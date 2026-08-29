@@ -237,6 +237,17 @@ rendered. The setting exists only under `integrations.slack`.
 
 ## Automated Setup: `crewlet mattermost provision`
 
+**A preflight runs before the first write.** Three things a config cannot show
+are checked against the live instance: that the provisioning credential really
+holds `system_admin`, and that `ServiceSettings.EnableBotAccountCreation` and
+`ServiceSettings.EnableUserAccessTokens` are on. Each is reported as a note
+naming the setting — without them the run fails on its first bot creation with
+a 403 that names an endpoint rather than the thing an administrator has to
+change. They are notes rather than refusals because the settings are read from
+a config endpoint whose exact key set varies by server version: an absent key
+means "this server did not say", not "it is off".
+
+
 ```
 export MATTERMOST_ADMIN_TOKEN="..."      # a system-admin personal access token
 crewlet mattermost provision company.yaml
@@ -249,7 +260,7 @@ For every Mattermost-enabled agent seat the command:
 2. **re-enables it** if a previous decommission disabled it — a disabled bot
    still owns its username, so creating over it fails with a conflict nothing
    else would explain;
-3. keeps its **display name** current (`{role name}{display_name_suffix}`);
+3. keeps its **display name** current (`{role name}{display_name_suffix}`) — read from the bot record rather than its user, because the display name lives on the bot and comparing against the user's nickname would report drift on every run;
 4. adds it to the **team** and to every configured **channel** — a bot only
    receives messages from channels it is a member of, so this is the step
    that makes the integration work at all;
@@ -271,9 +282,15 @@ joined, then nothing minted), and a loopback [Site URL](#the-site-url) on a
 server reached at a real address, which would leave every browser without
 live updates. Membership is **verified**, never inferred from a status code:
 Mattermost answers an add for an existing member with success, so a 4xx
-there is a real failure, and a configured channel that does not exist fails
-its seat rather than passing as a note — a bot hears nothing from a channel
-it is not in.
+there is a real failure.
+
+A configured channel that **does not exist** is the one case that is a note
+rather than a failure. Half a fleet of bots joined and the run stopped is a
+worse state than every bot joined to the channels that do exist and a line
+naming the one that did not — especially since the usual cause is a typo an
+operator fixes in seconds. **Read the notes**: a bot hears nothing from a
+channel it is not in, so a missing channel is silent at run time and visible
+only here.
 
 "Already provisioned" is checked against the server as well as the env file.
 "Already provisioned" is **proven by using the credential**, not inferred.
@@ -352,35 +369,53 @@ An admin must first enable personal access tokens in
 **System Console → Integrations → Integration Management**.
 
 The token is an *operator* credential and is never read from the company
-config: pass `--admin-token` or export `MATTERMOST_ADMIN_TOKEN`.
+config: pass `-admin-token` or export `MATTERMOST_ADMIN_TOKEN`. The bots' own
+tokens are what this run *mints*, so it cannot bootstrap itself from them.
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `--admin-token TOKEN` | System-admin PAT (default: `$MATTERMOST_ADMIN_TOKEN`). |
-| `--handles a,b` | Only provision these agent handles. |
-| `--decommission a,b` | Disable these handles' bots and revoke their tokens. |
-| `--dry-run` | Print the plan; create and modify nothing. Applies to `--decommission` too. |
-| `--env-file PATH` | Env file minted tokens are written to (default `.env`). |
-| `--secret-store` | Write minted tokens into the encrypted `secret_values` table instead. |
-| `--print` | Print `export VAR=token` lines to stdout (and `unset VAR` when a mint is rolled back, so the stream stays sourceable). |
+| `-admin-token TOKEN` | System-admin PAT (default: `$MATTERMOST_ADMIN_TOKEN`). |
+| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials on the server and prints none of them. `-print` writes `export VAR=…` lines and, when a run rolls back, `unset VAR` for each — the stream is meant to be sourced, and a comment is a no-op to a shell, so an operator who piped it into `source` would otherwise keep a revoked token exported. |
+| `-rotate` | Mint a fresh token for every bot, including bots whose current one still works. |
+| `-handles a,b` | Provision only these seat handles. It narrows the provisioning loop **only** — a `-handles` run with `-decommission` does not read the seats it skipped as departed. |
+| `-decommission` | Disable managed bot accounts whose seats have left the config. Disable, never delete: a deleted bot takes its posts with it, silently rewriting the history of every channel it spoke in. |
+| `-dry-run` | Print the plan; create and modify nothing. |
 
 Afterwards, (re)start `crewlet run` so the engine reads the new credentials
 and opens each seat's websocket.
 
-### Decommissioning
+### Why a re-run does not rotate
 
-`--decommission` disables the bot account and revokes its tokens. Disable
-rather than delete: the account keeps its history, so channels it posted in
-stay readable, and a later provision run re-enables it *and mints a fresh
-token*, since the revoked one is gone.
+Mattermost returns an access token's value **once**, so the reconcile cannot
+verify that what it recorded last time still matches. Minting every run
+would be an outage: the engine is running with the *old* value, and rotating
+revokes the credential every bot's websocket is currently authenticated
+with — an operator adding a tenth seat would take the other nine down, from
+a command whose whole promise is that it is safe to re-run.
 
-The account is disabled first — deactivating it is what actually stops the
-seat acting — and each token is then revoked on its own, so one failure
-costs one token rather than the whole seat. What is left over is named in
-the outcome (`error: 1 token(s) still active`) and exits non-zero.
-`--dry-run` applies here too, and prints what it would disable.
+So a bot is left alone when **both** halves hold: the variable holding its
+token still has a value (answered by the sink the run is writing to, and an
+*unreadable* sink stops the run rather than being read as empty), and the
+account still has a token under this tool's description, `crewlet-<handle>`.
+Either alone is wrong — a recorded value whose token was revoked leaves a
+bot 401ing for ever, and a live token nobody wrote down cannot be deployed.
+
+`-rotate` mints for every bot regardless, retiring the previous one *after*
+recording the new: never before, or a failed record leaves the seat with
+nothing. Only this tool's own description is retired — an administrator may
+have minted a token on the bot by hand, and revoking it would break whatever
+is using it, silently.
+
+### When a run cannot finish
+
+Everything it minted is undone. A bot this run **created** is rolled back by
+revoking every token on it, because nothing else has ever minted there; on a
+bot that already **existed**, only the token this run minted is revoked —
+sweeping the account would take an administrator's own token with no way to
+tell that it had. The rollback runs through a detached context, because the
+failure is often the cancellation itself.
 
 ### Seats and licensing
 
@@ -412,39 +447,43 @@ inbound path, in the order it breaks:
 
 | Check | Why it is here |
 |---|---|
-| `/system/ping` | Reachability, unauthenticated — a bad operator token must not make a healthy server look dead |
+| `/system/ping`, unauthenticated | Reachability — a bad credential must not make a healthy server look dead |
 | `SiteURL` vs `integrations.mattermost.url` | The [one setting](#the-site-url) whose failure has no error message |
 | A **browser-shaped** websocket upgrade | Sent *with* an `Origin` header, which is the only difference between a browser and the engine — this is the check that predicts what a human sees |
-| Per seat: token, account, channel membership | A bot receives nothing from channels it has not joined |
-| Per seat: a real authenticated websocket | The engine's only inbound path. A token can be valid for REST and still not open a socket |
+| The configured team | Channels are team-scoped, so a team that does not resolve is a company where no bot can be placed |
+| Per seat: its own credential, a real socket, its channels | A token can be valid for REST and still not open a socket, and a bot receives nothing from channels it has not joined |
 
-Nothing is written and no admin credential is needed — the seat tokens
-already in the config do the work, resolved the same way the engine resolves
-them (secret store, then environment). The exit code is non-zero when any
-check fails, so it drops into a deploy script.
+**No admin credential is needed and nothing is written.** The seat tokens
+already in the config do the work, resolved the way the engine resolves them
+(secret store, then environment) — they are the credentials the engine
+authenticates with, so they are the honest thing to check with. A literal
+token is used as-is: managing a seat's credential by hand is a supported
+choice, and refusing to check it would report a working seat as
+unconfigured. Pass `-admin-token` to run the shared checks as somebody else.
+The exit code is non-zero when any check fails, so it drops into a deploy
+script.
 
-Every cell distinguishes **checked and bad** from **never checked**. A `?`
-in a websocket column, `(not checked)` for the Site URL, `<< not checked` on
-the team — none of those is a failure, and reporting them as one sends you
-after faults nobody observed. An unreachable server returns before the Site
-URL, the browser socket and the team are ever queried; a seat whose token
-did not resolve or was rejected never gets a socket dialled; and an install
-without the `websockets` package (`pip install 'crewlet[mattermost]'`) can
-open neither socket, which is reported once as its own problem rather than
-as two failures. Everything that *can* be answered still is.
+**Checked-and-bad is distinguished from never-checked.** An unreachable
+server, an unreadable server configuration or a missing credential *stops*
+the run, and the report says so: one failing line with nothing after it
+would otherwise read as "one thing is wrong" when it means "nothing else was
+even asked". The same holds per seat — a seat whose token did not resolve is
+never dialled, and one whose credential is refused is never asked about its
+channels. Everything that *can* still be answered is: a team that does not
+resolve leaves the per-seat socket checks intact, because whether each agent
+authenticates is worth knowing either way.
 
 ```
-url           : http://203.0.113.7:8065
-reachable     : yes (Mattermost 10.5.1)
-site url      : http://203.0.113.7:8065
-browser ws    : ok — upgraded with Origin: http://203.0.113.7:8065
-team          : nimbus
-
-SEAT               USERNAME               TOKEN   WS      CHANNELS
-agent-pm           agent-pm               ok      ok      engineering,product,town-square
-agent-swe          agent-swe              ok      ok      engineering,town-square
-
-problems      : none
+ok    reachable        http://203.0.113.7:8065 answers
+ok    site url         the server agrees it is served at http://203.0.113.7:8065
+ok    credential       authenticates as agent-pm
+ok    team             team "nimbus" resolves (kx8f...)
+ok    browser socket   a browser-shaped upgrade to ws://203.0.113.7:8065/api/v4/websocket was accepted
+ok    seat pm          agent-pm authenticates, opens a socket, and is in 3 channel(s)
+FAIL  seat swe         agent-swe authenticates and opens a socket but has joined no
+                       channel, so it will only ever hear direct messages. Name channels
+                       under integrations.mattermost.provisioning or on the seat itself,
+                       and run `crewlet mattermost provision`
 ```
 
 ---
@@ -456,7 +495,7 @@ problems      : none
 1. A human posts in a channel the bot is a member of, or DMs it.
 2. Mattermost pushes a `posted` event down that bot's websocket.
 3. The fleet republishes it onto `crewlet.notifications.inbound`.
-4. `MattermostTransport` parses it, applies thread routing and loop
+4. the Mattermost transport parses it, applies thread routing and loop
    suppression, and produces a notification.
 5. NotificationService resolves handle → agent and publishes to
    `crewlet.agent.{handle}.inbox`.
@@ -536,7 +575,7 @@ disconnect and a server hanging up on sight look identical otherwise.
 
 All Mattermost capabilities — messaging, threading, search, reactions — come
 from **MCP tools** powered by the agent's own bot token. Messages post with
-the agent's own bot identity. `MattermostTransport.send()` exists as the
+the agent's own bot identity. the Mattermost transport's send exists as the
 transport-agnostic fallback for notifications routed through the
 notification service.
 
@@ -800,7 +839,7 @@ crewlet mattermost doctor mm-company.yaml
 
 # 6. Boot — one websocket per agent seat
 export ANTHROPIC_API_KEY=sk-ant-...
-crewlet run examples/nimbus.config.yaml --import-company mm-company.yaml
+crewlet run -config examples/nimbus.config.yaml -company mm-company.yaml
 ```
 
 Step 3 prints one line per seat — handle, bot username, and the variables it
@@ -821,7 +860,7 @@ should follow, in order:
    without mentioning anyone — it answers again, because it is now following
    the thread.
 3. The engine's dashboard shows the turn. Start the API with
-   `crewlet run … --api-port 8000` and open <http://localhost:8000> —
+   `crewlet run … -api-port 8000` and open <http://localhost:8000> —
    Activity shows the inbound notification with a Mattermost badge, and the
    agent's LLM calls are on its Agents page.
 
@@ -906,31 +945,3 @@ pass: reachability, the Site URL against your configured `url`, a
 distinguishes a browser from the engine), and one real authenticated socket
 per seat. It exits non-zero when anything is wrong.
 
----
-
-## Programmatic Setup
-
-```python
-from crewlet.notifications.transports.mattermost import (
-    MattermostBotConfig,
-    MattermostTransport,
-)
-from crewlet.notifications.typing_status import WorkingStatusMode
-
-transport = MattermostTransport(
-    base_url="https://chat.nimbus.example",
-    team="nimbus",
-    typing_status_mode=WorkingStatusMode.OFF,
-)
-transport.register_bot("engineer", MattermostBotConfig(
-    bot_token="...",
-    username="agent-engineer",
-    channel="engineering",
-))
-
-engine = Engine(organization=org, notification_transports=[transport])
-```
-
-The engine registers per-agent bots from `role.integrations.mattermost`
-during `start()`, and supplies the event queue the websocket fleet publishes
-on.

@@ -1,0 +1,34 @@
+-- The agent-to-agent channel record moved to the fleet's coordination store.
+--
+-- a2a_channels was the last of the tables migration 0010 should have taken,
+-- and the only one whose per-node home broke a feature outright rather than
+-- degrading a count. The row is an AUTHORIZATION record: internal/a2a's
+-- Reply() reads it to decide whether the answer it is about to deliver is one
+-- the sender is entitled to send. But the ask is opened on the REQUESTER's
+-- node and answered from whichever node owns the TARGET's seat — so the read
+-- happened on the one node that had never written the row, found nothing, and
+-- returned "no such channel". The target was woken, spent a turn composing an
+-- answer, and the answer went nowhere. Two seats that happened to land on one
+-- node worked, which is exactly why it looked healthy in every single-node
+-- deployment.
+--
+-- The package doc for internal/a2a already claimed the property this
+-- migration finally delivers — "a colleague owned by another node is a
+-- perfectly ordinary target" — which was true of the WAKE, since that rides
+-- the durable seat inbox, and false of the record the reply path reads.
+--
+-- It now lives in internal/coord, in a bucket with NO retention. That is the
+-- third distinct reason for an ageless bucket in the coordination store, and
+-- it is not the activation pointer's or the token counter's: a bucket's age
+-- cannot tell an OPEN channel from a closed one, so a TTL would reap the
+-- authorization record of an ask still waiting for its answer. Closing an
+-- idle channel and deleting a closed one stay DECISIONS, taken by the
+-- `maintenance` singleton duty against coord.Channels — see
+-- internal/maintenance/jobs.go.
+--
+-- DROPPED rather than left in place, for the same reason as 0010 and 0011: a
+-- table nothing reads is a table the next reader assumes is authoritative,
+-- and an open channel is exactly the shape somebody would wire an operator
+-- query to.
+
+DROP TABLE IF EXISTS a2a_channels;

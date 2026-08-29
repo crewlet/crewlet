@@ -27,7 +27,7 @@ another channel to go a round deeper (see
 [A2A](event-system.md#ephemeral-a2a-channels-crewleta2a)). A `request_1on1`
 wrapper over `A2AService` would be a thin alias of the kind the project
 deliberately avoids (`slack_message`, `jira_comment`-style wrappers —
-see `crewlet.tools.colleague`); it would carry a different description
+see `internal/agent/builtin`); it would carry a different description
 and nothing else.
 
 **One exchange is one channel.** Ask, answer, closed — the answering turn's

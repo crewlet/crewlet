@@ -48,7 +48,7 @@ didn't say). `None` is never coerced to `False`: "unknown" and
 distinction.
 
 First-party builtins declare their own annotations in code (registered
-via `ToolRegistry.register(tool, annotations=...)` and read back with
+via `tools.Registry.RegisterWith` and read back with
 `annotations_for`), so the same classification works for them.
 
 ### Where annotations come from

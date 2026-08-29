@@ -1,10 +1,15 @@
 # Code Sandbox
 
+> **v1 status.** Both backends run: `type: e2b` (a remote VM per run, on the
+> vendor cloud or a self-hosted cluster) and `type: local` (`direct`, a
+> process tree, or `container`, Docker or Podman), and the engine-fronted OTLP
+> receiver is wired.
+
 Crewlet agents author code through the **`run_sandbox` Execute tool**: the executor calls it with a concrete code task, the engine provisions an isolated sandbox (a real VM with a shell, a filesystem, and a git checkout), and a **coding agent** — Claude Code or OpenCode — works on the task autonomously inside it. The call is **detached**: the Execute tool-loop *suspends* when the job starts, the engine persists the in-flight conversation, and when the job completes — minutes or hours later — the **same loop resumes** with the coding agent's findings spliced in as that tool call's reply. The executor then reports and acts with its own tools (replying on the originating channel, updating the ticket) in the same turn, with full context.
 
 This is how a Crewlet agent implements a feature, makes tests pass, reproduces a bug, or runs a one-off script — anything that needs a shell and a checkout. The sandbox is the isolation boundary: arbitrary, autonomously generated code runs *there*, never on the engine host, which is why the coding agent can run fully permissioned (Claude Code `--permission-mode bypassPermissions`; OpenCode `permission: "allow"`).
 
-The moving parts live in `src/crewlet/sandbox/` (provider, manager, runners, waiter, coordinator, pending store) and `src/crewlet/tools/run_sandbox_tool.py`; the launch/collect plumbing is `src/crewlet/agent/execute_sandbox.py`.
+The moving parts live in `internal/sandbox/` — the provider, the manager, the coding-agent runners under `codingagent/`, the waiter, the coordinator, the pending store, and `launch.go`, which is the plumbing between the Execute loop and a detached run.
 
 ---
 
@@ -17,7 +22,7 @@ Execute loop                     Engine                         Sandbox
     │                              │                               │
     ├── run_sandbox(brief) ───────▶│ provision box, apply setup    │
     │                              │ start coding agent (detached) ├── clone, code,
-    │   ToolResult(suspend=True)   │ persist pending_sandbox_run   │   test, push,
+    │   ToolResult(suspend=True)   │ persist the run record        │   test, push,
     │◀─────────────────────────────┤ publish SandboxRunStarted     │   open PR/MR …
     │  loop SUSPENDS, turn ends    │                               │
     │  (agent busy, inbox paused)  │  SandboxWaiter polls ─────────┤ keepalive +
@@ -33,7 +38,7 @@ Execute loop                     Engine                         Sandbox
 
 The details, each load-bearing:
 
-- **Call → suspend.** `run_sandbox` provisions the box, starts the coding agent as a background command, persists a durable `pending_sandbox_run` row (the plan, success criteria, conversation key, trace context, and the serialized Execute conversation including the dangling tool call), and returns `ToolResult(suspend=True)`. The Execute loop leaves that call unanswered, the turn ends, and the agent transitions `WORKING → AWAITING_SANDBOX` in the turn's own `finally` — the state never passes through `IDLE`, so no queued event can slip a turn in between. Nothing is parked in memory; everything the resume needs is in the row.
+- **Call → suspend.** `run_sandbox` provisions the box, starts the coding agent as a background command, persists a durable run record in the [coordination store](coordination.md) (the plan, success criteria, conversation key, trace context, and the serialized Execute conversation including the dangling tool call), and returns `ToolResult(suspend=True)`. The Execute loop leaves that call unanswered, the turn ends, and the agent transitions `WORKING → AWAITING_SANDBOX` in the turn's own `finally` — the state never passes through `IDLE`, so no queued event can slip a turn in between. Nothing is parked in memory; everything the resume needs is in the row.
 - **Busy while it runs.** The agent's inbox topic is paused for the duration of the run (new events stay broker backlog; deliveries already in flight are requeued and acked, so nothing is held against a broker ack window during an hours-long job). The agent runs **one coding job at a time** — only the first suspend in a loop is honored, and a busy agent starts no new turns. It is freed only while a run is parked waiting on a human answer (see [Mid-run clarification](#mid-run-clarification-crewlet-ask)).
 
   That pause is a **hold this subsystem takes and this subsystem releases** — it is reason-scoped, so nothing else in the engine can drop it for you. So every exit that is finished with the box releases it from a `finally`, including the ones where cleanup failed: a store write that errors while tearing a box down is a bad minute, and a seat that is owned, attached and permanently deaf is a bad week. The one path that deliberately keeps it is a resumed executor calling `run_sandbox` again, where a new run owns the box and the seat is legitimately still busy.
@@ -56,12 +61,11 @@ A sibling of `providers.llm`, live-reloadable, with secrets kept as `${VAR}` ref
 ```yaml
 providers:
   sandbox:
-    type: e2b                     # e2b | fake | none (omit = disabled)
-    api_key: "${E2B_API_KEY}"     # required — the SDK authenticates on every call
-    domain: ""                    # set → self-hosted / local E2B; empty → e2b.dev cloud
-    template: ""                  # empty → E2B's prebuilt claude / opencode template
-                                  #   per coding agent; or a custom derived image.
-                                  #   ALSO how box resources are sized (below)
+    type: e2b                     # e2b | local | fake | none — REQUIRED, no default
+    api_key: "${E2B_API_KEY}"     # required for e2b — the API authenticates every call
+    domain: ""                    # set → self-hosted / local cluster; empty → the cloud
+    template: ""                  # empty → the prebuilt template for the coding agent;
+                                  #   ALSO how a box is sized (below)
     default_coding_agent: claude-code   # claude-code | opencode
     default_timeout_seconds: 900  # box TTL / keepalive window — NOT a run cap (below)
     default_pause_ttl_seconds: 1800     # how long a blocked run's paused box is
@@ -69,10 +73,13 @@ providers:
     setup: []                     # engine-wide provisioning steps (see Setup steps)
 ```
 
+- **`type` is required and has no default.** Every candidate default is wrong in a way nobody sees. `local` runs the coding agent on the **engine host** — its `direct` containment as the engine's own user — which is a trade an operator makes deliberately for their own machine and must never have made for them. `none` reads as "code work is on" in the document and off in the engine. `e2b` mints billable VMs. A block with no `type` is an operator who has not decided, so `crewlet validate` asks. **Leave the block out entirely** to run with no sandbox at all.
+- **`api_key`, `domain` and `template` belong to `type: e2b`** and are refused on any other backend — a `domain:` beside `type: local` reads as a cluster address and configures nothing. The key is **required** for `e2b` including against a self-hosted cluster: `domain` changes *which* API is talked to, never whether it authenticates.
+
 - **`default_timeout_seconds` is not a run-time limit.** It is the box's TTL / keepalive window: the completion poll refreshes a running box's TTL to this value on every tick, so the clock never kills a live job. It is effectively the *orphan-reclaim grace* — how long a box outlives an engine that stopped heart-beating (a crash) before E2B reaps it. A coding job is never force-stopped on a timer.
-- **`default_pause_ttl_seconds`** bounds how long a run blocked on a human answer keeps its *paused* box. E2B holds a paused sandbox indefinitely — there is no provider-side TTL — and bills for the snapshot, so expiring it is the engine's job: past this age the completion poll [reaps it](#mid-run-clarification-crewlet-ask) and the run re-seeds from the pushed branch when the answer arrives. 30 minutes trades a bounded snapshot bill against exact resume for the replies that come back quickly; raise it if your teams answer in hours. `0` means never pause — the box is torn down the moment the run blocks, for zero snapshot cost. Negative values are rejected: an unbounded pause is the leak the knob exists to prevent (a *role* that wants the provider default says so with `role.sandbox.pause_ttl_seconds: -1`). Correctness never depends on the box: the durable state is the pushed branch plus the persisted row.
-- **Sizing is `template`, not a limits knob.** There is deliberately no `default_limits`. A box's vCPU and RAM are properties of its **template**, fixed when the template is built (`e2b template build --cpu-count N --memory-mb M`); the sandbox-*create* API accepts no resource arguments at all, and disk is not exposed in either place. An engine-side limits field could only ever be parsed and dropped — an operator setting `memory_mb: 16384` would silently get whatever the template had. To give agents bigger boxes, build a template with the resources you want and name it in `template:`.
-- **Hot-reload:** a changed `providers.sandbox` re-instantiates the provider on `apply_config`; in-flight runs keep their handles, the next launch picks up the new one.
+- **`default_pause_ttl_seconds`** bounds how long a run blocked on a human answer keeps its *paused* box. E2B holds a paused sandbox indefinitely — there is no provider-side TTL — and bills for the snapshot, so expiring it is the engine's job: past this age the completion poll [reaps it](#mid-run-clarification-crewlet-ask) and the run re-seeds from the pushed branch when the answer arrives. 30 minutes trades a bounded snapshot bill against exact resume for the replies that come back quickly; raise it if your teams answer in hours. `0` means never pause — the box is torn down the moment the run blocks, for zero snapshot cost. Negative values are rejected here: an unbounded pause is the leak the knob exists to prevent. A *role* inherits this default by leaving `role.sandbox.pause_ttl_seconds` out entirely — the older spelling, `-1`, still means the same thing and is still accepted. Correctness never depends on the box: the durable state is the pushed branch plus the persisted row.
+- **Sizing is `template`, not a limits knob.** There is deliberately no `default_limits`. A box's vCPU and RAM are properties of its **template**, fixed when the template is built; the sandbox-*create* API accepts no resource arguments at all, and disk is not exposed in either place. An engine-side limits field could only ever be parsed and dropped — an operator setting `memory_mb: 16384` would silently get whatever the template had. To give agents bigger boxes, build a template with the resources you want and name it in `template:`; a `container` box is sized with `local.image` and `local.run_args` instead.
+- **Hot-reload:** a changed `providers.sandbox` re-instantiates the provider on the next apply; in-flight runs keep their handles, the next launch picks up the new one.
 
 ### Per-role gate — `role.sandbox`
 
@@ -86,7 +93,7 @@ roles:
     sandbox:
       enabled: true
       coding_agent: ""                  # empty → inherit providers.sandbox.default_coding_agent
-      pause_ttl_seconds: -1             # < 0 → provider default; 0 → never hold a paused box
+      # pause_ttl_seconds:              # leave out → provider default; 0 → never hold a paused box
       env:                              # env injected into this seat's runs, ${VAR}-expanded
         GITHUB_TOKEN: "${GITHUB_TOKEN_SENIOR}"   # this seat's own PAT (git-auth recipe + gh)
         NPM_TOKEN: "${NPM_TOKEN_SENIOR}"
@@ -104,16 +111,17 @@ roles:
 
 ## Sandbox backends
 
-The provider layer is pluggable behind the `SandboxProvider` protocol (`sandbox/protocol.py`). Four backends ship:
+The provider layer is pluggable behind the `SandboxProvider` interface (`internal/sandbox/protocol.go`). Three backends run code, and one turns it off:
 
-- **E2B cloud** (`type: e2b`, no `domain`). Sign up at [e2b.dev](https://e2b.dev), export `E2B_API_KEY` from the dashboard. The engine uses the open-source [`e2b`](https://pypi.org/project/e2b/) async SDK and E2B's prebuilt [`claude`](https://e2b.dev/docs/agents/claude-code) / [`opencode`](https://e2b.dev/docs/agents/opencode) templates (the coding-agent CLI preinstalled), picked automatically per coding agent when `template` is empty.
-- **Self-hosted / local E2B** (`type: e2b` + `domain`). E2B's infrastructure is open source ([e2b-dev/infra](https://github.com/e2b-dev/infra)); set `domain` to your cluster's domain and the **same class and code path** talks to it — one field is the whole cloud↔self-hosted switch. The cluster still issues its own `E2B_API_KEY` (the SDK always authenticates; `domain` only changes *which* API it talks to). If your self-hosted keys aren't in the SDK's `e2b_<hex>` format, set `E2B_VALIDATE_API_KEY=false` — see [Environment Variables](../reference/environment-variables.md#code-runtime-sandbox-optional).
-- **[Local](#local-sandboxes)** (`type: local`). The engine host itself — `direct` (a process tree) or `container` (Docker/Podman). No E2B account, and the coding agent can use the **subscription login** `crewlet llm login` already established. See below.
-- **`fake`** — deterministic in-process stubs (`sandbox/fake.py`): an in-memory filesystem, scripted coding-agent results, no network. The unit-test substrate; it does **not** run real code.
+- **E2B cloud** (`type: e2b`, no `domain`). Sign up at [e2b.dev](https://e2b.dev), export `E2B_API_KEY` from the dashboard. The engine talks to the documented REST API directly — there is no Go SDK to install, and no optional dependency for any of this — and uses E2B's prebuilt [`claude`](https://e2b.dev/docs/agents/claude-code) / [`opencode`](https://e2b.dev/docs/agents/opencode) templates (the coding-agent CLI preinstalled), picked automatically per coding agent when `template` is empty.
+- **Self-hosted / local E2B** (`type: e2b` + `domain`). E2B's infrastructure is open source ([e2b-dev/infra](https://github.com/e2b-dev/infra)); set `domain` to your cluster's domain and the **same code path** talks to it — one field is the whole cloud↔self-hosted switch, because the control-plane address and every box's own hostname are both derived from it. The cluster still issues its own key.
+- **[Local](#local-sandboxes)** (`type: local`). The engine host itself — `direct` (a process tree) or `container` (Docker/Podman). No remote account and no API key, and the coding agent can use the **subscription login** `crewlet llm login` already established. See below.
+- **`fake`** — deterministic in-process stubs (`internal/sandbox/fake.go`): an in-memory filesystem, scripted coding-agent results, no network. The unit-test substrate; it does **not** run real code.
+- **`none`** — code work is off. Sandbox-gated seats fall back to the native Execute loop, and `run_sandbox` never appears.
 
-> **Watch for a leftover `E2B_DOMAIN`.** The E2B SDK reads `E2B_DOMAIN` from the environment directly. With no `domain` in config you are targeting e2b.dev cloud — make sure a stale `E2B_DOMAIN` export from an earlier self-hosted experiment isn't silently routing the SDK to a dead cluster.
+The closed set `type` is checked against is exactly the set the engine can construct — a test walks it, because a value the config accepts and the engine cannot build fails at the first coding run and nowhere earlier.
 
-The `e2b` SDK is an optional dependency: `pip install 'crewlet[sandbox]'` (or `uv sync --extra sandbox` from a checkout). It is imported lazily, so an engine without the extra runs fine until an E2B sandbox is actually provisioned.
+> **Two planes, and they behave differently on purpose.** The control plane (`api.<domain>`) mints, kills, pauses and re-times boxes under a bounded timeout, because minting a VM is a real allocation with a real cost when it is abandoned. The in-box plane — running commands, reading and writing files — is reached on each box's own hostname and carries **no overall deadline at all**: a coding agent's foreground command legitimately runs for many minutes, so what bounds it is the gap *between* output frames rather than the length of the call.
 
 ### Local sandboxes
 
@@ -162,6 +170,12 @@ providers:
 
 The box directory is bind-mounted at `/home/user` — the same home E2B uses — so in-box paths, setup steps and briefs are identical across the two backends. The container is started with `--init` so a finished detached job is reaped rather than left as a zombie (which the completion probe would read as *still running*).
 
+**The container runs as the engine's own user, and the mount is proved before the box is used.** A bind mount is one directory shared by two processes, so both of them have to be able to manage what the other writes. Under a **rootful** Docker or Podman the container's root is the host's root, and every directory the box creates in the mount comes out root-owned — the engine, which is not root, can then neither install the agent's `crewlet-ask` shim into it nor reclaim the box's disk at teardown, so box directories accumulate on the host with no error anywhere. Crewlet therefore passes `--user <uid>:<gid>` on a rootful runtime and **not** on a rootless one, where the user namespace already maps container root onto the invoking user and `--user` would map it into the subuid range instead. The runtime is asked which it is (`docker info` / `podman info`); an unanswerable probe is treated as rootful, because that mistake fails loudly at creation while the other is silent.
+
+If your image genuinely needs its own user — one that installs packages at run time, say — put `--user 0:0` in `run_args`. Operator flags are spliced last and both runtimes take the final occurrence of a repeated flag, so yours wins. Be aware you are taking back the problem above.
+
+Every container box is then proved once, at creation, before anything runs in it: the engine writes a token the box reads back, and the box creates a directory the engine writes into and removes. That catches the ownership case and one other that is otherwise invisible — a `runtime` pointed at a daemon on **another host** (`DOCKER_HOST`, a forwarded socket) bind-mounts *that* machine's filesystem, so the agent finds no brief, no credentials and no shim. A box that fails the proof is torn down and the error names the cause; use the `e2b` provider for a genuinely remote runtime.
+
 **Setup commands get a provisioning budget, not a control one.** Each command may run for `timeout_seconds` (default 600). Real provisioning — a dependency install, a cold image pull, a large clone — takes minutes, and without its own budget these inherited the backend's control-plane timeout and were killed, failing the whole acquisition. Raise it for a step you know is slow; lower it for one that should be instant, so a hung command surfaces as a named setup failure rather than eating the turn. A failure reports the step and the command's position, never the command text: `${VAR}` references in commands are resolved before they run, so the text can carry the credential it was given.
 
 **Setup steps and containment.** `direct` mode has no filesystem virtualisation, so a setup step that writes a *system* path is refused with an error naming the mode — it would otherwise write to the engine host's real `/usr/local/bin`. The shipped [git-auth recipe](#the-git-auth-recipe) is one of these; under `direct`, root it in the box's home instead:
@@ -202,7 +216,7 @@ Runs headless — `claude -p "<brief>" --output-format json --permission-mode by
 
 Claude Code **speaks the Anthropic API only**, so it needs an Anthropic-compatible credential. The sandbox's LLM derives from the role's provider chain: `role.llm_sandbox` → `llm_execute` → `llm` → `default`. Point `role.llm_sandbox` at an `anthropic` `providers.llm` entry (a custom `base_url` on that entry becomes `ANTHROPIC_BASE_URL` — an Anthropic-API gateway works). A role whose resolved provider is *not* Anthropic-compatible cannot launch Claude Code — the launch fails with `SandboxCredentialError` (see [Failure modes](#failure-modes)) unless `ANTHROPIC_API_KEY` (or a Bedrock/Vertex/Foundry toggle) is supplied in `role.sandbox.env`.
 
-**A subscription counts.** When the resolved provider is a [`cli-agent`](subscription-llm-backends.md) entry, the headless subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, minted by `crewlet llm login <key> --capture-token`) is exported into the box and Claude Code there bills your Pro/Max plan — no API key anywhere. This works on **every** backend including remote E2B, because a token is one scoped, revocable variable. The credential *files* deliberately never leave the engine host: they carry a refresh token whose rotation is shared fleet state. A CLI that mints no headless token (Codex, Gemini CLI) therefore needs [`type: local`](#local-sandboxes), where the coding agent reads the login directly.
+**A subscription counts.** When the resolved provider is a [`cli-agent`](subscription-llm-backends.md) entry, the headless subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, minted by `crewlet llm login <key> -capture-token`) is exported into the box and Claude Code there bills your Pro/Max plan — no API key anywhere. This works on **every** backend including remote E2B, because a token is one scoped, revocable variable. The credential *files* deliberately never leave the engine host: they carry a refresh token whose rotation is shared fleet state. A CLI that mints no headless token (Codex, Gemini CLI) therefore needs [`type: local`](#local-sandboxes), where the coding agent reads the login directly.
 
 ### OpenCode
 
@@ -222,7 +236,7 @@ Because the brief instructs the coding agent that it is *not* the last step, it 
 
 ## Setup steps — provisioning the box
 
-A coding agent's box needs environment wiring beyond the CLI itself: git auth, registry credentials, toolchains. Provisioning is a declarative **setup-step** framework (`sandbox/setup.py`); each `SandboxSetupStep` contributes:
+A coding agent's box needs environment wiring beyond the CLI itself: git auth, registry credentials, toolchains. Provisioning is a declarative **setup-step** framework (`internal/sandbox/setup.go`); each `SandboxSetupStep` contributes:
 
 - `files` — content written into the box (helper scripts, config files);
 - `commands` — shell commands run after the files land; a non-zero exit **fails the acquisition** and tears the box down, so a half-provisioned box never receives a brief promising an environment it doesn't have;
@@ -277,7 +291,7 @@ The GitLab form of this recipe — same shape, `gitlab.com` scoping, `oauth2` us
 
 ## Credentials and the run environment
 
-`build_sandbox_env` (`sandbox/credentials.py`) assembles the env injected into each run. The engine contributes only **tool-agnostic** facts:
+The run env injected into each job is assembled in `internal/sandbox/launch.go`. The engine contributes only **tool-agnostic** facts:
 
 - **LLM credentials**, derived from the role's resolved `providers.llm` entry (the chain above): `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` for an Anthropic provider, `OPENAI_API_KEY` / `OPENAI_BASE_URL` otherwise (for OpenCode the real endpoint redirect is the custom provider written into `opencode.json`; the env forms are kept for parity).
 - **Agent identity** — `CREWLET_AGENT_HANDLE` and `CREWLET_AGENT_EMAIL`, the per-launch facts static config cannot know, which setup recipes map into tool shape (git commit identity above).
@@ -291,7 +305,7 @@ Any `${VAR}` reference whose variable is unset or empty — whole (`"${TOKEN}"`)
 
 ## MCP inside the sandbox
 
-The coding agent is itself an MCP client, so the engine renders the role's servers into the box (`sandbox/mcp_render.py` → Claude Code's `.mcp.json` via `--mcp-config --strict-mcp-config`, or OpenCode's `opencode.json`). Scoping is at the **server level only**: `role.sandbox.mcp.servers` names which of the role's `mcp_servers` to expose, and the coding agent gets **every tool those servers expose**. There is no per-tool allowlist — OpenCode has no allowlist flag and Claude Code runs `bypassPermissions` headless, so a curated list couldn't be enforced uniformly and would give a false sense of restriction. A role that shouldn't reach a surface simply doesn't list that server.
+The coding agent is itself an MCP client, so the engine renders the role's servers into the box (`internal/sandbox/mcprender.go` → Claude Code's `.mcp.json` via `--mcp-config --strict-mcp-config`, or OpenCode's `opencode.json`). Scoping is at the **server level only**: `role.sandbox.mcp.servers` names which of the role's `mcp_servers` to expose, and the coding agent gets **every tool those servers expose**. There is no per-tool allowlist — OpenCode has no allowlist flag and Claude Code runs `bypassPermissions` headless, so a curated list couldn't be enforced uniformly and would give a false sense of restriction. A role that shouldn't reach a surface simply doesn't list that server.
 
 Credentials from `role.mcp_env` are resolved into the rendered specs (HTTP servers get them as headers, stdio servers as env), so the in-box server instances authenticate as the seat. The connected server names are also listed in the coding agent's environment brief.
 
@@ -304,7 +318,7 @@ Two practical caveats:
 
 ## Mid-run clarification (`crewlet-ask`)
 
-Once it is in the code, the coding agent may hit something only a person can answer — an ambiguous spec, a design decision above its remit. Headless coding agents can't pause to ask interactively, so every box gets a shim, **`crewlet-ask`** (`sandbox/coding_agents/ask.py`), and the brief instructs: *don't guess — commit and push your WIP branch, run `crewlet-ask "<question>" --to <audience>`, and stop.* The audience is `requester`, `team`, `manager`, or a named teammate — the brief carries the unit roster and lead so the agent can name a real person.
+Once it is in the code, the coding agent may hit something only a person can answer — an ambiguous spec, a design decision above its remit. Headless coding agents can't pause to ask interactively, so every box gets a shim, **`crewlet-ask`** (`internal/sandbox/codingagent/ask.go`), and the brief instructs: *don't guess — commit and push your WIP branch, run `crewlet-ask "<question>" --to <audience>`, and stop.* The audience is `requester`, `team`, `manager`, or a named teammate — the brief carries the unit roster and lead so the agent can name a real person.
 
 The shim is **signal-only**: it records the question to a file and never posts anything itself. When the run completes with a pending question:
 
@@ -314,9 +328,9 @@ The shim is **signal-only**: it records the question to a file and never posts a
 
 The durable state is always **git plus the persisted row** — the WIP branch is pushed *before* the agent asks, so the paused box is a fast-resume optimization, never the store. Clarification rounds chain within the same turn, bounded by the turn's existing iteration cap and the budget cascade.
 
-**The pause reaper.** A human reply can take days, and E2B holds a paused box — billing for the snapshot — until something kills it. Nothing else would, so the completion poll enforces `pause_ttl_seconds` on the same tick it uses for running jobs. The box's age is durable (`pending_sandbox_run.paused_at`, stamped when the box is paused), so the deadline survives an engine restart instead of resetting with the process. Past the TTL, a parked run gets:
+**The pause reaper.** A human reply can take days, and E2B holds a paused box — billing for the snapshot — until something kills it. Nothing else would, so the completion poll enforces `pause_ttl_seconds` on the same tick it uses for running jobs. The box's age is durable (`paused_at` on the run record, stamped when the box is paused), so the deadline survives an engine restart — and a seat handoff — instead of resetting with the process. Past the TTL, a parked run gets:
 
-1. **the box killed by id** — `SandboxProvider.kill(sandbox_id)`, never `connect()`, which auto-resumes a paused sandbox and would boot the VM back up purely to shut it down;
+1. **the box killed by id** — `sandbox.Provider.Kill`, never `connect()`, which auto-resumes a paused sandbox and would boot the VM back up purely to shut it down;
 2. **the box released on the row** (`sandbox_id` cleared, `paused_at` cleared) — which is also what makes the next `run_sandbox` provision a fresh box rather than reattach to a dead id;
 3. **the run flipped to `reseed`** — still claimable, still matched by conversation key, because the run is not over. The answer can arrive days later and still resumes the same suspended Execute loop; only the spliced reply differs, telling the executor the machine is gone and the brief must re-check-out the pushed branch.
 
@@ -328,7 +342,7 @@ The reaper is scoped to **clarification waits** on purpose. The lifecycle pauses
 
 ## Durability, completion, and observability
 
-**Pending runs survive restarts.** Every detached run is a `pending_sandbox_run` row (Postgres when a database is configured; in-memory only for single-process tests — enable Postgres wherever the sandbox matters). On boot the coordinator's recovery pass re-pauses the inboxes of agents with running jobs and re-enters their busy state; the waiter then drives those jobs to completion. Recovery also reaps a run left in `resumed` — that state can only mean the previous engine died between claiming a completion and settling it, so nothing will ever pick it up again (the at-most-once claim already flipped) and its paused box would leak. A restart never orphans a job, because E2B boxes run server-side, independent of the engine, and any process can reconnect by `sandbox_id`.
+**Pending runs survive restarts — and seat handoffs.** Every detached run is a record in the fleet's [coordination store](coordination.md#what-the-fleet-shares), not in the node's own database, and the difference is the whole reason it is durable at all: a run outlives its turn, its process and sometimes its *node*, and the node that owns the seat next is the one whose recovery pass has to find it. Per-node, that pass listed nothing, so the suspended conversation was unreachable and a billed box was neither resumed nor reaped. On boot — or on acquiring a seat — the coordinator's recovery pass re-pauses the inboxes of agents with running jobs and re-enters their busy state; the waiter then drives those jobs to completion. Recovery also reaps a run left in `resumed` — that state can only mean the previous engine died between claiming a completion and settling it, so nothing will ever pick it up again (the at-most-once claim already flipped) and its paused box would leak. A restart never orphans a job, because E2B boxes run server-side, independent of the engine, and any process can reconnect by `sandbox_id`.
 
 **The completion poll is THE completion signal.** The `SandboxWaiter` reconnects to each running box every 15 s and asks the runner whether the job finished. There is deliberately no push callback from inside the sandbox: only a poll can see a job that died before its last step, and the tick has to run anyway because it **doubles as the box keepalive** (the TTL refresh that makes runs uncapped). Three signals cover every way a job can end:
 
@@ -338,7 +352,11 @@ The reaper is scoped to **clarification waits** on purpose. The lifecycle pauses
 
 **A vanished sandbox can't orphan a run.** If reconnecting fails on several consecutive ticks (~1 min at defaults), the waiter declares the box gone and fires completion anyway — E2B reclaimed it, a network partition, or the engine was down past the keepalive grace. The coordinator then frees the agent, marks the run failed, and the resumed executor reports the failure rather than polling a dead box forever.
 
-**Per-run OTel, without handing the sandbox a secret.** The coding agent's telemetry exports to an **engine-fronted OTLP receiver** (`sandbox/otel.py`), enabled by setting `CREWLET_SANDBOX_OTEL_RECEIVER_URL` to the engine API base the sandbox can reach. Each run gets a **per-run, trace-scoped, expiring token embedded in the endpoint path** (`POST /otlp/{token}/v1/{signal}`), so `OTEL_EXPORTER_OTLP_HEADERS` — the backend's ingest credential — never enters the box; the receiver validates the token and forwards upstream, adding the real auth outside the sandbox. The run env also carries non-secret resource attributes (`crewlet.turn_id`, `crewlet.agent_handle`) and a `TRACEPARENT`, so Claude Code's spans/metrics nest under the turn (its `CLAUDE_CODE_*` telemetry toggles are injected only for that runner). OpenCode emits no OTLP today — its observability is the published transcript plus the engine-side lifecycle events.
+**Per-run OTel, without handing the sandbox a secret.** The coding agent's telemetry exports to an **engine-fronted OTLP receiver**, enabled by setting `CREWLET_SANDBOX_OTEL_RECEIVER_URL` to the engine API base the sandbox can reach. Each run gets a **per-run, trace-scoped, expiring token embedded in the endpoint path** (`POST /otlp/{token}/v1/{signal}`), so `OTEL_EXPORTER_OTLP_HEADERS` — the backend's ingest credential — never enters the box; the receiver validates the token and forwards upstream, adding the real auth outside the sandbox. That variable is set **empty** in the box rather than left unset, because an exporter reads it from the ambient environment otherwise and a box inherits whatever the engine host exported.
+
+The token is **signed and self-describing** rather than a key into a store, because minting and verifying happen in different processes whenever the API runs on its own host: the engine mints when it launches a run, the API verifies when the box exports. Both derive the signing key from the Tier A keyring, so a split deployment agrees without sharing state — and with no keyring configured the key is per-process, which works for a single process and is warned about loudly for two. Expiry rides in the token, so nothing is reaped and a restart does not invalidate a live run's endpoint.
+
+The receiver **accepts and drops** when no upstream is configured: the engine's own per-turn span still carries the trace, and a deployment with no backend should not have every export fail. A failing backend is never reported to the box either — an exporter that gets a 5xx retries, and retries against a backend that is down turn one outage into two. The run env also carries non-secret resource attributes (`crewlet.turn_id`, `crewlet.agent_handle`) and a `TRACEPARENT`, so Claude Code's spans/metrics nest under the turn (its `CLAUDE_CODE_*` telemetry toggles are injected only for that runner). OpenCode emits no OTLP today — its observability is the published transcript plus the engine-side lifecycle events.
 
 **Dashboard.** The live-state projection maintains an active-sandboxes set from the `SandboxRunStarted` / `SandboxClarificationRequested` / `SandboxRunCompleted` lifecycle events, and the dashboard overview shows a **Running sandboxes** panel whenever a job is in flight — agent, coding agent, task, elapsed, status (running / awaiting input). Completed runs render as the three-row Execute group described above, with the findings and transcript.
 
@@ -372,9 +390,11 @@ The coding agent calls the LLM itself, from inside the sandbox, so the engine ca
 What an operator should recognize:
 
 - **`SandboxCredentialError` at launch** — the role chose `claude-code` but its resolved LLM provider isn't Anthropic-compatible. The run never starts; the error says exactly what to do: point `role.llm_sandbox` at an `anthropic` `providers.llm` entry, put `ANTHROPIC_API_KEY` in `role.sandbox.env`, or switch the role (or the provider default) to `opencode`.
-  For a [`cli-agent` provider](subscription-llm-backends.md) the error is specific to the two cases: a CLI that mints a headless token says "run `crewlet llm login <key> --capture-token`", and one that does not says to use `providers.sandbox.type: local` instead.
+  For a [`cli-agent` provider](subscription-llm-backends.md) the error is specific to the two cases: a CLI that mints a headless token says "run `crewlet llm login <key> -capture-token`", and one that does not says to use `providers.sandbox.type: local` instead.
 - **`LocalSandboxError: refuses to touch …`** — a setup step tried to write a system path under `containment: direct`, which has no filesystem virtualisation. Root the file under the box's `$HOME`, or switch to `containment: container`.
 - **`LocalSandboxError: neither docker nor podman`** — `containment: container` with no container runtime on the engine host's PATH. Install one, name it in `runtime:`, or use `direct`.
+- **`cannot see its own box directory`** — the runtime is driving a daemon on another host, so the bind mount is that machine's filesystem rather than this one's. Point `runtime:` at a local daemon, or use `type: e2b` for a remote runtime.
+- **`writes its box directory as a user this engine cannot manage`** — the container is running as someone the engine cannot follow into the mount, which happens when `run_args` overrides the `--user` the backend chose. Drop that override, or run the engine as the same user the container does.
 - **`sandbox_env_unresolved` warnings** — a declared `${VAR}` resolved empty; the run proceeds but the coding agent will hit auth failures (a clone dying anonymously, a 401 from a registry). Export the variable the config references.
 - **Setup-step failure** (`sandbox_setup_failed`) — a provisioning command exited non-zero; the box is torn down before any brief runs. This is an operator config problem (a broken recipe), logged distinctly from a coding-agent install failure.
 - **Sandbox lost mid-run** — the waiter's gone-detection above. The run is marked failed and the executor reports what happened; look for `sandbox_connect_failed` streaks preceding it. If the engine was down longer than `default_timeout_seconds`, E2B reaped the box as an orphan — that TTL is the knob to raise for deployments with long maintenance windows.
@@ -385,4 +405,4 @@ What an operator should recognize:
 
 ## Testing
 
-`providers.sandbox.type: fake` wires the in-process fakes (`FakeSandboxProvider`, `FakeCodingAgentRunner`) — scripted results, an in-memory filesystem, no network, per the project rule that tests never touch real services. The runner tests pin the exact CLI invocations (`claude -p … --output-format json`, `opencode run … --format json`) and output parsers, and `tests/test_sandbox/test_setup.py` exercises the git-auth recipes so their security properties (host scoping, `--add` rewrites, identity mapping) can't regress.
+`providers.sandbox.type: fake` wires the in-process fakes (`FakeSandboxProvider`, `FakeCodingAgentRunner`) — scripted results, an in-memory filesystem, no network, per the project rule that tests never touch real services. The runner tests pin the exact CLI invocations (`claude -p … --output-format json`, `opencode run … --format json`) and output parsers, and `internal/config/examples_test.go` holds the shipped git-auth recipe to its security properties (host scoping at both layers, `--add` rewrites, identity from the engine's agent facts) so an edit cannot quietly widen them.

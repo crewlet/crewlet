@@ -1,7 +1,8 @@
 # Automated dependency updates — one entry per dependency surface:
 #
 #   .github/workflows/*.yml   the actions CI and releases run on
-#   pyproject.toml            the package's own requirements
+#   go.mod                    the engine's own Go dependencies
+#   Dockerfile                the base image a release ships
 #   docker-compose.yml        the images the local dev stack runs
 #
 # A new surface needs its entry here in the same change. Nothing reports the
@@ -22,7 +23,15 @@ updates:
     schedule:
       interval: weekly
 
-  - package-ecosystem: pip
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  # The base image a release ships. Distinct from docker-compose below: that
+  # entry reads compose files and this one reads Dockerfiles, and neither
+  # ecosystem sees the other's manifests.
+  - package-ecosystem: docker
     directory: "/"
     schedule:
       interval: weekly

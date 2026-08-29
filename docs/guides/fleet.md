@@ -3,7 +3,7 @@
 One `crewlet run` is a whole company. Everything below is about running
 more than one, and the honest summary is: you probably do not need to.
 A single engine handles many concurrent turns — agent handlers are
-`asyncio` tasks, so the practical ceiling is LLM provider rate limits and
+goroutines, so the practical ceiling is LLM provider rate limits and
 host memory, not process count. **Scale up before you scale out.**
 
 Run a fleet when one of these is true:
@@ -16,25 +16,52 @@ Run a fleet when one of these is true:
 - **Some seats have to run somewhere specific.** A seat that needs a
   network zone, a filesystem, or a GPU that only one host has.
 
-It is not a throughput lever on its own: `max_concurrent` is per process,
+It is not a throughput lever on its own: `node.max_concurrent` is per process,
 so N nodes is N × that ceiling whether you wanted it or not. Size it per
 node.
 
 ## What a fleet needs
 
-**A database.** Seat leases live in PostgreSQL. Without
-`providers.database.dsn` they fall back to an in-process store and every
-node believes it owns the whole company; the engine logs
-`seat_placement_is_process_local` at boot. This is the one
-misconfiguration that silently gives two processes the same agents.
+**Shared coordination.** Seat leases live in the `coordination` slot.
+`coordination.type: local` holds them in this process, so every node
+believes it owns the whole company; the engine logs
+`seat_placement_is_process_local` at boot. It is *only* the leases: the
+fleet's shared records — the token counter, the completion ledger, the
+delivery dedupe, agent-to-agent channels, scheduled-fire claims, detached
+sandbox runs — are on the KV whatever this setting says, because each of
+them has to outlive the process rather than merely be visible to a peer. A fleet needs
+`coordination.type: embedded-kv` — and Tier A refuses `local` beside a
+clustered or external stream by name, because this is the one
+misconfiguration that would otherwise silently give two processes the
+same agents.
 
-**The right broker settings.** An unowned seat's subscription has no
-connected consumer, and two Pulsar reapers delete exactly that: set
+**Credentials go through a node that is running.** The
+[secret store](../concepts/secret-store.md#which-store-the-cli-writes) is on
+the KV like everything else the fleet shares, so `crewlet secrets set` against
+a live node reaches all of them — but it gets there through that node's
+authenticated API, because the coordination broker is inside the engine's own
+process and listens on no socket. Against a **stopped** node the same command
+writes that node's own table instead, which is the bootstrap path: the value
+is on one node until it starts and migrates the row. Fine for a first
+provisioning run, wrong for a rotation on a live fleet. `-secret-store` on a
+provisioner follows the same rule, and both take `-api URL` to name the node
+to write through. The process environment remains the fallback every node
+resolves from, so a platform secret projected as env still works unchanged.
+
+**One node or three, never two.** Two embedded-KV members have no quorum
+without each other, so the fleet stops serving the moment either
+restarts — and a rolling upgrade restarts them one at a time, which makes
+the outage certain rather than unlucky. Tier A refuses a two-member
+config by name.
+
+**The right broker settings, on Pulsar.** An unowned seat's subscription
+has no connected consumer, and two Pulsar reapers delete exactly that: set
 `subscriptionExpirationTimeMinutes` to `0` and
 `brokerDeleteInactiveTopicsEnabled` to `false` (or
 `brokerDeleteInactiveTopicsMode` to
 `delete_when_subscriptions_caught_up`). The repo's `docker-compose.yml`
-ships these values. Nothing in the engine can detect a broker that is
+ships these values under its `pulsar` profile, and CI certifies the
+backend against a broker configured this way. Nothing in the engine can detect a broker that is
 quietly deleting a quiet seat's mail.
 
 **A distinct, stable id per node.** `node.id` in the Tier A file, or
@@ -74,6 +101,23 @@ role has nobody doing it, and `fleet_role_manned` when it comes back.
 A node that does not run seats is also excluded from the denominator its
 peers divide seats by. Counting an ingress-only node would shrink every
 other node's share and strand the difference.
+
+### How `workers` is enforced
+
+Two independent things decide who runs a singleton duty, and both are
+needed:
+
+- **The `worker:{duty}` lease** decides *which* node among the ones asking.
+  Without it, two willing nodes both run the sweep.
+- **The `workers` role** decides *whether this node asks at all*. Without
+  it, a node explicitly configured `roles: [seats]` competes for every
+  duty — and wins some of them.
+
+A node without the role **refuses** the duty rather than abstaining from
+the claim, which is a distinction with teeth: internally, "no duty gate"
+means "there is no fleet, so this is always mine" — the single-node case.
+An ingress-only node that abstained would therefore run every duty. The
+refusal is silent, because the node is doing exactly what it was told to.
 
 ### Common shapes
 

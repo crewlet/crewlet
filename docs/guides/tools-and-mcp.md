@@ -27,16 +27,57 @@ Task-management tools (`create_task`, `assign_task`, `update_task`, `list_tasks`
 
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
 
-### Tool Protocol
+### Where a tool comes from
 
-```python
-class Tool(Protocol):
-    name: str
-    description: str
-    parameters: dict  # JSON Schema
+Every registered tool records **who registered it**, and that is recorded at
+registration because it cannot be recovered afterwards: a tool an MCP server
+serves is structurally identical to one the engine ships — same name, same
+schema, same call signature. With nothing recorded, a tool missing because its
+server failed to start reads as a missing builtin, which sends an operator to
+debug the wrong subsystem.
 
-    async def execute(self, params: dict, context: AgentContext) -> ToolResult: ...
-```
+`GET /tools` reports it as each tool's `source`, and the dashboard's Tools room
+groups on it:
+
+| `source` | Where the tool came from |
+|---|---|
+| `builtin` | Shipped by the engine. The agent-to-agent tools are builtins too — `a2a_ask` is registered by the same walk, so "a2a" is a capability rather than an origin |
+| `mcp:<server>` | Discovered on an MCP server. `<server>` is the **bare** template name, never the per-role instance: two seats' children of one template are the same integration to a reader grouping the catalogue |
+
+Those two are the whole grammar. A server that fails to start is visible as a
+**missing group**, rather than its tools quietly going absent from the builtins.
+
+---
+
+## Extending the engine
+
+There is no plugin API and no runtime loading. Crewlet ships as one static
+binary, and nothing under `internal/` is importable from outside the module —
+so an extension cannot be a library the engine loads.
+
+**The extension point is MCP**, deliberately. A tool server is a separate
+process (or a remote URL), it carries its own credentials, it can be written in
+any language, and a server that crashes takes down a tool group rather than the
+engine. Everything above about `mcp_servers` is that surface.
+
+Two things MCP does not cover, and what to do instead:
+
+- **A new chat or tracker vendor.** Routing an inbound delivery to a seat needs
+  a parser, and that is an in-tree Go interface — the
+  [notification spine](../concepts/event-system.md) is backend-neutral by
+  design, but a vendor contributes a client, a parser and a transport as code.
+  That is a pull request, not a config entry. The seven this build serves are
+  [Mattermost](../integrations/mattermost.md), [Slack](../integrations/slack.md),
+  [Plane](../integrations/plane.md), [Jira](../integrations/jira.md),
+  [Confluence](../integrations/confluence.md),
+  [GitLab](../integrations/gitlab.md) and [GitHub](../integrations/github.md) —
+  every one of them routes end to end (see
+  [d-703](../reference/design-decisions.md)).
+- **Company-wide periodic work.** An MCP server is called by an agent; it does
+  not get a tick of its own. Schedule it as [cron work](../concepts/scheduling.md)
+  against a seat, which gives it an agent, a turn, and the engine's own
+  at-most-once delivery across a fleet — rather than a loop that would run once
+  per node.
 
 ---
 
@@ -46,31 +87,27 @@ Instead of building hardcoded API wrappers for external tools (Jira, Slack, Conf
 
 ### Architecture
 
+```mermaid
+flowchart TD
+    subgraph ENGINE["Crewlet engine"]
+        BRIDGE["<b>Bridge</b><br/>owns every MCP server:<br/>start, stop, restart on apply"]
+        STDIO["<b>stdio child</b><br/>the engine spawns the server<br/>and speaks JSON-RPC 2.0 over<br/>stdin/stdout"]
+        HTTP["<b>HTTP / SSE client</b><br/>connects to an already-running<br/>server by URL"]
+        REG[("<b>tool registry</b><br/>each discovered tool registered<br/>as <code>mcp:&lt;server&gt;</code>, globally<br/>or in a per-role map")]
+        BRIDGE --> STDIO
+        BRIDGE --> HTTP
+        STDIO --> REG
+        HTTP --> REG
+    end
+    SERVER[["the MCP server's own API<br/>(a tracker, a code host, a wiki)"]]
+    STDIO -.-> SERVER
+    HTTP -.-> SERVER
 ```
-┌──────────────────────────────────────────────────────────┐
-│                    Crewlet Engine                         │
-│                                                          │
-│  ┌──────────────┐     ┌──────────────────────────────┐   │
-│  │  MCPToolBridge│────▶│  MCPClient (stdio)           │   │
-│  │              │     │  Launches MCP server as child │   │
-│  │  Manages all │     │  process, communicates via    │   │
-│  │  MCP servers │     │  JSON-RPC 2.0 over stdin/out  │   │
-│  │  and wraps   │     └──────────────────────────────┘   │
-│  │  discovered  │                                        │
-│  │  tools as    │     ┌──────────────────────────────┐   │
-│  │  Crewlet     │────▶│  MCPHttpClient (HTTP/SSE)    │   │
-│  │  Tool        │     │  Connects to remote MCP      │   │
-│  │  protocol    │     │  server via URL              │   │
-│  └──────────────┘     └──────────────────────────────┘   │
-│         │                                                │
-│         ▼                                                │
-│  ┌──────────────────────────────────────────────────┐    │
-│  │  MCPToolWrapper[]                                │    │
-│  │  Each discovered tool becomes a Crewlet Tool     │    │
-│  │  registered in the ToolRegistry or per-role map  │    │
-│  └──────────────────────────────────────────────────┘    │
-└──────────────────────────────────────────────────────────┘
-```
+
+A stdio server is a process **tree**, not a process: `npx` execs a launcher that
+execs the real server, so the engine puts each child in its own process group
+and signals the group. Killing only the pid it spawned leaves the grandchild
+holding the credentials and the port.
 
 ### Two Transport Modes
 
@@ -139,10 +176,55 @@ Inheritance: the unit's `mcp_env` is the base, role values override per key. The
 
 ---
 
-## Global vs Per-Role MCP Servers
+## Shared vs per-role servers
 
-- **Global servers** — launched once, shared by all agents. Tools are registered in the global `ToolRegistry`. Use for servers that don't need per-agent identity (e.g., a shared knowledge base).
-- **Per-role instances** — launched with the role's merged env vars. Tools are stored in `_role_mcp_tools` and only available to agents with that role. Use for servers where each agent needs its own identity (e.g., Jira, Slack, GitHub).
+`shared:` decides which of two quite different things a server is, and the
+difference is a lifetime as much as a scope.
+
+| | `shared: true` (default) | `shared: false` |
+|---|---|---|
+| What it is | One child for the company | A **template**: one child per role that declares credentials for it |
+| Whose identity | Nobody's — it carries no seat's credentials | That seat's, from `role.mcp_env[name]` |
+| Who can call it | Every seat | Only the seat whose child it is |
+| Lifetime | The config **epoch** — started on apply, replaced on the next one | The seat's **lease** — spawned when this node claims the seat, killed when it releases it |
+| Use it for | A shared knowledge base, a read-only reference server | A tracker, a chat backend, a code host — anywhere the action must be attributable to *this* agent |
+
+**An `mcp_servers` edit takes effect on the next turn, not at the next
+restart.** Applying a revision reconciles the bridge server by server: an entry
+that did not change is left alone, and one that was added, removed or re-pointed
+starts, stops or restarts **only that child**. A seat mid-turn finishes on the
+tool surface it started with, and its next turn renders the new one — the same
+next-turn promise [tool skills](../concepts/tool-skills.md), embeddings and the
+org chart make. A per-role template is reconciled the same way, on the seats
+this node holds.
+
+**A per-role child belongs to a seat, not to a node.** In a fleet each node
+claims a slice of the company, and it spawns children only for the seats it
+holds — so the company's processes are spread across the fleet rather than run
+N times over. It also means a seat that moves to a peer takes its identity with
+it: the credentials in a child *are* that seat, and one left running after the
+lease moved would let the old node keep acting as an agent it no longer serves.
+
+**Each seat gets its own surface**, and that is a correctness property rather
+than tidiness. Two children of one template publish the *same tool names*, so a
+single shared catalogue would keep whichever registered last and hand it to
+everyone — every seat calling one child, acting under one agent's identity in
+the tracker, invisibly, because the call looks identical from the engine's
+side. A claimed seat therefore gets its own registry (the company's catalogue
+plus its own children's tools) and its own bridge (holding only its own
+children).
+
+**A seat that declares no `mcp_env` for a template gets no child.** A template
+with nobody's identity in it is a server nobody can act through, and offering
+its tools anyway would put entries in the prompt whose every call fails
+authentication.
+
+**A server that will not start costs its own tools and nothing else.** The seat
+keeps its builtins, the other servers keep working, and the operator sees that
+server's **group missing** from the Tools room — which points at the right
+subsystem, where builtins quietly shrinking would not. It is logged as
+`mcp_server_failed` with the reason. Failing the apply instead would take a
+working company offline because one vendor's binary was absent from an image.
 
 ---
 
@@ -185,7 +267,7 @@ roles:
       github:    { Authorization: "Bearer ${ALICE_GH_TOKEN}" }
 ```
 
-Environment variables and HTTP header values support `${VAR}` references that resolve from `os.environ` at startup — both whole-value (`"${TOKEN}"`) and embedded (`"Bearer ${TOKEN}"`) — so secrets stay out of config files.
+Environment variables and HTTP header values support `${VAR}` references that resolve from the process environment at startup — both whole-value (`"${TOKEN}"`) and embedded (`"Bearer ${TOKEN}"`) — so secrets stay out of config files.
 
 ### Tool annotation overrides
 
@@ -207,13 +289,13 @@ Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); over
 
 ## How Tool Calls Work
 
-From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions. The LLM doesn't know whether a tool is a Python function or an MCP server talking to Jira.
+From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions. The model does not know whether a tool is a function inside the engine or an MCP server talking to a tracker.
 
-**Tool resolution order** (in `_execute_tool`):
+**Tool resolution order:**
 
 1. **Per-role MCP tools** — checked first (role-specific credentials)
 2. **Global tools** — builtin tools + global MCP tools
 
-**Tool output is returned to the LLM in full.** `sanitize_tool_output` strips control characters and `validate_tool_result` redacts secrets / rejects binary, but results are **never length-truncated** — a truncated result silently hides content the agent reasons over (the tail of a `list_mcp_server_tools` listing, for example, where the tool the agent needs may sort past any cap). The same principle applies across the engine: phase / aux telemetry, the agent diary (stored content), coalesced notification digests, and the Review / extension-judge tool logs all carry their full text. The one deliberate bound is the *embeddings* input (diary writes, similarity-query keys), trimmed only because the embeddings provider has a hard token limit — the stored/displayed text stays complete.
+**Tool output is returned to the LLM in full.** Control characters are stripped, secrets redacted and binary rejected, but results are **never length-truncated** — a truncated result silently hides content the agent reasons over (the tail of a `list_mcp_server_tools` listing, for example, where the tool the agent needs may sort past any cap). The same principle applies across the engine: phase / aux telemetry, the agent diary (stored content), coalesced notification digests, and the Review / extension-judge tool logs all carry their full text. The one deliberate bound is the *embeddings* input (diary writes, similarity-query keys), trimmed only because the embeddings provider has a hard token limit — the stored/displayed text stays complete.
 
 See [Agent Runtime](../concepts/agent-runtime.md) for the full execution loop.

@@ -1,0 +1,292 @@
+# Built-in cli-agent profiles.
+#
+# DATA, not code: every field here is replaceable from
+# providers.llm.<key>.cli.overrides, because these flags and JSON shapes
+# belong to vendors who rename them between releases. `written_for` is the
+# version each profile was authored against, and `crewlet llm doctor` prints
+# it beside the version actually installed — a profile that quietly stopped
+# matching its CLI is the failure this file is shaped to make visible.
+#
+# Paths under credential_paths and volatile_paths are relative to the SEAT
+# HOME, so a CLI that keeps two directories can name files in both.
+
+claude-code:
+  binary: claude
+  vendor: anthropic
+  written_for: "Claude Code CLI 2.x (`claude --version`)"
+  version_args: ["--version"]
+  # --no-session-persistence and --safe-mode are the isolation the rest of
+  # this backend depends on: no transcript on disk to leak between turns, and
+  # no CLAUDE.md, skill, plugin, hook or MCP server admitted from a host the
+  # engine does not control. The tool denials make it a text model — Crewlet's
+  # tools ride the prompt envelope, and a CLI editing files in its own sandbox
+  # is invisible to the tool registry, the permission model and redaction.
+  complete_args:
+    - "-p"
+    - "--output-format"
+    - "json"
+    - "--no-session-persistence"
+    - "--safe-mode"
+    - "--strict-mcp-config"
+    - "--disable-slash-commands"
+    - "--disallowedTools"
+    - "Bash"
+    - "Read"
+    - "Write"
+    - "Edit"
+    - "Glob"
+    - "Grep"
+    - "WebFetch"
+    - "WebSearch"
+    - "Task"
+    - "NotebookEdit"
+    - "TodoWrite"
+  model_args: ["--model", "{model}"]
+  prompt_mode: stdin
+  output: json
+  text_paths: [["result"]]
+  error_paths: [["is_error"]]
+  usage:
+    input: [["usage", "input_tokens"]]
+    output: [["usage", "output_tokens"]]
+    cache_read: [["usage", "cache_read_input_tokens"]]
+    cache_write: [["usage", "cache_creation_input_tokens"]]
+  config_env:
+    CLAUDE_CONFIG_DIR: ".claude"
+  credential_paths: [".claude/.credentials.json"]
+  volatile_paths:
+    # .claude.json is not merely settings: it carries a `projects` map whose
+    # entries hold per-directory conversation HISTORY. Observed on disk after
+    # a real call, which is why it is pruned rather than trusted — the
+    # remaining keys (machineID, migration flags, cached feature data) are
+    # re-created on the next start at the cost of a few milliseconds.
+    - ".claude/.claude.json"
+    - ".claude/projects"
+    - ".claude/sessions"
+    - ".claude/todos"
+    - ".claude/tasks"
+    - ".claude/history.jsonl"
+    - ".claude/statsig"
+    - ".claude/shell-snapshots"
+    - ".claude/telemetry"
+  host_credential_paths: [".claude/.credentials.json"]
+  token_env: "CLAUDE_CODE_OAUTH_TOKEN"
+  api_key_env: "ANTHROPIC_API_KEY"
+  login_args: ["/login"]
+  capture_token_args: ["setup-token"]
+  # A spent plan exits 0 with prose. The sentinel is emitted verbatim and
+  # carries the reset instant after a pipe, so the classification yields a
+  # real Retry-After rather than a guess.
+  limit_markers:
+    - sentinel: "Claude AI usage limit reached"
+      reset_separator: "|"
+      reset_unit: epoch
+  auth_markers:
+    - sentinel: "Invalid API key"
+    - sentinel: "OAuth token has expired"
+    - sentinel: "Please run /login"
+
+codex:
+  binary: codex
+  vendor: openai
+  written_for: "Codex CLI 0.5x (`codex --version`)"
+  version_args: ["--version"]
+  # read-only sandbox for the same reason as Claude's tool denials, and
+  # --skip-git-repo-check because the per-call scratch directory is
+  # deliberately not a repository.
+  complete_args: ["exec", "--json", "--sandbox", "read-only", "--skip-git-repo-check", "-"]
+  model_args: ["--model", "{model}"]
+  prompt_mode: stdin
+  output: jsonl
+  # Two shapes, newest first: 0.5x emits item.completed envelopes, 0.4x
+  # emitted msg envelopes. Both are listed rather than one being chosen so an
+  # operator on either release needs no override.
+  text_paths: [["item", "text"], ["msg", "message"]]
+  usage:
+    input:
+      - ["msg", "info", "total_token_usage", "input_tokens"]
+      - ["usage", "input_tokens"]
+    output:
+      - ["msg", "info", "total_token_usage", "output_tokens"]
+      - ["usage", "output_tokens"]
+    cache_read:
+      - ["msg", "info", "total_token_usage", "cached_input_tokens"]
+  config_env:
+    CODEX_HOME: ".codex"
+  credential_paths: [".codex/auth.json"]
+  volatile_paths: [".codex/sessions", ".codex/history.jsonl", ".codex/log"]
+  host_credential_paths: [".codex/auth.json"]
+  api_key_env: "OPENAI_API_KEY"
+  login_args: ["login"]
+  status_args: ["login", "status"]
+  logout_args: ["logout"]
+  limit_markers:
+    - sentinel: "You've hit your usage limit"
+    - sentinel: "rate limit reached"
+  auth_markers:
+    - sentinel: "Not logged in"
+    - sentinel: "run `codex login`"
+
+gemini-cli:
+  binary: gemini
+  vendor: google
+  written_for: "Gemini CLI 0.1x (`gemini --version`)"
+  version_args: ["--version"]
+  complete_args: ["--output-format", "json", "--approval-mode", "default"]
+  model_args: ["--model", "{model}"]
+  prompt_mode: stdin
+  output: json
+  text_paths: [["response"]]
+  # Gemini's usage block moved between releases and some builds omit it
+  # entirely; when none of these resolves the counts are estimated and
+  # `crewlet llm doctor` says so rather than reporting zeros as fact.
+  usage:
+    input: [["stats", "metrics", "input_tokens"], ["stats", "input_tokens"]]
+    output: [["stats", "metrics", "output_tokens"], ["stats", "output_tokens"]]
+    cache_read: [["stats", "metrics", "cached_content_tokens"]]
+  credential_paths: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"]
+  volatile_paths: [".gemini/tmp", ".gemini/history", ".gemini/sessions"]
+  host_credential_paths: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"]
+  api_key_env: "GEMINI_API_KEY"
+  # A project id is configuration, not a credential, and Gemini genuinely
+  # needs the ambient one on a Workspace account.
+  passthrough_env: ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]
+  login_args: []
+  limit_markers:
+    - sentinel: "Quota exceeded"
+    - sentinel: "RESOURCE_EXHAUSTED"
+  auth_markers:
+    - sentinel: "UNAUTHENTICATED"
+    - sentinel: "Please sign in"
+
+qwen-code:
+  binary: qwen
+  vendor: openai
+  written_for: "Qwen Code 0.1x (`qwen --version`), a Gemini CLI fork"
+  version_args: ["--version"]
+  complete_args: ["--output-format", "json", "--approval-mode", "default"]
+  model_args: ["--model", "{model}"]
+  prompt_mode: stdin
+  output: json
+  text_paths: [["response"]]
+  usage:
+    input: [["stats", "metrics", "input_tokens"], ["stats", "input_tokens"]]
+    output: [["stats", "metrics", "output_tokens"], ["stats", "output_tokens"]]
+  credential_paths: [".qwen/oauth_creds.json"]
+  volatile_paths: [".qwen/tmp", ".qwen/history", ".qwen/sessions"]
+  host_credential_paths: [".qwen/oauth_creds.json"]
+  api_key_env: "DASHSCOPE_API_KEY"
+  limit_markers:
+    - sentinel: "Quota exceeded"
+    - sentinel: "RESOURCE_EXHAUSTED"
+  auth_markers:
+    - sentinel: "UNAUTHENTICATED"
+
+opencode:
+  binary: opencode
+  vendor: anthropic
+  written_for: "OpenCode 0.4x (`opencode --version`)"
+  version_args: ["--version"]
+  complete_args: ["run", "--print-logs=false"]
+  model_args: ["--model", "{model}"]
+  prompt_mode: argv
+  output: text
+  credential_paths: [".local/share/opencode/auth.json"]
+  volatile_paths:
+    - ".local/share/opencode/storage"
+    - ".local/share/opencode/log"
+    - ".local/share/opencode/project"
+  host_credential_paths: [".local/share/opencode/auth.json"]
+  login_args: ["auth", "login"]
+  logout_args: ["auth", "logout"]
+  status_args: ["auth", "list"]
+  # The one built-in profile with a real credential login, which is why the
+  # `crewlet llm login --username/--password-stdin` path exists at all.
+  stdin_login:
+    args: ["auth", "login", "--username", "{username}"]
+    stdin_template: "{password}\n"
+  limit_markers:
+    - sentinel: "usage limit"
+    - sentinel: "429"
+  auth_markers:
+    - sentinel: "not authenticated"
+    - sentinel: "no credentials"
+
+cursor-agent:
+  binary: cursor-agent
+  vendor: anthropic
+  written_for: "Cursor Agent 2.x (`cursor-agent --version`)"
+  version_args: ["--version"]
+  complete_args: ["-p", "--output-format", "json"]
+  model_args: ["--model", "{model}"]
+  prompt_mode: stdin
+  output: json
+  text_paths: [["result"], ["response"]]
+  usage:
+    input: [["usage", "input_tokens"]]
+    output: [["usage", "output_tokens"]]
+  config_env:
+    CURSOR_CONFIG_DIR: ".cursor"
+  credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
+  volatile_paths: [".cursor/chats", ".cursor/logs", ".cursor/sessions"]
+  host_credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
+  login_args: ["login"]
+  logout_args: ["logout"]
+  status_args: ["status"]
+  limit_markers:
+    - sentinel: "usage limit"
+    - sentinel: "quota"
+  auth_markers:
+    - sentinel: "not logged in"
+
+copilot:
+  binary: copilot
+  vendor: openai
+  written_for: "GitHub Copilot CLI 0.3x (`copilot --version`)"
+  version_args: ["--version"]
+  complete_args: ["-p"]
+  model_args: ["--model", "{model}"]
+  # The prompt goes on argv, so a long transcript is bounded by ARG_MAX
+  # (~2 MB on Linux, 256 KB on macOS) and fails at exec rather than at the
+  # model. Documented in subscription-llm-backends.md.
+  prompt_mode: argv
+  output: text
+  credential_paths: [".copilot/hosts.json"]
+  volatile_paths: [".copilot/history", ".copilot/logs", ".copilot/sessions"]
+  host_credential_paths: [".copilot/hosts.json", ".config/gh/hosts.yml"]
+  # Copilot authenticates with a GitHub token, so this is its key variable —
+  # reached deliberately through auth.mode api-key or inherit-env, never
+  # forwarded silently.
+  api_key_env: "GITHUB_TOKEN"
+  login_args: ["login"]
+  logout_args: ["logout"]
+  limit_markers:
+    - sentinel: "usage limit"
+    - sentinel: "rate limit"
+  auth_markers:
+    - sentinel: "not authenticated"
+    - sentinel: "gh auth login"
+
+grok:
+  binary: grok
+  vendor: openai
+  written_for: "Grok CLI 0.1x (`grok --version`)"
+  version_args: ["--version"]
+  complete_args: ["-p"]
+  model_args: ["--model", "{model}"]
+  prompt_mode: argv
+  output: text
+  credential_paths: [".grok/auth.json"]
+  volatile_paths: [".grok/history", ".grok/sessions"]
+  host_credential_paths: [".grok/auth.json"]
+  api_key_env: "GROK_API_KEY"
+  limit_markers:
+    - sentinel: "rate limit"
+  auth_markers:
+    - sentinel: "invalid api key"
+
+# `custom` ships NOTHING on purpose. An operator pointing at their own wrapper
+# or a self-hosted gateway declares every field under cli.overrides, and the
+# profile validation then names whichever one they left out — which is a far
+# better first run than defaults borrowed from an unrelated vendor's CLI.
+custom: {}

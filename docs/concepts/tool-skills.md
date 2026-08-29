@@ -27,7 +27,7 @@ This covers the *how-to* half of tool decoupling. The structural half — the en
 flowchart TD
     OP["(operator authors / edits)"]
     KB["Knowledge backend — 'Tool Skills' container<br/>(Confluence space TS / Plane project TS)"]
-    SYNC["ToolSkillSyncWorker /<br/>PlaneSkillSyncWorker"]
+    SYNC["skill sync worker<br/>(one, per backend)"]
     REG["PromptSkillRegistry<br/>(in-memory)"]
     CAT["summary in per-phase catalogue"]
     LOAD["load_tool_skill(key) builtin<br/>(LLM-driven, always available)"]
@@ -43,7 +43,7 @@ flowchart TD
 
 **No code defaults.** The engine ships zero skill prose. An empty container → empty registry → just the tool catalogue. Operators seed it with `crewlet confluence import` / `crewlet plane import` (see below).
 
-**One sync worker, selected by backend.** The engine constructs exactly one — `ToolSkillSyncWorker` (Confluence) or `PlaneSkillSyncWorker` (Plane), matching the single-homed knowledge backend (see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). Both apply the same **admission predicate** to every page, at boot and on each webhook alike: the page lives in the configured container *and* identifies as a skill (Confluence: the `crewlet-skill` marker label + a decodable YAML macro; Plane: a body that decodes to a leading YAML code block with a `trigger`). A previously admitted page that stops satisfying the predicate — deleted, archived, moved out, or edited into a non-skill — is **evicted**, never left serving its last-good body.
+**One sync worker, selected by backend.** The engine constructs exactly one, matching the single-homed knowledge backend (see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). Both apply the same **admission predicate** to every page, at boot and on each webhook alike: the page lives in the configured container *and* identifies as a skill (Confluence: the `crewlet-skill` marker label + a decodable YAML macro; Plane: a body that decodes to a leading YAML code block with a `trigger`). A previously admitted page that stops satisfying the predicate — deleted, archived, moved out, or edited into a non-skill — is **evicted**, never left serving its last-good body.
 
 ---
 
@@ -164,7 +164,7 @@ A skill is **catalogued** in a phase's prompt when its declared `phases` include
 
 | Phase | Tool surface seen | Notes |
 |---|---|---|
-| **Plan** | full catalogue (`ToolSurface.catalogue_names()`) | Planner sees every skill that could apply if the plan picks that tool. |
+| **Plan** | full catalogue (the turn's tool catalogue) | Planner sees every skill that could apply if the plan picks that tool. |
 | **Execute** | `plan.tools_needed ∪ executor_always_on` | Narrowed — only tools the executor will actually call see their skill catalogued. |
 | **Review** | empty (Review has no domain tools) | MCP-server-keyed skills still appear when an operator scopes a skill to the Review phase (lists it in the skill's `phases`), even though Review has no domain-tool surface. |
 | **Sub-agent** | parent-passed allowlist | Same matching as Execute against the sub-agent's narrower surface. |
@@ -193,7 +193,7 @@ The engine deliberately does **not** auto-inject skill bodies. All loads are LLM
 
 ## Required skills — load-before-use enforcement
 
-A skill is practices for the tools its trigger names — and in practice models sometimes skip the `load_tool_skill` call and use the tool without reading them. Skills are therefore **enforced by default** (`required: true`): the guard (`crewlet.agent.skills.guard.SkillGuard`) enforces the load **in code, not in prompts**. Every tool call in Plan, Execute, and Sub-agent sessions passes through the engine's dispatch gate (`execute_tool`); a call to a tool the skill's trigger covers is rejected until the LLM has successfully called `load_tool_skill(key)` **in the same session**:
+A skill is practices for the tools its trigger names — and in practice models sometimes skip the `load_tool_skill` call and use the tool without reading them. Skills are therefore **enforced by default** (`required: true`): the guard enforces the load **in code, not in prompts**. Every tool call in Plan, Execute, and Sub-agent sessions passes through the engine's dispatch gate; a call to a tool the skill's trigger covers is rejected until the LLM has successfully called `load_tool_skill(key)` **in the same session**:
 
 ```
 Tool 'create_pull_request' is gated behind a required tool skill you
@@ -205,7 +205,11 @@ practice(s), then retry 'create_pull_request'. Loading is needed once
 per session; after that the tool works normally.
 ```
 
-The blocked call never executes; the LLM loads the skill on the next round and retries. Every block also publishes a `phase.tool_skill_blocked` event (agent, phase, tool, skill keys, turn id) so operators can see agents attempting to skip required practices.
+The blocked call never executes; the LLM loads the skill on the next round and retries.
+
+**Session scope, not turn scope.** "Loaded" means the body is in *this model's context*, and Plan, Execute and each sub-agent are separate message histories — so a skill loaded during Plan is genuinely not in front of the executor, and each session loads it itself. A round-cap extension continues the same session and keeps the load; a `self_iterate` starts a fresh session and therefore a fresh guard, because its context started over too.
+
+**The exempt set is about deadlock, not policy.** `load_tool_skill` itself, the discovery meta-tools, and the phase submitters are never blocked, whatever a trigger says: gating the unlock would make a session unrecoverable, gating discovery would add rounds without protecting anything, and gating a submitter would brick the phase. A misauthored trigger can cost a phase some tools; it can never cost the phase. Every block also publishes a `phase.tool_skill_blocked` event (agent, phase, tool, skill keys, turn id) so operators can see agents attempting to skip required practices.
 
 ### Opting out — advisory skills
 
@@ -266,17 +270,19 @@ Useful flags (see the [CLI reference](../reference/cli.md) for the full per-comm
 - `--space TS` (Confluence) / `--project TS` (Plane) — target a different Tool Skills container than the default `TS` (skill files only; knowledge docs take their container from their parent directory).
 - `--create-space` — Confluence only: auto-create any target space that doesn't exist (requires space-admin on the bot account). The Plane importer never creates projects — a missing project fails the pre-flight with remediation.
 
-### Combined deploy (engine + seed in one command)
+### Publishing before the engine starts
 
+Publish, then run — two commands, in that order:
+
+```bash
+crewlet plane import company.yaml ./skills/     # publish the pages
+crewlet run -config crewlet.yaml -company company.yaml
 ```
-crewlet run [config.yaml] --import-confluence [PATH] --import-company company.yaml
-            [--update-confluence] [--create-confluence-space] [--prune-confluence]
 
-crewlet run [config.yaml] --import-plane [PATH] --import-company company.yaml
-            [--update-plane] [--prune-plane]
-```
-
-Runs the same import step first, *then* starts the engine. `--import-company` is required alongside either import flag — the backend credentials come from the Tier B company YAML, not the Tier A bootstrap passed as the positional `config` — and the two import flags are mutually exclusive (one knowledge backend per run). Use this when bringing up a fresh deployment so the engine's own boot-time sync picks up the just-imported skill pages. `--prune-confluence` / `--prune-plane` mirror `--prune` on the standalone importers.
+The importer reads the backend's credentials from the **Tier B company
+YAML**, not from the Tier A bootstrap, so it works before a node is
+configured at all. Running it first on a fresh deployment means the
+engine's own boot-time sync picks up the pages that are already there.
 
 ### Edit at runtime
 
@@ -299,7 +305,7 @@ Re-runs the boot-time full populate against a *temporary* registry and prints th
 
 Both backends share the same idea: a machine-readable YAML frontmatter block at the top of the page (edit to change binding metadata — `key` / `trigger` / `phases` / `title`), followed by the guidance rendered as a normal page body (edit to change the prose). When the sync worker reads a page back, it parses the YAML and flattens the body HTML to plain text for the LLM. The conversion is intentionally lossy on formatting — bullets and headings flatten to text-with-newlines — because the body's only consumer is an LLM, not a human reader. Operators who want exact source-text fidelity should keep the `.md` files in version control and re-run the import with `--update` when they change.
 
-Every synced skill records the backend page it came from in `PromptSkill.source_page_id` / `source_page_version` — used for logging and webhook eviction only. Confluence stamps its integer page version; Plane has no integer page version (the API exposes `updated_at` only), so Plane-sourced skills keep `source_page_version = 0`.
+Every synced skill records the backend page it came from in `skills.Skill.SourcePageID` / `source_page_version` — used for logging and webhook eviction only. Confluence stamps its integer page version; Plane has no integer page version (the API exposes `updated_at` only), so Plane-sourced skills keep `source_page_version = 0`.
 
 ### Confluence
 
@@ -315,9 +321,14 @@ Each skill page opens with a literal `<pre><code class="language-yaml">` block i
 
 | Setting | Default | Description |
 |---|---|---|
-| `CREWLET_TOOL_SKILLS_SPACE` (env var) | `TS` | Confluence space key the engine watches. Set to empty string to disable the tool-skill sync entirely (the engine still boots; the rest of the Confluence integration is unaffected). |
-| `CREWLET_TOOL_SKILLS_PROJECT` (env var) | `TS` | [Plane](../integrations/plane.md) project identifier the engine watches when Plane is the knowledge backend — the `CREWLET_TOOL_SKILLS_SPACE` analog, read by the engine's `PlaneSkillSyncWorker`, the searcher's result exclusion, and the `crewlet plane import` default alike. Set to empty string to disable the sync (and the exclusion) entirely. |
-| `--space <key>` / `--project <id>` (CLI flags) | — | Per-invocation override of the Tool Skills container for `crewlet confluence import` / `resync` and `crewlet plane import` / `resync` respectively (skill files only — knowledge docs take their container from their parent directory). |
+| `integrations.confluence.skills_space` | `TS` | Confluence space key the engine watches when Confluence is the knowledge backend — read by the skill sync, the searcher's result exclusion and the parser's routing exclusion alike. |
+| `integrations.plane.skills_project` | `TS` | [Plane](../integrations/plane.md) project identifier the engine watches when Plane is the knowledge backend, with the same three consumers. |
+| `-space <key>` / `-project <id>` (CLI flags) | the config field | Per-invocation override of the Tool Skills container for `crewlet confluence import` / `resync` and `crewlet plane import` / `resync` respectively (skill files only — knowledge docs take their container from their parent directory). |
+| `CREWLET_TOOL_SKILLS_SPACE` / `CREWLET_TOOL_SKILLS_PROJECT` (env vars) | — | The **flag defaults** for those four commands, so an operator running them repeatedly does not retype the container. Nothing else reads them. |
+
+**Both fields are three-valued, and the empty string is an answer.** Absent takes the reserved default `TS`; a named container takes that container; an explicit `skills_space: ""` / `skills_project: ""` turns tool skills **off** — no sync, no routing exclusion, no search exclusion, and an import that meets a skill file refuses rather than filing it as prose. The off switch exists because the default reserves a real container name: a company whose ordinary work project happens to be `TS` would otherwise have it silently dropped from every knowledge search and every routing decision, with no way in the config to say otherwise.
+
+**The engine reads the config field and only the config field.** The environment variables are flag defaults for the operator commands and nothing more: a fleet whose nodes each read a container out of whoever's shell started them would disagree about which one holds the skills, and the symptom is agents on one node following guidance the others have never heard of. A routing decision belongs in the versioned document describing the company.
 
 The Tool Skills container holds engine-managed scaffolding, not general knowledge. Crewlet does not maintain a synced knowledge index, so there is nothing for the container to pollute; just don't add it to the knowledge read scope (`knowledge.confluence_spaces` / `knowledge.plane_projects`) and skill pages won't surface in the `## Relevant knowledge` query-time search — on Plane the searcher additionally drops skills-project rows from results wholesale, since a skill page's leading YAML block would dominate any snippet.
 
@@ -330,7 +341,7 @@ The container is also **excluded from notification routing**. Webhooks for tool-
 | What happens | Effect |
 |---|---|
 | Knowledge backend unreachable at boot | A boot walk that cannot enumerate the container completely never seeds (a partial walk must not silently delete skills). The engine **retries the walk with exponential backoff** (5 attempts from 5 s — sized for the compose boot race where the backend's API comes up seconds after the engine), so the ordinary race self-heals without a restart; if every attempt fails it logs `tool_skill_resync_exhausted` (error) and the registry keeps whatever it holds — empty at boot, or the previous backend's skills after a live cut-over — until the operator fixes the backend and re-applies the integrations config (or restarts). Webhook events apply once the backend recovers. |
-| Webhook lost during a long outage | The next engine restart's boot-time full populate reconciles. `crewlet confluence resync` / `crewlet plane resync` is the no-restart alternative. |
+| Webhook lost during a long outage | The next engine restart's boot-time full populate reconciles, and so does the next webhook for that page. `crewlet confluence resync` / `crewlet plane resync` is **a read-only diagnostic**, not a way to fix it: it prints what the container holds so you can see the drift, and deliberately does not reach into a running engine — see [Drift recovery](#drift-recovery) above. |
 | Skill body over the 32 KB cap | Page is skipped at parse time with a `tool_skill_sync_invalid_skill` log line; other skills load normally. |
 | Page is missing the leading YAML frontmatter block | Logged with `tool_skill_sync_decode_failed` — and if the page was previously admitted, it is **evicted** rather than left serving its last-good body. On Confluence, non-skill pages in the space (including the auto-generated home page) never reach the decoder because the boot walk filters by the `crewlet-skill` marker label; on Plane, they skip at `debug` (only crewlet-imported pages — `external_source="crewlet"` — log at `info`). |
 | Skill page archived (Plane) | Evicted on the archive webhook — archive is Plane's "remove" gesture (delete requires archive first), and the boot walk excludes archived pages. |
@@ -344,8 +355,8 @@ The container is also **excluded from notification routing**. Webhooks for tool-
 
 ## See also
 
-- [Agent Runtime](agent-runtime.md) — where the per-phase prompt builders live; how the registry is threaded into `TurnEngine`.
+- [Agent Runtime](agent-runtime.md) — where the per-phase prompt builders live; how the registry is threaded into the turn engine.
 - [Turn Engine](turn-engine.md) — phase contracts; how `plan.tools_needed` is resolved.
-- [CLI Reference](../reference/cli.md) — full flag reference for `crewlet confluence` / `crewlet plane` and `crewlet run --import-confluence` / `--import-plane`.
-- [Environment Variables](../reference/environment-variables.md) — `CREWLET_TOOL_SKILLS_SPACE`, `CREWLET_TOOL_SKILLS_PROJECT`.
+- [CLI Reference](../reference/cli.md) — full flag reference for `crewlet plane import` / `crewlet plane resync`.
+- [Environment Variables](../reference/environment-variables.md) — `CREWLET_TOOL_SKILLS_SPACE`, `CREWLET_TOOL_SKILLS_PROJECT` (import/resync flag defaults; the engine reads `integrations.confluence.skills_space` / `integrations.plane.skills_project`).
 - [Plane integration](../integrations/plane.md) — the Plane knowledge backend: search, import, sync, promotion.

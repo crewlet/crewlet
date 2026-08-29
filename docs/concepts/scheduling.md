@@ -1,6 +1,6 @@
 # Scheduling
 
-The **Scheduler** (`crewlet.schedule`) lets an agent — or a whole unit —
+The **Scheduler** (`internal/schedule`) lets an agent — or a whole unit —
 own **recurring work** without an external cron emitting webhooks into
 the engine. A QA Engineer can run a smoke-test pipeline every morning, a
 team can hold an async standup at 9:30, a Knowledge-Base agent can audit
@@ -15,13 +15,13 @@ of the org via `engine.reload_config()`.
 
 ## How it works
 
-A single asyncio loop ticks on a short interval (default 10s). Each tick:
+A single loop ticks on a short interval (default 10s). Each tick:
 
 1. Enumerates every `Schedule` across the **live** org (all roles and all
    units — read fresh each tick, so hot-reload is free).
 2. Works out which schedules are **due** since the previous tick.
 3. Resolves the **runner(s)** for each due fire.
-4. Claims the fire in the `scheduled_runs` ledger (at-most-once) and
+4. Claims the fire in the fleet's `fires` slot (at-most-once) and
    publishes a `TaskAssigned` to each runner's inbox topic
    (`crewlet.agent.{handle}.inbox`).
 
@@ -38,7 +38,7 @@ Scheduler loop (every tick_seconds)
                                    └── lead  → the unit's effective lead
         │
         ▼
-   claim scheduled_runs (composite PK dedup)  ── already claimed? skip
+   claim the fire on the fleet (identity dedup)  ── already claimed? skip
         │ claimed
         ▼
    publish TaskAssigned → crewlet.agent.{handle}.inbox  (+ ScheduledTaskFired)
@@ -104,7 +104,7 @@ units:
   - name: Backend
     type: team
     lead: Backend Lead
-    slack_channel: C_BACKEND
+    channel: C_BACKEND
     schedules:
       # target defaults to `each` → every direct member posts their own update
       - name: daily-standup
@@ -133,11 +133,11 @@ Runners are resolved from the **org**, never from the agents running in
 the ticking process. A fire is addressed to the runner seat's inbox and
 consumed by whichever node owns that seat — which is rarely the node
 whose tick won the ledger claim. The seat's agent id comes from
-`Organization.agent_id_for`, the same `uuid5` over `(org name, handle)`
+`org.Organization.AgentIDFor`, the same `uuid5` over `(org name, handle)`
 every node derives, so the `TaskAssigned` a scheduler publishes names
 exactly the identity the turn will run under.
 
-> **Schedules are not inherited.** Unlike `lead` and `slack_channel`, a
+> **Schedules are not inherited.** Unlike `lead` and `channel`, a
 > schedule on a department does **not** cascade to child units — that
 > would silently multiply a standup across every squad. Declare schedules
 > explicitly on each unit that should run them.
@@ -173,30 +173,49 @@ manager).
 
 ### At-most-once
 
-Every fire is claimed in the `scheduled_runs` table before publishing.
-The dedup identity is a **composite PRIMARY KEY** and the claim is
-`INSERT … ON CONFLICT DO NOTHING`, so a restart, a slow tick, or a
-re-evaluated minute can never fire the same run twice.
+Every fire is claimed in the [coordination store](coordination.md)'s
+`fires` slot before publishing — a first-writer-wins key per dispatch
+identity, so a restart, a slow tick, a re-evaluated minute, **or the
+scheduler duty moving to another node** can never fire the same run
+twice.
 
 ```
-PRIMARY KEY (scope_type, scope_id, schedule_name, fire_label, target_handle)
+scope_type · scope_id · schedule_name · fire_label · target_handle
 ```
+
+The claim is shared rather than node-local because the scheduler is a
+[singleton duty](seat-ownership.md#singleton-duties) and therefore
+*moves*: a lease lapse, a drain or a rolling upgrade hands the tick to a
+peer, and a peer reading its own database would find an empty ledger and
+let its catchup pass re-fire everything the previous holder claimed.
 
 `fire_label` is the schedule's **local wall-clock** stamp
 (`YYYYmmddTHHMM` in its timezone), not the UTC instant — so the dedup is
-DST-correct (see [DST & cron edge cases](#dst--cron-edge-cases)) and a
-`:` in any name/handle can't collide two fires (the identity is the
-column tuple, not a joined string).
+DST-correct (see [DST & cron edge cases](#dst--cron-edge-cases)). The
+identity is five separate components, and the key they are rendered into
+escapes each one, so a delimiter inside a unit or schedule name cannot
+make two different fires claim one key.
 
-`scheduled_runs` is a **dispatch ledger**, not a turn-outcome store:
-`outcome` is `fired` or `skipped_catchup`. The downstream turn result
+The claim **fails closed**: a coordination store that cannot be read
+yields no dispatch and the tick is retried on the next one. That is the
+opposite polarity to the [completion ledger](seat-ownership.md#the-completion-ledger),
+deliberately — that one asks "has this work been done", whose safe answer
+is to re-run, while this one asks "may I start", whose safe answer is to
+wait.
+
+`scheduled_runs` — the node's own table — stays as **this node's audit
+record** of what it dispatched, which is what the dashboard reads and what
+the retention sweep purges. It is the same split the token counter makes
+between the shared `budgets` slot and the per-agent `token_usage` rows:
+what the fleet has to agree on is "may I start", and nothing more. Its
+`outcome` is `fired` or `skipped_catchup`; the downstream turn result
 (done / failed / timed-out) lives in the normal turn telemetry
 (`TaskStarted` / `TaskCompleted` / `TaskFailed`, `TurnGuardBreach`) keyed
 by the same trace.
 
-> Scheduling **requires a database** — the ledger is what makes
-> at-most-once delivery survive restarts. With no database configured the
-> scheduler logs a disabled notice and does not start.
+> A node with no database still schedules correctly — the guarantee lives
+> in the coordination store now, not in the node's file. What such a node
+> loses is its own dispatch history in the dashboard.
 
 ### Missed-tick catchup
 
@@ -250,6 +269,28 @@ minute.
 
 ---
 
+## When the loop runs
+
+The engine arms the tick loop when three things hold, and re-checks all three
+on **every config apply**:
+
+1. `scheduling.enabled` is not `false`,
+2. this node has a store — the at-most-once claim ledger lives there, and a
+   scheduler with a process-local claim looks identical to a correct one until
+   there are two nodes, and then every company gets two standups,
+3. the company actually declares at least one role or unit schedule.
+
+Because the third condition is re-evaluated live, adding the **first** schedule
+to a running company arms the loop on that apply, and removing the last one
+disarms it and releases its fleet duty — neither needs a restart. The tick
+*knobs* (`tick_seconds`, the catchup clamps) are read when the loop is armed,
+so changing those lands at the next arm, like the retention sweep's horizons.
+
+Whether this node is ticking is visible on the engine as `SchedulerRunning`,
+and the `scheduler_armed` / `scheduler_disarmed` log lines say when it changed.
+
+---
+
 ## Observability
 
 - **Dashboard.** The **Schedules** view lists every configured schedule
@@ -263,7 +304,8 @@ minute.
   emitted per dispatch with `scope_type`, `scope_id`, `schedule_name`,
   `target_handle`, and `scheduled_at` — surfaced in the dashboard / event
   store.
-- The `scheduled_runs` table is the durable dispatch ledger.
+- The coordination store's `fires` slot is the at-most-once claim; the
+  node's `scheduled_runs` table is its own dispatch history.
 - Structured logs: `scheduler_enabled`, `schedule_fired`,
   `schedule_catchup_skipped`, `schedule_no_runners`,
   `scheduled_task_timeout`.
@@ -274,8 +316,8 @@ minute.
 
 - **Fall-back (clocks repeat an hour):** a wall-clock cron time in the
   repeated hour maps to two UTC instants, but both share one local
-  fire-label, so the run **fires once**, not twice. (The `scheduled_runs`
-  dedup identity uses the local wall-clock minute, not the UTC instant.)
+  fire-label, so the run **fires once**, not twice. (The claim identity
+  uses the local wall-clock minute, not the UTC instant.)
 - **Spring-forward (clocks skip an hour):** a cron time in the skipped
   hour has no instant that day, so it **does not run** that day — and
   nothing was "missed" from the window's view, so there's no

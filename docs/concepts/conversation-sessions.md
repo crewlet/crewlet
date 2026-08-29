@@ -19,7 +19,7 @@ and it deliberately follows the same doctrine one scope wider.
 ## What it is not
 
 **Not a transcript replay.** The engine can already round-trip a whole LLM
-conversation — `pending_sandbox_run.execute_state` persists the full message
+conversation — the detached run's `execute_state` persists the full message
 list, signed thinking blocks included, and splices it back into a running
 loop. That is right for a turn *parked* on a question whose dangling tool call
 is waiting for one answer. It is wrong here: a conversation's next turn
@@ -182,7 +182,7 @@ turn_engine:
 ```
 
 Nested under `turn_engine` rather than beside it, which is load-bearing: it
-rides the live `TurnEngineSettings` cell, so it hot-reloads through the
+rides the live the turn-engine settings cell, so it hot-reloads through the
 existing turn-engine diff handler with no extra apply-config wiring. Setting
 `enabled: false` restores the previous prompt exactly — which is why it is
 safe to leave on.
@@ -197,7 +197,7 @@ cannot undercut the worker's own invariant.
 
 ## Storage
 
-One row per recorded turn in `conversation_sessions`, a regular PostgreSQL
+One row per recorded turn in `conversation_sessions`, a regular
 table (not a hypertable), so dedupe is a plain unique index and an ordinary
 `ON CONFLICT DO NOTHING` — the advisory-lock dance in
 `031_work_key.sql` exists only because `episodes` is partitioned on time.
@@ -242,4 +242,4 @@ either failing says so rather than drawing an empty thread.
 - [Turn Engine](turn-engine.md) — the phases, and the within-turn prior-work ledger
 - [Agent Learning](agent-learning.md) — episodes, the diary, counterparty profiles
 - [Event System](event-system.md) — the conversation key and inbox coalescing
-- [Scaling Out](scaling.md) — why shared state lives in PostgreSQL
+- [Scaling Out](scaling.md) — why shared state lives in the coordination slot

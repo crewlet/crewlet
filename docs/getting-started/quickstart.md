@@ -7,9 +7,9 @@ integrations one at a time.
 
 Crewlet uses a [two-tier config](../concepts/configuration.md):
 
-- **Tier A** — ops-owned `config.yaml` on disk (database DSN, Pulsar URL, API
-  host/port/auth, debug). Restart to change.
-- **Tier B** — founder-owned `company.yaml`, imported into PostgreSQL
+- **Tier A** — ops-owned `crewlet.yaml` on disk (where this node's stream,
+  store and leases live, API host/port/auth, debug). Restart to change.
+- **Tier B** — founder-owned `company.yaml`, imported into the store
   (everything else: identity, roles, units, LLM providers, MCP servers,
   integrations, budgets). Versioned and live-editable.
 
@@ -20,30 +20,37 @@ Crewlet uses a [two-tier config](../concepts/configuration.md):
 > ground step by step. This page builds the config manually, which is the
 > better way to learn what the fields mean.
 
-## 0. Start the infrastructure
+## 0. There is no infrastructure to start
 
-Crewlet needs **Apache Pulsar** and **PostgreSQL (TimescaleDB + pgvector)**.
-From a repo checkout, the bundled compose file provides both (see
-[Installation](installation.md) for details and ports):
+Crewlet is one binary. Its event stream is a NATS JetStream server it
+embeds, and its database is a local file it creates — so a company runs with
+no broker to operate and nothing to point a DSN at. Both slots take an
+external address when a deployment outgrows that; see
+[Deployment](../guides/deployment.md).
 
-```bash
-cp .env.example .env
-docker compose up -d
-```
+The compose file in a repo checkout is for the *integration* loops
+(Mattermost, Plane, GitLab) further down this page, not for the engine.
 
-## 1. Write the Tier A bootstrap (`config.yaml`)
+## 1. Write the Tier A bootstrap (`crewlet.yaml`)
 
 ```yaml
 debug: true
 
-providers:
-  queue:
-    type: pulsar
-    url: "pulsar://localhost:6650"        # the compose broker
-  database:
-    dsn: "postgresql://crewlet:crewlet@localhost:5432/crewlet"  # the compose DB
-  knowledge:
-    type: pgvector
+stream:
+  type: embedded          # a JetStream server inside this process: no
+                          #   listener, no port, no service to operate
+  store_dir: "./acme-data/stream"   # leave empty and the stream is
+                          #   in-memory — right for a test, and nothing
+                          #   published survives a restart
+
+store:
+  path: "./acme-data/acme.db"   # ONE file, owned exclusively by this
+                          #   process. Not a shared database and no DSN:
+                          #   two engines pointed at one file corrupt it
+
+coordination:
+  type: local             # a single node holding its own seat leases;
+                          #   a fleet needs embedded-kv (see guides/fleet.md)
 
 api:
   host: "0.0.0.0"
@@ -237,12 +244,14 @@ units:
 When a budget is exceeded, the agent's turn stops immediately and a
 `BudgetExhausted` event is emitted.
 
-Usage is **durable** — it is stored in PostgreSQL and survives restarts, and
-is shared by every process running the company. Reset it deliberately:
+Usage is **durable** — it lives in the fleet's
+[coordination store](../concepts/coordination.md), so it survives restarts and
+is one number for the whole company however many nodes run it. Reset it
+deliberately, against a running node:
 
 ```bash
-crewlet budgets show     # usage per scope
-crewlet budgets reset    # zero everything (or --scope agent:<id>)
+crewlet budgets show     # usage per scope, read from the running node
+crewlet budgets reset    # zero everything (or -scope agent:<id>)
 ```
 
 (Usage used to reset on every engine start, which made a cap advisory in
@@ -263,30 +272,30 @@ references are checked as references, so it works before any secret is
 exported):
 
 ```bash
-crewlet validate company.yaml
-crewlet validate config.yaml     # the Tier A file too — tier is auto-detected
+crewlet validate            # both tiers, from ./crewlet.yaml and ./company.yaml
 ```
 
-**One command** — migrate, import the Tier B company, and run the engine in a
-single invocation:
+**One command** — migrate the store, seed the Tier B company and run the
+engine in a single invocation:
 
 ```bash
-crewlet run config.yaml --import-company company.yaml
+crewlet run crewlet.yaml -company company.yaml
 ```
 
-`--import-company` is idempotent: once a revision is active it's a no-op and
-the engine boots straight from the DB. (Use `crewlet config import --force` to
-overwrite an existing active revision.)
+`-company` is a **seed**: it is imported when the store does not already
+hold a company, and ignored when it does — so re-running the same command
+boots straight from the store rather than overwriting what is live. A
+running node then serves the store, not the file.
 
 **Or two steps** — import once, then run:
 
 ```bash
-crewlet config import company.yaml      # one-shot bootstrap of Tier B
-crewlet run                             # boots from ./config.yaml + DB
+crewlet config import company.yaml
+crewlet run                             # boots from the store
 ```
 
-`crewlet run` defaults its config path to `./config.yaml`; pass
-`crewlet run /path/to/config.yaml` for non-standard locations.
+Both flags default to files in the working directory — `crewlet.yaml` and
+`company.yaml` — so a node whose files are named that way needs neither.
 
 **Stopping:** press `Ctrl+C` once for a graceful drain (running agent turns
 finish; the dashboard stays up so you can watch the in-flight count converge),
@@ -335,8 +344,8 @@ you restart the agents, or the two on different hosts. Same command, given
 different roles:
 
 ```bash
-crewlet run config.yaml --roles seats,workers --api-port 0        # terminal 1
-crewlet run config.yaml --roles ingress --api-port 8000           # terminal 2
+crewlet run -roles seats,workers -api-port 0   # terminal 1
+crewlet run -roles ingress -api-port 8000      # terminal 2
 ```
 
 The ingress node exposes the same REST endpoints, webhook handlers
@@ -348,23 +357,25 @@ absent from that list — it has no usable inbound webhook, so the **engine**
 holds one outbound websocket per agent seat instead, and its inbound path
 does not go through the API process at all.
 
-## Programmatic setup
+## There is no programmatic setup
 
-```python
-import asyncio
-from crewlet import Engine
-from crewlet.config import load_bootstrap_config, load_company_config
+The engine has no importable API: every package lives under `internal/`, so
+the CLI, the config format and the wire protocol are the whole public
+surface. That is deliberate — it means the two-tier config is the only way
+to describe a company, and nothing can drift between what a YAML file says
+and what an embedding program set up by hand.
 
+Automating a deployment means driving `crewlet` and the REST API:
 
-async def main():
-    bootstrap = load_bootstrap_config("config.yaml")
-    engine = Engine.from_bootstrap(bootstrap)
-    await engine.apply_config(load_company_config("company.yaml"))
-    await engine.run()  # blocks until Ctrl+C
-
-
-asyncio.run(main())
+```bash
+crewlet validate                       # check both tiers in CI
+crewlet config import company.yaml     # write a new active revision
+crewlet run                            # start the node
 ```
+
+See [Configure via the API](../guides/configure-via-api.md) for editing a
+live company, and [Tools & MCP](../guides/tools-and-mcp.md#extending-the-engine)
+for adding behaviour the agents can reach.
 
 ## Next steps
 
@@ -417,11 +428,11 @@ each), then wire them in:
 - Stop exporting a variable per credential — with that keyring in place,
   `crewlet secrets set LLM_API_KEY` puts the value in the encrypted
   [secret store](../concepts/secret-store.md), which the engine consults ahead
-  of `os.environ` when resolving the `${...}` references you already wrote.
+  of the process environment when resolving the `${...}` references you already wrote.
   Provisioners can write there directly (`crewlet gitlab provision …
-  --secret-store`), so a minted credential reaches the engine with no file to
+  -secret-store`), so a minted credential reaches the engine with no file to
   source and no shell to be in
 - Explore the full [Nimbus example](../../examples/) — a seven-seat company
   with Plane + GitLab + Mattermost + sandbox wired end-to-end
-- Write [extensions](../guides/extensions.md) to hook into engine events
+- Add [MCP servers](../guides/tools-and-mcp.md#extending-the-engine) so agents can reach your own systems
 - See the full [configuration reference](configuration.md) for all YAML options

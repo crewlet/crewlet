@@ -260,7 +260,7 @@ founder seat above the agent CEO.
 
 ## Hot Reload
 
-Seat kind flips are first-class in `apply_config`:
+Seat kind flips are first-class in the config apply:
 
 - `human → agent` spawns an instance (budget, inbox, per-role MCP).
 - `agent → human` decommissions the instance. Agent IDs are
@@ -273,7 +273,7 @@ Seat kind flips are first-class in `apply_config`:
 
 `HandleRegistry` resolves **parties** — agents and human seats — via
 `resolve_party`, `resolve_party_role_name`, `resolve_party_email`,
-`resolve_party_external`, and enumerates them via `all_parties()`. The
+`resolve_party_external`, and enumerates them via the party resolver. The
 agent-only methods keep their narrow signatures so inbox routing can
 never target a human. Human external IDs come straight from config
 (`contact`), **reconciled** into the registry at boot and on every org

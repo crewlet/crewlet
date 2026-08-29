@@ -2,7 +2,7 @@
 
 Crewlet is an open-source engine for orchestrating hierarchically organized AI agent companies. It provides the runtime, event system, task management, agent lifecycle, and knowledge infrastructure needed to operate a network of AI agents modeled after a real corporate structure.
 
-Crewlet ships as **an engine plus a thin operational surface**: the engine does the work, and a REST API + zero-build web dashboard (embedded in the engine process by default, or run as its own process) provide configuration, webhooks, and observability. Anything beyond that — custom UIs, metrics exporters, bespoke automations — is built as [extensions](../guides/extensions.md) on top of the engine.
+Crewlet ships as **an engine plus a thin operational surface**: the engine does the work, and a REST API + zero-build web dashboard (embedded in the engine process by default, or run as its own process) provide configuration, webhooks, and observability. Anything beyond that — custom UIs, metrics exporters, bespoke automations — is built *outside* the process: the engine loads no plugins, and its surfaces to the outside are the REST API, the `/ws/stream` socket, OTLP, and [MCP](../guides/tools-and-mcp.md#extending-the-engine) for anything an agent should be able to call.
 
 ---
 
@@ -16,7 +16,7 @@ The framework models the same structures found in real companies:
 - **Communication** — channels, direct messages, and external tools (Slack or self-hosted [Mattermost](../integrations/mattermost.md), the work-item tracker, the code host)
 - **Task management** — integrated with external PM tools (Jira, Plane, GitHub/GitLab issues)
 - **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code through the [code sandbox](code-sandbox.md)
-- **Knowledge** — query-time knowledge-base search (Confluence or Plane) for shared docs + per-agent private diary (pgvector — hybrid vector ∪ recency candidate selection)
+- **Knowledge** — query-time knowledge-base search for shared docs + per-agent private diary (vector-indexed — hybrid vector ∪ recency candidate selection)
 - **Decision-making** — structured DACI framework with clear authority
 
 ---
@@ -30,22 +30,22 @@ Crewlet treats the organizational hierarchy as its primary orchestration structu
 | **Mental model** | A corporate org chart — departments, teams, and named seats |
 | **Hierarchy** | A native tree: identity, downward delegation, manager-handoff target, and scoping all derive from it |
 | **Communication** | Event-driven pub/sub with org-scoped channels |
-| **Knowledge** | A knowledge base (Confluence or Plane) searched live at query time, plus a per-agent private diary |
+| **Knowledge** | A knowledge base searched live at query time, plus a per-agent private diary |
 | **Decision model** | The DACI framework (Driver / Approver / Contributor / Informed) |
 | **Lifetime** | A long-running, persistent company |
-| **Config style** | A YAML org chart, with Python overrides |
+| **Config style** | A YAML org chart, versioned in the store and edited live |
 | **Extensibility** | A full extension system — providers, hooks, middleware |
 
-The hierarchy is informational + delegation-routing, not a special upward escalation mechanism. When an agent is stuck, it hands off to its manager using the same colleague-surface tools (Slack mention, Jira comment, Confluence comment, A2A) that a human teammate would use; the manager's handle comes from the agent's identity prompt. Engine-detected failures (stall, max-iter, unhandled exception, LLM unavailable) surface to the operator via structured logs and a dashboard `afk` state — see [Turn Engine](turn-engine.md) and [Task Engine](task-engine.md).
+The hierarchy is informational + delegation-routing, not a special upward escalation mechanism. When an agent is stuck, it hands off to its manager using the same colleague-surface tools (a chat mention, a work-item comment, A2A) that a human teammate would use; the manager's handle comes from the agent's identity prompt. Engine-detected failures (stall, max-iter, unhandled exception, LLM unavailable) surface to the operator via structured logs and a dashboard `afk` state — see [Turn Engine](turn-engine.md) and [Task Engine](task-engine.md).
 
 ---
 
 ## Design Principles
 
 - **Event-driven** — agents are reactive; events trigger agent work, agent work produces events
-- **Async-first** — all I/O (LLM calls, storage, retrieval) is async
+- **Concurrent by default** — a seat's turn, its MCP children and the node's own duties run in parallel, and every shared structure is checked under the race detector
 - **Provider-agnostic** — pluggable LLM, storage, and embedding backends; external tools (including the knowledge base) via MCP
-- **Config-driven AND programmatic** — define companies via YAML or Python API
+- **Config-driven** — a company is a YAML document, validated against a schema generated from the same types the engine runs on
 - **Extension-oriented** — anything beyond running the company is an extension, not core
 - **Observable** — structured logging, tracing hooks, and metrics from day one
 
@@ -62,19 +62,19 @@ flowchart TD
         ENG["<b>Engine</b><br/>Agent handlers (one turn engine per seat)<br/>Notification SVC (inbound routing + outbound sends)<br/>A2A service (agent-to-agent channels)<br/>———<br/>Organization model — hierarchy, roles, DACI decisions<br/>Provider layer — LLM · embeddings · sandbox<br/>Tool registry — builtins · per-role MCP · A2A"]
         API --- ENG
     end
-    PULSAR["<b>Apache Pulsar</b><br/>crewlet.agent.*.inbox<br/>crewlet.notifications<br/>crewlet.config.*"]
-    PG["<b>PostgreSQL</b><br/>TimescaleDB · pgvector<br/>company_config · token_usage<br/>agent_diary · episodes · …"]
+    STREAM["<b>Event stream</b><br/><i>embedded by default</i><br/>crewlet.agent.*.inbox<br/>crewlet.notifications<br/>crewlet.config.*"]
+    DB["<b>Store</b><br/><i>one local file</i><br/>company_config · token_usage<br/>agent_diary · episodes · …"]
     EXT -->|webhooks| API
     ENG -->|"MCP tools, called as each agent itself"| EXT
-    ENG --> PULSAR
-    ENG --> PG
+    ENG --> STREAM
+    ENG --> DB
 ```
 
-**Infrastructure**: Apache Pulsar + PostgreSQL with TimescaleDB and pgvector extensions (one database for operational state, the per-agent diary vector store, the episodic vector store, and the event store). OpenTelemetry for distributed tracing.
+**Infrastructure**: none to operate. The stream is a NATS JetStream server the process embeds, and the store is a local file it creates — both slots take an external address (NATS or Apache Pulsar; see [Running a Fleet](../guides/fleet.md)) when a deployment outgrows one node. OpenTelemetry for distributed tracing.
 
-**One node type**: `crewlet run` is the node, and what it does is a config value — `node.roles` picks from `ingress` (serve the HTTP API and its webhooks), `seats` (run agents), and `workers` (the company-wide singleton duties). The default is all three: one process serving the API and the dashboard and running every agent, which is the whole stack. Splitting the API off is the same command with `--roles ingress`, so both topologies are the same code path rather than two wirings that have to be kept in step.
+**One node type**: `crewlet run` is the node, and what it does is a config value — `node.roles` picks from `ingress` (serve the HTTP API and its webhooks), `seats` (run agents), and `workers` (the company-wide singleton duties). The default is all three: one process serving the API and the dashboard and running every agent, which is the whole stack. Splitting the API off is the same command with `-roles ingress`, so both topologies are the same code path rather than two wirings that have to be kept in step.
 
-**One node is enough, and more than one is supported.** Agents are stateful seats, not interchangeable workers, so which node runs which seat is decided by a lease — see [Seat ownership](seat-ownership.md). Scale up (a bigger host, a higher `max_concurrent`) before scaling out: a single engine handles many concurrent turns, and one node is the design's degenerate case rather than a lesser path. Run a fleet when a node's failure is not acceptable downtime, when traffic has to terminate separately from the agents, or when some seats must run somewhere specific — [Running a Fleet](../guides/fleet.md) covers all three, and [Scaling Out](scaling.md) is the model underneath them.
+**One node is enough, and more than one is supported.** Agents are stateful seats, not interchangeable workers, so which node runs which seat is decided by a lease — see [Seat ownership](seat-ownership.md). Scale up (a bigger host, a higher `node.max_concurrent`) before scaling out: a single engine handles many concurrent turns, and one node is the design's degenerate case rather than a lesser path. Run a fleet when a node's failure is not acceptable downtime, when traffic has to terminate separately from the agents, or when some seats must run somewhere specific — [Running a Fleet](../guides/fleet.md) covers all three, and [Scaling Out](scaling.md) is the model underneath them.
 
 ---
 
@@ -82,18 +82,18 @@ flowchart TD
 
 | Component | Technology | Rationale |
 |---|---|---|
-| Language | Python 3.12+ | AI ecosystem, async/await, type hints, protocols |
-| Async runtime | asyncio | Standard library, broad compatibility |
-| Data models | Pydantic v2 | Validation, serialization, JSON Schema generation |
-| Config parsing | PyYAML + Pydantic | YAML config → validated Pydantic models |
-| Message queue | Apache Pulsar | Persistent pub/sub, durable shared subscriptions (consumer groups), dead-letter queues |
-| Database | PostgreSQL + pgvector | Operational state + per-agent diary vector store + episodic vector store |
-| Event store | TimescaleDB (hypertable in the main PostgreSQL) | LLM invocation observability, event dashboards (direct write via publish listeners) |
-| Tracing | OpenTelemetry SDK | W3C Trace Context, automatic propagation, OTLP export to Jaeger/Tempo |
-| LLM clients | openai + anthropic SDKs | Official SDKs for each provider |
-| Structured logging | structlog | Machine-parsable, context-rich logging |
-| Testing | pytest + pytest-asyncio | Standard for async Python |
-| Packaging | uv | Modern Python packaging |
+| Language | Go 1.27+ | One static binary, real parallelism, a standard library that covers most of this table |
+| Distribution | A single `CGO_ENABLED=0` binary | Nothing to install alongside it; the cross-compile matrix is a plain `GOOS`/`GOARCH` loop |
+| Event stream | Embedded NATS JetStream | Persistent pub/sub *inside the process* — a company runs with no broker to operate. An external NATS or Apache Pulsar takes the same slot for a fleet |
+| Store | Turso, or mainline SQLite | One local file this process owns exclusively; both drivers are pure Go and certified by the same suite |
+| Vector search | The store's own vector index | The per-agent diary and the episodic store, in the same file as everything else |
+| Event store | A table in that file | LLM-invocation observability and the event dashboards, written inline by a publish listener |
+| Coordination | TTL leases with a fencing epoch | Seat ownership and the fleet's shared counters, in a KV slot separate from the store file |
+| Config | YAML → typed structs → generated JSON Schema | One definition drives validation, the schema editors read, and the docs |
+| Tracing | OpenTelemetry | W3C Trace Context, automatic propagation, OTLP export to Jaeger/Tempo |
+| LLM clients | Official vendor SDKs | Anthropic and OpenAI, plus any OpenAI-compatible endpoint |
+| Structured logging | `log/slog` | Standard library, machine-parsable, one component-bound logger per subsystem |
+| Testing | `testing` | Standard library, no assertion framework; one shared conformance suite per multi-backend contract |
 
 ---
 
@@ -111,104 +111,92 @@ Built-in providers: **OpenAI**, **Anthropic** (using their official SDKs), and *
 
 **Prompt caching.** Each call's large static prefix — the per-phase system prompt plus the tool-definition array — is the dominant repeated content of an agent turn: it is re-sent on every round of the [tool loop](agent-runtime.md#the-llm--tool-proxy) and is byte-stable across successive turns for the same agent (org config does not change mid-run). Both built-in providers cache it so it is re-read at a fraction of the base input price instead of re-billed in full each round. The Anthropic provider sets explicit `cache_control` breakpoints on the system block and the final tool definition (caching the whole `tools + system` prefix); the OpenAI provider relies on the platform's automatic prefix caching — the static system prompt is already first in the message array, which is what auto-caching requires. This is why the per-phase prompts can carry their full incident-hardened guidance (see [Turn Engine](turn-engine.md)) without the repetition dominating cost.
 
-`Completion.input_tokens` always reports the **full** prompt-token count regardless of cache state, so the budget cascade and the `token_usage` ledger stay correct: Anthropic reports cache reads/writes *separately* from its raw `input_tokens`, so the provider sums all three; OpenAI's `prompt_tokens` already includes the cached portion. `Completion.cache_read_input_tokens` / `cache_creation_input_tokens` break that total down for cost observability and are logged on every `llm_complete` event.
+`Completion.InputTokens` always reports the **full** prompt-token count regardless of cache state, so the budget cascade and the `token_usage` ledger stay correct: Anthropic reports cache reads/writes *separately* from its raw `input_tokens`, so the provider sums all three; OpenAI's `prompt_tokens` already includes the cached portion. `Completion.CacheReadInputTokens` / `cache_creation_input_tokens` break that total down for cost observability and are logged on every `llm_complete` event.
 
 ### Embedding Provider
 
-The `EmbeddingProvider` protocol defines `embed()` (batch text → vectors) and a `dimensions` property. Used by the [agent-learning subsystem](agent-learning.md) for vector-based retrieval over the agent's private `agent_diary` (the vector half of the `## Personal memory` prefetch's hybrid candidate selection) and `episodes` (the `## Similar prior work` prefetch and the `query_episodes` builtin). Knowledge-base content (Confluence or Plane) is searched live and is **not** embedded. Built-in provider: **OpenAI** (works with any OpenAI-compatible endpoint via `base_url`). Configured under `providers.embeddings` in YAML.
+The `EmbeddingProvider` protocol defines `embed()` (batch text → vectors) and a `dimensions` property. Used by the [agent-learning subsystem](agent-learning.md) for vector-based retrieval over the agent's private `agent_diary` (the vector half of the `## Personal memory` prefetch's hybrid candidate selection) and `episodes` (the `## Similar prior work` prefetch and the `query_episodes` builtin). Knowledge-base content is searched live and is **not** embedded. Built-in provider: **OpenAI** (works with any OpenAI-compatible endpoint via `base_url`). Configured under `providers.embeddings` in YAML.
 
 ### Database
 
-PostgreSQL via `asyncpg`. The schema is built from a forward-only migration sequence; the load-bearing tables:
+One local file, opened through one of two certified pure-Go drivers (Turso by default, mainline SQLite as the escape hatch), built from a forward-only migration sequence. **The engine owns that file exclusively** — a second process pointed at the same path is corruption waiting for a schedule to collide, which is why everything genuinely shared between nodes lives in the coordination KV instead. The load-bearing tables:
 
-- **`token_usage`** — per-agent cumulative token consumption, upserted by the turn engine's shared tool loop after each LLM completion that passes the budget check. Durable audit record; not used to hydrate the in-memory `BudgetManager` on startup.
-- **`agent_diary`** (pgvector) — each agent's private observation log; the read-side counterpart of `reflect_and_persist`. Rows are embedded on write; the read path is hybrid candidate selection (vector top-K ∪ recency top-K, deduped, capped at 100) handed to an aux-LLM relevance filter. Shared knowledge is **not** in the database — the knowledge base (Confluence or Plane) is searched live (see [knowledge system](knowledge-system.md)).
-- **`episodes`** (TimescaleDB hypertable, pgvector embedding) — one row per completed turn; raw + LLM-compacted aggregates share the same table.
+- **`token_usage`** — per-agent cumulative token consumption, upserted by the turn engine's shared tool loop after each LLM completion that passes the budget check. Durable audit record; not used to hydrate the in-memory the shared token counter on startup.
+- **`agent_diary`** (vector-indexed) — each agent's private observation log; the read-side counterpart of `reflect_and_persist`. Rows are embedded on write; the read path is hybrid candidate selection (vector top-K ∪ recency top-K, deduped, capped at 100) handed to an aux-LLM relevance filter. Shared knowledge is **not** in the database — the knowledge base is searched live (see [knowledge system](knowledge-system.md)).
+- **`episodes`** (vector-indexed) — one row per completed turn; raw and LLM-compacted aggregates share the same table.
 - **`synthesized_skills` / `synthesized_skill_versions`** — auto-drafted skills the agent can load via `use_skill`, with refinement history.
 - **`counterparty_profiles`** — per-(observer, subject) profiles built up from observed interactions.
 - **`agent_onboarding_markers`** — `mark_onboarded` bookkeeping (one row per agent, UPSERT-keyed).
 - **`conversation_sessions`** — the [conversation ledger](conversation-sessions.md): one row per completed turn, keyed on the seat and the conversation it served, rendered back into that conversation's next turn. Deduped on the work key, trimmed on write, swept on a retention horizon.
-- **`secret_values`** — the [secret store](secret-store.md): one encrypted row per env-var name, consulted ahead of `os.environ` when the config layer resolves a `${VAR}` reference. Sealed with the Tier A keyring; no plaintext mode.
+- **`secret_values`** — the local half of the [secret store](secret-store.md), and now only its bootstrap path: the company's credentials live on the coordination KV where every node reads them, and rows written here while the engine was stopped are migrated there at its next start. Sealed with the Tier A keyring either way; no plaintext mode.
 
-Everything else is YAML config, in-memory state, external PM tools, or Apache Pulsar. The full migration list is in `src/crewlet/db/migrations/`.
+Alongside them sit the durable runtime tables a turn leaves behind — `crewlet_events`, `scheduled_runs`, `chat_thread_follows`, `token_usage` — and the config plane's `company_config` payloads. The full migration list is in `internal/store/schema/`.
+
+What is *not* here is as deliberate: the completion ledger, the delivery dedupe, the notification valve, the credential cooldowns, the token counter, the activation pointer and each node's apply status all answer a question the whole **company** has to agree on, so they live in the fleet's [coordination store](coordination.md) rather than in any one node's file. `token_usage` above is the per-agent audit *record*, not the counter anything enforces against.
+
+Everything else is YAML config, in-memory state, or an external tool.
 
 ---
 
 ## Package Structure
 
 ```
-src/crewlet/
-├── engine.py             # Engine class — central entry point
-├── config.py             # YAML config → Pydantic models
-├── cli.py                # CLI commands (run, validate, api)
-├── org/                  # Organization model (hierarchy, roles)
-├── agent/                # Agent runtime (definition, instance, pool, turn engine:
-│                         #   turn, plan, execute, review, subagent, guards,
-│                         #   prompts, turn_context, phase_model, llm_loop,
-│                         #   iteration_log — within-turn prior-work ledger,
-│                         #   conversation_log — the cross-turn one
-│                         #     (see conversation-sessions.md),
-│                         #   skills/ — knowledge-base-sourced tool-skill registry)
-├── queue/                # EventQueue protocol (Pulsar + memory)
-├── a2a/                  # Agent-to-agent channels (durable state, service)
-├── db/                   # Database layer (asyncpg, migrations, token_usage,
-│                         #   deterministic agent-id derivation)
-├── secrets/              # Company-config encryption at rest (SecretCipher,
-│                         #   AES-256-GCM keyring, redaction helpers) + the
-│                         #   secret-store resolver installed ahead of
-│                         #   os.environ for ${VAR} (see secret-store.md)
-├── task/                 # Task engine (models, tracker, escalation)
-├── schedule/             # Scheduler — role/unit cron-style recurring work
-├── events/               # Event types, routing (subscriptions via EventQueue)
-├── knowledge/            # Shared-knowledge read (KnowledgeSearcher protocol
-│                         #   + the query-time Confluence and Plane searchers,
-│                         #   accessibility, shared markdown-doc helpers)
-├── confluence/           # Confluence page write side — generic page ops,
-│                         #   promotion writer, + unified `crewlet confluence
-│                         #   import` CLI (routes each .md: trigger=skill,
-│                         #   otherwise a knowledge doc whose space=parent
-│                         #   dir, title=H1; `crewlet plane import` is the
-│                         #   Plane analog, in plane/)
-├── learning/             # Agent-learning subsystem (ReflectEngine, PersistDecider,
-│                         #   SkillSynthesizer/Refiner, EpisodeStore + lifecycle,
-│                         #   AgentDiary, CounterpartyProfiler, OnboardingMarkerStore)
-├── providers/            # LLM + Embeddings protocols and implementations
-├── sandbox/              # Code sandbox — the run_sandbox Execute tool's
-│                         #   runtime (E2B provider, coding-agent runners,
-│                         #   suspend/resume coordinator; see code-sandbox.md)
-├── notifications/        # External notification system (outbound transports;
-│                         #   typing_status.py — Slack "is thinking…" working
-│                         #   indicator driven by the TurnEngine)
-├── slack/                # Slack app provisioning (`crewlet slack provision`):
-│                         #   canonical per-agent app manifest + App Manifest
-│                         #   API client + OAuth install + .env/ledger writing
-├── mattermost/           # Mattermost — self-hosted OSS chat: REST client,
-│                         #   the per-seat websocket event fleet (Mattermost
-│                         #   has no usable inbound webhook), and
-│                         #   `crewlet mattermost provision`
-├── tools/                # Agent tool system (builtins + A2A tools)
-├── github/               # GitHub integration (per-role remote MCP)
-├── gitlab/               # GitLab integration (async REST client + the
-│                         #   `crewlet gitlab provision` seat-provisioning CLI)
-├── plane/                # Plane integration (REST client, provisioning,
-│                         #   page import CLI, promotion writer)
-├── mcp/                  # MCP integration (stdio + HTTP/SSE)
-├── timescaledb/          # TimescaleDB event store (observability)
-├── api/                  # Standalone REST API (Starlette): routes/ handlers,
-│                         #   live_state.py projection (in-flight live_call),
-│                         #   streaming.py StreamService (/ws/stream); serves
-│                         #   the dashboard from the top-level static/ below
-├── static/               # Web assets served by the API — static/dashboard/
-│                         #   is the zero-build ES-module dashboard (reactive
-│                         #   store, WS client, hash router, per-view modules;
-│                         #   styles/ is the crewlet.io panel language — see
-│                         #   reference/dashboard-design.md;
-│                         #   llm.js renders LLM invocations with collapsible,
-│                         #   height-capped prompt messages + a Source block
-│                         #   naming the event that triggered the turn
-│                         #   (notification triggers show a branded
-│                         #   integration badge + sender); eventDetail.js
-│                         #   renders inbound notifications as a readable
-│                         #   integration-branded view)
-└── extensions/           # Extension system
+cmd/crewlet/              # The one binary: run, validate, schema, migrate,
+                          #   budgets, secrets, config, llm, and the seven
+                          #   vendor CLIs — gitlab/github/jira/slack
+                          #   `provision`, plane `provision|import|resync`,
+                          #   confluence `import|resync`, mattermost
+                          #   `provision|doctor`
+internal/
+├── engine/               # The wiring: which concrete thing satisfies which seam
+├── config/               # The two config tiers → typed structs → JSON Schema
+├── org/                  # Organization model (hierarchy, roles, seat identity)
+├── agent/                # The agent runtime, one package per hard part:
+│                         #   turn/ (the four-phase loop), toolloop/ (the
+│                         #   model↔tool round-trip and its suspend),
+│                         #   inbox/ (what wakes a seat, and what must not
+│                         #   wake it twice), ledger/ (iteration, conversation
+│                         #   and budget ledgers), prefetch/, prompts/,
+│                         #   skills/, builtin/, subagent/
+├── queue/                # The EventQueue contract + memory, jetstream and
+│                         #   pulsar backends, all certified by one suite
+├── coord/                # TTL leases with a fencing epoch + the shared KV
+├── seat/                 # Which seats this node runs, and the watchdog
+├── store/                # The local file: events, learning, runtime state
+├── events/               # The envelope and the typed-payload registry
+├── a2a/                  # Agent-to-agent channels (one ask, one answer)
+├── schedule/             # Role/unit cron-style recurring work
+├── learning/             # What a seat remembers (there is no task package:
+│                         #   task state lives in the PM tool, and the engine
+│                         #   mirrors none of it)
+├── knowledge/            # The backend-neutral knowledge-search seam
+├── providers/            # llm/ (+ chain, credential rotation), embeddings/
+├── sandbox/              # Code work as a suspended Execute phase
+├── mcp/                  # MCP client and child-process supervision
+├── tools/                # The registry, and the per-phase tool surfaces
+├── notify/               # The backend-neutral notification spine
+├── mattermost/ slack/    # The seven vendors: client, parser, transport,
+│   plane/ jira/          #   prompt, provisioning reconcile — each
+│   confluence/           #   contributing only what is genuinely its own,
+│   gitlab/ github/       #   which is why Jira has no transport
+├── configplane/          # The activation pointer's cadence and postures
+├── node/                 # The node's own identity, presence and drain
+├── provision/            # The shared provisioning grammar and its sinks
+├── maintenance/          # The retention sweep, behind one singleton duty
+├── tokens/               # Token accounting shared by the meter and the API
+├── hostbox/ procgroup/   # The local sandbox host, and process-tree teardown
+├── whsec/                # Webhook signing secrets: minting and verification
+├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
+│                         #   livestate/, configapi/, auth/
+├── observe/              # The observability edge (store row + live push)
+├── secrets/              # Config encryption at rest + the ${VAR} resolver
+└── version/ logging/ redact/ envref/ envfile/ workkey/  # small shared grammars
+
+static/dashboard/         # The zero-build ES-module dashboard, embedded in
+                          #   the binary — reactive store mirroring the server
+                          #   projection, one websocket as the only data
+                          #   channel, hash router, per-view modules. See
+                          #   reference/dashboard-design.md
 ```
+
+Every package states its own rationale in its package doc, so `go doc ./internal/coord` is the authority on coordination rather than this page.

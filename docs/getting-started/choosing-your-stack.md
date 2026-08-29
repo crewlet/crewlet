@@ -14,7 +14,10 @@ A useful mental model: for each integration there is usually
    you.
 2. **Per-agent identities inside it** — service accounts, bot apps, tokens.
    For Mattermost, Slack, Plane, and GitLab a provisioning CLI creates
-   these idempotently; for Atlassian and GitHub you create them by hand.
+   these idempotently; for Atlassian and GitHub you create them by hand,
+   because neither vendor issues a credential on a provisioner's behalf.
+   Those two still have a CLI — it reports which account each seat's own
+   credential turned out to be, and registers the webhooks.
 3. **A webhook back to the engine** — so external activity wakes the right
    agent. Self-registered where the API allows it, manual where it doesn't.
    Mattermost is the exception: it has no usable inbound webhook, so the
@@ -29,6 +32,7 @@ A useful mental model: for each integration there is usually
 | **Anthropic** | `type: anthropic` | Official SDK; prompt caching set explicitly by the provider. Required if you want Claude Code as the sandbox coding agent. |
 | **OpenAI** | `type: openai` | Official SDK; automatic prefix caching. |
 | **Any OpenAI-compatible endpoint** | `type: openai-compatible` + `base_url` | Hosted aggregators (OpenRouter, Together, …), cloud gateways, or your own vLLM / LiteLLM deployment. Fully self-hostable. OpenCode (the provider-agnostic sandbox coding agent) can reuse this same provider. |
+| **A gateway or proxy in front of a vendor** | `base_url` on `anthropic` / `openai` | `base_url` is not an `openai-compatible`-only field — it is merely *required* there. On a vendor entry it redirects that vendor's own wire format at an egress proxy, an Anthropic-API gateway, or a subscription OAuth proxy. The last of those has terms and trade-offs worth reading first: [Subscription LLM Backends § the proxy shape](../concepts/subscription-llm-backends.md#the-other-shape-an-oauth-proxy-in-front-of-an-http-entry). |
 | **A coding CLI you subscribe to** | `type: cli-agent` + `cli.agent` | No API key: drives `claude` / `codex` / `gemini` / `opencode` / `cursor-agent` / `copilot` on the operator's own subscription. The CLI must be installed on the engine host. Flat-rate cost, higher per-call latency, and each seat gets an isolated CLI home so agents never share memory. See [Subscription LLM Backends](../concepts/subscription-llm-backends.md). |
 
 You can configure several named providers and pick per role (`role.llm`), plus
@@ -54,14 +58,24 @@ provider the engine still runs; learning features degrade gracefully.
 
 ---
 
-## Core infrastructure (required)
+## Core infrastructure
 
-**Apache Pulsar** and **PostgreSQL (TimescaleDB + pgvector)**. Local: the
-bundled `docker-compose.yml` (see [Installation](installation.md)). Production:
-any Pulsar cluster and PostgreSQL server you operate — including a dedicated
-Pulsar tenant/namespace with token auth when Crewlet shares a cluster with
-your other workloads. See [Deployment](../guides/deployment.md) for sizing
-and broker authentication.
+**There is none to choose.** The engine is one binary: its event stream is a
+NATS JetStream server it embeds, and its store is a local file it creates and
+owns exclusively. A single host runs a whole company with nothing else
+installed, in development and in production alike.
+
+Two slots take an external address once a deployment outgrows one node:
+
+| Slot | Options |
+|---|---|
+| **Stream** | `embedded` (default, and clusterable across nodes) · an external **NATS** server · **Apache Pulsar**, including a dedicated tenant/namespace with token auth when Crewlet shares a cluster |
+| **Coordination** | `local` (one node) · `embedded-kv` (a fleet — one node or three; two has no quorum and is refused by name) |
+
+The **store** is never one of them: it stays one file per node, which is why
+everything genuinely shared lives in coordination instead. See
+[Running a Fleet](../guides/fleet.md) and
+[Deployment](../guides/deployment.md) for sizing and broker authentication.
 
 ---
 
@@ -91,7 +105,7 @@ What **you** do once:
    `scripts/plane-dev-bootstrap.sh` automates this; against a remote instance
    you sign up and create the workspace in the UI.
 3. **Run the provisioner** — `crewlet plane provision company.yaml
-   --webhook-url https://<engine>/webhooks/plane` creates one service account
+   -public-url https://<engine>` creates one service account
    per agent seat, project memberships, per-agent API tokens (minted into the
    `${VAR}` references your config already declares), the engine's read
    account, and the workspace webhook — idempotently.
@@ -131,7 +145,7 @@ Details: [Jira](../integrations/jira.md) ·
 [Confluence](../integrations/confluence.md).
 
 > **Don't mix knowledge backends**: the engine wires exactly one
-> `KnowledgeSearcher` — Confluence CQL or Plane page search — selected by
+> `knowledge.Searcher` — Confluence CQL or Plane page search — selected by
 > which integration is configured. See
 > [Knowledge System](../concepts/knowledge-system.md).
 
@@ -153,7 +167,7 @@ the whole fleet. This is the path the bundled Nimbus example uses:
    compose `gitlab` profile for end-to-end testing). Set `integrations.gitlab.url`
    accordingly — the same config shape covers gitlab.com and self-hosted.
 2. **Run the provisioner** — `crewlet gitlab provision company.yaml
-   --webhook-url https://<engine>/webhooks/gitlab` creates one **service
+   -public-url https://<engine>` creates one **service
    account per engineering seat** (mentionable, assignable, reviewer-able),
    group/project memberships, per-agent PATs minted into your config's own
    `${VAR}` references, and the webhooks. Requires an admin-capable operator
@@ -169,19 +183,30 @@ Details: [GitLab integration](../integrations/gitlab.md).
 
 ### Option B: GitHub
 
-github.com only (no self-hosted GitHub support in the integration):
+github.com or a GitHub Enterprise Server — leave `integrations.github.url`
+unset for the former, name the instance for the latter:
 
 1. **Create the org/repos** (you), plus **one PAT per engineer seat** — GitHub
    has no API-provisionable service accounts, so per-agent identities are
    machine users or fine-grained PATs you create by hand
    (`role.mcp_env.github` carries `Authorization: Bearer ${GITHUB_TOKEN_X}`).
-2. **Register the webhook** on the repos/org (manual): target
-   `POST /webhooks/github` with the shared `integrations.github.webhook_secret`.
+   The engine derives each seat's login from its own token; nothing is
+   declared.
+2. **Register the webhooks** with
+   [`crewlet github provision`](../reference/cli.md#crewlet-github-provision),
+   which mints the secret and registers one organization hook where the
+   credential may (covering repositories created later) or one per repository
+   where it may not — and reports which account each seat turned out to be,
+   which is the finding that decides whether the integration routes at all.
 3. Agents get the full toolset of the hosted
    [GitHub MCP server](https://github.com/github/github-mcp-server) per role;
    the sandbox git-auth recipe has a GitHub form (credential helper on
    `github.com` + `GITHUB_TOKEN` in `role.sandbox.env`) — see
    [GitHub integration](../integrations/github.md).
+
+A company can run **both** hosts: they are two hosts with different
+repositories on them, which is what a migration and an open-source presence
+both look like.
 
 ---
 
@@ -249,7 +274,7 @@ There is no self-hosted variant:
    `mcp_servers`. Each agent is its own bot identity: own token, own DM,
    own @-mention.
 3. **Provision the apps** with
-   [`crewlet slack provision`](../reference/cli.md#crewlet-slack-provision),
+   [`crewlet slack provision`](../integrations/slack.md),
    which creates one app per agent through Slack's App Manifest APIs, points
    each app's event subscriptions at `POST /webhooks/slack/{handle}`, and
    writes the obtained secrets back under the exact `${VAR}` names the YAML
@@ -304,7 +329,7 @@ Plane + GitLab + Mattermost + E2B sandbox + an OpenAI-compatible LLM, with a
 fully-local loop: `docker compose --profile plane --profile mattermost up -d`,
 then `scripts/plane-dev-bootstrap.sh` and `scripts/mattermost-dev-bootstrap.sh`,
 then
-`crewlet run examples/nimbus.config.yaml --import-company
+`crewlet run -config examples/nimbus.config.yaml -company
 examples/nimbus.company.yaml`. Reading it top to bottom is the fastest way to
 see every choice on this page made concretely — each block carries the
 rationale in comments.

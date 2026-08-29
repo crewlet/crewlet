@@ -188,6 +188,18 @@ palette offer the matching action. Clearing it reaches three places — storage,
 the socket's own copy, and the live connection — because the handshake carries
 the credential, so an already-open socket stays authenticated until it re-dials.
 
+**And the page has to notice it was refused, which it cannot learn from the
+socket.** A rejected handshake reaches a browser with no status and no close
+code — a connection that never opened sends no close frame — so it is
+reported as 1006, exactly like a stopped engine. This client was written
+believing the engine could answer `close(1008)`, and it cannot: every affordance
+above hung off a code that never arrived, so a stale token produced a page that
+said "retrying" for ever and never mentioned the one thing that was wrong. On a
+close that never opened, the client now re-asks over plain HTTP — `GET
+/ws/stream`, which answers `401` refused and `426` accepted — and only then
+raises the banner. A throw is the network and raises nothing, or a genuinely
+disconnected page would beg for a token on every backoff.
+
 **A chrome preference is a command, not a topbar button.** The topbar is the
 most valuable strip on every screen and a preference is set once and then
 never again. Density spent a permanent, icon-only slot there next to the theme
@@ -224,7 +236,7 @@ Five bands, top to bottom, in order of urgency:
 |---|---|---|
 | **Needs you** | Is anything waiting on me, and how long has the oldest waited? — the [attention queue](#the-attention-queue) | No other room aggregates obligations across sandboxes, seats, budgets and config |
 | **Engine** | What is the *engine* doing — turns in flight, posture, event store, draining | Most of it reached no pixel outside a popover you had to know to click |
-| **Stuck** | Which turns stopped producing rounds, and which seats hold a lease whose teardown was never proven | `runtime.py` calls the second "the one to alert on" and it reached no screen at all |
+| **Stuck** | Which turns stopped producing rounds, and which seats hold a lease whose teardown was never proven | `internal/api/runtime.go` calls the second "the one to alert on" and it reached no screen at all |
 | **Recent record** | Did anything break, and how far back can this page even see? | One company-wide track, not one row per seat — the per-seat view is the Agents room's |
 | **Cost** | What is this costing, in the two spans that are honest | The 24h rollup and the org meter-against-its-own-cap; per-seat detail is Spend's |
 
@@ -331,7 +343,7 @@ minutes. Activity pages beneath it into the event store with the `events`
 query, and three rules keep the merged list honest:
 
 - **One ordering key**, `(instant, id)` descending — `newestFirst` in
-  `format.js`, mirroring `timescaledb/_time.py`. Raw ISO strings are not
+  `format.js`, mirroring the server's own ordering. Raw ISO strings are not
   safely comparable (the API emits naive and aware forms for the same
   instant) and a shared timestamp needs the id to break it. A row's
   position depends only on its own key, so nothing jumps when a page lands.
@@ -371,7 +383,7 @@ screen answers *why did this wake anyone*, not just *what arrived*:
 
 | Source | What the layout names |
 | --- | --- |
-| GitLab | `object_kind`.`action`; the actor (`user.username`, or the flattened `user_username` a push hook sends instead of a user object); `project.path_with_namespace`; the MR, issue, pipeline or branch the event hangs off — a sibling key on a `note` or `pipeline` hook, `object_attributes` on the others; `state` and the MR's source → target branches; the `changes.{assignees,reviewers}` `previous → current` diff `parse_gitlab_webhook` routes on; `object_attributes.url` |
+| GitLab | `object_kind`.`action`; the actor (`user.username`, or the flattened `user_username` a push hook sends instead of a user object); `project.path_with_namespace`; the MR, issue, pipeline or branch the event hangs off — a sibling key on a `note` or `pipeline` hook, `object_attributes` on the others; `state` and the MR's source → target branches; the `changes.{assignees,reviewers}` `previous → current` diff the parser routes on; `object_attributes.url` |
 | Plane | `event`.`action`; `activity.actor` (a bare UUID or an expanded user); `workspace_slug`; the project identifier; the work item as `{identifier}-{sequence_id}`, or the page; `activity.field` with `old_value → new_value`; `data.assignees`; the `<mention-component>` ids a comment carries |
 
 Two of those are load-bearing for an operator reading a failure.

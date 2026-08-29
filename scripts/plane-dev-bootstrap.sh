@@ -54,15 +54,34 @@ ENV_FILE="${PLANE_ENV_FILE:-.env.plane}"
 # shipped examples/nimbus.company.yaml is). Set COMPANY=<path> to auto
 # provision + import; leave unset to just print the commands.
 COMPANY="${COMPANY:-}"
-# Where the compose Plane should reach the engine's /webhooks/plane. The
-# engine's EMBEDDED API serves that route: examples/nimbus.config.yaml
+# Where the compose Plane should reach THE ENGINE — its base address, not
+# its webhook path. The engine serves seven webhook routes and owns every
+# one of those paths, so the provisioner is handed a host and derives
+# `/webhooks/plane` itself: an operator typing the path can get it wrong,
+# and a hook pointing at a path nothing serves leaves the workspace
+# reporting a healthy integration that delivers nowhere.
+#
+# The engine's EMBEDDED API serves that route: examples/nimbus.config.yaml
 # sets api.port: 80, so a plain `crewlet run` binds it (on Linux that
 # needs privileged-port access — see the api block's comment in that
-# file). Do not also start `crewlet run api` on this host — that's the
-# split-deployment form and the two would fight over the port.
+# file). Do not also start a separate API process on this host — that's
+# the split-deployment form and the two would fight over the port.
 # host.docker.internal resolves via the extra_hosts mapping on the
 # plane-api and plane-worker services.
-WEBHOOK_URL="${WEBHOOK_URL:-http://host.docker.internal:80/webhooks/plane}"
+#
+# The knob used to be WEBHOOK_URL and took a full endpoint. Silently
+# ignoring one left in an operator's shell would send hooks to the default
+# host, which on a remote host is exactly the failure this address exists
+# to avoid — so it is refused rather than dropped.
+if [ -n "${WEBHOOK_URL:-}" ]; then
+  echo "WEBHOOK_URL is no longer read: the engine owns the webhook path and" >&2
+  echo "derives it. Set ENGINE_URL to the engine's base address instead." >&2
+  exit 2
+fi
+ENGINE_URL="${ENGINE_URL:-http://host.docker.internal:80}"
+# Display only, derived exactly as the provisioner derives it, so what this
+# script PRINTS cannot drift from what it registers.
+WEBHOOK_URL="${ENGINE_URL%/}/webhooks/plane"
 
 if [ -z "$("${COMPOSE[@]}" ps -q plane-api 2>/dev/null)" ]; then
   echo "Plane containers not found. Run: docker compose --profile plane up -d" >&2
@@ -310,16 +329,16 @@ fi
 # ── Steps 5-6: provision + import (with COMPANY=) ────────────────────────
 if [ -n "${COMPANY}" ]; then
   # The founder token IS a workspace-admin personal API token (owner via
-  # the create above). --create-projects creates LEAD/ENG/PROD/TS; the
+  # the create above). -create-projects creates LEAD/ENG/PROD/TS; the
   # webhook secret Plane generates is captured into ${PLANE_WEBHOOK_SECRET}
   # in the env file.
   echo "==> Provisioning agents from ${COMPANY}…"
-  PLANE_PROVISION_TOKEN="${FOUNDER_TOKEN}" \
+  PLANE_ADMIN_TOKEN="${FOUNDER_TOKEN}" \
   PLANE_URL="${PLANE_URL}" \
     crewlet plane provision "${COMPANY}" \
-      --create-projects \
-      --webhook-url "${WEBHOOK_URL}" \
-      --env-file "${ENV_FILE}"
+      -create-projects \
+      -public-url "${ENGINE_URL}" \
+      -env-file "${ENV_FILE}"
 
   # One walk publishes BOTH the tool skills (examples/tool-skills/,
   # `trigger:` ⇒ the TS project) and the knowledge docs + per-unit
@@ -350,15 +369,15 @@ if [ -z "${COMPANY}" ]; then
   cat <<EONEXT
    - Provision + import the shipped example (its integrations.plane.url is
      \${PLANE_URL}, already written to ${ENV_FILE}):
-       PLANE_PROVISION_TOKEN=${FOUNDER_TOKEN} PLANE_URL=${PLANE_URL} \\
+       PLANE_ADMIN_TOKEN=${FOUNDER_TOKEN} PLANE_URL=${PLANE_URL} \\
          crewlet plane provision examples/nimbus.company.yaml \\
-           --create-projects --webhook-url ${WEBHOOK_URL} --env-file ${ENV_FILE}
+           -create-projects -public-url ${ENGINE_URL} -env-file ${ENV_FILE}
        set -a; source ${ENV_FILE}; set +a
        crewlet plane import examples/nimbus.company.yaml examples/
    - Then run the engine — its EMBEDDED API (api.port: 80 in the Tier A
      file) receives the Plane webhooks and serves the dashboard:
        source ${ENV_FILE}
-       crewlet run examples/nimbus.config.yaml --import-company examples/nimbus.company.yaml
+       crewlet run -config examples/nimbus.config.yaml -company examples/nimbus.company.yaml
 EONEXT
 else
   cat <<EONEXT
@@ -366,7 +385,7 @@ else
    - Next, run the engine — its EMBEDDED API (api.port: 80 in the Tier A
      file) receives the Plane webhooks and serves the dashboard:
        source ${ENV_FILE}
-       crewlet run examples/nimbus.config.yaml --import-company ${COMPANY}
+       crewlet run -config examples/nimbus.config.yaml -company ${COMPANY}
 EONEXT
 fi
 

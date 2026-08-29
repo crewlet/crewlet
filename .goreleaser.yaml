@@ -1,0 +1,140 @@
+# How a Crewlet release is built.
+#
+# A release is still one command — `git tag v1.2.0 && git push origin v1.2.0`
+# — but what a tag produces is now a set of binaries rather than a package on
+# an index. See decisions/901-release-tooling.md for why goreleaser,
+# and RELEASING.md for the runbook.
+#
+# THE TAG IS THE VERSION. Nothing in the tree records it: the tag is stamped
+# into `internal/version.value` at link time, so there is no second place for
+# it to disagree with. A binary built without that stamp — `go install`, a
+# local `go build` — reports its module build info instead, so it names itself
+# honestly rather than claiming to be a release.
+#
+# Rehearse locally with `goreleaser release --snapshot --clean`, which builds
+# every target and the container image without touching GitHub. That is the
+# whole point of keeping this declarative: the PyPI pipeline it replaced
+# could only rehearse by uploading to TestPyPI.
+version: 2
+
+project_name: crewlet
+
+builds:
+  - id: crewlet
+    main: ./cmd/crewlet
+    binary: crewlet
+    env:
+      # Pure Go, all the way down: both certified store drivers
+      # (turso.tech/database/tursogo, modernc.org/sqlite) and the embedded
+      # NATS server compile without cgo, which is what makes the matrix
+      # below a plain GOOS/GOARCH loop instead of a cross-toolchain estate.
+      - CGO_ENABLED=0
+    flags:
+      # Strip the build machine's paths out of the binary, so two builds of
+      # one tag from two checkouts produce the same bytes.
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/crewlet/crewlet/internal/version.value={{ .Version }}
+    # Pinned to the commit's own timestamp rather than the build's, for the
+    # same reason as -trimpath: a rebuild of a tag must be verifiable
+    # against the artifact that shipped.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: crewlet
+    ids: [crewlet]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Keyless Sigstore signing over the checksum file.
+#
+# One signature covering the file that covers every artifact, rather than a
+# signature per archive: verifying the checksums file and then the checksum
+# is the same proof with one fetch instead of eight.
+#
+# It replaces the property PyPI Trusted Publishing gave — no long-lived
+# credential anywhere in this repository. The certificate is minted from the
+# workflow's OIDC token and logged to Rekor; there is no private key to leak
+# because there is no private key.
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+release:
+  # GitHub writes the body from the pull requests merged since the previous
+  # tag, grouped by .github/release.yml. That generated body is the ONLY
+  # record of what a release contains (there is no CHANGELOG.md), so
+  # goreleaser must ask for it rather than write a competing one from commit
+  # subjects.
+  prerelease: auto
+
+  # What to do when the Release ALREADY EXISTS, which here means exactly one
+  # thing: a re-run of a tag whose late steps failed (the image push, the
+  # signing) after the Release was created. `replace` makes that re-run
+  # idempotent — the body is regenerated from the same pull request list it
+  # was built from the first time.
+  #
+  # The default, `keep-existing`, would leave a half-written body standing.
+  # `append` — which this was — duplicates the entire changelog on every
+  # re-run, in the one artifact that IS the record of the release, and
+  # nobody notices until they read it.
+  #
+  # The cost is a hand-edit to the body being lost if someone then re-runs
+  # the tag. RELEASING.md sends that case to a new patch release instead,
+  # and prose that must survive belongs in release.header/footer, which are
+  # regenerated too.
+  mode: replace
+
+changelog:
+  use: github-native
+
+# The container image, built once per architecture and joined under one tag.
+#
+# GHCR rather than Docker Hub: the release workflow already holds a GitHub
+# token scoped to this repository, so publishing needs no second account and
+# no second credential.
+dockers_v2:
+  - id: crewlet
+    ids: [crewlet]
+    images:
+      - ghcr.io/crewlet/crewlet
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    tags:
+      - "{{ .Version }}"
+      # `latest` follows STABLE releases only. A pre-release that took it
+      # would hand `docker pull crewlet` to every operator who pinned
+      # nothing, which is the container equivalent of a pre-release becoming
+      # GitHub's "Latest".
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    dockerfile: Dockerfile
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.source: "https://github.com/crewlet/crewlet"
+      org.opencontainers.image.licenses: MIT

@@ -12,26 +12,25 @@ See `docs/index.md` for the full documentation index.
 Do this at the start of every conversation, before writing or modifying any code. These docs are the source of truth for how the system should work.
 
 ## Overview
-Crewlet is a Python engine for orchestrating hierarchically organized AI agent companies.
+Crewlet is a Go engine for orchestrating hierarchically organized AI agent companies.
 See `docs/index.md` for the full documentation index.
 
 ## Tech Stack
-- **Python 3.12+** — use modern syntax (type unions with `|`, match statements where appropriate). 3.12 and 3.13 are both tested in CI and declared in the classifiers; anything you write must run on both
-- **Pydantic v2** — all data models must be Pydantic BaseModel or use Protocol classes for interfaces
-- **asyncio** — all I/O is async. Use `async def` for any function that does I/O
-- **openai + anthropic SDKs** — official SDKs for LLM providers
-- **mcp** — official MCP Python SDK for MCP client/server protocol
-- **PyYAML** — config parsing
-- **structlog** — structured logging (see `src/crewlet/_logging.py`)
-- **pytest + pytest-asyncio** — testing (asyncio_mode = "auto")
-- **ruff** — linting and formatting
+- **Go 1.27+** — the module pins its own toolchain; `GOTOOLCHAIN=auto` fetches it rather than failing on a mismatch. Everything is pure Go: `CGO_ENABLED=0` builds every release target, which is what makes the cross-compile matrix a plain `GOOS`/`GOARCH` loop
+- **The standard library first.** `net/http` for servers and clients, `log/slog` for logging, `context` for cancellation, `encoding/json`. A dependency has to earn its place against what `std` already does
+- **Turso** (`turso.tech/database/tursogo`) — the embedded store, with `modernc.org/sqlite` as the certified fallback driver. Both pure Go, both run the same schema, both certified by the same suite. Turso is pure Go in the sense that matters — no cgo, no C toolchain — but it is not self-contained: its engine ships as a ~20 MB native library embedded in the driver and extracted at runtime into a shared per-user cache, which `internal/store/turso.go` prepares under a lock because upstream writes it non-atomically and PANICS on what a concurrent reader sees
+- **Embedded NATS JetStream** (`github.com/nats-io/nats-server`) — the default event stream, running *in the engine's own process*. Apache Pulsar is the external alternative for a fleet
+- **`github.com/modelcontextprotocol/go-sdk`** — MCP client and server
+- **Official vendor SDKs** where one exists; a thin typed client where one does not (Plane, Mattermost, GitLab)
+- **YAML** (`gopkg.in/yaml.v3`) — config parsing
+- **`testing`** — the standard library's, with no assertion framework. Table tests where the cases vary, named tests where the reasoning does
 
 ## This Is a Public Open-Source Repository
-Crewlet is MIT-licensed, developed in the open at `github.com/crewlet/crewlet`, published to PyPI as `crewlet`, and its `docs/` tree is served at docs.crewlet.ai. Everything committed is published, permanently: git history keeps what a later commit deletes, and the sdist keeps what the working tree drops. Write every change as something a stranger will read, run, and depend on.
+Crewlet is MIT-licensed, developed in the open at `github.com/crewlet/crewlet`, ships as signed binaries and a container image from a `v*` tag, and its `docs/` tree is served at docs.crewlet.ai. Everything committed is published, permanently: git history keeps what a later commit deletes, and a released binary keeps what the working tree drops. Write every change as something a stranger will read, run, and depend on.
 
 Rules:
 - **Never commit a secret, and never fix one by deleting it.** No real API keys, tokens, PATs, webhook secrets, private hostnames, internal URLs, or customer/employee names — in code, tests, docs, examples, fixtures, or commit messages. Config examples use `${VAR}` references and placeholder values (`example.com`, `U0FOUNDER`, `sk-ant-...`). If a real credential does land in a commit, it is compromised the moment it is pushed: it must be **rotated**, and removing it in a follow-up commit is not a fix.
-- **Commit subjects are semantic** — `type(scope): summary`, imperative, lowercase, no trailing period, ≤72 chars. Type is one of `feat` / `fix` / `docs` / `refactor` / `perf` / `test` / `ci` / `build` / `chore` / `revert`; scope is the *component*, normally the package directory under `src/crewlet/` (`agent`, `sandbox`, `plane`, `api`, `db`, `dashboard`, …) or the area for everything else (`docs`, `deps`, `packaging`, `examples`, `schema`, `scripts`, or the workflow name for `ci`). Unrelated fixes and tuning go in their own commit with their own scope. A pull request squash-merges into one commit whose subject is its title, so the title takes the same form. Nothing enforces this and history is permanent — the full rules are in `CONTRIBUTING.md`.
+- **Commit subjects are semantic** — `type(scope): summary`, imperative, lowercase, no trailing period, ≤72 chars. Type is one of `feat` / `fix` / `docs` / `refactor` / `perf` / `test` / `ci` / `build` / `chore` / `revert`; scope is the *component*, normally the package directory under `internal/` (`agent`, `api`, `coord`, `engine`, `queue`, `sandbox`, `seat`, `store`, …), plus `dashboard` for `static/dashboard/` and `cli` for `cmd/crewlet/`; outside `internal/` it is the area (`docs`, `deps`, `examples`, `schema`, `scripts`, or the workflow name for `ci`). Unrelated fixes and tuning go in their own commit with their own scope. A pull request squash-merges into one commit whose subject is its title, so the title takes the same form. Nothing enforces this and history is permanent — the full rules are in `CONTRIBUTING.md`.
 - **The pull request title is the release note.** There is no `CHANGELOG.md`: GitHub generates each Release body from the titles of the pull requests merged since the previous tag (grouped by `.github/release.yml`), and that generated body is the *only* record of what a release contains. So a title for a user-visible change — a new feature, a config or CLI change, a behavior change, a notable fix — must read as release notes for someone running Crewlet, not as a commit log. Nothing gates this at release time; a vague title is permanent once the pull request merges.
 - **The root-level files are canonical for process**, and this file must not contradict them: `CONTRIBUTING.md` (dev setup, contributor conventions, dependency surfaces), `RELEASING.md` (the release runbook), `SECURITY.md` (private vulnerability reporting, operator scope notes), `CODE_OF_CONDUCT.md`, `LICENSE`. When a rule here changes, change it there in the same commit — a contributor reading `CONTRIBUTING.md` and an agent reading this file must never get different answers.
 - **Follow the repository's own templates.** PRs use `.github/pull_request_template.md` (its checklist is the actual gate); issues use the templates in `.github/ISSUE_TEMPLATE/`.
@@ -96,1302 +95,153 @@ Rules:
 
 When in doubt, ask: "If I stopped right now, would a reader of this diff consider the task done?" If not, keep going until the answer is yes.
 
+
 ## Code Conventions
-- Use `Protocol` classes (from `typing`) for all provider interfaces
-- Use `UUID` for all entity IDs (auto-generated via `uuid4`)
-- Use `datetime` with UTC timezone for all timestamps
-- Use `enum.Enum` or `StrEnum` for status types
-- Prefer composition over inheritance
-- Every public class/function needs type annotations
-- Use official protocol SDKs (e.g. `mcp`, `openai`, `anthropic`) where available
+- **Interfaces are defined by the consumer**, in the package that calls them, and kept to what that caller needs. A provider package exports a concrete type; the package that uses it declares the two-method interface it actually calls. There is no `interfaces.go`
+- **`context.Context` first, always**, and threaded rather than stored in a struct. The one exception is a rollback or a teardown, which takes `context.WithoutCancel`: the failure it is undoing is often the cancellation itself, and a cleanup that inherits a dead context does nothing at all
+- **Accept interfaces, return structs**
+- **Zero values must be meaningful, or the type must refuse them.** A `pause_ttl_seconds` of 0 read as "never pause" and tore down the checkout of every seat that said nothing about the knob — a config field whose zero value is a valid *setting* needs a pointer or an explicit `Unset` sentinel, not a comment
+- **Errors wrap with `%w`** and say what to do about it. An error a person will read names the field, the file or the variable they have to change — not just what failed. Sentinels are `errors.Is`-comparable; typed errors carry the identifier the caller needs
+- **A three-valued answer is `(value, error)`**, never a bool. "Held", "definitively not held" and "the store could not be reached" are three different facts, and collapsing the last two into `false` is the single most incident-hardened lesson carried into this engine — see `internal/coord`
+- **IDs are `uuid.UUID`**, timestamps are `time.Time` in UTC, durations are `time.Duration`. A config field that is a number of seconds is named `…Seconds` and converted once, at the edge
+- **Enums are a named string type** with typed constants and a `Valid()` method, so an unknown value off the wire is a value rather than a panic
+- **Concurrency**: a goroutine's lifetime belongs to whoever started it, and every one has a way to stop. Prefer channels for handoff and a mutex for state; `sync.OnceValue` over a `sync.Once` plus a variable. Anything shared runs under `-race` in CI
+- **Comments explain WHY**, and especially why the obvious alternative is wrong. The diff shows what the code does. A package's rationale goes in its package doc, where `go doc` will find it
 
 ## Logging
-All logging MUST use structured logging via `structlog`. Never use stdlib `logging` directly.
+All logging goes through `internal/logging`, which builds a `*slog.Logger` bound to its component. Never the bare `slog` default, and never `fmt.Sprintf` into a message.
 
-```python
-from crewlet._logging import get_logger
+```go
+import "github.com/crewlet/crewlet/internal/logging"
 
-logger = get_logger("module.name")  # e.g. get_logger("task.engine")
+log := logging.Get("task.engine")
 
-# Use snake_case event names with keyword arguments — no printf-style formatting
-logger.info("task_created", task_id=task.id_str, creator=creator)
-logger.debug("resolving_hierarchy", agent_id=agent.id_str, role=role)
-logger.warning("budget_exhausted", agent_id=agent_id, used=used, limit=limit)
-logger.error("mcp_server_failed", server=name, error=str(exc))
-logger.exception("handler_failed", handler=name, event_type=event.type)
+log.Info("task_created", "task_id", task.ID, "creator", creator)
+log.Debug("resolving_hierarchy", "agent_id", agent.ID, "role", role)
+log.Warn("budget_exhausted", "agent_id", id, "used", used, "limit", limit)
+log.Error("mcp_server_failed", "server", name, "error", err)
 ```
 
 Rules:
-- Get loggers via `get_logger("component.name")` — this binds `component=` automatically
+- Get loggers via `logging.Get("component.name")` — this binds `component=` automatically
 - Event names are short, machine-parsable snake_case strings (not sentences)
-- All dynamic data goes in keyword arguments, never in the event string
-- Never use `logging.getLogger()` or `logging.basicConfig()` — use `configure_logging()` from `_logging.py`
-- App startup logging is configured via `configure_logging(level, fmt)` in `cli.py`
+- All dynamic data goes in key/value pairs, never in the message
+- Never `slog.Info(...)` on the package-level default, and never `log.Printf`
+- The process configures itself once via `logging.Configure(level, format, w)` in `cmd/crewlet` — and `Configure` is the ONLY way to set the destination. A command changes how loud it is with `logging.SetVerbosity(level, format)`, which keeps the sink already installed. Installing a writer a function was HANDED makes the global depend on its caller: `run` takes `stderr` so it can be tested, and installing that argument gave 29 parallel tests a global pointing at whichever buffer was configured last — a data race, and one test's log lines in another's output
 
 ## Package Layout
+
 ```
-src/crewlet/          # Main package
-  engine.py           # Engine class — central entry point
-  config.py           # YAML config → Pydantic models
-  cli.py              # CLI commands (run, validate, api)
-  cli_llm.py          # `crewlet llm` — operate the subscription CLI LLM
-                      #   backends: list / login (broker the vendor OAuth,
-                      #   --capture-token, --username/--password-stdin) /
-                      #   logout / status / doctor (binary + version + login
-                      #   + a REAL smoke completion, since a profile can look
-                      #   right and still not emit a parseable tool call) /
-                      #   export / import
-  _env.py             # Shared .env loader for CLI entry points (run, api,
-                      #   confluence/plane import + resync, gitlab/plane
-                      #   provision) — load_env_file
-  config_resolution.py # Resolution FINGERPRINT — a keyed, per-process
-                      #   digest of what a payload's ${VAR} references
-                      #   currently resolve to. Half of apply_config's
-                      #   no-op check: re-activating an unchanged
-                      #   revision is the documented rotation gesture, so
-                      #   a payload-only comparison made it rebuild
-                      #   nothing. Never persisted or logged
-  work_key.py         # THE work-key grammar — what identifies the unit
-                      #   of work a turn did, shared by the engine (which
-                      #   binds it around a dispatch) and the writers that
-                      #   must not duplicate under it. NOT turn_id: two
-                      #   nodes completing one trigger mint two turn ids,
-                      #   so a key from one RECORDS the duplicate instead
-                      #   of collapsing it — derived from the constituent
-                      #   trigger event ids, the same identity the
-                      #   completion ledger uses. Travels as a contextvar
-                      #   (like providers/llm/scope.py) because the
-                      #   writers sit frames below the dispatch behind
-                      #   functions with no other reason to carry it.
-                      #   Empty = a turn with no ledgerable trigger, which
-                      #   skips the guard: nothing to collapse
-  env_refs.py         # THE ${VAR} reference grammar — one compiled pattern
-                      #   shared by config.py (substitution), secrets/
-                      #   registry.py (skip-pointers-when-masking), org/
-                      #   models.py (contact literal-vs-reference) and
-                      #   provisioning.py (mint-into-this-var). Imports
-                      #   nothing from crewlet, so even config.py's own
-                      #   dependencies can use it. Four divergent copies
-                      #   previously caused a redaction leak and a
-                      #   mint-into-unreadable-${1} hole; tests/test_env_refs
-                      #   fails the build on a new re.compile of the grammar
-  redaction.py        # THE secret-redaction pass for free text leaving
-                      #   the engine — tool results, coding-agent
-                      #   transcripts, setup-step failures. A denylist of
-                      #   credential SHAPES, so it is the last line, not
-                      #   the first. Imports nothing from crewlet: it
-                      #   lived in agent/llm_loop.py, which meant the
-                      #   sandbox layer imported the agent layer to
-                      #   redact a string, and one more such import
-                      #   closed a cycle through crewlet/__init__
-  env_file.py         # THE .env assignment grammar — format_assignment /
-                      #   parse_assignment / ASSIGNMENT_RE, shared by
-                      #   provisioning.py (EnvFileSink + PrintSink),
-                      #   slack/envfile.py (EnvStore) and secrets/
-                      #   keygen.py. Imports nothing from crewlet, same
-                      #   reason as env_refs.py. What it guarantees is
-                      #   ROUND-TRIPPING through BOTH readers a
-                      #   credential file has: python-dotenv (which
-                      #   `crewlet run` boots with, and which expands
-                      #   ${...} in every quoting form) and an
-                      #   operator's `source` (where a bare space fails
-                      #   the line AND abandons every credential BELOW
-                      #   it). Slack reasoned the quoting through and
-                      #   refused what it could not represent; the
-                      #   shared sink wrote f"{var}={token}" — so
-                      #   whether a minted token survived depended on
-                      #   which CLI minted it. tests/test_env_file
-                      #   fails the build on a new hand-built
-                      #   assignment line
-  provisioning.py     # Integration-agnostic ${VAR}-minting contract shared
-                      #   by the provisioning CLIs: TokenSink protocol
-                      #   (record/discard/flush are ASYNC — a sink may
-                      #   persist remotely, and write-through closes the
-                      #   minted-but-unpersisted window; discard is the
-                      #   other half — a credential revoked because it
-                      #   could not be persisted everywhere must not be
-                      #   left standing in the vars that WERE written,
-                      #   since a dead token reads exactly like a live
-                      #   one) + SecretStoreSink
-                      #   (encrypted secret_values — the engine reads it back
-                      #   directly, no file to source) / EnvFileSink
-                      #   (understands `export VAR=value` lines; created 0600
-                      #   at open(), write-through on record; flush is a no-op
-                      #   when nothing was recorded and the file never
-                      #   existed) / PrintSink + add_sink_arguments +
-                      #   open_token_sink (shared --secret-store/--env-file/
-                      #   --print flag set + factory) + referenced_env_vars +
-                      #   sole_env_var (exactly-one-whole-reference check for
-                      #   capture contracts);
-                      #   per-integration seat scans live in each
-                      #   integration's module
-  org/                # Organization model (hierarchy, roles; Role.kind
-                      #   agent|human — human seats are addressable,
-                      #   never spawned; see docs/concepts/humans-in-the-org.md.
-                      #   models.py also owns SEAT IDENTITY —
-                      #   agent_id_for / agent_seat_by_handle /
-                      #   agent_seat_by_id: derive_agent_id is a uuid5 over
-                      #   (org name, handle), so any node recovers any seat
-                      #   from an id with no DB and no live instance. That
-                      #   derivation + its inverse is what lets routing
-                      #   address a seat this process is not running)
-  agent/              # Agent runtime (definition, instance, pool, turn engine)
-                      #   definition.py, instance.py, pool.py,
-                      #   turn.py (TurnEngine; resume_state re-enters Execute
-                      #     mid-loop on sandbox completion), plan.py,
-                      #   conversation_log.py (CROSS-TURN ledger —
-                      #     SessionEntry + build_session_entry +
-                      #     render_conversation_history, the
-                      #     iteration_log doctrine one scope wider: what
-                      #     this seat already said in ONE conversation,
-                      #     rendered into that conversation's NEXT turn
-                      #     as `## Earlier in this conversation`. Rows in
-                      #     db/conversation_sessions.py; the entry SHAPE
-                      #     lives here so db/ stays free of agent
-                      #     imports, exactly as execute_state is a blob
-                      #     there and a conversation in execute.py.
-                      #     Structured, never a transcript replay: the
-                      #     thread has MOVED by the next turn, so raw
-                      #     prior context invites acting on state that is
-                      #     no longer true. Reads stay marked STRONGER
-                      #     than within a turn — a read from last Tuesday
-                      #     is stale by construction),
-                      #   iteration_log.py (prior-work ledger —
-                      #     IterationRecord + render_iteration_ledger. Each
-                      #     phase rebuilds its LLM conversation per
-                      #     iteration and plan_tool_executions resets, so a
-                      #     self_iterate round would otherwise re-plan a
-                      #     delivery that already fired. The engine-recorded
-                      #     tool calls carry the guarantee — notably on the
-                      #     done→self_iterate override, where Review wrote
-                      #     no completed_work at all — and
-                      #     ReviewOutcome.completed_work adds the prose
-                      #     gloss on top. Args elide PER VALUE, never per
-                      #     blob: json.dumps preserves key order and the
-                      #     discriminator (channel/key/page_id) is usually
-                      #     the shortest value),
-                      #   onboarding_phase.py (run_onboarding_phase — dedicated
-                      #     first-turn onboarding pass BEFORE Plan, own round
-                      #     budget so it never starves submit_plan; strictly
-                      #     run-once per org chain: tri-state marker read
-                      #     (None=lookup failed → skip, retry next turn) +
-                      #     process-local latch + single-flight lock on
-                      #     AgentInstance + cross-process DB pass-lease
-                      #     (marker-store try_claim_pass, TTL-bounded)),
-                      #   execute.py (run_execute_phase — allow_suspend loop;
-                      #     ExecuteResumeState resume of a suspended loop),
-                      #   execute_sandbox.py (launch/collect/teardown plumbing
-                      #     for the run_sandbox tool), review.py,
-                      #   subagent.py, guards.py, prompts.py, turn_context.py,
-                      #   phase_model.py, llm_loop.py (run_tool_loop suspend
-                      #     primitive — ToolResult.suspend; publishes
-                      #     AgentTurnProgress TWICE per round — once the
-                      #     model has spoken, before its tools run, and
-                      #     again once they return — and builds that
-                      #     response with the SAME
-                      #     assistant_text_with_reasoning the phase record
-                      #     uses, so the dashboard's live row and the turn
-                      #     you expand later are one text, reasoning
-                      #     included, not two assemblies of it),
-                      #   extension.py (round-cap extension judge for Plan/Execute),
-                      #   tool_discovery.py (activate_tool +
-                      #     list_mcp_server_tools meta-tools shared by Plan/Execute),
-                      #   skills/ (PromptSkill registry + per-backend sync
-                      #     workers: sync.py ToolSkillSyncWorker
-                      #     (Confluence, space+marker-label admission),
-                      #     plane_sync.py PlaneSkillSyncWorker (Plane —
-                      #     strict single-enumeration boot walk, webhook
-                      #     fetch+re-admit with evict on 404/archived/
-                      #     decode-failure); PromptSkill.source_page_id/
-                      #     source_page_version are the backend-neutral
-                      #     provenance fields (Plane stamps version 0);
-                      #     confluence_codec.py (Confluence wire format —
-                      #     shared markdown/html helpers live in
-                      #     knowledge/markdown_docs.py);
-                      #     guard.py — required-skill load-before-use guard;
-                      #     publish CLIs live in confluence/ + plane/)
-  queue/              # EventQueue protocol (Pulsar + memory; subscribe_batch +
-                      #   BatchOptions — batched key-partitioned inbox delivery.
-                      #   ATTACHMENT LIFECYCLE is four verbs, not one:
-                      #   quiesce (stop taking new work, stay attached) /
-                      #   unquiesce (its inverse — a store blip keeps the
-                      #   seat, so a quiesce that is never followed by a
-                      #   detach must be reversible or the node is owned,
-                      #   attached and deaf forever; on Pulsar it restarts
-                      #   the consume loop AND asks the prefetch back, else
-                      #   the fetched-unacked messages wait out the 30-min
-                      #   ack timeout) / detach (non-destructive, keeps the
-                      #   subscription + its mail) / delete_subscription
-                      #   (destructive, needs NO local consumer — role
-                      #   decommission must not depend on which node ran
-                      #   the seat). `unsubscribe` is gone: its name never
-                      #   said which one it was. DeferDelivery is the third
-                      #   handler outcome beside ack-on-return and
-                      #   NAK-on-raise: leave it unacked, stop consuming;
-                      #   admin.py (BrokerAdmin + PulsarBrokerAdmin —
-                      #   subscription lifecycle over the admin v2 REST API,
-                      #   because creating one by SUBSCRIBING joins a Shared
-                      #   subscription a peer owns and steals its traffic,
-                      #   measured);
-                      #   memory.py is a BROKER + N CLIENTS, not one object:
-                      #   _Broker holds subs/mail/DLQ, each MemoryEventQueue
-                      #   is a node (client() mints a peer). Conflating them
-                      #   meant one node's detach dropped its peer's consumer
-                      #   and one node's pause gated the whole subscription;
-                      #   topics.py — THE subject
-                      #   grammar: agent_inbox_topic(handle) is the one
-                      #   definition of crewlet.agent.{handle}.inbox,
-                      #   which nine call sites used to f-string by hand.
-                      #   A producer and a consumer that disagree about a
-                      #   topic name never raise — the publish lands in a
-                      #   topic nobody reads. Imports nothing from crewlet;
-                      #   tests/test_queue/test_topics fails the build on a
-                      #   new hand-built f-string, in src/ AND in tests/)
-  a2a/                # Agent-to-agent channels over the DURABLE queue.
-                      #   The A2ABus (an asyncio.Queue per channel) is
-                      #   GONE: it was a second delivery path beside the
-                      #   seat inbox that carried the wake, and a path
-                      #   that only works in one process cannot be a
-                      #   fast path for a fleet — the target woke on the
-                      #   node owning ITS seat and found the queue
-                      #   empty. channels.py = A2AChannelStore (Postgres
-                      #   + memory twin) — the participants and open/
-                      #   closed state every authorization decision
-                      #   reads; service.py carries the brief ON the
-                      #   wake event and REPLIES by publishing the
-                      #   answering turn's final text back (there was no
-                      #   reply path at all: the prompt named
-                      #   send_a2a_message, a tool that is not
-                      #   registered and that tests assert is absent).
-                      #   One ask, one answer, then closed — which is
-                      #   what stops a volley; a2a_ask charges the
-                      #   delegation cap, the reply does not
-  db/                 # Database layer (asyncpg, migrations, token_usage,
-                      #   deterministic agent-id derivation in agents.py;
-                      #   client.py — Database.acquire()/transaction()/
-                      #   advisory_lock() hold ONE connection, which is what
-                      #   makes session-scoped state work (asyncpg's pool
-                      #   reset runs pg_advisory_unlock_all on release, so a
-                      #   pool-path advisory lock is a silent no-op);
-                      #   budgets.py / deliveries.py / credentials.py /
-                      #   rate_limits.py — the SHARED COUNTERS: token
-                      #   budget usage (caps stay config-derived in
-                      #   memory, only usage is shared), inbound webhook
-                      #   dedupe (GitHub/GitLab had none at all),
-                      #   fleet-wide credential cooldowns, and the
-                      #   notification valve. Each ships a Postgres store
-                      #   + a memory twin under one contract suite;
-                      #   turn_completions.py — the COMPLETION LEDGER:
-                      #   "has this trigger already been worked?", read
-                      #   before a turn and written after one. NOT a
-                      #   claim — no in_progress, no expiry, no
-                      #   supersede rule: the seat lease is already the
-                      #   mutual exclusion, so a claim's only honest
-                      #   disposition for a stale row is "re-run", which
-                      #   is what you do with no row. Keyed on
-                      #   CONSTITUENT event ids because a coalesced
-                      #   digest is minted fresh every time. BOTH
-                      #   directions fail open — not knowing whether
-                      #   work was done has one safe answer, and it is
-                      #   the pre-ledger one;
-                      #   conversation_sessions.py — the CONVERSATION
-                      #   LEDGER: what this seat already said in ONE
-                      #   thread / issue / PR, appended at turn end and
-                      #   rendered back into that conversation's next
-                      #   turn. Keyed (agent_handle, conversation_key),
-                      #   deduped on work_key — never turn_id, same
-                      #   reason as above. NOT episodes: those are
-                      #   agent-scoped cosine similarity over two
-                      #   summaries, with no reply text and gated OFF on
-                      #   exactly the thin pointer triggers that CONTINUE
-                      #   a conversation. A regular table, so dedupe is a
-                      #   plain unique index (031's advisory lock exists
-                      #   only because episodes is a hypertable).
-                      #   Bounded twice: max_entries trims on write (a
-                      #   chat DM keys on the whole CHANNEL, so it never
-                      #   stops growing) and the sweep drops past
-                      #   retention. Writes fail open, reads RAISE — the
-                      #   caller decides, because swallowing made
-                      #   "unreadable" and "nothing said yet" one answer
-                      #   and a screen drew a DB outage as a silent seat;
-                      #   maintenance.py — MaintenanceWorker, the
-                      #   retention sweep for the five tables that
-                      #   answer "recently" and are written on every
-                      #   event that asks (webhook_deliveries,
-                      #   rate_limits, scheduled_runs, turn_completions,
-                      #   a2a_channels — plus the idle-close of A2A
-                      #   channels no turn ever answered). Both migrations
-                      #   always SAID rows were swept on a TTL and both
-                      #   ship the index for it; `purge` existed on the
-                      #   stores and on their protocols and NOTHING
-                      #   called it, so all three grew for the life of
-                      #   the deployment. One retention per table, tied
-                      #   to what that table is for — the ledger's floor
-                      #   is catchup_max_seconds, because deleting a row
-                      #   a tick could still evaluate lets that fire run
-                      #   twice;
-                      #   leases.py — LeaseStore/MemoryLeaseStore, the
-                      #   cross-process ownership primitive: TTL lease +
-                      #   monotonic `epoch` fencing token, owner = a process
-                      #   INCARNATION (config.resolve_node_incarnation),
-                      #   release expires in place so the epoch never resets;
-                      #   config_plane.py — THE CONTROL PLANE (replaces the
-                      #   competing-consumer `engine-config`/`api-config`
-                      #   groups, under which exactly ONE process applied a
-                      #   revision and the rest ran the old company forever):
-                      #   config_activations = append-only epoch pointer
-                      #   (appended INSIDE CompanyConfigStore's own
-                      #   activation transaction via ACTIVATION_INSERT_SQL,
-                      #   and append-only because re-activating an UNCHANGED
-                      #   revision is the documented rotation gesture) +
-                      #   config_apply_status = per-node outcome, three-valued
-                      #   (ok | error | degraded — degraded = failed AFTER a
-                      #   restart-required subsystem was mutated, so rollback
-                      #   could not restore it; never counted as converged) +
-                      #   decide_posture (serve|wait|shed|isolated|stuck).
-                      #   The rule: lag alone NEVER sheds — every successful
-                      #   rollout produces lag, so shedding on it makes the
-                      #   fastest node the cause of a fleet-wide outage.
-                      #   See docs/concepts/control-plane.md;
-                      #   secret_values.py — SecretValueStore over the
-                      #   encrypted secret store (per-row AAD binds the var
-                      #   name; keyring REQUIRED, no plaintext mode) +
-                      #   DatabaseSecretSource/load_secret_source, the boot
-                      #   snapshot installed as the process secret source)
-  secrets/            # Company-config whole-config encryption at rest:
-                      #   the ENTIRE company_config payload is encrypted as
-                      #   one opaque blob ({"__encrypted__": "enc:v1:…"}).
-                      #   cipher.py (SecretCipher protocol + KeyringCipher
-                      #   AES-256-GCM + enc:v1: envelope),
-                      #   document.py (encrypt/decrypt_document wrapper +
-                      #   store_config/load_config/redact_config/rekey_config
-                      #   read/write helpers every payload consumer funnels
-                      #   through), registry.py (structural secret_pointers over
-                      #   the decrypted payload + redact_payload/restore_redacted
-                      #   for display masking + safe write-back), keygen.py,
-                      #   fake.py, resolver.py (SecretSource protocol +
-                      #   install_secret_source/lookup_secret/
-                      #   refresh_secret_snapshot — the process-wide source
-                      #   config._resolve_env_value consults BEFORE
-                      #   os.environ; store wins so a stale .env can't shadow
-                      #   a rotated secret; see docs/concepts/secret-store.md);
-                      #   keyring sourced from Tier A
-                      #   BootstrapConfig.secrets (root of trust, never in DB —
-                      #   no keyring = plaintext company_config storage,
-                      #   opt-in; the secret_values store has no plaintext
-                      #   mode and Tier A itself resolves with
-                      #   use_store=False, since it carries the DSN + keyring
-                      #   that open the store). See
-                      #   docs/concepts/configuration.md#secrets and
-                      #   docs/concepts/secret-store.md
-  task/               # Task engine (models, tracker, escalation)
-  seat/               # SEAT OWNERSHIP — which node runs which agent.
-                      #   See docs/concepts/seat-ownership.md and
-                      #   docs/guides/fleet.md.
-                      #   placement.py — THE vocabulary node.roles /
-                      #   node.labels / role.placement share with the
-                      #   host; imports nothing from crewlet so config.py
-                      #   and host.py can both depend on it. Owns the
-                      #   capacity math, which is the part that is easy
-                      #   to get wrong: placement is NOT a filter over a
-                      #   fleet-wide fair share — 9 seats pinned to one
-                      #   node and 1 free over 3 nodes gives ceil(10/3)=4
-                      #   and strands 5 forever while every sweep reads
-                      #   healthy. Share is per placement GROUP, over the
-                      #   nodes eligible for it, summed; a node that does
-                      #   not run seats is not in the denominator.
-                      #   host.py (SeatHost: converge on
-                      #   ceil(seats/live nodes) in BOTH directions —
-                      #   claiming alone only converges for a fleet that
-                      #   SHRINKS, so a node that booted alone would hold
-                      #   every seat and scaling out would do nothing until
-                      #   something died; the share is a ceiling, which is
-                      #   what makes the give-back settle instead of
-                      #   oscillating. `node:{id}` presence
-                      #   leases as THE membership read — inferring the
-                      #   count from seat ownership reads an unclaimed
-                      #   fleet as zero nodes and every node then takes
-                      #   every seat; claim/release rate limits because a
-                      #   move costs an MCP spawn, not a lease (attach is
-                      #   5 ms, measured); `preferred` ORDERS the claim and
-                      #   never gates it — the hint outlives the node that
-                      #   set it, so gating strands a dead node's seats
-                      #   forever, and it cannot rank a node's OWN seats
-                      #   (it names the last claimer) so the shed order is
-                      #   plain sorted; may_start() is FRESHNESS not
-                      #   membership — a renew at t proves exclusivity
-                      #   through t+ttl, and a membership snapshot can be a
-                      #   full TTL stale, i.e. exactly the window the check
-                      #   exists to close; on_release carries a REASON
-                      #   (voluntary quiesce-then-detach vs fenced
-                      #   detach-first-abandon) and an unproven teardown
-                      #   KEEPS the lease; on_admission fires on the renew
-                      #   EDGE so the owner's consumer stops and restarts
-                      #   with the store blip; renew()==False drops the seat
-                      #   NOW, LeaseError keeps it — conflating them tears a
-                      #   healthy company down over a DB blip);
-                      #   watchdog.py (EventLoopWatchdog — a stalled loop
-                      #   can't be signalled, so the thread's only real
-                      #   move is os._exit: a wedged-but-alive node holds
-                      #   its broker prefetch for the full 30-min ack
-                      #   timeout while its leases lapse and peers take
-                      #   over; exiting collapses that to 9 ms. Beat/poll
-                      #   are SCALED to the threshold — a beat slower than
-                      #   it makes a healthy loop shoot itself. A GONE
-                      #   loop is not a WEDGED one — indistinguishable
-                      #   from the thread (the beat just stops), opposite
-                      #   situations: only a live loop still holds a
-                      #   peer's mail. It records its loop and stands
-                      #   down when that loop closed, else every engine
-                      #   abandoned rather than stopped arms a TTL-long
-                      #   suicide timer (it killed this repo's own suite
-                      #   at 63%, exit 75, with zero test failures).
-                      #   Armed by
-                      #   the engine alongside the seat host and DISARMED
-                      #   for the whole of shutdown, which is the one part
-                      #   of the process that legitimately blocks the loop
-                      #   — exiting through it abandons the seat release
-                      #   that makes a drain graceful).
-                      #   Constants are MEASURED:
-                      #   docs/concepts/scaling.md § Where the constants
-                      #   come from; the harness that re-measures them is
-                      #   tests/test_queue/test_broker_behavior.py
-  schedule/           # Scheduler — role/unit cron-style recurring work:
-                      #   cron.py (5-field evaluator), scheduler.py (tick loop
-                      #   + describe_schedules projection for the dashboard
-                      #   /schedules view), store.py (scheduled_runs ledger)
-  events/             # Event types, routing (subscriptions via EventQueue).
-                      #   subscriptions.py resolves every recipient from
-                      #   the ORG — role name or derived agent id → seat →
-                      #   inbox — never from the local agent pool. Each
-                      #   crewlet.events.* topic has ONE fleet-wide
-                      #   consumer group, so the node that wins a delivery
-                      #   is rarely the node running the recipient, and a
-                      #   pool miss was a terminal drop (warn + ack), not
-                      #   a retry
-  knowledge/          # Shared-knowledge read — protocol.py (KnowledgeSearcher
-                      #   Protocol + KnowledgeHit + AUTO_DRAFTED_PARENT/
-                      #   AUTO_DRAFT_TITLE_PREFIX, the one seam the Plan
-                      #   prefetch talks through; engine wires exactly ONE
-                      #   backend, selected by integration presence),
-                      #   accessibility.py (accessible_spaces +
-                      #   accessible_projects org-wide scope),
-                      #   confluence_search.py (ConfluenceSearcher — CQL),
-                      #   plane_search.py (PlaneSearcher — workspace page
-                      #   search: recency-ordered, skills-project + auto-
-                      #   draft-parent exclusions, per-agent PLANE_API_KEY →
-                      #   engine-client fallback; the server ANDs query
-                      #   tokens, so on zero hits the searcher relaxes the
-                      #   query full→4→2-token prefixes and pre-trims to the
-                      #   server's 16-distinct-token cap),
-                      #   markdown_docs.py (backend-neutral .md doc parsing +
-                      #   render_markdown/html_to_text/frontmatter dump
-                      #   shared by both import CLIs and page codecs)
-  confluence/         # Confluence page WRITE side — pages.py (generic page
-                      #   ops + ConfluencePublishError), knowledge.py
-                      #   (knowledge-doc encode + crewlet-doc labels;
-                      #   directory convention: space=parent dir, title=first
-                      #   H1, optional frontmatter overrides only),
-                      #   import_cli.py (unified `crewlet confluence
-                      #   import`/`resync`: routes each .md — trigger:=skill,
-                      #   otherwise knowledge doc in its parent-dir space;
-                      #   --prune deletes orphaned import-managed skill pages
-                      #   via pages.find_all_by_label/delete_page),
-                      #   promotion.py (ConfluencePromotionWriter — the
-                      #   Confluence PromotionPageWriter backend)
-  learning/           # Agent-learning subsystem — ReflectEngine,
-                      #   PersistDecider, AgentDiary, SkillSynthesizer/
-                      #   Refiner, EpisodeStore + lifecycle,
-                      #   CounterpartyProfiler, OnboardingMarkerStore,
-                      #   relevant_knowledge.py (Plan-phase ## Relevant
-                      #   knowledge prefetch over the KnowledgeSearcher
-                      #   seam), skill_synthesizer.py (PromotionSynthesizer
-                      #   + the consumer-owned PromotionPageWriter Protocol
-                      #   — backends in confluence/promotion.py +
-                      #   plane/promotion.py; SkillPromoted.container_key)
-  providers/          # LLM + Embeddings protocols and implementations.
-                      #   llm/cli_agent.py — the `cli-agent` provider type:
-                      #   a locally installed coding CLI (claude / codex /
-                      #   gemini / opencode / cursor-agent / copilot / grok)
-                      #   driven headless on the operator's SUBSCRIPTION, no
-                      #   API key. Pieces: cli_profiles.py (declarative
-                      #   per-CLI data — argv, output paths, which files are
-                      #   credentials vs memory, login commands; every field
-                      #   overridable from YAML so flag drift is a config
-                      #   edit, and `custom` needs no engine change),
-                      #   cli_workspace.py (THE isolation boundary —
-                      #   per-seat HOME/XDG/vendor dirs, allowlisted child
-                      #   env (never os.environ), volatile-path prune per
-                      #   generation, shared-credential seed + refresh
-                      #   write-back), cli_protocol.py (messages+tools → one
-                      #   prompt; JSON envelope → tool_calls — the CLI's own
-                      #   tools are never used), cli_login.py (broker the
-                      #   vendor's OAuth, capture a headless token, drive a
-                      #   stdin credential login where one exists, export/
-                      #   import the credential bundle), scope.py
-                      #   (bind_llm_scope — the turn-scoped contextvar the
-                      #   shared provider instance reads to pick a seat's
-                      #   workspace). Operator surface: `crewlet llm`
-                      #   (cli_llm.py). See
-                      #   docs/concepts/subscription-llm-backends.md
-  sandbox/            # Sandbox-as-a-tool code runtime: code work is the
-                      #   run_sandbox Execute tool (tools/run_sandbox_tool.py)
-                      #   — the executor calls it, the Execute loop SUSPENDS,
-                      #   and the engine RESUMES the same loop with the result
-                      #   spliced in when the detached run completes (no
-                      #   separate completion turn). Pieces here:
-                      #   protocol.py (Sandbox/SandboxProvider/
-                      #   CodingAgentRunner protocols + RunHandle/specs/
-                      #   results; pause/close + start/poll/collect),
-                      #   manager.py (SandboxManager — acquire (install +
-                      #   apply_setup)/teardown + reconnect for box reuse),
-                      #   setup.py (declarative provisioning framework —
-                      #   SandboxSetupStep (files/commands/env/brief),
-                      #   apply_setup at acquire, environment_brief
-                      #   env-context block for the coding-agent brief;
-                      #   steps come ONLY from providers.sandbox.setup +
-                      #   role.sandbox.setup — the engine ships none; the
-                      #   git-auth recipe (scoped credential helper reading
-                      #   the seat's code-host PAT + SSH→HTTPS insteadOf +
-                      #   identity mapping from $CREWLET_AGENT_* + a brief
-                      #   telling the agent to use the token) is config,
-                      #   shipped in examples/nimbus.company.yaml (GitLab
-                      #   form; the GitHub form is in
-                      #   docs/integrations/github.md); setup
-                      #   commands run WITH the run env so recipes read
-                      #   engine facts at provisioning time),
-                      #   credentials.py
-                      #   (build_sandbox_env — tool-agnostic run env: LLM
-                      #   creds from providers.llm + generic agent identity
-                      #   as CREWLET_AGENT_HANDLE/_EMAIL + setup-step env +
-                      #   role.sandbox.env (external tokens are DECLARED
-                      #   there, e.g. GITHUB_TOKEN — the engine never names
-                      #   a tool-specific var); ${VAR} refs resolving empty
-                      #   log sandbox_env_unresolved),
-                      #   pending_store.py (durable pending_sandbox_run rows
-                      #   + at-most-once resume flip (running |
-                      #   awaiting_clarification | reseed → resumed) +
-                      #   execute_state JSONB = the suspended Execute
-                      #   conversation; the row is also the box record —
-                      #   sandbox_id non-empty ⇔ a box exists, paused_at set
-                      #   ⇔ it is paused), coordinator.py
-                      #   (SandboxCoordinator — completion → resume the
-                      #   suspended Execute loop; pause-on-collect / reuse /
-                      #   teardown-at-phase-end lifecycle; inbox-pause busy
-                      #   gate + restart recovery, incl. reaping a `resumed`
-                      #   tail abandoned by a dead engine),
-                      #   waiter.py (SandboxWaiter — THE completion signal:
-                      #   poll tick that detects a finished/dead job + doubles
-                      #   as the running box's keepalive; reaps a vanished
-                      #   sandbox after repeated connect failures so a lost
-                      #   box can't orphan a run; PAUSE REAPER — E2B holds a
-                      #   paused box forever and bills for the snapshot, so
-                      #   each tick kills clarification pauses older than
-                      #   pause_ttl (by id, never connect — that resumes) and
-                      #   flips the run to `reseed`, which re-seeds from the
-                      #   pushed branch on the eventual answer),
-                      #   e2b.py (E2BSandboxProvider — real
-                      #   sandboxes, cloud or self-hosted via domain; box
-                      #   resources come from the TEMPLATE (build-time
-                      #   cpu_count/memory_mb) — create takes none, so there
-                      #   is no engine-side limits knob),
-                      #   local.py (LocalSandboxProvider — the ENGINE HOST as
-                      #     a backend, so code work can use the subscription
-                      #     CLI login `crewlet llm login` established, with no
-                      #     E2B account or API key. Two containments:
-                      #     DirectSandbox (process tree; per-box HOME/XDG +
-                      #     allowlisted env isolate STATE, not the host —
-                      #     write_file refuses paths outside the box, and the
-                      #     detached job is spawned with start_new_session so
-                      #     one killpg reaches the tree AND asyncio reaps it,
-                      #     since a zombie reads as alive to `kill -0`) and
-                      #     ContainerSandbox (docker/podman, box bind-mounted
-                      #     at /home/user so in-box paths match E2B; --init
-                      #     reaps). SandboxSpec.credential_files carries the
-                      #     CLI login in; a refreshed one is written back),
-                      #   coding_agents/ (_detached.py DetachedFileRunner
-                      #   base — start() runs the agent UNCAPPED (no timeout
-                      #   kill) + closes stdin; poll() = done-marker OR
-                      #   _result_done(streamed output) for an agent that
-                      #   finishes but never exits (opencode#17516); sandbox
-                      #   teardown reaps the husk; TTL = budget + buffer is the
-                      #   only ceiling; collect() reconstructs transcript +
-                      #   surfaces the exit code; runners self-configure the
-                      #   LLM via CodingAgentLLM not env model;
-                      #   claude_code.py ClaudeCodeRunner — headless
-                      #   `claude -p` JSON, marker-driven; opencode.py
-                      #   OpenCodeRunner — `opencode run --format json`
-                      #   (streams line-flushed events: text .part.text +
-                      #   terminal step_finish reason:stop (or session
-                      #   .status:idle) → _result_done, since `run` hangs
-                      #   without exiting); writes a custom
-                      #   provider into opencode.json for a custom base_url
-                      #   (addresses crewlet/<model>; key via {env:…};
-                      #   share:disabled); ask.py — crewlet-ask clarification
-                      #   shim + MCP scoping; a detached completion publishes
-                      #   the redacted transcript as the Execute phase),
-                      #   mcp_render.py (resolve_sandbox_mcp — role's scoped
-                      #   MCP servers + creds → per-agent launch specs),
-                      #   otel.py (SandboxOtelReceiver + per-run token store —
-                      #   engine-fronted OTLP receiver; route
-                      #   POST /otlp/{token}/v1/{signal}; wired via
-                      #   CREWLET_SANDBOX_OTEL_RECEIVER_URL),
-                      #   fake.py (in-process test fakes); the
-                      #   per-role gate is role.sandbox, engine provider is
-                      #   providers.sandbox (see docs/concepts/code-sandbox.md)
-  notifications/      # External notification system (outbound transports;
-                      #   transports/chat_threads.py — BACKEND-NEUTRAL thread
-                      #   follow model (ChatThreadTracker + MentionGrammar);
-                      #   each backend supplies only its mention grammar
-                      #   (slack_threads.py `<@U123>` markup vs
-                      #   mattermost_threads.py literal @username) and its
-                      #   thread-id shape. Rows live in chat_thread_follows,
-                      #   keyed by `backend` — thread ids are unique only
-                      #   WITHIN a backend;
-                      #   typing_status.py — backend-neutral WorkingStatusDriver
-                      #   over a StatusPoster protocol; a poster declares its
-                      #   backend, its refresh cadence (sized to that backend's
-                      #   expiry) and supports_status_text: Slack renders free
-                      #   text, a plain typing indicator does not, and where it
-                      #   does not the phrase pools go inert;
-                      #   coalesce.py — conversation keys + digest merging
-                      #   for inbox batching; handle.py — party-level
-                      #   HandleRegistry over agents ∪ human seats
-                      #   (resolution + sender attribution; the engine
-                      #   never sends to humans as itself);
-                      #   transports/plane.py — PlaneTransport (inbound-only:
-                      #   webhook dedupe + two-layer routing — directed
-                      #   payload targets, subscriber fan-out via the engine
-                      #   read client — project id→identifier cache, tool-
-                      #   skills index-callback hook, excluded skills
-                      #   project, project-lead fallback; send() no-op;
-                      #   public client seam for page consumers:
-                      #   new_user_client/engine_client/workspace/base_url +
-                      #   resolve_project_ids, the shared identifier→UUID
-                      #   primitive);
-                      #   notification_prompts/plane.py —
-                      #   PlaneNotificationPrompt (routed_via-keyed);
-                      #   typing_status.py — Slack working indicator via
-                      #   assistant.threads.setStatus (chat:write; Slack has
-                      #   no public bot typing API — bolt-js#885):
-                      #   TurnEngine-driven sessions keyed by
-                      #   (handle, channel, thread_ts), refcounted by turn_id,
-                      #   45 s heartbeat under Slack's 120 s status TTL, held
-                      #   across a detached-sandbox suspend, cleared on reply /
-                      #   skip / failure; gated by integrations.slack.typing_status
-                      #   (addressed | always | off); wording = per-phase
-                      #   pools (PHASE_PHRASES / StatusPhrases), one line
-                      #   drawn per phase and held for it, overridden by
-                      #   integrations.slack.status_phrases)
-  mattermost/         # Mattermost integration (self-hosted OSS chat) —
-                      #   client.py (async REST: bots, tokens, teams,
-                      #   channels, posts, typing, the since= backfill read,
-                      #     server_time_ms (the Date header — reconnect
-                      #     windows compare SERVER-stamped post timestamps,
-                      #     so "now" cannot come from the engine's clock)
-                      #     + THE url helpers: normalize_base_url /
-                      #     websocket_url / site_urls_match, one derivation
-                      #     shared by config.py, the transport and doctor),
-                      #   doctor.py (`crewlet mattermost doctor` — checks
-                      #     what fails SILENTLY: ServiceSettings.SiteURL vs
-                      #     the configured url (Mattermost accepts a
-                      #     websocket only from a browser whose Origin
-                      #     matches SiteURL exactly, and the engine sends no
-                      #     Origin — so a mismatch blinds every human while
-                      #     agents keep working), a browser-shaped upgrade,
-                      #     and a REAL authenticated socket per seat),
-                      #   events.py (MattermostEventFleet — ONE WEBSOCKET PER
-                      #     AGENT SEAT, because Mattermost has no usable
-                      #     inbound webhook: outgoing webhooks fire only in
-                      #     public channels and carry no root_id / channel
-                      #     type / mentions. Republishes each post onto the
-                      #     standard raw_webhook envelope so everything
-                      #     downstream stays webhook-shaped. Mattermost
-                      #     replays nothing on reconnect, so each seat keeps a
-                      #     cursor and re-reads its channels over the gap,
-                      #     bounded to 15 min — a blip, not an outage),
-                      #   provision.py + provision_cli.py (`crewlet mattermost
-                      #     provision` — Plane/GitLab shape, NOT Slack's: no
-                      #     manifest, no ledger, no OAuth click, because an
-                      #     admin token mints a bot's PAT directly; the CLI
-                      #     also hosts `doctor`).
-                      #   Engine-side (MattermostConfig, MattermostTransport,
-                      #   its prompt, identity registration) lives in
-                      #   config/notifications like GitLab; the transport OWNS
-                      #   the fleet so a live config swap rebuilds both.
-                      #   See docs/integrations/mattermost.md
-  slack/              # Slack app provisioning — `crewlet slack provision`
-                      #   (one-app-per-agent automation via Slack's App
-                      #   Manifest APIs): manifest.py (canonical BOT_SCOPES/
-                      #   BOT_EVENTS + per-agent app manifest — the single
-                      #   source of truth for the app shape), api.py
-                      #   (SlackManifestClient — apps.manifest.* +
-                      #   tooling.tokens.rotate + oauth.v2.access; 429s
-                      #   waited out within a wall-clock budget), state.py
-                      #   (slack-apps.json ledger + manifest fingerprints,
-                      #   atomic 0600 writes), envfile.py (EnvStore — the
-                      #   ONE .env read+written; file wins over shell
-                      #   exports for managed keys; dotenv-round-trip-safe
-                      #   quoting), provision.py (plans from
-                      #   role.integrations.slack placeholders via
-                      #   config.env_var_reference + run_provision
-                      #   orchestration — per-agent failure isolation,
-                      #   expiry-aware token rotation, created-app forced
-                      #   install), provision_cli.py (CLI handler; the
-                      #   OAuth code is pasted from the API's
-                      #   GET /webhooks/slack-oauth landing page; see
-                      #   docs/integrations/slack.md)
-  tools/              # Agent tool system (builtins + A2A tools);
-                      #   registry.py — ToolRegistry + THE tool-origin
-                      #     grammar (builtin | custom | extension:<name> |
-                      #     mcp:<server>), the `source` of GET /tools.
-                      #     Recorded at REGISTRATION because it cannot be
-                      #     recovered after: an extension's tool is
-                      #     structurally identical to a builtin, so the
-                      #     dashboard called both "builtin" and a tool
-                      #     missing because its extension failed to load
-                      #     read as a missing builtin. Extensions get a
-                      #     for_origin() view of the registry, since the
-                      #     register() call is the only frame that knows
-                      #     who is registering;
-                      #   capabilities.py — tool classification from MCP
-                      #   annotations (ToolAnnotations +
-                      #   writes_to_shared_surface; keeps the engine
-                      #   tool-stack agnostic, see
-                      #   docs/concepts/tool-capabilities.md);
-                      #   spawn_subagent_tool.py (ephemeral sub-agents);
-                      #   run_sandbox_tool.py (the run_sandbox Execute tool —
-                      #     gated on CheckContext.sandbox_enabled; launches a
-                      #     detached coding run + suspends the loop)
-  github/             # GitHub integration (per-role remote MCP)
-  gitlab/             # GitLab integration — per-agent provisioning side:
-                      #   client.py (async REST client), provision.py
-                      #   (idempotent reconcile: service account + membership
-                      #   + PAT + webhooks per agent seat; sinks/${VAR} scan
-                      #   come from top-level provisioning.py, only the
-                      #   GitLab seat scan seat_token_vars lives here),
-                      #   provision_cli.py
-                      #   (`crewlet gitlab provision`). Engine-side GitLab
-                      #   (webhook route, parse_gitlab_webhook, identity
-                      #   registration, GitLabConfig) lives in api/config/
-                      #   notifications like GitHub; see
-                      #   docs/integrations/gitlab.md
-  plane/              # Plane integration (self-hosted fork) — REST-client
-                      #   half: client.py (thin async X-API-Key client,
-                      #   cursor pagination w/ strict completeness mode;
-                      #   users/me, projects, work-item subscribers,
-                      #   pages CRUD incl. archive_page +
-                      #   external_id/external_source identity + fields=
-                      #   projection, workspace page search,
-                      #   service accounts + token lifecycle, webhook
-                      #   CRUD, members/project-members, method-probe
-                      #   capability checks),
-                      #   provision.py (`provision()` — idempotent
-                      #   reconcile: seats + memberships + tokens minted
-                      #   into the config's own ${VAR} refs + crewlet-engine
-                      #   account + webhook-secret capture + decommission;
-                      #   pre-mutation capability preflight — stock-CE/
-                      #   not-admin abort, degraded mode without the token-
-                      #   lifecycle capability, page-echo detection;
-                      #   drift = notes, report ends with the member table),
-                      #   provision_cli.py (`crewlet plane provision` on the
-                      #   existing plane CLI group; per-field url/workspace
-                      #   resolution — never a full-model re-validation,
-                      #   token/webhook_secret stay RAW as the minting
-                      #   contract),
-                      #   plane_codec.py (skill-page wire format over
-                      #   description_html — leading YAML code block),
-                      #   import_cli.py (`crewlet plane import`/`resync` +
-                      #   PlanePublishError: external_id-keyed idempotency,
-                      #   archive→delete prune, project pre-flight),
-                      #   promotion.py (PlanePromotionWriter — ensure-exists
-                      #   Auto-Drafted-Skills parent, access=public).
-                      #   Engine-side Plane (PlaneConfig, /webhooks/plane
-                      #   route, PlaneTransport + prompt, identity
-                      #   registration) lives in config/api/notifications
-                      #   like GitLab; see docs/integrations/plane.md
-  mcp/                # MCP integration (stdio + HTTP/SSE)
-  timescaledb/        # TimescaleDB event store (observability, in main PG)
-  api/                # REST API + dashboard (Starlette). ONE wiring for
-                      #   embedded and standalone: state comes from the
-                      #   active config revision (config_refresh) and
-                      #   events from subscribe_stream — never a
-                      #   boot-time snapshot or a publish listener.
-                      #   runtime.py — NodeRuntime, the single seam for
-                      #   facts only a co-located engine can answer
-                      #   (in-flight turns, drain state, live MCP tools,
-                      #   config posture + applied epoch);
-                      #   config_refresh.py — ConfigStateRefresher, the
-                      #   cached projection's reconciler over the
-                      #   activation pointer (refresh_if_changed = one tick,
-                      #   run() = the loop). A MERGED node passes poll=False
-                      #   and the engine drives the tick from its own
-                      #   reconcile loop, so one process polls once and its
-                      #   two halves can't disagree about the epoch;
-                      #   auth guards EVERY route bar probes, webhooks
-                      #   (HMAC), /otlp (signed token) and the dashboard
-                      #   shell. The middleware is mounted
-                      #   UNCONDITIONALLY: it used to be gated on
-                      #   `bootstrap`, while the /config WRITE surface
-                      #   was gated on `company_config_store` — two
-                      #   independent conditions deciding one security
-                      #   property, coinciding only because every caller
-                      #   happens to pass both. Tier A supplies the
-                      #   POSTURE, never the existence of a check; with
-                      #   no Tier A no token can match, so reads serve
-                      #   and every write + all of /config is refused.
-                      #   Same rule for the seven inbound webhooks: a
-                      #   route whose secret is unset has nothing to
-                      #   verify with and answers 503+Retry-After. Slack
-                      #   was the one that skipped verification entirely
-                      #   in that case and returned 200 — no agent woke
-                      #   (the transport re-verifies) but the payload
-                      #   still reached the event store and every
-                      #   dashboard socket, which is the pollution the
-                      #   edge check exists to stop —
-                      #   routes/ (per-domain handlers: agents, events,
-                      #     tokens, org, stream, webhooks (Jira/Slack/GitHub/
-                      #     GitLab/Plane/Confluence/Forge inbound, incl.
-                      #     POST /webhooks/plane — X-Plane-Signature HMAC),
-                      #     dashboard, health;
-                      #     fleet.py / sandbox_runs.py / budgets.py /
-                      #     integrations.py each export a PAYLOAD function
-                      #     the REST route and the /ws/stream query both
-                      #     call — two surfaces answering one question
-                      #     from two implementations is how they end up
-                      #     disagreeing with nobody noticing.
-                      #     What they add is the durable half of three
-                      #     questions the live projection could only half
-                      #     answer: sandbox_runs reads pending_sandbox_run
-                      #     (in-memory swept a parked run after 12h while
-                      #     a question can wait days, and `reseed` had no
-                      #     surface at all — it looked like work that
-                      #     finished); budgets pairs the config CAP with
-                      #     the DURABLE counter the engine enforces
-                      #     against, keeping them distinct from the
-                      #     per-run meter (three spans, and only the
-                      #     meter shares one with the cap — so `durable`
-                      #     false means unreadable, never zero, and
-                      #     live_used is null, never 0); integrations
-                      #     answers how each surface is wired +
-                      #     secret_present (THREE-valued: null = uses
-                      #     none, false = a route 503-ing every
-                      #     delivery) + per-source counts grouped by the
-                      #     STORE. It never infers health — an idle
-                      #     Slack and a 401-ing Slack are identical in
-                      #     the event store, since verification runs
-                      #     BEFORE the row is written),
-                      #   app.py, tokens.py (aggregation),
-                      #   live_state.py (in-memory agent-state projection +
-                      #     in-flight live_call, so state survives a browser
-                      #     refresh without per-read DB scans; + active-
-                      #     sandboxes set from the SandboxRun* events →
-                      #     dashboard Running-sandboxes panel; + last_error
-                      #     and a frozen failed live_call so a stopped seat
-                      #     says WHY; + the live token rollup (records kept
-                      #     in the window, aggregated through api/tokens.py —
-                      #     one implementation, never a second one in JS);
-                      #     apply_event returns a Change naming what moved),
-                      #   streaming.py (StreamService: ingest → projection +
-                      #     /ws/stream fan-out + one shared health tick +
-                      #     DERIVED PUSHES — agents/sandboxes/tokens
-                      #     envelopes carry the RESULT of applying an event,
-                      #     so a dashboard mirrors the projection instead of
-                      #     re-deriving it),
-                      #   queries.py (the /ws/stream request/response channel:
-                      #     agent / agent_memory / event / events / trace /
-                      #     tokens / schedules / config* — each a thin adapter
-                      #     over the SAME function the REST route calls, so
-                      #     the two surfaces cannot answer differently;
-                      #     config* gated by auth.resolve_operator);
-                      #   serves the dashboard from the top-level static/
-                      #     (see static/ below)
-  static/             # Web assets served by the API. static/dashboard/ is
-                      #   the zero-build modular ES-module dashboard.
-                      #   THE WEBSOCKET IS THE ONLY DATA CHANNEL: socket.js
-                      #   (pushes + a query(what, params) Promise channel;
-                      #   the REST snapshot is degraded-mode only), store.js
-                      #   (a MIRROR of the server projection — it derives
-                      #   nothing, and wakes subscribers per SLICE so a
-                      #   health tick does not redraw the page), patch.js
-                      #   (keyed in-place DOM patching — rendering with
-                      #   innerHTML on every envelope is what made the page
-                      #   strobe; every repeated row needs a data-k),
-                      #   scheduler.js (rAF coalescing), records.js (ONE
-                      #   normalizer for an LLM record, pass-through rather
-                      #   than a field whitelist — four hand-maintained
-                      #   whitelists are how a phase failure got deleted on
-                      #   its way to the screen), pulse.js (THE COMPANY
-                      #   PULSE — one cell per minute of the last hour,
-                      #   lit by real feed events, red where the server's
-                      #   `failed` flag says so, PALE where the feed's
-                      #   retention edge means the minute is unknown
-                      #   rather than quiet. buildPulse is pure and
-                      #   buckets ONCE, answering the company-wide `cells`
-                      #   track and the per-seat `rows` from one pass —
-                      #   the total increments BEFORE the roster check, so
-                      #   engine-authored events with no actor are counted
-                      #   (summing the rows instead undercounts every one
-                      #   of them)), health.js (THE
-                      #   ENGINE HEALTH SURFACE — a popover on the live
-                      #   dot, plus the two conditions that escalate into
-                      #   always-on chrome because they must never wait
-                      #   for a click: a dead socket, and an engine with
-                      #   NO ACTIVE COMPANY CONFIG, which discards every
-                      #   inbound webhook and used to render exactly like
-                      #   a healthy idle one. Booleans from the engine
-                      #   are read THREE-VALUED — losing the socket
-                      #   clears the health slice, so `=== false ? bad :
-                      #   good` renders "Configuration: active" on a page
-                      #   that cannot see the engine; the dot's
-                      #   status→class map is a table for the same
-                      #   reason. emptyOrPending in ui.js is where
-                      #   socket-down / nothing-configured / genuinely-
-                      #   empty are told apart once, for every list view).
-                      #   Views are pure
-                      #   render(state) -> markup + a `slices` list;
-                      #   hash router, per-view modules; turnRail() in ui.js
-                      #   draws an in-flight turn as an object (phases spent
-                      #   / live / pending, packet on the live segment);
-                      #   staleness() in state.js is why MOTION STOPS WHEN
-                      #   WORK STOPS — pips that keep pulsing on a hung turn
-                      #   claim progress that is not happening; llm.js renders each
-                      #   LLM invocation with
-                      #   collapsible, height-capped prompt messages so a long
-                      #   system prompt cannot bury the response, plus a
-                      #   Source chip/block naming the event that triggered the
-                      #   turn — notification triggers show a branded
-                      #   integration badge (Slack/Jira/…) + sender via
-                      #   describe_trigger. llm.js also OWNS the
-                      #   `<think>` grammar the engine writes
-                      #   (events.types.format_reasoning_and_content):
-                      #   responseBody turns it into a Reasoning block
-                      #   inline with the tool badges, and anything
-                      #   wanting the plain text (row previews, the
-                      #   overview live card) calls stripThink instead of
-                      #   re-writing the regex. It renders a LIVE row and a
-                      #   finished one identically because the engine
-                      #   builds both responses with ONE function — a live
-                      #   record's toggle identity is records.js `_key`
-                      #   (timestamp-free), since updated_at moves every
-                      #   round and would re-open what the reader
-                      #   collapsed; eventDetail.js renders inbound
-                      #   notifications as a readable integration-branded view
-                      #   (state.js integrationMeta/integrationBadge) — see
-                      #   describe_trigger / turn-engine.md — and gives each
-                      #   webhook source a layout over the SAME fields its
-                      #   router keys on (GitLab `changes.{assignees,
-                      #   reviewers}` diffs + pipeline.failed jobs, Plane
-                      #   `activity.field`/`old_value → new_value` +
-                      #   mention ids), with the raw payload always kept
-                      #   beneath and any payload URL scheme-checked
-                      #   before it becomes an href).
-                      #   Visual system = INDIGO CONSOLE: a cool
-                      #   blue-black ground, and every division on it is a
-                      #   different ALPHA OF ONE COOL BLUE-WHITE (panel
-                      #   fill, hairline, inset, and the type itself) —
-                      #   that single material is what makes a dense
-                      #   surface read as one object. TEMPERATURE IS THE
-                      #   IDENTITY: a cool ground puts the warm half of
-                      #   the categorical set (amber/orange/brown/red) in
-                      #   opposition to the surface, so a status mark
-                      #   separates before hue is considered. The accent
-                      #   IS the logo's own violet (#7c56ff). Panels
-                      #   carry the identity, not the ground — chroma is
-                      #   only visible at lightness, so a ground that
-                      #   MEASURES blue over a 5% tint still RENDERS
-                      #   neutral black. The
-                      #   brand gradient is used as LIGHT (a hairline on the
-                      #   hero's top edge, the rail packet), never as a fill.
-                      #   styles/tokens.css is the ONLY place a colour is
-                      #   defined (surface/border/text ramps, glass, the
-                      #   type stack + the three tracking tokens, the brand
-                      #   gradient/ramp, the panel/card/lift shadows, and
-                      #   8 categorical hue
-                      #   families each shipping a --<hue> MARK step and a
-                      #   --<hue>-ink TEXT step; --red is a reserved status
-                      #   hue). One shared panel recipe in components.css
-                      #   backs .card/.list/.widget/.stat/.tool-card/.turn/
-                      #   .mem-card — views never re-declare a surface.
-                      #   Phase + event-category hue assignments (state.js
-                      #   PHASE_HUE / EVENT_CATEGORIES) are validated for
-                      #   CVD + normal-vision separation in BOTH themes —
-                      #   re-verify before changing one.
-                      #   ROOMS ARE GROUPED BY THE QUESTION THEY ANSWER,
-                      #   not by the kind of data they hold — nine
-                      #   top-level nouns meant the questions an operator
-                      #   actually arrives with each needed three or four
-                      #   screens and a mental join. Three zones:
-                      #     Now        Mission Control / Agents / Work
-                      #                / Activity
-                      #     Company    Org (chart|directory|charter)
-                      #                / Schedules / a seat page
-                      #     Operations Spend & Budgets / Integrations /
-                      #                Fleet / Configuration / Tools
-                      #   views/mission.js is TRIAGE, and the way that
-                      #   room fails is by re-rendering the rest of the
-                      #   product: it carried a per-seat grid Agents
-                      #   answers better, an in-flight board with a
-                      #   better-sourced twin in Work, a phase bar
-                      #   belonging to Spend (where the window is
-                      #   selectable) and a truncated Activity with none
-                      #   of Activity's machinery — and half of it was
-                      #   untrustworthy, since store.setConnected clears
-                      #   only the `health` slice, so agents/events/
-                      #   tokens/budget/sandboxes stay frozen and the page
-                      #   printed them at full confidence on a dead
-                      #   socket. Five bands, each owning a question no
-                      #   other room does: needs-you / ENGINE (in-flight,
-                      #   posture, event store — most of it reached no
-                      #   pixel outside a popover you had to know to
-                      #   click) / STUCK (stalled turns, plus seats whose
-                      #   teardown was never proven, which runtime.py
-                      #   calls the one to alert on and which reached no
-                      #   screen at all) / recent record / cost. An absent
-                      #   precondition renders an em dash, NEVER a zero:
-                      #   "cannot see the engine" and "the engine is doing
-                      #   nothing" are opposite facts a 0 merges.
-                      #   attention.js is the one NEW idea: buildAttention
-                      #   derives every open obligation — a sandbox parked
-                      #   on a question, a stopped seat, a budget refusing
-                      #   charges, an unconfigured engine — from slices
-                      #   the server already pushes, and gives it three
-                      #   outlets (the lead panel of Mission Control, the
-                      #   per-zone nav badges, the tab title). It answers
-                      #   `{items, stale}`: losing the socket freezes
-                      #   every slice it reads, so an empty list on a
-                      #   disconnected page means "cannot see", never
-                      #   "nothing to do", and attentionCounts returns
-                      #   null rather than a confident zero.
-                      #   commandPalette.js is the answer to "no search
-                      #   anywhere" — ONE palette over rooms, seats, any
-                      #   event or trace id pasted from a log, and
-                      #   COMMANDS, rather than a search box per view with
-                      #   its own ranking. A chrome preference is a
-                      #   command, never a topbar button: the topbar is
-                      #   the most valuable strip on every screen and a
-                      #   preference is set once, so density's permanent
-                      #   icon-only slot beside the theme toggle bought a
-                      #   mystery control (two rule glyphs saying nothing
-                      #   about spacing) at that price. Theme keeps its
-                      #   button — it is flipped by the light in the room.
-                      #   Commands rank below rooms/seats and vanish on an
-                      #   empty query; buildResults takes {theme,density,
-                      #   tokenHeld} as an ARGUMENT so it stays DOM-free.
-                      #   THE API TOKEN is the one piece of state a reader
-                      #   holds that no screen mentioned: localStorage,
-                      #   sent on every handshake and query frame, so a
-                      #   browser given one once is authenticated for ever
-                      #   and never prompted again — which is exactly what
-                      #   "it never asks me for a token" means, and it
-                      #   could only be diagnosed from devtools. The health
-                      #   popover reports held/not-set and both it and the
-                      #   palette offer the action; forgetting reaches
-                      #   storage AND socket.setToken AND a reconnect,
-                      #   since the handshake carries the credential and an
-                      #   open socket stays authenticated until it
-                      #   re-dials.
-                      #   modal.js replaced the window.prompt/confirm that
-                      #   were the only unstyled UI in the product.
-                      #   router.js OWNS THE BACK BUTTON, which is a
-                      #   decision every navigation makes whether or not
-                      #   anyone notices making it. Three rules, and all
-                      #   three shipped wrong: a MOVED path REPLACES
-                      #   (#/events, #/tokens, #/agents/:id, #/people,
-                      #   #/company, #/audit — query string intact,
-                      #   because those links are in bookmarks and chat
-                      #   threads); pushing one instead made Back land on
-                      #   the dead URL, redirect forward and arrive back
-                      #   — measured: Back could not escape at all. A
-                      #   SECTION (lens, tab — what the reader calls a
-                      #   screen) PUSHES; replacing made Back skip every
-                      #   lens and leave the room. A FILTER REPLACES:
-                      #   four ticked pills are one screen. Scroll is a
-                      #   property of a history ENTRY, not of a URL, so
-                      #   takeRoute() keys it on one stamped into
-                      #   history.state — an entry with no key IS the
-                      #   test for "somewhere new", which is the only
-                      #   thing that starts at the top. parseRoute merges
-                      #   the query into EVERY route: it used to do so
-                      #   only on the last branch, so a seat route
-                      #   arrived with ?tab= thrown away and the view
-                      #   re-read location.hash itself to get it back.
-                      #   The shell absorbs a section change via
-                      #   sameScreen() + view.setParams() rather than
-                      #   remounting — identity is the PATH, never the
-                      #   query, so a different tab of one seat keeps its
-                      #   loaded LLM history and a different seat does
-                      #   not.
-                      #   A seat's raw event list belongs to Activity ALONE
-                      #   (#/activity?actor=<role> seeds its actor filter);
-                      #   the seat page links there rather than rendering
-                      #   a second copy below its turns.
-                      #   Fleet reads the LEASE TABLE, not a fan-out of
-                      #   /health probes: /health answers about the node
-                      #   that served it, so behind a load balancer a
-                      #   refresh tells a different story. It reads it over
-                      #   the `fleet` QUERY: it was the last view with its
-                      #   own HTTP client and that is exactly where the
-                      #   cost landed — it took that client from a ctx
-                      #   field the shell never populated, so every poll
-                      #   threw before the network and the page held a
-                      #   loading skeleton for ever, on the one view an
-                      #   operator opens when nodes are dying. Reads have
-                      #   ONE transport; writes stay REST for the auth
-                      #   middleware's attribution. tests/test_dashboard/
-                      #   js/wiring.test.mjs holds that seam: what app.js
-                      #   provides against what each view destructures,
-                      #   that every imported module EXISTS (one missing
-                      #   import kills the whole module graph and renders
-                      #   nothing at all), and that none is orphaned.
-                      #   styles/rooms/*.css is one stylesheet per room —
-                      #   views.css keeps what the small shared views
-                      #   need, and a room that owns a screen owns its
-                      #   own file.
-                      #   EVERY nav entry is backed by a real endpoint — no
-                      #   placeholder screens. org.js flattens the /org tree
-                      #   into SEATS (unit chain + effective lead + inherited
-                      #   mcp_env) — views consume seats, never the raw
-                      #   payload, with state.js statusLine deriving "what
-                      #   it is doing" from live state only.
-                      #   views/agents.js is the Agents room — "who is
-                      #   working, who is not, and why", the product's
-                      #   most-asked question and formerly its worst-buried
-                      #   answer (one LENS of the Org room, which files it
-                      #   under how the company is ARRANGED rather than
-                      #   what it is DOING, with the LLM calls two clicks
-                      #   further down a tab of a seat page reachable only
-                      #   from there — while the most prominent agent list
-                      #   in the product, Mission Control's pulse strip,
-                      #   drew every row with a pointer cursor and did
-                      #   nothing when clicked). It is the ONLY seats list:
-                      #   Org keeps the structure, this owns the live
-                      #   state, and two screens answering one question
-                      #   eventually disagree. classify() groups by what a
-                      #   seat ASKS OF THE READER, not by the state enum —
-                      #   a seat parked on a question and a seat that fell
-                      #   over are both "not working" and only one is
-                      #   broken, which the enum cannot express. THE WHOLE
-                      #   ROW opens the seat — it was a div whose only
-                      #   target was the name, on the room whose whole job
-                      #   is reaching a seat — which also retires the
-                      #   "Open seat" button beside it, since a second
-                      #   control for what the row already does makes the
-                      #   row's own click look like it must do something
-                      #   else. The nested "LLM calls" button still wins
-                      #   (closest() resolves innermost-first, no
-                      #   stopPropagation); the shell's Enter-on-a-row
-                      #   handler now leaves NATIVE controls alone, since
-                      #   a <button> already fires its own click and the
-                      #   row's action was landing second and winning.
-                      #   COLOUR SAYS WHAT A SEAT IS DOING, never who it
-                      #   is: state.js seatTone() is the one derivation
-                      #   (needs | broken | working | quiet) and every
-                      #   surface drawing a seat calls it. The hashed
-                      #   identity hue it replaces (roleColor/roleInk) drew
-                      #   from the SAME eight families as event category,
-                      #   phase and integration brand — so a seat whose
-                      #   name hashed to amber looked like a seat needing
-                      #   attention — and it tinted unconditionally, so an
-                      #   idle seat carried a lit blob on the one screen
-                      #   whose job is telling working from not. quiet is
-                      #   UNTINTED; avatarFor defaults to it, so a caller
-                      #   with no state renders no claim.
-                      #   See docs/reference/dashboard-design.md
-  extensions/         # Extension system
-tests/                # Mirror structure of src/crewlet/, plus three that
-                      #   are exceptions. test_dashboard/ mirrors the
-                      #   dashboard, which is JavaScript, so its suites
-                      #   are ES modules under test_dashboard/js/ (a
-                      #   three-function harness + a vendored DOM, no npm
-                      #   and no build step) run under whatever `node` is
-                      #   on PATH by a pytest wrapper that SKIPS when
-                      #   there is none. test_scripts/ mirrors scripts/,
-                      #   which is shell, so its suites EXTRACT the pure
-                      #   helper functions and source them into a real
-                      #   bash, and assert the rest (what may never reach
-                      #   argv, what mode a file is created with) against
-                      #   the source — the same static shape
-                      #   tests/test_examples/test_local_stack.py uses
-                      #   for the Plane bootstrap. tests/test_fleet/
-                      #   mirrors nothing: it runs TWO Engines against
-                      #   one broker and one lease table and gates the
-                      #   seat-ownership exit criteria (handoff preserves
-                      #   order; a node that lost its lease starts no
-                      #   turn while still attached; a completion reaches
-                      #   only the owner; an unclaimed seat's mail
-                      #   survives). Parametrized over the memory twin
-                      #   AND a real Pulsar — "the same suite passes on
-                      #   the twin" is itself a criterion, so a twin that
-                      #   models the broker wrongly fails there instead
-                      #   of certifying the bug in CI
-examples/             # Working examples (the Nimbus example org:
-                      #   nimbus.config.yaml + nimbus.company.yaml +
-                      #   nimbus-docs/ + tool-skills/). The MINIMAL
-                      #   example is the quickstart's inline config, not
-                      #   a file here — one canonical minimal company,
-                      #   guarded by tests/test_examples/test_docs_configs.py
-schema/               # GENERATED JSON Schema for both config tiers
-                      #   (company.schema.json + bootstrap.schema.json).
-                      #   Emitted by `crewlet schema <tier> -o <path>`
-                      #   from the Pydantic models; a test regenerates
-                      #   and compares, so never hand-edit — change the
-                      #   models and re-run. Consumed by editors (the
-                      #   `# yaml-language-server: $schema=` modeline),
-                      #   CI, and AI-assisted authoring.
-skills/               # FOUNDER-facing authoring skills for an AI
-                      #   assistant (company-architect/SKILL.md —
-                      #   interview script, config invariants, the
-                      #   write→validate→fix loop). NOT the same thing
-                      #   as examples/tool-skills/, which are the
-                      #   knowledge-base-sourced fragments the engine's
-                      #   own agents load at runtime. See
-                      #   docs/getting-started/ai-authoring.md
-scripts/              # Repository tooling — NOT shipped in the wheel
-                      #   (the sdist carries it). gitlab-dev-bootstrap.sh,
-                      #   plane-dev-bootstrap.sh + mattermost-dev-bootstrap.sh
-                      #   stand up the local integration loops (each pairs
-                      #   with a profile-gated service in docker-compose.yml); release_metadata.py is the
-                      #   version/tag logic the release
-                      #   workflow runs on the tag, kept here rather than
-                      #   inline in the YAML so tests/test_packaging can
-                      #   exercise it on every PR. Stdlib-only: it runs
-                      #   on a bare checkout, before any install
+cmd/crewlet/          # The one binary. run / validate / schema / migrate /
+                      #   budgets / secrets / config, and the seven vendor CLIs
+                      #   (gitlab, github, plane, jira, slack, confluence,
+                      #   mattermost).
+                      #   Every command the switch dispatches must appear in
+                      #   usage() — nothing connects them, and a test asserts it
+internal/             # Everything else. No package here is importable from
+                      #   outside the module, which is deliberate: the engine
+                      #   has no stable Go API to keep, only a CLI, a config
+                      #   format and a wire protocol
+static/               # Embedded assets — static/dashboard/ is the zero-build
+                      #   ES-module dashboard, served by internal/api and
+                      #   compiled into the binary via embed
+tests/dashboard/js/   # The dashboard's own suites. JavaScript, so they live
+                      #   outside the Go tree and run under plain `node`,
+                      #   driven from internal/api. No package.json, no runner
+examples/             # The Nimbus example company — a working two-tier config
+docs/                 # Product documentation, published to docs.crewlet.ai
+schema/               # GENERATED JSON Schema for both config tiers. Emitted by
+                      #   `crewlet schema <tier>`; a test regenerates and
+                      #   compares, so never hand-edit — change the Go models
+decisions/            # The design record. Why the engine is shaped the way
+                      #   it is, and what the obvious alternative cost. Cited
+                      #   from the code it governs. See decisions/README.md
+skills/               # FOUNDER-facing authoring skills for an AI assistant
+scripts/              # The three vendor dev-loop bootstraps (bash)
 ```
+
+### The packages, and the one thing each is for
+
+**Every package states its own rationale in its package doc.** `go doc ./internal/coord` is the authority on coordination, not this file — what follows is a map, so you know which doc to read. Where a decision would be tempting to "fix" back to the obvious shape, it is written up under `decisions/`.
+
+*The spine — what everything else is built on:*
+
+| Package | What it is for |
+|---|---|
+| `queue` | THE EventQueue contract. One interface, three backends (`memory`, `jetstream`, `pulsar`), all certified by ONE suite in `queuetest`. Nothing above this package may branch on which backend is running. A durable subscription IS a seat's mailbox: it exists without a consumer and retains what is published while nothing is attached. Handlers have three outcomes — ack, nak, and *defer*. Attachment has four verbs of differing destructiveness, because `unsubscribe` never said which one it was |
+| `coord` | Cross-process ownership: TTL leases with a monotonic fencing epoch, plus everything else a fleet has to agree on (`fleet.go`) — the activation pointer (a COMPARE-AND-SET: there is no leader, so the flip is what stops two operators overwriting each other) and per-node apply status, the completion ledger, the delivery dedupe, the notification valve, the credential cooldowns, the token counter and the company's SECRETS. Every "do I hold this?" is three-valued — held / definitively not / **unknown** — and treating unknown as loss tears a healthy company down over a two-second store blip. Retention here is a BUCKET's age, never a per-write TTL |
+| `store` | The node's LOCAL database: the audit event log, learning memory, durable turn state, and the bootstrap half of the secret store that `fleetsecrets` migrates off at boot. **One file, one process** — exclusively owned, so nothing here has to be safe against a peer, and the migrator's advisory-lock idiom simply disappears. Anything the COMPANY has to agree on belongs in `coord` instead, and migrations 0010–0011 are what that rule cost when it was broken. Two certified drivers, one dialect: every statement must parse on both |
+| `events` | The envelope and the typed-payload registry. Two load-bearing properties: evolution is additive-only, and an event type this build does not know decodes, round-trips and re-publishes losslessly — a rolling upgrade puts unknown types on the wire, and dropping them would make every upgrade an outage |
+| `config` | The two tiers. Tier A (`Bootstrap`) is ops-owned, on disk, restart to change. Tier B (`Company`) is founder-owned, versioned in the store, edited live. Tier A is the root of trust and therefore resolves with `EnvOnly` — it holds the keys to the secret store, so it can never read a value out of it. Tier B's secrets are `${VAR}` POINTERS, stored verbatim, resolved only where a provider or transport is constructed |
+| `seat` | Which seats this node runs. The placement policy is deliberately dumb — greedy claim to `ceil(seats / live nodes)`, converging in BOTH directions, `preferred` orders the attempt and never gates it. `watchdog` is the other half: a wedged event loop cannot be signalled, so the thread's only honest move is to exit |
+| `engine` | The ENTANGLEMENT POINT — which concrete thing satisfies which seam. Deliberately many small files rather than one large one; the two hardest passages (the inbox handler, the config apply) are packages of their own. `mcp.go` is where `mcp_servers:` becomes running children: shared servers on the epoch, per-role children on a seat's LEASE, each claimed seat with its own bridge and its own registry — two children of one template publish the same tool names, so anything shared between seats hands one seat's identity to another |
+
+*The agent runtime:*
+
+| Package | What it is for |
+|---|---|
+| `agent/turn` | The turn loop — Onboarding, Plan, Execute, Review — and the guards between phases |
+| `agent/toolloop` | The model↔tool round-trip, and the `Suspend` primitive a detached coding run returns through |
+| `agent/inbox` | What wakes a seat, and what it must not be woken by twice. `ledgered` is the completion side |
+| `agent/ledger` | The prior-work ledgers: `iteration` (within a turn), `conversation` (across turns in one thread), `budgets`. Structured, never a transcript replay — the thread has moved by the next turn |
+| `agent/prefetch` | The Plan-phase context assembly: relevant knowledge, memory, the blocks a prompt gets |
+| `agent/prompts` | The prompt text. Tuned against observed model behaviour; a reworded section is a behaviour change |
+| `agent/skills` | Prompt fragments admitted from the knowledge base and injected per phase, plus the load-before-use guard |
+| `agent/builtin` | The tools the engine itself ships |
+| `tools` | The registry, holding four kinds of tool under one contract and recording WHICH at registration — the only frame that knows, and the last that can say |
+| `mcp` | MCP client and child supervision. A stdio server is a process TREE, not a process. See `decisions/602` |
+| `providers/llm` | The model contract. It does NOT retry (rotation belongs to the credential pool, fallback to the chain) and does NOT decide what a failure means beyond a coarse kind |
+| `sandbox` | Code work as a suspended Execute phase. A coding run is DETACHED: the tool starts it, the loop suspends, and the engine resumes that same loop — minutes later, possibly after a restart, possibly on another node. Nothing parks a goroutine on a running job. Two real backends behind one contract — a remote VM per run (E2B, cloud or self-hosted) and the engine host itself — and the closed set `providers.sandbox.type` accepts is asserted against the switch that builds them |
+| `learning` | What a seat remembers. Everything here is BEST EFFORT by design: a failed write is logged, a failed read answers empty |
+| `schedule` | Role- and unit-scoped cron work, with at-most-once delivery, missed-tick catchup and a wall-clock cap |
+
+*The edges:*
+
+| Package | What it is for |
+|---|---|
+| `api` | REST + the dashboard. ONE wiring for embedded and standalone; what differs is only what the node can SEE, and that is one seam (`NodeRuntime`). Auth guards every route bar probes, webhooks (HMAC), OTLP (signed token) and the dashboard shell |
+| `api/webhooks` | The seven inbound vendor routes. A route whose secret is unset has nothing to verify with and answers 503 — it does not accept the delivery |
+| `api/secretsapi` | `/secrets`: the company's credentials, written through a running node because the coordination broker is inside its process and listens on no socket. Always guarded, reads included; the ONE route that returns a value needs an explicit `?reveal=true` and logs the access |
+| `api/stream` | The `/ws/stream` socket: pushes, plus a request/response query channel that is a thin adapter over the SAME function each REST route calls |
+| `observe` | The observability edge, and the two routes are deliberately different: the STORE is written by a publish listener inline on the publishing node (no consumer group, so no two nodes can write one row); the PROJECTION is fed by an ephemeral per-caller broadcast |
+| `notify` | The backend-neutral notification spine — conversation keys, digest coalescing, party resolution, the rate valve. Built before any vendor sat on it, because a spine built after its first vendor has that vendor welded into it |
+| `mattermost`, `slack`, `plane`, `gitlab`, `github`, `jira`, `confluence` | The vendors. Each contributes only what is genuinely its own: a client, a parser, a transport, a prompt, a provisioning reconcile — and no more, which is why Jira has no transport (an agent writes through its own MCP tools) and why its reconcile and GitHub's report rather than mint (neither vendor issues a credential on a provisioner's behalf) |
+| `fleetsecrets` | The company's credential store: this package owns the KEY, coordination owns the BYTES. Also the one-way migration off `store`'s own table, which copies before it deletes and never overwrites a name the fleet already holds |
+| `secrets`, `provision`, `envref`, `envfile`, `redact`, `workkey` | The small shared grammars. Each imports nothing from the rest of the engine, which is what lets `config` itself depend on them |
 
 ## Pre-commit Checks
 Before committing, ALWAYS run and fix any issues from:
-- `ruff check src/ tests/` — lint check
-- `ruff format --check src/ tests/` — format check
+- `gofmt -l .` — prints the files that need formatting; the output must be empty
+- `go vet ./...`
+- `golangci-lint run` — what CI's lint job runs
+- `go test ./...`
 
-If either fails, fix the issues (use `ruff check --fix` and `ruff format`) before committing. These are the same checks CI runs.
+These are the same checks CI runs. Anything touching concurrency — the seat host, the queue, the turn engine — also gets `go test ./... -race`, which CI runs on everything: the engine's concurrency model is real parallelism, so every "atomic because it is single-threaded" assumption is a data race until proven otherwise.
 
-If the change touches `pyproject.toml`, `README.md`, or any non-`.py` file under `src/crewlet/`, also run the packaging build CI runs on every PR — a break there is otherwise invisible until the tag that publishes it:
-- `python -m build && twine check --strict dist/*`
+**A skip is not a pass.** Three suites need something the machine may not have and skip silently without it: the dashboard's suites need `node`, `internal/store` runs twice over `CREWLET_STORE_DRIVER=turso|sqlite`, and the Pulsar conformance suite needs `CREWLET_TEST_PULSAR_URL`. A green local run has not necessarily exercised any of them. CI fails rather than skips where it can.
 
 ## Dependency Updates
-Dependabot watches every dependency surface in the repo — `.github/workflows/*.yml` (`github-actions`), `pyproject.toml` (`pip`), and `docker-compose.yml` (`docker-compose`). The config is `.github/dependabot.yml`, and it is deliberately three entries on a weekly schedule with no further knobs; keep it that way unless a knob earns its place.
+Dependabot watches every dependency surface in the repo — `.github/workflows/*.yml` (`github-actions`), `pyproject.toml` (`pip`), `go/go.mod` (`gomod`), `Dockerfile` (`docker`), and `docker-compose.yml` (`docker-compose`). The config is `.github/dependabot.yml`, and it is deliberately one entry per surface on a weekly schedule with no further knobs; keep it that way unless a knob earns its place. `docker` and `docker-compose` are separate ecosystems reading separate manifests — a repository with both needs both entries.
 
 - **A new dependency surface ships with its `updates:` entry.** Adding the first `Dockerfile`, a `package.json`, a `go.mod` — the Dependabot entry is part of that change, not a follow-up. Nothing fails when it is missing; the surface is just never watched, which looks exactly like a surface with nothing to update.
 - **Actions pinned to a non-version ref are invisible to Dependabot.** A branch pointer (`@release/v1`) or `@main` yields no update PRs at all, so pin actions to a version tag or a full SHA. Maintainer-facing detail is in `CONTRIBUTING.md`.
 
-## Packaging & Releases
-The package is published to PyPI as `crewlet` from a `v*` tag via `.github/workflows/release.yml` (Trusted Publishing over OIDC — no API token in the repo). See `RELEASING.md`.
 
-- **The version lives in exactly one place**: `__version__` in `src/crewlet/__init__.py`. `pyproject.toml` reads it via `[tool.hatch.version]`. Never add a literal `version =` back.
-- **Version numbers follow semver** — the minor number moves for features, the patch number for fixes. The tag must name the version `__init__.py` reports; the workflow refuses to build when they disagree.
-- **Pushing the tag is the whole release** — the workflow publishes to PyPI and then creates the GitHub Release itself, with notes GitHub generates from the merged pull requests (grouped by `.github/release.yml`) and the sdist + wheel attached. Those generated notes are the only description a release gets, so pull request titles carry it. Pre-release and dev versions are flagged so they never become GitHub's "Latest". The version and tag checks live in `scripts/release_metadata.py`, not inline in the workflow, so `tests/test_packaging` runs them on every PR.
-- **`README.md` keeps repo-relative links** (GitHub and docs.crewlet.ai resolve them); `hatch-fancy-pypi-readme` absolutises them for PyPI. A new link form the patterns miss fails `tests/test_packaging`; fix the pattern in `pyproject.toml`, not the README.
-- **No `License ::` classifier** — `license = "MIT"` is an SPDX expression, and PEP 639 requires PyPI to reject a distribution carrying both.
-- **Python classifiers must match the CI matrices** exactly — and every CI job that fans out over interpreters (`test`, `package-install`) must name the same list. `crewlet[all]` must stay the union of the runtime extras. All asserted by `tests/test_packaging`.
-- **An extra must carry what its own surface needs at runtime — the `all` union does not prove that.** `all` being a union means a dependency can reach it through *some other* extra while the extra that actually needs it still lacks one, and the union test passes. That is exactly how `crewlet[api]` came to serve a WebSocket-only dashboard with no WebSocket library: `websockets` reached `all` via `mattermost`, so nothing failed — the dashboard just fell back to a 5-second poll and ran in degraded mode forever. When an extra's surface needs a package to work at all, name it in that extra and pin the requirement with its own test.
+## Releases
+The engine ships as signed binaries and a container image, built by goreleaser from a `v*` tag. See `RELEASING.md`.
+
+- **The tag is the version.** Nothing in the tree records one, so there is nothing for a tag to disagree with and no version bump to make. goreleaser stamps the tag into `internal/version.value` at link time; a binary built any other way reports its module build info instead, so it names itself honestly rather than claiming to be a release. **Never add a literal version constant back.**
+- **Version numbers follow semver** — the minor number moves for features, the patch number for fixes.
+- **Pushing the tag is the whole release** — the workflow builds six targets, signs the checksums with keyless Sigstore, pushes the image to GHCR and creates the GitHub Release with notes GitHub generates from the merged pull requests. Those generated notes are the only description a release gets, so pull request titles carry it. A pre-release takes neither GitHub's "Latest" nor the `latest` image tag.
+- **The release surface is asserted, not remembered** — `internal/version` guards the ldflags stamp, the pure-Go build, the `${TARGETPLATFORM}` copy, the catch-all notes category, the pre-release flags and the single tag trigger. Each of those fails silently in production and has no other symptom.
 
 ## Testing
-- Run tests: `pytest`
-- Run linter: `ruff check src/ tests/`
-- Every subsystem needs unit tests
-- Use mock LLM providers in tests (never call real APIs in tests)
-- Test files mirror source: `src/crewlet/queue/protocol.py` → `tests/test_queue/test_protocol.py`
+- Run tests: `go test ./...`
+- Test files sit beside what they cover, as Go expects: `internal/queue/queue.go` → `internal/queue/queue_test.go`
+- **A contract with more than one implementation gets ONE suite.** `queuetest`, `coordtest`, `storetest`, `scheduletest` and `sandboxtest` export the suite; each backend runs it. A twin that agrees only with itself proves nothing, which is why the memory twins are certified by the same cases as the real backends
+- Every subsystem needs tests, and a test names the invariant it protects rather than the function it calls
+- Use the fakes in `internal/providers` — tests never call real LLM APIs
+- **A test that cannot fail is worse than no test.** Mutate what you wrote: break the thing on purpose and confirm the suite goes red. A guard nothing catches is a claim, not coverage
 
 ## Documentation — Keep Docs Updated
 Every change to code, config, or behavior MUST include corresponding documentation updates. Docs are NOT optional — they are part of the deliverable.
@@ -1410,21 +260,24 @@ Rules:
 
 This applies to every commit, not just "big" changes. A one-line config rename still needs a docs update.
 
+
 ## Architecture Reference
 The implementation must follow the architecture docs in `docs/concepts/`. Key subsystems:
-1. **Event Queue** — persistent pub/sub via Apache Pulsar (EventQueue protocol)
+1. **Event Queue** — durable pub/sub behind one contract: an embedded NATS JetStream by default, an external NATS or Apache Pulsar for a fleet, an in-memory twin for tests
 2. **Organization Model** — hierarchy is the execution graph
-3. **Agent Runtime** — queue-driven callback handlers, LLM execution loop
-4. **Task Engine** — ExecutionTracker, external PM tool integration
-5. **Decision Framework** — DACI behavioral guidance (via Slack channels, no dedicated engine)
-6. **Knowledge System** — query-time knowledge-base search for shared docs (Confluence CQL or Plane page search, one backend per org) + per-agent `agent_diary` (pgvector)
-7. **Communication** — external chat (Slack or Mattermost, or both) + ephemeral A2A channels
-8. **Notification Service** — EventQueue-based, outbound-only transports
-9. **Provider Layer** — pluggable LLM, embeddings. Includes the `cli-agent` LLM type: a locally installed coding CLI driven on the operator's subscription instead of an API key, with per-seat filesystem isolation and an in-prompt tool-call envelope (see `docs/concepts/subscription-llm-backends.md`)
-10. **Database** — PostgreSQL (token_usage, agent_diary + episodes via pgvector)
-11. **Tool Registry** — builtins + MCP tools + A2A tools
-12. **Tool Skills** — knowledge-base-sourced prompt fragments injected per-phase based on the active tool / MCP surface (`agent.skills`; see `docs/concepts/tool-skills.md`)
-13. **Code Sandbox** — per-role sandboxed coding-agent Execute backend (`crewlet.sandbox`; E2B, or the engine host via `type: local` — `direct`/`container`; see `docs/concepts/code-sandbox.md`). Artefact paths are per-sandbox (`Sandbox.home` → `RunPaths`), never module constants — many local boxes share one filesystem
-14. **API** — standalone Starlette process (EventQueue)
-15. **Extension System** — hooks and middleware
-16. **Scheduler** — role/unit-scoped cron-style recurring work; fires `TaskAssigned` on a schedule with at-most-once delivery (`scheduled_runs`), missed-tick catchup, and a per-task wall-clock cap (`crewlet.schedule`; see `docs/concepts/scheduling.md`)
+3. **Agent Runtime** — queue-driven seats, a four-phase turn, an LLM tool loop that can suspend
+4. **Task Engine** — there is none: task state lives in the PM tool, and the engine mirrors nothing
+5. **Decision Framework** — DACI behavioral guidance (via chat channels, no dedicated engine)
+6. **Knowledge System** — query-time knowledge-base search for shared docs (Plane page search, or Confluence CQL — single-homed, one per company) + per-agent diary
+7. **Communication** — external chat (Mattermost, Slack) + ephemeral A2A channels. The seven vendors this build serves are Mattermost, Slack, Plane, GitLab, GitHub, Jira and Confluence (`decisions/701`, `decisions/703`); every one routes end to end, and no integration block is refused any more
+8. **Notification Service** — queue-based spine, vendors on top
+9. **Provider Layer** — pluggable LLM and embeddings, with a credential pool and a fallback chain around them
+10. **Store** — the node's own embedded database (Turso, or mainline SQLite); coordination lives in the KV layer instead, never here
+11. **Coordination** — TTL leases with a fencing epoch, plus the fleet's shared counters, ledgers and the company's sealed credentials
+12. **Seat Ownership** — which node runs which seat, and how a fleet converges without a coordinator
+13. **Tool Registry** — builtins + MCP tools + A2A tools, each recording its origin
+14. **Tool Skills** — knowledge-base-sourced prompt fragments injected per phase
+15. **Code Sandbox** — a per-role coding-agent Execute backend; a run is detached and resumes a suspended loop. E2B for a remote VM, the engine host for a local one
+16. **API + Dashboard** — one wiring, embedded or standalone; the websocket is the dashboard's only data channel
+17. **Scheduler** — role/unit-scoped cron work with at-most-once delivery, catchup and a wall-clock cap
+18. **Control Plane** — the config activation pointer and per-node apply status; lag alone never sheds

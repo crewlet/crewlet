@@ -10,7 +10,7 @@ Three things make this work, and you can use any of them on their own:
 | Piece | What it gives you |
 |---|---|
 | **`crewlet schema`** | JSON Schema generated from the models — the authoritative field list, for your editor, your CI, or an agent |
-| **`crewlet validate --json`** | Machine-readable errors with exact field paths, so a fix loop converges |
+| **`crewlet validate -json`** | Machine-readable errors with exact field paths, so a fix loop converges |
 | **The `company-architect` skill** | An interview script, the invariants, and the write → validate → fix loop |
 
 ---
@@ -55,11 +55,11 @@ asked:
 
 ### 4. It writes and checks its own work
 
-You get `company.yaml` (Tier B — the company) and `config.yaml`
+You get `company.yaml` (Tier B — the company) and `crewlet.yaml`
 (Tier A — the infrastructure). After every edit it runs:
 
 ```bash
-crewlet validate company.yaml --json
+crewlet validate company.yaml -json
 ```
 
 and fixes each reported `path` until `valid` is true. It should tell you
@@ -75,7 +75,7 @@ assistant to list every `${VAR}` it used — a missing one resolves to an
 empty string and fails later, deep in a turn.
 
 ```bash
-cp .env.example .env && docker compose up -d      # Pulsar + PostgreSQL
+# nothing to bring up: the engine embeds its stream and creates its store
 
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."
@@ -86,7 +86,7 @@ export MATTERMOST_FOUNDER_USERNAME="you"          # your chat username
 ### 6. Run it
 
 ```bash
-crewlet run config.yaml --import-company company.yaml
+crewlet run crewlet.yaml -company company.yaml
 ```
 
 ### 7. Watch the first turn
@@ -131,7 +131,7 @@ reference with everything connected:
 
 Two reasons the raw docs aren't enough on their own.
 
-**The surface is large and strict.** Tier B validates through Pydantic
+**The surface is large and strict.** Tier B validates against the typed config models
 models that forbid unknown keys, so a plausible-but-invented field name
 (`responsibilites`, `leed`, `commnad`) is a hard error, not a silent
 no-op. An assistant working from prose will occasionally invent one.
@@ -157,8 +157,8 @@ with any standards-compliant JSON Schema validator (`jsonschema`,
 `ajv`), or by reading it.
 
 It carries more than field names. Because the config models forbid
-unknown keys and the cross-field rules are encoded alongside their
-Python validators, a schema-only check catches:
+unknown keys and the cross-field rules are generated from the same Go
+types the engine parses with, a schema-only check catches:
 
 - unknown keys, at every level including roles, units, and MCP servers
 - wrong types, and bad enums (`kind: robot`, `type: openaii`)
@@ -177,7 +177,7 @@ check them by reading:
 | Cron *semantics* (`99 * * * *` has the right shape) | Needs a cron parser |
 
 The two encodings are held in sync by
-`tests/test_cli/test_schema_rules.py`, which runs every rule through
+`internal/config/schema_test.go`, which runs every rule through
 both paths and fails if they disagree — a schema that quietly diverges
 from the loader would be worse than no schema, because an assistant
 would trust it.
@@ -189,23 +189,36 @@ would trust it.
 The property that makes automated authoring safe:
 
 ```bash
-crewlet validate company.yaml --json
+crewlet validate company.yaml -json
 ```
 
 ```json
 {
   "valid": false,
   "tier": "company",
+  "file": "company.yaml",
   "errors": [
-    { "path": "roles.0.backstroy", "message": "Extra inputs are not permitted", "type": "extra_forbidden" },
-    { "path": "units.0.leed",      "message": "Extra inputs are not permitted", "type": "extra_forbidden" }
+    { "path": "agents.roles[0].backstroy", "type": "unknown_field",
+      "message": "\"backstroy\" is not a setting — check the spelling, or the block it belongs under" },
+    { "path": "agents.roles[2].llm", "type": "unknown_value",
+      "message": "no provider named \"nonexistent\" is configured" }
   ]
 }
 ```
 
 Every offending field, with its exact path, all at once — so an
-assistant fixes them in one pass instead of re-guessing. Exit code is
-`0` when valid, `1` otherwise.
+assistant fixes them in one pass instead of re-guessing.
+
+`type` is one of `missing`, `out_of_range`, `conflict`, `shape`,
+`unknown_field`, `unknown_value`, or `invalid` for anything this build does
+not classify. It is a closed set with a fallback deliberately: a loop
+branching on it must never receive an empty string and read it as a field
+somebody forgot to populate.
+
+Exit code is `0` when valid and `1` otherwise, **in both output modes** — so
+`crewlet validate company.yaml -json || exit 1` actually gates. Nothing is
+echoed on stderr in `-json` mode: the payload already carries every problem,
+and a second copy is what makes the loop's log unreadable.
 
 **It needs no credentials, no database, and no network.** Tier B stores
 `${VAR}` references verbatim and resolves them at engine start (see
@@ -218,9 +231,16 @@ bad cron expressions, invalid timezones, human seats with no contact
 identity, and the Confluence-XOR-Plane rule all fail here rather than at
 run time.
 
-`--tier auto` (the default) picks the model from the file: Tier B
-requires a top-level `name` and Tier A forbids it, so the split is exact.
-Force it with `--tier company` / `--tier bootstrap`.
+`-tier auto` (the default) picks the tier from the document's **keys**, not
+its filename — the one thing this has to get right is the case where the file
+was named something else. The two tiers share no top-level key:
+`name` / `agents` / `providers` / `integrations` mean Tier B,
+`node` / `stream` / `store` / `coordination` / `api` mean Tier A.
+
+A document carrying neither, or an equal count of both, is **refused naming
+the flag** rather than guessed at: guessing wrong reports every field of the
+file as invalid, and a fix loop reading that has no way to tell it from a
+genuinely broken document. Force it with `-tier company` / `-tier bootstrap`.
 
 ---
 
@@ -251,7 +271,7 @@ cannot drift from what the loader accepts.
 Wire it into CI to catch a bad config before it reaches the engine:
 
 ```bash
-crewlet validate company.yaml --json || exit 1
+crewlet validate company.yaml -json || exit 1
 ```
 
 ---

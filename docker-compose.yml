@@ -87,10 +87,26 @@ x-plane-live-env: &plane-live-env
 
 services:
   # ---------------------------------------------------------------------------
-  # Core infrastructure
+  # Pulsar — the EXTERNAL stream backend, for developing against a fleet.
+  #
+  # Profile-gated, and that is the whole shape of this file now: `docker
+  # compose up` on its own starts NOTHING, because the engine needs nothing.
+  # It embeds its own JetStream server and creates its own store file, so a
+  # company runs with no service here at all.
+  #
+  # Bring this up with `docker compose --profile pulsar up -d` when working
+  # on the Pulsar backend itself, or to run the conformance suite locally:
+  #
+  #   CREWLET_TEST_PULSAR_URL=pulsar://localhost:6650 \
+  #   CREWLET_TEST_PULSAR_ADMIN_URL=http://localhost:8080 \
+  #     go test ./internal/queue/pulsar/...
+  #
+  # That suite SKIPS without those variables, and skipping is not passing —
+  # it is the only place the Pulsar backend is certified at all.
   # ---------------------------------------------------------------------------
   pulsar:
     image: apachepulsar/pulsar:latest
+    profiles: [pulsar]
     # Standalone runs broker + metadata + BookKeeper in one container.
     # Functions worker and stream storage are unused by crewlet, so disable
     # them to keep startup fast and the footprint lean.  ``apply-config-from-env``
@@ -169,34 +185,6 @@ services:
       retries: 10
       start_period: 30s
 
-  postgres:
-    # `latest-pg18` floats within PostgreSQL 18, so TimescaleDB patches arrive
-    # on `docker compose pull`.  The pg MAJOR is the pinned half, and
-    # Dependabot proposes that one as its own pull request (see
-    # .github/dependabot.yml) -- take it deliberately: an existing pg-data
-    # volume will not open under a newer major without a pg_upgrade or a
-    # dump/restore, and discarding it takes the company config and every
-    # agent's diary with it.
-    image: timescale/timescaledb:latest-pg18
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-crewlet}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crewlet}
-      POSTGRES_DB: ${POSTGRES_DB:-crewlet}
-    ports:
-      - "127.0.0.1:5432:5432"
-    volumes:
-      - pg-data:/var/lib/postgresql
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U crewlet"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-
-  # ---------------------------------------------------------------------------
-  # Admin UIs
-  # ---------------------------------------------------------------------------
   # Pulsar web UI (topics, subscriptions, backlog, message browse).  Dekaf
   # is the UI recommended by the Pulsar docs -- Apache-2.0, no account or
   # license needed.  Reaches the broker by service name (binary + admin).
@@ -208,6 +196,7 @@ services:
     # Dependabot opens the bump as a pull request when a newer version ships
     # (see .github/dependabot.yml), so noticing the release is not a job.
     image: visortelle/dekaf:1.2.1
+    profiles: [pulsar]
     depends_on:
       pulsar:
         condition: service_healthy
@@ -239,17 +228,6 @@ services:
       timeout: 5s
       retries: 6
       start_period: 30s
-
-  pgweb:
-    image: sosedoff/pgweb:latest
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      PGWEB_DATABASE_URL: postgres://${POSTGRES_USER:-crewlet}:${POSTGRES_PASSWORD:-crewlet}@postgres:5432/${POSTGRES_DB:-crewlet}?sslmode=disable
-    ports:
-      - "8150:8081"
-    restart: unless-stopped
 
   # ---------------------------------------------------------------------------
   # GitLab — local instance for integration-testing the GitLab integration.
@@ -289,6 +267,15 @@ services:
       - gitlab-config:/etc/gitlab
       - gitlab-logs:/var/log/gitlab
       - gitlab-data:/var/opt/gitlab
+    # Webhook deliveries POST to the engine at host.docker.internal, and
+    # GitLab's SSRF check resolves the target when the hook is created.
+    # Docker Desktop provides the name natively; `host-gateway` covers
+    # Linux hosts, where it otherwise resolves to nothing and every
+    # delivery fails with a name lookup — the same mapping plane-api and
+    # plane-worker carry, and the reason the mattermost block below says
+    # gitlab and plane both need it.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Lean config settles around ~1.9 GiB; this ceiling OOM-kills (and
     # restarts) rather than letting the box swap the host — same guard the
     # pulsar service uses.
@@ -815,7 +802,6 @@ configs:
 
 volumes:
   pulsar-data:
-  pg-data:
   dekaf-library:
   gitlab-config:
   gitlab-logs:

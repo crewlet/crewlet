@@ -1,8 +1,8 @@
 # Agent Runtime
 
-The agent runtime (`crewlet.agent`) manages agent lifecycle, execution, and memory.
+The agent runtime (`internal/agent`) manages agent lifecycle, execution, and memory.
 
-> **Per-turn execution:** every agent turn runs through the three-phase **Plan → Execute → Review** [Turn Engine](turn-engine.md). Every agent turn described on this page dispatches into `TurnEngine.run_turn`, which owns concurrency, OTel context restoration, phase dispatch with the iteration cap and stall detection, ephemeral sub-agent spawning, and the runtime invariants (delegation-depth cap, sub-agent tool allowlist, budget cascade). The sections below describe the surrounding lifecycle; the turn-engine doc describes what happens inside a turn.
+> **Per-turn execution:** every agent turn runs through the three-phase **Plan → Execute → Review** [Turn Engine](turn-engine.md). Every agent turn described on this page dispatches into `turn.Engine.Run`, which owns concurrency, OTel context restoration, phase dispatch with the iteration cap and stall detection, ephemeral sub-agent spawning, and the runtime invariants (delegation-depth cap, sub-agent tool allowlist, budget cascade). The sections below describe the surrounding lifecycle; the turn-engine doc describes what happens inside a turn.
 
 ---
 
@@ -12,7 +12,7 @@ Each **agent seat** (`Role.kind == "agent"`) maps 1:1 to an AgentDefinition and 
 
 **Identity is deterministic.** `AgentInstance.id` is computed as
 `uuid5(AGENT_ID_NAMESPACE, f"{org.name}:{handle}")` (see
-`crewlet.db.agents.derive_agent_id`).  The same role in the same org
+`org.Organization.AgentIDFor`).  The same role in the same org
 always lands on the same `UUID` across processes, machines, and
 restarts.  Anything keyed by `agent.id` -- ``agent_diary`` rows,
 ``agent_onboarding_markers`` rows, ``counterparty_profiles`` keyed
@@ -75,7 +75,7 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    │     Reserve activation for read-only recon (Slack thread reads,
    │     Jira fetches, agent lookup); action / write tools should not
    │     be activated here -- name them in tools_needed for Execute.
-   └── Emits an ExecutionPlan: reasoning, steps, tools_needed, criteria
+   └── Emits a Plan: reasoning, steps, tools needed, success criteria
 
 3. Execute phase
    ├── Tool surface = plan.tools_needed ∪ executor_always_on_tools
@@ -100,7 +100,7 @@ The Plan and Execute phases can run on different LLM models — see the [Turn En
 
 ## The LLM ↔ Tool Proxy
 
-The LLM is an external HTTP service — it cannot access local code, MCP servers, or engine internals directly. The shared tool-call loop (`crewlet.agent.llm_loop.run_tool_loop`, driven by each phase of the [Turn Engine](turn-engine.md)) acts as a **proxy** that translates between the LLM's text-based tool calls and local execution:
+The LLM is an external HTTP service — it cannot access local code, MCP servers, or engine internals directly. The shared tool-call loop (`internal/agent/toolloop`, driven by each phase of the [Turn Engine](turn-engine.md)) acts as a **proxy** that translates between the LLM's text-based tool calls and local execution:
 
 ```mermaid
 flowchart TD
@@ -135,7 +135,7 @@ Both builtin and MCP tools produce identical tool definition schemas. From the L
 
 ## System Prompts (per phase)
 
-Under the three-phase [Turn Engine](turn-engine.md), each phase builds its own narrow system prompt — there is no single monolithic prompt for a turn. Each builder lives in `src/crewlet/agent/prompts.py`; the detail layer is in `src/crewlet/agent/definition.py`. Founder-defined role/org context (mission, vision, policies, backstory, responsibilities, behavioral guidelines, team roster) renders **directly from the in-memory `Organization` model into the Plan prompt** via the section builders in `crewlet.agent.definition` — no DB seed step, no reconcile pass.
+Under the three-phase [Turn Engine](turn-engine.md), each phase builds its own narrow system prompt — there is no single monolithic prompt for a turn. Each builder lives in `internal/agent/prompts/`; the detail layer is in `internal/agent/prompts/sections.go`. Founder-defined role/org context (mission, vision, policies, backstory, responsibilities, behavioral guidelines, team roster) renders **directly from the in-memory `Organization` model into the Plan prompt** via the section builders in `internal/agent` — no DB seed step, no reconcile pass.
 
 | Phase | What's in the prompt |
 |---|---|
@@ -152,7 +152,7 @@ Engine guardrails ("event triage framework", "escalation judgement", "tool usage
 
 Tool- and MCP-server-specific guidance (when to call ``reflect_and_persist``, how to mention teammates on Jira vs Slack, when to author code via the [code sandbox](code-sandbox.md) and what the GitHub tools are for) lives in the [Tool Skills](tool-skills.md) registry — modular knowledge-base-sourced fragments (Confluence or Plane pages) where each skill carries a short **summary** (always inline in the per-phase catalogue) and a rich **body** that loads on demand via the always-on ``load_tool_skill`` builtin. The engine ships no skill prose; operators seed the skills container with ``crewlet confluence import`` / ``crewlet plane import`` and edit pages in the backend's editor thereafter.
 
-The `AgentDefinition.system_prompt` property composes a single monolithic prompt for introspection / external callers; the runtime path (`TurnEngine.run_turn`) never calls it. `AgentDefinition.build_system_prompt_with_skills(registry)` is the registry-aware variant for callers that want that combined prompt to stay consistent with what the live engine builds.
+There is no single monolithic system prompt to read: `internal/agent/prompts` builds one PER PHASE (`BuildOnboarding`, `BuildPlan`, `BuildExecute`, `BuildReview`) from the same identity sections, and each phase sees only the guidance and the tool catalogue that phase is meant to act on.
 
 ---
 
@@ -210,52 +210,70 @@ Inbox delivery is **batched per conversation** (see [Event System — Inbox batc
 
 ### Concurrency
 
-The engine uses **cooperative async concurrency** within a single process:
+The engine runs **genuinely parallel** work within a single process:
 
-- Queue handlers are async — when an agent awaits an LLM call, other handlers run
+- Each delivery is handled in its own goroutine, so seats make progress independently rather than taking turns
 - Multiple agents can be in the `Working` state simultaneously
-- `ConcurrencyController` limits max concurrent agent turns via a global semaphore, with optional per-role limits
-- Agents acquire a semaphore slot before the LLM loop, release when done
+- A **per-node concurrency gate** limits how many agent turns run at once: Tier A's `node.max_concurrent` (default 32)
+- A turn takes a slot after the ownership check and before its first model round-trip, and releases it when the turn ends
 
-```
-Event Loop
-  │
-  ├── Event 1 → triggers Agent A turn (awaits LLM call)
-  ├── Event 2 → triggers Agent B turn (awaits LLM call)  ← runs while A waits
-  ├── Agent A LLM response arrives → processes, emits events
-  ├── Agent B LLM response arrives → processes, emits events
-  └── ... continues
-```
+**What the gate is for, and what already bounds itself.** A seat's mailbox is a durable subscription whose handler runs one batch at a time, so a *seat* is already serial — it never runs two turns at once. What is not bounded is how many seats run at once: that is [placement](seat-ownership.md)'s arithmetic over the company's seat count and the live node count, not a statement about the machine this process is on. A node handed forty seats would open forty simultaneous model round-trips and their tool loops. `max_concurrent` is the knob that says how many the host can actually take.
+
+**A turn past the ceiling waits, in this process.** It is not handed back for the broker to redeliver on the broker's own schedule — for a chat message someone is waiting on, that turns a busy moment into a visible stall. The waiting turn starts the instant a slot frees. The one exception is a drain, below.
+
+**What it does not gate, and why that is not an oversight.** Post-turn [reflection](agent-learning.md) does not take a slot. It does not need one: it consumes `turn_completed` through a single durable subscription whose handler runs one delivery at a time, so a node runs at most one reflection pass at a time however many turns finish at once. Making it compete for turn slots instead would let a backlog of completed turns starve live seats — a company under load would stop answering people in order to finish learning from what it already answered — and the reverse, learning starved indefinitely by traffic, is what the separate consumer group exists to prevent. Auxiliary spend is bounded where it belongs, by the [token budget](../guides/deployment.md), and every learning worker resolves its model through the metered registry so that counter sees it.
+
+**Sizing it.** It is per *node*, so a fleet's ceiling is N × the value — see [Scaling Out](scaling.md#what-stays-per-process-deliberately). The default of 32 is above the seat count of a single-node company (the example company runs a handful of seats; a large one runs tens) so it changes nothing for a company running today, while still bounding a node that has been handed far more seats than its host can serve. Raise it on a bigger host; lower it on a satellite running one agent. There is no "unbounded" — `0` means "take the default", and effectively-no-limit is a large number you can see in your config. Note this is a *different* knob from a cli-agent provider's own `max_concurrent`, which caps that provider's subprocesses; see [Subscription LLM backends](subscription-llm-backends.md).
+
+That is real parallelism rather than one cooperative loop, which is the
+single biggest behavioural difference from the engine's first
+implementation: anything shared between turns is guarded rather than
+safe-by-construction, and the whole suite runs under the race detector for
+exactly that reason.
 
 ### Graceful shutdown
 
-SIGINT / SIGTERM trigger a **pause-then-drain** shutdown, designed so a restart picks up cleanly without a half-finished turn. The engine owns the process signals exclusively — exactly one handler per signal, registered via `signal.signal()` so it fires even when the event loop is blocked in synchronous code. The embedded API's uvicorn server is constructed signal-free (its `capture_signals` is a no-op): without that, uvicorn's `serve()` would steal SIGINT/SIGTERM, shut the dashboard down on the *first* Ctrl+C — exactly when the operator wants it alive to watch the drain — and re-raise the captured signals on exit, which the engine would count as phantom extra presses and escalate to a force-stop mid-drain.
+SIGINT / SIGTERM trigger a **quiesce-then-drain** shutdown, designed so a restart picks up cleanly without a half-finished turn. The engine owns the process signals exclusively — nothing else in the process may install a handler — and the embedded API server is *not* one of the things holding one. If it were, it would shut the dashboard down on the first Ctrl+C, exactly when an operator wants it alive to watch the drain converge.
 
 ```mermaid
 flowchart TD
-    SIG["Signal arrives (1st)"] --> S1
-    S1["1. event_queue.pause_delivery()"] --> S2
-    S2["2. Stop work producers<br/>turn_engine.begin_shutdown()"] --> S3
-    S3["3. event_queue.wait_for_handlers()"] --> S4
-    S4["4. Stop extensions / workers / agents"] --> S5
-    S5["5. event_queue.stop()"] --> S6
+    SIG["Signal arrives (1st)<br/><i>signals handed back to the OS</i>"] --> S1
+    S1["1. Quiesce every held seat"] --> S2
+    S2["2. Stop work producers<br/>timers · scheduler"] --> S3
+    S3["3. Wait for in-flight handlers"] --> S4
+    S4["4. Release seats; stop sandbox,<br/>transports, maintenance"] --> S5
+    S5["5. Close stream + store"] --> S6
     S6["6. Embedded API server exits"]
+    SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
 ```
 
-1. **`pause_delivery()`** — no NEW handlers start. Publishes still work, so
-   in-flight turns can emit `TaskCompleted`.
-2. **Stop work producers** — deadline timers and the cron scheduler. Turns still
-   parked at the concurrency gate are NAK'd back to the broker (redelivered next
-   boot) instead of starting fresh LLM rounds mid-drain.
-3. **`wait_for_handlers()`** — waits indefinitely; RUNNING turns finish their
-   rounds until the counter hits 0 (`drain_in_progress` logs the in-flight count
-   every 10 s).
-4. **Stop extensions / workers / agents** — once no handler is running.
-5. **`stop()`** — the Pulsar connection closes.
-6. **API server exits** — the dashboard is served through the whole drain, and is
-   brought down only after the engine has fully stopped.
+1. **Quiesce every held seat** — the node stops taking new work while staying
+   attached. This is what makes the wait below terminate: without it the
+   mailbox keeps feeding this node work for as long as its peers keep
+   publishing, and "wait until nothing is running" never comes true.
+   Quiesce is also the *reversible* verb, so a drain that turns out to be a
+   shed can be undone.
+2. **Stop work producers** — deadline timers and the cron scheduler, and
+   close the concurrency gate. Turns still parked at it are released at
+   once and their deliveries deferred — left unacked, so a peer picks them
+   up rather than waiting out a redelivery timer — instead of starting
+   fresh LLM rounds mid-drain. The gate closes *before* the mailboxes
+   quiesce: quiescing stops new deliveries, but a turn already delivered
+   and parked behind a slot is past that point. Closing is reversible, so
+   a node that drained and then converged serves again rather than
+   holding its seats and refusing every turn.
+3. **Wait for in-flight handlers** — indefinitely; running turns finish
+   their rounds until the count hits 0, with `drain_in_progress` logging the
+   in-flight count every 10 s.
+4. **Release the seats**, then stop the sandbox waiter, the notification
+   transports and the maintenance duties — the waiter last of the three to
+   start stopping, because its keepalive is what stops a running box being
+   reaped while turns are still finishing.
+5. **Close the backends** — the stream connection and the store file.
+6. **API server exits** — the dashboard is served through the whole drain,
+   and is brought down only after the engine has fully stopped.
 
-**Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the `ConcurrencyController` gate (LLM rounds under way) run to completion. Turns that were delivered before the pause but are still *waiting* for a concurrency slot abort with `ShutdownDraining` — they haven't called an LLM or fired a side effect yet, so the NAK'd trigger message simply redelivers to the next boot. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute Plan → Execute → Review turns one after another during shutdown.
+**Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute Plan → Execute → Review turns one after another during a shutdown that waits for them indefinitely.
 
 **No engine-level timeout on the drain.** Step 3 waits as long as in-flight turns need. We don't try to second-guess "too long" — the host already provides that cutoff:
 
@@ -265,15 +283,29 @@ flowchart TD
 
 Embedding our own grace window would duplicate that decision in two places and inevitably disagree. Size the orchestrator's grace period to cover your expected turn length (a multi-tool Plan → Execute → Review can comfortably take 2–5 minutes).
 
-**Force stop (second signal).** A second SIGINT/SIGTERM during shutdown cancels all asyncio tasks; the cancellation propagates up through `run()`'s `CancelledError` branch into `_force_stop()`, which resets any still-`WORKING` agent to `Idle`, then closes the embedded API, MCP children, LLM clients, the event queue, and storage in ≤ 2 s per step. The cancelled turn's Pulsar message is **negatively acknowledged** so the broker redelivers it to the next engine subscription promptly — without the NAK the message would sit unacknowledged until the `ack_timeout` window (10 minutes) elapsed, and the next engine would miss it for that window. A fresh turn runs from scratch on restart, and any side effects (Slack posts, Jira comments) already fired by the cancelled turn may duplicate. That's the trade-off you opted into by sending the second signal.
+**Force stop (second signal).** The first signal starts the drain and
+*hands the signals back to the operating system*, so a second SIGINT or
+SIGTERM does what it always does: the process dies immediately, with no
+cleanup. That handover is what makes the unbounded drain above safe to
+offer — without it the engine would still be the installed handler, every
+further press would be swallowed, and an operator watching a drain from
+the terminal they started it in would have no way to abort it short of
+SIGKILL from somewhere else.
 
-**Hard exit (third signal).** A third SIGINT/SIGTERM calls `os._exit(1)` directly from the signal handler — no cleanup, no event loop required. This is the deterministic escape hatch for a process whose loop is wedged; before it existed, extra presses just re-cancelled all tasks and ripped `CancelledError` through the force-stop cleanup at arbitrary points.
-
-**Signal feedback is best-effort.** Each press schedules its shutdown action on the event loop *before* printing the console notice, and the notice itself can never raise. This matters when output is piped: the terminal delivers Ctrl+C to the whole foreground process group, so with `crewlet run 2>&1 | tee run.log` the first press also kills `tee`, turning stdout/stderr into a broken pipe. An exception escaping a Python signal handler is re-raised inside whatever frame the main thread happened to be executing — it can silently kill an arbitrary task (the engine then runs on, looking wedged) or tear the event loop down around the live Pulsar client, whose C++ threads then abort the process at interpreter exit. Console output from the handler is therefore strictly optional; structured log writes already tolerate a dead stream. To keep watching the drain through a pipe, use `tee -i` (it ignores SIGINT and survives the press) — or watch the dashboard's in-flight pill, which needs no console at all.
+A turn killed that way leaves its trigger **unacknowledged** rather than
+NAK'd, because nothing gets to run. The broker redelivers it once its ack
+window elapses, so the work is not lost — it is just slower to come back
+than after a graceful drain, where each finished turn acks normally and
+each turn still parked at the concurrency gate is deferred, so a peer takes
+it straight over. A redelivered turn runs from scratch, and side effects the
+killed turn already fired (a chat post, a work-item comment) may
+duplicate — the [completion ledger](seat-ownership.md#the-completion-ledger)
+covers a turn that *finished*, and this one did not. That is the trade-off
+you opted into by sending the second signal.
 
 **Watching the drain.** The dashboard stays live through the entire drain (the embedded API server is stopped only after `stop()` completes). Its footer pill shows the engine's in-flight handler count whenever it's non-zero or the engine has flipped to "shutting down" — turns red during the drain so operators can watch it converge to 0. The count is also available programmatically:
 
-- `engine.in_flight_count` — Python property on the engine
+- the engine's in-flight turn count
 - `engine.shutting_down` — `True` from the first moment of `stop()` (unlike `is_running`, which only flips once teardown completes)
 - `GET /health` — JSON includes `in_flight` and `shutting_down`, and `status` reads `"shutting_down"` during the drain (embedded API only; the standalone API process omits these fields because it has no engine reference)
 

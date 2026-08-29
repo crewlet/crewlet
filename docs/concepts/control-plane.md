@@ -2,7 +2,7 @@
 
 The **control plane** is how every Crewlet node in a deployment converges on the same company config — and, when one cannot, how it decides what to do about its own traffic.
 
-It is two PostgreSQL tables and a poll loop. The interesting part is not delivery; it is the decision a lagging node makes, where the obvious answer turns every successful rollout into an outage.
+It is two keys in the fleet's [coordination store](coordination.md) and a poll loop. The interesting part is not delivery; it is the decision a lagging node makes, where the obvious answer turns every successful rollout into an outage.
 
 ---
 
@@ -24,32 +24,47 @@ Broadcasting the event fixes the fan-out but not the reliability. An ephemeral b
 ```mermaid
 flowchart TD
     ACT["activation<br/>(PUT /config, revert,<br/>crewlet config import)"]
-    LOG[("config_activations<br/><b>append-only epoch log</b>")]
+    DB[("company_config<br/><b>each node's own copy</b>")]
+    PTR[("coordination: <code>activation</code><br/><b>pointer + payload, revision = epoch</b>")]
     NUDGE(["broadcast nudge<br/>revision_activated"])
     N1["node-0<br/>reconcile poll"]
     N2["node-1<br/>reconcile poll"]
-    STATUS[("config_apply_status<br/><b>one row per node</b>")]
-    ACT -->|same transaction| LOG
+    STATUS[("coordination: status bucket<br/><b>one key per node</b>")]
+    ACT --> DB
+    ACT -->|payload, then pointer| PTR
     ACT -.->|best effort| NUDGE
     NUDGE -.->|wake early| N1
     NUDGE -.->|wake early| N2
-    LOG --> N1
-    LOG --> N2
+    PTR --> N1
+    PTR --> N2
+    N1 -.->|adopt on first sight| DB
     N1 --> STATUS
     N2 --> STATUS
     STATUS --> N1
     STATUS --> N2
 ```
 
-**`config_activations` is the authoritative pointer.** It is an append log rather than a column on `company_config`, because the counter has to move on every activation *including re-activation of an unchanged revision* — that is the documented gesture for picking up a rotated credential (see [Secret Store § Propagation](secret-store.md#propagation)), and a pointer keyed on the revision id could never express it. `BIGSERIAL` is the monotonic epoch; the current target is `MAX(epoch)`.
+**The `activation` key is the authoritative pointer**, and it lives in the coordination store rather than in a node's own database. The split is the whole point: *which revision is current* is a question the fleet has to agree on, and a pointer each node reads out of its own file is a fleet of one.
 
-The append runs **inside the activation's own transaction**, so the `is_active` flip and the epoch commit together. A crash between them would otherwise leave a fleet converged on a revision nobody asked for, or an activation no node ever notices.
+**The payload travels with it.** A revision is written to the database of whichever node served the write, so every *other* node meets it for the first time when the pointer names it — and a peer with no copy has nothing to apply. So `Activate` publishes the sealed body and then moves the pointer, in that order: a crash between them leaves a body nothing points at, which the next activation replaces, while the other order points the fleet at bytes no node can read.
+
+Only the **current** revision's body is kept there. A node that has fallen behind needs exactly the revision the pointer names and never an older one, so a per-revision history in a bucket with no retention would be unbounded growth for rows nothing would ever read. A node that fetches a revision **adopts** it into its own `company_config` — which is where its history, its diffs and its revert targets are read from, so a node that applied without adopting would serve an epoch its own operator surface cannot show.
+
+The body is whatever the node sealed. With a keyring configured the coordination store holds ciphertext exactly as the node's database does, and a node opens it with the Tier A keyring it was deployed with.
+
+**Its revision is the epoch.** The coordination store assigns every key write a monotonic revision, so publishing the pointer appends and flips in a single write — there is no instant where a node can read an epoch whose target has not been published, and two operators activating at once get two different epochs rather than racing over a counter the engine keeps. It also gives the counter the property a plain revision-id pointer could never have: it moves on every activation *including re-activation of an unchanged revision*, which is the documented gesture for picking up a rotated credential (see [Secret Store § Propagation](secret-store.md#propagation)).
+
+The pointer's bucket has **no retention at all**. Everything else the fleet shares ages out; a pointer that expired would restart the epoch, and a fencing sequence that restarts is not a fence.
+
+> **On an embedded broker the coordination store lives inside the running engine**, so an *offline* `crewlet config import --activate` can mark a revision active locally but cannot move the pointer — it says so, and tells you to use `PUT /config` against a running node instead. A node that starts holding an active revision the fleet has no pointer for publishes it, unless the pointer it finds is newer; a restarted single-node deployment therefore comes back pointing at what it was already serving, and a node rejoining a live fleet converges on the fleet rather than rolling it back.
 
 **Every node polls it** every ~15 s (±20 % jitter). A poll cannot miss anything, because it asks. The jitter exists only to break lock-step after a synchronized fleet restart — a rolling deploy boots every pod within the same second — and is deliberately applied to the *interval*, never to the apply.
 
-**The `revision_activated` event survives as a nudge.** It wakes the loop so an operator's change lands in milliseconds instead of seconds. Losing it costs one poll interval, never a revision. After a nudge fires, the next iteration still waits a full jittered interval, so an activation storm cannot become an apply storm.
+**The `revision_activated` event survives as a nudge.** It wakes the loop so an operator's change lands in milliseconds instead of seconds. It is delivered as an **ephemeral broadcast**, never a consumer group: every node has to hear every activation, and a competing group would hand each one to exactly one node — the delivery shape that made config a fleet of one before the pointer existed.
 
-**`config_apply_status` is what each node managed to do** — one row per node, last-write-wins. This is what makes partial apply visible, and it has three outcomes rather than two:
+It is also deliberately thin. The event carries the revision id and its summary and nothing a node acts on: the woken loop re-reads the *pointer*. That is what makes losing a nudge cost one poll interval and never a revision, and it is why a node that cannot subscribe at all — an attach failure is logged, not fatal — simply converges on its interval like any other. After a nudge fires, the next iteration still waits a full jittered interval, so an activation storm cannot become an apply storm.
+
+**The status bucket is what each node managed to do** — one key per node, last-write-wins. This is what makes partial apply visible, and it has three outcomes rather than two:
 
 | Status | Meaning |
 |---|---|
@@ -57,11 +72,11 @@ The append runs **inside the activation's own transaction**, so the `is_active` 
 | `error` | Failed and rolled back. The node still serves the prior epoch — a legitimate degraded-but-correct state, and one work can safely route to. |
 | `degraded` | Failed **after** a restart-required subsystem was mutated. Rollback restores and restarts transports, but it cannot respawn the per-role MCP children the failed revision already started. So this node's declared epoch is not the whole truth — it reports the prior config while its tool surface may be amputated. Never counted as converged, and never counted as somewhere work can go. |
 
-Each node **re-stamps its row every tick**, not only when it converges, and the posture decision only counts rows written in the last four intervals (~60 s). Both halves are needed together. The table is keyed by node rather than by event, so nothing sweeps it — a node that is scaled in, redeployed or crashed leaves its last `ok` behind forever, and a surviving node that cannot apply the current epoch would read that ghost as "there is a healthy peer to shed to" and step out of rotation to hand work to a process that no longer exists. Bounding on freshness fixes that, but only if a live node keeps writing: a converged node that reported once and went quiet would age out of its own fleet's view, and a lagging peer would read `peers_ok = 0` off a perfectly healthy fleet. One idempotent upsert per node per tick is what makes a row mean *"alive, at this epoch"* rather than *"was alive, once"*.
+Each node **re-stamps its key every tick**, not only when it converges, and the posture decision only counts reports written in the last four intervals (~60 s). Both halves are needed together. The bucket is keyed by node rather than by event, so a node that is scaled in, redeployed or crashed would otherwise leave its last `ok` behind forever, and a surviving node that cannot apply the current epoch would read that ghost as "there is a healthy peer to shed to" and step out of rotation to hand work to a process that no longer exists. Bounding on freshness fixes that, but only if a live node keeps writing: a converged node that reported once and went quiet would age out of its own fleet's view, and a lagging peer would read `peers_ok = 0` off a perfectly healthy fleet. One idempotent write per node per tick is what makes a key mean *"alive, at this epoch"* rather than *"was alive, once"*.
 
-The bound applies to the **decision**, not to the display: the operator view and the `config_apply_status` query below still show a node that stopped reporting, because that is precisely what an operator needs to see.
+**The bucket's own age is that bound**, set to four reconcile intervals when the store is opened. Nothing sweeps it, because there is nothing to sweep: a node that stops reporting stops renewing, and the broker expires the key on its own. That is also why the value is a bucket-wide constant rather than a per-write TTL — see [Coordination § Retention is a bucket's age](coordination.md#retention-is-a-buckets-age).
 
-The rows themselves are swept on a seven-day retention by the [maintenance worker](../guides/deployment.md), alongside the other tables that answer *recently*. This one is keyed by node rather than by event, which is why it was not in that list to begin with — and why it grew the same way regardless: one row per node id that has ever run, which under pod names is one row per pod. Seven days is chosen for the operator view rather than for the decision (the freshness bound already covers that after a minute): a node that died is exactly what someone reviewing an incident needs to find, and a week outlasts the review. A swept row is recreated the moment that node reports again.
+A node's recorded failure text is **truncated** at 2 000 characters. The whole fleet's status is read on every posture decision and rendered on the dashboard's fleet view, so one node returning a megabyte of Go error would be paid for by every reader on every tick.
 
 ---
 
@@ -126,13 +141,13 @@ Sandbox-driven turns bypass the gate entirely: a completion is dispatched direct
 
 The topic pause a shed applies is **reason-scoped** (`reason="config"`), so it cannot collide with the sandbox busy gate holding the same topics. Without that, a node converging back to `serve` would un-gate a seat mid-sandbox, and a completing sandbox would un-gate a diverged node.
 
-The **scheduler** is gated too, and differently: a tick on a shedding node is skipped whole rather than fired. A schedule's fire identity is org-derived — its name, cron and target seat — so a stale node would fire the previous company's schedules, and unlike a delivery there is no queued copy to fall back on. The skipped window stays open, so the missed-tick catchup evaluates it once the node converges; anything a peer already fired is absorbed by the `scheduled_runs` at-most-once claim.
+The **scheduler** is gated too, and differently: a tick on a shedding node is skipped whole rather than fired. A schedule's fire identity is org-derived — its name, cron and target seat — so a stale node would fire the previous company's schedules, and unlike a delivery there is no queued copy to fall back on. The skipped window stays open, so the missed-tick catchup evaluates it once the node converges; anything a peer already fired is absorbed by the fleet's at-most-once fire claim.
 
 ---
 
 ## Rotation
 
-A config revision and the *values* its `${VAR}` references resolve to are two different things, and `apply_config` used to compare only the first.
+A config revision and the *values* its `${VAR}` references resolve to are two different things, and the apply used to compare only the first.
 
 That gap was the whole of secret rotation. Re-activating an unchanged revision produces a byte-identical payload, so the no-op early-out fired and nothing rebuilt: MCP children kept the credential they captured at spawn, LLM providers kept the revoked key, transports kept the old token.
 
@@ -146,13 +161,13 @@ The key is per-process and never persisted or logged. A bare hash of a short cre
 
 ## What a running turn sees
 
-A live apply mutates engine state **in place** so in-flight work keeps working: the LLM provider map is `clear()` + `update()`d (identity preserved on purpose), `_role_mcp_tools` is rewritten per role, an `AgentDefinition` is reassigned on the running instance, and the `TurnEngineSettings` cell hands out a new model in one shot.
+A live apply mutates engine state **in place** so in-flight work keeps working: the LLM provider map is `clear()` + `update()`d (identity preserved on purpose), `_role_mcp_tools` is rewritten per role, an `AgentDefinition` is reassigned on the running instance, and the turn-engine settings cell hands out a new model in one shot.
 
 In-place is right — the alternative is a turn holding a reference to a dict nobody updates any more. But *keeps working* is not *stays coherent*, and each of those is read repeatedly within one turn: the ~18 turn-engine settings accessors re-read the cell on **every access**, `_role_mcp_tools` is read twice from two different places, and the agent's definition is read from roughly twenty. A turn could plan against one company and execute against another — one round cap for Plan and a different one for Execute, or a sub-agent budget sized from a fraction its parent never saw.
 
 Two mechanisms, and the split between them is the point.
 
-**The pin.** A turn captures those four things once, at the top, and reads through the capture for the rest of it. The capture lives in a `contextvars.ContextVar`, so it propagates into every task the turn spawns — a sub-agent inherits the turn that spawned it — without threading a parameter through every phase signature. It is keyed by owner and seat, so a concurrent turn for a different seat, or a second engine in the same process, reads live state.
+**The pin.** A turn captures those four things once, at the top, and reads through the capture for the rest of it. The capture rides the turn's own `context.Context`, so it reaches every goroutine the turn spawns — a sub-agent inherits the turn that spawned it — without threading a parameter through every phase signature. It is keyed by owner and seat, so a concurrent turn for a different seat, or a second engine in the same process, reads live state.
 
 **The drain.** A pin holds a *catalogue*, not a *capability*: pinning an MCP tool wrapper does not keep the client it dispatches to alive, so a pinned turn whose server was respawned fails as a dead tool rather than as a name that vanished. So before the apply mutates a seat — swapping its definition, respawning its per-role MCP children, decommissioning it — it waits for that seat's in-flight turns, capped at 10 s.
 
@@ -192,20 +207,57 @@ The drain counts turns, deliberately, rather than reading `AgentState`. A seat p
 
 ### Reading a stuck node
 
-`config_apply_status` carries the failing node's `error`, so the first question — *is this the revision or is this the node?* — is answered by the table:
+Each node's status carries the `error` it failed with, so the first question — *is this the revision or is this the node?* — is answered by the fleet view. It is on the dashboard, and it is one request:
 
-```sql
-SELECT node_id, epoch, status, error, updated_at
-FROM config_apply_status
-ORDER BY node_id;
+```bash
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  http://localhost:8080/query/fleet | jq '.nodes[] |
+    {id, config_epoch, config_status, config_error, config_reported_at}'
 ```
 
+A node that stopped reporting **drops out of this list** once its status ages past the freshness bound — which is the same fact the posture decision reads, so what an operator sees and what the fleet concluded cannot disagree.
+
 One node `error` while peers are `ok` is a per-node problem: a missing env var, an image without some MCP binary. Every node `error` on the same epoch is the revision — revert it. Any node `degraded` needs a **restart** of that process specifically; rollback did not restore what the apply tore down, and nothing short of a restart will.
+
+### After the fact
+
+The fleet view above is a **live** view and deliberately forgetful: a node that stops reporting drops out of it within a minute, which is exactly the node — the one that crashed, or was scaled in mid-rollout — an incident review is looking for.
+
+The durable answer is the event log. Every apply publishes `config_revision_applied`, with the reporting node in the event's `source`:
+
+```bash
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  "http://localhost:8080/query/events?type=config_revision_applied&limit=50" |
+  jq '.events[] | {id, source, timestamp, failed, summary}'
+```
+
+The `summary` reads as a failure for every status other than `ok` — `degraded` included, because a node that could not finish an apply has not converged and a line that hedged would let the fleet look healthier than it is.
+
+A listing never carries payloads (see [API § An event on the wire](../reference/api-endpoints.md#an-event-on-the-wire)), so fetch the one you want by id for the detail:
+
+```bash
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  http://localhost:8080/events/$EVENT_ID | jq '.payload'
+```
+
+```json
+{
+  "revision_id": "cfg-…",
+  "status": "degraded",
+  "error": "engine: apply: …",
+  "applied_subsystems": ["secrets", "company", "tools", "learning"]
+}
+```
+
+`applied_subsystems` is the ordered list of what this node had already rebuilt when it stopped — `secrets`, `company`, `tools`, `learning`, `sandbox`, `parties`, `integrations`, `epoch`, `mailboxes`, `scheduler`. That is the difference between "refused before anything changed" and "torn down halfway", which is precisely what decides whether the node needs a restart. An `error` with an **empty** list never reached the apply at all: the revision could not be read, opened or parsed.
+
+Like every other event this lives in each node's own log, so a node whose disk is gone took its rows with it — but a node that merely stopped reporting, or was replaced, still has them.
 
 ---
 
 ## See also
 
+- [Coordination](coordination.md) — the shared store this plane's two keys live in, and what else does
 - [Scaling Out](scaling.md) — the model this sits inside, and the other four kinds of coupling a fleet had to resolve
 - [Configuration](configuration.md) — the two-tier split, the apply itself, and rollback
 - [Secret Store](secret-store.md) — where rotated credentials live and how re-activation picks them up

@@ -139,15 +139,17 @@ Inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature
 
 `webhook_secret` is therefore **required** for Data Center webhooks: without one the endpoint answers **503** with a `Retry-After`, exactly as its peers do, rather than accepting deliveries it cannot verify. That is deliberately not a 4xx — the sender's request is fine, what is missing is on this side, and a 4xx would tell it to discard a delivery nobody else has a copy of. The delivery waits at Confluence and flows once the secret is set. Cloud is unaffected — those events arrive through the Forge app on `/webhooks/forge` and carry a JWT instead.
 
-### Event Deduplication
+### Delivery deduplication
 
-The transport deduplicates webhook events using a composite key of timestamp + page ID + event type, with a 5-minute TTL. This applies to both Cloud and Data Center.
+Data Center deliveries are claimed fleet-wide on the `X-Atlassian-Webhook-Identifier` the instance sends, which is stable across its own retries — so a redelivery is answered `200 {"status":"duplicate"}` and wakes nobody. The claim lasts five minutes. A route whose provider sends no such header — the Forge relay always, and a Data Center build that does not set one — is claimed on a **hash of the raw body** instead. The payload is what stays identical across a provider's own retry, and byte identity is deliberately preferred to derived coordinates: every field left out of a coordinate set is a way for two *different* events to collapse into one, and a collapsed event is a message nobody ever answers. A hash cannot do that — any difference at all yields a different key. See [Webhook deliveries are deduplicated at the edge](../reference/design-decisions.md#webhook-deliveries-are-deduplicated-at-the-edge).
 
 ---
 
 ## Query-Time Confluence Search
 
-Crewlet does not maintain a local copy of Confluence content. Shared knowledge is searched **live at query time**: the `ConfluenceSearcher` (`crewlet.knowledge.confluence_search.ConfluenceSearcher`) has the auxiliary LLM turn a turn's trigger context into a Confluence CQL query — once per turn — and runs it against the Confluence REST API (`/rest/api/content/search`). There is no startup walk, no pgvector index, and no webhook-driven re-index of page bodies; Confluence is the live source of truth and is read on demand.
+Crewlet keeps no local copy of Confluence content. Shared knowledge is searched **live at query time**: the auxiliary model turns a turn's trigger into a short text query — once per turn — and the searcher runs it as CQL against `/rest/api/content/search`. There is no startup walk, no vector index, and no webhook-driven re-index of page bodies; Confluence is the live source of truth and is read on demand.
+
+The query text is **capped and escaped** before it reaches the CQL literal. A pathologically long fragment is both a slow query and a sign the auxiliary model misbehaved, and an unescaped quote would end the literal early — turning a search into a query nobody wrote.
 
 The search backs the Plan-phase `## Relevant knowledge` prefetch (see [Knowledge System](../concepts/knowledge-system.md#relevant-knowledge-prefetch)). Agents that want to search or read Confluence directly use the `confluence_search` and `confluence_get_page` MCP tools.
 
@@ -158,7 +160,9 @@ The query-time search authenticates **as the agent's own Atlassian user**, reusi
 - **Cloud** — `CONFLUENCE_USERNAME` + `CONFLUENCE_API_TOKEN`.
 - **Data Center** — `CONFLUENCE_PERSONAL_TOKEN`.
 
-Roles without a per-agent Confluence token fall back to the **org admin token** (`confluence.token`). Set per-agent tokens whenever you want per-agent permission scoping; an agent on the admin token sees whatever that account sees.
+The credential is read from `mcp_env.atlassian` or `mcp_env.confluence` — Atlassian's own MCP server covers both products, so the documented entry is named `atlassian`.
+
+Roles without a per-agent Confluence token fall back to the **org token** (`integrations.confluence.token`), which sees whatever that account sees. That fallback is exactly why an unscoped search is then **refused** rather than run: searching the whole instance on a shared credential is how one seat reads a page its own account never could.
 
 ### Page-level restrictions — enforced natively by Confluence
 
@@ -182,11 +186,19 @@ units:
       confluence: { space: "ENG" }    # ENG is Engineering's WRITE / routing home — it does NOT scope reads
 ```
 
-Read scope is computed at query time by `crewlet.knowledge.accessibility.accessible_spaces(org)` — just the normalised `org.confluence_spaces`. With the config above, *every* agent's search is scoped to `{HANDBOOK, GENERAL}` regardless of unit; an Engineering agent is **not** restricted to `ENG` (and with `confluence_spaces` omitted it searches across everything its Atlassian account can read).
+Read scope is computed at query time from the normalised `knowledge.confluence_spaces`, so a live config edit to the scope takes effect with no restart and no refresh hook. With the config above, *every* agent's search is scoped to `{HANDBOOK, GENERAL}` regardless of unit; an Engineering agent is **not** restricted to `ENG` (and with `confluence_spaces` omitted it searches across everything its Atlassian account can read).
+
+**Unreviewed auto-drafted skills never reach a planner.** A hit whose ancestor chain includes `Auto-Drafted Skills` is dropped, and so is one whose title still carries the `[Auto-draft] ` prefix — two tests, because the first can silently stop matching (an instance that answered without the ancestor expand) and an exclusion that quietly matches nothing looks exactly like a knowledge base with no drafts in it. A lead publishes a draft by **moving it out** of that parent, which is the review gesture; the prefix is cleared with it.
+
+**The tool-skills space is not knowledge.** Pages in `integrations.confluence.skills_space` (default `TS`) are machinery — a planner told to read one would follow an instruction written for a different phase of a different turn — so they are excluded from search and from routing alike, while still being indexed into the skill registry.
 
 ### When Confluence search is unavailable
 
-The `## Relevant knowledge` prefetch stays empty (logged, no error) when `confluence` is not configured. The query-time search needs a Confluence connection and an LLM for CQL generation — it does **not** need a database or an embeddings provider, so it works in test / in-memory mode whenever a Confluence endpoint is reachable.
+The `## Relevant knowledge` prefetch stays empty — logged, never an error — whenever the search cannot run: no `confluence` block, an org token that did not resolve, an unreachable instance, a refused query. **A turn must not die because a wiki was slow**, so every failure path is an empty result.
+
+There is also a cheap **no-I/O pre-gate**: when a search is a guaranteed no-op (no scope AND no per-seat credential), the Plan phase skips the auxiliary model call that would have generated the query. That call is the expensive half, so a gate that had to reach the network to answer would cost more than it saves.
+
+The search needs a Confluence connection and a model for query generation. It needs **no** database and **no** embeddings provider.
 
 ---
 
@@ -196,85 +208,124 @@ Confluence serves two roles in a Crewlet company: **knowledge source** (agents s
 
 ### Inbound: Confluence Content Changes Wake Agents
 
-```
-Confluence event
-  (page_updated, comment_created, etc.)
-        │
-        ▼
-POST /webhooks/confluence
-        │
-        ▼
-API publishes raw_webhook to EventQueue
-  topic: crewlet.notifications.inbound
-        │
-        ▼
-NotificationService._parse_and_route_webhook()
-        │
-        ▼
-ConfluenceTransport.handle_webhook()
-  ├─ Verify signature (HMAC-SHA256 for Data Center)
-  ├─ Deduplicate (5-min TTL on timestamp+page_id+event)
-  ├─ Self-ignore (skip events triggered by our agents)
-  └─ Route (by specificity):
-       1. Page watchers → via REST API (auto-added on edit)
-       2. @mentions → from comment body (auto-follow page)
-       3. Space leads → all unit leads for the space
-       4. Standard resolution → fallback
-        │
-        ▼
-ConfluenceNotificationPrompt.build()
-  (tool-agnostic task description for the agent)
-        │
-        ▼
-Publish to crewlet.agent.{handle}.inbox
-        │
-        ▼
-Agent wakes up, reads full page via MCP tools,
-takes action based on the event
+```mermaid
+flowchart TD
+    A["Confluence event<br/>(page_updated, comment_created, …)"] --> B["POST /webhooks/confluence"]
+    B --> C{"HMAC-SHA256 over the body<br/>(X-Hub-Signature)"}
+    C -- "no secret configured" --> R1["503 + Retry-After<br/>the delivery waits at Confluence"]
+    C -- "bad signature" --> R2["401 — nothing is recorded<br/>or published"]
+    C -- "verified" --> D["Published to<br/>crewlet.notifications.inbound"]
+    D --> E["notify.Service.Handle<br/>(internal/notify/service.go)"]
+    E --> F["confluence.Parser.Parse<br/>one Routed per recipient"]
+    F --> G["Route:<br/>subscribers ∪ @mentions,<br/>else the space lead"]
+    G --> H["Prompt.Build renders the<br/>tool-agnostic task description"]
+    H --> I["crewlet.agent.{handle}.inbox"]
+    I --> J["The seat wakes, reads the page<br/>through its own MCP tools, acts"]
 ```
 
 ### Routing Strategy
 
-Routing follows the same watcher-based pattern as Jira, adapted for Confluence's behaviors:
+A wiki page event names only who edited it — there are no assignees — so
+routing has three signals, and the last is a fallback in the strict sense: it
+says "this concerns your team", never "this is yours".
 
-1. **Watchers** — The transport fetches page watchers via the Confluence REST API. Confluence **auto-adds users as watchers when they edit a page** — this includes the page creator, so there is no separate "page creator" routing step. Agents who have edited a page will automatically receive notifications about subsequent activity on it.
-2. **@mentions** — When a comment contains `@mention` markup (`<ri:user ri:account-id="..."/>`), the mentioned agents receive the notification. The Confluence UI does not allow mentioning service accounts, but **the API can insert mention markup** — so agents commenting via MCP tools can direct notifications to other agents. Mentioned agents are **automatically added as page watchers** so they receive future events on that page.
-3. **Space leads** — If no watchers or mentions resolved to a known agent (steps 1-2), all unit leads mapped to the space key receive the notification — **except the agent that triggered the event**. Multiple units can share the same space key.
+1. **Subscribers** — seats that have **touched this page before**. A seat is
+   subscribed when it *edits* the page or when somebody *@mentions* it there.
+2. **@mentions** — a comment or page body containing `<ri:user
+   ri:account-id="…"/>` markup routes to the seats named. The Confluence UI
+   does not allow mentioning service accounts, but **the API can insert
+   mention markup**, so agents commenting through their MCP tools can direct a
+   page to a colleague.
+3. **Space leads** — if neither produced a recipient, every unit lead mapped
+   to the space key gets it, minus the actor.
 
-"Resolved to a known agent" means the account maps to an **agent seat in the org**, not to an agent running in the node that received the webhook — a watcher owned by another node is routed to normally, since the notification is addressed by handle and consumed by whichever node owns that seat. Human watchers deliberately resolve to nothing here: Confluence already notified them natively, and counting one as a delivered recipient would suppress the space-lead fallback in favour of a notification the engine then skips.
-4. **Standard resolution** — If no space mapping exists, the notification is returned for generic handle/email resolution.
+**Steps 1 and 2 are one tier, not a precedence.** Ordering them against each
+other is the wrong question: a mention is a directed ask and a subscription is
+a declared interest, and suppressing either in favour of the other loses a
+recipient who genuinely wanted the event. Both fire, and a seat that is *both*
+mentioned and subscribed gets exactly **one** notification (under the mention,
+the stronger reason) — two copies would be two turns for one page change. Only
+the lead fallback is exclusive: it exists for the case where nobody was found
+at all.
 
-When specific recipients are found (steps 1-2), space leads are **not** notified — this prevents leads from being flooded with events that already have a clear recipient.
+"Resolved to a known agent" means the account maps to an **agent seat in the
+org**, not to an agent running on the node that received the webhook — a
+recipient owned by another node is routed to normally, since the notification
+is addressed by handle and consumed by whichever node owns that seat. Humans
+resolve to nothing here, deliberately: Confluence already notified them
+natively, and counting one as a delivered recipient would suppress the
+space-lead fallback in favour of a notification the engine then skips.
+
+#### The subscription list is the engine's, not Confluence's
+
+Confluence does keep watchers, and reading them is the obvious design. It is
+the wrong one here, for three reasons that compound:
+
+- the watcher list is mostly **people**, who Confluence has already notified
+  and who resolve to nothing the engine can wake;
+- reading it costs **a call per event**, on a path that has to stay cheap;
+- a **per-role token frequently cannot read another user's watch state**, so
+  the answer would be "nobody watching" on exactly the deployments this is
+  documented for.
+
+So the engine keeps its own list, of the only parties it can route to anyway,
+on the coordination store — a seat subscribed by a mention one node handled
+has to be found by whichever node handles the next event. Membership is asked
+as a single question per event ("which of my seats is subscribed to this
+page?"), so the cost does not grow with a page's history.
+
+The list is bounded by the **coordination bucket's retention** rather than a
+per-page expiry: a page nobody has touched inside that window drops its
+subscribers, which is the right forgetting — a seat that edited a page a year
+ago is not waiting on it.
+
+A node with **no coordination store** (a single embedded node) has no list and
+routes by mentions and space leads alone. That is a supported shape, not a
+degraded one; what it costs is step 1.
+
+#### An edit subscribes you; a comment does not
+
+This asymmetry is the whole delegation loop, and it is also the rule
+Confluence applies to people. Editing a page is a claim on it. Commenting on
+one is often the opposite — handing it over — so a lead answering a page with
+"@teammate, this is yours" must **not** thereby subscribe itself, or every
+later event comes straight back and the delegation achieved nothing. The
+mention subscribes the teammate; the comment does not subscribe the lead.
+
+Pages in the **Tool Skills space** subscribe nobody: their events are
+machinery and are excluded from routing entirely, so a subscription there
+could only ever produce notifications the parser drops.
 
 #### Self-ignore: an agent is never notified about its own action
 
 Every routing step excludes the user who triggered the webhook — the agent already knows about the action it just performed. This matters most for **space-lead routing**: a lead acting in the space it leads (e.g. a CEO commenting on a page in the leadership space) is the *default* space-lead recipient for the resulting `comment_created` / `page_updated` webhook. Without the exclusion, that webhook routes straight back to the lead, which wakes it to "acknowledge" the change — posting another comment that triggers another webhook, an endless self-notification loop.
 
-When the **only** candidate recipient is the trigger user (the sole watcher, or the sole space lead), the event is **dropped** rather than falling through to a later routing step. The `NotificationService` adds a transport-agnostic backstop: any inbound notification whose `actor_account_id` matches the resolved recipient's registered external ID is skipped (recorded as a `NotificationSkipped` event). Both layers depend on each agent authenticating as a **distinct Atlassian user** (per-role `CONFLUENCE_API_TOKEN`) so the engine can tell whose action it was — see the per-role-token note below.
+When the **only** candidate recipient is the trigger user (the sole subscriber, or the sole space lead), the event is **dropped** rather than falling through to a later routing step. The notification service adds a transport-agnostic backstop: any inbound notification whose `actor_external_id` resolves to the recipient itself is skipped (recorded as a `NotificationSkipped` event). `actor_external_id` is the **one** actor key every integration stamps — a per-vendor key protects the vendors somebody remembered and silently protects none of the others — and the actor is *resolved* through the handle registry rather than string-matched, so a seat's bot identity and its member identity compare equal. Both layers depend on each agent authenticating as a **distinct Atlassian user** (per-role `CONFLUENCE_API_TOKEN`) so the engine can tell whose action it was — see the per-role-token note below.
 
 ### Lead-fallback prompt hint
 
-When a lead receives an event via `routed_via = "space_lead"` (steps 1-2 produced no recipient), the [`ConfluenceNotificationPrompt`](https://github.com/crewlet/crewlet/blob/main/src/crewlet/notifications/notification_prompts/confluence.py) adds a `## Why You Received This` section that names the space, warns the lead that no one else is watching the page, and lays out three explicit decisions:
+When a lead receives an event via `routed_via = "space_lead"` (steps 1-2 produced no recipient), the Confluence notification prompt adds a `## Why You Received This` section that names the space, warns the lead that no one else is watching the page, and lays out three explicit decisions:
 
-- **Delegate** — `@mention` the right teammate in a comment on the page; the mention markup auto-adds them as a watcher so they pick up future events.
+- **Delegate** — `@mention` the right teammate in a **comment** on the page. The mention subscribes them, so the next event on the page reaches them instead. Commenting does not subscribe the lead; *editing* the page would.
 - **Act yourself** — if the page concerns the lead's own work or needs a lead-level response, reply directly.
-- **Escalate** — if the page is outside the team's scope or the lead can't identify the right reviewer, `@mention` their own manager (named in the identity prompt) in a comment so the manager is added as a watcher and can decide where the page belongs. Space-lead fallback fires only when nobody else is involved, so silently walking away would leave the page unwatched.
+- **Escalate** — if the page is outside the team's scope or the lead can't identify the right reviewer, `@mention` their own manager (named in the identity prompt) in a comment, which subscribes the manager and lets them decide where the page belongs. Space-lead fallback fires only when nobody else is involved, so silently walking away would leave the page with no subscriber at all.
 
 The hint is suppressed for `watcher` / `mention` routings — those carry their own signal of personal involvement.
 
-**Example 1**: Agent SWE edits a page (auto-added as watcher). A human comments on it:
-- Agent SWE gets the notification (via watcher)
-- Unit leads do NOT get it (watcher routing succeeded)
+**Example 1**: Agent SWE edits a page, which subscribes it. A human then comments:
+- Agent SWE gets the notification (`routed_via: watcher`)
+- Unit leads do NOT get it — a subscriber was found
 
 **Example 2**: Agent PM comments on a page mentioning `@Agent CTO` via the API:
-- Agent CTO gets the notification (via @mention) and is auto-added as a page watcher
-- Next time someone updates this page, Agent CTO will receive the event (via watcher)
+- Agent CTO gets the notification (`routed_via: mention`) and is subscribed to the page
+- The next event on the page reaches Agent CTO (`routed_via: watcher`)
+- Agent PM is **not** subscribed by having commented — see [An edit subscribes you; a comment does not](#an-edit-subscribes-you-a-comment-does-not)
 
-> **Important: Per-role tokens required for watcher and creator routing.** Watcher and page-creator routing only work when each agent authenticates to Confluence as a **distinct Atlassian user** (via per-role `CONFLUENCE_API_TOKEN` in `mcp_env`). If all agents share a single service account token, Confluence records the same user for all edits, and routing cannot distinguish between agents. See [Jira Integration](jira.md) for the `mcp_env` pattern.
+> **Important: per-role tokens are what make subscriptions work.** A seat is subscribed by editing or being mentioned, and both are attributed to whichever Atlassian user acted — so this only distinguishes agents when each authenticates as a **distinct** one (per-role `CONFLUENCE_API_TOKEN` in `mcp_env`). If every agent shares one service account, Confluence records the same user for every edit, one seat's subscription is every seat's, and the self-ignore rule silences the page for all of them. See [Jira Integration](jira.md) for the `mcp_env` pattern.
 
-> **Confluence does NOT auto-add commenters as watchers.** When an agent comments on a page, they are not automatically added as a watcher (unlike page edits). The transport provides an `add_watcher()` method to explicitly watch a page after commenting, ensuring the agent receives future events.
+> **Commenting deliberately does not subscribe you.** Only an *edit* subscribes its author. That asymmetry is what makes delegation work — a lead handing a page over by comment must not stay subscribed to it — and it matches what Confluence does for people. A seat that wants a page it only commented on has to edit it, or be mentioned on it by somebody.
 
-> **@mentions via API only.** The Confluence UI does not allow `@mentioning` service accounts. However, the API can insert mention markup (`<ri:user ri:account-id="..."/>`) when agents create comments via MCP tools. The transport extracts these mentions and routes accordingly. For human users wanting to direct a comment to an agent, they must use the agent's display name in the comment text (not @mention) — the transport will still route via watchers/page creator.
+> **@mentions via API only.** The Confluence UI does not allow `@mentioning` service accounts. However, the API can insert mention markup (`<ri:user ri:account-id="..."/>`) when agents create comments via MCP tools. The transport extracts these mentions and routes accordingly. For human users wanting to direct a comment to an agent, they must use the agent's display name in the comment text (not @mention) — the notification still routes to the page's subscribers, and to the space lead if it has none.
 
 ### Outbound: Agents Write to Confluence
 
@@ -292,19 +343,24 @@ Agents use MCP tools directly to create or update pages. Common patterns:
 Operators publish locally authored markdown — [Tool Skills](../concepts/tool-skills.md) and [knowledge docs](../concepts/knowledge-system.md#publishing-knowledge-docs) — to Confluence with `crewlet confluence import`. Each `.md` file is routed by its frontmatter: a `trigger:` makes it a Tool Skill page (in the Tool Skills space); everything else becomes a knowledge doc whose **space is its parent-directory name** and **title is its first `# H1`**.
 
 ```bash
-# Publish (and overwrite) the example Nimbus pages.
-crewlet confluence import <company.yaml> examples/nimbus-docs --update
+crewlet confluence import <company.yaml> ./docs-to-publish
 ```
 
 (The Nimbus example org runs on Plane — its shipped `nimbus.company.yaml` carries an `integrations.plane` block, so point the command at a company YAML with a `confluence:` block. The docs tree itself is Confluence-importable as-is: the directory conventions are identical across backends.)
 
-- The **positional argument is the Tier B company YAML** — the Confluence credentials are read from its `confluence:` block, not from the Tier A bootstrap `config.yaml`.
-- **`--update` is required to overwrite existing pages.** Without it, pages that already exist are skipped and only new pages are created.
-- Credentials referenced as `${VAR}` in the `confluence:` block are resolved from the process environment. The command loads a `.env` next to the company YAML (falling back to `./.env`) first — just like `crewlet run` — so credentials kept only in `.env` work; real environment variables win over `.env`.
-- Add `--dry-run` to preview, or `--create-space` to auto-create any missing target space (needs space-admin on the tenant).
-- Add `--prune` to garbage-collect orphans: after publishing, it deletes import-managed skill pages whose source `.md` is gone (e.g. a renamed or removed bundled skill). It only touches pages the importer itself published — never user-authored pages or knowledge docs — and pairs with `--dry-run` to preview. `crewlet run --import-confluence` exposes the same behaviour as `--prune-confluence`.
+- The **first positional argument is the Tier B company YAML** and the second is the directory — the Confluence credentials come from its `confluence:` block, resolved through the node's secret store and then the environment (pass `-config` to name a different Tier A document).
+- **Every target space is checked before a single page is written.** A typo in a directory name would otherwise be discovered half way through, leaving an operator to work out which pages landed. The importer never *creates* a space: that names a container the whole company then works in, and guessing it is not this command's job.
+- **A page that exists is updated in place**, matched by title within its space. Confluence has no external-id field, so a page somebody renamed in the UI is orphaned and a re-import creates a second one — a real limitation of the backend, reported rather than worked around with a marker pressed into service as a second identity.
+- **Frontmatter may declare `parent:` and `labels:`.** Frontmatter may also declare a `parent:` — the **title** of a page in the same space to nest this one under, which is the one thing a flat directory of files cannot say about a wiki that has trees in it — and `labels:`, the author's own page labels. The plan is ordered parents-first so a `parent:` naming a page **published by the same run** resolves; a cycle stops the walk naming the files, and a parent nobody publishes is a note and a page at the space root, because a doc nobody can read is worse than a doc in the wrong place. **An existing page is never re-parented** — where a page sits is something people move deliberately, and a run that dragged it back every time would be fighting them with no way to say so. Labels are lower-cased and de-duplicated at parse time, because that is what Confluence stores and answers with; a label that will not attach is a note, not a page failure.
+- **Every skill page this command writes gets the `crewlet-skill` label.** That is provenance, not identity: it says only that the importer wrote the page, which is a fact no field on the page carries. `-prune` is the one thing that needs it.
+- **Page failures are isolated.** A restricted page or one 403 does not cost the other forty; the run reports what failed and exits non-zero.
+- `-space KEY` publishes tool skills into a space other than `integrations.confluence.skills_space`; empty reads `$CREWLET_TOOL_SKILLS_SPACE`, then the config field. A company that has [turned tool skills off](../concepts/tool-skills.md#configuration) with `skills_space: ""` has nowhere for a skill file to go, so a tree containing one stops the walk naming both the setting and this flag.
+- `-prune` deletes the skill pages this tool published that no local file publishes any more — labelled, parsing as a skill, and with a key this run's tree does not carry. All three conditions are required: the label protects a lead's hand-authored page, the parse protects an ordinary page filed in the same space, and the key comparison makes a renamed skill a delete-and-create rather than a silent duplicate. **A prune that cannot enumerate the space deletes nothing** and fails the run, because the orphan set is derived by subtraction and a partial read deletes live pages. Deleted pages go to the space's trash, so an operator who pruned something they wanted restores it in the UI.
+- Add `-dry-run` to print the plan and write or delete nothing.
 
-The same publish can be bundled into engine start with `crewlet run --import-company <company.yaml> --import-confluence <path> --update-confluence`. That import runs **before** the Tier A bootstrap is loaded — it needs only `--import-company`, so it publishes even when `config.yaml` is missing or invalid (the engine still needs a valid Tier A config to start serving afterward). For a publish-only workflow, prefer the standalone `crewlet confluence import`. See the [CLI reference](../reference/cli.md#crewlet-confluence-import).
+Publish first, then start the engine — two commands, in that order. The importer reads its credentials from the **Tier B company YAML**, so it works before a node is configured at all, and running it first means the engine's boot-time sync finds the pages already there.
+
+`crewlet confluence resync <company.yaml>` is the read-only diagnostic beside it, and the counterpart of [`crewlet plane resync`](plane.md): it runs the **same** walk and the **same** admission the engine's boot sync runs, against a throwaway registry, and prints the keys that loaded plus any page that declares a `trigger:` and does not parse. It answers "why is this skill not being applied", not "make it apply" — it does **not** reach into a running engine, which picks changes up on its next boot or the next webhook. `-space` targets a space other than the configured one, for checking a container before pointing the company at it. It exits non-zero on a page that meant to be a skill and failed to decode, because the only other symptom is guidance that never appears. See the [CLI reference](../reference/cli.md#crewlet-confluence-resync).
 
 ---
 
@@ -334,7 +390,7 @@ Each unit's Confluence space can host an `Onboarding` page that fresh agents are
 
 ### 3. Query-time Confluence search (engine side)
 
-The Plan-phase `## Relevant knowledge` block runs a live Confluence search for the planner: the `ConfluenceSearcher` has the auxiliary LLM generate a CQL query from the trigger and runs it against the Confluence REST API, optionally narrowed to the org-wide `knowledge.confluence_spaces` (empty ⇒ unscoped, with the agent's own Confluence ACLs bounding the results). See [Knowledge System § Relevant-knowledge prefetch](../concepts/knowledge-system.md#relevant-knowledge-prefetch). Agents that want to search or read pages themselves use the `confluence_search` and `confluence_get_page` MCP tools.
+The Plan-phase `## Relevant knowledge` block runs a live Confluence search for the planner: the Confluence searcher has the auxiliary LLM generate a CQL query from the trigger and runs it against the Confluence REST API, optionally narrowed to the org-wide `knowledge.confluence_spaces` (empty ⇒ unscoped, with the agent's own Confluence ACLs bounding the results). See [Knowledge System § Relevant-knowledge prefetch](../concepts/knowledge-system.md#relevant-knowledge-prefetch). Agents that want to search or read pages themselves use the `confluence_search` and `confluence_get_page` MCP tools.
 
 This approach keeps tool guidance **configurable per-org** and **per-role** rather than hardcoded in the engine. The same Confluence MCP tools are available to all agents, but each agent's prompt scaffolding and accessible spaces determine how they use them.
 
@@ -346,7 +402,7 @@ The Confluence UI does not allow `@mentioning` service accounts, but agents can 
 <p>Hey <ac:link><ri:user ri:account-id="ACCOUNT_ID"/></ac:link>, please review this page.</p>
 ```
 
-Replace `ACCOUNT_ID` with the target agent's Atlassian account ID. The transport will extract the mention, route the notification to the mentioned agent, and auto-add them as a page watcher.
+Replace `ACCOUNT_ID` with the target agent's Atlassian account ID. The parser extracts the mention, routes the notification to the agent named, and subscribes them to the page so later events reach them too.
 
 **This syntax is carried by a [Tool Skill](../concepts/tool-skills.md)** — a Confluence-sourced prompt fragment triggered for any role with `atlassian` in its `mcp_env`. The skill's summary appears in the per-phase catalogue and the full mention-syntax body loads on demand via `load_tool_skill`, so agents with Confluence tools know how to mention others without paying the token cost on every turn.
 
@@ -364,30 +420,4 @@ This works naturally because both integrations share the `mcp-atlassian` MCP ser
 
 ---
 
-## Programmatic Setup
-
-```python
-from crewlet.config import ConfluenceConfig
-from crewlet.notifications.transports.confluence import ConfluenceTransport
-
-# Cloud — webhooks via Forge app
-confluence_transport = ConfluenceTransport(ConfluenceConfig(
-    url="https://your-company.atlassian.net/wiki",
-    token="your-api-token",
-    email="admin@your-company.com",
-))
-
-# Data Center — direct webhook with HMAC secret
-confluence_transport = ConfluenceTransport(ConfluenceConfig(
-    url="https://confluence.internal.company.com",
-    token="your-pat",
-    webhook_secret="your-hmac-secret",
-))
-
-engine = Engine(
-    organization=org,
-    notification_transports=[confluence_transport],
-)
-```
-
-The Confluence MCP *tool* server is declared separately in `mcp_servers` (the `atlassian` entry shown under [Configuration](#configuration)) — the transport above only handles webhooks and org-level REST calls. For Cloud, install the [Crewlet Forge app](https://github.com/crewlet/forge) which handles webhook delivery via Forge Remote.
+The Confluence MCP *tool* server is declared separately in `mcp_servers` (the `atlassian` entry shown under [Configuration](#configuration)), and it is a different surface from the one this page has been describing: the MCP server is what an **agent** calls, while the `integrations.confluence` block is what the **engine** reads — the inbound webhook, the knowledge search and the tool-skill walk. For Cloud, install the [Crewlet Forge app](https://github.com/crewlet/forge), which delivers webhooks over Forge Remote.

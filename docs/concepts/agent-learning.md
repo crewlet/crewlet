@@ -15,9 +15,9 @@ A common misconception is that adding memory/skill tools is sufficient to make a
 | Layer | What it does | Where Crewlet carries it |
 |---|---|---|
 | **1. Model training** | Weights that know the memory/reflection protocol | **Not required.** Layers 2–4 do the work; any stock Claude/GPT works. |
-| **2. Per-phase contract** | Short, per-phase system-prompt rules that remind the LLM *when* to persist, reflect, recall | Plan/Review prompt builders in `crewlet.agent.prompts` — guidance blocks injected only when the matching tool is registered. See [Prompt scaffolding](#prompt-scaffolding). |
+| **2. Per-phase contract** | Short, per-phase system-prompt rules that remind the LLM *when* to persist, reflect, recall | Plan/Review prompt builders in `internal/agent/prompts` — guidance blocks injected only when the matching tool is registered. See [Prompt scaffolding](#prompt-scaffolding). |
 | **3. Tool descriptions** | One-line *when to use* text on each tool — Crewlet pushes guardrails into descriptions, not prompts | Builtins (`query_episodes`, `reflect_and_persist`, `refresh_memory`, `refine_skill`, `use_skill`, `mark_onboarded`) have precise one-line descriptions. |
-| **4. Deterministic harness** | Post-turn code that runs reflection regardless of whether the LLM "remembers" to | `ReflectEngine` — the load-bearing piece. LLM cooperation is a bonus, not a dependency. |
+| **4. Deterministic harness** | Post-turn code that runs reflection regardless of whether the LLM "remembers" to | the reflect engine — the load-bearing piece. LLM cooperation is a bonus, not a dependency. |
 
 Crewlet puts the weight on layers **2–4**. Layer 1 is desirable but optional — effectiveness is not gated on any one vendor's checkpoint.
 
@@ -25,21 +25,31 @@ Crewlet puts the weight on layers **2–4**. Layer 1 is desirable but optional �
 
 ## Subsystems
 
-Six small components, each with a single responsibility, plus the orchestrator that wires them.
+Small components, each with a single responsibility, plus the orchestrator that wires them.
+
+**Two ways in, and they are not the same shape.** Everything learned *from a turn* arrives on one event through one dispatcher; the two passes driven by a *clock* rather than a turn are their own loops, and fleet singletons.
 
 ```mermaid
 flowchart TD
-    TC["TurnCompleted event"] --> RE
-    SCH["scheduled consolidator<br/>(SkillClusteringScheduler,<br/>EpisodeLifecycleWorker)"] --> RE
-    RE["ReflectEngine<br/>(orchestrator)"]
-    RE --> SS["SkillSynthesizer"]
-    RE --> SR["SkillRefiner"]
+    TC["turn_completed event"] --> RE
+    RE["ReflectEngine<br/>(one dispatcher per process)"]
     RE --> PD["PersistDecider"]
+    RE --> EPW["Episodist"]
     RE --> CP["CounterpartyProfiler"]
-    SS --> SK["synthesized_skills<br/>(per-agent)"]
-    SR --> SK
+    RE --> SU["SkillUse<br/>(refreshes the staleness clock)"]
     PD --> AD["agent_diary<br/>(private)"]
-    CP --> EX["counterparty_profiles<br/>episodes (per-turn)"]
+    EPW --> EP["episodes<br/>(one row per turn)"]
+    CP --> CPT["counterparty_profiles"]
+    SU --> SK["synthesized_skills<br/>(per-agent)"]
+
+    CLK["background loops<br/>(fleet singletons)"]
+    CLK -->|hourly, threshold-gated| ELW["episode lifecycle<br/>(compaction + retention)"]
+    CLK -->|daily| CUR["skill curator<br/>(stale / archive / revive)"]
+    ELW --> EP
+    CUR --> SK
+
+    SS["SkillSynthesizer"] --> SK
+    SR["SkillRefiner"] --> SK
     AT["AgentTurn<br/>(Plan-phase prefetch + tools)"]
     AT -->|"use_skill, refine_skill"| SK
     AT -->|"query_episodes, reflect_and_persist, refresh_memory"| AD
@@ -56,7 +66,7 @@ Replaces "hope the LLM remembers to capture a durable fact" with a deterministic
   - `DOC` — would be team-relevant; the decider does not write personal memory but logs the recommendation. Real cross-agent propagation goes through the team knowledge base, not the diary.
   - `NOOP` — nothing worth persisting.
 - **Writing-style rule:** persisted entries are **declarative facts, not instructions**. `"User prefers concise responses"` ✓ — `"Always respond concisely"` ✗. Instructions drift out of date and get re-discovered as contradictions; facts compose cleanly. (Adopted verbatim from Hermes's memory guidance.)
-- **Effect:** writes a row to the agent's `agent_diary` via `AgentDiary.write` — agent-scope only.
+- **Effect:** writes a row to the agent's `agent_diary` via `learning.Diary.Write` — agent-scope only.
 
 ### 2. AgentDiary + `reflect_and_persist` — *in-flight personal memory*
 
@@ -65,11 +75,11 @@ The agent's private observation log. Two kinds:
 | Kind | TTL | Use |
 |---|---|---|
 | `diary_long` | None | Durable preferences and facts (`Stakeholder X prefers digests`). |
-| `diary_short` | Set | Situational state (`Sprint freeze runs through 2026-05-10`, `Opened PR-123 from sandbox run, awaiting review`). Excluded by the read's own SQL predicate once the TTL passes — so an expired row never consumes a slot in the recency window — and physically deleted by the [retention sweep](../guides/fleet.md), which runs `delete_expired` on the same fleet-wide singleton tick as the other short-horizon tables. |
+| `diary_short` | Set | Situational state (`Sprint freeze runs through 2026-05-10`, `Opened PR-123 from sandbox run, awaiting review`). Excluded by the read's own SQL predicate once the TTL passes — so an expired row never consumes a slot in the recency window — and physically deleted by the [retention sweep](../guides/fleet.md), which runs on the same fleet-wide singleton tick as the other short-horizon tables. |
 
-Two writers converge: the post-turn `PersistDecider` (above) and the in-flight `reflect_and_persist` LLM-facing builtin. Both go through `AgentDiary.write`, which embeds the content on write so the row is reachable by vector similarity later. The `## Personal memory` prefetch and `refresh_memory` read the diary via **hybrid candidate selection**: `AgentDiary.search_for_agent` (vector top-K matches to the trigger) unioned with `AgentDiary.list_for_agent` (recency top-K), deduped by row id and capped at `DEFAULT_CANDIDATE_POOL_LIMIT` (100), then passed to an aux-LLM relevance filter that picks the final digest. The two halves serve different needs: vector search catches **topical / semantic matches** to the current trigger; recency catches **broadly-applicable operational rules** that may not be a topical match (e.g. "use semantic commit messages on every PR"). The aux filter judges from the merged pool.
+Two writers converge: the post-turn `PersistDecider` (above) and the in-flight `reflect_and_persist` LLM-facing builtin. Both go through `learning.Diary.Write`, which embeds the content on write so the row is reachable by vector similarity later. The `## Personal memory` prefetch and `refresh_memory` read the diary via **hybrid candidate selection**: `learning.Diary.Recall` (vector top-K matches to the trigger) unioned with `learning.Diary.Recent` (recency top-K), deduped by row id and capped at `memoryCandidatePool` (100), then passed to an aux-LLM relevance filter that picks the final digest. The two halves serve different needs: vector search catches **topical / semantic matches** to the current trigger; recency catches **broadly-applicable operational rules** that may not be a topical match (e.g. "use semantic commit messages on every PR"). The aux filter judges from the merged pool.
 
-**Write-boundary hygiene.** `AgentDiary.write` runs a cheap guard on every write: an exact-duplicate of a live row short-circuits to the existing row id rather than inserting a paraphrase the read-side filter would then have to wade through. Content is stored verbatim — never length-truncated, so the agent reads back exactly what was written; only the text handed to the embeddings provider is sliced (`_MAX_EMBED_INPUT_CHARS`) to stay within its token limit. The post-turn `PersistDecider` is additionally skipped when the turn already self-persisted in-flight (the planner called `reflect_and_persist`), so the two writers don't double-write the same fact. Prompt-injection scanning at this boundary is a separate concern, deliberately not bundled into the hygiene pass — the guard is about write dedup, not content vetting.
+**Write-boundary hygiene.** `learning.Diary.Write` runs a cheap guard on every write: an exact-duplicate of a live row short-circuits to the existing row id rather than inserting a paraphrase the read-side filter would then have to wade through. Content is stored verbatim — never length-truncated, so the agent reads back exactly what was written; only the text handed to the embeddings provider is sliced, to stay within its token limit. The post-turn `PersistDecider` is additionally skipped when the turn already self-persisted in-flight (the planner called `reflect_and_persist`), so the two writers don't double-write the same fact. Prompt-injection scanning at this boundary is a separate concern, deliberately not bundled into the hygiene pass — the guard is about write dedup, not content vetting.
 
 The diary is read by:
 - The Plan-phase `## Personal memory` prefetch block (see [`fetch_personal_memory_block`](#personal-memory-prefetch--refresh)).
@@ -88,7 +98,7 @@ Crewlet's multi-party equivalent of Hermes's "model of who you are."
 
 Agents can search their own prior turns.
 
-- **Source:** the `episodes` hypertable — one row per completed turn (`agent_handle`, `task_summary`, `plan_summary`, `tool_sequence`, `skills_used`, `review_outcome`, `started_at`, `ended_at`, `duration_ms`, `embedding`).
+- **Source:** the `episodes` table in the node's own store — one row per completed turn (`agent_handle`, `task_summary`, `plan_summary`, `tool_sequence`, `skills_used`, `review_outcome`, `started_at`, `ended_at`, `duration_ms`, `embedding`).
 - **Builtin:** `query_episodes(query, limit, outcome_filter?)` — vector similarity over `task_summary | plan_summary` concat, scoped to the calling agent's handle, available in Plan phase.
 - **Auxiliary summarization:** raw episode hits are passed through the role's `llm_auxiliary` model (a cheap one) before reaching the planner, keeping the planner's context window small. Falls back to raw bullets when no aux model is configured.
 - **Frozen-at-turn-start:** the Plan-phase `## Similar prior work` prefetch resolves once per turn and bakes the summary into the system prompt. Re-iteration (Review → Plan again) reuses the same prefix so the LLM provider's prompt cache keeps working.
@@ -97,30 +107,60 @@ Agents can search their own prior turns.
 
 Mines recurring successful trajectories and drafts a new procedural skill.
 
-- **Two trigger paths:** single-turn (inline in `ReflectEngine` when a turn used ≥`min_tool_calls` tools and ended in `done`) and clustered (the periodic `SkillClusteringScheduler` greedy-clusters recent successful turns by tool-sequence Jaccard and drafts from clusters of size ≥`cluster_min_size`).
+- **Single-turn induction** runs inline in the reflect engine: a **settled** turn (`done` or `failed`) that used ≥`min_tool_calls` tools is offered to the auxiliary model, which drafts a skill or declines. Declining is the ordinary answer — most turns are not procedures — so a turn with no reusable shape costs one cheap call and writes nothing.
+- **Three gates, all before the model call**, because a draft made only to be discarded is money spent for nothing: the per-seat cap (`max_skills_per_agent`), and a duplicate check comparing the turn's tool set against the seat's existing skills by Jaccard similarity (`duplicate_jaccard_threshold`). The comparison is over the tool **set**, not the ordered run — two turns calling the same four tools in a different order are the same procedure, and treating order as identity is how a seat ends up with a skill per permutation. A draft the model returns without a name, summary or body is dropped rather than written with the gap.
+- **Clustered synthesis** (`scheduler_enabled`, `cluster_*`) is the other half, and it catches what single-turn induction cannot: the shape a seat arrives at over a fortnight — three tools, unremarkable on any one turn, run the same way eleven times. Repetition is evidence a single turn cannot offer, and it is invisible from inside any one of them. A daily [singleton](seat-ownership.md#singleton-duties) pass reads each seat's last `episode_fetch_limit` (default 200) turns, greedy-clusters them by tool-sequence Jaccard at `cluster_jaccard_threshold` (default 0.6), and drafts from the largest cluster of size ≥`cluster_min_size` (default 3). It is **off by default** — `scheduler_enabled: false` — because the pass costs an auxiliary call per seat per day and a young company has nothing to cluster yet.
+  - **One draft per seat per pass, largest cluster first.** Not every qualifying cluster: each draft is a completion, and a seat with three real patterns learns them over three days with the strongest evidence going first. A pass that drafted everything could also fill the per-seat cap in a single tick.
+  - **A cluster the seat has already learned is skipped, not a stop.** The next pattern down may be one it has not — the same `duplicate_jaccard_threshold` the inline path uses, which is *stricter* than the pooling threshold on purpose: pooling asks "is this the same kind of work", rejecting a draft asks "is this the same skill".
+  - **Only raw, settled turns with ≥`min_tool_calls` tools are evidence.** A compacted row is already a summary of a cluster and would count a fold as one turn; a `self_iterate` round is work the agent judged incomplete.
+  - **The stored `tool_sequence` is a run that actually happened** — the cluster's representative — rather than a union of its members, because the duplicate check compares stored sequences against new turns and a union nobody performed matches everything loosely.
+  - The `SkillSynthesized` event carries `trigger: clustered` and the `cluster_size`, and **no `turn_id`**: the draft came from a group, and naming any single member would put a trace on the event that explains none of the others.
 - **Output:** a row in `synthesized_skills` keyed by `(agent_handle, name)` — agent-scope only. The body is stored in the familiar SKILL.md Markdown shape, which `use_skill` returns verbatim.
-- **Cross-agent promotion:** when ≥N siblings in the same `OrgUnit` independently converge on a similar pattern, a separate `PromotionSynthesizer` distils the cluster into a **draft page in the team knowledge base** under the unit's `Auto-Drafted Skills` parent. The synthesizer builds a backend-neutral markdown draft and hands it to a **`PromotionPageWriter`** — the small consumer-owned seam (`resolve_unit_container` / `missing_container_hint` / `create_draft_page`) implemented per backend: `ConfluencePromotionWriter` posts rendered XHTML into the unit's `integrations.confluence.space`; `PlanePromotionWriter` posts into the unit's `integrations.plane.project`, [ensuring the parent page exists](../integrations/plane.md#skill-promotion-on-plane). A unit without a configured container soft-skips with the writer's remediation hint; a write failure returns nothing so the scheduler retries next tick. Because the scheduler re-clusters the same persisted rows every tick, **cross-tick dedup is the writer's job**, per backend: Confluence rejects a repeat create with a 4xx on the duplicate title, while the Plane writer stamps `external_id="draft:<name>"` (the fork 409s on the duplicate pair) and returns the existing page instead of creating another — either way one converging cluster yields one draft, not one per tick. Draft titles carry the `[Auto-draft] ` prefix (`AUTO_DRAFT_TITLE_PREFIX`), and the `## Relevant knowledge` search hides pages under the `Auto-Drafted Skills` parent — so an unvetted draft never reaches other agents. A unit lead reviews and publishes by moving the page out of the parent; once published it's a regular knowledge-base page, reachable through the query-time search. The engine carries no unit-scope skill rows of its own. Success publishes a `SkillPromoted` event whose `container_key` field carries the unit's configured container (space key / project identifier) alongside `page_id` / `page_title`.
+- **Cross-agent promotion** is the third path, and its output is deliberately *not* a skill row. Every other skill here is agent-scope — one seat's row, in one seat's prompt — because a skill is a procedure a particular seat follows. A procedure four seats independently arrived at is something the **team** has, which makes it documentation. So when ≥`min_sibling_count` **distinct seats** in one `OrgUnit` converge on a similar tool run, a daily [singleton](seat-ownership.md#singleton-duties) pass distils the cluster into a **draft page in the team knowledge base** under the unit's `Auto-Drafted Skills` parent, for a lead to review.
+  - **Distinct seats, not skills.** One seat that drafted four near-identical skills is a catalogue that needs curating, not a team convergence — counting rows rather than owners would promote it and present one agent's habit as the unit's practice.
+  - **Direct members only.** A parent unit does not pool its children's catalogues: it would find the convergence the child already promoted and draft it again one level up, on a page naming a team that never converged on anything.
+  - **The draft is hidden until a person publishes it.** The `## Relevant knowledge` search excludes the auto-drafted subtree (and, as a fail-closed backstop where a backend has no parent chain, the `[Auto-draft] ` title prefix), so an unvetted draft never reaches another agent. A lead adopts one by moving it out of that parent; once published it is an ordinary knowledge-base page reachable through the query-time search. Rejecting one is a delete — it is re-drafted only if the team converges again.
+  - **One backend, matched.** The pass writes through a small `PromotionWriter` seam implemented per backend: `ConfluencePromotionWriter` posts rendered storage-format XHTML under the unit's `integrations.confluence.space`, creating the `Auto-Drafted Skills` parent if the space has none — and **refusing the draft** rather than filing it at the space root if that parent cannot be created, because a page outside the subtree is one every agent can read. `PlanePromotionWriter` posts into the unit's `integrations.plane.project`. Which field a unit's container comes from follows the *wired* backend, never a preference order: a unit may carry both identities (Plane as its tracker, Confluence as its wiki), and handing a space key to the Plane writer would file into whatever project happened to share the name.
+  - **Cross-tick dedup is the writer's job**, per backend, because the pass re-clusters the same persisted rows every tick and would otherwise yield one draft a day forever. Confluence keys on the title, which is unique within a space; Plane keys on `external_id="draft:<name>"`, which survives a lead renaming the draft while reviewing it — a name-keyed check would create a second copy beside the one they are editing. Either way one converging cluster yields one page, and a tick that finds the existing draft stays quiet rather than re-announcing the promotion.
+  - **A unit with no container is soft-skipped** with the field to set in the log; a company that configured knowledge for one team and not another is supported, and failing would stop the configured team's promotions too. A write failure announces nothing, and the next tick retries.
+  - Success publishes `SkillPromoted` carrying the unit, the `container_key`, the `page_id` / `page_title`, and both `sibling_count` and `distinct_agents` — one agent repeating itself and five agents converging are different findings.
+  - The engine carries no unit-scope skill rows of its own.
 - **Collision guard:** the synthesizer rejects names that already exist in the agent's own `synthesized_skills` table. There's no global skill registry to guard against — synthesized skills are per-agent, and shared procedures live in the team knowledge base rather than in an engine-side registry.
 
 ### 6. SkillRefiner + `refine_skill` — *improve skills during use*
 
 When a synthesized skill was central to a successful turn, append an *observed-in-practice* bullet; when it contributed to a failed turn, append a *counter-example*.
 
-- **Auto path:** `ReflectEngine` dispatches the refiner after every turn whose `skills_used` is non-empty. The auxiliary model picks one observation (or NOOP); successful turns produce `Observed in practice: …`, failures produce `Counter-example: …`.
-- **Manual path:** the LLM-facing `refine_skill` builtin lets the planner patch its own skills mid-Plan — `action="append"` adds a bullet, `action="replace_body"` rewrites the steps. Patch-on-encounter: if the plan finds a skill outdated, it patches immediately rather than waiting for a separate consolidation pass.
+- **Auto path:** the reflect engine dispatches the refiner after every **settled** turn (`done` or `failed`) whose `skills_used` is non-empty. A `self_iterate` round is not refined — it is work the agent itself judged incomplete, so a lesson drawn from it is one the next round may contradict, and the turn will emit another `turn_completed` when it does settle. The auxiliary model picks one observation (or NOOP); successful turns produce `Observed in practice: …`, failures produce `Counter-example: …`.
+- **One call, one bullet, at most one skill.** The turn's whole offered catalogue goes into a single prompt and the model chooses which skill — if any — learned something. Per-skill calls would cost a completion per skill per turn for answers that are almost always NOOP, and a turn rarely teaches two procedures something new at once. A name the model invents is dropped rather than matched onto the nearest candidate: a bullet appended to the wrong procedure is worse than no bullet.
+- **NOOP is the expected answer**, and it is not an error. A model asked what a turn taught will produce something for any turn at all, and a skill that grows a bullet per turn stops being a procedure and becomes a diary of the turns that read it. The prompt says twice that answering nothing is correct.
+- **Only skills that still exist.** The turn's `skills_used` is a list of ids captured when its prompt was built; the refiner intersects it with the live catalogue, so a skill the [curator](#skill-curator) archived in the meantime is not resurrected. A turn whose skills have all been archived costs no model call at all.
+- **Bullets collect under one `## What practice added` heading** at the end of the body, rather than scattering a new section through the steps on every refinement — a reader sees the procedure first and what practice added to it second.
+- **Manual path:** the LLM-facing `refine_skill` builtin lets the planner correct its own skills mid-turn. It takes `skill_name`, the **full** corrected `content` and an optional `reason`; the new text replaces the body in its entirety. A whole-body replacement rather than a patch, because a model asked for a diff produces something diff-shaped that does not apply, and a half-applied edit leaves a procedure that is neither the old one nor the new — with nothing to compare against, since the prior body is already archived by then. Patch-on-encounter: if the plan finds a skill outdated, it corrects it immediately rather than waiting for a separate consolidation pass. A seat may only refine its **own** skills.
 - **Versioning:** every refinement archives the prior state to `synthesized_skill_versions` and bumps the live row's `version`. Rollback is a forward-step operation (the archived body becomes the body of a new version), so rewinding then un-rewinding works without losing history. History is bounded by `max_versions_kept` (default 10) per skill.
-- **Body cap:** `max_body_chars` (default 20 000) — refinements that would breach the cap are rejected so a runaway loop can't blow up a skill body.
+- **Body cap:** `max_body_chars` (default 20 000) — a refinement that would breach the cap is **refused, never truncated**, so a runaway loop can't blow up a skill body. A clip lands mid-step and the model reads the remainder as the whole procedure. The auto path skips silently and logs it; the manual tool refuses with the field name, because there a model can tighten the text and retry.
+- **`enabled` gates both halves.** `learning.skill_refinement.enabled: false` withdraws the `refine_skill` tool *and* leaves the post-turn refiner unwired — they write the same rows through the same version archive, so a company that turned refinement off and still had the tool would watch its skills change under a knob it had set to false. `use_skill` is unaffected: reading a skill is not changing one. Setting **both** `auto_refine_on_success` and `auto_refine_on_failure` to false is refinement-off spelled the long way, and the engine leaves the worker unbuilt rather than skipping every turn.
 
 ### 7. ReflectEngine — *the orchestrator*
 
 The deterministic harness. Owns when reflection runs and coordinates the workers above.
 
-- **Hooks:** subscribes to `TurnCompleted` on the EventQueue.
-- **Concurrency:** acquires a `ConcurrencyController` slot per role around dispatch and releases in `finally`, so reflection workers compete with live turns for execution slots.
-- **Budget pre-flight:** checks `BudgetManager` — if either the org-wide or per-agent budget is exhausted, the whole pass short-circuits with a `reflection_skipped_budget_exhausted` log.
-- **Per-role gate:** `Role.learning_enabled = False` opts a noisy or sensitive role out of reflection without disabling the subsystem globally.
-- **Idempotency:** an LRU of recently-processed `turn_id`s short-circuits duplicate deliveries; at-least-once queue semantics don't cause duplicate writes.
-- **Failure mode:** every dispatch is best-effort. A failed worker logs and the next worker still runs; a failed reflect never fails the parent turn.
+- **Hooks:** subscribes to `turn_completed` on the EventQueue, under its **own consumer group**. Its own, shared with nothing: reflection is the one subsystem an operator turns off on its own, and a group shared with another consumer would take that consumer's traffic down with it.
+- **One consumer, not one per writer.** Everything a seat learns is learned from one event, and every writer is gated on the same questions about it. Three subscriptions would mean three redelivery windows over one turn, three places to discover a company that learns nothing, and three chances for one of them to be quietly unwired.
+- **One dispatcher per process, not per config revision.** A [config apply](configuration.md) swaps the org and the worker set behind it; the subscription and the redelivery guard stay put. Rebuilding it per revision would empty that guard, so a redelivery landing either side of an apply would be classified twice — two auxiliary calls, two differently-worded rows for one fact. A refused worker set leaves the previous one serving: reflecting against a stale org is a far smaller wrong than not reflecting at all.
+- **Gates, in order.** Each is reported by name, per worker, per turn, because "this company never learns anything" needs an answer that says *which* gate closed:
+  1. **No workers** — nothing is wired, so there is no question to ask about this turn.
+  2. **No role** — the turn came from a seat this revision no longer has. Learning about a renamed or removed role writes memory under an identity nothing can read back.
+  3. **Per-role opt-out** — `learning_enabled: false` opts a noisy or sensitive role out without disabling the subsystem globally. Unset inherits the company-wide setting.
+  4. **No budget** — the company or the seat is already at its `token_budget` ceiling, so the pass declines to *start*. Reflection is best effort and this is the skip that costs nothing: a pass that runs and then discovers it is over budget has already made its auxiliary calls. It sits **before** the duplicate ring on purpose — an exhausted budget is the one *transient* refusal in this list, so a turn skipped for it stays reflectable when the ceiling moves, while every other gate would still hold on a redelivery. An **unreachable** counter reflects anyway: unknown is not "no", and a coordination blip must not silently stop a company learning.
+  5. **Duplicate** — a bounded ring of recently-processed work keys. Reflection is *not* idempotent: each pass is a fresh auxiliary call that can write a second, differently-worded row for the same fact. The ring is per-process and deliberately not durable — a second node reflecting the same turn writes a second diary row, which is the [bounded duplication](#what-does-not-happen) the engine promises rather than exactly-once. It **evicts** rather than growing: past the bound, a redelivery is far outside any backend's redelivery window.
+  6. **No engagement** — the planner opted out (`plan_decision: skip`), or was coerced to `direct` and called nothing. Either way the agent processed nothing externally observable, and a fact read off the trigger would teach it a directive it never received.
+  7. **Per-worker skip** — each worker states its own applicability, because they genuinely differ: the persist decider must not run on an unsettled turn, the counterparty profiler must.
+- **Failure mode:** every dispatch is best-effort and each worker runs under its own panic recovery, so one worker's bug costs neither the pass's remaining workers nor its sentinel. A failed worker logs and the next one still runs; a failed reflect never fails the parent turn. The handler **always acks**: reflection is work about a turn that is already over, so a nak would redeliver it to spend another round of auxiliary tokens reaching the same conclusion.
+
+#### What the turn event has to carry
+
+The dispatcher is a queue consumer, so it usually runs on a node that never saw the trigger. Everything the gates read therefore rides on the `turn_completed` payload itself — the tool sequences, the plan decision, the skills the prompt offered, and the inbound interactions with their senders resolved. A field left off that payload is a fact no worker can consult, and the gates fail **open-looking**: an absent tool sequence reads as "the agent engaged with nothing", which silently skips every worker on exactly the successful turns worth learning from, while the dispatcher reports a clean pass.
 
 ---
 
@@ -144,13 +184,13 @@ Plus four always-on prefetch blocks (rendered when the data exists):
 - **`## Similar prior work`** — top 3 episode-search hits, summarised by the aux model.
 - **`## Personal memory`** — diary entries selected via [hybrid vector ∪ recency candidate selection](#hybrid-candidate-selection), then filtered for relevance to the current task / trigger by the aux model.
 - **`## Synthesized skills you've learned`** — names + descriptions of the agent's own synthesized skills, loadable via `use_skill`.
-- **`## Relevant knowledge`** — knowledge-base pages from a live query-time search: the aux LLM generates a short search query from the trigger, and the [`KnowledgeSearcher`](knowledge-system.md#the-knowledgesearcher-seam) runs it scoped to the role's accessible containers. See [Relevant-knowledge prefetch](#relevant-knowledge-prefetch) below.
+- **`## Relevant knowledge`** — knowledge-base pages from a live query-time search: the aux LLM generates a short search query from the trigger, and the [`knowledge.Searcher`](knowledge-system.md#the-knowledgesearcher-seam) runs it scoped to the role's accessible containers. See [Relevant-knowledge prefetch](#relevant-knowledge-prefetch) below.
 
 Plus the conditional prefetch:
 
 - **`## First-turn onboarding`** — rendered until the agent calls `mark_onboarded`. Lists the relevant `Onboarding` knowledge-base pages on the agent's unit chain. Stored markers live in `agent_onboarding_markers`, keyed by `agent_id` and stamped with a `chain_hash`; an org-chain change invalidates the marker so the hint re-fires for the new structure.
 
-These blocks are **layer 2** from the four-layer table above. The `ReflectEngine` (layer 4) runs regardless of whether the LLM follows them — the scaffolding is an optimization that lets well-behaved models cooperate, not a dependency.
+These blocks are **layer 2** from the four-layer table above. The reflect engine (layer 4) runs regardless of whether the LLM follows them — the scaffolding is an optimization that lets well-behaved models cooperate, not a dependency.
 
 ---
 
@@ -162,10 +202,10 @@ The Plan-phase `## Personal memory` block runs `fetch_personal_memory_block` onc
 
 `fetch_existing_memories` is the candidate-pool helper that feeds the aux filter. Given a trigger query, it returns the **union** of two top-K reads against the agent's diary:
 
-- **Vector top-K** — `AgentDiary.search_for_agent(query=trigger)` runs cosine similarity against the diary's embedding column, scoped to the agent's id. This catches *topical / semantic matches* to the trigger.
-- **Recency top-K** — `AgentDiary.list_for_agent(limit=N)` reads the most-recent rows in insert order, again scoped to the agent's id. This catches *broadly-applicable operational rules* that may not be a topical match to this particular trigger — "use semantic commit messages on every PR," "always tag the security channel before merging auth changes" — which the vector half would miss when the trigger is unrelated to the rule's topic but the rule still applies.
+- **Vector top-K** — `learning.Diary.Search` runs cosine similarity against the diary's embedding column, scoped to the agent's id. This catches *topical / semantic matches* to the trigger.
+- **Recency top-K** — `learning.Diary.List` reads the most-recent rows in insert order, again scoped to the agent's id. This catches *broadly-applicable operational rules* that may not be a topical match to this particular trigger — "use semantic commit messages on every PR," "always tag the security channel before merging auth changes" — which the vector half would miss when the trigger is unrelated to the rule's topic but the rule still applies.
 
-The two sets are deduped by row id and capped at `DEFAULT_CANDIDATE_POOL_LIMIT` (100). The aux-LLM relevance filter then judges from this merged pool — same filter as before, just a better-recall candidate pool. The hybrid is **not pure vector** (which would miss the broadly-applicable rules) and **not pure recency** (which falls off for long-lived agents with >100 LONG entries — old-but-relevant rows would drop off the window and never reach the filter).
+The two sets are deduped by row id and capped at `memoryCandidatePool` (100). The aux-LLM relevance filter then judges from this merged pool — same filter as before, just a better-recall candidate pool. The hybrid is **not pure vector** (which would miss the broadly-applicable rules) and **not pure recency** (which falls off for long-lived agents with >100 LONG entries — old-but-relevant rows would drop off the window and never reach the filter).
 
 `PersistDecider`'s write-side dedup keeps calling `fetch_existing_memories` *without* a query — that path falls back to pure recency, which is the correct shape for the "is this paraphrase already in the diary?" check.
 
@@ -173,21 +213,21 @@ The two sets are deduped by row id and capped at `DEFAULT_CANDIDATE_POOL_LIMIT` 
 
 The prefetch filters against the **salient inbound message** — the raw message, not the notification builder's enriched task description (see [Salient-body sourcing](#salient-body-sourcing)). That leaves two failure modes:
 
-1. **Context-thin triggers** ("yes", "+1", a thread reply with little semantic content) — the salient message itself is thin, so the filter has nothing to match on and the block ends up empty. When that happens *and* the agent has memory rows, the block renders an `EMPTY_FILTER_HINT` line nudging the planner to refresh after recon.
+1. **Context-thin triggers** ("yes", "+1", a thread reply with little semantic content) — the salient message itself is thin, so the filter has nothing to match on and the block ends up empty. When that happens *and* the agent has memory rows, the block renders an the gate-path hint line nudging the planner to refresh after recon.
 2. **Richer triggers** can produce a non-empty block, but the entries the trigger-time filter chose may not be the most relevant once the planner has read the thread / fetched the ticket / queried knowledge and learned what the conversation is *actually* about.
 
 The `refresh_memory(context_hint=…)` builtin fixes both. The `refresh_memory` line of the bundled `retrieval-research` [Tool Skill](tool-skills.md) (`examples/tool-skills/retrieval-research.md`) tells the planner to call refresh after any tool call that materially changed its understanding of the conversation — *even when the initial block already had entries*, not only as an escape hatch from the empty case. The tool re-runs the filter with the planner's enriched `context_hint` appended to the original task and returns the freshly-rendered digest as the tool result. Bounded by:
 
-- **Per-turn cap** — `learning.personal_memory.max_refreshes_per_turn` (default 3). Distinct hints exceeding the cap return an error so the planner stops trying instead of silently no-op'ing.
-- **Idempotency cache** — repeat calls with the same hint within one turn (case- and whitespace-normalised) return the cached output without firing a fresh LLM call.
-- **Per-turn isolation** — state keyed by `turn_id`, bounded by an LRU on the closure; state from one turn never leaks into another.
+- **Per-turn cap** — `learning.personal_memory.max_refreshes_per_turn` (default 3). A hint beyond the cap is refused with the count spent, so the planner learns the shape of the limit and stops trying instead of silently no-op'ing. A hint whose filter call *failed* still spends its slot — otherwise a failing call is retryable without bound, which is the same unbounded spend the cap exists to stop — but retrying that same hint is allowed and does re-run the filter.
+- **Idempotency cache** — a repeat of a hint already used this turn (case- and whitespace-normalised) is answered from the ledger without a fresh auxiliary call, including when the answer was "nothing bears on this". A repeat is free *because it is answered from here*, not merely uncharged: re-running the filter for free would leave the cap bounding nothing, since a model alternating two hints could spend a completion per round forever. What is cached is the **filtered rows**, not the rendered text, so a repeat asking for a larger `limit` gets the extra notes rather than the first call's rendering.
+- **Per-turn isolation** — state keyed by `turn_id` and bounded to the most recent 256 turns, far more than a node runs at once; the bound is what makes it a cache rather than a leak, since nothing tells the tool when a turn ended. State from one turn never leaks into another.
 - **Frozen-prefix-cache safe** — refresh output lands as a tool-result message, not a system-prompt rewrite. The LLM provider's prompt cache stays valid across iterations.
 
 ---
 
 ## Relevant-knowledge prefetch
 
-The Plan-phase `## Relevant knowledge` block surfaces team-published documents — playbooks, runbooks, ADRs, conventions, design docs, anything in the agent's accessible knowledge-base containers — without forcing the planner to discover them by guessing names against `use_skill` or by remembering to call the knowledge-search tool first. It runs a live knowledge-base search once per turn through the [`KnowledgeSearcher` seam](knowledge-system.md#the-knowledgesearcher-seam) (Confluence CQL or Plane page search — one backend per org); the [Personal memory prefetch](#personal-memory-prefetch--refresh) is the closest sibling in spirit, though that one reads the private diary via hybrid vector ∪ recency candidate selection filtered by an aux-LLM relevance pass.
+The Plan-phase `## Relevant knowledge` block surfaces team-published documents — playbooks, runbooks, ADRs, conventions, design docs, anything in the agent's accessible knowledge-base containers — without forcing the planner to discover them by guessing names against `use_skill` or by remembering to call the knowledge-search tool first. It runs a live knowledge-base search once per turn through the [`knowledge.Searcher` seam](knowledge-system.md#the-knowledgesearcher-seam) (Confluence CQL or Plane page search — one backend per org); the [Personal memory prefetch](#personal-memory-prefetch--refresh) is the closest sibling in spirit, though that one reads the private diary via hybrid vector ∪ recency candidate selection filtered by an aux-LLM relevance pass.
 
 ### Why "knowledge" and not "skills"
 
@@ -222,7 +262,7 @@ The bullets render title + snippet — enough for the planner to decide which pa
 ### Hardening
 
 - **Show-nothing on search unavailability / failure.** When the backend is unreachable or query generation fails, the block renders nothing rather than erroring the turn — `search()` is best-effort by protocol contract.
-- **`EMPTY_FILTER_HINT`** rendered when the block would otherwise go silently empty — either the thin-trigger gate skipped the search, or the search ran and returned nothing. Mirrors `personal_memory`'s hint; points the planner at the knowledge-search tool as the mid-turn escape hatch.
+- **The gate-path hint** rendered when the block would otherwise go silently empty — either the thin-trigger gate skipped the search, or the search ran and returned nothing. Mirrors `personal_memory`'s hint; points the planner at the knowledge-search tool as the mid-turn escape hatch.
 - **Frozen at turn start.** The block is part of the system-prompt prefix, so re-iteration (Review → Plan) reuses the same prefix and the LLM provider's prompt cache stays valid.
 - **Once per turn.** The query is generated and the search runs once; the result is reused across phases.
 
@@ -230,7 +270,7 @@ The bullets render title + snippet — enough for the planner to decide which pa
 
 On a [thin-trigger](#thin-trigger-gate) turn the Plan-time `## Relevant knowledge` prefetch is gated off — generating a search query from a bare pointer is noise. That leaves a gap: the planner does its recon *inside* the Plan phase, but the Execute phase that follows would still run blind, with no relevant-knowledge block at all.
 
-`fetch_post_plan_relevant_knowledge` (`agent/plan.py`) closes it. After Plan submits, the `TurnEngine` re-runs the relevant-knowledge search — but keyed on **`plan.summary()`**, not the task description. On a thin trigger the original task is webhook boilerplate; the plan summary is the recon-informed, task-shaped query the gate was waiting for. The re-fetch uses the `query_override` parameter of the relevant-knowledge wrapper, which forces the thin-trigger gate **off** (the override *is* a real query) and re-points query generation at it. The rendered block is injected into the Execute system prompt as its own `## Relevant knowledge` section.
+`fetch_post_plan_relevant_knowledge` (`internal/agent/runner/phases.go`) closes it. After Plan submits, the turn engine re-runs the relevant-knowledge search — but keyed on **`plan.summary()`**, not the task description. On a thin trigger the original task is webhook boilerplate; the plan summary is the recon-informed, task-shaped query the gate was waiting for. The re-fetch uses the `query_override` parameter of the relevant-knowledge wrapper, which forces the thin-trigger gate **off** (the override *is* a real query) and re-points query generation at it. The rendered block is injected into the Execute system prompt as its own `## Relevant knowledge` section.
 
 It runs only when **all** of: the trigger required recon (otherwise the Plan-time prefetch already saw a real trigger — no gap), the plan decision is `plan` or `direct` (`skip` never reaches Execute), and the plan summary is non-empty. It runs **once per turn iteration** — a `self_iterate` round produces a fresh plan summary, so the re-fetch reflects the corrected plan.
 
@@ -238,7 +278,7 @@ This is the **push** half of the thin-trigger story: the [retrieval re-search gu
 
 ### Telemetry
 
-`PlanPrefetchSummary.relevant_knowledge_hit` / `relevant_knowledge_bytes` / `relevant_knowledge_selection_count` are recorded alongside the other prefetch blocks. The selection count distinguishes the two `hit=True` paths: a non-zero count means real pages were rendered; zero with `hit=True` means the `EMPTY_FILTER_HINT` was rendered — the thin-trigger gate skipped the search, or the search ran and returned nothing. Operators investigating low effectiveness pivot on this field to tell "no signal" from "hint nudge only."
+the plan-prefetch summary's `relevant_knowledge_hit` / `relevant_knowledge_bytes` / `relevant_knowledge_selection_count` are recorded alongside the other prefetch blocks. The selection count distinguishes the two `hit=True` paths: a non-zero count means real pages were rendered; zero with `hit=True` means the gate-path hint was rendered — the thin-trigger gate skipped the search, or the search ran and returned nothing. Operators investigating low effectiveness pivot on this field to tell "no signal" from "hint nudge only."
 
 The post-Plan re-fetch emits its own `RelevantKnowledgeRefetched` event whenever it takes its active path (thin trigger + `plan` / `direct` + non-empty summary), carrying `iteration`, `plan_decision`, `block_bytes`, and `selection_count`. The overwhelmingly common non-thin-trigger turn emits nothing. The event lets an operator correlate a gated Plan prefetch with the block Execute actually received.
 
@@ -260,18 +300,18 @@ The gate skips the aux call when the trigger is a pointer. It is **pure logic �
 
 | Stage | Carries the signal |
 |---|---|
-| **Notification builder** | `NotificationPrompt.requires_recon(notification)` — `True` when the builder emitted a "go fetch the real thing" directive. Jira / Confluence page / Plane work-item + page events (`## Get Full Context`), GitHub `review_requested` ("read the diff"), Slack thread replies (read-the-thread). The generic builder returns `False` — its body *is* the message. |
-| **`NotificationService`** | `notification_requires_recon(notification)` → `ExternalNotification.context_requires_recon`. |
-| **`InboundInteraction`** | `list_from_trigger_event` reads the flag into `InboundInteraction.requires_recon` — the one normalized, platform-agnostic property workers *may* branch on (it is not an `event.type` check). A coalesced trigger yields one interaction per constituent message, all carrying the event-level merged flag; `interactions_require_recon(interactions)` is the whole-trigger predicate. A2A and internal `TaskAssigned` triggers carry their own context → always `False`. |
-| **Prefetch** | All three relevance prefetches read it. `fetch_personal_memory_block` / `fetch_relevant_knowledge_block` take `trigger_requires_recon`; `_fetch_episode_recall_block` reads `interactions_require_recon` directly. When set: skip the aux call (for personal memory the relevance filter, for relevant knowledge the query generation and live knowledge-base search, for episode recall the vector query). All three then render a **gate-path hint** so the block stays visible and self-explanatory rather than vanishing — `EMPTY_FILTER_HINT` for personal memory and relevant knowledge, `_EMPTY_RECALL_HINT` for episode recall — and the matching per-tool line in the [retrieval re-search guidance](#prompt-scaffolding) carries the same nudge. |
+| **Notification builder** | `notify.Prompt.RequiresRecon` — `True` when the builder emitted a "go fetch the real thing" directive. Jira / Confluence page / Plane work-item + page events (`## Get Full Context`), GitHub `review_requested` ("read the diff"), Slack thread replies (read-the-thread). The generic builder returns `False` — its body *is* the message. |
+| **the notification service** | Carries the builder's answer onto the notification it publishes, so nothing downstream has to re-derive it. |
+| **The inbound interaction** | The flag is read off the trigger event into the interaction — the one normalized, platform-agnostic property workers *may* branch on (it is not an event-type check). A coalesced trigger yields one interaction per constituent message, all carrying the event-level merged flag, and the whole-trigger predicate is true when any of them is. A2A and internal `TaskAssigned` triggers carry their own context → always `False`. |
+| **Prefetch** | All three relevance prefetches read it: personal memory, relevant knowledge and episode recall. When set: skip the aux call (for personal memory the relevance filter, for relevant knowledge the query generation and live knowledge-base search, for episode recall the vector query). All three then render a **gate-path hint** so the block stays visible and self-explanatory rather than vanishing — `EmptyMemoryHint`, `EmptyKnowledgeHint` and `EmptyRecallHint` respectively — and the matching per-tool line in the [retrieval re-search guidance](#prompt-scaffolding) carries the same nudge. |
 
 The signal lives at the notification builder because the builder *decides* whether to emit a recon directive — classifying from `event.type` downstream would duplicate that decision and let the two drift. A raw token-count heuristic doesn't work here: a webhook `task_description` is *long* (title + event metadata + multi-step "How to Handle This" boilerplate) but *thin on substance* — length would wrongly classify it as rich.
 
-Personal memory still does its cheap diary recency list on a thin trigger (a DB read, no LLM) so it can render the hint only when the agent actually has memory rows to refresh — the vector half of the hybrid would key on a bare pointer that has nothing substantive to match, so it's skipped alongside the aux filter. Relevant knowledge skips the query generation and live knowledge-base search entirely — it only needs `can_search` to confirm a search could return anything (so the search-tool nudge is actionable) before rendering the hint. Episode recall skips the vector query outright and renders its hint unconditionally: unlike a diary list or an accessible-spaces check, the only way to know whether an agent *has* matching past episodes is the vector query the gate exists to skip — so the hint is phrased conditionally ("if this task resembles something you have done before…") to read correctly even for an agent with no episodes.
+Personal memory still does its cheap diary recency list on a thin trigger (a DB read, no LLM) so it can render the hint only when the agent actually has memory rows to refresh — the vector half of the hybrid would key on a bare pointer that has nothing substantive to match, so it's skipped alongside the aux filter. Relevant knowledge skips the query generation and live knowledge-base search entirely — it only needs `CanSearch` to confirm a search could return anything (so the search-tool nudge is actionable) before rendering the hint. Episode recall skips the vector query outright and renders its hint unconditionally: unlike a diary list or an accessible-spaces check, the only way to know whether an agent *has* matching past episodes is the vector query the gate exists to skip — so the hint is phrased conditionally ("if this task resembles something you have done before…") to read correctly even for an agent with no episodes.
 
-**Observability.** `PlanPrefetchSummary.trigger_requires_recon` records the gate decision once per turn. Without it, a gated prefetch and a filter that ran-and-found-nothing look identical in telemetry (both `*_hit=False` / `selection_count=0`); with it, an operator seeing an empty `## Relevant knowledge` block can tell the prefetch was *gated* (the trigger was a pointer) rather than *broken*. The event's `summary` surfaces it in the trace view (`"… plan prefetch: N/6 hits (thin trigger — filters gated)"`).
+**Observability.** The summary's `trigger_requires_recon` records the gate decision once per turn. Without it, a gated prefetch and a filter that ran-and-found-nothing look identical in telemetry (both `*_hit=False` / `selection_count=0`); with it, an operator seeing an empty `## Relevant knowledge` block can tell the prefetch was *gated* (the trigger was a pointer) rather than *broken*. The event's `summary` surfaces it in the trace view (`"… plan prefetch: N/6 hits (thin trigger — filters gated)"`).
 
-This makes the prefetch honest about its role: it's an **optimization for rich triggers**, and for event-driven turns the tool-call path is the *primary* retrieval path — re-query-after-recon is the expected pattern, not a fallback. That re-query happens two ways: the planner *pulls* mid-Plan via `refresh_memory` / the knowledge backend's search tools / `query_episodes` (guided by the [retrieval re-search guidance](#prompt-scaffolding)), and for relevant knowledge the `TurnEngine` also *pushes* — the [post-Plan re-fetch](#post-plan-re-fetch-thin-triggers) re-runs the search keyed on the plan summary and injects the result into the Execute prompt, so Execute is covered whether or not the planner pulled.
+This makes the prefetch honest about its role: it's an **optimization for rich triggers**, and for event-driven turns the tool-call path is the *primary* retrieval path — re-query-after-recon is the expected pattern, not a fallback. That re-query happens two ways: the planner *pulls* mid-Plan via `refresh_memory` / the knowledge backend's search tools / `query_episodes` (guided by the [retrieval re-search guidance](#prompt-scaffolding)), and for relevant knowledge the turn engine also *pushes* — the [post-Plan re-fetch](#post-plan-re-fetch-thin-triggers) re-runs the search keyed on the plan summary and injects the result into the Execute prompt, so Execute is covered whether or not the planner pulled.
 
 **One block is not gated, deliberately.** A pointer-shaped trigger is very often a *follow-up on a conversation this seat already worked* — the second comment on POC-518, the reply in a thread it answered yesterday. [Conversation sessions](conversation-sessions.md) render what the seat itself already said there, and that lookup is a keyed read rather than a similarity match: no embedding, no aux LLM, nothing for the gate to save. So on exactly the turns where all three prefetches above go quiet, the seat still arrives knowing what it last said and did in this conversation — which is what stops it answering the same question twice while it goes off to re-read the thread.
 
@@ -283,16 +323,16 @@ The relevance prefetches, the counterparty profiler, the PersistDecider, and `re
 
 `build_notification_prompt` produces the **enriched body** — for a Slack message, ~1.5k chars of `## Triage` instructions front-loaded *before* the actual message. That enriched body becomes the planner's `task_description` (the planner needs the triage contract). But a relevance filter keyed on a `task[:N]` prefix of it never reaches the message: it filters against boilerplate that is byte-identical on every Slack turn.
 
-So the raw message rides separately. `ExternalNotification.salient_body` carries `InboundNotification.body` verbatim — the message, no scaffolding — alongside the enriched `body`. `InboundInteraction.body` is sourced from it (falling back to the enriched `body` for events that carry no `salient_body`); a [coalesced trigger](event-system.md#inbox-batching--coalescing) sources one interaction body per constituent message. `salient_task_text(interactions, fallback)` (`learning/interaction.py`) is the single chooser: a single interaction body renders verbatim, multiple bodies join chronologically with sender attribution (`Alice: …`) and the joined text is clipped to the same 4,000-char bound a single body always had (embedding queries and filter prompts never receive `max_batch × 4000` chars), and the turn's `task_description` is the fallback — internal `TaskAssigned` triggers have no notification scaffolding, so the fallback is already clean.
+So the raw message rides separately. the notification's `SalientBody` carries the inbound body verbatim — the message, no scaffolding — alongside the enriched `body`. `InboundInteraction.body` is sourced from it (falling back to the enriched `body` for events that carry no `salient_body`); a [coalesced trigger](event-system.md#inbox-batching--coalescing) sources one interaction body per constituent message. `salient_task_text(interactions, fallback)` (`internal/events/types/interaction.go`) is the single chooser: a single interaction body renders verbatim, multiple bodies join chronologically with sender attribution (`Alice: …`) and the joined text is clipped to the same 4,000-char bound a single body always had (embedding queries and filter prompts never receive `max_batch × 4000` chars), and the turn's `task_description` is the fallback — internal `TaskAssigned` triggers have no notification scaffolding, so the fallback is already clean.
 
 Every relevance surface routes through it:
 
 | Surface | Reads |
 |---|---|
-| `## Personal memory` prefetch | `salient_task_text` → aux filter prompt |
-| `## Relevant knowledge` prefetch | `salient_task_text` → aux-LLM query generation + knowledge-base search |
-| `## Similar prior work` (episode recall) | `salient_task_text` → vector query |
-| `refresh_memory` | `salient_task_text` as the base task the `context_hint` is appended to |
+| `## Personal memory` prefetch | the salient text → aux filter prompt |
+| `## Relevant knowledge` prefetch | the salient text → aux-LLM query generation + knowledge-base search |
+| `## Similar prior work` (episode recall) | the salient text → vector query |
+| `refresh_memory` | the salient text as the base task the `context_hint` is appended to |
 | Counterparty profiler / PersistDecider | `InboundInteraction.body` directly |
 
 Without this, a stored memory that perfectly answered a question went unused: the filter only ever saw the triage boilerplate, so it could not see the question.
@@ -301,15 +341,23 @@ Without this, a stored memory that perfectly answered a question went unused: th
 
 ## Episode lifecycle
 
-The `episodes` hypertable is the raw substrate of agent learning. Without lifecycle management it grows forever. The `EpisodeLifecycleWorker` drains it on a write-triggered, demand-proportional cadence — no daily cron, no caller-path latency.
+The `episodes` table is the raw substrate of agent learning. Without lifecycle management it grows forever. The episode lifecycle worker drains it on a threshold-gated pass, walking each seat and doing nothing for the ones that are not due.
 
-### Trigger: write-side, threshold-based
+**Episodes have no plain retention sweep, deliberately.** Every other short-horizon table gets a range delete on a single horizon. Episodes cannot: their retention is this pass, which applies four different horizons to four different row states. A single `DELETE WHERE ended_at < cutoff` would collapse all four, and the row it would take first is the compacted summary — the only record of a whole era of a seat's work, standing in for hundreds of turns that are already gone.
 
-Every `EpisodeStore.write` increments a per-agent counter; every Nth write (default 10) the store runs a cheap `count(*)` and, if the agent's raw-episode total has crossed `max_raw_episodes_per_agent` (default 500), publishes a `CompactionRequested` event. The lifecycle worker is the subscriber. Idle agents fire nothing; busy agents fire often. A per-agent semaphore in the worker dedups concurrent requests.
+### Trigger: threshold-gated, on a slow loop
+
+The worker ticks hourly and, for each seat, runs one indexed `count(*)`. A seat under `max_raw_episodes_per_agent` (default 500) is skipped without touching the pass; a seat over it gets the full lifecycle run. The count is the gate rather than the pass's own early return, because "not yet" is the overwhelmingly common answer and it must cost one query rather than a walk.
+
+The cadence is far shorter than the [skill curator's](#skill-curator) because what it watches is a **count**, not a clock: a busy seat crosses its threshold in a burst, and every turn past that point pays the recall scan over rows that should already have been folded. An hour bounds that overshoot to one hour of one seat's traffic.
+
+**It is a fleet singleton**, claimed per tick under the node's own incarnation — two nodes compacting one seat's episodes would summarise the same cluster twice and pay for it twice. The claim **fails closed**: not knowing whether a peer holds the duty is exactly the case where running anyway produces the double write. Neither background pass fires on start, because every node in a fleet starts within seconds of a rolling restart — firing on start means every node races for the duty at once, and a crash-looping node spends the company's tokens on every restart.
+
+**Compaction needs a summarizer.** The pass folds a cluster by asking the seat's own `llm_auxiliary` chain to describe what its members had in common — per seat, so a company whose seats run on different models has each one's memory compacted by the model that seat is configured with. With no auxiliary model configured anywhere, the pass does not run at all: what it could still do is delete, and deleting is the half an operator least wants unsupervised. The rows stay raw and readable instead.
 
 ### One worker, four actions
 
-For each `CompactionRequested` event the worker runs the full lifecycle pass for that agent:
+For each seat over its threshold the worker runs the full lifecycle pass:
 
 1. **Drop non-terminal episodes** older than `non_terminal_max_age_days` (default 14). `self_iterate` is a mid-state — the reflect engine's terminal-outcome gate already excludes it from skill synthesis, and it only feeds `query_episodes` recall as noise. Cheap SQL DELETE; no LLM.
 2. **Drop skill-consolidated episodes** older than `consolidated_grace_days` (default 30). When the synthesizer drafts a skill from a cluster of episodes it stamps `consolidated_into_skill_id` on each source row; the lifecycle worker drops them after grace because the skill itself now carries the learning forward. The grace gives operators a chance to audit / detect bad consolidations before the source disappears.
@@ -333,8 +381,8 @@ Vector similarity returns both kinds in one query. Callers branch on `kind` at r
 
 - **`query_episodes` builtin** — kinds=both; renders raw entries as single past turns, compacted entries as `[pattern, observed N×]` aggregates.
 - **`## Similar prior work` Plan-prompt block** — kinds=both; the auxiliary `summarize_episodes` step has a kind-aware prompt that emits the right bullet shape per row.
-- **`SkillSynthesizer`** — kinds=`['raw']` only. Compacted aggregates are too coarse to draft a clean skill body from.
-- **`SkillRefiner`** — same: raw-only.
+- **`SkillSynthesizer`** — kinds=`['raw']` only, on both paths. Compacted aggregates are too coarse to draft a clean skill body from, and the clustered pass would count one fold as one turn.
+- **`SkillRefiner`** — reads no episodes at all. It is shown the skills the turn was offered and the turn itself (task, plan, tool sequence, outcome), which is the whole question it answers.
 
 ### What this protects
 
@@ -345,11 +393,37 @@ Vector similarity returns both kinds in one query. Callers branch on `kind` at r
 
 ### What does NOT happen
 
-- **Reads never trigger compaction** — only writes can fire the trigger. Read paths pay no latency cost for lifecycle work.
+- **No work on the caller's path** — nothing about compaction runs inside a turn. Reads pay no latency cost for it, and neither does the write that crossed the threshold.
 - **Compaction never feeds skill synthesis** — the consolidation hierarchy is one-directional: raw → skill, raw → compacted. A compacted entry doesn't get re-promoted to a skill; if the same pattern recurs after compaction, the *new* raw episodes form a fresh cluster the synthesizer can pick up.
-- **No daily cron, no idle work** — agents that don't accumulate episodes do no lifecycle work at all.
+- **No work for idle seats** — a seat under its threshold costs one indexed count per tick and nothing else. The loop wakes; the seat does not.
 
 ---
+
+## Skill curator
+
+A synthesized skill that nothing uses any more should leave the catalogue, and one that is used again should come back. That is a clock, not an event, so it is the second background pass — a fleet singleton on the same claim discipline as the episode lifecycle, ticking **daily**. A day, because the transitions it makes are measured in tens of days: a pass an hour would scan the whole catalogue 24 times to make the same zero transitions, and the one it eventually makes would land at most an hour earlier, against a threshold nobody set to the hour.
+
+The state machine is `active → stale → archived` on disuse, and `stale → active` on use:
+
+| Transition | When | Effect |
+| --- | --- | --- |
+| `active → stale` | unused for `stale_after_days` (default 30) | Still listed and still loadable — the prefetch renders it with an ageing marker, so the agent knows. |
+| `stale → archived` | unused for `archive_after_days` (default 90) | Listings hide it and the loader refuses it. **Archived is not deleted:** the row stays readable, so restoring one is an operator edit rather than a re-synthesis. |
+| `stale → active` | the skill is used again | Revival happens in the same transaction as the use, so the skill is back in the very next Plan prefetch rather than after the curator's next tick — which on the default schedule is up to a day later. |
+
+An **archive window inside the stale window** is a misconfiguration, and taken literally it archives rows the same policy calls fresh. It is widened to the stale window instead, which is the reading both halves agree on.
+
+Skills the operator has **pinned** are exempt from every automatic transition. Nothing promotes a skill to pinned.
+
+### Being offered is being used
+
+A skill's staleness clock is its last-used stamp, and the thing that moves it is the Plan-phase prefetch **offering** the skill — not the model then loading its body.
+
+That is the honest reading of what the stamp answers. A skill rendered into the prompt *is* in the catalogue and *is* what the seat is being asked to work from; whether the model loaded the body is a question about that turn, not about the skill's currency. Keying on the load would age out every skill whose menu line was enough — which is the well-written ones.
+
+The ids follow the prompt's own character budget: a skill whose menu line did not fit was never offered, so its clock does not move. A stamp that cannot be written is announced as a telemetry failure rather than swallowed, because an operator has to see a clock that stopped **before** the curator archives a hot skill.
+
+Without this the whole catalogue ages out over a quarter while the prefetch is putting it in front of a model the entire time — and not as a slow degradation anyone notices. The menu simply gets shorter.
 
 ## Telemetry harness
 
@@ -362,7 +436,7 @@ The harness lives in:
 
 | Surface | What's tracked | Where it lands |
 |---|---|---|
-| `synthesized_skills.use_count` / `last_used_at` | Per-skill load count + most-recent-load timestamp | Bumped by `SynthesizedSkillStore.mark_used`, called from `_use_skill` after a successful resolution. |
+| `synthesized_skills.use_count` / `last_used_at` | Per-skill load count + most-recent-load timestamp | Bumped by `learning.Skills.MarkUsed`, called from the `use_skill` builtin after a successful resolution. |
 | `SkillUsed` event | One per `use_skill(name)` resolution | Published on `crewlet.events.skill_used`; correlated to the host turn via `trace_id` / `span_id`. |
 | `SkillSynthesized` / `SkillRefined` / `SkillPromoted` events | Lifecycle markers — induction, refinement, cross-agent promotion | Published on `crewlet.events.skill_*`; the dashboard groups them by trace. |
 | `PlanPrefetchSummary` event | One per turn after the Plan-phase prefetches resolve, recording per-block `hit` (bool) + `bytes` (rendered size) + the `trigger_requires_recon` gate decision. | Published on `crewlet.events.plan_prefetch_summary` once per turn. |
@@ -393,15 +467,15 @@ Every telemetry write — `mark_used`, `SkillUsed` publish, `PlanPrefetchSummary
 
 | Touchpoint | Role |
 |---|---|
-| `crewlet.agent.turn` (TurnEngine) | Emits `TurnCompleted` with plan, tool trace, review outcome, skills used. |
-| `crewlet.agent.prompts` | Plan-phase prompt builders inject conditional guidance blocks gated on tool availability. |
-| `crewlet.knowledge` | The `KnowledgeSearcher` seam (`protocol`) with its two backends — `ConfluenceSearcher` (CQL) and `PlaneSearcher` (fork page search) — backing the `## Relevant knowledge` prefetch; `accessibility` scopes it by space / project. See [Knowledge System](knowledge-system.md). |
-| `crewlet.tools` (registry) | Builtins: `query_episodes`, `reflect_and_persist`, `refresh_memory`, `refine_skill`, `use_skill`, `mark_onboarded`. |
-| `crewlet.events` | `TurnCompleted`, `SkillSynthesized`, `SkillRefined`, `SkillPromoted`, `SkillUsed`, `PersistDeciderCompleted`, `CounterpartyProfileUpdated`, `PlanPrefetchSummary`, `RelevantKnowledgeRefetched`, `CompactionRequested`. |
-| `crewlet.timescaledb` | Underpins the `episodes` hypertable + the dashboard event store. |
-| `crewlet.learning/` | `ReflectEngine`, `SkillSynthesizer`, `SkillRefiner`, `PromotionSynthesizer`, `SkillClusteringScheduler`, `EpisodeLifecycleWorker`, `PersistDecider`, `CounterpartyProfiler`, `AgentDiary`, `OnboardingMarkerStore`, `relevant_knowledge.fetch_relevant_knowledge_block`. |
-| `crewlet.config` | `learning:` block — per-role enable flag, reflection budget, promotion thresholds, lifecycle knobs. See [Configuration](../getting-started/configuration.md). |
-| `crewlet.api` | `GET /agents/{id}/memory` aggregates personal memories, episodes, counterparty profiles, and synthesized skills for the dashboard's per-agent memory view. See [API endpoints](../reference/api-endpoints.md#get-agentsidmemory). |
+| `internal/agent/turn` (TurnEngine) | Emits `turn_completed` carrying everything the reflection gates read: the plan summary and decision, the Plan and Execute tool sequences, the review outcome, the skills the prompt offered, and the inbound interactions with their senders resolved. |
+| `internal/agent/prompts` | Plan-phase prompt builders inject conditional guidance blocks gated on tool availability. |
+| `internal/knowledge` | The knowledge-search seam and its two backends — the Confluence searcher (CQL) and the Plane searcher (fork page search), one per company — backing the `## Relevant knowledge` prefetch; `accessibility` scopes it by space / project. See [Knowledge System](knowledge-system.md). |
+| `internal/tools` (registry) | Builtins: `query_episodes`, `reflect_and_persist`, `refresh_memory`, `refine_skill`, `use_skill`, `mark_onboarded`. |
+| `internal/events` | `turn_completed`, `episode_written`, `persist_decider_completed`, `counterparty_profile_updated`, `reflection_completed`, `skill_synthesized`, `skill_refined`, `skill_promoted`, `skill_used`, `skill_staled`, `skill_archived`, `skill_revived`, `skill_telemetry_write_failed`, `plan_prefetch_summary`, `relevant_knowledge_refetched`, `compaction_requested`, `compaction_completed`. |
+| `internal/store` | Holds `episodes`, `agent_diary` and the dashboard's event log, in the node's own file. |
+| `internal/learning` | The reflect dispatcher and its per-turn workers (`PersistDecider`, `Episodist`, `Profiler`, `SkillUse`, `Synthesizer`, `Refiner`), the background passes behind `Background` (episode `Lifecycle`, the skill curator, clustered synthesis, cross-agent `Promoter`), `Skills` for synthesis and refinement, `Diary`, the onboarding marker store, and the relevant-knowledge prefetch. |
+| `internal/config` | `learning:` block — per-role enable flag, reflection budget, promotion thresholds, lifecycle knobs. See [Configuration](../getting-started/configuration.md). |
+| `internal/api` | `GET /agents/{id}/memory` aggregates personal memories, episodes, counterparty profiles, and synthesized skills for the dashboard's per-agent memory view. See [API endpoints](../reference/api-endpoints.md#get-agentsidmemory). |
 
 ---
 
@@ -409,8 +483,8 @@ Every telemetry write — `mark_used`, `SkillUsed` publish, `PlanPrefetchSummary
 
 | Table | What it holds | Keyed by |
 |---|---|---|
-| `episodes` (hypertable) | One row per completed turn (raw) or per cluster (compacted) | `id`; partitioned by `started_at` |
-| `agent_diary` (pgvector) | The agent's private observation log; rows carry an `embedding` for the vector half of the `## Personal memory` prefetch's hybrid candidate selection | `id`; indexed by `agent_id`, `kind`; HNSW on `embedding` |
+| `episodes` | One row per completed turn (raw) or per cluster (compacted) | `id`; indexed by `started_at` |
+| `agent_diary` | The agent's private observation log; rows carry an `embedding` for the vector half of the `## Personal memory` prefetch's hybrid candidate selection | `id`; indexed by `agent_id`, `kind`; vector index on `embedding` where the driver offers one |
 | `synthesized_skills` | Auto-drafted skills, agent-scope | `id`; unique on `(agent_handle, name)` |
 | `synthesized_skill_versions` | Refinement history | `id`; references `skill_id` |
 | `counterparty_profiles` | One row per `(observer, subject, platform)` | composite |
@@ -449,9 +523,9 @@ That said, several Hermes design choices are directly useful and adopted above:
 
 Explicitly rejected:
 
-- **Monolithic CLI coupling** — Hermes's learning loop is threaded through `run_agent.py`; ours sits behind the `EventQueue` as its own package.
-- **LLM-nudge-only triggers** — Hermes's pipeline fires only if the model invokes the tool. Ours pairs nudges with a deterministic `ReflectEngine`.
+- **Monolithic CLI coupling** — Hermes's learning loop is threaded through its agent entry point; ours sits behind the `EventQueue` as its own package.
+- **LLM-nudge-only triggers** — Hermes's pipeline fires only if the model invokes the tool. Ours pairs nudges with a deterministic the reflect engine.
 - **Single-user `USER.md` persona** — replaced by multi-party `CounterpartyProfile` keyed by `(observer, subject, platform)`.
-- **Home-dir file storage** — replaced by Postgres + pgvector tables.
+- **Home-dir file storage** — replaced by vector-indexed tables in the engine's own store.
 - **Unversioned skill overwrites** — Crewlet keeps prior revisions for rollback.
 - **No model fine-tuning requirement** — notably, Hermes itself also runs on stock models; Crewlet's in-engine learning never touches weights.

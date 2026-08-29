@@ -651,7 +651,7 @@ fi
 if [ -n "${COMPANY:-}" ]; then
   say "Provisioning agent bots from ${COMPANY}"
   MATTERMOST_ADMIN_TOKEN="$ADMIN_TOKEN" MATTERMOST_URL="$URL" \
-    crewlet mattermost provision "$COMPANY" --env-file "$ENV_FILE"
+    crewlet mattermost provision "$COMPANY" -env-file "$ENV_FILE"
 else
   say "Skipping bot provisioning (set COMPANY=<company.yaml> to include it)"
 fi
@@ -684,7 +684,7 @@ Next:
 
   4. Start the engine — it opens one websocket per agent seat:
 
-       crewlet run config.yaml
+       crewlet run -config crewlet.yaml -company <company.yaml>
 
 Nothing needs to reach the engine from Mattermost, so no tunnel is needed.
 See docs/integrations/mattermost.md for the full walkthrough.

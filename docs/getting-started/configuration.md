@@ -2,17 +2,17 @@
 
 Crewlet companies are defined across **two tiers** — see the [Configuration concept page](../concepts/configuration.md) for the full design.
 
-- **Tier A** (`config.yaml`, restart-only): DB DSN, Pulsar URL, API host/port/auth, debug, knowledge backend.
-- **Tier B** (`company.yaml` imported into PostgreSQL, live-editable): everything else — identity, providers, integrations, MCP servers, roles, units, turn engine, learning, budgets, extensions.
+- **Tier A** (`crewlet.yaml`, restart-only): DB DSN, Pulsar URL, API host/port/auth, debug, knowledge backend.
+- **Tier B** (`company.yaml` imported into the store, live-editable): everything else — identity, providers, integrations, MCP servers, roles, units, turn engine, learning, budgets, scheduling.
 
-This page documents the **Tier B** fields below.  For Tier A see [Configuration concept page §"Tier A example"](../concepts/configuration.md#tier-a-example-configyaml).
+This page documents the **Tier B** fields below.  For Tier A see [Configuration concept page §"Tier A example"](../concepts/configuration.md#tier-a-example-crewletyaml).
 
 > **Machine-readable version.** `crewlet schema company` emits the JSON
 > Schema for everything on this page, generated from the models
 > themselves. Point your editor at it for autocomplete and typo
 > squiggles, or hand it to an AI assistant — see
 > [Authoring with an AI assistant](ai-authoring.md). Check your file with
-> `crewlet validate <file>` (add `--json` for machine-readable errors);
+> `crewlet validate <file>` (add `-json` for machine-readable errors);
 > it reads no environment, so it works before any secret is exported.
 >
 > **Unknown keys are rejected.** Every config model forbids extra
@@ -55,7 +55,7 @@ turn_engine:                            # optional — Plan/Execute/Review turn 
   plan_max_tool_rounds: 16              # max tool-call rounds within a single Plan-phase run
   onboarding_max_tool_rounds: 10        # dedicated first-turn onboarding pass before Plan (0 = disabled)
   subagent_max_turns: 20                # maximum tool rounds per spawn_subagent call
-  subagent_timeout_seconds: 120         # wall-clock timeout per sub-agent (asyncio.wait_for)
+  subagent_timeout_seconds: 120         # wall-clock timeout per sub-agent
   subagent_budget_fraction: 0.2         # fraction of parent's remaining tokens a sub-agent may consume
                                         #   (for a batched call, the TOTAL slice shared across children)
   subagent_max_parallel: 3              # max children a batched spawn_subagent runs concurrently
@@ -82,7 +82,8 @@ turn_engine:                            # optional — Plan/Execute/Review turn 
 learning:                               # optional — agent-learning subsystem
   enabled: true                         # master switch (auto-disables without DB + embeddings)
   episodic:
-    retrieval_limit: 5                  # default limit for query_episodes results (1-20)
+    retrieval_limit: 5                  # default hits query_episodes returns when the
+                                        # model names no limit (1-20)
   reflect:
     enabled: true                       # ReflectEngine + reflect_and_persist tool
     persist_decider: true               # run the post-turn PersistDecider on every turn
@@ -98,24 +99,46 @@ learning:                               # optional — agent-learning subsystem
     budget_tokens: 4000                 # soft cap on the synthesizer's LLM call
     max_skills_per_agent: 50            # hard cap; once reached the synthesizer no-ops
     duplicate_jaccard_threshold: 0.7    # reject near-duplicates of existing skills
-    # Scheduler (opt-in; drives the clustered-synthesis path)
+    # Clustered synthesis (opt-in). A fleet singleton: one node runs the tick.
     scheduler_enabled: false            # set true to enable the background tick
-    scheduler_interval_seconds: 3600    # seconds between ticks
-    cluster_window_hours: 168           # look-back window for clustering (7d)
-    cluster_min_size: 3                 # min matches to form a cluster
-    cluster_jaccard_threshold: 0.6      # similarity threshold for joining a cluster
+    scheduler_interval_seconds: 3600    # seconds between ticks. Hourly is cheap:
+                                        #   a tick is one indexed scan per seat
+                                        #   and only calls the model when a NEW
+                                        #   cluster qualified
+    cluster_window_hours: 168           # look-back window (7d). Bounds the QUIET
+                                        #   seat, whose last 200 turns can span a
+                                        #   year; episode_fetch_limit bounds the
+                                        #   busy one
+    cluster_min_size: 3                 # turns that must converge before a
+                                        #   cluster earns a skill. Two is a
+                                        #   coincidence
+    cluster_jaccard_threshold: 0.6      # similarity that pools two turns. Lower
+                                        #   than duplicate_jaccard_threshold on
+                                        #   purpose: pooling asks "same kind of
+                                        #   work", rejecting asks "same skill"
     episode_fetch_limit: 200            # max episodes pulled per agent per tick
   skill_refinement:
-    enabled: true                       # SkillRefiner + refine_skill tool
+    enabled: true                       # both halves: the post-turn refiner AND
+                                        # the refine_skill tool. false withdraws
+                                        # the tool too — they write the same rows
     auto_refine_on_success: true        # append "Observed in practice" on done
-    auto_refine_on_failure: true        # append "Counter-example" on failed/self_iterate
+    auto_refine_on_failure: true        # append "Counter-example" on failed.
+                                        # self_iterate is never refined: the turn
+                                        # is not settled yet. Both false leaves
+                                        # the refiner unbuilt
     budget_tokens: 3000                 # soft cap on the refiner's LLM call
-    max_body_chars: 20000               # skip refinement once the body reaches this size
+    max_body_chars: 20000               # a refinement whose result exceeds this
+                                        # is refused, not truncated
     max_versions_kept: 10               # history retention per skill (older pruned)
   skill_promotion:
-    enabled: true                       # cross-agent promotion pass in the scheduler
-    min_sibling_count: 3                # distinct siblings needed to promote
-    jaccard_threshold: 0.6              # similarity threshold for cross-agent clustering
+    enabled: true                       # daily cross-agent promotion pass. Needs a
+                                        #   knowledge base (integrations.confluence
+                                        #   or .plane) — a promoted skill is a draft
+                                        #   page a unit lead reviews
+    min_sibling_count: 3                # distinct SEATS that must converge. One seat
+                                        #   with four similar skills is a catalogue
+                                        #   to curate, not a team practice
+    jaccard_threshold: 0.6              # similarity that pools two seats' skills
     budget_tokens: 4000                 # soft cap on the promotion LLM call
   personal_memory:
     max_refreshes_per_turn: 3           # cap on distinct context_hint values per turn
@@ -199,7 +222,12 @@ providers:
         rate_limit_seconds: 3600        #   429 / 402 default cooldown (a Retry-After / x-ratelimit-reset
         auth_seconds: 300               #   401 / 403 default cooldown   header on the error overrides it;
                                         #   repeated auth failures on one key back off exponentially)
-      base_url: "..."                   # optional — custom endpoint (required for openai-compatible)
+                                        #   a bench is SHARED across the fleet, so a peer's 429 benches the
+                                        #   key here too — see concepts/coordination.md
+      base_url: "${LLM_BASE_URL}"       # optional — custom endpoint; supports ${ENV_VAR} references.
+                                        #   Required for openai-compatible (it has no vendor default);
+                                        #   on `openai` / `anthropic` it points the vendor's own wire
+                                        #   format at a gateway or proxy instead of the vendor host
       timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
       reasoning: false                  # optional — enable reasoning/extended thinking (default: false)
@@ -251,39 +279,93 @@ providers:
                                         #   vendor renames a flag (validated here, so a
                                         #   typo fails `crewlet validate`)
 
-  embeddings:                           # required for the agent-learning subsystem
-                                        # (agent_diary vector candidate selection AND episodes vector recall)
+  embeddings:                           # optional — similarity search for the
+                                        #   agent-learning subsystem (agent_diary
+                                        #   candidate selection AND episode recall).
+                                        #   Omit it and both fall back to recency;
+                                        #   nothing else changes.
     type: openai                        # openai | openai-compatible
-    model: text-embedding-3-small       # default — 1536 dimensions
-    api_key: "${OPENAI_API_KEY}"        # supports ${ENV_VAR} references
-    base_url: "..."                     # optional — custom endpoint
-    dimensions: 1536                    # must match the model's output dimensions
+    model: text-embedding-3-small       # required — no default, because a default
+                                        #   here would be a width the store was not
+                                        #   sized for
+    api_key: "${OPENAI_API_KEY}"        # supports ${ENV_VAR} references; empty falls
+                                        #   back to OPENAI_API_KEY, the same variable
+                                        #   the chat backend reads
+    base_url: "..."                     # optional — custom endpoint. This is the only
+                                        #   difference between `openai` and
+                                        #   `openai-compatible`, so a local embedding
+                                        #   server needs nothing else
+    dimensions: 1536                    # the vector width. Requested from the API
+                                        #   (third-generation models truncate on
+                                        #   request), and checked against what comes
+                                        #   back on every call
 ```
 
-Tier A (`config.yaml`, restart-only) provides the queue / database /
-knowledge backend.  Example:
+**The width is a contract with the store, not with the model.** Vectors of
+two different widths cannot be compared, so a row written at the wrong one is
+not a degraded search — it is a row that can be written and never read back,
+silently and permanently. Two checks follow from that, and both refuse rather
+than adapt:
+
+- **At the apply.** A revision whose `dimensions` differs from the width this
+  store already holds is rejected, with an error naming both. Changing the
+  width means re-embedding what is stored, which is a decision for an operator
+  who is watching rather than a silent divergence discovered at the first
+  recall weeks later.
+- **On every call.** A vector that comes back at the wrong width is refused
+  rather than stored — on every call and not just the first, because a
+  gateway or aggregator can move models mid-deployment.
+
+Everything else about an embedding failure is cheap: a timed-out or refused
+call is *no vector*, which every caller reads as "no similarity search this
+turn" and carries on with recency. Nothing here retries — the caller's
+degradation costs less than a retry spent inside a Plan-phase prefetch
+somebody is waiting on.
+
+Tier A (`crewlet.yaml`, restart-only) says where this node's stream, store and
+API are.  Example:
 
 ```yaml
 # config.yaml — Tier A bootstrap
-providers:
-  queue:
-    type: pulsar
-    url: "pulsar://localhost:6650"
-    # admin_url: ""                   # optional — admin HTTP endpoint; empty derives it from
-    #                                 #   `url` (pulsar://host:6650 -> http://host:8080).
-    #                                 #   Used to create and delete each seat's durable
-    #                                 #   subscription, which needs no consumer. Set it when
-    #                                 #   the admin endpoint is not on the broker's host at
-    #                                 #   the default port
-    # tenant: public                  # optional — must already exist; tenants and namespaces
-    # namespace: default              #   are never auto-created (see Deployment guide)
-    # auth_token: "${CREWLET_PULSAR_TOKEN}"   # optional — JWT for token auth; the token's role
-    #                                 #   should be granted only this engine's namespace
-    # tls_trust_certs_path: ""        # optional — CA bundle for pulsar+ssl:// URLs
-  database:
-    dsn: "postgresql://user:pass@host:5432/db"  # PostgreSQL with TimescaleDB + pgvector
-  knowledge:
-    type: pgvector
+stream:
+  type: embedded                    # a JetStream server inside this process.
+                                    #   `nats` or `pulsar` point the same slot
+                                    #   at an external one, and then need `url`
+  store_dir: "./crewlet-data/stream"  # empty = in-memory: right for a test,
+                                    #   and nothing published survives a restart
+  # url: "pulsar://localhost:6650"  # required for nats/pulsar, refused for embedded
+  # admin_url: ""                   # Pulsar only — empty derives it from `url`
+                                    #   (pulsar://host:6650 -> http://host:8080).
+                                    #   Each seat's durable subscription is created
+                                    #   over admin REST, so this must be reachable
+  # tenant: public                  # optional — must already exist; tenants and
+  # namespace: default              #   namespaces are never auto-created
+  # token: "${CREWLET_PULSAR_TOKEN}"  # JWT for token auth; grant its role only
+                                    #   this engine's namespace
+  # tls_trust_certs: ""             # CA bundle for pulsar+ssl:// URLs (Pulsar only)
+  # credentials: ""                 # path to a NATS credentials file (nats only)
+  # tls:                            # nats only — the transport under that auth.
+  #   ca: /etc/crewlet/ca.pem       #   a private CA to trust; empty = host roots
+  #   cert: /etc/crewlet/client.pem #   the CLIENT certificate, for a broker
+  #   key: /etc/crewlet/client.key  #   configured `tls { verify: true }`.
+                                    #   Both or neither — half a keypair is
+                                    #   refused at validation
+
+store:
+  path: "./crewlet-data/company.db"   # ONE file, owned exclusively by this
+                                    #   process. Not a shared database, and no
+                                    #   DSN: two engines on one file corrupt it
+
+coordination:
+  type: local                       # one node holding its own seat leases;
+                                    #   a fleet needs `embedded-kv`
+  # nats:                           # only for a PULSAR stream, which cannot
+  #   url: "nats://leases:4222"     #   hold leases: the estate that does
+  #   tls:                          #   takes the same three fields as the
+  #     ca: /etc/crewlet/ca.pem     #   stream's block above, because it is a
+  #     cert: /etc/crewlet/client.pem  #   separate connection to a separate
+  #     key: /etc/crewlet/client.key   #   broker
+
 api:
   host: "0.0.0.0"
   port: 8000
@@ -294,11 +376,10 @@ api:
 debug: false
 ```
 
-The event store (LLM observability) lives in the same PostgreSQL instance as
-the rest of Crewlet's state, backed by a TimescaleDB hypertable.  The
-migration runner creates the `crewlet_events` hypertable on startup — no extra
-config is needed beyond `providers.database.dsn`.  See
-[Deployment → TimescaleDB Event Store](../guides/deployment.md#timescaledb-event-store)
+The event store (LLM observability) is a table in that same file, created by
+the engine's own migrations on first start — there is nothing to configure
+beyond `store.path`.  See
+[Deployment → The event store](../guides/deployment.md#the-event-store)
 for the full layout.
 
 ---
@@ -341,12 +422,13 @@ units:
         lead: Tech Lead                 # optional — inherited from parent if omitted
         goals:                          # optional
           - "Ship features on 2-week cadence"
-        integrations:                   # optional — the unit's Atlassian "home" identity
-          jira:                          #   (webhook routing + write home; NOT read scope,
+        channel: backend                # optional — the team's chat channel, inherited
+        integrations:                   # optional — the unit's tracker "home" identity
+          plane:                         #   (webhook routing + write home; NOT read scope,
             project: "BACK"              #    NOT an MCP credential)
         mcp_env:                        # optional — per-agent MCP creds, inherited by roles
-          atlassian:                     #   (real tool credentials only; Slack transport
-            JIRA_API_TOKEN: "${BACK_JIRA_TOKEN}"  #   is per-agent)
+          atlassian:                     #   (real tool credentials only; the chat transport
+            JIRA_API_TOKEN: "${BACK_JIRA_TOKEN}"  #   identity is per-agent)
         roles:
           - name: Tech Lead             # required — unique agent identity
             goal: "..."                 # optional — individual mission
@@ -361,16 +443,16 @@ units:
             behavioral_guidelines:      # optional
               - "Be thorough in code reviews"
             integrations:               # optional — per-agent transport identity
-              slack:
-                bot_token: "${SLACK_BOT_TOKEN_TL}"
-                signing_secret: "${SLACK_SIGNING_SECRET_TL}"
-                channel: C0123456789    # optional — default channel
+              mattermost:
+                bot_token: "${MATTERMOST_BOT_TOKEN_TL}"
+                username: tl-bot        # optional — the bot's Mattermost username
+                channel: backend        # optional — default channel
             mcp_env:                    # optional — per-agent MCP server credentials
               atlassian:
                 JIRA_USERNAME: "${TL_JIRA_USER}"
                 JIRA_API_TOKEN: "${TL_JIRA_TOKEN}"
-              slack:
-                SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_TL}"   # same token as role.integrations.slack
+              mattermost:
+                MATTERMOST_TOKEN: "${MATTERMOST_BOT_TOKEN_TL}"  # same token as role.integrations.mattermost
               github:
                 Authorization: "Bearer ${GITHUB_TOKEN_TL}"
 ```
@@ -396,11 +478,11 @@ units:
 | `responsibilities` | list[string] | no | Role responsibilities |
 | `behavioral_guidelines` | list[string] | no | Behavioral rules |
 | `mcp_env` | dict | no | Per-agent MCP server credentials, keyed by server name — env vars for `stdio` servers, HTTP headers for `http` servers (e.g. `atlassian.JIRA_USERNAME` / `atlassian.JIRA_API_TOKEN`, `confluence.CONFLUENCE_USERNAME` / `confluence.CONFLUENCE_API_TOKEN`, `slack.SLACK_MCP_XOXB_TOKEN`, `mattermost.MATTERMOST_TOKEN`, `github.Authorization: "Bearer …"`, `plane.PLANE_API_KEY`). The per-agent tool-credential surface only — scope a server via its own filter (`JIRA_PROJECTS_FILTER` / `CONFLUENCE_SPACES_FILTER`) if needed. The unit's Jira project / Confluence space / Plane project identity lives under `integrations` (below), not here |
-| `integrations.slack` | dict | no | Per-agent Slack **transport** identity (`bot_token`, `signing_secret`, optional `channel`). The same bot token is also named as `mcp_env.slack.SLACK_MCP_XOXB_TOKEN` for the Slack MCP subprocess |
+| `integrations.slack` | dict | no | This seat's own Slack app: `bot_token`, `signing_secret`, optional `channel`. **Both credentials are required together** — without the token the seat receives messages it cannot answer, without the secret its route answers 503 while the app's settings page reports a healthy request URL. `crewlet slack provision` mints both into the `${VAR}`s these fields point at |
 | `integrations.mattermost` | dict | no | Per-agent Mattermost **transport** identity (`bot_token`, optional `username`, optional `channel`). One credential, three readers: the same token is named as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess, and the inbound websocket for this seat authenticates with it too |
-| `integrations.jira.project` | string | no | **Authored on a unit or root-level role** (→ `OrgUnit.jira_project` / `Role.jira_project`). The team's Jira project as integration identity: inbound Jira activity with no better recipient routes to the unit lead, and it's the team's write home. **Not** an MCP credential, and it does **not** scope knowledge reads |
-| `integrations.confluence.space` | string | no | **Authored on a unit or root-level role** (→ `OrgUnit.confluence_space` / `Role.confluence_space`). The team's Confluence space as integration identity: inbound Confluence activity with no better recipient routes to the unit lead, and it's the team's write / skill-promotion home. **Not** an MCP credential, and it does **not** scope knowledge reads — read scope is the org-wide `knowledge.confluence_spaces` only |
-| `integrations.plane.project` | string | no | **Authored on a unit or root-level role** (→ `OrgUnit.plane_project` / `Role.plane_project`). The team's Plane project as integration identity: inbound Plane activity with no better recipient (unassigned work items, intake triage, page events) routes to the unit lead, and it's the project the team files work under. **Not** an MCP credential, and it does **not** scope knowledge reads — read scope is the org-wide `knowledge.plane_projects` only |
+| `integrations.jira.project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.JiraProject` / `org.Role.JiraProject`). The team's Jira project as integration identity: an issue that names nobody in the org chart routes to the unit lead, and it is the project the team files work under. **Not** an MCP credential, and it does **not** scope knowledge reads |
+| `integrations.confluence.space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.ConfluenceSpace` / `org.Role.ConfluenceSpace`). The team's Confluence space as integration identity: a page change that names nobody routes to the unit lead, and it is where the team writes. It does **not** scope reads — read scope is the org-wide `knowledge.confluence_spaces` only |
+| `integrations.plane.project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.PlaneProject` / `org.Role.PlaneProject`). The team's Plane project as integration identity: inbound Plane activity with no better recipient (unassigned work items, intake triage, page events) routes to the unit lead, and it's the project the team files work under. **Not** an MCP credential, and it does **not** scope knowledge reads — read scope is the org-wide `knowledge.plane_projects` only |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
 
 ### Schedules
@@ -450,25 +532,30 @@ units:
 
 ## Integrations
 
-Inbound / notification integrations live under a single `integrations:` block — admin credentials, webhook secrets, the Forge app id, the Slack transport marker, and outbound `transports`. These carry only **non-tool** config; the MCP **tool** servers are declared in [`mcp_servers`](#mcp-servers), and each agent's per-server credentials live in `role.mcp_env`. It's the inbound mirror of `mcp_servers` (outbound tool actions).
+Inbound / notification integrations live under a single `integrations:` block — admin credentials, webhook secrets, and outbound `transports`. These carry only **non-tool** config; the MCP **tool** servers are declared in [`mcp_servers`](#mcp-servers), and each agent's per-server credentials live in `role.mcp_env`. It's the inbound mirror of `mcp_servers` (outbound tool actions).
 
 ```yaml
 integrations:
-  forge_app_id: "ari:cloud:ecosystem::app/your-forge-app-id"
+  forge_app_id: "ari:cloud:ecosystem::app/your-forge-app-id"   # Jira Cloud's delivery path
 
   jira:
-    url: "${JIRA_URL}"                    # Jira instance URL
-    token: "${JIRA_API_TOKEN}"            # API token (admin/service account)
-    email: "${JIRA_EMAIL}"                # Cloud only — admin email for Basic Auth
+    url: "${JIRA_URL}"                    # a Data Center instance, or a Cloud site
+    # cloud_id: "${JIRA_CLOUD_ID}"        # an Atlassian Cloud id — give this OR url
+    # site_url: "https://acme.atlassian.net"  # with cloud_id: the base for links people open
+    token: "${JIRA_API_TOKEN}"            # API token (org read account)
+    email: "${JIRA_EMAIL}"                # Cloud only — the account's email, for Basic auth
     webhook_secret: "${JIRA_WEBHOOK_SECRET}"  # Data Center only — HMAC-SHA256 secret
 
-  confluence:
-    url: "${CONFLUENCE_URL}"              # Confluence instance URL (Cloud or Data Center)
-    token: "${CONFLUENCE_API_TOKEN}"      # API token (admin/service account)
-    email: "${CONFLUENCE_EMAIL}"          # Cloud only — admin email for Basic Auth
+  confluence:                            # the knowledge base (Plane XOR Confluence)
+    url: "${CONFLUENCE_URL}"              # a Data Center instance, or a Cloud site
+    # cloud_id: "${CONFLUENCE_CLOUD_ID}"  # an Atlassian Cloud id — give this OR url
+    # site_url: "https://acme.atlassian.net"  # with cloud_id: the base for links people open
+    token: "${CONFLUENCE_API_TOKEN}"      # API token (org read account)
+    email: "${CONFLUENCE_EMAIL}"          # Cloud only — the account's email, for Basic auth
     webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"  # Data Center only — HMAC-SHA256 secret
+    skills_space: TS                      # tool-skill pages; excluded from routing and search
 
-  slack:                                 # enables the outbound Slack transport
+  slack:                                 # per-seat apps live on each role
     typing_status: addressed             # working indicator: addressed (default) | always | off
     status_phrases:                      # optional — replaces the built-in wording, per phase
       plan: ["is nimbusing...", "is thinking very hard..."]
@@ -483,7 +570,13 @@ integrations:
 
   github:
     enabled: true
+    # url:  "https://github.example.com"       # Enterprise Server; omit for github.com
     webhook_secret: "${GITHUB_WEBHOOK_SECRET}"   # HMAC-SHA256 secret (required when enabled)
+    token: "${GITHUB_ENGINE_TOKEN}"              # read credential for participant fan-out
+    provisioning:                                # read only by `crewlet github provision`
+      org: nimbus                                #   (organization holding the repositories)
+      repos: [nimbus/api, nimbus/web]            #   (extra owner/repo entries to hook)
+      org_webhook: auto                          #   auto | true | false
 
   gitlab:
     enabled: true
@@ -504,26 +597,27 @@ integrations:
       projects: [LEAD, ENG, PROD, TS]            #   (projects every agent seat joins)
 ```
 
-- **`forge_app_id`** — verifies the Forge Invocation Token (FIT) on Cloud webhooks against Atlassian's JWKS; the `aud` claim must match. Required when using the Forge app.
-- **`jira` / `confluence`** — admin/service account for watcher lookups + webhook routing. They share a single `atlassian` MCP server — declare it once under [`mcp_servers`](#mcp-servers) and set both `JIRA_URL` and `CONFLUENCE_URL` in its `env`. See [Confluence Integration](../integrations/confluence.md).
-- **`slack`** — enables the Slack transport; per-agent Slack identity lives on each role's `integrations.slack` block (`bot_token`, `signing_secret`), with the same bot token named as `mcp_env.slack.SLACK_MCP_XOXB_TOKEN` for the Slack MCP. `slack: {}` (no keys) is still a valid enable-marker. Its org-wide settings are the working indicator an agent shows while it reasons about a Slack message: **`typing_status`** — `addressed` (default — DMs, direct `@mentions`, followed threads), `always` (every Slack-triggered turn), or `off` — and **`status_phrases`**, which replaces the words it shows. Each phase draws one line from its own pool (*is crewleting…*, *is cracking on…*, *is marking its own homework…*); list your own under `onboarding` / `plan` / `execute` / `review` to rebrand them, and any phase you omit keeps the built-in pool. Keep phrases generic to the phase — the pick is arbitrary, so anything specific enough to read as a report of actual work ("is checking Jira…") is usually false when it shows. Uses the `chat:write` scope agents already hold. See [Slack § Working Status](../integrations/slack.md#working-status-is-thinking).
-- **`mattermost`** — the self-hosted chat backend, and the one integration that is **both** inbound and outbound: enabling it starts the outbound transport *and* the websocket fleet that holds one connection per agent seat (Mattermost has no usable inbound webhook, so nothing has to reach the engine — no public URL, no tunnel). `url` and `team` are both **required** when enabled. Per-agent identity lives on each role's `integrations.mattermost.bot_token`, named again as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess. **`typing_status`** takes the same `off` / `addressed` / `always` values as Slack's but defaults to `off`, and there is deliberately no `status_phrases`: Mattermost renders a fixed client-side indicator with no API for the text. The `provisioning:` sub-block is read only by [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision), not the engine. Slack and Mattermost may run side by side. See [Mattermost Integration](../integrations/mattermost.md).
-- **`github`** — webhook config; the GitHub MCP server is an [`mcp_servers`](#mcp-servers) `http` entry and each agent's token goes in `role.mcp_env.github.Authorization` as a `Bearer` header. See [GitHub Integration](../integrations/github.md).
+- **`forge_app_id`** — verifies the Forge Invocation Token (FIT) on Cloud webhooks against Atlassian's JWKS; the `aud` claim must match. Required when Jira Cloud delivers through the Forge app.
+- **`jira`** — the Atlassian tracker, served end to end. Give `url` **or** `cloud_id`, never both — they are two ways to name one instance and `crewlet validate` refuses the ambiguity. `token` is the org read account (an issue's watchers are the one routing input a webhook never carries); `email` switches authentication to Cloud's Basic scheme; `site_url` is the human base for links when the instance is named by a cloud id. `webhook_secret` is **required for Data Center** and unused on Cloud, whose events arrive through the Forge app instead. Each seat's own credential lives in `mcp_env.atlassian` (or `mcp_env.jira`) and is what the engine resolves its account id from — see [Jira](../integrations/jira.md).
+- **`confluence`** — the knowledge base, and the **query-time search** behind every Plan phase's "Relevant knowledge" block. Same address rule as `jira`: `url` **or** `cloud_id`, never both. `token` is the org read account a seat with no Confluence credential of its own searches under; a seat WITH one searches as itself and Confluence enforces its page permissions natively. `webhook_secret` is required for Data Center and unused on Cloud. The knowledge backend is **single-homed** — `confluence` and an enabled `plane` together are refused, because two searchers would make an agent's answer to "what do we already know about this" depend on which one was asked. Scope reads with `knowledge.confluence_spaces`; publish with [`crewlet confluence import`](../reference/cli.md#crewlet-confluence-import). See [Confluence](../integrations/confluence.md).
+- **`slack`** — the hosted chat backend. The org-level block carries **no credentials at all**: Slack gives each agent its OWN app, so the token and signing secret live on each role's `integrations.slack`, and this block holds only the working-indicator settings. **`typing_status`** takes `off` / `addressed` / `always` and defaults to `addressed` — the opposite of Mattermost's default, because Slack's indicator renders TEXT and a phase change is something the person waiting can actually read, which is also what makes `status_phrases` worth having here. Inbound events arrive per seat at `/webhooks/slack/{handle}`, verified against that seat's own signing secret. Provision with [`crewlet slack provision`](../reference/cli.md#crewlet-slack-provision). See [Slack Integration](../integrations/slack.md).
+- **`mattermost`** — the self-hosted chat backend, and the one integration that is **both** inbound and outbound: enabling it starts the outbound transport *and* the websocket fleet that holds one connection per agent seat (Mattermost has no usable inbound webhook, so nothing has to reach the engine — no public URL, no tunnel). `url` and `team` are both **required** when enabled. Per-agent identity lives on each role's `integrations.mattermost.bot_token`, named again as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess. **`typing_status`** takes `off` / `addressed` / `always` and defaults to `off`, and there is deliberately no `status_phrases`: Mattermost renders a fixed client-side indicator with no API for the text. The `provisioning:` sub-block is read only by [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision), not the engine. A company may run Mattermost and Slack together — they are different workspaces with different people in them, and an org migrating from one to the other runs both for a while. See [Mattermost Integration](../integrations/mattermost.md).
+- **`github`** — the hosted code host, served end to end. `url` is **optional**: leave it unset for github.com, whose API lives on a different host rather than a path on the web UI, and name an Enterprise Server there — the REST base is derived either way. `webhook_secret` is **required** when enabled, and takes any string (GitHub signs with it verbatim, so unlike GitLab's there is no shape to get wrong). The optional `token` is a read credential for **participant fan-out** — a payload carries the author, assignees and requested reviewers but not who has commented or reviewed — and it is what `crewlet github provision` registers webhooks with. Each seat's own credential lives in `mcp_env.github` and is what the engine resolves its login from; a human seat is reached by `contact.github_login` instead. The `provisioning:` sub-block is read only by [`crewlet github provision`](../reference/cli.md#crewlet-github-provision): `org_webhook: auto` takes one organization-level hook where the credential may (covering repositories created later) and falls back to one per repository where it may not. A company may run GitHub and GitLab together — they are two hosts with different repositories on them. See [GitHub Integration](../integrations/github.md).
 - **`gitlab`** — webhook config + boot-time identity resolution. `url` and `signing_secret` are both **required** when enabled — inbound webhooks are verified by the GitLab 19.1+ signing-token HMAC only (the plain `X-Gitlab-Token` scheme is unsupported; self-managed < 19.1 is not supported). The optional `token` (a read-only PAT; the provisioner mints a dedicated `crewlet-engine` account for it) enables **participants-based routing** — comments and state changes reach everyone participating in the issue/MR, not just assignees and mentioned users. The GitLab MCP server is a `shared: false` [`mcp_servers`](#mcp-servers) entry — by default the official `glab mcp serve` (stdio, spawned per-role by the engine, no separate server) — and each agent's service-account PAT goes in `role.mcp_env.gitlab.GITLAB_TOKEN`. The `provisioning:` sub-block is read only by `crewlet gitlab provision`, not the engine. See [GitLab Integration](../integrations/gitlab.md).
-- **`plane`** — webhook config + routing enrichment + boot-time identity resolution for the self-hosted [Plane fork](../integrations/plane.md). `url`, `workspace`, and `webhook_secret` are all **required** when enabled — inbound webhooks are verified by the `X-Plane-Signature` HMAC (Plane's only scheme; the secret is generated *by* Plane at webhook creation). The optional `token` (an engine read credential; the provisioner mints a dedicated `crewlet-engine` service account for it) enables **subscriber fan-out** and project-name resolution — without it, thread activity degrades to payload assignees and lead-fallback routing degrades after restarts. The Plane MCP server is a `shared: false` [`mcp_servers`](#mcp-servers) entry (official `plane-mcp-server`, stdio) and each agent's service-account token goes in `role.mcp_env.plane.PLANE_API_KEY`. The `provisioning:` sub-block is read only by [`crewlet plane provision`](../reference/cli.md#crewlet-plane-provision), not the engine. **Mutually exclusive with `integrations.confluence`** when enabled — the knowledge backend is single-homed (Jira + Plane may coexist). See [Plane Integration](../integrations/plane.md).
-- **`transports`** — outbound delivery transports (e.g. `email`). The Jira/Confluence/Slack/Mattermost/Plane transports are auto-derived from the sections above; this list adds any others.
+- **`plane`** — webhook config + routing enrichment + boot-time identity resolution for the self-hosted [Plane fork](../integrations/plane.md). `url`, `workspace`, and `webhook_secret` are all **required** when enabled — inbound webhooks are verified by the `X-Plane-Signature` HMAC (Plane's only scheme; the secret is generated *by* Plane at webhook creation). The optional `token` (an engine read credential; the provisioner mints a dedicated `crewlet-engine` service account for it) enables **subscriber fan-out** and project-name resolution — without it, thread activity degrades to payload assignees and lead-fallback routing degrades after restarts. The Plane MCP server is a `shared: false` [`mcp_servers`](#mcp-servers) entry (official `plane-mcp-server`, stdio) and each agent's service-account token goes in `role.mcp_env.plane.PLANE_API_KEY`. The `provisioning:` sub-block is read only by [`crewlet plane provision`](../reference/cli.md#crewlet-plane-provision), not the engine. The knowledge backend is single-homed, so an enabled `plane` and a `confluence` block together are refused — a migration between them is a cut-over, not an overlap. A company may run Plane and Jira together — they are separate trackers, each routing its own webhooks by its own project identity. See [Plane Integration](../integrations/plane.md).
+- **`transports`** — outbound delivery transports (e.g. `email`). The Mattermost, GitLab and Plane transports are auto-derived from the sections above; this list adds any others. Jira is inbound-only by design and has no transport: an agent's writes to an issue go through its own MCP tools under its own credential, never through the engine. Confluence is inbound-only for the same reason — a page an agent writes is written by its own MCP tools. Slack is the exception among the chat backends: its transport is per seat, derived from each role's own app credentials rather than from an org-level block, so it is not listed here either.
 
 ## Knowledge
 
 ```yaml
 knowledge:
-  confluence_spaces: ["HANDBOOK"]        # org-wide spaces every agent can search (optional)
-  plane_projects: []                     # Plane analog (requires integrations.plane enabled)
+  plane_projects: ["ENG", "HANDBOOK"]    # org-wide projects every agent can search (optional)
+  confluence_spaces: ["ENG", "HANDBOOK"] # org-wide spaces every agent can search (optional)
 ```
 
-Org-wide Confluence spaces visible to every agent — this list is the **entire** read scope for the Plan-phase `## Relevant knowledge` search. A unit's `integrations.confluence.space` is integration identity (webhook routing + write home), **not** read scope, so per-team spaces are *not* unioned in here. **Optional:** leave it unset and an agent with its own Confluence credentials searches *unscoped*, letting Confluence's page ACLs bound the results; a credential-less (admin-fallback) agent then searches nothing. Set spaces to *focus* the search or to scope admin-fallback agents. See [Knowledge System](../concepts/knowledge-system.md).
+`knowledge.plane_projects` is the org-wide read scope: [Plane](../integrations/plane.md) project identifiers, materialised onto `org.Organization.PlaneProjects` and consumed by the query-time the Plane searcher ([Plane § Knowledge scope](../integrations/plane.md#knowledge-scope) — note the per-seat project-membership precondition). This list is the **entire** read scope for the Plan-phase `## Relevant knowledge` search. A unit's `integrations.plane.project` is integration identity (webhook routing + write home), **not** read scope, so per-team projects are *not* unioned in here. **Optional:** leave it unset and an agent with its own Plane credentials searches *unscoped*, letting Plane's own ACLs bound the results. Set projects to *focus* the search. It requires an enabled `integrations.plane` — a read scope for a backend that is off narrows nothing. See [Knowledge System](../concepts/knowledge-system.md).
 
-`knowledge.plane_projects` is the [Plane](../integrations/plane.md) analog — org-wide Plane project identifiers, materialised onto `Organization.plane_projects` and consumed by the query-time `PlaneSearcher` ([Plane § Knowledge scope](../integrations/plane.md#knowledge-scope) — note the per-seat project-membership precondition). The knowledge backend is **single-homed**: `plane_projects` requires an enabled `integrations.plane`, is rejected alongside `integrations.confluence`, and `confluence_spaces` is likewise rejected when Plane is enabled.
+`knowledge.confluence_spaces` is the same scope for the other backend: [Confluence](../integrations/confluence.md) space keys, materialised onto `org.Organization.ConfluenceSpaces` and read by the Confluence searcher. It requires an `integrations.confluence` block — a read scope for a backend that is not there narrows nothing while reading as though it does. **Optional:** leave it unset and a seat holding its own Confluence credential searches *unscoped*, bounded by that account's own page permissions; a seat with no credential of its own falls back to the org token and is **only** searched under a scope, because an unscoped search on the shared credential is how one seat reads a page its own account never could. The two lists are mutually exclusive in practice: the knowledge backend is single-homed, so `plane_projects` and `confluence_spaces` can never both be live.
 
 ---
 
@@ -587,21 +681,6 @@ Both deadlines therefore always apply.
 
 A server that exceeds either deadline is logged and skipped; the rest of
 the company still starts.
-
----
-
-## Extensions
-
-```yaml
-extensions:
-  - my_metrics_extension:          # module path resolved by the loader;
-      export: prometheus           #   settings are passed to the constructor
-```
-
-Each entry names an extension module and its settings — see
-[Extensions](../guides/extensions.md) for the loader contract and the hook
-surface. (The REST API is not an extension; run it embedded via `api.port`
-or on its own node via `crewlet run --roles ingress`.)
 
 ---
 

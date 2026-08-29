@@ -1,255 +1,222 @@
-name: CI
+name: ci
+
+# CI for the engine. The Go tree IS the repository, so this runs on
+# everything rather than on a path filter: a path list on a repository-wide
+# workflow is a way to skip the build for exactly the change nobody thought
+# of.
 
 on:
   push:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+env:
+  # The module pins its own toolchain in go.mod; auto lets the setup-go
+  # toolchain fetch it rather than failing on a mismatch.
+  GOTOOLCHAIN: auto
+
 jobs:
-  lint:
-    # Deliberately NOT matrixed over interpreters. Ruff is a self-contained
-    # binary that reads the Python it targets from `tool.ruff.target-version`
-    # in pyproject.toml, not from the interpreter running it, so a second job
-    # would re-run the same analysis and reach the same answer.
+  build:
+    name: build + vet
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
-          python-version: "3.12"
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-      - name: Ruff check
-        run: ruff check src/ tests/
-      - name: Ruff format check
-        run: ruff format --check src/ tests/
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go build ./...
+      - run: go vet ./...
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed:"; echo "$unformatted"; exit 1
+          fi
 
   test:
+    name: test (race)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # Every interpreter the package advertises a classifier for. Adding one
-        # here and to the classifiers in pyproject.toml is the same change.
-        python-version: ["3.12", "3.13"]
-    services:
-      # The storage contract suites are parameterised over three backends: the
-      # memory twin, a SQL fake, and a REAL PostgreSQL — and the third one only
-      # appears when CREWLET_TEST_DSN is set. Without this service every one of
-      # those cases skipped here, silently, which is exactly the failure mode
-      # CONTRIBUTING warns about ("a skip is not a pass"): the fake can confirm
-      # that SQL means what its author thought, but only a server rejects a
-      # statement it cannot parse. Leases, the config plane, the completion
-      # ledger, budgets, webhook dedupe, rate limits and A2A channels are all
-      # SQL, and all of them coordinate a fleet.
-      #
-      # Same image as the bundled docker-compose.yml, which is where its
-      # version is pinned and where Dependabot proposes the pg major — service
-      # images in a workflow are not a surface Dependabot watches, so tracking
-      # compose keeps one source of truth rather than adding an unwatched one.
-      postgres:
-        image: timescale/timescaledb:latest-pg18
-        env:
-          POSTGRES_USER: crewlet
-          POSTGRES_PASSWORD: crewlet
-          POSTGRES_DB: crewlet
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U crewlet"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-    env:
-      CREWLET_TEST_DSN: postgresql://crewlet:crewlet@localhost:5432/crewlet
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: pip install -e ".[dev,all]"
-      - name: Apply database migrations
-        # The pgvector columns bake their width into the DDL and the sequence
-        # is forward-only, so the migrator refuses to guess one: without a
-        # width it stops before them and everything after stays pending. Any
-        # width works for the suite — the tests exercise the SQL, not the
-        # embeddings — so this names the model default from config.py.
-        run: |
-          python - <<'PY'
-          import asyncio
-          import os
-
-          from crewlet.db.client import Database
-          from crewlet.db.migrator import migrate
-
-
-          async def main() -> None:
-              db = await Database.connect(os.environ["CREWLET_TEST_DSN"])
-              try:
-                  applied = await migrate(
-                      db, template_vars={"embedding_dimensions": "1536"}
-                  )
-              finally:
-                  await db.close()
-              print(f"applied {len(applied)} migrations")
-
-
-          asyncio.run(main())
-          PY
-      - name: Start Pulsar
-        # A service container cannot supply the command a standalone broker
-        # needs, so it is a plain `docker run` — the runner ships Docker.
-        # Image, command and JVM cap all mirror the compose service, which
-        # is where they are pinned and explained; neither a service image nor
-        # a `docker run` reference is a surface Dependabot watches, so
-        # tracking compose keeps one source of truth.
-        #
-        # What this unskips is the part of the design that is a claim ABOUT
-        # the broker: that a close-driven handoff returns a seat's mail at
-        # `redeliveryCount` 0, that the cursor survives a change of owner,
-        # that a wedged consumer holds its prefetch for the ack timeout.
-        # The memory twin models all three, and a twin agreeing with itself
-        # proves nothing about Pulsar.
-        #
-        # The two PULSAR_PREFIX settings are the reason this goes through
-        # `apply-config-from-env.py` rather than running the binary
-        # straight, and they are not optional. `brokerDeleteInactiveTopics`
-        # ships ON with a 60 s sweep, and a suite that takes minutes has
-        # idle topics in it; compose disables it because it was OBSERVED
-        # deleting a test topic. Its default mode spares a topic that still
-        # has a subscription, which is what makes the hazard intermittent
-        # rather than certain — the worst kind to leave in CI. Expiry is
-        # already 0 by default and pinned anyway, for the reason compose
-        # gives: between owners a seat's inbox has no connected consumer,
-        # and the retained backlog IS how an unowned seat keeps its mail.
-        run: |
-          docker run -d --name pulsar \
-            -p 6650:6650 -p 8080:8080 \
-            -e PULSAR_MEM="-Xms512m -Xmx1g -XX:MaxDirectMemorySize=512m" \
-            -e PULSAR_PREFIX_subscriptionExpirationTimeMinutes=0 \
-            -e PULSAR_PREFIX_brokerDeleteInactiveTopicsEnabled=false \
-            apachepulsar/pulsar:latest \
-            bash -c "bin/apply-config-from-env.py conf/standalone.conf && \
-                     exec bin/pulsar standalone --no-functions-worker --no-stream-storage"
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:8080/admin/v2/clusters >/dev/null; then
-              echo "broker ready after ${i}s"; exit 0
-            fi
-            sleep 1
-          done
-          echo "::error::Pulsar did not become ready"; docker logs pulsar; exit 1
-      - name: Ensure shellcheck is present
-        # The repo's dev-loop bootstrap scripts are shell, and their lint
-        # test skips silently without it — the last remaining skip in the
-        # suite. The runner image normally ships it, so this only installs
-        # when it does not, and never fails the build for it: a missing
-        # linter costs the skip it always cost, not the run.
-        run: |
-          command -v shellcheck && exit 0
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends shellcheck || \
-            echo "::warning::shellcheck unavailable — its suite will skip"
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: Ensure node is present
-        # The dashboard's 300-odd tests run under plain `node` — no
-        # package.json, no node_modules, no runner. Nothing in this
-        # workflow declared that dependency: it worked only because the
-        # Ubuntu image happens to ship a node, and the day it stops, every
-        # dashboard suite becomes a skip and the build stays green. That
-        # is the dashboard's ONLY coverage, so unlike shellcheck above,
-        # this one fails rather than warning — and the wrapper
-        # (tests/test_dashboard/test_dashboard_js.py) fails too if it is
-        # still missing after this, so neither guard depends on the other.
+        # Gate G5 runs the dashboard's ~350 JavaScript assertions against the
+        # tree this binary embeds, under plain `node` — no package.json, no
+        # node_modules, no runner. That is the dashboard's ONLY coverage, and
+        # without node the gate skips and the build stays green, so this step
+        # fails rather than warning.
         #
-        # The version is recorded rather than pinned. The suites use ES
-        # modules and `node:assert` and nothing else, so a major bump is
-        # not a risk worth a setup action; what IS worth having is the
-        # number in the log, so "it broke on the new image" is a diff
-        # rather than a theory.
+        # The version is recorded rather than pinned: the suites use ES
+        # modules and `node:assert` and nothing else, so a major bump is not
+        # a risk worth a setup action; what IS worth having is the number in
+        # the log, so "it broke on the new image" is a diff rather than a
+        # theory. TestTheGoWorkflowDeclaresItsNodeDependency asserts this step
+        # is still here.
         run: |
           command -v node || {
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends nodejs
           }
           echo "node $(node --version)"
-      - name: Run tests
-        run: python -m pytest
+      # The race detector is not optional here: the engine's whole
+      # concurrency model changed from one cooperative event loop to real
+      # parallelism, so every "atomic because asyncio" assumption the
+      # Python code made is a potential data race in the port.
+      - run: go test ./... -race -count=1
 
-  package:
-    # The same build the release workflow runs, on every pull request. Packaging
-    # breaks are otherwise invisible until the tag that publishes them, and a
-    # bad upload to PyPI cannot be replaced — only yanked.
-    #
-    # Built once, on one interpreter, and handed to `package-install` as an
-    # artifact. The wheel is `py3-none-any`, so rebuilding it per interpreter
-    # would produce the same bytes — and would mean each install check verified
-    # a *different* build instead of the one artifact a release would ship.
+  gates:
+    name: end-to-end gates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
-          python-version: "3.12"
-      - name: Install build tooling
-        run: python -m pip install --upgrade build twine
-      - name: Build sdist and wheel
-        # Builds the wheel from the sdist, so anything missing from the sdist
-        # fails here rather than shipping a wheel nobody can rebuild.
-        run: python -m build
-      - name: Check distribution metadata
-        run: python -m twine check --strict dist/*
-      - uses: actions/upload-artifact@v7
-        with:
-          name: ci-distributions
-          path: dist/
-          if-no-files-found: error
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      # internal/e2e runs a real engine, a real broker and the real API, then
+      # replays the frames its socket produced through the dashboard's own
+      # store.js. Both halves of the wire protocol are checked against each
+      # other here and nowhere else, so a missing node fails rather than skips.
+      - name: Ensure node is present
+        run: |
+          command -v node || {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends nodejs
+          }
+          echo "node $(node --version)"
+      - run: go test ./internal/e2e/... -race -count=1 -v
 
-  package-install:
-    # Install the built wheel on every interpreter the package claims to
-    # support. The `test` job covers an editable install of `[dev,all]` from the
-    # source tree; this covers what people actually get from PyPI — the wheel,
-    # with core dependencies only — resolved fresh on each interpreter.
-    needs: package
+  stores:
+    name: stores (dual driver)
     runs-on: ubuntu-latest
+    # Turso is the chosen embedded database and mainline SQLite is the
+    # certified fallback driver. Running the store contract suites
+    # against BOTH is what keeps the escape hatch real rather than
+    # theoretical, and what stops Turso-only SQL reaching the schema —
+    # Turso is currently the NARROWER dialect (see decisions/002).
     strategy:
       fail-fast: false
       matrix:
-        # Kept identical to the `test` job's matrix and to the Python
-        # classifiers in pyproject.toml; tests/test_packaging fails the build
-        # if the three ever disagree.
-        python-version: ["3.12", "3.13"]
+        driver: [turso, sqlite]
     steps:
-      # No checkout on purpose: nothing here may resolve against the source
-      # tree, or `import crewlet` could pass without the wheel providing it.
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
-          python-version: ${{ matrix.python-version }}
-      - uses: actions/download-artifact@v8
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go test ./internal/store/... -race -count=1
+        env:
+          CREWLET_STORE_DRIVER: ${{ matrix.driver }}
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
-          name: ci-distributions
-          path: dist/
-      - name: Install the wheel into a clean environment and smoke-test it
-        # Proves the console script runs and the non-Python package data
-        # (dashboard assets, SQL migrations, py.typed) shipped — the test suite
-        # runs against the source tree and cannot catch either.
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          # No working-directory: the module is the repository.
+
+  # THERE IS NO SEPARATE "integration" JOB, and that is a correction rather
+  # than an omission. One existed, running `go test ./... -tags=integration`
+  # with CREWLET_INTEGRATION=1 — and NOTHING reads either: no file carries
+  # that build tag and no code reads that variable. It was the `test` job
+  # again, at the cost of a second full race-detector run on every pull
+  # request, reported under a name that implied coverage it did not have.
+  #
+  # The suites that genuinely need a service each have their own job and
+  # their own gate: `stores` over both certified drivers, and `pulsar`
+  # against a real broker. Embedded NATS runs in-process, so the JetStream
+  # conformance and fleet suites need no container at all.
+
+  pulsar:
+    name: pulsar conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # Started here rather than in a `services:` block, which cannot do it:
+      # the apachepulsar/pulsar image has no entrypoint that starts a broker
+      # (its CMD is a shell), and `services:` accepts `options` but no
+      # command, so there is nowhere to say `bin/pulsar standalone`.
+      #
+      # The suite needs an ADMIN endpoint as well as the broker port:
+      # subscription lifecycle runs over admin REST, because creating a
+      # subscription by subscribing joins a Shared subscription a peer owns
+      # and steals its traffic (measured). A deployment without 8080 reachable
+      # is a deployment where seat mailboxes cannot be created at all.
+      #
+      # The broker is configured the way a Crewlet deployment MUST be, not the
+      # way it ships. Two reapers are on by default and both destroy the
+      # invariant seat ownership rests on — a subscription that outlives its
+      # consumer (docs/guides/fleet.md, docs/concepts/seat-ownership.md):
+      # brokerDeleteInactiveTopicsEnabled removes an idle topic outright, and
+      # subscriptionExpirationTimeMinutes deletes a subscription whose last
+      # consumer left. Certifying against a broker whose reapers would eat an
+      # unowned seat's mailbox in production is certifying the wrong broker.
+      #
+      # forceDeleteNamespaceAllowed is for the suite alone: each queue gets its
+      # own namespace (parallel subtests share subject names), and without it
+      # the cleanup cannot remove one that still holds topics.
+      #
+      # The settings are APPENDED to standalone.conf rather than passed as
+      # PULSAR_PREFIX_* env vars: the latter needs the image's
+      # apply-config-from-env.py, and a config mechanism this job cannot
+      # verify is a config mechanism that silently does nothing. Pulsar loads
+      # the file with java.util.Properties, where the last occurrence of a key
+      # wins, so appending overrides whatever the image ships.
+      #
+      # The leading `echo` is load-bearing: the shipped standalone.conf ends
+      # WITHOUT a trailing newline, so appending directly glues the first key
+      # onto compactionServiceFactoryClassName — corrupting that setting and
+      # losing this one, with the broker starting perfectly happily either way.
+      - name: start pulsar
         run: |
-          python -m venv /tmp/smoke
-          /tmp/smoke/bin/python -m pip install --upgrade pip
-          /tmp/smoke/bin/python -m pip install dist/*.whl
-          /tmp/smoke/bin/crewlet --version
-          /tmp/smoke/bin/python - <<'PY'
-          import pathlib
+          docker run -d --name pulsar \
+            -p 6650:6650 -p 8080:8080 \
+            apachepulsar/pulsar:4.0.6 \
+            sh -c "{ echo; printf '%s\n' \
+                       brokerDeleteInactiveTopicsEnabled=false \
+                       subscriptionExpirationTimeMinutes=0 \
+                       forceDeleteNamespaceAllowed=true; } >> conf/standalone.conf &&
+                   exec bin/pulsar standalone --no-functions-worker --no-stream-storage"
 
-          import crewlet
+      - name: wait for pulsar
+        run: |
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:8080/admin/v2/clusters >/dev/null; then
+              echo "broker ready after ~$((i * 2))s"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::pulsar did not become ready"; docker logs pulsar | tail -80; exit 1
 
-          root = pathlib.Path(crewlet.__file__).parent
-          missing = [
-              str(p)
-              for p in ("static/dashboard/index.html", "py.typed")
-              if not (root / p).exists()
-          ]
-          if not list((root / "db/migrations").glob("*.sql")):
-              missing.append("db/migrations/*.sql")
-          if missing:
-              raise SystemExit(f"Wheel is missing package data: {missing}")
-          print("Wheel package data is complete.")
-          PY
+      # The conformance suite SKIPS without this variable, and skipping is not
+      # passing — this job is the only place the Pulsar backend is actually
+      # certified. The timeout is generous because every subtest provisions
+      # its own namespace on a cold standalone broker.
+      - name: conformance
+        run: go test ./internal/queue/pulsar/... -race -count=1 -timeout 25m
+        env:
+          CREWLET_TEST_PULSAR_URL: pulsar://localhost:6650
+          CREWLET_TEST_PULSAR_ADMIN_URL: http://localhost:8080
+
+      - name: broker logs
+        if: failure()
+        run: docker logs pulsar | tail -200

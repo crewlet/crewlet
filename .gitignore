@@ -1,38 +1,44 @@
-__pycache__/
-*.pyc
-*.egg-info/
-dist/
-build/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.coverage
-.coverage.*
-coverage.xml
-htmlcov/
+# Build output. `crewlet` is what `go build ./cmd/crewlet` drops in the
+# working directory; dist/ is goreleaser's.
+/crewlet
+/dist/
+
+# The store is a local file this node owns exclusively, and the embedded
+# stream persists beside it. Both are per-checkout state, never committed.
 *.db
+*.db-shm
+*.db-wal
+/crewlet-data/
+/nimbus-data/
+/acme-data/
+
 .env
 # Minted-credential env files the provisioning CLIs write from the repo
 # root (.env.plane, .env.gitlab, any operator variant) — never committable.
 .env.*
 # ...except the committed template.
 !.env.example
-# Slack provisioning ledger (per-app credentials) — see docs/integrations/slack.md
+
+# The Slack provisioning ledger `crewlet slack provision` writes beside a
+# company document. It holds the app client secrets and signing secrets
+# Slack serves once, at creation, and the operator's app-configuration
+# token pair — so it is a secrets file exactly like .env, and committing
+# it publishes credentials nothing can rotate for you.
 slack-apps.json
+**/slack-apps.json
+
 # Pulsar JWT signing key + tokens the deployment guide's auth recipe lands
 # in the repo root — see docs/guides/deployment.md "Authentication". Key
 # material never belongs in git, hence the blanket *.key / *.pem too.
 pulsar-keys/
 *.key
 *.pem
+
 # Locally-pointed copies of the example company config that the integration
 # guides' local-testing recipes create (and that operators then personalize
 # with real contact IDs) — see docs/integrations/gitlab.md.
 *.local.company.yaml
-.venv/
+
 .idea/
 .vscode/
 .DS_Store
-# Library package: consumers resolve their own dependency versions, so the
-# lockfile stays local (CI installs from pyproject ranges on purpose).
-uv.lock

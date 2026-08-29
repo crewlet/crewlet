@@ -1,0 +1,133 @@
+package types
+
+import (
+	"fmt"
+
+	"github.com/crewlet/crewlet/internal/events"
+)
+
+// Agent-to-agent channels: one ask, one answer, then closed. These events are
+// the audit trail of that exchange — the delivery itself rides the target
+// seat's durable inbox, never a second in-process path.
+
+// The two WAKE types an A2A exchange puts on a seat's inbox.
+//
+// They are named here, beside the audit events, rather than spelled inline
+// where they are minted, because the completion ledger keys on them: a
+// producer and a consumer that disagree about a type name never raise — the
+// ledger simply records nothing under a name nobody looks up, and every
+// redelivery runs the turn again.
+//
+// They carry no struct because they carry no schema: the wake is a pointer at
+// a channel the recipient reads, and its payload is built by the service that
+// owns that channel. Registering an empty struct for them would put two types
+// in the decoder that nothing ever decodes.
+const (
+	// A2ARequestType wakes the TARGET of an ask.
+	A2ARequestType = "a2a_request"
+
+	// A2AMessageType wakes the REQUESTER with the answer. This hop lands
+	// on a channel that is already closed by design, so the completion
+	// ledger is the only thing standing between a redelivery and a second
+	// turn spent acting on the same answer.
+	A2AMessageType = "a2a_message"
+)
+
+func init() {
+	events.Register[A2AChannelOpened]()
+	events.Register[A2AMessageSent]()
+	events.Register[A2AMessageDelivered]()
+	events.Register[A2AChannelClosed]()
+}
+
+// A2AChannelOpened marks a channel being created between two agents.
+type A2AChannelOpened struct {
+	ChannelID    string   `json:"channel_id"`
+	Requester    string   `json:"requester"`
+	Target       string   `json:"target"`
+	Participants []string `json:"participants,omitempty"`
+}
+
+// EventType is the "a2a_channel_opened" wire type.
+func (A2AChannelOpened) EventType() string { return "a2a_channel_opened" }
+
+// Summary leads with the requester the payload names, not the resolved actor:
+// the publisher is the A2A service, and attributing the ask to it would hide
+// which colleague actually asked.
+func (e A2AChannelOpened) Summary() string {
+	return lead(e.Requester, "opened A2A channel with "+e.Target)
+}
+
+// A2AMessageSent marks a message put on an A2A channel. It is also a trigger
+// the learning subsystem normalizes into an inbound interaction, which is why
+// Sender and Content are the fields that matter downstream.
+type A2AMessageSent struct {
+	ChannelID  string `json:"channel_id"`
+	Sender     string `json:"sender"`
+	SenderRole string `json:"sender_role"`
+	Recipient  string `json:"recipient"`
+	MessageID  string `json:"message_id"`
+	Content    string `json:"content"`
+}
+
+// EventType is the "a2a_message_sent" wire type. Distinct from A2AMessageType,
+// which is the inbox WAKE — this is the audit record of the same message.
+func (A2AMessageSent) EventType() string { return "a2a_message_sent" }
+
+// SummaryFor prefers the message's own sender, for the same reason MessageSent
+// does: the publisher is the bus, not the colleague who asked.
+func (e A2AMessageSent) SummaryFor(actor string) string {
+	who := e.Sender
+	if who == "" {
+		who = actor
+	}
+	phrase := "sent A2A message on " + e.ChannelID
+	if e.Recipient != "" {
+		phrase += " → " + e.Recipient
+	}
+	return lead(who, phrase)
+}
+
+// A2AMessageDelivered marks messages being read by the target agent.
+type A2AMessageDelivered struct {
+	ChannelID          string `json:"channel_id"`
+	Recipient          string `json:"recipient"`
+	Sender             string `json:"sender"`
+	MessageCount       int    `json:"message_count"`
+	TotalContentLength int    `json:"total_content_length"`
+}
+
+// EventType is the "a2a_message_delivered" wire type.
+func (A2AMessageDelivered) EventType() string { return "a2a_message_delivered" }
+
+// Summary leads with the recipient, because delivery is something that happened
+// TO a seat: it is the read, not the send.
+func (e A2AMessageDelivered) Summary() string {
+	return lead(e.Recipient, fmt.Sprintf("received %d A2A message(s) from %s on %s",
+		e.MessageCount, e.Sender, e.ChannelID))
+}
+
+// A2AChannelClosed marks a channel closing — the exchange is over, and a
+// re-open is a new ask rather than a continued volley.
+type A2AChannelClosed struct {
+	ChannelID    string   `json:"channel_id"`
+	ClosedBy     string   `json:"closed_by"`
+	Participants []string `json:"participants,omitempty"`
+	MessageCount int      `json:"message_count"`
+	DurationMS   float64  `json:"duration_ms"`
+}
+
+// EventType is the "a2a_channel_closed" wire type.
+func (A2AChannelClosed) EventType() string { return "a2a_channel_closed" }
+
+// Summary names who closed the channel, falling back to the engine itself for
+// the idle sweep — see the branch below.
+func (e A2AChannelClosed) Summary() string {
+	who := e.ClosedBy
+	if who == "" {
+		// An idle-close is the maintenance sweep's doing, not a participant's.
+		who = "system"
+	}
+	return fmt.Sprintf("%s closed A2A channel %s (%d messages)",
+		who, e.ChannelID, e.MessageCount)
+}

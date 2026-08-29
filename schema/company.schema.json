@@ -1,1533 +1,1287 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://docs.crewlet.ai/schema/company.schema.json",
   "$defs": {
-    "CLIAgentAuthConfig": {
+    "CLIAgent": {
       "additionalProperties": false,
-      "description": "How a ``cli-agent`` provider authenticates.\n\nSee ``docs/concepts/subscription-llm-backends.md``; the login itself\nis performed by ``crewlet llm login``, not by the engine.",
-      "properties": {
-        "mode": {
-          "default": "subscription",
-          "enum": [
-            "subscription",
-            "api-key",
-            "inherit-env"
-          ],
-          "title": "Mode",
-          "type": "string"
-        },
-        "token": {
-          "default": "",
-          "title": "Token",
-          "type": "string"
-        },
-        "credential_bundle": {
-          "default": "",
-          "title": "Credential Bundle",
-          "type": "string"
-        }
-      },
-      "title": "CLIAgentAuthConfig",
-      "type": "object"
-    },
-    "CLIAgentConfig": {
-      "additionalProperties": false,
-      "description": "The ``cli-agent`` block of a ``providers.llm`` entry.",
       "properties": {
         "agent": {
-          "default": "claude-code",
-          "enum": [
-            "claude-code",
-            "codex",
-            "gemini-cli",
-            "qwen-code",
-            "opencode",
-            "cursor-agent",
-            "copilot",
-            "grok",
-            "custom"
-          ],
-          "title": "Agent",
+          "description": "Which coding CLI to drive.",
           "type": "string"
         },
-        "state_dir": {
-          "default": "",
-          "title": "State Dir",
-          "type": "string"
-        },
-        "timeout_seconds": {
-          "default": 300.0,
-          "title": "Timeout Seconds",
-          "type": "number"
-        },
-        "max_concurrent": {
-          "default": 4,
-          "title": "Max Concurrent",
-          "type": "integer"
+        "auth": {
+          "$ref": "#/$defs/CLIAgentAuth"
         },
         "env": {
           "additionalProperties": {
             "type": "string"
           },
-          "title": "Env",
+          "description": "Extra environment for the CLI child process.",
           "type": "object"
         },
-        "auth": {
-          "$ref": "#/$defs/CLIAgentAuthConfig"
+        "max_concurrent": {
+          "description": "Concurrent CLI processes; each costs 200-400 MB.",
+          "minimum": 0,
+          "type": "integer"
         },
         "overrides": {
-          "additionalProperties": true,
-          "title": "Overrides",
+          "additionalProperties": {},
+          "description": "Field-wise overrides of the built-in CLI profile.",
           "type": "object"
+        },
+        "state_dir": {
+          "description": "Credential + per-seat home directory. Entries sharing one share a login.",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "description": "Wall-clock cap on one CLI invocation.",
+          "minimum": 0,
+          "type": "number"
         }
       },
-      "title": "CLIAgentConfig",
       "type": "object"
     },
-    "ConfluenceConfig": {
+    "CLIAgentAuth": {
       "additionalProperties": false,
-      "description": "Organisation-level Confluence configuration.\n\nDefines the admin / service account used for org-wide Confluence\nAPI access.  Individual agents authenticate via their own\n``mcp_env`` credentials.\n\nCloud webhooks are handled by the Forge app.  Data Center\nwebhooks use ``webhook_secret`` for HMAC-SHA256 verification.\n\nProvide **either** ``url`` (direct instance URL) **or**\n``cloud_id`` (Atlassian Cloud ID).  Providing both or neither\nis an error.\n\nThis section is **non-tool config only** \u2014 admin credentials for\norg-level REST calls and the inbound webhook secret.  It lives under\nthe top-level ``integrations`` block.  Org-wide knowledge spaces are\nconfigured in ``knowledge.confluence_spaces``, and the Confluence MCP\n*tool* server is declared in ``mcp_servers`` (name it ``atlassian``,\nshared with Jira); see ``docs/concepts/tool-capabilities.md``.\n\nExample YAML::\n\n    integrations:\n      confluence:\n        url: \"https://mycompany.atlassian.net/wiki\"\n        token: \"${CONFLUENCE_ADMIN_TOKEN}\"\n        email: \"${CONFLUENCE_ADMIN_EMAIL}\"\n\n    knowledge:\n      confluence_spaces: [\"HANDBOOK\"]\n\n    mcp_servers:\n      - name: atlassian\n        shared: false\n        command: uvx\n        args: [\"mcp-atlassian\"]\n        env: { CONFLUENCE_URL: \"https://mycompany.atlassian.net/wiki\" }",
       "properties": {
-        "url": {
-          "default": "",
-          "title": "Url",
+        "credential_bundle": {
+          "description": "${VAR} holding a bundle exported by crewlet llm export.",
           "type": "string"
         },
-        "cloud_id": {
-          "default": "",
-          "title": "Cloud Id",
-          "type": "string"
-        },
-        "site_url": {
-          "default": "",
-          "title": "Site Url",
+        "mode": {
+          "description": "subscription (default), api-key, or inherit-env.",
+          "enum": [
+            "subscription",
+            "api-key",
+            "inherit-env"
+          ],
           "type": "string"
         },
         "token": {
-          "title": "Token",
+          "description": "${VAR} holding a long-lived subscription token.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Confluence": {
+      "additionalProperties": false,
+      "properties": {
+        "cloud_id": {
+          "description": "Atlassian Cloud id. Give this or url, not both.",
           "type": "string"
         },
         "email": {
-          "default": "",
-          "title": "Email",
+          "description": "Set for Cloud Basic auth; omit for bearer-token auth.",
+          "type": "string"
+        },
+        "site_url": {
+          "description": "Human-readable base for shareable links; needed with cloud_id.",
+          "type": "string"
+        },
+        "skills_space": {
+          "description": "Space holding tool-skill pages; excluded from routing and knowledge search. Default TS; empty string disables tool skills entirely.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Admin API token or PAT; ${VAR} supported.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Instance URL. Give this or cloud_id, not both.",
           "type": "string"
         },
         "webhook_secret": {
-          "default": "",
-          "title": "Webhook Secret",
+          "description": "HMAC secret for Data Center webhooks.",
           "type": "string"
         }
       },
       "required": [
         "token"
       ],
-      "title": "ConfluenceConfig",
       "type": "object"
     },
-    "ConfluenceIdentity": {
+    "ConversationSession": {
       "additionalProperties": false,
-      "description": "The Confluence space a unit / root-role owns.\n\nUsed for inbound webhook routing \u2014 page activity routes to the unit\nlead (:func:`build_space_key_lead_map`) \u2014 and as the team's write /\nskill-promotion home.  Not a tool credential, and **does not** scope\nknowledge reads: read scope is the org-wide\n:attr:`KnowledgeConfig.confluence_spaces` only.",
-      "properties": {
-        "space": {
-          "default": "",
-          "title": "Space",
-          "type": "string"
-        }
-      },
-      "title": "ConfluenceIdentity",
-      "type": "object"
-    },
-    "ConversationSessionConfig": {
-      "additionalProperties": false,
-      "description": "Per-conversation session ledger settings.\n\nCarries what a seat already did in one conversation (a Slack thread,\na Jira issue, a GitHub PR) into the NEXT turn of that conversation,\nas a ``## Earlier in this conversation`` block on the Plan and\nExecute user messages.\n\nThis is the cross-turn counterpart of the within-turn prior-work\nledger, and it is deliberately structured rather than a transcript\nreplay \u2014 see ``docs/concepts/conversation-sessions.md``.",
       "properties": {
         "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
+          "description": "Record and replay per-conversation history (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
-        "max_entries": {
-          "default": 20,
-          "minimum": 1,
-          "title": "Max Entries",
+        "injected_max_chars": {
+          "description": "Byte budget for the injected block.",
+          "minimum": 0,
           "type": "integer"
         },
         "injected_max_entries": {
-          "default": 5,
-          "minimum": 1,
-          "title": "Injected Max Entries",
+          "description": "Entries injected into the prompt, newest N.",
+          "minimum": 0,
           "type": "integer"
         },
-        "injected_max_chars": {
-          "default": 6000,
-          "minimum": 500,
-          "title": "Injected Max Chars",
+        "max_entries": {
+          "description": "Entries kept per conversation.",
+          "minimum": 0,
           "type": "integer"
         },
         "retention_days": {
-          "default": 30,
-          "minimum": 1,
-          "title": "Retention Days",
+          "description": "How long a conversation is remembered.",
+          "minimum": 0,
           "type": "integer"
         }
       },
-      "title": "ConversationSessionConfig",
       "type": "object"
     },
-    "CounterpartyConfig": {
+    "Counterparty": {
       "additionalProperties": false,
-      "description": "CounterpartyProfiler settings.\n\nRuns alongside the PersistDecider in the ReflectEngine.  For\neach turn triggered by an identifiable sender, updates a per-\n``(observer, subject)`` profile on the auxiliary model.  Writes\ngo to the ``counterparty_profiles`` table.",
       "properties": {
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
-        },
         "budget_tokens": {
-          "default": 3000,
-          "title": "Budget Tokens",
-          "type": "integer"
-        }
-      },
-      "title": "CounterpartyConfig",
-      "type": "object"
-    },
-    "CredentialCooldownConfig": {
-      "additionalProperties": false,
-      "description": "TTL policy for the LLM credential pool.\n\nEach provider's pool keys can be marked cooled-down by error class\n-- a 429 typically clears in an hour, while a 401 / 403 often\nclears in minutes after a token refresh.",
-      "properties": {
-        "rate_limit_seconds": {
-          "default": 3600,
-          "title": "Rate Limit Seconds",
+          "description": "Soft token cap on the profiler call.",
+          "minimum": 0,
           "type": "integer"
         },
+        "enabled": {
+          "description": "Observe counterparties (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CredentialCooldowns": {
+      "additionalProperties": false,
+      "properties": {
         "auth_seconds": {
-          "default": 300,
-          "title": "Auth Seconds",
+          "description": "Cooldown after an auth error (60..86400s).",
+          "maximum": 86400,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rate_limit_seconds": {
+          "description": "Cooldown after a rate-limit error (60..86400s).",
+          "maximum": 86400,
+          "minimum": 0,
           "type": "integer"
         }
       },
-      "title": "CredentialCooldownConfig",
       "type": "object"
     },
-    "EmbeddingProviderConfig": {
+    "EmbeddingProvider": {
       "additionalProperties": false,
-      "description": "Configuration for an embedding provider.",
       "properties": {
+        "api_key": {
+          "description": "API key or ${VAR} reference.",
+          "type": "string"
+        },
+        "base_url": {
+          "description": "Endpoint for an openai-compatible embedding service.",
+          "type": "string"
+        },
+        "dimensions": {
+          "description": "Vector width; must match the model's output size.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "description": "Embedding model id.",
+          "type": "string"
+        },
         "type": {
-          "default": "openai",
+          "description": "openai (default) or openai-compatible.",
           "enum": [
             "openai",
             "openai-compatible"
           ],
-          "title": "Type",
           "type": "string"
-        },
-        "model": {
-          "default": "text-embedding-3-small",
-          "title": "Model",
-          "type": "string"
-        },
-        "api_key": {
-          "default": "",
-          "title": "Api Key",
-          "type": "string"
-        },
-        "base_url": {
-          "default": "",
-          "title": "Base Url",
-          "type": "string"
-        },
-        "dimensions": {
-          "default": 1536,
-          "title": "Dimensions",
-          "type": "integer"
         }
       },
-      "title": "EmbeddingProviderConfig",
       "type": "object"
     },
-    "EpisodeLifecycleConfig": {
+    "EpisodeLifecycle": {
       "additionalProperties": false,
-      "description": "Episode-lifecycle settings.\n\nThe ``EpisodeLifecycleWorker`` drains the ``episodes`` table by\ndropping low-value rows and LLM-compacting clusters of similar\nroutine turns into single ``kind='compacted'`` summaries.  Trigger\nis write-side (``EpisodeStore.write`` publishes\n``CompactionRequested`` once an agent's raw count exceeds\n``max_raw_episodes_per_agent``); no daily cron, no caller-path\nlatency on reads.\n\nSee ``docs/concepts/agent-learning.md`` -- episode lifecycle\nsection.",
       "properties": {
-        "max_raw_episodes_per_agent": {
-          "default": 500,
-          "title": "Max Raw Episodes Per Agent",
+        "compacted_max_age_days": {
+          "description": "Age at which compacted summaries are dropped; 0 = never.",
+          "minimum": 0,
           "type": "integer"
-        },
-        "write_check_every_n": {
-          "default": 10,
-          "title": "Write Check Every N",
-          "type": "integer"
-        },
-        "non_terminal_max_age_days": {
-          "default": 14,
-          "title": "Non Terminal Max Age Days",
-          "type": "integer"
-        },
-        "consolidated_grace_days": {
-          "default": 30,
-          "title": "Consolidated Grace Days",
-          "type": "integer"
-        },
-        "compaction_min_age_days": {
-          "default": 30,
-          "title": "Compaction Min Age Days",
-          "type": "integer"
-        },
-        "compaction_min_cluster_size": {
-          "default": 3,
-          "title": "Compaction Min Cluster Size",
-          "type": "integer"
-        },
-        "compaction_jaccard_threshold": {
-          "default": 0.6,
-          "title": "Compaction Jaccard Threshold",
-          "type": "number"
         },
         "compaction_batch_size": {
-          "default": 200,
-          "title": "Compaction Batch Size",
+          "description": "Raw episodes pulled into one pass.",
+          "minimum": 0,
           "type": "integer"
         },
         "compaction_budget_tokens": {
-          "default": 4000,
-          "title": "Compaction Budget Tokens",
+          "description": "Soft token cap on summarising one cluster.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "compaction_jaccard_threshold": {
+          "description": "Similarity that pools two episodes into one cluster.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "compaction_min_age_days": {
+          "description": "Only compact rows older than this.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "compaction_min_cluster_size": {
+          "description": "Smallest cluster worth compacting.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "consolidated_grace_days": {
+          "description": "Audit grace before a consolidated raw row is dropped.",
+          "minimum": 0,
           "type": "integer"
         },
         "exemplar_count": {
-          "default": 2,
-          "title": "Exemplar Count",
+          "description": "Originals kept raw after a cluster is compacted.",
+          "minimum": 0,
           "type": "integer"
         },
-        "compacted_max_age_days": {
-          "default": 0,
-          "title": "Compacted Max Age Days",
+        "max_raw_episodes_per_agent": {
+          "description": "Raw episodes per seat that trigger a lifecycle pass.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "non_terminal_max_age_days": {
+          "description": "Age at which mid-state episodes are dropped.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "write_check_every_n": {
+          "description": "Writes between real threshold checks.",
+          "minimum": 0,
           "type": "integer"
         }
       },
-      "title": "EpisodeLifecycleConfig",
       "type": "object"
     },
-    "EpisodicConfig": {
+    "Episodic": {
       "additionalProperties": false,
-      "description": "Episodic-memory settings for the agent-learning subsystem.",
       "properties": {
         "retrieval_limit": {
-          "default": 5,
-          "title": "Retrieval Limit",
+          "description": "Episode-query hits returned (1..20).",
+          "maximum": 20,
+          "minimum": 1,
           "type": "integer"
         }
       },
-      "title": "EpisodicConfig",
       "type": "object"
     },
-    "GitHubConfig": {
+    "GitHub": {
       "additionalProperties": false,
-      "description": "Organisation-level GitHub integration configuration \u2014 webhook side.\n\nThis section is **non-tool config only**: it enables inbound GitHub\nwebhook handling (``webhook_secret``) and the per-agent GitHub\nidentity registration used to route those webhooks.\n\nThe GitHub *tool* server (the remote Copilot MCP at\n``https://api.githubcopilot.com/mcp/``) is declared in\n``mcp_servers`` as a ``shared: false`` ``http`` server.  Each agent\nsupplies its token in ``role.mcp_env.github`` as an ``Authorization:\nBearer <token>`` header (the per-role ``http`` overrides become\nrequest headers).  See ``docs/concepts/tool-capabilities.md``.\n\nExample YAML::\n\n    integrations:\n      github:\n        enabled: true\n        webhook_secret: \"${GITHUB_WEBHOOK_SECRET}\"\n\n    mcp_servers:\n      - name: github\n        transport: http\n        shared: false\n        url: \"https://api.githubcopilot.com/mcp/\"\n\n    roles:\n      - name: Senior Engineer\n        mcp_env:\n          github:\n            Authorization: \"Bearer ${GITHUB_TOKEN_ENGINEER}\"",
       "properties": {
         "enabled": {
-          "default": false,
-          "title": "Enabled",
+          "description": "Turn the integration on.",
           "type": "boolean"
-        },
-        "webhook_secret": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Webhook Secret"
-        }
-      },
-      "title": "GitHubConfig",
-      "type": "object"
-    },
-    "GitLabConfig": {
-      "additionalProperties": false,
-      "description": "Organisation-level GitLab integration configuration \u2014 webhook side.\n\nSymmetric with :class:`GitHubConfig`, with two differences: ``url``\nis **required** (webhook links, boot-time identity resolution via\n``GET {url}/api/v4/user``, and provisioning all need the instance\naddress), and inbound webhooks are verified by the GitLab **signing\ntoken** \u2014 a 19.1+ Standard-Webhooks HMAC over\n``{webhook-id}.{webhook-timestamp}.{body}`` \u2014 so ``signing_secret``\nis **required** when enabled. (The weaker plain ``X-Gitlab-Token``\nscheme is intentionally unsupported; gitlab.com always runs \u2265 19.1\nand the docker-compose test instance runs ``gitlab-ee:latest``, so\nthe signing token is always available. Self-managed GitLab older\nthan 19.1 is not supported.)\n\nThe GitLab *tool* server is declared in ``mcp_servers`` as a\n``shared: false`` server; each agent supplies its service-account PAT\nin ``role.mcp_env.gitlab``. The default is the official ``glab`` CLI's\nstdio MCP server (``glab mcp serve``), with the token in the\n``GITLAB_TOKEN`` env var \u2014 the engine's bridge spawns it per role, so\nthere is no separate server to run. See ``docs/integrations/gitlab.md``.\n\nExample YAML::\n\n    integrations:\n      gitlab:\n        enabled: true\n        url: \"https://gitlab.com\"\n        signing_secret: \"${GITLAB_SIGNING_SECRET}\"\n        provisioning:\n          group: nimbus-hq\n          access_level: developer\n\n    mcp_servers:\n      - name: gitlab                       # official glab CLI MCP server (stdio)\n        shared: false\n        command: glab\n        args: [\"mcp\", \"serve\"]\n\n    roles:\n      - name: Agent SWE\n        mcp_env:\n          gitlab:\n            GITLAB_TOKEN: \"${GITLAB_TOKEN_SWE}\"\n            GITLAB_HOST: gitlab.com",
-      "properties": {
-        "enabled": {
-          "default": false,
-          "title": "Enabled",
-          "type": "boolean"
-        },
-        "url": {
-          "default": "",
-          "title": "Url",
-          "type": "string"
-        },
-        "signing_secret": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Signing Secret"
-        },
-        "token": {
-          "default": "",
-          "title": "Token",
-          "type": "string"
         },
         "provisioning": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GitLabProvisioningConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "title": "GitLabConfig",
-      "type": "object"
-    },
-    "GitLabProvisioningConfig": {
-      "additionalProperties": false,
-      "description": "Inputs for ``crewlet gitlab provision`` \u2014 consumed by the CLI only.\n\nThe engine never reads this block: it drives the reconcile that\ncreates one service account per agent seat, adds group/project\nmembership, mints per-agent PATs from the config's own ``${VAR}``\nreferences, and registers project webhooks. See\n``docs/integrations/gitlab.md``.",
-      "properties": {
-        "group": {
-          "default": "",
-          "title": "Group",
+          "$ref": "#/$defs/GitHubProvisioning",
+          "description": "Inputs for the provisioning CLI; ignored by the engine."
+        },
+        "token": {
+          "description": "Read token for participant fan-out; empty degrades thread routing.",
           "type": "string"
         },
+        "url": {
+          "description": "Enterprise Server base URL, e.g. https://github.example.com. Empty = github.com.",
+          "type": "string"
+        },
+        "webhook_secret": {
+          "description": "HMAC secret for inbound deliveries; required when enabled.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "GitHubProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "org": {
+          "description": "GitHub organization holding the repositories.",
+          "type": "string"
+        },
+        "org_webhook": {
+          "description": "auto (one org hook where the credential may), true, or false.",
+          "enum": [
+            "auto",
+            "true",
+            "false"
+          ],
+          "type": "string"
+        },
+        "repos": {
+          "description": "owner/repo entries to hook individually.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "GitLab": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "type": "boolean"
+        },
+        "provisioning": {
+          "$ref": "#/$defs/GitLabProvisioning",
+          "description": "Inputs for the provisioning CLI; ignored by the engine."
+        },
+        "signing_secret": {
+          "description": "Standard-Webhooks signing token; required when enabled.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Read PAT for participants-based routing; empty degrades routing.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Instance base URL, e.g. https://gitlab.com.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "GitLabProvisioning": {
+      "additionalProperties": false,
+      "properties": {
         "access_level": {
-          "default": "developer",
-          "title": "Access Level",
+          "description": "Default membership level.",
+          "enum": [
+            "developer",
+            "maintainer"
+          ],
           "type": "string"
         },
         "access_levels": {
           "additionalProperties": {
             "type": "string"
           },
-          "title": "Access Levels",
+          "description": "Per-handle membership overrides.",
           "type": "object"
         },
-        "username_prefix": {
-          "default": "",
-          "title": "Username Prefix",
+        "group": {
+          "description": "Top-level group the service accounts join.",
+          "type": "string"
+        },
+        "group_webhook": {
+          "description": "auto (one group hook if the plan allows), true, or false.",
+          "enum": [
+            "auto",
+            "true",
+            "false"
+          ],
           "type": "string"
         },
         "projects": {
+          "description": "Extra projects to join and hook.",
           "items": {
             "type": "string"
           },
-          "title": "Projects",
           "type": "array"
-        },
-        "group_webhook": {
-          "default": "auto",
-          "title": "Group Webhook",
-          "type": "string"
         },
         "token_scopes": {
+          "description": "Scopes minted on each service-account token.",
           "items": {
             "type": "string"
           },
-          "title": "Token Scopes",
           "type": "array"
+        },
+        "username_prefix": {
+          "description": "Prefix on each service-account username.",
+          "type": "string"
         }
       },
-      "title": "GitLabProvisioningConfig",
       "type": "object"
     },
     "HumanContact": {
       "additionalProperties": false,
-      "description": "External identities for reaching a human seat.\n\nAgents reach humans through the same surfaces they use with each\nother (Slack mentions, Jira comments, Confluence mentions, GitHub\nreviews); these identifiers let prompts and the colleague-surface\ndispatcher address the right account.\n\nEvery field accepts either a literal ID or exactly one whole-value\n``${VAR}`` environment reference (e.g.\n``plane_user_id: \"${PLANE_FOUNDER_USER_ID}\"`` \u2014 instance-specific\nIDs cannot ship in a config file).  Values are whitespace-stripped\nat validation; references are stored verbatim and resolved from the\nprocess environment at consumption time via\n:meth:`resolved_identities`.  A value that merely *embeds* a\n``${VAR}`` inside a longer string (``\"acme-${SUFFIX}\"``) is rejected\nat validation \u2014 half-substituting it would silently register a wrong\nidentity.",
       "properties": {
-        "slack_user_id": {
-          "default": "",
-          "title": "Slack User Id",
-          "type": "string"
-        },
-        "mattermost_user_id": {
-          "default": "",
-          "title": "Mattermost User Id",
-          "type": "string"
-        },
         "atlassian_account_id": {
-          "default": "",
-          "title": "Atlassian Account Id",
           "type": "string"
         },
         "github_login": {
-          "default": "",
-          "title": "Github Login",
           "type": "string"
         },
         "gitlab_username": {
-          "default": "",
-          "title": "Gitlab Username",
+          "type": "string"
+        },
+        "mattermost_user_id": {
           "type": "string"
         },
         "plane_user_id": {
-          "default": "",
-          "title": "Plane User Id",
+          "type": "string"
+        },
+        "slack_user_id": {
           "type": "string"
         }
       },
-      "title": "HumanContact",
       "type": "object"
     },
-    "IntegrationsConfig": {
+    "Integrations": {
       "additionalProperties": false,
-      "description": "External-system integrations \u2014 the inbound / notification side.\n\nGroups the **non-tool** integration config: the Atlassian (Jira +\nConfluence) admin accounts used for webhook routing and watcher\nlookups, the Slack transport marker, the GitHub / GitLab / Plane\nwebhook configs, the Forge app id, and the outbound notification\n``transports`` list.\n\nAgent *tools* are configured separately under\n:attr:`CompanyConfig.mcp_servers`; this block is purely how external\nevents reach agents and how notifications are delivered.  It is the\ninbound counterpart to ``mcp_servers`` (outbound tool actions).",
       "properties": {
-        "jira": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/JiraConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "confluence": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ConfluenceConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "slack": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SlackConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "mattermost": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MattermostConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "github": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GitHubConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "gitlab": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GitLabConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "plane": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PlaneConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/Confluence",
+          "description": "Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."
         },
         "forge_app_id": {
-          "default": "",
-          "title": "Forge App Id",
+          "description": "Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud.",
           "type": "string"
+        },
+        "github": {
+          "$ref": "#/$defs/GitHub",
+          "description": "GitHub.com or Enterprise Server, webhook secret and provisioning. Absent = disabled."
+        },
+        "gitlab": {
+          "$ref": "#/$defs/GitLab",
+          "description": "GitLab instance, webhook signing and provisioning. Absent = disabled."
+        },
+        "jira": {
+          "$ref": "#/$defs/Jira",
+          "description": "Jira instance or Cloud site, org read account and webhook secret. Absent = disabled."
+        },
+        "mattermost": {
+          "$ref": "#/$defs/Mattermost",
+          "description": "Mattermost instance and team. Absent = disabled."
+        },
+        "plane": {
+          "$ref": "#/$defs/Plane",
+          "description": "Plane instance, workspace and webhook secret. Absent = disabled."
+        },
+        "slack": {
+          "$ref": "#/$defs/Slack",
+          "description": "Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."
         }
       },
-      "title": "IntegrationsConfig",
       "type": "object"
     },
-    "JiraConfig": {
+    "Jira": {
       "additionalProperties": false,
-      "description": "Organisation-level Jira configuration.\n\nDefines the admin / service account used for org-wide Jira\nAPI access.  This is **not** a per-agent identity \u2014 individual\nagents authenticate via their own ``mcp_env`` credentials.\n\nThe admin account is used for:\n- Fetching ticket watchers for routing decisions\n- (Future) Provisioning per-role Jira service accounts\n\nProvide **either** ``url`` (direct instance URL) **or**\n``cloud_id`` (Atlassian Cloud ID \u2014 the gateway URL is built\nautomatically).  Providing both or neither is an error.\n\nThis section is **non-tool config only** \u2014 admin credentials for\nthe org-level REST calls above plus the inbound webhook secret.  It\nlives under the top-level ``integrations`` block.  The Jira/Confluence\nMCP *tool* server is declared separately in ``mcp_servers`` (name it\n``atlassian``); see ``docs/concepts/tool-capabilities.md``.\n\nExample YAML::\n\n    integrations:\n      jira:\n        url: \"https://mycompany.atlassian.net\"\n        token: \"${JIRA_ADMIN_TOKEN}\"\n        email: \"${JIRA_ADMIN_EMAIL}\"\n        webhook_secret: \"${JIRA_WEBHOOK_SECRET}\"\n\n    mcp_servers:\n      - name: atlassian\n        shared: false\n        command: uvx\n        args: [\"mcp-atlassian\"]\n        env: { JIRA_URL: \"https://mycompany.atlassian.net\" }",
       "properties": {
-        "url": {
-          "default": "",
-          "title": "Url",
-          "type": "string"
-        },
         "cloud_id": {
-          "default": "",
-          "title": "Cloud Id",
-          "type": "string"
-        },
-        "token": {
-          "title": "Token",
+          "description": "Atlassian Cloud id. Give this or url, not both.",
           "type": "string"
         },
         "email": {
-          "default": "",
-          "title": "Email",
+          "description": "Set for Cloud Basic auth; omit for bearer-token auth.",
+          "type": "string"
+        },
+        "site_url": {
+          "description": "Human-readable base for shareable links; needed with cloud_id.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Admin API token or PAT; ${VAR} supported.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Instance URL. Give this or cloud_id, not both.",
           "type": "string"
         },
         "webhook_secret": {
-          "default": "",
-          "title": "Webhook Secret",
+          "description": "HMAC secret for inbound webhooks.",
           "type": "string"
         }
       },
       "required": [
         "token"
       ],
-      "title": "JiraConfig",
       "type": "object"
     },
-    "JiraIdentity": {
+    "Knowledge": {
       "additionalProperties": false,
-      "description": "The Jira project a unit / root-role owns.\n\nUsed for inbound webhook routing \u2014 project activity with no better\nrecipient routes to the unit lead (:func:`build_project_key_lead_map`)\n\u2014 and as the project agents file work under.  Not a tool credential\n(the Jira MCP server authenticates from ``mcp_env.atlassian`` and\nscopes via its own ``JIRA_PROJECTS_FILTER``) and irrelevant to\nknowledge reads.",
-      "properties": {
-        "project": {
-          "default": "",
-          "title": "Project",
-          "type": "string"
-        }
-      },
-      "title": "JiraIdentity",
-      "type": "object"
-    },
-    "KnowledgeConfig": {
-      "additionalProperties": false,
-      "description": "Shared-knowledge config (Tier B).\n\nCurrently the org-wide Confluence spaces every agent can search (the\nPlan-phase ``## Relevant knowledge`` prefetch scope).  Distinct from\nthe Tier A :class:`KnowledgeStoreConfig` (the vector-store backend\nbound to the database).",
       "properties": {
         "confluence_spaces": {
+          "description": "Org-wide Confluence read scope. Empty = unscoped, bounded by each seat's own ACLs. Requires integrations.confluence.",
           "items": {
             "type": "string"
           },
-          "title": "Confluence Spaces",
           "type": "array"
         },
         "plane_projects": {
+          "description": "Org-wide Plane read scope. Empty = unscoped. Requires integrations.plane.",
           "items": {
             "type": "string"
           },
-          "title": "Plane Projects",
           "type": "array"
         }
       },
-      "title": "KnowledgeConfig",
       "type": "object"
     },
-    "LLMProviderConfig": {
+    "LLMProvider": {
       "additionalProperties": false,
-      "description": "Configuration for an LLM provider.",
       "properties": {
-        "type": {
-          "default": "openai",
-          "enum": [
-            "openai",
-            "anthropic",
-            "openai-compatible",
-            "cli-agent"
-          ],
-          "title": "Type",
-          "type": "string"
-        },
-        "model": {
-          "default": "gpt-4o",
-          "title": "Model",
-          "type": "string"
-        },
         "api_keys": {
+          "description": "API keys, ${VAR} supported. Several rotate on rate-limit/auth errors.",
           "items": {
             "type": "string"
           },
-          "title": "Api Keys",
           "type": "array"
         },
-        "cooldowns": {
-          "$ref": "#/$defs/CredentialCooldownConfig"
-        },
         "base_url": {
-          "default": "",
-          "title": "Base Url",
+          "description": "Endpoint override, ${VAR} supported. Required for openai-compatible; optional for openai and anthropic (a gateway or proxy).",
+          "type": "string"
+        },
+        "cli": {
+          "$ref": "#/$defs/CLIAgent",
+          "description": "The cli-agent block. Required for type cli-agent, refused otherwise."
+        },
+        "cooldowns": {
+          "$ref": "#/$defs/CredentialCooldowns"
+        },
+        "model": {
+          "description": "Model id this provider serves.",
           "type": "string"
         },
         "reasoning": {
-          "default": false,
-          "title": "Reasoning",
+          "description": "Enable extended thinking (openai and anthropic only).",
           "type": "boolean"
         },
+        "reasoning_budget_tokens": {
+          "description": "Anthropic thinking budget in tokens when reasoning is on.",
+          "minimum": 0,
+          "type": "integer"
+        },
         "reasoning_effort": {
-          "default": "medium",
+          "description": "OpenAI reasoning effort when reasoning is on.",
           "enum": [
             "low",
             "medium",
             "high",
             "max"
           ],
-          "title": "Reasoning Effort",
           "type": "string"
         },
-        "reasoning_budget_tokens": {
-          "default": 10000,
-          "title": "Reasoning Budget Tokens",
-          "type": "integer"
-        },
         "timeout_seconds": {
-          "default": 120.0,
-          "title": "Timeout Seconds",
+          "description": "Per-request HTTP timeout in seconds.",
+          "minimum": 0,
           "type": "number"
         },
-        "cli": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CLIAgentConfig"
-            },
-            {
-              "type": "null"
-            }
+        "type": {
+          "description": "Which implementation to construct.",
+          "enum": [
+            "openai",
+            "anthropic",
+            "openai-compatible",
+            "cli-agent"
           ],
-          "default": null
+          "type": "string"
         }
       },
-      "title": "LLMProviderConfig",
       "type": "object"
     },
-    "LearningConfig": {
+    "Learning": {
       "additionalProperties": false,
-      "description": "Configuration for the agent-learning subsystem.\n\nSee ``docs/concepts/agent-learning.md`` for the full design.\nRequires a configured database + embedding provider; when either\nis missing the engine logs a disabled-notice and skips registration\nof learning tools.",
       "properties": {
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
-        },
-        "episodic": {
-          "$ref": "#/$defs/EpisodicConfig",
-          "default": {
-            "retrieval_limit": 5
-          }
-        },
-        "reflect": {
-          "$ref": "#/$defs/ReflectConfig",
-          "default": {
-            "enabled": true,
-            "persist_decider": true,
-            "budget_tokens": 5000,
-            "summarize_episodes": true,
-            "summarize_max_tokens": 400
-          }
-        },
         "counterparty": {
-          "$ref": "#/$defs/CounterpartyConfig",
-          "default": {
-            "enabled": true,
-            "budget_tokens": 3000
-          }
+          "$ref": "#/$defs/Counterparty"
         },
-        "skill_synthesis": {
-          "$ref": "#/$defs/SkillSynthesisConfig",
-          "default": {
-            "enabled": true,
-            "min_tool_calls": 5,
-            "budget_tokens": 4000,
-            "max_skills_per_agent": 50,
-            "duplicate_jaccard_threshold": 0.7,
-            "scheduler_enabled": false,
-            "scheduler_interval_seconds": 3600,
-            "cluster_window_hours": 168,
-            "cluster_min_size": 3,
-            "cluster_jaccard_threshold": 0.6,
-            "episode_fetch_limit": 200
-          }
-        },
-        "skill_refinement": {
-          "$ref": "#/$defs/SkillRefinementConfig",
-          "default": {
-            "enabled": true,
-            "auto_refine_on_success": true,
-            "auto_refine_on_failure": true,
-            "budget_tokens": 3000,
-            "max_body_chars": 20000,
-            "max_versions_kept": 10
-          }
-        },
-        "skill_promotion": {
-          "$ref": "#/$defs/SkillPromotionConfig",
-          "default": {
-            "enabled": true,
-            "min_sibling_count": 3,
-            "jaccard_threshold": 0.6,
-            "budget_tokens": 4000
-          }
-        },
-        "skill_curator": {
-          "$ref": "#/$defs/SkillCuratorConfig",
-          "default": {
-            "enabled": true,
-            "interval_hours": 24,
-            "stale_after_days": 30,
-            "archive_after_days": 90
-          }
-        },
-        "personal_memory": {
-          "$ref": "#/$defs/PersonalMemoryConfig",
-          "default": {
-            "max_refreshes_per_turn": 3
-          }
+        "enabled": {
+          "description": "Master switch for agent learning (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "episode_lifecycle": {
-          "$ref": "#/$defs/EpisodeLifecycleConfig",
-          "default": {
-            "max_raw_episodes_per_agent": 500,
-            "write_check_every_n": 10,
-            "non_terminal_max_age_days": 14,
-            "consolidated_grace_days": 30,
-            "compaction_min_age_days": 30,
-            "compaction_min_cluster_size": 3,
-            "compaction_jaccard_threshold": 0.6,
-            "compaction_batch_size": 200,
-            "compaction_budget_tokens": 4000,
-            "exemplar_count": 2,
-            "compacted_max_age_days": 0
-          }
+          "$ref": "#/$defs/EpisodeLifecycle"
+        },
+        "episodic": {
+          "$ref": "#/$defs/Episodic"
+        },
+        "personal_memory": {
+          "$ref": "#/$defs/PersonalMemory"
+        },
+        "reflect": {
+          "$ref": "#/$defs/Reflect"
+        },
+        "skill_curator": {
+          "$ref": "#/$defs/SkillCurator"
+        },
+        "skill_promotion": {
+          "$ref": "#/$defs/SkillPromotion"
+        },
+        "skill_refinement": {
+          "$ref": "#/$defs/SkillRefinement"
+        },
+        "skill_synthesis": {
+          "$ref": "#/$defs/SkillSynthesis"
         }
       },
-      "title": "LearningConfig",
       "type": "object"
     },
-    "LocalSandboxConfig": {
+    "LocalSandbox": {
       "additionalProperties": false,
-      "description": "The ``local`` sandbox backend (``providers.sandbox.local``).\n\nRuns the coding agent on the **engine host** rather than a remote\nbox, so it can use the subscription login ``crewlet llm login``\nalready established \u2014 no E2B account, no API key. See\n``docs/concepts/code-sandbox.md#local-sandboxes``.",
       "properties": {
         "containment": {
-          "default": "direct",
+          "description": "direct (state isolation only) or container (host isolation).",
           "enum": [
             "direct",
             "container"
           ],
-          "title": "Containment",
           "type": "string"
         },
         "image": {
-          "default": "",
-          "title": "Image",
+          "description": "Container image with the coding-agent CLI installed.",
           "type": "string"
         },
+        "network": {
+          "description": "Container network; setting it to none also cuts off the coding agent's LLM.",
+          "type": "string"
+        },
+        "run_args": {
+          "description": "Extra container run arguments. This is where a local box is sized.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "runtime": {
-          "default": "auto",
+          "description": "Container CLI to drive.",
           "enum": [
             "auto",
             "docker",
             "podman"
           ],
-          "title": "Runtime",
           "type": "string"
         },
         "state_dir": {
-          "default": "",
-          "title": "State Dir",
+          "description": "Parent directory for box directories.",
           "type": "string"
-        },
-        "network": {
-          "default": "",
-          "title": "Network",
-          "type": "string"
-        },
-        "run_args": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Run Args",
-          "type": "array"
         }
       },
-      "title": "LocalSandboxConfig",
       "type": "object"
     },
-    "MCPServerConfig": {
+    "MCPServer": {
       "additionalProperties": false,
-      "description": "Configuration for an MCP server integration.\n\nSupports two transports:\n- ``stdio`` (default): launches a local subprocess\n- ``http``: connects to a remote Streamable HTTP server\n\nWhen ``shared`` is True (default), a single global server instance\nis launched and its tools are available to all agents.  When False,\nthe config is used only as a **template** for per-role instances\n(spawned from ``role.mcp_env`` overrides).  No global instance is\nlaunched.  Use ``shared: false`` for identity-bound servers where\neach agent needs its own credentials.\n\nPer-role instances work for **both** transports.  For each role that\ndeclares ``role.mcp_env[name]``, the engine launches a dedicated\ninstance and applies the role's overrides as **environment\nvariables** (``stdio``) or **HTTP headers** (``http``).  An ``http``\nserver with ``shared: false`` is therefore how an identity-bound\nremote server (e.g. the GitHub Copilot MCP) gets a per-agent token.\n\n**All tool servers are configured here** \u2014 including Jira/Confluence\n(name them ``atlassian``), Slack, and GitHub.  The\n``integrations.jira`` / ``.confluence`` / ``.slack`` / ``.github``\nsections carry only non-tool config (admin credentials, webhook\nsecrets); the engine never derives MCP servers from them.  See\n``docs/concepts/tool-capabilities.md``.\n\nExample YAML::\n\n    mcp_servers:\n      # stdio, shared by all agents\n      - name: calculator\n        command: uvx\n        args: [\"mcp-calculator\"]\n      # stdio, per-role (token from role.mcp_env.atlassian)\n      - name: atlassian\n        shared: false\n        command: uvx\n        args: [\"mcp-atlassian\"]\n        env: { JIRA_URL: \"https://co.atlassian.net\" }\n      # http, per-role (Authorization header from role.mcp_env.github)\n      - name: github\n        transport: http\n        shared: false\n        url: \"https://api.githubcopilot.com/mcp/\"",
       "properties": {
-        "name": {
-          "minLength": 1,
-          "title": "Name",
-          "type": "string"
-        },
-        "transport": {
-          "default": "stdio",
-          "title": "Transport",
-          "type": "string"
-        },
-        "shared": {
-          "default": true,
-          "title": "Shared",
-          "type": "boolean"
-        },
-        "command": {
-          "default": "",
-          "title": "Command",
-          "type": "string"
-        },
         "args": {
+          "description": "Arguments for the executable (stdio).",
           "items": {
             "type": "string"
           },
-          "title": "Args",
           "type": "array"
+        },
+        "command": {
+          "description": "Executable to launch (stdio).",
+          "type": "string"
         },
         "env": {
           "additionalProperties": {
             "type": "string"
           },
-          "title": "Env",
+          "description": "Environment for the subprocess (stdio); ${VAR} supported.",
           "type": "object"
-        },
-        "tool_prefix": {
-          "default": "",
-          "title": "Tool Prefix",
-          "type": "string"
-        },
-        "url": {
-          "default": "",
-          "title": "Url",
-          "type": "string"
         },
         "headers": {
           "additionalProperties": {
             "type": "string"
           },
-          "title": "Headers",
+          "description": "Headers sent with each request (http); ${VAR} supported.",
           "type": "object"
+        },
+        "name": {
+          "description": "Server name; the key seats declare credentials under.",
+          "type": "string"
+        },
+        "request_timeout_seconds": {
+          "description": "Cap on one tool call.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "shared": {
+          "description": "One shared instance (default), or false for one per seat.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "startup_timeout_seconds": {
+          "description": "Connect, handshake and first tool listing budget.",
+          "minimum": 0,
+          "type": "number"
         },
         "tool_annotations": {
           "additionalProperties": {
-            "additionalProperties": true,
+            "additionalProperties": false,
+            "properties": {
+              "destructive": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "destructiveHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "idempotent": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "idempotentHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "openWorldHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "open_world": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "readOnlyHint": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "read_only": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
             "type": "object"
           },
-          "title": "Tool Annotations",
+          "description": "Per-tool behavioural-hint overrides, keyed by bare tool name.",
           "type": "object"
         },
-        "startup_timeout_seconds": {
-          "default": 120.0,
-          "exclusiveMinimum": 0,
-          "title": "Startup Timeout Seconds",
-          "type": "number"
+        "tool_prefix": {
+          "description": "Prefix applied to this server's tool names.",
+          "type": "string"
         },
-        "request_timeout_seconds": {
-          "default": 300.0,
-          "exclusiveMinimum": 0,
-          "title": "Request Timeout Seconds",
-          "type": "number"
+        "transport": {
+          "description": "stdio (default) or http.",
+          "enum": [
+            "stdio",
+            "http"
+          ],
+          "type": "string"
+        },
+        "url": {
+          "description": "Endpoint of the remote server (http).",
+          "type": "string"
         }
       },
       "required": [
         "name"
       ],
-      "title": "MCPServerConfig",
       "type": "object"
     },
-    "MattermostConfig": {
+    "Mattermost": {
       "additionalProperties": false,
-      "description": "Organisation-level Mattermost integration.\n\nThe self-hosted, open-source chat backend.  Shaped like\n:class:`GitLabConfig` / :class:`PlaneConfig` \u2014 ``enabled`` plus a\nrequired ``url`` and ``team`` \u2014 with one structural difference that\nshapes the whole integration: **Mattermost has no usable inbound\nwebhook.**\n\nIts outgoing webhooks fire only in *public* channels (the server\ngates on ``ChannelTypeOpen``), and their payload carries no\n``root_id``, no channel type and no mention list \u2014 so DMs, private\nchannels and thread attribution are all unreachable through them.\nThe supported path for an external service is the **WebSocket event\nAPI**, authenticated as each bot.  The engine therefore holds one\nconnection per Mattermost-enabled agent seat\n(:mod:`crewlet.mattermost.events`) instead of receiving HTTP\ncallbacks, and there is no ``webhook_secret`` here to configure.\n\nThat also means an agent seat needs only **one** credential \u2014 the\nbot's personal access token drives the websocket, the REST calls and\nthe MCP tool server alike.\n\n``typing_status`` defaults to ``off``, unlike Slack's ``addressed``.\nMattermost's indicator has a fixed vocabulary (\"*is typing\u2026*\"), so it\nconveys only *busy* where Slack's carries the phase, and it has to be\nre-asserted every few seconds against Slack's 45 \u2014 a multi-minute\nturn costs one to two orders of magnitude more requests for strictly\nless information.  Operators who still want it opt in; the per-phase\n``status_phrases`` setting has deliberately no analogue here, because\nno text this backend accepts would ever be rendered.\n\nThe Mattermost *tool* server is declared in ``mcp_servers`` as a\n``shared: false`` server; each agent supplies the same token in\n``role.mcp_env.mattermost``.  See ``docs/integrations/mattermost.md``.\n\nExample YAML::\n\n    integrations:\n      mattermost:\n        enabled: true\n        url: \"https://chat.nimbus.example\"   # instance base URL (required)\n        team: nimbus                         # team slug (required)\n        typing_status: off                   # off (default) | addressed | always\n        provisioning:          # consumed ONLY by the CLI, ignored by\n                               #   the engine\n          username_prefix: \"\"  # e.g. \"agent-\" if humans share the server\n          channels: [town-square, engineering]   # channels every bot joins\n          display_name_suffix: \" (AI)\"\n\n    mcp_servers:\n      - name: mattermost\n        shared: false\n        command: uvx\n        args: [\"mcp-server-mattermost\"]\n        env:\n          MATTERMOST_URL: \"https://chat.nimbus.example\"\n        tool_prefix: \"mattermost_\"\n\n    roles:\n      - name: Agent SWE\n        integrations:\n          mattermost:\n            bot_token: \"${MATTERMOST_TOKEN_SWE}\"\n            channel: engineering\n        mcp_env:\n          mattermost:\n            MATTERMOST_TOKEN: \"${MATTERMOST_TOKEN_SWE}\"   # same token",
       "properties": {
         "enabled": {
-          "default": false,
-          "title": "Enabled",
+          "description": "Turn the integration on.",
           "type": "boolean"
         },
-        "url": {
-          "default": "",
-          "title": "Url",
-          "type": "string"
+        "provisioning": {
+          "$ref": "#/$defs/MattermostProvisioning",
+          "description": "Inputs for the provisioning CLI; ignored by the engine."
         },
         "team": {
-          "default": "",
-          "title": "Team",
+          "description": "Team slug the agent bots belong to.",
           "type": "string"
         },
         "typing_status": {
-          "$ref": "#/$defs/WorkingStatusMode",
-          "default": "off"
-        },
-        "provisioning": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MattermostProvisioningConfig"
-            },
-            {
-              "type": "null"
-            }
+          "description": "When to show the typing indicator (default off).",
+          "enum": [
+            "addressed",
+            "always",
+            "off"
           ],
-          "default": null
-        }
-      },
-      "title": "MattermostConfig",
-      "type": "object"
-    },
-    "MattermostProvisioningConfig": {
-      "additionalProperties": false,
-      "description": "Inputs for ``crewlet mattermost provision`` \u2014 consumed by the CLI\nonly.  The engine never reads this block; it must parse so a\nprovisioning-ready config validates today.",
-      "properties": {
-        "username_prefix": {
-          "default": "",
-          "title": "Username Prefix",
           "type": "string"
         },
+        "url": {
+          "description": "Instance base URL, e.g. https://chat.example.com.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "MattermostProvisioning": {
+      "additionalProperties": false,
+      "properties": {
         "channels": {
+          "description": "Channels every bot joins.",
           "items": {
             "type": "string"
           },
-          "title": "Channels",
           "type": "array"
         },
         "display_name_suffix": {
-          "default": "",
-          "title": "Display Name Suffix",
+          "description": "Suffix on each bot display name, e.g. \" (AI)\".",
+          "type": "string"
+        },
+        "username_prefix": {
+          "description": "Prefix on each bot username, e.g. agent-.",
           "type": "string"
         }
       },
-      "title": "MattermostProvisioningConfig",
       "type": "object"
     },
-    "OrgUnitConfig": {
+    "PersonalMemory": {
       "additionalProperties": false,
-      "description": "The authored YAML shape of one ``units:`` entry (recursive).\n\nTransformed into an :class:`~crewlet.org.models.OrgUnit` by\n:func:`_parse_unit`.  Like :class:`RoleConfig` this forbids extra\nkeys so a mistyped field fails validation rather than vanishing.",
-      "properties": {
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
-        "type": {
-          "default": "team",
-          "title": "Type",
-          "type": "string"
-        },
-        "purpose": {
-          "default": "",
-          "title": "Purpose",
-          "type": "string"
-        },
-        "lead": {
-          "default": "",
-          "title": "Lead",
-          "type": "string"
-        },
-        "goals": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Goals",
-          "type": "array"
-        },
-        "slack_channel": {
-          "default": "",
-          "title": "Slack Channel",
-          "type": "string"
-        },
-        "knowledge": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Knowledge",
-          "type": "array"
-        },
-        "mcp_env": {
-          "additionalProperties": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object"
-          },
-          "title": "Mcp Env",
-          "type": "object"
-        },
-        "integrations": {
-          "$ref": "#/$defs/UnitIntegrationsConfig"
-        },
-        "roles": {
-          "items": {
-            "$ref": "#/$defs/RoleConfig"
-          },
-          "title": "Roles",
-          "type": "array"
-        },
-        "children": {
-          "items": {
-            "$ref": "#/$defs/OrgUnitConfig"
-          },
-          "title": "Children",
-          "type": "array"
-        },
-        "schedules": {
-          "items": {
-            "$ref": "#/$defs/Schedule"
-          },
-          "title": "Schedules",
-          "type": "array"
-        }
-      },
-      "required": [
-        "name"
-      ],
-      "title": "OrgUnitConfig",
-      "type": "object"
-    },
-    "PersonalMemoryConfig": {
-      "additionalProperties": false,
-      "description": "Personal-memory read-side settings.\n\nControls the Plan-phase ``## Personal memory`` digest and the\nLLM-callable ``refresh_memory`` tool.  Memory writes are governed\nby the ``reflect`` block above (PersistDecider) and the\n``reflect_and_persist`` builtin -- they are not affected by these\nfields.",
       "properties": {
         "max_refreshes_per_turn": {
-          "default": 3,
-          "title": "Max Refreshes Per Turn",
+          "description": "Distinct memory refreshes one turn may make.",
+          "minimum": 0,
           "type": "integer"
         }
       },
-      "title": "PersonalMemoryConfig",
       "type": "object"
     },
-    "PlaneConfig": {
+    "Plane": {
       "additionalProperties": false,
-      "description": "Organisation-level Plane integration \u2014 webhook + engine-read side.\n\nSymmetric with :class:`GitLabConfig`: ``enabled`` plus a required\n``url`` when enabled, joined by ``workspace`` (every resource path the\nintegration operates on is workspace-scoped \u2014 only ``GET /users/me/``\nand workspace creation aren't) and ``webhook_secret`` (the\n``X-Plane-Signature`` HMAC-SHA256 key \u2014 the only verification mode\nPlane offers; generated *by* Plane at webhook creation and captured by\nthe provisioner).\n\nThe Plane *tool* server is declared in ``mcp_servers`` as a\n``shared: false`` server; each agent supplies its service-account\ntoken in ``role.mcp_env.plane``.  See\n``docs/integrations/plane.md``.\n\nExample YAML::\n\n    integrations:\n      plane:\n        enabled: true\n        url: \"https://plane.nimbus.example\"      # fork instance base URL (required)\n        workspace: nimbus                        # workspace slug (required)\n        webhook_secret: \"${PLANE_WEBHOOK_SECRET}\"  # X-Plane-Signature HMAC key \u2014\n                                                 #   generated BY Plane at webhook\n                                                 #   creation; provisioner captures\n                                                 #   it into this ${VAR}\n        token: \"${PLANE_ENGINE_TOKEN}\"           # engine read credential\n                                                 #   (subscribers, members, project\n                                                 #   map, page fetch) \u2014 provisioned\n                                                 #   crewlet-engine service account\n        provisioning:            # consumed ONLY by the CLI, ignored by\n                                 #   the engine\n          role: member           # workspace role for agent accounts\n                                 #   (admin|member|guest)\n          roles: { tech-lead: admin }      # per-handle overrides\n          username_prefix: \"\"    # e.g. \"agent-\" if the workspace is shared\n          projects: [LEAD, ENG, PROD, TS]  # project identifiers: membership\n                                           #   targets (+ created with\n                                           #   --create-projects)\n          token_expiry_days: 364 # omit expiry with 0 (Plane tokens:\n                                 #   optional expiry)\n\n    mcp_servers:\n      - name: plane                       # official plane-mcp-server, stdio\n        shared: false\n        command: uvx\n        args: [\"plane-mcp-server\", \"stdio\"]\n        env:\n          PLANE_BASE_URL: \"https://plane.nimbus.example\"\n          PLANE_WORKSPACE_SLUG: \"nimbus\"\n\n    roles:\n      - name: Agent SWE\n        mcp_env:\n          plane:\n            PLANE_API_KEY: \"${PLANE_TOKEN_SWE}\"   # per-agent service-account token",
       "properties": {
         "enabled": {
-          "default": false,
-          "title": "Enabled",
+          "description": "Turn the integration on.",
           "type": "boolean"
         },
-        "url": {
-          "default": "",
-          "title": "Url",
+        "provisioning": {
+          "$ref": "#/$defs/PlaneProvisioning",
+          "description": "Inputs for the provisioning CLI; ignored by the engine."
+        },
+        "skills_project": {
+          "description": "Project holding tool-skill pages; excluded from routing and knowledge search. Default TS; empty string disables tool skills entirely.",
           "type": "string"
         },
-        "workspace": {
-          "default": "",
-          "title": "Workspace",
+        "token": {
+          "description": "Engine read credential; empty degrades routing.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Instance base URL.",
           "type": "string"
         },
         "webhook_secret": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Webhook Secret"
-        },
-        "token": {
-          "default": "",
-          "title": "Token",
+          "description": "HMAC key; generated by Plane and captured by the provisioner.",
           "type": "string"
         },
-        "provisioning": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PlaneProvisioningConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "title": "PlaneConfig",
-      "type": "object"
-    },
-    "PlaneIdentity": {
-      "additionalProperties": false,
-      "description": "The Plane project a unit / root-role owns.\n\nIntegration identity only \u2014 the inbound webhook fallback-routing\ntarget (:func:`build_plane_project_lead_map`) and the project agents\nfile work under.  Not a tool credential (the Plane MCP server\nauthenticates from ``mcp_env.plane``), and it does **not** scope\nknowledge reads (read scope is the org-wide\n:attr:`KnowledgeConfig.plane_projects` only).",
-      "properties": {
-        "project": {
-          "default": "",
-          "title": "Project",
+        "workspace": {
+          "description": "Workspace slug; every resource path is workspace-scoped.",
           "type": "string"
         }
       },
-      "title": "PlaneIdentity",
       "type": "object"
     },
-    "PlaneProvisioningConfig": {
+    "PlaneProvisioning": {
       "additionalProperties": false,
-      "description": "Inputs for ``crewlet plane provision`` \u2014 consumed by the CLI only\n(slice 4).  The engine never reads this block; it must parse so a\nprovisioning-ready config validates today.",
       "properties": {
+        "projects": {
+          "description": "Project identifiers the accounts join.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "role": {
-          "default": "member",
-          "title": "Role",
+          "description": "Default workspace role for agent accounts.",
+          "enum": [
+            "admin",
+            "member",
+            "guest"
+          ],
           "type": "string"
         },
         "roles": {
           "additionalProperties": {
             "type": "string"
           },
-          "title": "Roles",
+          "description": "Per-handle workspace-role overrides.",
           "type": "object"
         },
-        "username_prefix": {
-          "default": "",
-          "title": "Username Prefix",
-          "type": "string"
+        "token_expiry_days": {
+          "description": "Expiry on each minted token; 0 = never expires.",
+          "minimum": 0,
+          "type": "integer"
         },
-        "projects": {
+        "username_prefix": {
+          "description": "Prefix on each service-account username.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ProjectRef": {
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "description": "Project key or identifier.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Providers": {
+      "additionalProperties": false,
+      "properties": {
+        "embeddings": {
+          "$ref": "#/$defs/EmbeddingProvider",
+          "description": "Embedding provider for diary and episode recall."
+        },
+        "llm": {
+          "additionalProperties": {
+            "$ref": "#/$defs/LLMProvider"
+          },
+          "description": "Named LLM providers; seats select one by key.",
+          "type": "object"
+        },
+        "llm_order": {
+          "description": "Provider precedence; normally derived from the order they are written in.",
           "items": {
             "type": "string"
           },
-          "title": "Projects",
           "type": "array"
         },
-        "token_expiry_days": {
-          "default": 364,
-          "minimum": 0,
-          "title": "Token Expiry Days",
-          "type": "integer"
-        }
-      },
-      "title": "PlaneProvisioningConfig",
-      "type": "object"
-    },
-    "ProvidersConfig": {
-      "additionalProperties": false,
-      "description": "Tier B provider settings \u2014 LLM + embeddings.\n\nTier A providers (queue, database, knowledge) live on\n:class:`BootstrapProvidersConfig` and load from ``config.yaml`` at\nengine startup.",
-      "properties": {
-        "llm": {
-          "additionalProperties": {
-            "$ref": "#/$defs/LLMProviderConfig"
-          },
-          "title": "Llm",
-          "type": "object"
-        },
-        "embeddings": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EmbeddingProviderConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "sandbox": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SandboxProviderConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/SandboxProvider",
+          "description": "Code sandbox backend. Absent = no seat runs code."
         }
       },
-      "title": "ProvidersConfig",
       "type": "object"
     },
-    "ReflectConfig": {
+    "Reflect": {
       "additionalProperties": false,
-      "description": "Reflection/PersistDecider settings.\n\nRuns after every turn to decide whether any durable fact from the\nturn should be persisted to the knowledge store.  Enabled by\ndefault; the on-event dispatcher subscribes only when\n``enabled=True``.",
       "properties": {
+        "budget_tokens": {
+          "description": "Soft token cap on the reflection call; 0 = uncapped.",
+          "minimum": 0,
+          "type": "integer"
+        },
         "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
+          "description": "Run reflection after each turn (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "persist_decider": {
-          "default": true,
-          "title": "Persist Decider",
-          "type": "boolean"
-        },
-        "budget_tokens": {
-          "default": 5000,
-          "title": "Budget Tokens",
-          "type": "integer"
+          "description": "Run the persist decision after each turn (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "summarize_episodes": {
-          "default": true,
-          "title": "Summarize Episodes",
-          "type": "boolean"
+          "description": "Summarise episode hits through the auxiliary model (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "summarize_max_tokens": {
-          "default": 400,
-          "title": "Summarize Max Tokens",
+          "description": "Soft cap on a per-hit summary.",
+          "minimum": 0,
           "type": "integer"
         }
       },
-      "title": "ReflectConfig",
       "type": "object"
     },
-    "RoleConfig": {
+    "Role": {
       "additionalProperties": false,
-      "description": "The authored YAML shape of one seat \u2014 a ``roles:`` entry.\n\nThis is the *wire format* a founder writes, not the runtime model:\n:func:`_parse_role` transforms it into a\n:class:`~crewlet.org.models.Role` (materialising\n``integrations.slack`` into ``Role.slack``, collapsing the ``llm``\ndict form into per-phase fields, and mapping the integration\nidentities onto ``jira_project`` / ``confluence_space`` /\n``plane_project``).\n\n``extra=\"forbid\"``: an unrecognised key here is a typo, and a\nsilently-ignored ``backstroy:`` would spawn the seat with an empty\nbackstory and no diagnostic.  Fields are rejected at\n``crewlet validate`` time instead.",
-      "if": {
-        "properties": {
-          "kind": {
-            "const": "human"
-          }
-        },
-        "required": [
-          "kind"
-        ]
-      },
       "properties": {
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
-        "kind": {
-          "$ref": "#/$defs/RoleKind",
-          "default": "agent"
-        },
-        "contact": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HumanContact"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "availability": {
-          "default": "",
-          "title": "Availability",
-          "type": "string"
-        },
-        "handle": {
-          "default": "",
-          "pattern": "^$|^[a-z0-9][a-z0-9-]*$",
-          "title": "Handle",
-          "type": "string"
-        },
-        "email": {
-          "default": "",
-          "title": "Email",
-          "type": "string"
-        },
-        "unit": {
-          "default": "",
-          "title": "Unit",
-          "type": "string"
-        },
-        "goal": {
-          "default": "",
-          "title": "Goal",
+          "description": "Human seats: free-text availability shown in rosters.",
           "type": "string"
         },
         "backstory": {
-          "default": "",
-          "title": "Backstory",
+          "description": "Who this seat is; reaches its prompt.",
           "type": "string"
         },
-        "responsibilities": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Responsibilities",
-          "type": "array"
-        },
-        "manages": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Manages",
-          "type": "array"
-        },
         "behavioral_guidelines": {
+          "description": "How this seat should work; reaches its prompt.",
           "items": {
             "type": "string"
           },
-          "title": "Behavioral Guidelines",
           "type": "array"
         },
-        "token_budget": {
-          "default": 0,
-          "minimum": 0,
-          "title": "Token Budget",
-          "type": "integer"
+        "contact": {
+          "$ref": "#/$defs/HumanContact",
+          "description": "Human seats: external account ids per surface."
         },
-        "llm": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "$ref": "#/$defs/RolePhaseLLMConfig"
-            }
-          ],
-          "default": "default",
-          "title": "Llm"
+        "email": {
+          "description": "Seat email; plus-addressing derives from the handle.",
+          "type": "string"
         },
-        "llm_plan": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Llm Plan"
+        "goal": {
+          "description": "What this seat is for; reaches its prompt.",
+          "type": "string"
         },
-        "llm_execute": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Llm Execute"
+        "handle": {
+          "description": "Canonical slug. Effectively permanent — it derives the seat's durable id.",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "type": "string"
         },
-        "llm_review": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Llm Review"
+        "integrations": {
+          "$ref": "#/$defs/RoleIntegrations"
         },
-        "llm_subagent": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
+        "kind": {
+          "description": "agent (default) or human.",
+          "enum": [
+            "agent",
+            "human"
           ],
-          "default": null,
-          "title": "Llm Subagent"
-        },
-        "llm_auxiliary": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Llm Auxiliary"
-        },
-        "llm_judge": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Llm Judge"
-        },
-        "llm_sandbox": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Llm Sandbox"
+          "type": "string"
         },
         "learning_enabled": {
-          "anyOf": [
+          "description": "Override company learning for this seat.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "llm": {
+          "description": "Provider key, chain, or per-phase mapping.",
+          "oneOf": [
             {
-              "type": "boolean"
+              "type": "string"
             },
             {
-              "type": "null"
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "auxiliary": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "default": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "execute": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "judge": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "plan": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "review": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "sandbox": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "subagent": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
             }
-          ],
-          "default": null,
-          "title": "Learning Enabled"
+          ]
+        },
+        "llm_auxiliary": {
+          "description": "Cheap model for reflection and summaries.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "llm_execute": {
+          "description": "Provider chain for Execute.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "llm_judge": {
+          "description": "Cheap model for the round-cap extension judge.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "llm_plan": {
+          "description": "Provider chain for Plan; wins over llm.plan.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "llm_review": {
+          "description": "Provider chain for Review.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "llm_sandbox": {
+          "description": "Model the sandboxed coding agent runs on.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "llm_subagent": {
+          "description": "Provider chain for spawned sub-agents.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ]
+        },
+        "manages": {
+          "description": "Seats or units this seat manages; a unit expands to its seats.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "mcp_env": {
           "additionalProperties": {
@@ -1536,1026 +1290,800 @@
             },
             "type": "object"
           },
-          "title": "Mcp Env",
+          "description": "Per-seat MCP credentials: env vars (stdio) or headers (http).",
           "type": "object"
         },
-        "sandbox": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RoleSandboxConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+        "name": {
+          "description": "Unique seat name; also the source of the auto-derived handle.",
+          "type": "string"
         },
         "placement": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RolePlacementConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/RolePlacement",
+          "description": "Which nodes may run this seat. Absent = any node that runs seats."
         },
-        "integrations": {
-          "$ref": "#/$defs/RoleIntegrationsConfig"
+        "responsibilities": {
+          "description": "What this seat owns.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/RoleSandbox",
+          "description": "Per-seat code sandbox gate. Absent = never offered."
         },
         "schedules": {
+          "description": "Recurring work fired into this seat's inbox.",
           "items": {
             "$ref": "#/$defs/Schedule"
           },
-          "title": "Schedules",
           "type": "array"
+        },
+        "token_budget": {
+          "description": "Per-seat token ceiling; 0 = unlimited.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unit": {
+          "description": "Home unit for a root-level seat; the seat is moved into it.",
+          "type": "string"
         }
       },
       "required": [
         "name"
       ],
-      "then": {
-        "$comment": "A human seat is addressable-only and needs at least one contact identity.",
-        "required": [
-          "contact"
-        ]
-      },
-      "title": "RoleConfig",
       "type": "object"
     },
-    "RoleIntegrationsConfig": {
+    "RoleIntegrations": {
       "additionalProperties": false,
-      "description": "Per-agent integration identity \u2014 the inbound / transport side.\n\nThe per-agent counterpart to the org-level ``integrations`` block:\nwhere an agent's *non-tool* identity for an external system lives \u2014\nthe Slack transport app (``slack``) and, for root-level roles, the\nJira project / Confluence space / Plane project the role owns for\nwebhook routing (``jira`` / ``confluence`` / ``plane``; units carry\nthese too \u2014 see :class:`UnitIntegrationsConfig`).\n\nPer-agent *tool* credentials are configured separately under\n``role.mcp_env`` (Atlassian / GitHub / Plane tokens, the Slack MCP's\n``SLACK_MCP_XOXB_TOKEN``) \u2014 those go straight to the MCP server that\nconsumes them.  The ``jira`` / ``confluence`` / ``plane`` identity\nhere is **not** a tool credential and **does not** scope knowledge\nreads (read scope is the org-wide\n:attr:`KnowledgeConfig.confluence_spaces` /\n:attr:`KnowledgeConfig.plane_projects` only).",
       "properties": {
-        "slack": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RoleSlackIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "mattermost": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RoleMattermostIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+        "confluence": {
+          "$ref": "#/$defs/SpaceRef",
+          "description": "The Confluence space this seat owns."
         },
         "jira": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/JiraIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ProjectRef",
+          "description": "The Jira project this seat owns."
         },
-        "confluence": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ConfluenceIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+        "mattermost": {
+          "$ref": "#/$defs/RoleMattermost",
+          "description": "This seat's Mattermost bot: one token covers everything."
         },
         "plane": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PlaneIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ProjectRef",
+          "description": "The Plane project this seat owns."
+        },
+        "slack": {
+          "$ref": "#/$defs/RoleSlack",
+          "description": "This seat's own Slack app: bot token and signing secret."
         }
       },
-      "title": "RoleIntegrationsConfig",
       "type": "object"
     },
-    "RoleKind": {
-      "description": "What kind of individual holds a seat in the org chart.",
-      "enum": [
-        "agent",
-        "human"
-      ],
-      "title": "RoleKind",
-      "type": "string"
-    },
-    "RoleMattermostIdentity": {
+    "RoleMattermost": {
       "additionalProperties": false,
-      "description": "Per-agent Mattermost identity (one bot account per agent).\n\nUnlike Slack, a seat needs exactly **one** credential: the bot's\npersonal access token authenticates the inbound websocket, the\noutbound REST calls and the Mattermost MCP server alike.  There is no\nsigning secret because there is no inbound webhook to verify \u2014 see\n:class:`MattermostConfig`.\n\nName the same ``${VAR}`` here and under\n``role.mcp_env.mattermost.MATTERMOST_TOKEN``: two consumers, one\nsecret, minted once by ``crewlet mattermost provision``.",
       "properties": {
         "bot_token": {
-          "default": "",
-          "title": "Bot Token",
-          "type": "string"
-        },
-        "username": {
-          "default": "",
-          "title": "Username",
+          "description": "Bot personal access token; one credential covers everything.",
           "type": "string"
         },
         "channel": {
-          "default": "",
-          "title": "Channel",
+          "description": "Default channel name for this seat.",
+          "type": "string"
+        },
+        "username": {
+          "description": "Bot username; defaults to the seat handle.",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
           "type": "string"
         }
       },
-      "title": "RoleMattermostIdentity",
       "type": "object"
     },
-    "RolePhaseLLMConfig": {
+    "RolePlacement": {
       "additionalProperties": false,
-      "description": "Dict form of ``role.llm`` \u2014 one provider key per turn phase.\n\nThe scalar form (``llm: fast``) points every phase at one named\nprovider.  This mapping form splits them, with any omitted phase\nfalling back to :attr:`default`.  Equivalent to the flat\n``llm_plan`` / ``llm_execute`` / \u2026 fields on :class:`RoleConfig`;\nwhen both are given the flat field wins.  See\n``docs/concepts/turn-engine.md`` \u00a7 Per-phase LLM models.",
       "properties": {
-        "default": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          ],
-          "default": "default",
-          "title": "Default"
-        },
-        "plan": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Plan"
-        },
-        "execute": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Execute"
-        },
-        "review": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Review"
-        },
-        "subagent": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Subagent"
-        },
-        "auxiliary": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Auxiliary"
-        },
-        "judge": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Judge"
-        },
-        "sandbox": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Sandbox"
-        }
-      },
-      "title": "RolePhaseLLMConfig",
-      "type": "object"
-    },
-    "RolePlacementConfig": {
-      "additionalProperties": false,
-      "description": "Which nodes may run a seat (``role.placement``).\n\n``node`` pins to one node id; ``labels`` requires every pair to\nmatch that node's ``node.labels``. Give both and both must hold \u2014\nthe conditions only ever narrow.\n\nThe engine cannot verify what a node can *reach*, only what it says\nit is. Pinning a sandbox-enabled seat to a node that cannot reach\nthe sandbox provider produces a seat that claims fine and fails\nevery run; see ``docs/guides/fleet.md`` for the network facts a\ntopology has to be true for.",
-      "properties": {
-        "node": {
-          "default": "",
-          "title": "Node",
-          "type": "string"
-        },
         "labels": {
           "additionalProperties": {
             "type": "string"
           },
-          "title": "Labels",
+          "description": "Node labels that must all match.",
           "type": "object"
+        },
+        "node": {
+          "description": "Exact node id to pin this seat to.",
+          "type": "string"
         }
       },
-      "title": "RolePlacementConfig",
       "type": "object"
     },
-    "RoleSandboxConfig": {
+    "RoleSandbox": {
       "additionalProperties": false,
-      "description": "Per-role code-runtime gate (``role.sandbox``).\n\nAbsent \u2192 the role never sees the sandbox option: the\n``run_sandbox`` Execute tool is not offered to it.",
       "properties": {
-        "enabled": {
-          "default": false,
-          "title": "Enabled",
-          "type": "boolean"
-        },
         "coding_agent": {
-          "default": "",
+          "description": "Override the provider default for this seat.",
           "enum": [
-            "",
             "claude-code",
             "opencode"
           ],
-          "title": "Coding Agent",
           "type": "string"
         },
-        "pause_ttl_seconds": {
-          "default": -1.0,
-          "title": "Pause Ttl Seconds",
-          "type": "number"
-        },
-        "mcp": {
-          "$ref": "#/$defs/RoleSandboxMCPConfig"
+        "enabled": {
+          "description": "Offer this seat the sandbox tool.",
+          "type": "boolean"
         },
         "env": {
           "additionalProperties": {
             "type": "string"
           },
-          "title": "Env",
+          "description": "Env for this seat's sandbox run; declare external tokens here.",
           "type": "object"
         },
+        "mcp": {
+          "$ref": "#/$defs/RoleSandboxMCP"
+        },
+        "pause_ttl_seconds": {
+          "description": "Paused-box TTL. Unset (or negative) = provider default; 0 = never pause.",
+          "type": "number"
+        },
         "setup": {
+          "description": "Per-seat provisioning steps, applied after the engine-wide ones.",
           "items": {
             "$ref": "#/$defs/SandboxSetupStep"
           },
-          "title": "Setup",
           "type": "array"
         }
       },
-      "title": "RoleSandboxConfig",
       "type": "object"
     },
-    "RoleSandboxMCPConfig": {
+    "RoleSandboxMCP": {
       "additionalProperties": false,
-      "description": "Which of the role's MCP servers to render into the sandbox.\n\nScoping is at the **server** level only. There is no per-tool allowlist:\nthe coding agent gets every tool the configured servers expose. OpenCode\nhas no allowlist flag, and Claude Code already runs ``bypassPermissions``\nheadless, so a curated allowlist couldn't be enforced uniformly \u2014 we let\neach platform deal with the servers it's given.",
       "properties": {
         "servers": {
+          "description": "MCP server names the coding agent may use.",
           "items": {
             "type": "string"
           },
-          "title": "Servers",
           "type": "array"
         }
       },
-      "title": "RoleSandboxMCPConfig",
       "type": "object"
     },
-    "RoleSlackIdentity": {
+    "RoleSlack": {
       "additionalProperties": false,
-      "description": "Per-agent Slack *transport* identity (one Slack app per agent).\n\nThe credentials the :class:`SlackTransport` uses for this agent \u2014 its\nbot token (outbound Web API + ``send()`` fallback), signing secret\n(inbound webhook signature verification), and optional default\nchannel.  This is **not** the Slack MCP credential: the Slack MCP\nserver reads its own ``SLACK_MCP_XOXB_TOKEN`` from\n``role.mcp_env.slack`` \u2014 name the same ``${VAR}`` in both (two\nconsumers, one secret).",
       "properties": {
         "bot_token": {
-          "default": "",
-          "title": "Bot Token",
-          "type": "string"
-        },
-        "signing_secret": {
-          "default": "",
-          "title": "Signing Secret",
+          "description": "Bot token for outbound Web API calls.",
           "type": "string"
         },
         "channel": {
-          "default": "",
-          "title": "Channel",
+          "description": "Default channel id for this seat.",
+          "type": "string"
+        },
+        "signing_secret": {
+          "description": "Verifies inbound webhooks for this seat's app.",
           "type": "string"
         }
       },
-      "title": "RoleSlackIdentity",
       "type": "object"
     },
-    "SandboxProviderConfig": {
+    "SandboxProvider": {
       "additionalProperties": false,
-      "description": "Engine-level sandbox provider config (``providers.sandbox``).\n\nDrives the [code sandbox](../concepts/code-sandbox.md): a\nsandbox-enabled role can run real code work as a coding agent\n(Claude Code / OpenCode) inside an isolated sandbox via the\n``run_sandbox`` Execute tool. Sibling of\n``providers.llm`` -- live-reloadable, secrets kept verbatim (``${ENV}``\nreferences) in the DB and resolved at construction time.",
       "properties": {
+        "api_key": {
+          "description": "Remote sandbox API key; required for type e2b. ${VAR} supported.",
+          "type": "string"
+        },
+        "default_coding_agent": {
+          "description": "Coding agent for seats that name none.",
+          "enum": [
+            "claude-code",
+            "opencode"
+          ],
+          "type": "string"
+        },
+        "default_pause_ttl_seconds": {
+          "description": "Paused-box TTL before reap and re-seed. 0 = never pause.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "default_timeout_seconds": {
+          "description": "Box TTL/keepalive. Not a run cap — the orphan-reclaim grace.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "domain": {
+          "description": "Self-hosted sandbox cluster domain; empty = vendor cloud.",
+          "type": "string"
+        },
+        "local": {
+          "$ref": "#/$defs/LocalSandbox",
+          "description": "The local backend's block. Required for type local, refused otherwise."
+        },
+        "setup": {
+          "description": "Provisioning steps applied to every box before per-seat extras.",
+          "items": {
+            "$ref": "#/$defs/SandboxSetupStep"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "Box template. This is where vCPU/RAM/disk are set — at template build time.",
+          "type": "string"
+        },
         "type": {
-          "default": "e2b",
+          "description": "Backend: e2b, local, fake, or none. Required — there is no default.",
           "enum": [
             "e2b",
             "local",
             "fake",
             "none"
           ],
-          "title": "Type",
           "type": "string"
-        },
-        "local": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LocalSandboxConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "api_key": {
-          "default": "",
-          "title": "Api Key",
-          "type": "string"
-        },
-        "domain": {
-          "default": "",
-          "title": "Domain",
-          "type": "string"
-        },
-        "template": {
-          "default": "",
-          "title": "Template",
-          "type": "string"
-        },
-        "default_coding_agent": {
-          "default": "claude-code",
-          "enum": [
-            "claude-code",
-            "opencode"
-          ],
-          "title": "Default Coding Agent",
-          "type": "string"
-        },
-        "default_timeout_seconds": {
-          "default": 900.0,
-          "exclusiveMinimum": 0,
-          "title": "Default Timeout Seconds",
-          "type": "number"
-        },
-        "default_pause_ttl_seconds": {
-          "default": 1800.0,
-          "minimum": 0,
-          "title": "Default Pause Ttl Seconds",
-          "type": "number"
-        },
-        "setup": {
-          "items": {
-            "$ref": "#/$defs/SandboxSetupStep"
-          },
-          "title": "Setup",
-          "type": "array"
         }
       },
-      "title": "SandboxProviderConfig",
       "type": "object"
     },
     "SandboxSetupStep": {
       "additionalProperties": false,
-      "description": "One declarative provisioning unit applied to a fresh sandbox.\n\nConfig-loadable (``providers.sandbox.setup`` / ``role.sandbox.setup``);\nevery provisioning concern \u2014 git auth included \u2014 goes through this one\napply / env-merge / brief pipeline with no engine special cases.",
       "properties": {
-        "name": {
-          "title": "Name",
+        "brief": {
+          "description": "What this step made true about the box, told to the coding agent.",
           "type": "string"
         },
-        "files": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "title": "Files",
-          "type": "object"
-        },
         "commands": {
+          "description": "Shell commands run in order; a non-zero exit fails the box.",
           "items": {
             "type": "string"
           },
-          "title": "Commands",
           "type": "array"
         },
         "env": {
           "additionalProperties": {
             "type": "string"
           },
-          "title": "Env",
+          "description": "Env merged into the run; resolved once at launch, not at load.",
           "type": "object"
         },
-        "brief": {
-          "default": "",
-          "title": "Brief",
+        "files": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Files written into the box before commands run.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Short identifier used in logs and failure messages.",
           "type": "string"
         },
         "timeout_seconds": {
-          "default": 600.0,
-          "exclusiveMinimum": 0,
-          "title": "Timeout Seconds",
+          "description": "Per-command wall-clock cap for this step.",
+          "minimum": 0,
           "type": "number"
         }
       },
       "required": [
         "name"
       ],
-      "title": "SandboxSetupStep",
       "type": "object"
     },
     "Schedule": {
       "additionalProperties": false,
-      "description": "A recurring task an agent or unit owns, fired on a cron expression.\n\nSchedules live in the YAML org config (``Role.schedules`` and\n``OrgUnit.schedules``) \u2014 one source of truth, hot-reloadable via\n``engine.reload_config()``.  The engine's :class:`~crewlet.schedule.Scheduler`\npublishes a ``TaskAssigned`` to the resolved runner's inbox when a\nschedule is due; the agent runtime path is otherwise unchanged.\n\nSee ``docs/concepts/scheduling.md`` for the full design.",
       "properties": {
-        "name": {
-          "title": "Name",
-          "type": "string"
+        "catchup": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "cron": {
-          "pattern": "^\\s*\\S+(?:\\s+\\S+){4}\\s*$",
-          "title": "Cron",
           "type": "string"
         },
-        "task": {
-          "title": "Task",
-          "type": "string"
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
-        "timezone": {
-          "default": "",
-          "title": "Timezone",
+        "name": {
           "type": "string"
         },
         "target": {
-          "default": "each",
-          "title": "Target",
           "type": "string"
         },
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
+        "task": {
+          "type": "string"
         },
         "timeout_seconds": {
-          "default": 180,
-          "title": "Timeout Seconds",
           "type": "integer"
         },
-        "catchup": {
-          "default": true,
-          "title": "Catchup",
-          "type": "boolean"
+        "timezone": {
+          "type": "string"
         }
       },
-      "required": [
-        "name",
-        "cron",
-        "task"
-      ],
-      "title": "Schedule",
       "type": "object"
     },
-    "SchedulingConfig": {
+    "Scheduling": {
       "additionalProperties": false,
-      "description": "Configuration for the role/unit scheduler.\n\nThe scheduler is auto-enabled when ``enabled`` is true, a database\nis configured (it needs the ``scheduled_runs`` ledger for\nat-most-once delivery), and at least one role or unit declares a\n``schedules:`` block.  Orgs with no schedules never spin up the\ntick loop.\n\nSee ``docs/concepts/scheduling.md``.",
       "properties": {
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
-        },
-        "tick_seconds": {
-          "default": 10,
-          "title": "Tick Seconds",
-          "type": "integer"
-        },
-        "default_timezone": {
-          "default": "UTC",
-          "title": "Default Timezone",
-          "type": "string"
-        },
-        "jitter_seconds": {
-          "default": 0,
-          "title": "Jitter Seconds",
+        "catchup_max_seconds": {
+          "description": "Upper clamp on the missed-tick catchup window.",
+          "minimum": 0,
           "type": "integer"
         },
         "catchup_min_seconds": {
-          "default": 120,
-          "title": "Catchup Min Seconds",
+          "description": "Lower clamp on the missed-tick catchup window.",
+          "minimum": 0,
           "type": "integer"
         },
-        "catchup_max_seconds": {
-          "default": 7200,
-          "title": "Catchup Max Seconds",
+        "default_timezone": {
+          "description": "IANA zone for schedules that name none.",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Master switch for the scheduler (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "jitter_seconds": {
+          "description": "Deterministic per-schedule jitter to spread a popular minute.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tick_seconds": {
+          "description": "Scheduler poll interval; under 60s catches every cron minute.",
+          "minimum": 1,
           "type": "integer"
         }
       },
-      "title": "SchedulingConfig",
       "type": "object"
     },
-    "SkillCuratorConfig": {
+    "SkillCurator": {
       "additionalProperties": false,
-      "description": "Skill-curator settings.\n\nThe ``SkillCuratorWorker`` walks ``synthesized_skills`` on an\ninterval and ages out unused skills (active \u2192 stale \u2192 archived).\nPinned skills are exempt. Archived skills are still in the table\n-- restoration is ``UPDATE synthesized_skills SET state='active'``.\n\nThe read-then-archive race against the Plan-phase prefetch is\nclosed in the store: ``transition_state`` only fires the demote\nUPDATE if the row's ``last_used_at`` still matches the curator's\nsnapshot, so no \"safety window\" knob is needed.",
       "properties": {
+        "archive_after_days": {
+          "description": "Unused days before a skill is archived.",
+          "minimum": 0,
+          "type": "integer"
+        },
         "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
+          "description": "Age unused skills out (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "interval_hours": {
-          "default": 24,
-          "title": "Interval Hours",
+          "description": "How often the curator walks the skill table.",
+          "minimum": 0,
           "type": "integer"
         },
         "stale_after_days": {
-          "default": 30,
-          "title": "Stale After Days",
-          "type": "integer"
-        },
-        "archive_after_days": {
-          "default": 90,
-          "title": "Archive After Days",
+          "description": "Unused days before a skill goes stale.",
+          "minimum": 0,
           "type": "integer"
         }
       },
-      "title": "SkillCuratorConfig",
       "type": "object"
     },
-    "SkillPromotionConfig": {
+    "SkillPromotion": {
       "additionalProperties": false,
-      "description": "Skill-promotion settings.\n\nAdds a second pass to the SkillClusteringScheduler: for each unit,\ncluster recent agent-scope synthesized skills across siblings by\ntool-sequence Jaccard; when \u2265 ``min_sibling_count`` distinct\nagents share a cluster (and no unit-scope skill already covers\nit), draft a unit-scope skill via the auxiliary model.",
       "properties": {
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
-        },
-        "min_sibling_count": {
-          "default": 3,
-          "title": "Min Sibling Count",
+        "budget_tokens": {
+          "description": "Soft token cap per promotion draft.",
+          "minimum": 0,
           "type": "integer"
+        },
+        "enabled": {
+          "description": "Promote sibling skills to unit scope (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "jaccard_threshold": {
-          "default": 0.6,
-          "title": "Jaccard Threshold",
+          "description": "Similarity that pools two seats' skills.",
+          "maximum": 1,
+          "minimum": 0,
           "type": "number"
         },
-        "budget_tokens": {
-          "default": 4000,
-          "title": "Budget Tokens",
+        "min_sibling_count": {
+          "description": "Distinct seats a cluster needs before promotion.",
+          "minimum": 0,
           "type": "integer"
         }
       },
-      "title": "SkillPromotionConfig",
       "type": "object"
     },
-    "SkillRefinementConfig": {
+    "SkillRefinement": {
       "additionalProperties": false,
-      "description": "Skill-refinement settings.\n\nRuns as a fourth worker inside the ReflectEngine: whenever a turn\nused one or more synthesized skills, the refiner decides whether\nto append an observation (on success) or a counter-example (on\nfailure) to the most-recently-used match.  Version history is\narchived automatically; rollback works via\n:meth:`SynthesizedSkillStore.rollback_to_version`.",
       "properties": {
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
+        "auto_refine_on_failure": {
+          "description": "Append a counter-example when it failed (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "auto_refine_on_success": {
-          "default": true,
-          "title": "Auto Refine On Success",
-          "type": "boolean"
-        },
-        "auto_refine_on_failure": {
-          "default": true,
-          "title": "Auto Refine On Failure",
-          "type": "boolean"
+          "description": "Append an observation when a skill's turn succeeded (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "budget_tokens": {
-          "default": 3000,
-          "title": "Budget Tokens",
+          "description": "Soft token cap per refinement.",
+          "minimum": 0,
           "type": "integer"
         },
+        "enabled": {
+          "description": "Refine skills after use (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "max_body_chars": {
-          "default": 20000,
-          "title": "Max Body Chars",
+          "description": "Ceiling on a refined skill's body.",
+          "minimum": 0,
           "type": "integer"
         },
         "max_versions_kept": {
-          "default": 10,
-          "title": "Max Versions Kept",
+          "description": "Archived versions kept for rollback.",
+          "minimum": 0,
           "type": "integer"
         }
       },
-      "title": "SkillRefinementConfig",
       "type": "object"
     },
-    "SkillSynthesisConfig": {
+    "SkillSynthesis": {
       "additionalProperties": false,
-      "description": "Skill-synthesis settings.\n\nTwo triggers: single-turn (inline from the ReflectEngine when a\nturn used ``>= min_tool_calls`` tools and finished ``done``) and\nclustered (scheduled tick that groups recent successful turns by\ntool-sequence Jaccard similarity and drafts skills for recurring\npatterns).  Both paths write to the ``synthesized_skills`` table.",
       "properties": {
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
-        },
-        "min_tool_calls": {
-          "default": 5,
-          "title": "Min Tool Calls",
-          "type": "integer"
-        },
         "budget_tokens": {
-          "default": 4000,
-          "title": "Budget Tokens",
-          "type": "integer"
-        },
-        "max_skills_per_agent": {
-          "default": 50,
-          "title": "Max Skills Per Agent",
-          "type": "integer"
-        },
-        "duplicate_jaccard_threshold": {
-          "default": 0.7,
-          "title": "Duplicate Jaccard Threshold",
-          "type": "number"
-        },
-        "scheduler_enabled": {
-          "default": false,
-          "title": "Scheduler Enabled",
-          "type": "boolean"
-        },
-        "scheduler_interval_seconds": {
-          "default": 3600,
-          "title": "Scheduler Interval Seconds",
-          "type": "integer"
-        },
-        "cluster_window_hours": {
-          "default": 168,
-          "title": "Cluster Window Hours",
-          "type": "integer"
-        },
-        "cluster_min_size": {
-          "default": 3,
-          "title": "Cluster Min Size",
+          "description": "Soft token cap per draft attempt.",
+          "minimum": 0,
           "type": "integer"
         },
         "cluster_jaccard_threshold": {
-          "default": 0.6,
-          "title": "Cluster Jaccard Threshold",
+          "description": "Similarity that pools two turns into one cluster.",
+          "maximum": 1,
+          "minimum": 0,
           "type": "number"
         },
+        "cluster_min_size": {
+          "description": "Turns a cluster needs before it earns a skill.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cluster_window_hours": {
+          "description": "How far back the clustering pass looks.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "duplicate_jaccard_threshold": {
+          "description": "Reject a draft this similar to an existing skill.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "enabled": {
+          "description": "Draft skills from turns (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "episode_fetch_limit": {
-          "default": 200,
-          "title": "Episode Fetch Limit",
+          "description": "Episodes pulled into one clustering pass.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_skills_per_agent": {
+          "description": "Hard per-seat skill cap.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_tool_calls": {
+          "description": "Tool calls a turn needs before an inline draft.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scheduler_enabled": {
+          "description": "Background clustering pass (default off).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "scheduler_interval_seconds": {
+          "description": "How often the clustering pass runs.",
+          "minimum": 0,
           "type": "integer"
         }
       },
-      "title": "SkillSynthesisConfig",
       "type": "object"
     },
-    "SlackConfig": {
+    "Slack": {
       "additionalProperties": false,
-      "description": "Organisation-level Slack configuration.\n\nEvery *credential* is per-agent (``role.integrations.slack``); this\nblock is the transport-enable marker plus the genuinely org-wide\nSlack behaviour \u2014 ``typing_status`` and ``status_phrases``.\nDeclaring this section under the top-level ``integrations`` block\n(even as ``slack: {}``) turns on the outbound\n:class:`SlackTransport` and per-agent webhook routing; omit it to\ndisable Slack entirely.\n\n``typing_status`` controls the \"*<agent> is thinking\u2026*\" working\nindicator an agent shows while it reasons about a Slack message (see\n:mod:`crewlet.notifications.typing_status`):\n\n- ``addressed`` (default) \u2014 only when a human is plausibly waiting on\n  this agent: a DM / group DM, a direct ``@mention``, or a thread the\n  agent already follows.\n- ``always`` \u2014 on every Slack-triggered turn, including passive\n  top-level channel messages and ``@here`` broadcasts.\n- ``off`` \u2014 disabled.\n\n``status_phrases`` replaces the words it shows \u2014 see\n:class:`SlackStatusPhrases`.\n\nThe Slack *tool* server is declared separately in ``mcp_servers``\n(name it ``slack``, ``shared: false``).  A Slack-enabled agent needs\nits bot token in **two** places \u2014 they are two different consumers:\nthe transport identity (``role.integrations.slack``, whose\n``signing_secret`` also verifies inbound webhooks) and the Slack MCP\nsubprocess (``role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN``).  Both\nreference the same ``${VAR}``, so there is no secret duplication.\nSee ``docs/concepts/tool-capabilities.md``.\n\nExample YAML::\n\n    integrations:\n      slack:\n        typing_status: addressed   # addressed | always | off\n        status_phrases:            # optional \u2014 built-ins otherwise\n          plan: [\"is nimbusing...\"]\n\n    mcp_servers:\n      - name: slack\n        shared: false\n        command: npm\n        args: [\"exec\", \"--yes\", \"--\", \"slack-mcp-server@latest\",\n               \"--transport\", \"stdio\"]\n        tool_prefix: \"slack_\"\n\n    roles:\n      - name: Engineer\n        integrations:                 # per-agent transport identity\n          slack:\n            bot_token: \"${SLACK_BOT_TOKEN_ENGINEER}\"\n            signing_secret: \"${SLACK_SIGNING_SECRET_ENGINEER}\"\n        mcp_env:                       # Slack MCP server identity\n          slack:\n            SLACK_MCP_XOXB_TOKEN: \"${SLACK_BOT_TOKEN_ENGINEER}\"",
       "properties": {
-        "typing_status": {
-          "$ref": "#/$defs/WorkingStatusMode",
-          "default": "addressed"
-        },
         "status_phrases": {
-          "$ref": "#/$defs/SlackStatusPhrases"
+          "$ref": "#/$defs/StatusPhrases"
+        },
+        "typing_status": {
+          "description": "When to show the working indicator (default addressed).",
+          "enum": [
+            "addressed",
+            "always",
+            "off"
+          ],
+          "type": "string"
         }
       },
-      "title": "SlackConfig",
       "type": "object"
     },
-    "SlackStatusPhrases": {
+    "SpaceRef": {
       "additionalProperties": false,
-      "description": "Per-phase overrides for the Slack working-status lines.\n\nSlack renders each line suffixed to the agent's name, so every phrase\nmust complete that sentence: ``\"is crewleting...\"`` reads as \"*Agent\nSWE is crewleting\u2026*\".  Each phase draws from its whole list \u2014 the\nengine picks one per phase and holds it for that phase's duration \u2014\nso a list of one is a fixed label and a longer list gives the\nindicator some variety across turns.\n\nA phase you omit (or give an empty list) keeps the built-in pool from\n:mod:`crewlet.notifications.typing_status`.  ``default`` covers any\nphase the engine adds later that has no pool of its own.\n\nKeep every phrase generic to the phase.  The engine's pick is\narbitrary \u2014 it never inspects what the agent is doing \u2014 so a line\nnaming real work (\"is checking Jira...\") is a claim that is false most\nof the time it shows; see the phrase rule in\n:mod:`crewlet.notifications.typing_status`.\n\nExample YAML::\n\n    integrations:\n      slack:\n        status_phrases:\n          plan: [\"is nimbusing...\", \"is thinking very hard...\"]\n          execute: [\"is nimbusing it...\", \"is on the case...\"]",
       "properties": {
-        "onboarding": {
+        "space": {
+          "description": "Space key.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "StatusPhrases": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "description": "Lines for any phase with no pool of its own.",
           "items": {
             "type": "string"
           },
-          "title": "Onboarding",
-          "type": "array"
-        },
-        "plan": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Plan",
           "type": "array"
         },
         "execute": {
+          "description": "Lines shown during Execute.",
           "items": {
             "type": "string"
           },
-          "title": "Execute",
+          "type": "array"
+        },
+        "onboarding": {
+          "description": "Lines shown during the first-turn onboarding pass.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "plan": {
+          "description": "Lines shown during Plan.",
+          "items": {
+            "type": "string"
+          },
           "type": "array"
         },
         "review": {
+          "description": "Lines shown during Review.",
           "items": {
             "type": "string"
           },
-          "title": "Review",
           "type": "array"
-        },
-        "default": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "title": "Default"
         }
       },
-      "title": "SlackStatusPhrases",
       "type": "object"
     },
-    "TurnEngineConfig": {
+    "TurnEngine": {
       "additionalProperties": false,
-      "description": "Configuration for the Plan/Execute/Review turn engine.\n\nThe turn engine replaces the single-shot LLM + tool loop with three\nphases per agent turn: Plan produces an ``ExecutionPlan``, Execute\nruns the plan's tool surface, and Review decides whether the turn\nis done, should iterate, or hand off to a colleague.\n\nSee ``docs/concepts/turn-engine.md`` for details.",
       "properties": {
-        "max_iterations": {
-          "default": 3,
-          "title": "Max Iterations",
-          "type": "integer"
-        },
-        "subagent_max_turns": {
-          "default": 20,
-          "title": "Subagent Max Turns",
-          "type": "integer"
-        },
-        "subagent_timeout_seconds": {
-          "default": 120.0,
-          "title": "Subagent Timeout Seconds",
-          "type": "number"
-        },
-        "subagent_budget_fraction": {
-          "default": 0.2,
-          "title": "Subagent Budget Fraction",
-          "type": "number"
-        },
-        "subagent_max_parallel": {
-          "default": 3,
-          "title": "Subagent Max Parallel",
-          "type": "integer"
-        },
-        "subagent_batch_timeout_seconds": {
-          "default": 120.0,
-          "title": "Subagent Batch Timeout Seconds",
-          "type": "number"
-        },
-        "subagent_min_per_child_tokens": {
-          "default": 500,
-          "title": "Subagent Min Per Child Tokens",
-          "type": "integer"
-        },
-        "executor_always_on_tools": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Executor Always On Tools",
-          "type": "array"
+        "conversation_session": {
+          "$ref": "#/$defs/ConversationSession"
         },
         "delegation_depth_limit": {
-          "default": 3,
-          "title": "Delegation Depth Limit",
-          "type": "integer"
-        },
-        "max_tool_rounds": {
-          "default": 20,
-          "title": "Max Tool Rounds",
-          "type": "integer"
-        },
-        "plan_max_tool_rounds": {
-          "default": 16,
-          "title": "Plan Max Tool Rounds",
-          "type": "integer"
-        },
-        "onboarding_max_tool_rounds": {
-          "default": 10,
-          "title": "Onboarding Max Tool Rounds",
-          "type": "integer"
-        },
-        "extension_enabled": {
-          "default": true,
-          "title": "Extension Enabled",
-          "type": "boolean"
-        },
-        "plan_max_tool_rounds_ceiling": {
-          "default": 32,
-          "title": "Plan Max Tool Rounds Ceiling",
+          "description": "Maximum depth of agent-to-agent delegation chains.",
+          "minimum": 0,
           "type": "integer"
         },
         "execute_max_tool_rounds_ceiling": {
-          "default": 40,
-          "title": "Execute Max Tool Rounds Ceiling",
+          "description": "Hard ceiling for Execute rounds across extensions.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "executor_always_on_tools": {
+          "description": "Tools Execute always has, whatever the plan named.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "extension_enabled": {
+          "description": "Round-cap extension judge (default on).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "extension_round_step": {
+          "description": "Maximum rounds one extension call may grant.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_iterations": {
+          "description": "Plan/Execute/Review iterations per turn.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_tool_rounds": {
+          "description": "Tool rounds within one Execute run.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "onboarding_max_tool_rounds": {
+          "description": "Rounds for the first-turn onboarding pass; 0 disables it.",
+          "minimum": 0,
           "type": "integer"
         },
         "onboarding_max_tool_rounds_ceiling": {
-          "default": 20,
-          "title": "Onboarding Max Tool Rounds Ceiling",
+          "description": "Hard ceiling for onboarding rounds across extensions.",
+          "minimum": 0,
           "type": "integer"
         },
-        "extension_round_step": {
-          "default": 8,
-          "title": "Extension Round Step",
+        "plan_max_tool_rounds": {
+          "description": "Tool rounds within one Plan run.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plan_max_tool_rounds_ceiling": {
+          "description": "Hard ceiling for Plan rounds across extensions.",
+          "minimum": 0,
           "type": "integer"
         },
         "sandbox_budget_fraction": {
-          "default": 0.5,
-          "title": "Sandbox Budget Fraction",
+          "description": "Share of the seat's remaining budget a sandboxed Execute may use.",
+          "maximum": 1,
+          "minimum": 0,
           "type": "number"
         },
         "sandbox_min_budget_tokens": {
-          "default": 2000,
-          "title": "Sandbox Min Budget Tokens",
+          "description": "Refuse a sandboxed Execute below this remaining budget.",
+          "minimum": 0,
           "type": "integer"
         },
-        "conversation_session": {
-          "$ref": "#/$defs/ConversationSessionConfig",
-          "default": {
-            "enabled": true,
-            "max_entries": 20,
-            "injected_max_entries": 5,
-            "injected_max_chars": 6000,
-            "retention_days": 30
-          }
+        "subagent_batch_timeout_seconds": {
+          "description": "Wall-clock cap on a whole batched spawn.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "subagent_budget_fraction": {
+          "description": "Share of the parent's remaining budget a sub-agent may use.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "subagent_max_parallel": {
+          "description": "Sub-agents run concurrently in one batch.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subagent_max_turns": {
+          "description": "Tool rounds one sub-agent may run.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subagent_min_per_child_tokens": {
+          "description": "Floor on a child's token slice; below it the batch is refused.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "subagent_timeout_seconds": {
+          "description": "Wall-clock cap on one sub-agent.",
+          "minimum": 0,
+          "type": "number"
         }
       },
-      "title": "TurnEngineConfig",
       "type": "object"
     },
-    "UnitIntegrationsConfig": {
+    "Unit": {
       "additionalProperties": false,
-      "description": "Per-unit integration identity \u2014 the Jira project + Confluence space\n+ Plane project a unit owns.\n\nDrives inbound webhook routing (Jira project / Confluence space /\nPlane project activity with no better recipient routes to the unit\nlead \u2014 see :func:`build_project_key_lead_map` /\n:func:`build_space_key_lead_map` /\n:func:`build_plane_project_lead_map`) and serves as the team's write\n/ skill-promotion home.  Slack at the unit level is the\n``slack_channel`` field, so it is intentionally not part of this\nblock.  No field here is a tool credential, and none scopes\nknowledge reads.",
       "properties": {
-        "jira": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/JiraIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+        "channel": {
+          "description": "Unit channel on the company's chat surface; inherited by child units.",
+          "type": "string"
         },
-        "confluence": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ConfluenceIdentity"
+        "children": {
+          "description": "Child units.",
+          "items": {
+            "$ref": "#/$defs/Unit"
+          },
+          "type": "array"
+        },
+        "goals": {
+          "description": "What this unit is working toward.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "integrations": {
+          "$ref": "#/$defs/UnitIntegrations"
+        },
+        "knowledge": {
+          "description": "Free-text knowledge references. Not a read scope.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "lead": {
+          "description": "Seat leading this unit; inherited from the parent when empty.",
+          "type": "string"
+        },
+        "mcp_env": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
             },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+            "type": "object"
+          },
+          "description": "Credentials inherited by this unit's direct members.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Unit name; also what a manages entry can reference.",
+          "type": "string"
+        },
+        "purpose": {
+          "description": "What this unit is for.",
+          "type": "string"
+        },
+        "roles": {
+          "description": "Seats belonging to this unit.",
+          "items": {
+            "$ref": "#/$defs/Role"
+          },
+          "type": "array"
+        },
+        "schedules": {
+          "description": "Recurring work owned by this unit.",
+          "items": {
+            "$ref": "#/$defs/Schedule"
+          },
+          "type": "array"
+        },
+        "type": {
+          "description": "Informational label: team (default), department, squad, ...",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "UnitIntegrations": {
+      "additionalProperties": false,
+      "properties": {
+        "confluence": {
+          "$ref": "#/$defs/SpaceRef",
+          "description": "The Confluence space this unit owns."
+        },
+        "jira": {
+          "$ref": "#/$defs/ProjectRef",
+          "description": "The Jira project this unit owns."
         },
         "plane": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PlaneIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+          "$ref": "#/$defs/ProjectRef",
+          "description": "The Plane project this unit owns."
         }
       },
-      "title": "UnitIntegrationsConfig",
       "type": "object"
-    },
-    "WorkingStatusMode": {
-      "description": "When an agent shows a working status on a chat backend.\n\n``addressed`` (the default) covers exactly the cases where a human is\nplausibly waiting on *this* agent: a DM or group DM, a direct\n``@mention``, or a thread the agent already follows.  A broadcast\n(``@here`` / ``@channel``) and a passive top-level channel message are\ndeliberately excluded \u2014 every bot in the channel is woken by those, and\nthe chat triage prompt tells most of them to stay silent, so lighting\nup N indicators would be noise rather than signal.\n\n``always`` shows it on every chat-triggered turn (useful for a\nsingle-agent workspace); ``off`` disables the feature entirely.",
-      "enum": [
-        "off",
-        "addressed",
-        "always"
-      ],
-      "title": "WorkingStatusMode",
-      "type": "string"
     }
   },
+  "$id": "https://docs.crewlet.ai/schema/company.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "allOf": [
-    {
-      "$comment": "The knowledge backend is single-homed: integrations.confluence and an enabled integrations.plane are mutually exclusive.",
-      "not": {
-        "properties": {
-          "integrations": {
-            "properties": {
-              "confluence": {
-                "type": "object"
-              },
-              "plane": {
-                "properties": {
-                  "enabled": {
-                    "const": true
-                  }
-                },
-                "required": [
-                  "enabled"
-                ],
-                "type": "object"
-              }
-            },
-            "required": [
-              "confluence",
-              "plane"
-            ]
-          }
-        },
-        "required": [
-          "integrations"
-        ]
-      }
-    },
     {
       "$comment": "knowledge.plane_projects requires an enabled integrations.plane.",
       "if": {
@@ -2599,270 +2127,99 @@
           "integrations"
         ]
       }
-    },
-    {
-      "$comment": "knowledge.confluence_spaces is a scope list for the Confluence backend; it is rejected when integrations.plane is enabled.",
-      "if": {
-        "properties": {
-          "knowledge": {
-            "properties": {
-              "confluence_spaces": {
-                "minItems": 1
-              }
-            },
-            "required": [
-              "confluence_spaces"
-            ]
-          }
-        },
-        "required": [
-          "knowledge"
-        ]
-      },
-      "then": {
-        "not": {
-          "properties": {
-            "integrations": {
-              "properties": {
-                "plane": {
-                  "properties": {
-                    "enabled": {
-                      "const": true
-                    }
-                  },
-                  "required": [
-                    "enabled"
-                  ]
-                }
-              },
-              "required": [
-                "plane"
-              ]
-            }
-          },
-          "required": [
-            "integrations"
-          ]
-        }
-      }
     }
   ],
-  "description": "Tier B \u2014 founder-owned, live-editable, versioned in PostgreSQL.\n\nEverything that defines *what the company is and how its agents\nbehave*: identity, providers, integrations, MCP servers, roles,\nunits, learning + turn-engine settings, budgets, extensions.\n\nStored as a JSONB document in the ``company_config`` table; one\nrow marked active at a time.  Delivered to the engine via\n:meth:`Engine.apply_config` either at boot (from the active DB\nrow) or at runtime (over Pulsar after a ``PUT /config``).\n\nSee ``docs/concepts/configuration.md``.",
   "properties": {
-    "name": {
-      "title": "Name",
-      "type": "string"
-    },
-    "mission": {
-      "default": "",
-      "title": "Mission",
-      "type": "string"
-    },
-    "vision": {
-      "default": "",
-      "title": "Vision",
-      "type": "string"
-    },
-    "policies": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Policies",
-      "type": "array"
-    },
     "integrations": {
-      "$ref": "#/$defs/IntegrationsConfig"
+      "$ref": "#/$defs/Integrations"
     },
     "knowledge": {
-      "$ref": "#/$defs/KnowledgeConfig"
-    },
-    "skill_variables": {
-      "additionalProperties": false,
-      "patternProperties": {
-        "^[A-Za-z_][A-Za-z0-9_]*$": {
-          "type": "string"
-        }
-      },
-      "title": "Skill Variables",
-      "type": "object"
-    },
-    "providers": {
-      "$ref": "#/$defs/ProvidersConfig",
-      "default": {
-        "llm": {},
-        "embeddings": null,
-        "sandbox": null
-      }
-    },
-    "turn_engine": {
-      "$ref": "#/$defs/TurnEngineConfig",
-      "default": {
-        "max_iterations": 3,
-        "subagent_max_turns": 20,
-        "subagent_timeout_seconds": 120.0,
-        "subagent_budget_fraction": 0.2,
-        "subagent_max_parallel": 3,
-        "subagent_batch_timeout_seconds": 120.0,
-        "subagent_min_per_child_tokens": 500,
-        "executor_always_on_tools": [
-          "load_tool_skill"
-        ],
-        "delegation_depth_limit": 3,
-        "max_tool_rounds": 20,
-        "plan_max_tool_rounds": 16,
-        "onboarding_max_tool_rounds": 10,
-        "extension_enabled": true,
-        "plan_max_tool_rounds_ceiling": 32,
-        "execute_max_tool_rounds_ceiling": 40,
-        "onboarding_max_tool_rounds_ceiling": 20,
-        "extension_round_step": 8,
-        "sandbox_budget_fraction": 0.5,
-        "sandbox_min_budget_tokens": 2000,
-        "conversation_session": {
-          "enabled": true,
-          "injected_max_chars": 6000,
-          "injected_max_entries": 5,
-          "max_entries": 20,
-          "retention_days": 30
-        }
-      }
+      "$ref": "#/$defs/Knowledge"
     },
     "learning": {
-      "$ref": "#/$defs/LearningConfig",
-      "default": {
-        "enabled": true,
-        "episodic": {
-          "retrieval_limit": 5
-        },
-        "reflect": {
-          "budget_tokens": 5000,
-          "enabled": true,
-          "persist_decider": true,
-          "summarize_episodes": true,
-          "summarize_max_tokens": 400
-        },
-        "counterparty": {
-          "budget_tokens": 3000,
-          "enabled": true
-        },
-        "skill_synthesis": {
-          "budget_tokens": 4000,
-          "cluster_jaccard_threshold": 0.6,
-          "cluster_min_size": 3,
-          "cluster_window_hours": 168,
-          "duplicate_jaccard_threshold": 0.7,
-          "enabled": true,
-          "episode_fetch_limit": 200,
-          "max_skills_per_agent": 50,
-          "min_tool_calls": 5,
-          "scheduler_enabled": false,
-          "scheduler_interval_seconds": 3600
-        },
-        "skill_refinement": {
-          "auto_refine_on_failure": true,
-          "auto_refine_on_success": true,
-          "budget_tokens": 3000,
-          "enabled": true,
-          "max_body_chars": 20000,
-          "max_versions_kept": 10
-        },
-        "skill_promotion": {
-          "budget_tokens": 4000,
-          "enabled": true,
-          "jaccard_threshold": 0.6,
-          "min_sibling_count": 3
-        },
-        "skill_curator": {
-          "archive_after_days": 90,
-          "enabled": true,
-          "interval_hours": 24,
-          "stale_after_days": 30
-        },
-        "personal_memory": {
-          "max_refreshes_per_turn": 3
-        },
-        "episode_lifecycle": {
-          "compacted_max_age_days": 0,
-          "compaction_batch_size": 200,
-          "compaction_budget_tokens": 4000,
-          "compaction_jaccard_threshold": 0.6,
-          "compaction_min_age_days": 30,
-          "compaction_min_cluster_size": 3,
-          "consolidated_grace_days": 30,
-          "exemplar_count": 2,
-          "max_raw_episodes_per_agent": 500,
-          "non_terminal_max_age_days": 14,
-          "write_check_every_n": 10
-        }
-      }
-    },
-    "scheduling": {
-      "$ref": "#/$defs/SchedulingConfig",
-      "default": {
-        "enabled": true,
-        "tick_seconds": 10,
-        "default_timezone": "UTC",
-        "jitter_seconds": 0,
-        "catchup_min_seconds": 120,
-        "catchup_max_seconds": 7200
-      }
+      "$ref": "#/$defs/Learning"
     },
     "mcp_servers": {
+      "description": "Tool servers, stdio or http. Per-agent credentials live in role.mcp_env.",
       "items": {
-        "$ref": "#/$defs/MCPServerConfig"
+        "$ref": "#/$defs/MCPServer"
       },
-      "title": "Mcp Servers",
       "type": "array"
     },
-    "token_budget": {
-      "default": 0,
-      "title": "Token Budget",
-      "type": "integer"
+    "mission": {
+      "description": "One line on what the company is for; reaches every seat's prompt.",
+      "type": "string"
     },
-    "notification_rate_limit": {
-      "default": 0,
-      "title": "Notification Rate Limit",
+    "name": {
+      "description": "Company name. Half of every seat's derived id — effectively permanent.",
+      "type": "string"
+    },
+    "notification_coalesce_max_batch": {
+      "description": "Events merged into one digest trigger.",
+      "minimum": 1,
       "type": "integer"
     },
     "notification_coalesce_window_seconds": {
-      "default": 0.0,
-      "maximum": 60.0,
-      "minimum": 0.0,
-      "title": "Notification Coalesce Window Seconds",
+      "description": "Inbox linger before dispatch, 0..60s. 0 adds no latency.",
+      "maximum": 60,
+      "minimum": 0,
       "type": "number"
     },
-    "notification_coalesce_max_batch": {
-      "default": 20,
-      "minimum": 1,
-      "title": "Notification Coalesce Max Batch",
+    "notification_rate_limit": {
+      "description": "Outbound notification cap; 0 = unlimited.",
+      "minimum": 0,
       "type": "integer"
     },
-    "roles": {
+    "policies": {
+      "description": "Company-wide rules injected into every seat's prompt.",
       "items": {
-        "$ref": "#/$defs/RoleConfig"
+        "type": "string"
       },
-      "title": "Roles",
       "type": "array"
+    },
+    "providers": {
+      "$ref": "#/$defs/Providers"
+    },
+    "roles": {
+      "description": "Seats belonging to no unit.",
+      "items": {
+        "$ref": "#/$defs/Role"
+      },
+      "type": "array"
+    },
+    "scheduling": {
+      "$ref": "#/$defs/Scheduling"
+    },
+    "skill_variables": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "name -\u003e value facts substituted into tool-skill text. Keys must be identifiers.",
+      "type": "object"
+    },
+    "token_budget": {
+      "description": "Org-wide token ceiling across all seats; 0 = unlimited.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "turn_engine": {
+      "$ref": "#/$defs/TurnEngine"
     },
     "units": {
+      "description": "The org hierarchy; units nest to any depth.",
       "items": {
-        "$ref": "#/$defs/OrgUnitConfig"
+        "$ref": "#/$defs/Unit"
       },
-      "title": "Units",
       "type": "array"
     },
-    "extensions": {
-      "items": {
-        "additionalProperties": true,
-        "type": "object"
-      },
-      "title": "Extensions",
-      "type": "array"
+    "vision": {
+      "description": "Longer statement of where the company is going.",
+      "type": "string"
     }
   },
   "required": [
     "name"
   ],
-  "title": "CompanyConfig",
+  "title": "Crewlet company config (Tier B)",
   "type": "object"
 }

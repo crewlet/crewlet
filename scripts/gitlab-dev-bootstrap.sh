@@ -31,13 +31,32 @@ PROJECT="${GITLAB_PROJECT:-nimbuscore}"
 # Set COMPANY=path/to/your-local-config.yaml to auto-provision it; leave
 # unset to just seed + print the provision command.
 COMPANY="${COMPANY:-}"
-# Where the compose GitLab should reach the engine's /webhooks/gitlab. The
-# engine's EMBEDDED API serves that route when the Tier A file sets
+# Where the compose GitLab should reach THE ENGINE — its base address, not
+# its webhook path. The engine serves seven webhook routes and owns every
+# one of those paths, so the provisioner is handed a host and derives
+# `/webhooks/gitlab` itself: an operator typing the path can get it wrong,
+# and a hook pointing at a path nothing serves leaves the group reporting a
+# healthy integration that delivers nowhere.
+#
+# The engine's EMBEDDED API serves that route when the Tier A file sets
 # api.port: 80 (the single-host walkthrough shape — see
 # docs/integrations/gitlab.md § Local testing; NOT 8080 — that's Pulsar's
 # admin port in this compose). On Docker Desktop reach the host via
 # host.docker.internal; on Linux the gateway IP works.
-WEBHOOK_URL="${WEBHOOK_URL:-http://host.docker.internal:80/webhooks/gitlab}"
+#
+# The knob used to be WEBHOOK_URL and took a full endpoint. Silently
+# ignoring one left in an operator's shell would send hooks to the default
+# host, which on a remote host is exactly the failure this address exists
+# to avoid — so it is refused rather than dropped.
+if [ -n "${WEBHOOK_URL:-}" ]; then
+  echo "WEBHOOK_URL is no longer read: the engine owns the webhook path and" >&2
+  echo "derives it. Set ENGINE_URL to the engine's base address instead." >&2
+  exit 2
+fi
+ENGINE_URL="${ENGINE_URL:-http://host.docker.internal:80}"
+# Display only, derived exactly as the provisioner derives it, so what this
+# script PRINTS cannot drift from what it registers.
+WEBHOOK_URL="${ENGINE_URL%/}/webhooks/gitlab"
 
 if [ -z "${GITLAB_CONTAINER}" ]; then
   echo "GitLab container not found. Run: docker compose --profile gitlab up -d" >&2
@@ -95,10 +114,10 @@ fi
 
 if [ -n "${COMPANY}" ]; then
   echo "==> Provisioning agents from ${COMPANY}…"
-  GITLAB_PROVISION_TOKEN="${ROOT_TOKEN}" \
+  GITLAB_ADMIN_TOKEN="${ROOT_TOKEN}" \
     crewlet gitlab provision "${COMPANY}" \
-      --webhook-url "${WEBHOOK_URL}" \
-      --env-file .env.gitlab
+      -public-url "${ENGINE_URL}" \
+      -env-file .env.gitlab
 fi
 
 cat <<EONOTE
@@ -113,14 +132,14 @@ EONOTE
 if [ -z "${COMPANY}" ]; then
   cat <<EONEXT
    - Provision a local-pointed config (integrations.gitlab.url = ${GITLAB_URL}):
-       GITLAB_PROVISION_TOKEN=${ROOT_TOKEN} \\
+       GITLAB_ADMIN_TOKEN=${ROOT_TOKEN} \\
          crewlet gitlab provision <your-config>.yaml \\
-           --webhook-url ${WEBHOOK_URL} --env-file .env.gitlab
-       source .env.gitlab && crewlet run config.yaml --import-company <your-config>.yaml
+           -public-url ${ENGINE_URL} -env-file .env.gitlab
+       source .env.gitlab && crewlet run -config crewlet.yaml -company <your-config>.yaml
 EONEXT
 else
   cat <<EONEXT
    - Tokens written: .env.gitlab
-   - Next: source .env.gitlab && crewlet run config.yaml --import-company ${COMPANY}
+   - Next: source .env.gitlab && crewlet run -config crewlet.yaml -company ${COMPANY}
 EONEXT
 fi

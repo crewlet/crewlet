@@ -18,7 +18,7 @@ So attachment has to be exclusive, and exclusivity has to be provable across pro
 
 ## The lease
 
-Ownership is a row in the `leases` table (`crewlet.db.leases`) with a TTL and a monotonic `epoch`:
+Ownership is a row in the `leases` table (`internal/coord`) with a TTL and a monotonic `epoch`:
 
 ```
 seat:{handle}   owner=node-a:9f3c1e70   epoch=7   expires_at=…   preferred=node-a
@@ -32,7 +32,7 @@ Three properties carry everything above it:
 
 ## Placement
 
-Placement is deliberately dumb, and lives in `crewlet.seat.host`:
+Placement is deliberately dumb, and lives in `internal/seat`:
 
 - Every node holds a `node:{id}` presence lease, renewed on the same heartbeat as its seats. Counting the live ones is how a node learns the fleet size. It cannot be inferred from seat ownership: a fleet where nobody has claimed anything yet would read as zero nodes, and every node would then take every seat.
 - A node claims up to `ceil(seats / live nodes)` — its **fair share** — trying `preferred`-hinted seats first for stickiness, and never more than `SEAT_CLAIM_LIMIT_PER_SWEEP` per pass, because each takeover costs an MCP spawn.
@@ -43,7 +43,7 @@ The share is a ceiling, so shares sum to at least the seat count and a node at i
 ```mermaid
 sequenceDiagram
     participant A as node-a
-    participant L as leases (PostgreSQL)
+    participant L as leases (coordination)
     participant B as node-b
     A->>L: acquire node:node-a
     A->>L: acquire seat:ceo, seat:eng, seat:ops
@@ -59,7 +59,7 @@ sequenceDiagram
 
 ## Establishing a seat, and giving it back
 
-`on_acquire` establishes the seat in a known state and attaches the consumer **last**: agent instance, budget cap, per-role MCP children, interrupted sandbox-run recovery, *then* the inbox and control subscriptions. A seat that starts receiving work before its MCP children are up runs its first turn with an empty tool surface.
+The acquire hook establishes the seat in a known state and attaches the consumer **last**: agent instance, budget cap, per-role MCP children, interrupted sandbox-run recovery, *then* the inbox and control subscriptions. A seat that starts receiving work before its MCP children are up runs its first turn with an empty tool surface. The release hook is the mirror: the seat's children die with its lease, because the credentials in one *are* that seat's identity and a child left running would let this node keep acting as an agent a peer now serves. See [Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
 
 Releasing has **two modes**, because losing a lease and choosing to let go are opposites:
 
@@ -80,51 +80,53 @@ Only a restart of that process can free a seat whose teardown never succeeds —
 
 A handler has two ordinary outcomes: return (ack) or raise (negative-ack, which spends the message's dead-letter budget). Seat handoff needs a third, so the queue protocol has one:
 
-```python
-raise DeferDelivery(f"seat {handle!r} is not owned here")
+```go
+return queue.Defer(fmt.Sprintf("seat %q is not owned here", handle))
 ```
 
 The delivery is left **unacked** and the attachment stops consuming. Measured against a real broker, a close-driven handoff does *not* increment `redeliveryCount`: the messages return to the seat's next owner in order, at count 0. A NAK would burn the budget on messages nothing is wrong with.
 
-Three paths use it, and they are the three ways this node can be the wrong one to run a delivery it was just handed: the seat is not owned here, the in-turn fence tripped mid-dispatch, or the config posture went `shed`/`stuck`. Each also calls `note_delivery_deferred`, because a deferral quiesces the consumer and the resume is edge-triggered on the next successful renew — without it the seat is owned, attached and deaf.
+Three paths use it, and they are the three ways this node can be the wrong one to run a delivery it was just handed: the seat is not owned here, the in-turn fence tripped mid-dispatch, or the config posture went `shed`/`stuck`. Each also records the deferral, because a deferral quiesces the consumer and the resume is edge-triggered on the next successful renew — without it the seat is owned, attached and deaf.
 
 ## Admission: freshness, not membership
 
 "Do I hold this seat?" is a question about a local snapshot refreshed on a 15-second heartbeat against a 45-second TTL, so the honest answer can be a full TTL stale — precisely the window an ownership check exists to close. A membership check cannot meet its own exit criterion.
 
-What *is* provable is that a successful renew at time *t* bought exclusivity through *t + ttl*. So `SeatHost.may_start(handle)` returns the epoch only when the last successful renew is inside one heartbeat interval, and `None` otherwise. Every turn that starts is then certified owned for at least `ttl - heartbeat`.
+What *is* provable is that a successful renew at time *t* bought exclusivity through *t + ttl*. So `seat.Host.MayStart` returns the epoch only when the last successful renew is inside one heartbeat interval, and `None` otherwise. Every turn that starts is then certified owned for at least `ttl - heartbeat`.
 
 That also gives the right answer during a database blip. The lease row is untouched by an unreachable store, so the seat is **kept** — shedding on a two-second outage would tear a healthy company down — but new turns stop at the first failed renew. The consumer is quiesced, and un-quiesced when a renew succeeds again. Both edges matter: without the second one the node comes back healthy, still owning the seat, still attached to it, and never reads from it again.
 
 ## Fencing: what it protects, and what it cannot
 
-The epoch is threaded into the **sandbox run state** — every mutation on a live `pending_sandbox_run` row carries `WHERE owner_epoch = $epoch` — and checked in the turn loop before every round and before every write-capable tool. A zombie's late write to a run it no longer owns bounces; a zombie's turn stops within a round.
+The epoch is threaded into the **sandbox run state** — every mutation on a live run record is refused when the record's `owner_epoch` outranks the writer's — and checked in the turn loop before every round and before every write-capable tool. A zombie's late write to a run it no longer owns bounces; a zombie's turn stops within a round.
 
 It is **not** on every seat-scoped write, and the honest inventory is narrower than "the learning tables are unfenced". What a duplicate write actually does, per table:
 
 | Table | A second writer today |
 |---|---|
-| `episodes` | **Collapsed.** One row per unit of work — see [Keying a write on the work](#keying-a-write-on-the-work) below |
+| `episodes` | **Collapsed** against the reader that matters. One row per unit of work in the node's own store, which is the only one its recall reads — see [Keying a write on the work](#keying-a-write-on-the-work) below |
 | `counterparty_profiles.interaction_count` | **Collapsed.** The increment is skipped when the last counted work key repeats |
 | `agent_onboarding_markers` | Upsert *plus* `try_claim_pass`, a cross-process single-flight claim: already exclusive |
 | `agent_diary` | Byte-identical content collapses on write. Two turns that word the same fact differently still land twice |
-| `token_usage` | Two rows, skewing the dashboard rollup. **Not** budget enforcement, which reads the shared `token_budget_usage` counter and stays correct |
+| `token_usage` | Two rows, skewing the dashboard rollup. **Not** budget enforcement, which reads the fleet's shared counter and stays correct |
 
 The last two are deliberate. Nothing can key a *differently worded* diary entry to its twin — that needs the duplicate turn not to happen, which is the completion ledger's job, not a write guard's. And `token_usage` is observability on a high-volume insert path swept on a TTL; a guard there costs more than the skew it prevents.
 
 ## Keying a write on the work
 
-The instinct is to fence these the way `pending_sandbox_run` is fenced, with `WHERE owner_epoch = $epoch`. That works for a mutation of an existing row and fails here twice over: an insert has no prior row to hang the condition on, and a fence **loses data in the case where nothing went wrong** — a node that completes a turn, acks the delivery and only then lapses would have its episode refused. The turn happened; the memory of it is gone.
+The instinct is to fence these the way a sandbox run is fenced, on `owner_epoch`. That works for a mutation of an existing row and fails here twice over: an insert has no prior row to hang the condition on, and a fence **loses data in the case where nothing went wrong** — a node that completes a turn, acks the delivery and only then lapses would have its episode refused. The turn happened; the memory of it is gone.
 
 So the write is keyed on the work rather than fenced on the writer. Every turn dispatched from a ledgerable trigger carries a `work_key` derived from its constituent event ids — the same identity the completion ledger uses, and the one thing that is stable across a re-run (two nodes mint two `turn_id`s, so anything keyed on those records the duplicate instead of collapsing it).
 
 |  | epoch fence | work key |
 |---|---|---|
-| Zombie and owner both complete | one row | one row |
+| Zombie and owner both complete, same node | one row | one row |
 | Owner completes, acks, *then* lapses | **row lost** | one row |
 | Ledger fails open, turn legitimately re-runs | two rows | one row |
 
-Exclusion is an advisory lock on `(agent_handle, work_key)` plus `INSERT … WHERE NOT EXISTS`, not a unique index — `episodes` is a hypertable partitioned on `ended_at`, so every unique index must contain `ended_at`, and the two duplicate turns end at different times. `WHERE NOT EXISTS` alone is evaluated under the statement's snapshot, so without the lock two concurrent writers both see "not there" and both insert; the lock is what closes that, and the test suite measures it rather than asserting it.
+Exclusion is a **unique index** on `(agent_handle, work_key)` plus `INSERT … ON CONFLICT DO NOTHING` — one statement, no read-then-write, so two writers racing inside one process cannot both see "not there" and both insert. It is per agent rather than global: two seats legitimately act on one trigger (a broadcast, a task assigned to a unit) and each one's episode is its own memory. The column is nullable and an empty key maps to SQL `NULL`, which SQLite's index treats as distinct from every other `NULL` — so an unkeyed turn is never deduped against another, which is the whole reason it is nullable rather than defaulting to `''`.
+
+**The index is the node's**, like the table it is on, and that is the honest scope of the guarantee. `episodes` is a seat's memory and lives in [the node's own database](coordination.md#what-stays-node-local) — read by the node running that seat, never by a peer. So a duplicate written on two *different* nodes is two rows in two databases, neither of which the other reads, and no recall or synthesis anywhere sees both. What the index collapses is the case that actually recurs against one reader: **one node writing twice** — a redelivery it worked again, or a legitimate re-run after the [completion ledger](#the-completion-ledger) failed open.
 
 A turn with no ledgerable trigger — a scheduled fire, a sub-agent, a sandbox resume — carries an empty key, skips the guard entirely, and writes exactly as it always did. It has no cross-node duplicate to collapse.
 
@@ -134,12 +136,12 @@ A turn with no ledgerable trigger — a scheduled fire, a sub-agent, a sandbox r
 
 Fencing and admission bound the window in which two nodes could be working one seat. They do not close a narrower one: a turn **finishes**, its outbound effects ship, and the node dies before the delivery is acked. At-least-once then hands that trigger to the seat's next owner, which re-runs the whole turn — the same Slack reply, the same Jira comment, from an agent with no idea it already spoke.
 
-`turn_completions` records what finished, and is read before the next turn starts.
+The **completion ledger** records what finished, and is read before the next turn starts. It lives in the fleet's [coordination store](coordination.md), not in a node's own database — a redelivery that lands on a peer has to find it, and a ledger each node kept privately would find nothing and run the turn again, which is the exact failure it exists to prevent.
 
 It is deliberately **not** a claim, and the absences are the design:
 
 - **No `in_progress` state.** The seat lease is already the mutual exclusion — one consuming node, serial within it — so a claim's only honest disposition for a stale in-progress row is "supersede and re-run", which is exactly what you do with no row at all. An earlier design had one; five of five reviewers rejected it, because every other defect they found existed only to service that state.
-- **No expiry, no supersede rule.** A row means the work is done, and done does not lapse. Rows are deleted on a retention horizon by the `maintenance` duty — garbage collection, not semantics.
+- **No expiry, no supersede rule.** A record means the work is done, and done does not lapse. Records age out on the bucket's own seven-day retention — garbage collection, not semantics, and its floor is the scheduler's catchup ceiling rather than a round number: forgetting a completion a tick could still evaluate lets that fire run twice.
 - **Keyed on *constituent* event ids.** A multi-event partition is merged into one digest before the turn runs, and that digest is minted fresh on every coalesce, so a key taken from it would differ on every redelivery and match nothing. Recording constituents also means a redelivery that overlaps a previous partition only partially — A+B ran, then A+B+C arrives — skips A and B and runs C.
 
 **Both directions fail open, and that is the whole failure policy.** An unreadable ledger cannot tell you whether work was done, and the only safe answer to that is the one the engine gave before the table existed: run it. Failing closed would park real work during a database blip — and the seat's own admission gate already refuses new turns within one heartbeat of a store it cannot reach. The write happens *after* the side effects shipped, so failing to record them cannot un-ship them.
@@ -171,19 +173,21 @@ It does, because the **durable subscription** is what retains messages, and the 
 
 ## The wedged node, and why it leaves
 
-Every failure above assumes a node either works or dies. The one that is neither is a process whose **event loop has stalled while the process stays alive** — and it is the worst case, because the two halves of ownership come apart:
+Every failure above assumes a node either works or dies. The one that is neither is a process whose **duties have stopped turning while the process stays alive** — a deadlock, a duty blocked on something that never returns — and it is the worst case, because the two halves of ownership come apart:
 
 - Its seat leases lapse, because nothing is renewing them. Peers take the seats over, correctly.
 - Its **broker session does not lapse.** The Pulsar client answers keepalives from its own IO threads, so the broker goes on treating it as a live consumer and holding its prefetch of those seats' messages — measured at the full unacked-message timeout, roughly **30 minutes** at the engine's setting. The new owner cannot see mail that is already reserved for a corpse.
 
-Nothing can be signalled out of that state: a stalled loop does not run `call_soon_threadsafe` either, so anything a watchdog thread schedules waits behind the very blockage it is reacting to. **What the thread can do unilaterally is end the process** — and that is the whole remedy, because the client dies with the process, the broker sees the session end, and redelivery is immediate (9 ms, measured).
+Nothing can be scheduled out of that state either: the duty that stalled is the one that would have to run the recovery, so anything queued behind it waits on the very blockage it is reacting to. **What a watcher can do unilaterally is end the process** — and that is the whole remedy, because the client dies with the process, the broker sees the session end, and redelivery is immediate (9 ms, measured).
 
-So every node runs an `EventLoopWatchdog`: a beat task in the loop, a daemon thread watching it, and `os._exit(75)` when the lag passes the **lease TTL**. Three things about it are deliberate:
+So every node runs a **watchdog**: each duty stamps a beat as it turns, a separate goroutine compares, and it calls `os.Exit(75)` when the lag passes the **lease TTL**. Four things about it are deliberate:
 
 - **The threshold is not a config knob.** It is the same number the lease TTL is. Past it the node is provably not the owner, and letting the two drift is how a process gets to be simultaneously "not the owner" and "still holding the mail".
-- **The exit is the crudest possible one** — no unwinding, no `atexit`, no drain. A process that cannot run its event loop cannot be trusted to run a graceful shutdown, and trying is how a watchdog ends up wedged too. Exit code **75** is distinct from any ordinary failure, so an orchestrator's restart log says what happened.
+- **The exit is the crudest possible one** — `os.Exit`, which runs no deferred function, rather than a panic, a signal, or a graceful shutdown. The duty that stalled is the one that would have to run the shutdown, so anything waiting on it hangs; trying is how a watchdog ends up wedged too. The notice goes straight to stderr rather than through the logger for the same reason: a configured handler may batch, format, or ship lines somewhere, which is more machinery than a wedged process has earned. Exit code **75** is distinct from any ordinary failure, so an orchestrator's restart log says what happened.
 - **It is disarmed for the whole of a normal shutdown.** Teardown is the one part of the process that legitimately blocks the loop — reaping MCP subprocesses, joining threads, tearing sandboxes down — and exiting through the middle of it would abandon the seat release that makes a drain graceful. A shutdown that hangs is a `SIGKILL` away; a shutdown that exits without releasing costs every peer a full TTL of dark seats.
-- **A loop that is *gone* is not a loop that is *wedged*.** From the watching thread the two are indistinguishable — the beat simply stops refreshing — and they are opposite situations. A wedged loop is still alive and still holding a peer's mail, which is the entire reason to exit. A loop that closed took the broker client and its IO threads with it, so there is nothing left to hold. The watchdog therefore records the loop it beats on and stands down (`loop_watchdog_stood_down`) rather than exiting when that loop is closed or no longer running. Without the check, every engine that is abandoned rather than stopped arms a suicide timer that fires one TTL later on a perfectly healthy process.
+- **The beat cadence is scaled to the threshold, not set independently.** A beat slower than the threshold makes a perfectly healthy node shoot itself, so both the stamp interval and the poll interval are ceilings derived from it.
+
+- **A duty that is *gone* is not a duty that is *wedged*.** From the watcher the two are indistinguishable — the beat simply stops refreshing — and they are opposite situations. A wedged duty is still alive and still holding a peer's mail, which is the entire reason to exit. A duty that has finished took its share of the client with it, so there is nothing left to hold. The watchdog therefore stands down when nothing it watches is live any more, rather than exiting. Without that check, every engine abandoned rather than stopped arms a suicide timer that fires one TTL later on a perfectly healthy process — which is not hypothetical: it killed this repository's own test suite at 63%, exit 75, with zero test failures.
 
 Single node or fleet, it is armed the same way. With one node nothing is waiting on the prefetch, but a wedged engine is a dead engine either way, and leaving is what lets a supervisor notice.
 
@@ -193,7 +197,7 @@ A detached coding run outlives the node that started it, so its completion has t
 
 It cannot ride the inbox itself: while a seat is `AWAITING_SANDBOX` the inbox is paused, and a completion riding it would queue behind the very pause it exists to lift.
 
-`pending_sandbox_run` carries `owner` and `owner_epoch`, so a run is recovered by the node that owns the seat, under that node's epoch, as a step inside `on_acquire`.
+The run record carries `owner` and `owner_epoch`, so a run is recovered by the node that owns the seat, under that node's epoch, as a step inside `on_acquire`. The record lives in the [coordination store](coordination.md), which is what makes that possible at all: on the node's own database the successor's recovery pass listed nothing, and the run's box was neither resumed nor reaped.
 
 ## Routing is org-derived, never instance-derived
 
@@ -201,15 +205,16 @@ Agents exist only on the seat's owner, so **any code that resolves a recipient t
 
 Routing needs only `handle → (inbox topic, agent id)`, and both are derivable from the org every node has in full:
 
-```python
-from crewlet.queue.topics import agent_inbox_topic
-
-topic = agent_inbox_topic(handle)
-seat = org.agent_seat_by_handle(handle)
-agent_id = org.agent_id_for(seat)      # uuid5 over (org name, handle)
+```go
+topic := topics.AgentInbox(handle)
+seat := org.AgentSeatByHandle(handle)
+agentID, ok := org.AgentIDFor(seat)   // uuid5 over (org name, handle)
 ```
 
-The live `AgentInstance` is an *execution* detail. It must never be a *routing* one. This applies to extensions too — see [Extensions § The agent pool is per-node](../guides/extensions.md#the-agent-pool-is-per-node).
+Both are derived from the ORGANIZATION, which every node holds in full. The
+running agent is an *execution* detail; it must never be a *routing* one — a
+lookup among the seats this process happens to be running answers "is this
+agent here?", and a miss means "not on this node", never "does not exist".
 
 ## Singleton duties
 
@@ -221,10 +226,10 @@ Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**,
 |---|---|---|
 | `seat-subscriptions` | Creates every seat's inbox and control subscription at boot | Only needs doing once per company; no reason for every node to walk every seat at every boot |
 | `sandbox-waiter` | Polls live sandbox boxes, keeps them alive, reaps expired pauses | Each poll is a reconnect, so N nodes means N reconnects per box per tick — and N racing reapers |
-| `scheduler` | Evaluates every schedule and fires what is due | The `scheduled_runs` claim already makes a fire at-most-once, so peers are not *wrong* — they lose the race on every fire, having walked the whole org to get there |
+| `scheduler` | Evaluates every schedule and fires what is due | The fleet's fire claim already makes a dispatch at-most-once, so peers are not *wrong* — they lose the race on every fire, having walked the whole org to get there |
 | `skill-clustering` | Synthesises skills from episodes | Reads every agent's episodes and **writes** skills: N nodes produce N sets of near-identical pages and N× the LLM spend |
 | `skill-curator` | Transitions skills active → stale → archived | Publishes a lifecycle event per transition, and races its own optimistic-concurrency guard |
-| `maintenance` | Retention sweeps for `webhook_deliveries`, `rate_limits`, `scheduled_runs`, `turn_completions` | Idempotent range deletes, so peers are harmless — just N times the write amplification and vacuum churn |
+| `maintenance` | Retention sweeps for every short-horizon table in the node's own database — `events`, `scheduled_runs`, `conversation_sessions`, `chat_thread_follows` — plus both halves of the A2A channel sweep: the idle-close of an ask no turn ever answered, and the delete of one closed long enough. The channel record is the one *shared* thing swept here, and the [coordination store](coordination.md#retention-is-a-buckets-age) says why: its other slots expire on a bucket's age, which cannot tell an open channel from a closed one | Idempotent range deletes, so peers are harmless — just N times the write amplification and vacuum churn |
 
 Without a placement host — the single-node case — the answer is always yes: there is no fleet to be a singleton within. A duty claim that *fails* (an unreachable lease store) skips the tick rather than proceeding: unknown ownership is not ownership, and assuming otherwise is how every node decides it is the singleton at once.
 
@@ -244,7 +249,7 @@ Two consequences worth stating plainly:
 
 The current protocol is **3**, and it has moved twice — each time because holding a lease came to *mean* something a previous build could not honour:
 
-- **v2 — the completion ledger.** Holding a seat lease now means consulting and settling `turn_completions`. A v1 node cannot: it takes a seat over, never reads the completion row, and re-runs a turn whose effects already shipped.
+- **v2 — the completion ledger.** Holding a seat lease now means consulting and settling the completion ledger. A v1 node cannot: it takes a seat over, never reads the record, and re-runs a turn whose effects already shipped.
 - **v3 — placement.** Holding a seat lease now means "and this node satisfies the seat's `role.placement`". A v2 node has no such concept, so it claims a seat pinned to a node id or a label it does not carry — and *succeeds*, because the lease is only a mutex and knows nothing about where a seat belongs. The operator's pin is silently violated: the seat runs, on the wrong node, with nothing to see.
 
 ## What ownership looks like from outside

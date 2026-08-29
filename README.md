@@ -6,16 +6,16 @@
 
 **Run an AI agent company.**
 
-Crewlet is an open-source Python engine for orchestrating hierarchically organized
+Crewlet is an open-source Go engine for orchestrating hierarchically organized
 AI agent companies. You describe a company in YAML — mission, org chart, roles,
 policies, integrations — and Crewlet runs it: one persistent agent per seat,
 planning and executing real work in chat, your issue tracker, and your code host,
 learning from what it did, and escalating to the humans in the org chart when stuck.
 
-[![PyPI](https://img.shields.io/pypi/v/crewlet?style=flat-square&color=7c56ff&label=pypi)](https://pypi.org/project/crewlet/)
+[![Release](https://img.shields.io/github/v/release/crewlet/crewlet?style=flat-square&color=7c56ff&label=release)](https://github.com/crewlet/crewlet/releases)
 [![CI](https://github.com/crewlet/crewlet/actions/workflows/ci.yml/badge.svg)](https://github.com/crewlet/crewlet/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-7c56ff?style=flat-square)](LICENSE)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-7c56ff?style=flat-square)](pyproject.toml)
+[![Go 1.27+](https://img.shields.io/badge/go-1.27%2B-7c56ff?style=flat-square)](go.mod)
 [![Docs](https://img.shields.io/badge/docs-read-7c56ff?style=flat-square)](docs/index.md)
 
 <a href="docs/getting-started/quickstart.md"><b>Quickstart</b></a> ·
@@ -44,8 +44,8 @@ about their reports — not by a routing algorithm.</sub>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/company-as-code.svg" width="64" alt=""><br>
 <b>Company as code</b><br>
-<sub>The whole company is versioned YAML in PostgreSQL — live-editable through a REST
-API, with no restart for role, provider, or integration changes.</sub>
+<sub>The whole company is versioned YAML the engine stores and serves — live-editable
+through a REST API, with no restart for role, provider, or integration changes.</sub>
 </td>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/turn-engine.svg" width="64" alt=""><br>
@@ -100,20 +100,24 @@ model — a frontier model to plan, a cheap one to summarize. See
 
 ## Quickstart
 
-Bring up the infrastructure, describe a company, run it:
+There is no infrastructure to bring up. Crewlet is one binary: it embeds its
+event stream (a NATS JetStream server) and its database is a local file it
+creates. Describe a company and run it:
 
 ```bash
-pip install "crewlet[postgresql,api]"
-
-# PostgreSQL (TimescaleDB + pgvector) and Apache Pulsar
-cp .env.example .env && docker compose up -d
+go install github.com/crewlet/crewlet/cmd/crewlet@latest
+# or grab a signed binary from the releases page, or run
+# ghcr.io/crewlet/crewlet
 
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."     # or OpenAI, or any OpenAI-compatible endpoint
 export OPENAI_API_KEY="sk-..."            # embeddings
 
-crewlet run config.yaml --import-company company.yaml
+./crewlet run -config config.yaml -company company.yaml
 ```
+
+The company file is a *seed*: it is imported the first time, and after that the
+store is the source of truth and `crewlet config` edits it live.
 
 A four-agent company is about 40 lines of YAML:
 
@@ -162,34 +166,49 @@ first turn with no integrations at all, then wiring in the real ones.
 
 ## Plug in your stack
 
-Crewlet is the engine; the surfaces your agents work on are yours to choose. Every
-one has a hosted and a self-hosted path — see
+Crewlet is the engine; the surfaces your agents work on are yours to choose — see
 [Choosing your stack](docs/getting-started/choosing-your-stack.md).
+
+**Routed end to end** — a delivery from one of these wakes the seat it concerns:
 
 | | Options |
 |---|---|
 | **LLM** | [Anthropic](docs/getting-started/quickstart.md#llm-options), OpenAI, or **any OpenAI-compatible endpoint** — including your own vLLM / LiteLLM gateway |
-| **Tracker + knowledge base** | [Plane](docs/integrations/plane.md) (self-hosted, covers both) · [Jira](docs/integrations/jira.md) + [Confluence](docs/integrations/confluence.md) |
-| **Code host** | [GitLab](docs/integrations/gitlab.md) (gitlab.com or self-hosted) · [GitHub](docs/integrations/github.md) |
-| **Chat** | [Mattermost](docs/integrations/mattermost.md) (self-hosted) · [Slack](docs/integrations/slack.md) — one bot identity per agent either way |
-| **Code sandbox** | [E2B cloud or self-hosted](docs/concepts/code-sandbox.md); Claude Code or OpenCode as the coding agent |
+| **Tracker** | [Plane](docs/integrations/plane.md) — self-hosted, tracker and knowledge base in one — or [Jira](docs/integrations/jira.md), Cloud or Data Center |
+| **Knowledge base** | [Plane](docs/integrations/plane.md) pages, or [Confluence](docs/integrations/confluence.md) — the search behind every Plan phase, run as the asking seat |
+| **Code host** | [GitLab](docs/integrations/gitlab.md) — gitlab.com or self-hosted — or [GitHub](docs/integrations/github.md), github.com or Enterprise Server |
+| **Chat** | [Mattermost](docs/integrations/mattermost.md) — self-hosted, one bot identity per agent — or [Slack](docs/integrations/slack.md), one app per agent |
+| **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container; Claude Code or OpenCode as the coding agent |
 
-For Mattermost, Slack, Plane, and GitLab, one command provisions the whole fleet —
-a bot account or service account per seat, memberships, per-agent tokens minted into
-your config's own `${VAR}` references, and the webhooks:
+The knowledge base is **single-homed** — Plane or Confluence, never both, because two
+searchers would make an agent's answer to "what do we already know about this" depend
+on which one was asked. Everything else composes: a company can run Jira beside Plane,
+GitHub beside GitLab, or Slack beside Mattermost, which is what a migration and an
+open-source presence both look like.
+
+One command provisions the whole fleet — a bot or
+service account per seat, memberships, per-agent tokens minted into your config's own
+`${VAR}` references, and the webhooks:
 
 ```bash
 crewlet mattermost provision company.yaml
-crewlet slack      provision company.yaml --base-url <url>
-crewlet plane      provision company.yaml --create-projects --webhook-url <url>
-crewlet gitlab     provision company.yaml --webhook-url <url>
+crewlet plane      provision company.yaml
+crewlet gitlab     provision company.yaml -public-url <url>
+crewlet jira       provision company.yaml -public-url <url> -env-file .env
+crewlet slack      provision company.yaml -public-url <url> -env-file .env
+crewlet github     provision company.yaml -public-url <url> -env-file .env
 ```
+
+What each command can actually do differs by what the vendor allows: Mattermost,
+Plane and GitLab create an account per seat and mint its token; Jira and GitHub
+issue no credential on a provisioner's behalf, so those runs report which account
+each seat's own credential authenticates as and register the webhooks.
 
 Mattermost takes no URL because nothing has to reach the engine: it holds one
 outbound websocket per agent seat instead of receiving webhooks, so that loop
 runs behind NAT with no tunnel.
 
-Add `--secret-store` and the minted credentials go straight into the encrypted
+Add `-secret-store` and the minted credentials go straight into the encrypted
 [secret store](docs/concepts/secret-store.md) the engine reads `${VAR}` from —
 no env file to source, no shell to be in.
 
@@ -201,9 +220,9 @@ no env file to source, no shell to be in.
 flowchart LR
     EXT["<b>External surfaces</b><br/>Mattermost / Slack · Jira / Plane<br/>GitHub / GitLab"]
     API["<b>REST API + dashboard</b><br/><i>embedded, or its<br/>own process</i>"]
-    Q["<b>Apache Pulsar</b><br/><i>per-agent<br/>inbox topics</i>"]
+    Q["<b>Event stream</b><br/><i>embedded JetStream,<br/>or Pulsar for a fleet</i>"]
     ENG["<b>Engine</b><br/><i>one turn engine<br/>per seat</i>"]
-    DB[("<b>PostgreSQL</b><br/>TimescaleDB<br/>pgvector")]
+    DB[("<b>Store</b><br/>one local file<br/>events · memory · config")]
 
     EXT -->|webhooks| API
     API <--> Q
@@ -216,7 +235,7 @@ flowchart LR
 Agents are callback-driven: messages on an agent's inbox topic invoke its handler,
 and events that piled up while it was busy are batched into a single digest turn.
 Config lives in two tiers — an ops-owned bootstrap file on disk, and a versioned,
-live-editable company document in PostgreSQL that can be
+live-editable company document in the store that can be
 [encrypted at rest](docs/concepts/configuration.md#secrets) as a single opaque blob.
 
 ---
@@ -224,18 +243,17 @@ live-editable company document in PostgreSQL that can be
 ## CLI
 
 ```bash
-crewlet run config.yaml --import-company company.yaml   # boot + import, idempotent
-crewlet run api config.yaml                             # standalone API (split deployments)
-crewlet validate company.yaml                           # check before importing
-crewlet validate company.yaml --json                    # machine-readable errors
-crewlet schema company                                  # JSON Schema (editors, CI, agents)
+crewlet run                                   # boot; seeds the store on first run
+crewlet run -roles ingress                    # API + webhooks only (split deployments)
+crewlet validate                              # check both tiers before booting
+crewlet schema company                        # JSON Schema (editors, CI, agents)
 
-crewlet config export | show | revisions | diff         # inspect Tier B revisions
-crewlet secrets keygen && crewlet config seal           # encrypt the config at rest
-crewlet secrets set LLM_API_KEY                         # store a secret the engine reads ${VAR} from
+crewlet config import | show | export | revisions | diff | activate
+crewlet secrets keygen                        # a keyring key — installing it seals the config
+crewlet secrets set LLM_API_KEY               # a secret the engine reads ${VAR} from
 
-crewlet plane import company.yaml examples/             # publish docs + tool skills
-crewlet confluence import company.yaml                  # ...on the Confluence backend
+crewlet plane import company.yaml docs/       # publish knowledge docs + tool skills
+crewlet gitlab provision company.yaml         # reconcile the company's seats into GitLab
 ```
 
 Full reference: [CLI](docs/reference/cli.md) ·
@@ -264,7 +282,7 @@ Full reference: [CLI](docs/reference/cli.md) ·
 - [Event system](docs/concepts/event-system.md) · [Scheduling](docs/concepts/scheduling.md) · [Configuration](docs/concepts/configuration.md)
 
 **Guides**
-- [Tools & MCP](docs/guides/tools-and-mcp.md) · [Extensions](docs/guides/extensions.md) · [Deployment](docs/guides/deployment.md)
+- [Tools & MCP](docs/guides/tools-and-mcp.md) · [Deployment](docs/guides/deployment.md) · [Running a Fleet](docs/guides/fleet.md)
 
 </td>
 <td valign="top" align="center" width="38%">
@@ -281,12 +299,12 @@ Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers 
 dev setup, conventions, and the checks CI runs:
 
 ```bash
-uv sync --all-extras
-uv run pytest
-uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/
+go build ./...
+go test ./... -race
+gofmt -l . && go vet ./... && golangci-lint run
 ```
 
-Releases go to PyPI from a `v*` tag — see [RELEASING.md](RELEASING.md).
+Releases are cut by pushing a `v*` tag — see [RELEASING.md](RELEASING.md).
 
 Security issues: please report them privately — see [SECURITY.md](SECURITY.md).
 

@@ -11,8 +11,8 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
 | `CREWLET_NODE_ID` | This process's identity, when `node.id` is unset in the Tier A file. Labels every log line, health payload, and config-apply event. Must be **stable across restarts**; defaults to `node-0` | Your orchestrator (Kubernetes pod name / StatefulSet ordinal, or the host name) |
-| `CREWLET_DATABASE_DSN` | PostgreSQL DSN the example Tier A configs reference (`providers.database.dsn`) | Your database (`postgresql://crewlet:crewlet@localhost:5432/crewlet` for the bundled compose) |
-| `CREWLET_PULSAR_URL` | Pulsar broker URL the example Tier A configs reference (`providers.queue.url`) | `pulsar://localhost:6650` for the bundled compose |
+| `CREWLET_STORE_DRIVER` | Which certified driver opens the store file — `turso` (the default) or `sqlite`. Overridden by `store.driver` in the Tier A file | Leave unset unless you are exercising the fallback driver |
+| `TURSO_GO_CACHE_DIR` | Read directly by the `turso` driver (and by the engine, which prepares it): where its embedded ~20 MB native library is extracted and loaded from. Default `os.UserCacheDir()` — `~/.cache` on Linux. Point it at a writable, persistent path in an ephemeral container, or every restart pays the extraction again. See [Deployment § The store](../guides/deployment.md#the-store) | — |
 | `CREWLET_API_TOKEN_FOUNDER` | Bearer token for the founder API identity (`api.auth.tokens`) | Generate one: `openssl rand -hex 32` |
 | `LLM_API_KEY` | API key for your LLM provider (`providers.llm.default.api_keys`) | Your LLM provider dashboard |
 | `LLM_MODEL` | Model id served by your OpenAI-compatible endpoint (`providers.llm.default.model` in the example) | Your LLM provider docs |
@@ -20,11 +20,11 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 | `OPENAI_API_KEY` | Read directly as a fallback by the `openai` / `openai-compatible` LLM providers (when `api_keys` is empty) and the OpenAI embeddings provider (when `api_key` is unset) | OpenAI dashboard |
 | `ANTHROPIC_API_KEY` | Read directly as a fallback by the `anthropic` LLM provider when `api_keys` is empty | Anthropic Console |
 | `CREWLET_LLM_CLI_HOME` | Read directly by every [`cli-agent`](../concepts/subscription-llm-backends.md) LLM provider: the root under which each provider keeps its credential directory and per-seat CLI homes (`<root>/<provider key>`). Default `~/.crewlet/llm-cli`. Point it at a persistent volume when the engine runs in an ephemeral container, or the subscription login is lost on every restart. Overridden per provider by `cli.state_dir`. | — |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Read as the subscription credential by a `cli-agent` provider on the `claude-code` profile when `cli.auth.token` is unset. Resolved through the [secret store](../concepts/secret-store.md) first, so `crewlet llm login <key> --capture-token` stores it there and nothing needs exporting. | `claude setup-token`, or `crewlet llm login … --capture-token` |
-| `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` | Conventional name for a `cli-agent` provider's exported credential bundle (`<KEY>` is the `providers.llm` key upper-cased, non-alphanumerics folded to `_`). Restored into the provider's credential directory at boot when that directory is empty, so a fresh container comes up already authenticated. Overridden by `cli.auth.credential_bundle`. | `crewlet llm export <key> --secret-store` |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Read as the subscription credential by a `cli-agent` provider on the `claude-code` profile when `cli.auth.token` is unset. Resolved through the [secret store](../concepts/secret-store.md) first, so `crewlet llm login <key> -capture-token` stores it there and nothing needs exporting. | `claude setup-token`, or `crewlet llm login … -capture-token` |
+| `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` | Conventional name for a `cli-agent` provider's exported credential bundle (`<KEY>` is the `providers.llm` key upper-cased, non-alphanumerics folded to `_`). Restored into the provider's credential directory at boot when that directory is empty, so a fresh container comes up already authenticated. Overridden by `cli.auth.credential_bundle`. | `crewlet llm export <key> -secret-store` |
 | `CREWLET_SANDBOX_LOCAL_HOME` | Read directly by the [`local` sandbox backend](../concepts/code-sandbox.md#local-sandboxes): the parent directory its per-box homes are created under. Default `~/.crewlet/sandboxes`. Overridden per provider by `providers.sandbox.local.state_dir`. | — |
-| `CREWLET_TOOL_SKILLS_SPACE` | Read directly by the engine and `crewlet confluence import`: the Confluence space key the [Tool Skills](../concepts/tool-skills.md) sync watches. Default `TS`. Set to empty string to disable the sync entirely. | — |
-| `CREWLET_TOOL_SKILLS_PROJECT` | Read directly by the engine, the knowledge searcher's result exclusion, and `crewlet plane import`: the [Plane](../integrations/plane.md) project identifier the [Tool Skills](../concepts/tool-skills.md) sync watches when Plane is the knowledge backend — the `CREWLET_TOOL_SKILLS_SPACE` analog. Default `TS`. Set to empty string to disable the sync (and the search exclusion). | — |
+| `CREWLET_TOOL_SKILLS_SPACE` | The `-space` default for `crewlet confluence import` and `crewlet confluence resync`: which Confluence space [Tool Skill](../concepts/tool-skills.md) pages are published into and read back from. Default `integrations.confluence.skills_space`, itself defaulting to `TS`. **The engine never reads this variable** — the space it watches comes from the company document and only from there, because a fleet whose nodes each read a variable out of whoever's shell started them would disagree about which space holds the skills. To turn tool skills off, set `skills_space: ""` in the company config. | — |
+| `CREWLET_TOOL_SKILLS_PROJECT` | The `-project` default for `crewlet plane import` and `crewlet plane resync`: which [Plane](../integrations/plane.md) project [Tool Skill](../concepts/tool-skills.md) pages are published into and read back from. Default `integrations.plane.skills_project`, itself defaulting to `TS`. **The engine never reads this variable** — the project it WATCHES comes from the company document and only from there, since a routing decision belongs in the document describing the company. To turn tool skills off, set `skills_project: ""` in the company config. | — |
 
 ---
 
@@ -34,11 +34,11 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 |----------|-------------|-----------------|
 | `SLACK_BOT_TOKEN_<ROLE>` | Bot User OAuth Token (`xoxb-...`) | Written by `crewlet slack provision`, or Slack app > OAuth & Permissions |
 | `SLACK_SIGNING_SECRET_<ROLE>` | Signing Secret | Written by `crewlet slack provision`, or Slack app > Basic Information |
-| `SLACK_CONFIG_TOKEN` | App configuration token (`xoxe.xoxp-...`, 12 h lifetime) authenticating the App Manifest APIs used by [`crewlet slack provision`](cli.md#crewlet-slack-provision) | [api.slack.com/apps](https://api.slack.com/apps) > Your App Configuration Tokens (once); rotated near expiry + persisted to the env file automatically |
-| `SLACK_CONFIG_REFRESH_TOKEN` | Refresh token (`xoxe-1-...`) minting the next config-token pair via `tooling.tokens.rotate` | Issued alongside `SLACK_CONFIG_TOKEN`; rotated automatically |
-| `SLACK_CONFIG_TOKEN_EXPIRES_AT` | Unix timestamp of the access token's expiry — lets re-runs skip rotation while the token is fresh | Written by `crewlet slack provision`; never set by hand |
+| `SLACK_CONFIG_REFRESH_TOKEN` | **Bootstrap only.** The app-configuration *refresh* token (`xoxe-1-...`) that seeds an empty [app ledger](../integrations/slack.md#the-ledger-slack-appsjson); `crewlet slack provision` exchanges it for a 12-hour access token and stores **both** halves of the rotated pair in the ledger. Once the ledger holds a pair, this variable is ignored — see the precedence note below. | [api.slack.com/apps](https://api.slack.com/apps) > Your App Configuration Tokens (once) |
 
 Replace `<ROLE>` with the role name in uppercase (e.g., `SLACK_BOT_TOKEN_ENGINEER`). The per-role names are conventions — any `${VAR}` name referenced from `role.integrations.slack` works, and `crewlet slack provision` writes whatever names the YAML uses.
+
+> **The ledger beats the shell**, which is the reverse of the usual "an explicit input wins" rule, and the reverse is the point. Slack's config-token rotation is **single-use in both directions**: every successful rotate invalidates the refresh token it was given, so the value sitting in a `SLACK_CONFIG_REFRESH_TOKEN` export is dead the moment this command first used it. Preferring it would trade the ledger's live pair — the only way back into the operator's apps — for a token Slack has already retired, on every run after the first, for ever. So `-config-token` and `$SLACK_CONFIG_REFRESH_TOKEN` seed a ledger that holds nothing, and are ignored once it does.
 
 ---
 
@@ -83,15 +83,15 @@ MCP server (`CONFLUENCE_USERNAME` / `CONFLUENCE_API_TOKEN`), like Jira.
 
 ## Plane
 
-Conventions used by the [Plane integration](../integrations/plane.md) and its provisioning/bootstrap tooling. Apart from `PLANE_PROVISION_TOKEN` (read directly by the CLI), these are `${VAR}` references in the company YAML — [`crewlet plane provision`](cli.md#crewlet-plane-provision) **mints** the token values into `.env.plane` for you.
+Conventions used by the [Plane integration](../integrations/plane.md) and its provisioning/bootstrap tooling. Apart from `PLANE_ADMIN_TOKEN` (read directly by the CLI), these are `${VAR}` references in the company YAML — [`crewlet plane provision`](cli.md#crewlet-plane-provision) **mints** the token values into `.env.plane` for you.
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
 | `PLANE_PUBLIC_URL` | The address browsers use to reach Plane. Read by the bundled `docker-compose.yml` (it becomes `WEB_URL` + `CORS_ALLOWED_ORIGINS`) and by `scripts/plane-dev-bootstrap.sh`; keep it in lock-step with `PLANE_URL`. Defaults to `http://localhost:8091`. | You — it is the address in your browser's address bar |
 | `PLANE_URL` | Plane instance base URL — the one reference the example config resolves for `integrations.plane.url` and `skill_variables.plane_base_url` | Written to `.env.plane` by `scripts/plane-dev-bootstrap.sh` locally; your Plane deployment's URL otherwise |
-| `PLANE_PROVISION_TOKEN` | Read directly by `crewlet plane provision` as the operator credential fallback (a workspace-admin personal API token; `--provision-token` overrides) | Plane profile > API tokens (workspace-admin account) |
+| `PLANE_ADMIN_TOKEN` | Read directly by `crewlet plane provision` as the operator credential fallback (a workspace-admin personal API token; `-admin-token` overrides) | Plane profile > API tokens (workspace-admin account) |
 | `PLANE_ENGINE_TOKEN` | The `crewlet-engine` read account's API token (`integrations.plane.token`) | Minted by `crewlet plane provision` |
-| `PLANE_WEBHOOK_SECRET` | Workspace webhook secret (`integrations.plane.webhook_secret`) — generated by Plane at hook creation | Captured by `crewlet plane provision --webhook-url …` |
+| `PLANE_WEBHOOK_SECRET` | Workspace webhook secret (`integrations.plane.webhook_secret`) — generated by Plane at hook creation | Captured by `crewlet plane provision -public-url …` |
 | `PLANE_TOKEN_<SEAT>` | Per-agent service-account API token (each role's `mcp_env.plane.PLANE_API_KEY`, e.g. `PLANE_TOKEN_CEO`) | Minted by `crewlet plane provision` |
 
 ---
@@ -111,14 +111,13 @@ Conventions used by the [Mattermost integration](../integrations/mattermost.md) 
 
 ## GitLab
 
-Conventions used by the [GitLab integration](../integrations/gitlab.md). Apart from the operator credentials (read directly by the CLI), these are `${VAR}` references in the company YAML — [`crewlet gitlab provision`](cli.md#crewlet-gitlab-provision) mints the PAT values into `.env.gitlab`.
+Conventions used by the [GitLab integration](../integrations/gitlab.md). Apart from the operator credential — read from the environment only, and never from the secret store — these are `${VAR}` references in the company YAML, resolved through the [secret store first and the environment behind it](../concepts/secret-store.md). [`crewlet gitlab provision`](cli.md#crewlet-gitlab-provision) mints the PAT values into whichever sink you name.
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
-| `GITLAB_PROVISION_TOKEN` | Read directly by `crewlet gitlab provision` as the operator credential fallback (group Owner / admin PAT with `api` scope; `--provision-token` overrides) | GitLab > Access tokens |
-| `GITLAB_ADMIN_TOKEN` | Second fallback for the same operator credential | GitLab > Access tokens |
+| `GITLAB_ADMIN_TOKEN` | Read directly by `crewlet gitlab provision` as the operator credential fallback (group Owner / admin PAT with `api` scope; `-admin-token` overrides) | GitLab > Access tokens |
 | `GITLAB_ENGINE_TOKEN` | Engine read token (`integrations.gitlab.token`) | GitLab service account, or minted by provisioning |
-| `GITLAB_SIGNING_SECRET` | Webhook signing token (`integrations.gitlab.signing_secret`, GitLab 19.1+ Standard-Webhooks scheme) | Set when registering the webhook |
+| `GITLAB_SIGNING_SECRET` | The hook's **signing token** (`integrations.gitlab.signing_secret`) — the HMAC key every delivery is verified against, and the route's only credential. Must be `whsec_` over standard base64 of a 32-byte key. | `crewlet gitlab provision` mints one into this variable; GitLab's own **Generate signing token** button produces the same shape |
 | `GITLAB_TOKEN_<SEAT>` | Per-agent service-account PAT (each role's `mcp_env.gitlab.GITLAB_TOKEN`, also referenced from `role.sandbox.env`, e.g. `GITLAB_TOKEN_SWE`) | Minted by `crewlet gitlab provision` |
 
 ---
@@ -131,28 +130,44 @@ Conventions used by the [GitLab integration](../integrations/gitlab.md). Apart f
 
 ---
 
-## Database
+## The store
 
-There is no dedicated database environment variable: the PostgreSQL DSN lives in the Tier A bootstrap YAML (`providers.database.dsn`), which — like every YAML string — may reference an environment variable of your choosing:
+**There is no database environment variable, because there is no database
+server.** The store is a local file, named by `store.path` in the Tier A
+bootstrap YAML:
 
 ```yaml
-providers:
-  database:
-    dsn: "${CREWLET_DATABASE_DSN}"   # the conventional name the examples use — or inline: "postgresql://crewlet:crewlet@localhost:5432/crewlet"
+store:
+  path: "/var/lib/crewlet/company.db"
 ```
 
-The bundled `docker-compose.yml` uses the `timescale/timescaledb:latest-pg18` image, which ships with the TimescaleDB and pgvector extensions preloaded. The event store (`crewlet_events` hypertable) lives in the same database as the rest of Crewlet's state — there is no separate observability DB to configure.
+That file is owned **exclusively** by one engine process. It is not a shared
+database and there is no DSN to point anywhere; two engines opening one file
+corrupt it. Everything that genuinely has to be shared between nodes — seat
+leases, config activations, the completion ledger, dedupe and the rate
+valves — lives in the `coordination` slot instead.
+
+`CREWLET_STORE_DRIVER` picks which certified driver opens it (see Core above).
+The event store is a table in that same file, created by the engine's own
+migrations — there is no separate observability database to configure.
 
 ---
 
-## Pulsar (Optional Auth)
+## The external broker
 
-Only needed when the broker runs with token authentication (see [Deployment § Authentication](../guides/deployment.md)). Both are `${VAR}` conventions — the first in the Tier A YAML, the second in the compose `.env`.
+Every Tier A field below takes a `${VAR}`, so these are **conventions** rather than variables the engine looks up by name — the name is whatever your `crewlet.yaml` writes. They are listed because a deployment that invents its own names ends up with the same value spelled three ways.
 
-| Variable | Description | Where to get it |
-|----------|-------------|-----------------|
-| `CREWLET_PULSAR_TOKEN` | This engine's broker token (`providers.queue.auth_token`) | `bin/pulsar tokens create --subject <engine-role>` |
-| `PULSAR_ADMIN_TOKEN` | Operator/superuser token used by the compose broker config, its healthcheck, and `pulsar-admin` | `bin/pulsar tokens create --subject admin` |
+The whole block lives under `stream:`, which is where an external NATS estate and a Pulsar estate are both configured. (There is no `providers.queue` — Tier A refuses unknown keys, so a config written against that path fails to load.)
+
+| Variable | Tier A field | Where to get it |
+|----------|--------------|-----------------|
+| `CREWLET_PULSAR_URL` | `stream.url` — the broker address. Required for `type: nats` and `type: pulsar`, and **refused** for `embedded` | Your broker's service address (`pulsar://…`, `nats://…`) |
+| `CREWLET_PULSAR_TOKEN` | `stream.token` — this engine's bearer token, for a broker running with token authentication (see [Deployment § Authentication](../guides/deployment.md)) | `bin/pulsar tokens create --subject <engine-role>` |
+| `PULSAR_ADMIN_TOKEN` | None — read by the compose broker config, its healthcheck and `pulsar-admin`, never by the engine | `bin/pulsar tokens create --subject admin` |
+
+Two more `stream:` fields carry no `${VAR}` convention because they are paths and names rather than credentials: `stream.credentials` is a NATS credentials file on disk (the usual way to authenticate to an external NATS estate, instead of `stream.token`), and `stream.tenant` / `stream.namespace` scope this company's topics inside a Pulsar estate.
+
+A Pulsar stream keeps its **leases** on a NATS estate rather than on Pulsar — Pulsar has no compare-and-set — so `coordination.nats.url` / `.token` / `.credentials` are configured alongside, with the same shapes. See [Coordination](../concepts/coordination.md#backends).
 
 ---
 
@@ -162,16 +177,27 @@ Only needed when the broker runs with token authentication (see [Deployment § A
 |----------|-------------|-----------------|
 | `CREWLET_SECRET_KEY_<ID>` | Base64-encoded 32-byte key referenced by a Tier A `secrets.keys[].material`. When a keyring is configured, the **entire** Tier B config is stored **encrypted at rest** in the DB as one opaque blob instead of as verbatim `${VAR}` references. | `crewlet secrets keygen` |
 
-The keyring lives in Tier A (`config.yaml`) and is the sole root of trust — the DB holds only the encrypted document, never the key, and the key is required for **every** config read. Without a keyring, Crewlet keeps the default `${VAR}`-reference behaviour and every env var on this page is resolved from the environment at construction time. See [Configuration § Secrets](../concepts/configuration.md#secrets).
+The keyring lives in Tier A (`crewlet.yaml`) and is the sole root of trust — the DB holds only the encrypted document, never the key, and the key is required for **every** config read. Without a keyring, Crewlet keeps the default `${VAR}`-reference behaviour and every env var on this page is resolved from the environment at construction time. See [Configuration § Secrets](../concepts/configuration.md#secrets).
 
 A keyring lets you retire the per-secret env vars on this page (`LLM_API_KEY`, `<ROLE>_JIRA_TOKEN`, `SLACK_BOT_TOKEN_<ROLE>`, `*_WEBHOOK_SECRET`, …) two different ways:
 
-- **[Secret store](../concepts/secret-store.md)** *(recommended)* — keep the `${VAR}` references in the config and store the values in the encrypted `secret_values` table (`crewlet secrets set`, or `--secret-store` on a provisioning CLI). The engine consults that table **ahead of** `os.environ`, so a name it answers no longer needs to be exported at all. Rotation is an update of one row.
+- **[Secret store](../concepts/secret-store.md)** *(recommended)* — keep the `${VAR}` references in the config and store the values in the encrypted store (`crewlet secrets set`, or `-secret-store` on a provisioning CLI). The engine consults it **ahead of** the process environment, so a name it answers no longer needs to be exported at all. Rotation is a write of one record, and it reaches every node.
 - **Literal values in the encrypted config** — set them via `PUT /config` or import a `company.yaml` with literals. Simpler, but every rotation writes a new immutable revision that archives the superseded secret, and one credential referenced from two places (a Slack bot token is both `role.integrations.slack.bot_token` and `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`) becomes two literals that must change together.
 
 Either way, `${VAR}` references that remain unanswered by the store still resolve from the environment.
 
-**Two variables can never move into the store**, no matter how it is configured: the database DSN and `CREWLET_SECRET_KEY_<ID>` itself. Tier A is what opens and decrypts the store, so it is always env/file-sourced.
+**Those are the only two sources. The engine does not read a `.env` file.**
+`crewlet … provision -env-file PATH` writes one for an operator to `source`,
+and the values reach the engine only once they are in the process
+environment — so an `-env-file` run ends with "source it and restart", every
+time. A dotenv loader in the engine would be a third source of truth for
+secrets, discovered by filename and able to override the Tier A keyring that
+opens the store, which is the inversion the two-tier design exists to refuse.
+`-secret-store` is the path that needs no file and no restart: the values land
+in the encrypted table, and [`crewlet config activate`](cli.md#crewlet-config-activate)
+makes a running fleet re-read them.
+
+**Nothing in Tier A can move into the store**, no matter how it is configured — `CREWLET_SECRET_KEY_<ID>` above all. Tier A is what locates and decrypts the store, so it is always env- or file-sourced; it resolves with the store deliberately switched off.
 
 ---
 
@@ -191,13 +217,12 @@ When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the engine exports OTel spans to the 
 
 ## Code Runtime (Sandbox, Optional)
 
-Used only when `providers.sandbox` is configured so sandbox-enabled roles can author code in an isolated E2B sandbox — see [Code Sandbox](../concepts/code-sandbox.md). Requires the `sandbox` extra — `pip install 'crewlet[sandbox]'` (or `uv sync --extra sandbox` from a checkout) — which pulls in the `e2b` SDK. The variable names below are the conventions the [Nimbus example](../../examples/nimbus.company.yaml) references; any `${ENV}` name works.
+Used only when `providers.sandbox` is configured so sandbox-enabled roles can author code in an isolated sandbox — see [Code Sandbox](../concepts/code-sandbox.md). There is nothing to install: the binary carries every backend it has, and talks to E2B's REST API directly. The variable names below are the conventions the [Nimbus example](../../examples/nimbus.company.yaml) references; any `${ENV}` name works.
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
-| `E2B_API_KEY` | E2B API key (`providers.sandbox.api_key`). **Required even for self-hosted/local E2B** — the SDK always authenticates (sends it as an `X-API-KEY` header); `E2B_DOMAIN` only changes *which* API it talks to. | [e2b.dev](https://e2b.dev) dashboard (cloud) or your self-hosted E2B's key management |
-| `E2B_DOMAIN` | Self-hosted / local E2B cluster domain (`providers.sandbox.domain`). Omit for E2B cloud. | Your self-hosted E2B deployment |
-| `E2B_VALIDATE_API_KEY` | Set to `false` to skip the SDK's `e2b_<hex>` key-format check — needed if your self-hosted cluster issues keys in a different format. Default `true`. Read directly by the `e2b` SDK from the env. | — |
+| `E2B_API_KEY` | E2B API key, referenced by `providers.sandbox.api_key`. **Required for self-hosted clusters too** — every call authenticates with it, sent as `X-API-KEY`; the cluster domain only changes *which* API is talked to. | [e2b.dev](https://e2b.dev) dashboard (cloud) or your self-hosted cluster's key management |
+| `E2B_DOMAIN` | Self-hosted / local cluster domain, referenced by `providers.sandbox.domain`. Omit for the vendor cloud. The engine reads it **through the config field**, never from the environment directly, so a stale export cannot silently reroute a box. | Your self-hosted E2B deployment |
 | `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | Read by every node: the externally-reachable base URL of whichever node serves your webhooks (an `ingress` one) (e.g. `http://host.docker.internal:80`). When set, the engine wires its `/otlp/{token}/v1/{signal}` receiver route and sandbox runs export telemetry through it (forwarded to `OTEL_EXPORTER_OTLP_*` when configured). Unset = no sandbox telemetry. | Your engine's public address |
 
 Inside each sandbox run the engine **injects** `CREWLET_AGENT_HANDLE` and `CREWLET_AGENT_EMAIL` — the running agent's identity facts, readable by `role.sandbox.setup` recipes (e.g. to configure `git config user.name`/`user.email`). They are outputs of the engine, not inputs you set.
@@ -220,6 +245,6 @@ providers:
     api_key: "${OPENAI_API_KEY}"  # embeddings still take a single scalar
 ```
 
-Variables are resolved at startup from the [secret store](../concepts/secret-store.md) first (when one is configured and holds the name), then `os.environ`. An unanswered reference resolves to the empty string.
+Variables are resolved at startup from the [secret store](../concepts/secret-store.md) first (when one is configured and holds the name), then the process environment. An unanswered reference resolves to the empty string.
 
 Only the braced identifier form is substituted — `${NAME}` where `NAME` matches `[A-Za-z_][A-Za-z0-9_]*`. Bare `$NAME` and shell parameter expansions (`${1:-x}`, `${line#host=}`) are left untouched, so config-authored script content — a sandbox setup step's helper script, say — survives intact.

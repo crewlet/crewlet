@@ -8,12 +8,12 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
-| **A** | `config.yaml` on disk | Ops / SRE | Restart-only | DB DSN, queue (Pulsar) URL, API host/port, API auth tokens, debug, knowledge backend |
-| **B** | PostgreSQL (`company_config` table, JSONB, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Plane / Forge), org roles & units, extensions, token budgets |
+| **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, debug |
+| **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Plane / Forge), org roles & units, token budgets |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
 
-### Tier A example (`config.yaml`)
+### Tier A example (`crewlet.yaml`)
 
 ```yaml
 debug: false
@@ -21,14 +21,16 @@ debug: false
 node:
   id: "node-0"          # optional; see below
 
-providers:
-  queue:
-    type: pulsar
-    url: "pulsar://localhost:6650"
-  database:
-    dsn: "postgresql://crewlet:crewlet@localhost:5432/crewlet"
-  knowledge:
-    type: pgvector
+stream:
+  type: embedded        # a JetStream server inside this process; `nats` or
+                        #   `pulsar` point the same slot at an external one
+  store_dir: "./crewlet-data/stream"
+
+store:
+  path: "./crewlet-data/company.db"   # ONE file, owned exclusively
+
+coordination:
+  type: local           # one node; a fleet needs `embedded-kv`
 
 api:
   host: "0.0.0.0"
@@ -108,14 +110,14 @@ Everything that defines the company — see [examples/nimbus.company.yaml](https
 
 The engine boots in this order:
 
-1. Read `config.yaml` (Tier A only — DSN, queue URL, api host/port/auth, debug)
+1. Read `crewlet.yaml` (Tier A only — DSN, queue URL, api host/port/auth, debug)
 2. `configure_logging(level)`
-3. Connect to Pulsar + PostgreSQL
-4. Run migrations in two phases, serialized behind a PostgreSQL advisory lock so concurrent processes wait rather than race: first apply the self-contained bootstrap tables (`company_config`, `secret_values`, `leases`), read the active revision's `providers.embeddings.dimensions`, then apply the rest with that value so the pgvector columns (`episodes`, `agent_diary`) are sized to the configured embedding model. The width is **never guessed** — with no active revision the run stops before those migrations and they apply later, when a config declares one (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)). A company bootstrapped through the unconfigured state gets them applied as part of its first `apply_config`.
+3. Open the store file and start or dial the stream
+4. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
 5. Start the API process (or embedded API) bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
 6. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
 7. `SELECT payload FROM company_config WHERE is_active = TRUE`
-   - **Row present**: call `apply_config(payload)` which spawns the full company
+   - **Row present**: apply the payload, which spawns the full company
    - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`
 
 ### Two equivalent bootstrap entry points
@@ -124,7 +126,7 @@ The engine boots in this order:
 
 ```bash
 crewlet config import company.yaml   # one-shot bootstrap of Tier B
-crewlet run                          # boots from ./config.yaml + DB
+crewlet run                          # boots from ./crewlet.yaml + the store
 ```
 
 **Option 2 — run first, configure over the API:**
@@ -140,7 +142,7 @@ curl -X PUT https://crewlet.example.com/config \
 # company in place — no restart needed.
 ```
 
-`crewlet run` defaults its config path to `./config.yaml` in the current working directory; passing an explicit path is only needed when the file lives elsewhere.
+`crewlet run` defaults `-config` to `./crewlet.yaml` and `-company` to `./company.yaml` in the working directory; naming a path is only needed when a file lives elsewhere.
 
 ---
 
@@ -150,9 +152,9 @@ Until the first `is_active=TRUE` row exists, the engine holds an empty `Organiza
 
 **What stays running:**
 
-- The Tier A connections — Pulsar, PostgreSQL, the API socket — all up.
+- The Tier A resources — the stream, the store file, the API socket — all up.
 - The API's `/config/*` routes and the node's [reconcile loop](control-plane.md) — which is exactly what wakes an unconfigured node when the first revision lands.
-- Structlog with `state=unconfigured` so the unconfigured posture is obvious in logs and on the dashboard.
+- A structured log line carrying `state=unconfigured`, so the unconfigured posture is obvious in logs and on the dashboard.
 
 **What returns degraded responses:**
 
@@ -164,25 +166,29 @@ Until the first `is_active=TRUE` row exists, the engine holds an empty `Organiza
 | `GET /config/revisions` | `200 []` |
 | `PUT /config` | Accepted — creates the first active revision. `If-Match` not required when nothing to match against; if supplied must equal `"none"` else `412 Precondition Failed` |
 | `POST /config/revisions/{id}/revert` | `404` — no revisions exist yet |
-| Per-entity routes (`POST /config/roles`, etc.) | `409 Conflict` — operator must initialise via `PUT /config` first |
+| Per-entity routes (`PUT /config/roles/{handle}`, etc.) and `PATCH /config` | `409 Conflict` — they edit a document, and there is none; initialise via `PUT /config` first |
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
 | `POST /webhooks/...` | Signature check still runs (a forgery is rejected as a forgery); body logged at WARNING; returns `503 {"status": "unavailable", "reason": "unconfigured"}` with `Retry-After` so the sender **retries**. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet |
 
-Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → `apply_config` runs → spawn cascade executes → engine is fully alive. The dashboard carries the unconfigured state in always-on chrome — an amber live dot and a banner saying inbound webhooks are being dropped — and it clears automatically on the next health tick once `/health` reports `configured: true`. See [Health](../reference/dashboard-design.md#health).
+Transition out of unconfigured: the first activation moves the pointer → the reconcile tick picks it up → the apply runs → the spawn cascade executes → the engine is fully alive. The dashboard carries the unconfigured state in always-on chrome — an amber live dot and a banner saying inbound webhooks are being dropped — and it clears automatically on the next health tick once `/health` reports `configured: true`. See [Health](../reference/dashboard-design.md#health).
 
 ---
 
 ## Live Propagation
 
-When a new revision is activated (via `PUT /config`, per-entity write, revert, or `crewlet config import`), the write appends an **activation epoch** in the same transaction. Every node polls that pointer and converges onto it; a broadcast `crewlet.config.revision_activated` event wakes the poll early but carries no work.
+When a new revision is activated (via `PUT /config`, `PATCH /config`, a per-entity write, a revert, or `crewlet config import`), the revision is stored and the fleet's **activation pointer** is then moved to it; the pointer's own KV sequence *is* the epoch, so the append and the flip cannot come apart. Every node polls that pointer and converges onto it; a broadcast `crewlet.config.revision_activated` event wakes the poll early but carries no work.
+
+The two steps are **not one transaction**, and they span two stores — the node's own database and the coordination KV. That ordering is deliberate: a crash between them leaves a revision nothing points at, which is inert and replaced by the next activation, where the other order would point the fleet at bytes no node had stored.
+
+There is **no leader**, so any node's API may write. What keeps two operators from silently overwriting each other is that the flip is a **compare-and-set** against the revision the write was derived from: the loser gets a `409` naming what won, rather than a `201` for a change the fleet never took. See [Concurrent writes](../reference/api-endpoints.md#concurrent-writes).
 
 This replaced a pair of Pulsar **competing-consumer** subscriptions (`engine-config`, `api-config`) under which exactly one process applied any given revision and the rest ran the previous company indefinitely. The full mechanism — the epoch log, what a lagging node does about its own traffic, and the operator surface — is [Control Plane](control-plane.md); what follows is the apply itself.
 
 ### The engine half
 
-Converging runs `await self.apply_config(payload)`, which:
+Converging applies the payload, which:
 
-1. Acquires `self._apply_lock` (serialises the CLI path, the reconcile loop, and tests).
+1. Takes the apply lock, so the CLI path, the reconcile loop and tests serialise against one another.
 2. Re-reads the secret store, then validates the payload as `CompanyConfig` (defence in depth).
 3. **No-op short-circuit:** if the new payload equals the current active config **and** its [resolution fingerprint](control-plane.md#rotation) is unchanged, returns `[]` immediately — no snapshot capture, no per-subsystem comparison passes. Same payload with a *moved* fingerprint is a credential rotation, not a no-op: the credential-bearing subsystems (LLM providers, shared and per-role MCP servers, notification transports) rebuild and the rest is skipped.
 4. Snapshots in-memory state for rollback (including `_scheduling_config` so a rollback after `_apply_scheduling_live` restores the prior scheduler settings).
@@ -191,18 +197,18 @@ Converging runs `await self.apply_config(payload)`, which:
    - **`budgets`** — update org `token_budget` (per-role caps are applied by the `org` branch above, since they live on `Role`)
 
    > **Per-seat caps are a projection of the active org, not an accumulation.** Every org swap re-derives the whole cap set: each agent seat with a positive `token_budget` gets its cap (usage history preserved), and every cap whose seat is gone — role removed, flipped to human, budget dropped to `0` (= unlimited) — is dropped. Crucially the caps cover **every seat in the company on every node**, not just the seats a node happens to be running: caps are config while only *usage* is shared, and a missing local cap is read as "unlimited", so a node that seeded selectively would run a seat with no cap the moment it took that seat over.
-   - **`turn_engine`** — push new settings into `TurnEngineSettings` cell; in-flight turns finish on the prior snapshot
-   - **`providers`** — re-instantiate LLM providers and swap dict entries in place (preserves dict identity so `TurnEngine` sees the swap). The **embeddings** provider is *not* live-rewired: it is wired deeply into the diary / episode store / reflect engine at boot (and fixes the pgvector column width at migration time), so a change stores the new provider and logs a restart-required WARNING — the running learning subsystem keeps the prior provider until the next restart.
-   - **`scalars`** — `integrations.forge_app_id`, `notification_rate_limit` (the rate limit is propagated onto the running `NotificationService` so it takes effect on the next notification), and `notification_coalesce_window_seconds` / `notification_coalesce_max_batch` (mutated in place on the shared `BatchOptions` the inbox batch consume loops read every cycle — takes effect on the next batch, no re-subscription; see [Event System — Inbox batching](event-system.md#inbox-batching--coalescing))
-   - **`restart_required`** — MCP server start/stop/restart for both stdio (`MCPToolBridge.restart_server`) and remote http (`restart_http_server`, triggered by a `url` / `headers` change), per-role MCP respawn when a role's `mcp_env` changes (`_respawn_role_mcp` — this carries the per-agent Slack/GitHub credentials too), notification transport dict swap with routing re-seed (Slack apps + Jira/Confluence project/space key→lead maps), integration handle-registry refresh, extension `unregister`/`register`. **Learning** is the one subsystem that does NOT live-restart — the new `learning:` config is stored for the next engine restart and a WARNING is logged; the running `ReflectEngine` / `EpisodeLifecycleWorker` / `SkillCuratorWorker` keep the prior config until then.
+   - **`turn_engine`** — push new settings into the turn-engine settings cell; in-flight turns finish on the prior snapshot
+   - **`providers`** — LLM providers are rebuilt and swapped in place. The **embeddings** provider is rebuilt with them — model, key and base URL are all live — with **one exception that is refused rather than applied**: `dimensions`. Rows already written carry vectors of the old width, and a similarity query across two widths compares nothing; the apply fails with an error naming the declared width and the width this store already holds. Changing it means re-embedding, not a restart. Adding or removing the whole `embeddings` block *is* live, in both directions: a company that drops it degrades to recency-only recall on the next turn rather than at the next restart.
+   - **`scalars`** — `integrations.forge_app_id`, `notification_rate_limit` (the rate limit is propagated onto the running notification service so it takes effect on the next notification), and `notification_coalesce_window_seconds` / `notification_coalesce_max_batch` (mutated in place on the shared `BatchOptions` the inbox batch consume loops read every cycle — takes effect on the next batch, no re-subscription; see [Event System — Inbox batching](event-system.md#inbox-batching--coalescing))
+   - **`restart_required`** — MCP server start/stop/restart for both stdio and remote http (a `url` / `headers` change is a restart of that one server), per-role MCP respawn when a role's `mcp_env` changes — this carries the per-agent Slack/GitHub credentials too — notification transport swap with routing re-seed (Slack apps + Jira/Confluence project/space key→lead maps), and integration handle-registry refresh. **Only the changed server restarts**, and a seat picks up its new tool surface on its **next turn**, not at the next engine restart. **Learning** is the one subsystem that does NOT live-restart — the new `learning:` config is stored for the next engine restart and a WARNING is logged; the running reflect engine / `EpisodeLifecycleWorker` / `SkillCuratorWorker` keep the prior config until then.
 6. Refreshes derived state (`DelegationHandler`).
 7. Publishes `crewlet.config.revision_applied` with `status`, `applied_subsystems`, optional `error`.
 
-On any mid-apply failure: `_rollback(snapshot)` restores all captured state — and, after the org and transports dict are back, re-derives both the per-seat token caps and the running transports' routing maps from the rolled-back org, so a failed apply never leaves live spend limits or webhook routing derived from a revision that was never activated — and `ConfigApplyError(subsystem, original, applied_before_failure)` is raised. The DB row stays `is_active=TRUE` either way — the dashboard banner surfaces divergence. The converge path unpacks `applied_before_failure` from the exception onto `ConfigRevisionApplied.applied_subsystems` so the dashboard can render "applied: org, budgets; failed at: providers" rather than an empty list, and records the outcome in `config_apply_status` so peers can see it.
+On any mid-apply failure the rollback restores all captured state — and, after the org and the transports are back, re-derives both the per-seat token caps and the running transports' routing maps from the rolled-back org, so a failed apply never leaves live spend limits or webhook routing derived from a revision that was never activated. The error carries which subsystem failed and which ones had already applied. The active row stays active either way — the dashboard banner surfaces divergence. The converge path carries that partial list onto the `config_revision_applied` event so the dashboard can render "applied: org, budgets; failed at: providers" rather than an empty list, and records the outcome in the fleet's [apply status](control-plane.md) so peers can see it.
 
 Rollback **restarts** the transports it restores, routing them through the same swap the apply used, so a failed apply cannot leave the node with a live config and a dead inbound path.
 
-What it still cannot undo is per-role MCP respawn: the failed revision's children are already running, and re-running the spawn sequence for every role inside an already-failing apply trades one failure for a longer, less predictable one. `ConfigApplyError` therefore carries a `degraded` flag, set when the failure came *after* a restart-required subsystem was mutated. Such a node reports the prior epoch while its tool surface may be amputated, so the control plane records it as `degraded`, never counts it as converged, and fails its readiness probe — see [Control Plane](control-plane.md).
+What it still cannot undo is per-role MCP respawn: the failed revision's children are already running, and re-running the spawn sequence for every role inside an already-failing apply trades one failure for a longer, less predictable one. The apply error therefore carries a `degraded` flag, set when the failure came *after* a restart-required subsystem was mutated. Such a node reports the prior epoch while its tool surface may be amputated, so the control plane records it as `degraded`, never counts it as converged, and fails its readiness probe — see [Control Plane](control-plane.md).
 
 ### The API half
 
@@ -337,13 +343,13 @@ Crewlet has two secret-handling behaviours for Tier B. Which one is in effect de
 
 ### Default: `${VAR}` references (no keyring)
 
-With no `secrets:` block in `config.yaml`, the DB stores `${ENV_VAR}` reference strings verbatim and resolution happens at provider / transport / integration construction time (`crewlet.engine_builders._resolved_for_runtime`). The `company_config` table never holds a real secret; the environment is the source of truth. Safe to back up / export, but every deployment must re-provision the referenced env vars, and rotating a key means editing the env + restarting.
+With no `secrets:` block in `crewlet.yaml`, the DB stores `${ENV_VAR}` reference strings verbatim and resolution happens at provider / transport / integration construction time (`internal/engine`). The `company_config` table never holds a real secret; the environment is the source of truth. Safe to back up / export, but every deployment must re-provision the referenced env vars, and rotating a key means editing the env + restarting.
 
-A configured keyring also unlocks a second, independent place a `${VAR}` can resolve from: the encrypted [secret store](secret-store.md) (`secret_values`), consulted ahead of the environment. That is what lets a provisioner hand a minted credential straight to the engine instead of writing a file someone has to source. It is opt-in and inert until a secret is actually stored.
+A configured keyring also unlocks a second, independent place a `${VAR}` can resolve from: the encrypted [secret store](secret-store.md), consulted ahead of the environment. That is what lets a provisioner hand a minted credential straight to the engine instead of writing a file someone has to source. It is opt-in and inert until a secret is actually stored.
 
 ### Encrypted at rest (Tier A keyring configured)
 
-Add a keyring to `config.yaml` and Crewlet encrypts the **entire** `company_config` payload as one opaque blob (AES-256-GCM) before it reaches the DB:
+Add a keyring to `crewlet.yaml` and Crewlet encrypts the **entire** `company_config` payload as one opaque blob (AES-256-GCM) before it reaches the DB:
 
 ```yaml
 # config.yaml (Tier A) — the keyring is the sole root of trust
@@ -356,7 +362,7 @@ secrets:
 
 The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` — nothing about the config's structure (org chart, policies, model choices, or secrets) is visible in the database. A stolen DB reveals nothing.
 
-- **Encrypt on write.** Every write path (`PUT /config`, per-entity `PATCH`, `crewlet config import`, `crewlet run --import-company`) encrypts the whole document before the payload reaches the DB.
+- **Encrypt on write.** Every write path (`PUT /config`, per-entity `PUT`, `crewlet config import`, `crewlet run -company`) encrypts the whole document before the payload reaches the DB.
 - **Decrypt at the read boundary.** The engine, API process, migrations, and CLI each decrypt the blob (`load_config`) into the plaintext structure before use — the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
 - **Fail closed.** If an activated revision is stored encrypted but no keyring is configured (or the key is missing), the engine refuses to boot rather than run with an opaque blob it can't read.
 - **One key, not N env vars.** After encrypting, the engine needs only the Tier A key in its environment — not a per-secret env var for every LLM key, MCP token, and webhook secret.
@@ -399,11 +405,11 @@ If you also use the [secret store](secret-store.md), run `crewlet secrets rekey`
 
 Every HTTP read path **redacts** secrets behind a `{"encrypted": true, "key_id": null}` marker — `GET /config` (JSON + YAML), revision reads, the revision diff, the entity GETs (`/config/llm-providers/{key}`, `/config/roles/{handle}`, `/config/units/{name}`), and the dashboard `/org` view. The read path decrypts the whole document, then masks every secret leaf, so the caller sees the config's shape but never a secret value — no ciphertext or plaintext egresses. Without the keyring these paths return an opaque `{"__encrypted__": {"encrypted": true}}` rather than leaking.
 
-What counts as a secret leaf: LLM `api_keys`, embeddings / sandbox `api_key`, Jira/Confluence/GitHub/GitLab/Plane tokens + webhook/signing secrets, every per-agent `mcp_env` value and per-role Slack cred, and — for the shared `mcp_servers[].env` / `.headers` dicts — any value whose key name signals a secret (a `*_TOKEN` env var, an `Authorization` header). (Org-level `integrations.slack` carries no secrets — it is an empty enable-marker.) Non-secret structure (URLs, hosts, ports, flags, model names) stays visible. The key-name match errs toward **over**-masking — a non-secret key that happens to contain `token`/`authorization` (e.g. `max_tokens`) is masked too — deliberately, so a real secret is never missed. A value that is still a `${VAR}` reference is left **visible** on reads: it is an inert pointer (the real secret lives in the environment or the encrypted [secret store](secret-store.md), never in this payload), so it is neither ciphertext nor a secret-at-rest — masking it would hide the useful variable name and falsely flag it as encrypted. "Is a reference" uses the engine's own grammar (`crewlet.env_refs`), i.e. *substitution would actually change this value*; a literal secret merely containing brace syntax the resolver ignores (`${line#host=}`) is a literal, and is masked.
+What counts as a secret leaf: LLM `api_keys`, embeddings / sandbox `api_key`, Jira/Confluence/GitHub/GitLab/Plane tokens + webhook/signing secrets, every per-agent `mcp_env` value and per-role Slack cred, and — for the shared `mcp_servers[].env` / `.headers` dicts — any value whose key name signals a secret (a `*_TOKEN` env var, an `Authorization` header). (Org-level `integrations.slack` carries no secrets — it is an empty enable-marker.) Non-secret structure (URLs, hosts, ports, flags, model names) stays visible. The key-name match errs toward **over**-masking — a non-secret key that happens to contain `token`/`authorization` (e.g. `max_tokens`) is masked too — deliberately, so a real secret is never missed. A value that is still a `${VAR}` reference is left **visible** on reads: it is an inert pointer (the real secret lives in the environment or the encrypted [secret store](secret-store.md), never in this payload), so it is neither ciphertext nor a secret-at-rest — masking it would hide the useful variable name and falsely flag it as encrypted. "Is a reference" uses the engine's own grammar (`internal/envref`), i.e. *substitution would actually change this value*; a literal secret merely containing brace syntax the resolver ignores (`${line#host=}`) is a literal, and is masked.
 
 A redacted `GET` → edit a field → full-doc `PUT` round-trips safely: the write path swaps each marker back to the currently-stored (decrypted) value before validating (keep-existing), so a round-trip never clobbers or exposes a secret. To *change* a secret, supply the new value (or a `${VAR}`) at that field.
 
-What counts as a secret leaf is structural, and it covers the untyped surfaces too — `mcp_servers[].env` and `.headers`, `integrations.transports[]`, and a `cli-agent` provider's `cli.auth.token` / `cli.auth.credential_bundle` / `cli.env`. On those, only keys whose *name* signals a credential are masked, so a host, a region or a URL beside the token stays readable in the config view. A field carrying a credential as a literal rather than a `${VAR}` is masked exactly the same way — `${VAR}` is the convention, not what makes redaction work.
+What counts as a secret leaf is structural, and it covers the untyped surfaces too — `mcp_servers[].env` and `.headers`, and a `cli-agent` provider's `cli.auth.token` / `cli.auth.credential_bundle` / `cli.env`. On those, only keys whose *name* signals a credential are masked, so a host, a region or a URL beside the token stays readable in the config view. A field carrying a credential as a literal rather than a `${VAR}` is masked exactly the same way — `${VAR}` is the convention, not what makes redaction work.
 
 `crewlet config export` runs on the host (you already hold the key) and emits the stored payload verbatim — a plaintext `${VAR}` config when unencrypted, or the inert `{"__encrypted__": "enc:v1:…"}` document blob when encrypted (DR-friendly and round-trippable: re-importing decrypts and re-stores it). `crewlet config export --redact` decrypts the structure but masks every secret for a share-safe dump.
 
@@ -411,6 +417,6 @@ What counts as a secret leaf is structural, and it covers the untyped surfaces t
 
 ## One company per engine
 
-An engine runs exactly one company. It connects to one PostgreSQL database, that database holds one `company_config` table, and that table has **at most one** `is_active=TRUE` row (zero in the unconfigured boot state; otherwise one). There is no `tenant_id` column and no row-level scoping — the revision you activate is simply the company the engine runs. The same rule governs [`secret_values`](secret-store.md): one company per database, so a variable name alone is the primary key.
+An engine runs exactly one company. It opens one store file, that file holds one `company_config` table, and that table has **at most one** `is_active=TRUE` row (zero in the unconfigured boot state; otherwise one). There is no `tenant_id` column and no row-level scoping — the revision you activate is simply the company the engine runs. The same rule governs the [secret store](secret-store.md): one company per coordination estate, so a variable name alone is the key.
 
 To run a second company, run a second engine with its own database.

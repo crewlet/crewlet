@@ -1,6 +1,6 @@
 # Organization Model
 
-The organization model (`crewlet.org`) is the foundational data structure representing the company hierarchy. It determines how agents communicate, what knowledge they can access, who they report to, and how tasks flow.
+The organization model (`internal/org`) is the foundational data structure representing the company hierarchy. It determines how agents communicate, what knowledge they can access, who they report to, and how tasks flow.
 
 ---
 
@@ -14,14 +14,15 @@ Organization
 ├── roles: Role[]                          (root-level org-wide agents)
 └── units: OrgUnit[]
     ├── name, type, purpose, lead, goals, knowledge_refs
-    ├── slack_channel: str                 (team Slack channel, inherited by children)
+    ├── channel: str                       (team channel on the company's chat
+    │                                       surface, inherited by children)
     ├── jira_project: str                  (integrations.jira.project — the unit's Jira
-    │                                       project identity: webhook routing + write home,
-    │                                       NOT an MCP credential, does NOT scope reads)
+    │                                       project identity: lead-fallback webhook
+    │                                       routing + the project the team files under)
     ├── confluence_space: str              (integrations.confluence.space — the unit's
-    │                                       Confluence space identity: webhook routing +
-    │                                       write / skill-promotion home, NOT an MCP
-    │                                       credential, does NOT scope reads)
+    │                                       Confluence space: where its pages live and
+    │                                       where page activity routes. Does NOT scope
+    │                                       knowledge reads)
     ├── plane_project: str                 (integrations.plane.project — the unit's Plane
     │                                       project identity: webhook fallback routing +
     │                                       the project the team files work under, NOT an
@@ -50,13 +51,11 @@ Role (a SEAT — can live at root level OR inside an OrgUnit)
 │                                      project/space identity is the
 │                                      integrations block below)
 ├── jira_project: str  (root-level roles — integrations.jira.project;
-│                       the role's Jira project identity: webhook routing
-│                       + write home, NOT an MCP credential, does NOT
-│                       scope reads)
+│                       the role's Jira project identity: lead-fallback
+│                       webhook routing + write home, NOT an MCP credential)
 ├── confluence_space: str (root-level roles — integrations.confluence.space;
-│                          the role's Confluence space identity: webhook
-│                          routing + write home, NOT an MCP credential,
-│                          does NOT scope reads — read scope is the org-wide
+│                          the role's Confluence space. Does NOT scope
+│                          knowledge reads — that is the org-wide
 │                          knowledge.confluence_spaces only)
 ├── plane_project: str (root-level roles — integrations.plane.project;
 │                       the role's Plane project identity: webhook fallback
@@ -69,15 +68,20 @@ Role (a SEAT — can live at root level OR inside an OrgUnit)
 │                       summarisation work)
 ├── learning_enabled: bool? (per-role override for the agent-learning
 │                            subsystem)
-├── slack: dict        (per-agent Slack bot token, signing secret)
+├── slack: dict        (role.integrations.slack — this seat's OWN Slack
+│                       app: bot_token + signing_secret, both required
+│                       together. Slack gives each agent its own app, so
+│                       there is no company-wide credential)
 └── schedules: Schedule[]  (role-scoped recurring work; see
                             [Scheduling](scheduling.md))
 ```
 
 Roles can live in two places:
 
-- **Inside an OrgUnit** (`units[].roles`) — scoped to that unit for MCP env inheritance and lead auto-management. The unit's `integrations.jira.project` / `integrations.confluence.space` / [`integrations.plane.project`](../integrations/plane.md#project-identity) give the team its tracker "home" (webhook routing + write target), but do not scope what the role can *read*.
-- **At the root level** (`roles`) — org-wide agents that don't belong to any specific team. They participate in the `manages[]` hierarchy like any other role and are fully visible to task routing; a root-level role can carry its own `integrations.jira.project` / `integrations.confluence.space` / `integrations.plane.project` identity. Knowledge **read** scope for every agent is the org-wide `Organization.confluence_spaces` (or, on the Plane backend, `Organization.plane_projects`) only.
+- **Inside an OrgUnit** (`units[].roles`) — scoped to that unit for MCP env inheritance and lead auto-management. The unit's [`integrations.plane.project`](../integrations/plane.md#project-identity) gives the team its tracker "home" (webhook routing + write target), but does not scope what the role can *read*.
+- **At the root level** (`roles`) — org-wide agents that don't belong to any specific team. They participate in the `manages[]` hierarchy like any other role and are fully visible to task routing; a root-level role can carry its own `integrations.plane.project` identity. Knowledge **read** scope for every agent is the org-wide `org.Organization.PlaneProjects` only.
+
+> Every one of these identities is consulted. Each tracker routes an item that names nobody to the lead of the unit that owns the project, and Confluence does the same for a page change nobody was mentioned in. None of them narrows what an agent can READ: knowledge scope is the org-wide `knowledge.plane_projects` / `knowledge.confluence_spaces` only, because letting a unit's identity double as a read scope is how an agent ends up unable to read the page it was told to follow. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
 
 ---
 
@@ -131,7 +135,7 @@ Root-level roles differ from unit roles in a few ways:
 | Knowledge scope | Org-wide (reads are role-independent — see [Knowledge System](knowledge-system.md)) | Org-wide (same) |
 | MCP env inheritance | No parent unit to inherit from | Inherits unit's `mcp_env` |
 | Lead auto-management | N/A (no unit lead concept) | Auto-managed by unit lead if unmanaged |
-| `get_unit_for_role()` | Returns `None` | Returns the containing unit |
+| `org.Organization.UnitFor` | Returns `None` | Returns the containing unit |
 
 ### Flat Startup (no departments)
 
@@ -366,7 +370,7 @@ In this example:
 - **Backend** has no lead, so it inherits `VP Engineering`. VP Engineering auto-manages `Dev A` and `Dev B`.
 - **Frontend** has an explicit lead (`Frontend Lead`), so the parent's lead is ignored.
 
-Inherited leads work the same as explicit leads for auto-management, task routing, `is_unit_lead()`, and the Jira project-key mapping. The only difference is that the lead role lives in an ancestor unit rather than the current one — use `get_effective_lead(unit, org)` from `crewlet.org.hierarchy` to resolve the lead `Role` object in code.
+Inherited leads work the same as explicit leads for auto-management, task routing, `org.Organization.IsUnitLead`, and the Jira project-key mapping. The only difference is that the lead role lives in an ancestor unit rather than the current one — use `get_effective_lead(unit, org)` from `internal/org` to resolve the lead `Role` object in code.
 
 ### Roles at Any Level
 
@@ -407,7 +411,7 @@ This mirrors how a real new hire learns.  A founder doesn't need YAML config for
 The org model is loaded once at startup and can be hot-reloaded at runtime via the Engine API:
 
 - **`engine.reassign()`** — move an agent to a different role (optionally with a new manager)
-- **`engine.apply_config(CompanyConfig)`** — full Tier B hot-reload: spawn new roles, terminate removed roles, swap `AgentDefinition` for changed roles, plus diff-and-apply for every other Tier B subsystem (LLM providers, MCP servers, integrations, transports, turn engine, budgets, extensions). Driven by the API process when a `PUT /config` activates a new `company_config` revision; see [Configuration concept doc](configuration.md).
+- **The config apply** — full Tier B hot-reload: spawn new roles, terminate removed roles, swap the agent definition for changed roles, plus diff-and-apply for every other Tier B subsystem (LLM providers, MCP servers, integrations, transports, turn engine, budgets). Driven by each node's reconcile tick once a `PUT /config` moves the activation pointer; see [Configuration concept doc](configuration.md).
 
 Since all agent handlers run in the same Engine process (shared memory), hot reload works by:
 
@@ -415,4 +419,4 @@ Since all agent handlers run in the same Engine process (shared memory), hot rel
 2. Cancelling handlers for removed agents, spawning new ones
 3. Updating `AgentDefinition` in place for modified agents — picked up on next turn
 
-For non-org subsystems (LLM providers, MCP servers, integrations, transports, extensions, learning workers), `apply_config` runs per-subsystem diff handlers that rewire the live instances (providers re-instantiated, MCP processes restarted via `MCPToolBridge.restart_server`, notification transports swapped in `NotificationService.transports`, extensions un/registered). Mid-apply failures roll back to a snapshot of pre-apply state via `ConfigApplyError`.
+For non-org subsystems (LLM providers, MCP servers, integrations, transports, learning workers), the apply runs per-subsystem diff handlers that rewire the live instances: providers re-instantiated, per-role MCP children restarted, notification transports swapped. A mid-apply failure rolls back to a snapshot of the pre-apply state.

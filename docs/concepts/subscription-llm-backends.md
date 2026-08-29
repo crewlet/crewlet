@@ -20,9 +20,9 @@ providers:
 
 ```bash
 # Already have the CLI logged in on this machine? Adopt that login:
-crewlet llm login default --from-host
+crewlet llm login default -from-host
 # Otherwise log in (or mint a headless token) inside Crewlet's own dir:
-crewlet llm login default --capture-token
+crewlet llm login default -capture-token
 crewlet llm doctor default                  # verify before the first turn
 ```
 
@@ -33,7 +33,10 @@ crewlet llm doctor default                  # verify before the first turn
 > development, evaluation, and a small company you run yourself; a
 > metered key remains the better fit for a large, latency-sensitive
 > fleet. The two compose — see [Falling back to a metered
-> key](#falling-back-to-a-metered-key).
+> key](#falling-back-to-a-metered-key). There is also a second way to
+> spend a subscription that is not this page's backend at all — an
+> [OAuth proxy behind an ordinary HTTP entry](#the-other-shape-an-oauth-proxy-in-front-of-an-http-entry),
+> with a different set of trade-offs you own rather than Crewlet.
 
 ---
 
@@ -85,7 +88,7 @@ one task's context into the next.
 **Between the seat and the host.** The child process gets an
 **allowlisted** environment — `PATH`, locale, TLS trust, proxy settings,
 plus whatever the profile and your `cli.env` declare — never
-`os.environ`. Inheriting the engine's environment would hand every seat
+the process environment. Inheriting the engine's environment would hand every seat
 the org's `SLACK_BOT_TOKEN` and database DSN. It would also, for a
 subscription backend, silently bill a metered `ANTHROPIC_API_KEY` that
 happened to be exported.
@@ -145,7 +148,7 @@ rides in the prompt:
    ```
 
 4. The reply is parsed back into `Completion.content` +
-   `Completion.tool_calls`.
+   `Completion.ToolCalls`.
 
 The parser is deliberately forgiving — it accepts the last fenced block,
 a bare object, `arguments` as a JSON string, and `message` / `content` /
@@ -160,7 +163,7 @@ plain answer, with no envelope to get wrong.
 
 ### Token accounting
 
-`Completion.input_tokens` / `output_tokens` come from the CLI's own
+`Completion.InputTokens` / `output_tokens` come from the CLI's own
 usage report where the profile can find one (Claude Code and Codex
 report it; Gemini CLI's shape varies by version). Where it can't, the
 counts are estimated at four characters per token — an approximation, but
@@ -181,14 +184,14 @@ What it does instead covers every deployment shape:
 ### 0. Already logged in on this machine? Adopt it
 
 ```bash
-crewlet llm login default --from-host
+crewlet llm login default -from-host
 ```
 
 The usual starting point: you have been running `claude` on this box
 yourself for months. Crewlet **does not** use that login on its own —
 the child process is given its own `HOME`, so your `~/.claude` is
 invisible to it, which is exactly the isolation the rest of this page
-depends on. `--from-host` copies the CLI's credential files out of your
+depends on. `-from-host` copies the CLI's credential files out of your
 home directory into Crewlet's, once, on request.
 
 It is a *copy*, not a redirect: agents never write into your personal
@@ -197,9 +200,9 @@ surprise you get handed. The cost is that both copies then descend from
 one refresh token, and a vendor that rotates refresh tokens can log out
 whichever side refreshes second. Where the CLI mints a headless token
 (option 2 below), that is the better answer and avoids the fork
-entirely — `crewlet llm login --from-host` says so after it runs.
+entirely — `crewlet llm login -from-host` says so after it runs.
 
-`--home PATH` reads from somewhere other than the engine user's own home,
+`-home PATH` reads from somewhere other than the engine user's own home,
 for a deployment where the engine runs as a different user than the one
 that logged the CLI in.
 
@@ -212,8 +215,8 @@ host login    : .claude/.credentials.json (not adopted)
 problems:
   - no login of its own, but this machine has one at
     ~/.claude/.credentials.json — adopt it with
-    `crewlet llm login default --from-host`, or mint a headless
-    CLAUDE_CODE_OAUTH_TOKEN with `--capture-token` (preferred: no
+    `crewlet llm login default -from-host`, or mint a headless
+    CLAUDE_CODE_OAUTH_TOKEN with `-capture-token` (preferred: no
     shared refresh token)
 ```
 
@@ -232,7 +235,7 @@ personal CLI login on the same machine.
 ### 2. Capture a headless token (best where it exists)
 
 ```bash
-crewlet llm login default --capture-token
+crewlet llm login default -capture-token
 ```
 
 Runs the vendor's token-minting command (`claude setup-token`) and puts
@@ -245,14 +248,14 @@ no persistent volume.
 Already have a token from elsewhere?
 
 ```bash
-pass show anthropic/crewlet-oauth | crewlet llm login default --token-stdin
+pass show anthropic/crewlet-oauth | crewlet llm login default -token-stdin
 ```
 
 ### 3. Username / password, where the CLI genuinely has one
 
 ```bash
 vault read -field=password secret/gateway |
-  crewlet llm login default --username ops@example.com --password-stdin
+  crewlet llm login default -username ops@example.com -password-stdin
 ```
 
 Available for a profile that declares `stdin_login` — the built-in
@@ -267,7 +270,7 @@ unset, and the command says so rather than failing obscurely:
 Error: the 'claude-code' CLI authenticates through the vendor's browser
 OAuth flow — there is no username/password login to drive. Run
 `crewlet llm login` (which brokers that flow), or
-`crewlet llm login --capture-token` where the vendor mints a headless
+`crewlet llm login -capture-token` where the vendor mints a headless
 token. If your build of this CLI does accept a credential, declare it
 under providers.llm.<key>.cli.overrides.stdin_login.
 ```
@@ -293,17 +296,31 @@ several hosts. Export the credential directory as one blob into the
 encrypted secret store:
 
 ```bash
-crewlet llm export default --secret-store
+crewlet llm export default -secret-store
 ```
 
-Any engine sharing that database restores it at boot when its own
-`credentials/` directory is empty, so a fresh container comes up already
-authenticated. The blob is validated on the way back in — only the
+That engine restores it at boot when its own `credentials/` directory is
+empty, so a fresh container on the same store comes up already authenticated.
+It is **that node's** store and nothing else's — the rows do not travel, and a
+second host needs its own `crewlet llm login`, or the same bundle handed to it
+through `providers.llm[].auth.credential_bundle`. The blob is validated on the way back in — only the
 profile's own credential paths, files only, size-capped — because an
 archive is an execution surface if it is unpacked on trust.
 
 Only the credential files travel. Sessions, history, and caches never go
 into a bundle.
+
+**Between two hosts that share no database**, pipe it instead:
+
+```bash
+crewlet llm export default | ssh other-host crewlet llm import default
+```
+
+`import` reads the bundle from **stdin** — a credential on argv is visible in
+`ps` and lands in shell history — and refuses to overwrite a login the target
+already has. A host that has been running holds the fresher refresh token, and
+restoring a boot-time blob over it is how a fleet logs itself out; `crewlet
+llm logout <KEY>` first if you mean to replace it.
 
 ### Token refresh across seats
 
@@ -513,12 +530,114 @@ chain keeps the seat working while you re-run `crewlet llm login`.
 
 ---
 
+## The other shape: an OAuth proxy in front of an HTTP entry
+
+Everything above drives the vendor's CLI as a **process**. There is a
+second way to spend a subscription, which Crewlet supports without
+knowing anything about it: run a **proxy** that holds the OAuth login
+itself and re-exposes it as an ordinary Anthropic- or OpenAI-shaped HTTP
+endpoint, then point a normal provider entry at it.
+
+Crewlet needs no `cli-agent` block for this. It is an HTTP entry like any
+other, and `base_url` is all that changes:
+
+```yaml
+providers:
+  llm:
+    # The proxy speaks the Anthropic Messages API.
+    subscription-proxy:
+      type: anthropic
+      model: claude-sonnet-5
+      base_url: "${LLM_PROXY_URL}"      # e.g. http://127.0.0.1:8317
+      api_keys: ["${LLM_PROXY_KEY}"]    # the proxy's OWN inbound key
+
+    # Or it speaks the OpenAI wire format.
+    subscription-proxy-oai:
+      type: openai-compatible
+      model: gpt-5
+      base_url: "${LLM_PROXY_URL}/v1"
+      api_keys: ["${LLM_PROXY_KEY}"]
+```
+
+**`base_url` is not an `openai-compatible` field.** It is honoured on
+`anthropic` and `openai` entries too — it is only *required* for
+`openai-compatible`, which has no vendor default to fall back to. The
+same field is what points an entry at a corporate egress proxy or an
+Anthropic-API gateway, and the [code sandbox](code-sandbox.md) forwards
+an `anthropic` entry's value to Claude Code as `ANTHROPIC_BASE_URL`.
+
+**Which header your proxy will be handed** depends on the entry's type,
+because each backend sends its vendor's native one:
+
+| Entry type | Credential arrives as |
+|---|---|
+| `anthropic` | `x-api-key` — and only that. The backend builds its client with `WithoutEnvironmentDefaults`, which deliberately disables the SDK's own bearer-token path so an ambient `ANTHROPIC_AUTH_TOKEN` cannot redirect a company's auth |
+| `openai`, `openai-compatible` | `Authorization: Bearer` |
+
+The `api_keys` value is the credential for **the proxy**, not for the
+vendor: the vendor login lives inside the proxy. Rotation, cooldowns and
+the fleet-shared credential bench all apply to that inbound key as they
+would to any other.
+
+### What you gain, and what becomes yours
+
+Against the `cli-agent` backend you get a real HTTP provider back: native
+tool calls instead of the [in-prompt JSON envelope](#tool-calls), no
+process launch per call, and whatever token accounting the endpoint
+reports. Against a metered key you get flat-rate cost.
+
+What you take on is everything this page's design otherwise handles for
+you:
+
+- **The isolation guarantees do not apply.** [Per-seat homes, volatile
+  path pruning and the allowlisted child environment](#isolation-the-part-that-actually-matters)
+  exist because a CLI keeps conversation state under one home. A proxy is
+  one process serving every seat, so whatever session, cache or history
+  it keeps is shared across your whole company — that is the proxy's
+  design to answer, not Crewlet's.
+- **`crewlet llm` does not see it.** `list`, `doctor`, `login` and the
+  rest build `cli-agent` providers only, so there is no login state to
+  report and no smoke test to run. Keeping the proxy authenticated is a
+  separate operational job.
+- **A spent window is not translated.** The [prose sentinel](#falling-back-to-a-metered-key)
+  that turns "Usage limit reached" into a retryable `RATE_LIMIT` is the
+  CLI backend's. Over HTTP you get whatever status the proxy returns, and
+  only a 429 / 401 / 403 / 402 / 408 / 5xx is [retryable](turn-engine.md#per-phase-llm-models);
+  anything else is fatal and the role's fallback chain will **not** walk
+  to the next provider. Check what your proxy returns on an exhausted
+  plan before you rely on `llm: [proxy, metered]`.
+
+### Before you choose this
+
+A proxy that spends a *subscription* rather than an API key has to
+present itself to the vendor as the vendor's own client. In practice
+that means reproducing a specific client build's headers, its beta
+flags, sometimes its TLS fingerprint, and often injecting that client's
+system prompt ahead of yours — which quietly changes what your prompts
+say and where prompt-cache breakpoints land.
+
+Vendor terms generally do not permit a third-party client to route
+requests through consumer subscription credentials, and vendors have
+enforced that. Crewlet's `cli-agent` backend is on the other side of
+that line **by construction**: it runs the vendor's own unmodified CLI,
+logged in by you, as a child process — Crewlet never sees a password,
+never re-implements an auth flow, and never impersonates a client.
+Pointing `base_url` at a proxy is a supported configuration and a
+decision you are making, exactly as the note at the end of this page
+says about plan terms generally.
+
+None of this applies to an ordinary **gateway** — LiteLLM, a corporate
+egress proxy, a self-hosted vLLM — reached through the same field with a
+key you were issued. That is just an endpoint.
+
+---
+
 ## Operating it
 
 ```bash
 crewlet llm list                      # providers, agent, model, login state
 crewlet llm doctor                    # verify all of them, end to end
-crewlet llm doctor default --no-smoke # skip the real completion
+crewlet llm doctor default -no-smoke # skip the real completion
 crewlet llm status default            # ask the CLI who it's logged in as
 crewlet llm logout default            # revoke locally + delete credentials
 ```
@@ -543,7 +662,9 @@ smoke test    : ok — 812 in / 34 out
 problems      : none
 ```
 
-See the [CLI reference](../reference/cli.md#crewlet-llm) for every flag.
+One caveat worth stating plainly: `doctor` spends a real completion. On a
+subscription that is a few thousand tokens of your plan's allowance, which
+is why `-no-smoke` exists for a scripted health check that runs often.
 
 ---
 
@@ -555,7 +676,7 @@ See the [CLI reference](../reference/cli.md#crewlet-llm) for every flag.
 - **Code work needs one more decision.** A subscription *can* back the
   [code sandbox](code-sandbox.md), two ways. On any backend including
   remote E2B, the headless token travels: `crewlet llm login <key>
-  --capture-token` and Claude Code in the box bills your plan. For a CLI
+  -capture-token` and Claude Code in the box bills your plan. For a CLI
   that mints no such token (Codex, Gemini CLI), use
   [`providers.sandbox.type: local`](code-sandbox.md#local-sandboxes),
   where the coding agent runs on the engine host and reads the login
@@ -573,7 +694,9 @@ See the [CLI reference](../reference/cli.md#crewlet-llm) for every flag.
 - **Check the vendor's terms.** Subscription plans are generally written
   for interactive use by the subscriber. Running a fleet of agents on
   one may not be permitted by your plan — that is a decision for you,
-  not something Crewlet can decide for you.
+  not something Crewlet can decide for you. It is the sharper question
+  for [the proxy shape](#the-other-shape-an-oauth-proxy-in-front-of-an-http-entry),
+  where a third-party client is presenting itself as the vendor's own.
 
 ---
 
@@ -583,4 +706,3 @@ See the [CLI reference](../reference/cli.md#crewlet-llm) for every flag.
 - [Turn Engine — per-phase LLM models](turn-engine.md#per-phase-llm-models)
 - [Secret Store](secret-store.md) — where tokens and credential bundles live
 - [Code Sandbox](code-sandbox.md) — the *other* place Crewlet runs a coding agent
-- [CLI reference — `crewlet llm`](../reference/cli.md#crewlet-llm)
