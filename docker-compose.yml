@@ -23,7 +23,14 @@ services:
   # it is the only place the Pulsar backend is certified at all.
   # ---------------------------------------------------------------------------
   pulsar:
-    image: apachepulsar/pulsar:latest
+    # Pinned, and pinned to the version CI certifies against. This service is
+    # the local half of the ONE suite that certifies the Pulsar backend, so a
+    # floating tag would mean a local pass says nothing about the broker the
+    # job will run -- and `latest` gives Dependabot's docker-compose entry no
+    # version to bump, which is a service watched by nothing that looks
+    # exactly like a service with nothing to update. internal/version asserts
+    # this tag and the workflow's are the same.
+    image: apachepulsar/pulsar:4.0.6
     profiles: [pulsar]
     # Standalone runs broker + metadata + BookKeeper in one container.
     # Functions worker and stream storage are unused by crewlet, so disable
@@ -125,8 +132,8 @@ services:
   # Open http://localhost:8090.  (CLI alternative:
   #   docker compose exec pulsar bin/pulsar-admin topics list public/default)
   dekaf:
-    # Dekaf publishes no ``:latest`` tag, so this is an explicit pin --
-    # every other service in this file tracks a floating one.
+    # Dekaf publishes no ``:latest`` tag, so this is an explicit pin -- as is
+    # the broker above, for a different reason.
     # Dependabot opens the bump as a pull request when a newer version ships
     # (see .github/dependabot.yml), so noticing the release is not a job.
     image: visortelle/dekaf:1.2.1

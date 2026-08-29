@@ -1,6 +1,7 @@
 package version
 
 import (
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -159,6 +160,43 @@ func TestEveryComposeProfileTheMakefileStartsExists(t *testing.T) {
 				"having started nothing", match[1])
 		}
 	}
+}
+
+// THE LOCAL BROKER IS THE BROKER CI CERTIFIES AGAINST.
+//
+// `make pulsar-up` is now the documented way to run the one suite that
+// certifies the Pulsar backend at all, and a conformance pass is a claim
+// about a BROKER — a close-driven handoff returning mail at redelivery count
+// 0, a cursor surviving a change of owner. Run it against a different build
+// of Pulsar than the job does and the claim is about a different broker,
+// with nothing to say so: both runs are green.
+func TestTheLocalBrokerIsTheOneCIRuns(t *testing.T) {
+	t.Parallel()
+	compose := pulsarImage(t, "docker-compose.yml")
+	workflow := pulsarImage(t, filepath.Join(".github", "workflows", "ci.yml"))
+	if compose != workflow {
+		t.Errorf("docker-compose.yml runs %s and ci.yml certifies against %s — "+
+			"a local conformance pass would be about the wrong broker",
+			compose, workflow)
+	}
+}
+
+// pulsarImage finds the pinned broker image in a file, ignoring comments —
+// both files discuss the image in prose as well as running it.
+func pulsarImage(t *testing.T, name string) string {
+	t.Helper()
+	pinned := regexp.MustCompile(`apachepulsar/pulsar:([\w.-]+)`)
+	for _, line := range strings.Split(releaseFile(t, name), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if match := pinned.FindStringSubmatch(trimmed); match != nil {
+			return match[0]
+		}
+	}
+	t.Fatalf("%s names no pulsar image, so this test is checking nothing", name)
+	return ""
 }
 
 // --- the target list ------------------------------------------------------
