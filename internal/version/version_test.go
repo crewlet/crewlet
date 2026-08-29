@@ -461,6 +461,10 @@ func TestOnlyOneWorkflowIsTriggeredByAVersionTag(t *testing.T) {
 // never fires again and the site quietly falls back to the hourly poll the
 // trigger exists to pre-empt. Two strings in two files with nothing joining
 // them is exactly the shape this package exists to assert.
+//
+// This asserts the PAIR; the sweep below asserts the rule. Neither covers the
+// other: a docs-publish.yml that watches nothing at all passes the sweep with
+// nothing to check, and is the same outage by a different route.
 func TestTheDocsRebuildWatchesTheReleaseWorkflowByItsName(t *testing.T) {
 	t.Parallel()
 	release := workflowName(t, "release.yml")
@@ -472,38 +476,99 @@ func TestTheDocsRebuildWatchesTheReleaseWorkflowByItsName(t *testing.T) {
 	}
 }
 
-// workflowName is the `name:` a workflow declares — the top-level one, which
-// is the only unindented key of that name in the file.
+// EVERY WATCHED WORKFLOW NAME IS A WORKFLOW THAT EXISTS.
+//
+// The pair above is the one that broke; this is the rule it broke, held over
+// every watcher in the directory. A name in a `workflows:` list that matches
+// nothing is not an error, a warning or a skipped run — the workflow simply
+// never starts, which looks exactly like a workflow with nothing to do. The
+// next `workflow_run` trigger anyone adds inherits the guard without having
+// to remember it.
+func TestEveryWatchedWorkflowNameExists(t *testing.T) {
+	t.Parallel()
+	names := map[string]bool{}
+	watched := map[string]string{} // watched name -> the file watching it
+	for _, path := range workflowFiles(t) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		body := string(raw)
+		names[declaredName(body)] = true
+		for _, name := range watchedIn(body) {
+			watched[name] = filepath.Base(path)
+		}
+	}
+	if len(watched) == 0 {
+		t.Fatal("no workflow watches another one, so this test is checking nothing")
+	}
+	for name, watcher := range watched {
+		if !names[name] {
+			t.Errorf("%s watches a workflow called %q and no workflow is "+
+				"named that — the trigger never fires, and nothing reports it",
+				watcher, name)
+		}
+	}
+}
+
+// workflowName is the `name:` a workflow declares, and fails the test if it
+// declares none — a caller asking for one workflow by file has nothing to
+// compare against without it.
 func workflowName(t *testing.T, file string) string {
 	t.Helper()
-	for _, line := range strings.Split(releaseFile(t, filepath.Join(".github", "workflows", file)), "\n") {
+	name := declaredName(releaseFile(t, filepath.Join(".github", "workflows", file)))
+	if name == "" {
+		t.Fatalf("%s declares no top-level name", file)
+	}
+	return name
+}
+
+// declaredName is a workflow's own `name:` — the top-level one, which is the
+// only unindented key of that name in the file, and the reason this matches
+// on the raw line rather than a trimmed one: every step in the file has a
+// `name:` too, and they are all indented.
+func declaredName(body string) string {
+	for _, line := range strings.Split(body, "\n") {
 		if rest, ok := strings.CutPrefix(line, "name:"); ok {
 			return strings.Trim(strings.TrimSpace(rest), `"'`)
 		}
 	}
-	t.Fatalf("%s declares no top-level name", file)
 	return ""
 }
 
 // watchedWorkflows is the inline `workflows: [a, b]` list of a workflow_run
-// trigger.
+// trigger, and fails the test if the file has none — "watches nothing" is not
+// an answer a caller naming one file can act on.
 func watchedWorkflows(t *testing.T, file string) []string {
 	t.Helper()
-	for _, line := range strings.Split(releaseFile(t, filepath.Join(".github", "workflows", file)), "\n") {
+	names := watchedIn(releaseFile(t, filepath.Join(".github", "workflows", file)))
+	if len(names) == 0 {
+		t.Fatalf("%s has no workflow_run workflows list", file)
+	}
+	return names
+}
+
+// watchedIn is every name in every inline `workflows: [a, b]` list in one
+// workflow.
+//
+// The key has to START the trimmed line. That is what keeps prose out: a
+// comment carries its `#` through the trim, and docs-publish.yml explains
+// this very trigger in comments that name it — an assertion that read them
+// would be checking an explanation rather than the trigger it explains.
+func watchedIn(body string) []string {
+	var names []string
+	for _, line := range strings.Split(body, "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "workflows:")
 		if !ok {
 			continue
 		}
-		var names []string
 		for _, name := range strings.Split(strings.Trim(strings.TrimSpace(rest), "[]"), ",") {
 			if name = strings.Trim(strings.TrimSpace(name), `"'`); name != "" {
 				names = append(names, name)
 			}
 		}
-		return names
 	}
-	t.Fatalf("%s has no workflow_run workflows list", file)
-	return nil
+	return names
 }
 
 // --- the dependency auto-merge -------------------------------------------
