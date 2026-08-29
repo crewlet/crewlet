@@ -137,40 +137,39 @@ func loadOrHealTursoLibrary(dir string) error {
 	return nil
 }
 
-// libcAdvice names the C library mismatch, when there is evidence of one.
+// libcAdvice names the C library requirement, when there is evidence it is
+// the thing in the way.
 //
 // # Why this sentence exists
 //
-// The engine is a static pure-Go binary, so an operator reasonably assumes it
-// runs anywhere linux runs — and it does, right up until the store opens. The
-// database engine is a native shared object, and the driver embeds a GLIBC
-// build and a MUSL build behind a build tag. Extract the glibc one on Alpine
-// and every step before the last one SUCCEEDS: the file is written, its
-// sha256 matches, and then dlopen fails because the loader is not there.
+// Everything about this engine says "static binary" — one file, no runtime,
+// CGO_ENABLED=0 — and on linux that is FALSE, measured. The driver reaches its
+// database engine through purego, which declares its dlopen/dlsym imports with
+// //go:cgo_import_dynamic, so the linker emits a DYNAMIC executable even with
+// cgo off: interpreter /lib64/ld-linux-x86-64.so.2, NEEDED libc.so.6. The
+// linux binaries require glibc.
 //
-// The message that failure lands in is about a cache that will not verify —
-// which is exactly the wrong thing to tell someone whose cache is perfect. It
-// sends them to delete a directory, watch it be rebuilt identically, and
-// delete it again. The archive they need is `_musl` (or `_linux` if they built
-// with the tag and deployed on glibc), and nothing anywhere would have said so.
+// On a plain musl system that fails at execve and nothing here ever runs, so
+// this is not the message that case gets — the kernel's is, and it is
+// "no such file or directory" about a file that exists. What this covers is
+// the case that DOES reach Go: a musl host with a glibc shim (gcompat and
+// friends), where the process starts and then the extracted shared object
+// will not load. That failure otherwise arrives dressed as "the cache will not
+// verify", about a cache that is perfect, and sends an operator to delete a
+// directory that is rebuilt identically.
 //
 // Appended rather than substituted, and phrased as "looks like": the evidence
 // is one glob (see runningOnMusl), a host can carry both C libraries, and the
-// underlying error is still the thing to read. A hint that is occasionally
-// unnecessary is much cheaper than the absence of the only hint that helps.
+// underlying error is still the thing to read.
 func libcAdvice() string {
-	if runningOnMusl() == builtForMusl {
+	if !runningOnMusl() {
 		return ""
 	}
-	if builtForMusl {
-		return "\n\nThis binary was built with -tags musl, for a musl C library, and this " +
-			"host does not look like a musl system. Use the plain linux archive " +
-			"(crewlet_<version>_linux_<arch>.tar.gz) instead."
-	}
-	return "\n\nThis host looks like a musl system (Alpine and friends) and this binary " +
-		"carries the glibc build of the database engine, which will not load there. " +
-		"Use the musl archive (crewlet_<version>_linux_<arch>_musl.tar.gz), or run " +
-		"the published container image, which is glibc."
+	return "\n\nThis host looks like a musl system (Alpine and friends). The linux " +
+		"binaries are dynamically linked against GLIBC — the database engine is " +
+		"loaded with dlopen, which is not something a pure-Go build avoids — so " +
+		"the shared object will not load here even under a glibc shim. Run the " +
+		"published container image, or use a glibc base image."
 }
 
 // loadTursoLibrary extracts-if-absent, verifies and loads.

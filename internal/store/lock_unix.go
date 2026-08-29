@@ -1,4 +1,4 @@
-//go:build unix
+//go:build (linux || darwin) && (amd64 || arm64)
 
 package store
 

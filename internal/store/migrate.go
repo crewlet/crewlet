@@ -184,10 +184,17 @@ func SchemaVersions() []string {
 // schema of a live engine's database and only refused at the point it tried
 // to change it: the check that runs first was the one with no guard.
 //
-// The lock is released before returning, because a caller that goes on to
-// migrate calls [Open] next and must be able to take it. Inside one process
-// that is free — the claim is refcounted — so the two calls never contend
-// with each other, only with another process.
+// The lock is released before returning, and NOT because [Open] would
+// otherwise be refused — it would not. The claim is refcounted per process
+// (see lock.go), so `crewlet migrate` calling Pending and then Open shares one
+// claim either way, and a Pending that never released would look perfectly
+// fine from inside that command.
+//
+// It is released because a claim this process no longer needs is a claim it
+// must not keep: the lock lives as long as the process, so a leak here would
+// leave the file excluded from every OTHER process for the rest of this one's
+// life, with nothing to point at. That is why the test asserts the refcount
+// rather than a following Open — an Open that succeeds proves nothing.
 func Pending(ctx context.Context, path string, opts Options) (applied, pending []string, err error) {
 	lock, err := lockStore(path)
 	if err != nil {

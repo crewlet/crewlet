@@ -1,6 +1,8 @@
 package store_test
 
 import (
+	"encoding/binary"
+	"math"
 	"path/filepath"
 	"testing"
 
@@ -202,4 +204,120 @@ func TestPartialIndexConflictTarget(t *testing.T) {
 	); err != nil {
 		t.Fatalf("repeating the predicate should parse: %v", err)
 	}
+}
+
+// The three properties of vector_distance_cos that internal/learning's recall
+// is WRITTEN AGAINST, pinned here because recall cannot pin them itself.
+//
+// Each one is load-bearing and each one is invisible in the code that depends
+// on it — a pin bump that changed any of them would leave the whole suite
+// green while recall silently returned the wrong rows, or errored, or ranked
+// garbage first. They live in this file rather than in internal/learning
+// because they are a claim about a pinned DRIVER, which is what this file is
+// for; the recall tests then assert BEHAVIOUR and stay readable.
+func TestVectorDistanceSemanticsRecallDependsOn(t *testing.T) {
+	t.Parallel()
+	db, err := store.Open(t.Context(),
+		filepath.Join(t.TempDir(), "sem.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	ctx := t.Context()
+
+	// (1) IT IS A DISTANCE, AND IT IS 1 - cosine.
+	//
+	// Recall's floor is written as `distance <= 1 - floor`, which means
+	// `similarity >= floor` only if this holds. A function that answered a
+	// SIMILARITY instead would invert the filter: every irrelevant memory
+	// would pass and every relevant one would be cut.
+	var identical, orthogonal, opposite float64
+	if err := db.SQL().QueryRowContext(ctx, `SELECT
+		vector_distance_cos(vector32('[1,0]'), vector32('[1,0]')),
+		vector_distance_cos(vector32('[1,0]'), vector32('[0,1]')),
+		vector_distance_cos(vector32('[1,0]'), vector32('[-1,0]'))`,
+	).Scan(&identical, &orthogonal, &opposite); err != nil {
+		t.Fatalf("distance: %v", err)
+	}
+	for _, c := range []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"identical", identical, 0},
+		{"orthogonal", orthogonal, 1},
+		{"opposite", opposite, 2},
+	} {
+		if diff := c.got - c.want; diff > 1e-6 || diff < -1e-6 {
+			t.Errorf("distance between %s vectors = %v, want %v — recall's "+
+				"floor is `distance <= 1 - similarity`, which this is what makes true",
+				c.name, c.got, c.want)
+		}
+	}
+
+	// (2) A NON-FINITE COMPONENT ANSWERS 0 — a PERFECT match, so it sorts
+	// FIRST.
+	//
+	// This is why store.EncodeVector refuses to write one and why recall
+	// re-scores in Go: without both, one bad response from an embeddings
+	// provider puts a garbage row at the top of every recall that seat ever
+	// runs. If a pin bump ever made this NULL or an error instead, the
+	// guards become belt-and-braces rather than load-bearing — worth
+	// knowing, and worth failing here to say so.
+	nan := packRaw([]float32{float32(math.NaN()), 0})
+	var poisoned float64
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT vector_distance_cos(?, vector32('[1,0]'))`, nan).Scan(&poisoned); err != nil {
+		t.Fatalf("distance to a NaN vector: %v", err)
+	}
+	if poisoned != 0 {
+		t.Errorf("distance to a NaN vector = %v, want 0 — if this is no longer "+
+			"a false perfect match, say so where EncodeVector and "+
+			"learning.Recall explain why they guard against it", poisoned)
+	}
+
+	// (3) A WIDTH MISMATCH FAILS DURING ITERATION, not at the query.
+	//
+	// The statement succeeds and rows come back; the error arrives from
+	// rows.Err() partway through. That is what makes recall's
+	// `length(embedding) = ?` load-bearing rather than an optimisation: a
+	// company that changed embedding model would otherwise get an error
+	// from recall instead of the rows it can still compare.
+	if _, err := db.SQL().ExecContext(ctx,
+		`CREATE TABLE sem (id TEXT PRIMARY KEY, e BLOB)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx,
+		`INSERT INTO sem (id, e) VALUES ('narrow', ?)`, packRaw([]float32{1, 0})); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.SQL().QueryContext(ctx,
+		`SELECT vector_distance_cos(e, vector32('[1,0,0,0]')) FROM sem`)
+	if err != nil {
+		t.Fatalf("a width mismatch now fails the QUERY rather than the "+
+			"iteration: %v — recall filters on length(embedding) because of "+
+			"this; re-read the comment there", err)
+	}
+	for rows.Next() {
+		var d float64
+		_ = rows.Scan(&d)
+	}
+	iterErr := rows.Err()
+	_ = rows.Close()
+	if iterErr == nil {
+		t.Error("a width mismatch no longer fails at all — recall's " +
+			"length(embedding) filter is now merely a narrowing, and the " +
+			"comment there says it is load-bearing")
+	}
+}
+
+// packRaw is the vector layout the schema holds, built without a configured
+// width so a deliberately-wrong one can be written. store.DB.EncodeVector is
+// the production path and refuses both of the vectors this file needs.
+func packRaw(v []float32) []byte {
+	out := make([]byte, 4*len(v))
+	for i, f := range v {
+		binary.LittleEndian.PutUint32(out[4*i:], math.Float32bits(f))
+	}
+	return out
 }

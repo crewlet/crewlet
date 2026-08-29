@@ -27,15 +27,27 @@ builds:
     main: ./cmd/crewlet
     binary: crewlet
     env:
-      # Pure Go, all the way down: the store driver
-      # (turso.tech/database/tursogo) and the embedded NATS server both
-      # compile without cgo, which is what makes the matrix below a plain
-      # GOOS/GOARCH loop instead of a cross-toolchain estate.
+      # No cgo, so the matrix below is a plain GOOS/GOARCH loop rather than a
+      # cross-toolchain estate. That is what CGO_ENABLED=0 buys here, and it
+      # is ALL it buys — see the two notes below, both measured.
       #
-      # "Pure Go" is not "self-contained" for the driver: its database engine
-      # is a native library embedded in the module and extracted at run time
-      # (internal/store/turso.go). That is what bounds the matrix below — the
-      # loop is free, the platforms are not.
+      # NOT A STATIC BINARY, on linux. The store driver reaches its database
+      # engine through purego, which declares its dlopen/dlsym imports with
+      # //go:cgo_import_dynamic — so the linker emits a DYNAMIC executable
+      # even with cgo off. Measured on the linux/amd64 artifact: interpreter
+      # /lib64/ld-linux-x86-64.so.2, NEEDED libdl.so.2, libpthread.so.0,
+      # libc.so.6. (A hello-world at CGO_ENABLED=0 is statically linked, so
+      # this is the dependency and not the toolchain.) The linux binaries
+      # therefore require GLIBC; on a musl system they fail at execve, before
+      # any Go code runs, and `-tags musl` does NOT change that — the tag
+      # only selects which .so the driver embeds, not this binary's own
+      # interpreter. Publishing a musl archive means producing and testing
+      # one on a musl toolchain, which nothing here does.
+      #
+      # "Pure Go" is not "self-contained" either: the database engine is a
+      # native library embedded in the driver module and extracted at run
+      # time (internal/store/turso.go). That is what bounds the matrix below
+      # — the loop is free, the platforms are not.
       - CGO_ENABLED=0
     flags:
       # Strip the build machine's paths out of the binary, so two builds of
@@ -66,38 +78,6 @@ builds:
     goos: [linux, darwin]
     goarch: [amd64, arm64]
 
-  # The musl linux build — Alpine and anything else on musl.
-  #
-  # A SECOND BINARY RATHER THAN A SECOND SWITCH, because which C library the
-  # embedded database engine is linked against is fixed when the archive is
-  # built, not when it runs. turso-go-platform-libs embeds libs/linux_{arch}
-  # behind `!musl` and libs/linux_{arch}_musl behind `musl`, and the tag is
-  # the only thing that chooses.
-  #
-  # Without this there is no musl artifact at all, and an operator who
-  # re-bases the shipped image on Alpine gets the glibc shared object: it
-  # extracts, its sha256 matches, and dlopen fails — a failure that arrives
-  # as "the cache will not verify", about a cache that is perfect. That is
-  # what internal/store/libc_linux.go now adds a sentence to, and this build
-  # is what gives that sentence something to point at.
-  #
-  # darwin is absent on purpose: there is one C library there.
-  - id: crewlet-musl
-    main: ./cmd/crewlet
-    binary: crewlet
-    env:
-      - CGO_ENABLED=0
-    flags:
-      - -trimpath
-    tags:
-      - musl
-    ldflags:
-      - -s -w
-      - -X github.com/crewlet/crewlet/internal/version.value={{ .Version }}
-    mod_timestamp: "{{ .CommitTimestamp }}"
-    goos: [linux]
-    goarch: [amd64, arm64]
-
 archives:
   - id: crewlet
     ids: [crewlet]
@@ -105,20 +85,6 @@ archives:
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     # tar.gz everywhere. The zip override existed for Windows and went with
     # it; linux and darwin both want a tarball.
-    formats: [tar.gz]
-    files:
-      - LICENSE
-      - README.md
-
-  # The musl archives, named apart from the glibc ones.
-  #
-  # The suffix is load-bearing: both builds produce a binary called `crewlet`
-  # for the same GOOS/GOARCH, so without it the two archives collide on one
-  # filename and one silently replaces the other in checksums.txt.
-  - id: crewlet-musl
-    ids: [crewlet-musl]
-    name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}_musl
     formats: [tar.gz]
     files:
       - LICENSE
@@ -183,9 +149,9 @@ changelog:
 # GHCR rather than Docker Hub: the release workflow already holds a GitHub
 # token scoped to this repository, so publishing needs no second account and
 # no second credential.
-# glibc, because the image is debian:trixie-slim. The musl build has no image
-# of its own: an operator on Alpine is building their own image anyway, and
-# that is what the musl ARCHIVE is for.
+# The image is debian:trixie-slim, and that is not a size preference — see
+# the Dockerfile, and the GLIBC note on the build above. A musl base does not
+# work at all.
 dockers_v2:
   - id: crewlet
     ids: [crewlet]

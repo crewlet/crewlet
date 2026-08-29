@@ -9,14 +9,16 @@
 *.db-shm
 *.db-wal
 # The lock sidecar `store.Open` writes beside the database file — see
-# internal/store/lock.go. It is named `<database>.lock`, so a store opened
-# at a bare filename (or, before that path was refused, at an empty one)
-# drops it straight into whatever directory the process was run from. One
-# such file reached this public repository as `internal/store/.lock`,
-# carrying a pid, a hostname and a timestamp; the pattern below is what
-# stops the next one. `*` matches a leading dot in a gitignore pattern, so
-# this covers the bare `.lock` as well as `crewlet.db.lock`.
-*.lock
+# internal/store/lock.go. It is `<database>.lock`, so it lands wherever the
+# database does; one reached this public repository as `internal/store/.lock`,
+# carrying a pid, a hostname and a timestamp.
+#
+# `*.db.lock` and not `*.lock`: the broad pattern would silently swallow
+# yarn.lock, Cargo.lock, uv.lock and every other dependency manifest, and
+# internal/version's dependency-surface test exists precisely because a
+# manifest nobody can see is a surface nobody watches. This is exactly as
+# broad as the `*.db` above it, which is the thing it shadows.
+*.db.lock
 /crewlet-data/
 /nimbus-data/
 /acme-data/

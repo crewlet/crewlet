@@ -80,6 +80,18 @@ func TimeAt(v sql.NullInt64) time.Time {
 // active configuration declared.
 var ErrVectorDimension = errors.New("store: embedding dimension mismatch")
 
+// ErrVectorNotFinite reports an embedding holding a NaN or an infinity.
+//
+// A SEPARATE SENTINEL FROM ErrVectorDimension because the two want opposite
+// answers from a caller. A wrong width is a configuration fault — the company
+// changed embedding model and something did not follow — and failing the write
+// is right, because the next one will be wrong the same way. A non-finite
+// component is one bad response from a provider, and failing the write would
+// cost the row: the learning subsystem's whole premise is that a transient
+// embeddings problem must never cost an episode. So callers store NULL and log,
+// which is exactly what they already do when the provider is unreachable.
+var ErrVectorNotFinite = errors.New("store: embedding holds a non-finite value")
+
 // EncodeVector packs an embedding into the byte layout the vector columns
 // hold: little-endian float32, no header — byte-identical to what Turso's
 // vector32() produces, so a Go-written row and a SQL-written one are the same
@@ -91,6 +103,21 @@ var ErrVectorDimension = errors.New("store: embedding dimension mismatch")
 // later insert raises against the mismatched column, forever. That risk is
 // what made the Postgres migrator a two-phase run; here a mismatch is one
 // error on one insert.
+//
+// # Why finiteness is checked here rather than tolerated on read
+//
+// A NaN or an infinity in a stored vector is not a bad memory, it is a
+// poisoned one: vector_distance_cos answers 0 for it — a PERFECT match — so
+// the row sorts ahead of every genuine hit in every recall that seat ever
+// runs. The read path drops such rows (learning.cosine refuses them), but it
+// drops them AFTER the database has already spent a slot of the LIMIT on one,
+// so a single poisoned row silently costs a real result on every recall.
+//
+// Refusing it here is the root fix: the value never reaches the table, the
+// LIMIT is spent on rows that can be returned, and the read-side guard goes
+// back to being verification rather than a filter that quietly under-delivers.
+// The cost is a bounded scan of a vector that has just come back from an HTTP
+// round trip — microseconds against tens of milliseconds.
 func (d *DB) EncodeVector(v []float32) ([]byte, error) {
 	if d.dim > 0 && len(v) != d.dim {
 		return nil, fmt.Errorf("%w: got %d, configured %d",
@@ -98,6 +125,11 @@ func (d *DB) EncodeVector(v []float32) ([]byte, error) {
 	}
 	out := make([]byte, 4*len(v))
 	for i, f := range v {
+		f64 := float64(f)
+		if math.IsNaN(f64) || math.IsInf(f64, 0) {
+			return nil, fmt.Errorf("%w: component %d of %d is %v",
+				ErrVectorNotFinite, i, len(v), f)
+		}
 		binary.LittleEndian.PutUint32(out[4*i:], math.Float32bits(f))
 	}
 	return out, nil

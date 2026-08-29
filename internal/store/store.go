@@ -253,18 +253,29 @@ func openPrepared(ctx context.Context, path string, opts Options) (*sql.DB, erro
 }
 
 // engineVersion is what the database engine calls itself, for the one log line
-// an operator reads when a store behaves unlike the last release did.
+// an operator reads when a store behaves unlike it did before a driver bump.
+// Worth having because the driver is pre-1.0 and pinned, so "what changed" is
+// a real support question with no other answer inside the process.
 //
-// Best effort and deliberately unstructured: it is turso_version(), it reports
-// the SQLite version the engine is compatible with rather than Turso's own
-// release, and the only thing anything does with it is print it. A driver that
-// stopped answering must not fail an open that has already succeeded.
+// TWO NUMBERS, because there are two and they disagree. Measured at
+// tursogo v0.8.0-pre.7: turso_version() answers "3.47.0" and sqlite_version()
+// answers "3.50.4". Neither is the driver's own module version, and this file
+// deliberately does not claim to know which of them is the engine's release
+// and which is a compatibility level — it reports what was asked rather than
+// an interpretation that could be wrong in a log line nobody can re-check.
+// The identifier that is unambiguous is the pin in go.mod.
+//
+// Best effort: a driver that stopped answering either query must not fail an
+// open that has already succeeded.
 func engineVersion(ctx context.Context, pool *sql.DB) string {
-	var v string
-	if err := pool.QueryRowContext(ctx, `SELECT turso_version()`).Scan(&v); err != nil {
-		return "unknown"
+	ask := func(fn string) string {
+		var v string
+		if err := pool.QueryRowContext(ctx, `SELECT `+fn+`()`).Scan(&v); err != nil {
+			return "unknown"
+		}
+		return v
 	}
-	return v
+	return fmt.Sprintf("turso=%s sqlite=%s", ask("turso_version"), ask("sqlite_version"))
 }
 
 // Close releases the pool and this process's claim on the file.

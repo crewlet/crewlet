@@ -278,6 +278,88 @@ func TestTheImageCopiesPerPlatform(t *testing.T) {
 	}
 }
 
+// THE RELEASE MATRIX AND THE CROSS-COMPILE JOB NAME THE SAME PLATFORMS.
+//
+// windows/arm64 shipped for a release because nothing checks that a target in
+// the release matrix can actually run. It compiled — `GOOS=windows
+// GOARCH=arm64 go build` exits 0 against an empty embed.FS in the store
+// driver's platform library — and failed at the operator's first query.
+//
+// The compile-time half of the answer is internal/store/platform.go, whose
+// build constraint names the four supported pairs and refuses everything else
+// with a sentence. But a constraint only fires when something builds for that
+// platform, and the only job that builds for anything but the runner is ci's
+// `cross`. So the guard is a chain, and this test is its weak link: goreleaser
+// says what ships, `cross` says what is compiled, and if the two lists drift
+// then a target ships that platform.go never got the chance to refuse.
+//
+// Both lists are read off the tree. Writing the expected pairs here would
+// assert the ones that already exist and pass on the day a fifth is added to
+// one file and not the other, which is the entire failure.
+func TestTheCrossCompileJobCoversEveryReleaseTarget(t *testing.T) {
+	t.Parallel()
+	release := matrixPairs(t, releaseFile(t, ".goreleaser.yaml"))
+	ci := matrixPairs(t, releaseFile(t, ".github/workflows/ci.yml"))
+
+	if len(release) == 0 {
+		t.Fatal(".goreleaser.yaml declares no goos/goarch matrix")
+	}
+	if !slices.Equal(release, ci) {
+		t.Errorf("the release builds %v and CI cross-compiles %v.\n"+
+			"A target goreleaser ships and CI never builds is one nothing "+
+			"has compiled for until the tag; a target CI builds and "+
+			"goreleaser does not ship is dead work. Keep .goreleaser.yaml "+
+			"and the `cross` job in step — and remember that adding a pair "+
+			"to both is not enough on its own, because "+
+			"internal/store/platform.go still has to be taught that the "+
+			"store driver has a library for it.", release, ci)
+	}
+}
+
+// matrixPairs reads every `goos: [...]` / `goarch: [...]` list in a YAML file
+// and returns the sorted product.
+//
+// Line-scanned rather than YAML-parsed, like the rest of this file: these
+// guards read the same bytes the tools do, with no dependency of their own.
+// The two files spell the matrix differently — goreleaser puts it on a build,
+// a workflow puts it under `strategy.matrix` — and both spell it as those two
+// keys, which is the only thing this needs.
+func matrixPairs(t *testing.T, config string) []string {
+	t.Helper()
+	var oses, arches []string
+	for _, line := range strings.Split(config, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "goos:"):
+			oses = append(oses, yamlInlineList(strings.TrimPrefix(trimmed, "goos:"))...)
+		case strings.HasPrefix(trimmed, "goarch:"):
+			arches = append(arches, yamlInlineList(strings.TrimPrefix(trimmed, "goarch:"))...)
+		}
+	}
+	var pairs []string
+	for _, os := range oses {
+		for _, arch := range arches {
+			pairs = append(pairs, os+"/"+arch)
+		}
+	}
+	slices.Sort(pairs)
+	return slices.Compact(pairs)
+}
+
+// yamlInlineList splits a `[a, b]` flow sequence into its members.
+func yamlInlineList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "[")
+	raw = strings.TrimSuffix(raw, "]")
+	var out []string
+	for _, field := range strings.Split(raw, ",") {
+		if v := strings.TrimSpace(field); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // EVERY DEPENDENCY SURFACE IS WATCHED.
 //
 // CLAUDE.md's rule, asserted because nothing reports the omission: a

@@ -19,11 +19,14 @@ import (
 // one fails the build — see capability_test.go, which turns each answer into a
 // test that passes, skips, or fails deliberately.
 //
-// A probe never fails Open, including VectorFunctions. Recall degrades to
-// empty rather than taking a company down with it (internal/learning is best
-// effort throughout), so a driver regression here should read as a capability
-// that vanished in the log line and in the test — not as an engine that will
-// not start.
+// A probe never fails Open, including VectorFunctions. A driver regression
+// here should read as a capability that vanished — in the log line and in the
+// test — not as an engine that will not start. What it would actually cost is
+// worth stating precisely rather than as "best effort": two of recall's three
+// callers log and carry on with an empty block (the Plan-phase prefetches),
+// and the third is the `query_episodes` builtin, which propagates and surfaces
+// as a tool error to the planner. So a company keeps running and its seats
+// stop remembering.
 type Capabilities struct {
 	// VectorFunctions is vector32() and vector_distance_cos(): similarity
 	// computed by the database. It is what recall's ORDER BY is written

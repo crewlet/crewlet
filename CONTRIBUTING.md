@@ -112,11 +112,21 @@ without it** — a green run has simply not exercised them.
   test input, so without `-count=1` Go will happily serve the PASS from before
   it went bad).
 
-  The library also decides what this project can be built for: upstream
-  embeds it for linux and darwin on amd64 and arm64 and for windows/amd64,
-  and for nothing else. Windows is not a release target;
-  `internal/store/platform.go` turns a build for anything outside the shipped
-  matrix into a compile error that says why.
+  It also decides what this project can be built for. Upstream embeds the
+  library for linux and darwin on amd64 and arm64 and for windows/amd64;
+  Crewlet ships the first four, and `internal/store/platform.go` turns a build
+  for anything else into a compile error that says why rather than a binary
+  that fails at its first query.
+
+  **The linux binary is not static, and that surprises people.** purego
+  declares its `dlopen` imports with `//go:cgo_import_dynamic`, so
+  `CGO_ENABLED=0 go build` still emits a dynamic executable — `interpreter
+  /lib64/ld-linux-x86-64.so.2`, `NEEDED libc.so.6`. It needs glibc and does not
+  run on musl, and `-tags musl` does NOT change that: the tag picks which
+  shared object the driver embeds, not this binary's own linkage. That is why
+  there is no musl archive. The `cross` CI job asserts the linkage on every
+  run, so if a dependency ever makes the binary static again, CI says so and
+  points at the statements that would need re-checking.
 
   ```bash
   # What CI cross-compiles on every pull request.

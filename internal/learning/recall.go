@@ -63,8 +63,11 @@ const (
 // had to be served and it then ran on BOTH drivers unconditionally, because
 // nothing ever called the other path. With one driver (decisions/003) the
 // ordering is `vector_distance_cos` in an ORDER BY, and only the rows that
-// survive the LIMIT cross the driver boundary. Measured at 5 000 rows of 1 536
-// dimensions: 30.7 MB and 81 ms became one row and 26 ms.
+// survive the LIMIT cross the driver boundary.
+//
+// Measured on this store, 5 000 episodes of 1 536 dimensions with ~1 KB of
+// text apiece, keeping 5: the Go loop was 144 ms and 35.8 MB across the driver
+// boundary; this is 34 ms and 35.8 KB.
 //
 // Rows with no embedding are skipped rather than scored: they were written
 // during an embeddings outage, and treating a missing vector as a zero vector
@@ -94,22 +97,40 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 		return nil, fmt.Errorf("learning: recall for %s: %w", q.Handle, err)
 	}
 
+	// RANK IDS, THEN FETCH THE WINNERS BY PRIMARY KEY.
+	//
+	// The inner query carries only what the ranking needs — an id, the
+	// tie-break column and the distance — so the sort over the seat's whole
+	// row set moves a few dozen bytes per row instead of the ~7 KB an
+	// episode weighs once its text columns and its 6 KB vector are in
+	// scope. Same fixture as above: 78 ms carrying every column through the
+	// sort, 34 ms this way.
+	//
+	// The outer statement returns an UNORDERED set, which is fine here and
+	// would be a bug in a query that returned it to a caller: [rank] below
+	// imposes the total order in Go and deliberately does not lean on the
+	// order the database gave. That was already true — it is written down
+	// at rank — and this shape is what makes it load-bearing rather than
+	// belt-and-braces.
+	//
 	// The kind filter is a bound list of short literals rather than
 	// placeholders because it comes from a typed enum this package owns —
 	// see kindList.
 	rows, err := e.db.SQL().QueryContext(ctx,
-		`SELECT `+episodeColumns+` FROM (
-		    SELECT `+episodeColumns+`,
-		           vector_distance_cos(embedding, ?) AS distance
-		    FROM episodes
-		    WHERE agent_handle = ?
-		      AND embedding IS NOT NULL
-		      AND length(embedding) = ?
-		      AND kind IN (`+kindList(kinds)+`)
-		 )
-		 WHERE distance <= ?
-		 ORDER BY distance ASC, ended_at DESC, id DESC
-		 LIMIT ?`,
+		`SELECT `+episodeColumns+` FROM episodes WHERE id IN (
+		    SELECT id FROM (
+		        SELECT id, ended_at,
+		               vector_distance_cos(embedding, ?) AS distance
+		        FROM episodes
+		        WHERE agent_handle = ?
+		          AND embedding IS NOT NULL
+		          AND length(embedding) = ?
+		          AND kind IN (`+kindList(kinds)+`)
+		    )
+		    WHERE distance <= ?
+		    ORDER BY distance ASC, ended_at DESC, id DESC
+		    LIMIT ?
+		 )`,
 		probe, q.Handle, width, 1-floor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("learning: recall for %s: %w", q.Handle, err)

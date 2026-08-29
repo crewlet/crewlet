@@ -2,10 +2,19 @@
 
 ## Prerequisites
 
-**None, to run the engine.** Crewlet is one static binary with no runtime to
+**A glibc userland, on linux.** Crewlet is one binary with no runtime to
 install: it embeds its event stream (a NATS JetStream server) and its database
 is a local file it creates. There is no broker to operate and nothing to point
 a DSN at.
+
+It is not, however, a *static* binary on linux, and it is worth knowing why
+before you pick a base image. The store's database engine is a native library
+loaded with `dlopen`, so the linux binaries are dynamically linked against
+glibc (`libc.so.6`) — a pure-Go build does not avoid that. They will not run on
+`scratch`, on a distroless image without a C library, or on Alpine and other
+musl systems, where the failure is `no such file or directory` about a file
+that plainly exists. Use a glibc base, or the published container image, which
+is `debian:trixie-slim` for exactly this reason. macOS binaries are unaffected.
 
 Two things are worth having anyway, for what runs *around* it:
 
@@ -22,16 +31,15 @@ go install github.com/crewlet/crewlet/cmd/crewlet@latest
 ```
 
 Or take a signed release binary — every tag publishes archives for linux and
-macOS on amd64 and arm64, plus a musl linux build for each architecture, and a
-`checksums.txt` with a keyless [Sigstore](https://www.sigstore.dev/) signature
-beside it. **Take the `_musl` archive on Alpine** and the plain one everywhere
-else; the difference is the C library the embedded database engine is linked
-against, and the wrong one fails at the first query with a message saying so.
+macOS on amd64 and arm64, plus a `checksums.txt` with a keyless
+[Sigstore](https://www.sigstore.dev/) signature beside it:
 
-> **There is no Windows build.** The store driver ships its database engine as
-> a native library that upstream embeds for windows/amd64 and not for
-> windows/arm64, so half of the Windows matrix could never open a store. macOS
-> and linux, or the container image, or WSL.
+> **There is no Windows build**, and no musl build. The store driver ships its
+> database engine as a native library that upstream embeds for windows/amd64
+> and *not* for windows/arm64, so half of the Windows matrix could never open a
+> store; rather than ship one architecture and break the other, the target
+> went. On linux use a glibc distribution (see the prerequisites above), the
+> container image, or — on Windows — WSL.
 
 
 ```bash

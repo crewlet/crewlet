@@ -1,6 +1,6 @@
 # Deployment
 
-**Crewlet requires no infrastructure services.** The engine is one static
+**Crewlet requires no infrastructure services.** The engine is one
 binary: its event stream is a NATS JetStream server it embeds, and its store
 is a local file it creates and owns exclusively. A single host runs a whole
 company with nothing else installed.
@@ -344,14 +344,14 @@ re-extracts a cache entry that will not verify. Two consequences worth knowing:
 - **A cache that cannot be repaired names the way out**, and there is no
   second driver to fall back to any more: delete that directory by hand, or
   point `TURSO_GO_CACHE_DIR` at a writable directory of its own.
-- **Alpine and other musl systems need the musl archive.** The native library
-  is linked against a C library, and each release publishes both — a
-  `crewlet_<version>_linux_<arch>.tar.gz` for glibc and a
-  `..._linux_<arch>_musl.tar.gz` for musl. Run the glibc binary on musl and
-  the library extracts, verifies, and then will not load; the engine says so
-  and names the archive to use instead. The published container image is
-  `debian:trixie-slim`, so it is the glibc one — an image re-based on Alpine
-  needs the musl binary.
+- **The linux binaries need glibc, and there is no musl build.** The database
+  engine is a native library loaded with `dlopen`, which makes the binary
+  dynamically linked against `libc.so.6` even though it is pure Go and built
+  with `CGO_ENABLED=0`. On Alpine and other musl systems it fails at `execve`,
+  reported as `no such file or directory` about a file that plainly exists.
+  Use a glibc base image — the published one is `debian:trixie-slim` for
+  exactly this reason — or run the engine on a glibc host. macOS is
+  unaffected.
 
 **The engine owns the file exclusively.** A second process pointed at the same
 path is not a degraded configuration, it is corruption waiting for a schedule

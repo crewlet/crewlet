@@ -138,12 +138,32 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
 
-      # The musl linux archive the release publishes. Same source, different
-      # embedded shared object — the tag is what selects it in
-      # turso-go-platform-libs — so compiling it is a separate build.
-      - name: the musl build
+      # THE LINUX ARTIFACT IS NOT STATIC, and this is where that stops being
+      # a surprise. purego declares its dlopen imports with
+      # //go:cgo_import_dynamic, so the linker emits a dynamic executable
+      # even at CGO_ENABLED=0 — which is why the image is debian and not
+      # scratch, and why there is no musl archive. Nothing else in the tree
+      # can notice if that changes in either direction: a dependency that
+      # made the binary static again would quietly invalidate the docs, and
+      # one that added a NEEDED entry would quietly narrow the hosts it runs
+      # on.
+      - name: assert the linux artifact's linkage
         if: matrix.goos == 'linux'
-        run: go build -tags musl ./...
+        run: |
+          go build -o /tmp/crewlet ./cmd/crewlet
+          file /tmp/crewlet
+          readelf -d /tmp/crewlet | grep NEEDED || true
+          if ! readelf -l /tmp/crewlet | grep -q INTERP; then
+            echo "::error::the linux binary is statically linked again."
+            echo "That is GOOD NEWS and it invalidates several published"
+            echo "statements: docs/getting-started/installation.md, the"
+            echo "Dockerfile and .goreleaser.yaml all say this binary needs"
+            echo "glibc and cannot run on musl or scratch, which is why there"
+            echo "is no musl archive and why the image is debian. Re-check"
+            echo "those, and consider whether a musl or scratch target is now"
+            echo "possible."
+            exit 1
+          fi
         env:
           CGO_ENABLED: "0"
           GOOS: linux

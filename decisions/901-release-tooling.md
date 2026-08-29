@@ -110,13 +110,21 @@ else. The compiler would happily produce a binary for any GOOS; that binary
 would fail at its first query. `internal/store/platform.go` makes it fail at
 build time instead, with a sentence.
 
-**musl is a second BUILD, not a runtime switch**, because which C library the
-library is linked against is fixed when the archive is built. Without it, an
-operator re-basing the shipped image on Alpine gets the glibc object: it
-extracts, its sha256 matches, and `dlopen` fails — arriving as "the cache will
-not verify", about a cache that is perfect. `internal/store/turso.go` now adds
-a sentence naming the right archive, and this build is what gives that sentence
-something to point at.
+**There is no musl archive, and `-tags musl` is not what would produce one.**
+This was nearly shipped and the measurement stopped it. The tag selects which
+shared object the driver embeds; it does not change the binary's own linkage,
+and the binary is not static: purego declares its dlopen imports with
+`//go:cgo_import_dynamic`, so `CGO_ENABLED=0 go build` still emits
+`interpreter /lib64/ld-linux-x86-64.so.2` with `NEEDED libc.so.6` — identical
+with and without the tag. A `_musl` archive built that way fails at `execve`
+on Alpine, which is worse than no archive: it is a signed artifact promising a
+platform it cannot run on, the same defect as the windows/arm64 binary below.
+
+A real musl artifact needs a musl toolchain to build on and a musl host to
+test on. Until there is one, the honest position is the one the docs now take:
+the linux binaries require glibc. The `cross` CI job asserts the linkage every
+run, so the day a dependency makes the binary static again is a build failure
+that says to re-check this.
 
 **Windows was dropped, and it is worth being exact about why.** Not "Turso has
 no Windows build" — it has one, for amd64. The release published windows/amd64
@@ -138,7 +146,9 @@ Multi-arch (`linux/amd64`, `linux/arm64`) to GHCR, because the release
 workflow already holds a token scoped to this repository and a second
 registry would mean a second account and a second credential.
 
-Base: `debian:trixie-slim`, **not** distroless or scratch. A static pure-Go
+Base: `debian:trixie-slim`, **not** distroless or scratch. The binary is not
+static on linux at all (see above), so `scratch` does not merely lose the
+userland below — the process would not start. Even setting that aside: a
 binary would run on `scratch` and that is the right image for most Go
 services. Not for this one, because the engine SPAWNS things:
 

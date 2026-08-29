@@ -51,7 +51,7 @@ Those two are the whole grammar. A server that fails to start is visible as a
 
 ## Extending the engine
 
-There is no plugin API and no runtime loading. Crewlet ships as one static
+There is no plugin API and no runtime loading. Crewlet ships as one
 binary, and nothing under `internal/` is importable from outside the module —
 so an extension cannot be a library the engine loads.
 

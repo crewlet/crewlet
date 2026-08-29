@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -88,13 +89,20 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 		return fmt.Errorf("learning: a %q entry must not carry a deadline", DiaryLong)
 	}
 
+	// Same policy as an episode's embedding, and for the same reason — see
+	// Episodes.encodeEmbedding. A wrong width fails the write; a non-finite
+	// component costs the vector and not the observation.
 	var blob any
 	if len(e.Embedding) > 0 {
 		packed, err := d.db.EncodeVector(e.Embedding)
-		if err != nil {
+		switch {
+		case errors.Is(err, store.ErrVectorNotFinite):
+			log.Warn("diary_embedding_discarded", "entry", e.ID, "error", err.Error())
+		case err != nil:
 			return fmt.Errorf("learning: encode diary embedding: %w", err)
+		default:
+			blob = packed
 		}
-		blob = packed
 	}
 	if _, err := d.db.SQL().ExecContext(ctx, `
 		INSERT INTO agent_diary (id, agent_id, kind, content, ttl_until, source,
@@ -195,18 +203,20 @@ func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now t
 		return nil, fmt.Errorf("learning: diary recall for %s: %w", agentID, err)
 	}
 	rows, err := d.db.SQL().QueryContext(ctx,
-		`SELECT `+diaryColumns+` FROM (
-		    SELECT `+diaryColumns+`,
-		           vector_distance_cos(embedding, ?) AS distance
-		    FROM agent_diary
-		    WHERE agent_id = ?
-		      AND embedding IS NOT NULL
-		      AND length(embedding) = ?
-		      AND (ttl_until IS NULL OR ttl_until > ?)
-		 )
-		 WHERE distance <= ?
-		 ORDER BY distance ASC, created_at DESC, id DESC
-		 LIMIT ?`,
+		`SELECT `+diaryColumns+` FROM agent_diary WHERE id IN (
+		    SELECT id FROM (
+		        SELECT id, created_at,
+		               vector_distance_cos(embedding, ?) AS distance
+		        FROM agent_diary
+		        WHERE agent_id = ?
+		          AND embedding IS NOT NULL
+		          AND length(embedding) = ?
+		          AND (ttl_until IS NULL OR ttl_until > ?)
+		    )
+		    WHERE distance <= ?
+		    ORDER BY distance ASC, created_at DESC, id DESC
+		    LIMIT ?
+		 )`,
 		probe, agentID, width, store.EncodeTime(now), 1-floor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("learning: diary recall for %s: %w", agentID, err)

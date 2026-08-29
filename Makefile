@@ -170,11 +170,6 @@ test-cross: ## cross-compile every release target (ci: cross-compile the release
 	  echo "==> build $$target"; \
 	  CGO_ENABLED=0 GOOS=$${target%/*} GOARCH=$${target#*/} \
 	    $(GO) build ./... || status=1; \
-	  case $$target in linux/*) \
-	    echo "==> build $$target (musl)"; \
-	    CGO_ENABLED=0 GOOS=linux GOARCH=$${target#*/} \
-	      $(GO) build -tags musl ./... || status=1;; \
-	  esac; \
 	done; \
 	exit $$status
 

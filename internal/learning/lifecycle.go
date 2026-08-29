@@ -29,12 +29,12 @@ import (
 //
 // The constant shrank when the distance arithmetic moved into the database
 // (decisions/003) — the rows no longer cross the driver boundary to be decoded
-// in Go, which at 5 000 rows of 1 536 dimensions was 30.7 MB and 81 ms against
-// 26 ms for the same ranking. The SHAPE did not: it is still linear in the
-// seat's row count, still with no ceiling, and this pass is still the only
-// thing that puts one there. The original measurement, before the move — 6 ms
-// at 100 rows, 32 ms at 500, 63 ms at 1000, 122 ms at 2000, ~62 µs per row —
-// is what the pass was sized against.
+// in Go, which at 5 000 rows of 1 536 dimensions was 144 ms and 35.8 MB
+// against 34 ms and 35.8 KB for the same ranking. The SHAPE did not: it is
+// still linear in the seat's row count, still with no ceiling, and this pass
+// is still the only thing that puts one there. The original measurement,
+// before the move — 6 ms at 100 rows, 32 ms at 500, 63 ms at 1000, 122 ms at
+// 2000, ~62 µs per row — is what the pass was sized against.
 //
 // Four actions, cheapest first, so an expensive one never runs over rows the
 // cheap ones were about to delete:

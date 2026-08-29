@@ -3,6 +3,7 @@ package learning_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"path/filepath"
 	"slices"
@@ -496,5 +497,68 @@ func TestListColumnsAlwaysHoldAJSONArray(t *testing.T) {
 	if err := db.SQL().QueryRowContext(t.Context(),
 		`SELECT json_array_length(tool_sequence) FROM episodes WHERE id = 'a'`).Scan(&n); err != nil {
 		t.Errorf("the column is not a JSON array: %v", err)
+	}
+}
+
+// A POISONED EMBEDDING DOES NOT COST A REAL RESULT.
+//
+// The ranking is the database's now, so the LIMIT is spent before Go sees a
+// row. A vector holding a NaN scores 0 there — a PERFECT match — so it sorts
+// FIRST, and the Go re-score that correctly refuses it then hands back one
+// hit fewer than the seat had. Under the old all-rows-into-Go loop this could
+// not happen; moving the limit into SQL is what made it possible, and the
+// write-side guard in store.EncodeVector is what closes it.
+//
+// Four rows and a limit of three: without the guard this returns two.
+func TestAPoisonedEmbeddingDoesNotCostARealHit(t *testing.T) {
+	t.Parallel()
+	e := episodes(t)
+	poison := ep("poison", "ceo", base.Add(3*time.Minute))
+	poison.Embedding = []float32{float32(math.NaN()), 0, 0, 0}
+	for i, v := range [][]float32{{1, 0, 0, 0}, {0.99, 0.1, 0, 0}, {0.95, 0.2, 0, 0}} {
+		good := ep(fmt.Sprintf("good-%d", i), "ceo", base.Add(time.Duration(i)*time.Minute))
+		good.Embedding = v
+		mustAppend(t, e, good)
+	}
+	mustAppend(t, e, poison)
+
+	hits, err := e.Recall(context.Background(), learning.RecallQuery{
+		Handle: "ceo", Embedding: []float32{1, 0, 0, 0}, Limit: 3,
+	})
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	if len(hits) != 3 {
+		t.Fatalf("hits = %v, want all three well-defined episodes — a poisoned "+
+			"row that reached the table would have taken one of the slots", hitIDs(hits))
+	}
+	for _, h := range hits {
+		if h.Episode.ID == "poison" {
+			t.Error("a NaN embedding was ranked as a hit")
+		}
+	}
+}
+
+// AND THE EPISODE ITSELF SURVIVES. The guard must cost the vector, never the
+// row: an episode is the record of a turn that really happened, and losing one
+// to a bad response from an embeddings API is the failure the nullable column
+// exists to prevent.
+func TestANonFiniteEmbeddingCostsTheVectorAndNotTheEpisode(t *testing.T) {
+	t.Parallel()
+	e := episodes(t)
+	bad := ep("bad", "ceo", base)
+	bad.Embedding = []float32{1, float32(math.Inf(-1)), 0, 0}
+	if _, err := e.Append(context.Background(), bad); err != nil {
+		t.Fatalf("a non-finite embedding failed the whole write: %v", err)
+	}
+	got, err := e.Recent(context.Background(), "ceo", 10)
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "bad" {
+		t.Fatalf("recent = %v, want the episode written without its vector", ids(got))
+	}
+	if got[0].Embedding != nil {
+		t.Errorf("the non-finite vector was stored as %v", got[0].Embedding)
 	}
 }

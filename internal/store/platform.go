@@ -1,9 +1,9 @@
-//go:build !unix
+//go:build !((linux || darwin) && (amd64 || arm64))
 
 package store
 
-// The store does not build off unix, and this file is what says so in a
-// sentence.
+// The store builds for four GOOS/GOARCH pairs, and this file is what tells
+// anyone who asks for a fifth why they cannot have it.
 //
 // Everything else in this package is portable Go, so nothing here is a
 // limitation of the ENGINE — it is a limitation of what the database can run
@@ -30,11 +30,19 @@ package store
 // the same thing, and the store is not optional: there is no useful subset of
 // this engine that runs without one.
 //
+// The constraint names the SUPPORTED SET rather than excluding windows,
+// because the failure it is protecting against was never windows-shaped. It
+// was a platform in the release matrix with no embedded library — and
+// `GOOS=windows GOARCH=arm64 go build` exits 0 against an empty embed.FS,
+// which is exactly how a broken arm64 archive got published. Naming the four
+// pairs means the next platform anyone adds fails HERE, whichever one it is,
+// instead of at an operator's first query.
+//
 // The declaration below is deliberate: it does not compile, and the compiler's
 // message quotes the string, so `go build` on an unsupported platform prints
 // the reason rather than a list of undefined symbols from lock_unix.go.
 type unsupportedPlatform struct{}
 
-var _ unsupportedPlatform = "crewlet builds for linux and darwin (amd64 and arm64) only: " +
-	"the Turso database engine ships as a native library that upstream embeds for " +
-	"no other platform. See decisions/003-turso-is-the-only-driver.md."
+var _ unsupportedPlatform = "crewlet builds for linux/amd64, linux/arm64, darwin/amd64 " +
+	"and darwin/arm64 only: the Turso database engine ships as a native library, and " +
+	"those are the platforms Crewlet ships for. See decisions/003-turso-is-the-only-driver.md."

@@ -7,8 +7,17 @@
 #
 # # Why a userland, and not distroless
 #
-# A static pure-Go binary would run on `scratch`, and for most Go services
-# that is the right image. Not for this one: the engine SPAWNS things.
+# For most pure-Go services `scratch` is the right image. Not for this one,
+# and there are two independent reasons — the second is the hard one.
+#
+# FIRST: the binary is not static on linux. Measured on the release artifact:
+# `dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2`, NEEDED
+# libdl.so.2, libpthread.so.0, libc.so.6. CGO_ENABLED=0 does not prevent that
+# here — the store's database engine is loaded with dlopen through purego,
+# which declares its imports with //go:cgo_import_dynamic. So `scratch` and a
+# musl base do not fail slowly or partially; the process never starts.
+#
+# SECOND, and true even if that changed: the engine SPAWNS things.
 #
 #   - The local sandbox backend (`providers.sandbox: {type: local}`) runs a
 #     coding agent as a child process tree and applies setup steps that are

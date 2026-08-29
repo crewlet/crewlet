@@ -82,7 +82,7 @@ flowchart TD
 
 | Component | Technology | Rationale |
 |---|---|---|
-| Language | Go 1.27+ | One static binary, real parallelism, a standard library that covers most of this table |
+| Language | Go 1.27+ | One self-contained binary, real parallelism, a standard library that covers most of this table |
 | Distribution | A single `CGO_ENABLED=0` binary | Nothing to install alongside it. The matrix is linux and macOS on amd64 and arm64, plus a musl linux build — bounded by the platforms the store driver embeds its database engine for, not by the compiler |
 | Event stream | Embedded NATS JetStream | Persistent pub/sub *inside the process* — a company runs with no broker to operate. An external NATS or Apache Pulsar takes the same slot for a fleet |
 | Store | Turso | One local file this process owns exclusively; pure Go, SQLite file format, and the vector functions the learning subsystem's recall is written against |
