@@ -183,6 +183,28 @@ registers no virtual-table module at all — `pragma_module_list` is empty.
   untouched, `sqlite3` still reads it for forensics, and there is no
   migration to run.
 
+- **NOT the static binary.** This is worth stating because it is the first
+  thing the release-tooling note (d-901) invites a reader to assume. Measured
+  on one machine, `CGO_ENABLED=0` throughout:
+
+  | build | linkage |
+  |---|---|
+  | `main` before this change, both drivers | **dynamic** — `NEEDED libdl.so.2, libpthread.so.0, libc.so.6` |
+  | this change, Turso alone | **dynamic** — identical |
+  | a program linking ONLY `modernc.org/sqlite` | **statically linked**, zero `NEEDED` |
+
+  Dropping the fallback cost nothing here: Turso was already the DEFAULT
+  driver, so purego and its `dlopen` were already linked in and the artifact
+  was already dynamic. Row 3 is the honest counterfactual, and it is about the
+  other direction — mainline SQLite is pure Go with no shared object to load,
+  so an engine that had dropped *Turso* instead would ship a static binary.
+
+  That is a real trade and it was made earlier, in d-002, when Turso became the
+  database: a static binary in exchange for the vector functions the learning
+  subsystem's recall reads through. This decision only removes a fallback that
+  could not serve a database with rows in it. Anyone reopening the trade is
+  reopening d-002, not this one.
+
 ## What this does not change
 
 - **Windows is dropped in the same change but for a different reason.** The

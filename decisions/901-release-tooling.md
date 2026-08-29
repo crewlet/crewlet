@@ -123,7 +123,10 @@ measured on one machine:
 | `CGO_ENABLED=1 -linkmode external -extldflags "-static"` — crewlet | statically linked, and **SIGSEGV at the first query** |
 
 Row 1 is the control: the toolchain makes static binaries perfectly well, so
-row 2 is the dependency and not the environment. The cause is in purego, and
+row 2 is the dependency and not the environment. It is not a NEW dependency
+either — `main` before the single-driver change was already dynamic, with the
+same three `NEEDED` entries, because Turso was already the default driver.
+d-003 has that measurement and the counterfactual beside it. The cause is in purego, and
 its build tag is the joke — `dlfcn_nocgo_linux.go` is `//go:build !cgo`, the
 file that applies *precisely when cgo is off*, and it says so: "if there is no
 Cgo we must link to each of the functions from dlfcn.h". It declares `dlopen`,
