@@ -678,3 +678,77 @@ test("integrations: an API with no engine says so rather than 'no'", async () =>
 });
 
 await run();
+
+// "128 inbound" alone cannot tell a working integration from one whose every
+// delivery reaches nobody. The two outcome counts are what separate them.
+test("integrations: what became of the deliveries is shown beside how many arrived", async () => {
+  await withView(
+    createIntegrationsView,
+    {
+      integrations: {
+        traffic_known: true,
+        traffic_since: "2026-06-01T00:00:00Z",
+        integrations: [
+          {
+            key: "gitlab",
+            configured: true,
+            enabled: true,
+            inbound_kind: "webhook",
+            inbound_path: "/webhooks/gitlab",
+            secret_present: true,
+            routes: true,
+            seats: ["swe"],
+            inbound: 128,
+            skipped: 30,
+            coalesced: 2,
+            last_at: "2026-06-08T07:31:10Z",
+          },
+        ],
+      },
+    },
+    ({ view }) => {
+      const html = view.render(state());
+      assert.match(html, /128 inbound/);
+      assert.match(html, /30 dropped/);
+      assert.match(html, /2 merged/);
+    },
+  );
+});
+
+// NULL IS NOT ZERO. A node that could not read its event log must not be
+// rendered as one where every delivery woke a seat — and a healthy
+// integration with nothing dropped shows no outcome clause at all, because a
+// "0 dropped" on every row is noise that trains a reader to skip the line.
+test("integrations: outcome counts that are null or zero render nothing", async () => {
+  await withView(
+    createIntegrationsView,
+    {
+      integrations: {
+        traffic_known: true,
+        traffic_since: "2026-06-01T00:00:00Z",
+        integrations: [
+          {
+            key: "gitlab",
+            configured: true,
+            enabled: true,
+            inbound_kind: "webhook",
+            inbound_path: "/webhooks/gitlab",
+            secret_present: true,
+            routes: true,
+            seats: ["swe"],
+            inbound: 128,
+            skipped: null,
+            coalesced: 0,
+            last_at: "2026-06-08T07:31:10Z",
+          },
+        ],
+      },
+    },
+    ({ view }) => {
+      const html = view.render(state());
+      assert.match(html, /128 inbound/);
+      assert.doesNotMatch(html, /dropped/);
+      assert.doesNotMatch(html, /merged/);
+    },
+  );
+});

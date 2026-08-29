@@ -261,22 +261,31 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 	access := entityKinds[kind]
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		summary := r.Header.Get("X-Summary")
+		body, err := readBody(w, r)
+		if err != nil {
+			refuseBody(w, err)
+			return
+		}
+		summary, body, err := splitSummary(body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "invalid_body", "detail": err.Error(),
+			})
+			return
+		}
+		if header := r.Header.Get("X-Summary"); header != "" {
+			summary = header
+		}
 		if summary == "" {
 			// The same rule the whole-document write has, and for the same
 			// reason: a list of revisions with no summaries is a list of
 			// uuids. A per-entity write can say more, so the hint does.
 			writeJSON(w, http.StatusBadRequest, map[string]string{
 				"error": "summary_required",
-				"hint": "this write needs an audit summary in the X-Summary header — " +
-					"name what changed about " + kind + "/" + id,
+				"hint": "this write needs an audit summary — the X-Summary header, " +
+					"or a top-level _summary key in the body. Name what changed " +
+					"about " + kind + "/" + id,
 			})
-			return
-		}
-
-		body, err := readBody(w, r)
-		if err != nil {
-			refuseBody(w, err)
 			return
 		}
 

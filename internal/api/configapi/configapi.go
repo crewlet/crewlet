@@ -229,24 +229,40 @@ func missingSide(err error, r *http.Request) string {
 // deleting a role impossible through this surface, which is the one operation
 // an operator most needs to be sure of.
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
-	summary := r.Header.Get("X-Summary")
+	// THE BODY IS READ FIRST, because the summary may be in it. See
+	// [splitSummary]: a caller that cannot set a header can still put a
+	// `_summary` key in the document.
+	body, err := readBody(w, r)
+	if err != nil {
+		refuseBody(w, err)
+		return
+	}
+	summary, body, err := splitSummary(body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid_body", "detail": err.Error(),
+		})
+		return
+	}
+	if header := r.Header.Get("X-Summary"); header != "" {
+		// THE HEADER WINS when both are present. It is the more explicit
+		// channel — a `_summary` can survive in a document somebody keeps
+		// in version control long after it stopped describing the write.
+		summary = header
+	}
 	if summary == "" {
 		// Required, because the history is what an operator reads at 3am
 		// to find the change that broke something. A list of revisions
 		// with no summaries is a list of uuids.
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "summary_required",
-			"hint": "PUT /config needs an audit summary in the X-Summary header — " +
-				"the revision history is the record of who changed what and why",
+			"hint": "PUT /config needs an audit summary — the X-Summary header, " +
+				"or a top-level _summary key in the body. The revision history " +
+				"is the record of who changed what and why",
 		})
 		return
 	}
 
-	body, err := readBody(w, r)
-	if err != nil {
-		refuseBody(w, err)
-		return
-	}
 	incoming, err := parseDocument(body)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{

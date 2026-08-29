@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // pinned is the clock these answers run on. Pinned because a lease countdown
@@ -1019,3 +1021,117 @@ func (brokenPlane) RecordApply(context.Context, coord.NodeApply) error { return 
 func (brokenPlane) Fleet(context.Context) ([]coord.NodeApply, error) { return nil, errUnreadablePlane }
 
 var errUnreadablePlane = errors.New("the coordination plane is unreachable")
+
+// THE THREE NUMBERS ANSWER ONE QUESTION TOGETHER. "128 arrived" alone cannot
+// tell a working integration from one whose every delivery reaches nobody;
+// "128 arrived, 30 the routing gate dropped, 2 merges" can.
+func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	now := time.Now().UTC().Add(-time.Hour)
+	write := func(id, kind, source string) {
+		t.Helper()
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id, Type: kind, Time: now, Source: "engine",
+			Category: "notification", Summary: kind,
+			Tags: map[string]string{"notification_source": source},
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	// Two inbound deliveries on the edge's own category…
+	for i, src := range []string{"gitlab", "gitlab", "mattermost"} {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: "w" + strconv.Itoa(i), Type: "webhook:push", Time: now,
+			Source: src, Category: "webhook", Summary: "push",
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	// …and what became of them, on the engine's.
+	write("s1", "notification_skipped", "gitlab")
+	write("s2", "notification_skipped", "gitlab")
+	write("c1", "notifications_coalesced", "mattermost")
+
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: log,
+	}, "integrations", nil))
+	rows, _ := body["integrations"].([]any)
+	byKind := map[string]map[string]any{}
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		byKind[entry["key"].(string)] = entry
+	}
+	if got := byKind["gitlab"]["skipped"]; got != float64(2) {
+		t.Errorf("gitlab skipped = %v, want 2", got)
+	}
+	if got := byKind["gitlab"]["coalesced"]; got != float64(0) {
+		t.Errorf("gitlab coalesced = %v, want 0", got)
+	}
+	if got := byKind["mattermost"]["coalesced"]; got != float64(1) {
+		t.Errorf("mattermost coalesced = %v, want 1", got)
+	}
+	// The inbound count is unchanged and still comes from the edge's rows.
+	if got := byKind["gitlab"]["inbound"]; got != float64(2) {
+		t.Errorf("gitlab inbound = %v, want 2", got)
+	}
+}
+
+// NULL, NOT ZERO, when nothing was counted. A node with no event log cannot
+// say how many deliveries were dropped, and reporting 0 would tell an
+// operator every one of them woke a seat.
+func TestUncountedOutcomesAreNullRatherThanZero(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+	}, "integrations", nil))
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		for _, field := range []string{"skipped", "coalesced"} {
+			if entry[field] != nil {
+				t.Errorf("%s %s = %v, want null on a node with no event log",
+					entry["key"], field, entry[field])
+			}
+		}
+	}
+}
+
+// AN UNREADABLE EVENT LOG REPORTS NULL, NOT ZERO — the same rule as a node
+// with no log at all, and for the same reason: a zero that means "could not
+// tell" is the number an operator would act on.
+//
+// A closed store fails the FIRST listing, so this covers the outer guard. The
+// narrower one inside countOutcomes applies the identical rule to a second
+// listing that fails on its own, which needs a transient store error this
+// suite has no way to stage — it is defence in depth rather than a separate
+// contract.
+func TestAnUnreadableEventLogReportsNullOutcomes(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	// A closed store: every listing fails from here on.
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	cfg := company(t)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg }, Events: log,
+	}, "integrations", nil))
+	rows, _ := body["integrations"].([]any)
+	if len(rows) == 0 {
+		t.Fatal("no integrations answered")
+	}
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		for _, field := range []string{"skipped", "coalesced"} {
+			if entry[field] != nil {
+				t.Errorf("%s %s = %v, want null when the listing failed",
+					entry["key"], field, entry[field])
+			}
+		}
+	}
+}

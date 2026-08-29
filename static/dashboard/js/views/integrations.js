@@ -46,13 +46,32 @@ export function createIntegrationsView({ query, refresh }) {
   // `since` rather than a fixed window: the count is over the most recent
   // page of deliveries, not the last N hours, so naming a window would be a
   // number the server never measured.
+  // What BECAME of the deliveries, beside how many arrived.
+  //
+  // "128 inbound" alone cannot tell a working integration from one whose
+  // every delivery reaches nobody. The two outcome counts are three-valued —
+  // null means this node could not read its event log — so an absent one is
+  // omitted rather than rendered as a zero the operator would act on. Both
+  // zero renders nothing either: a line saying "0 dropped, 0 merged" on every
+  // healthy integration is noise that trains a reader to skip the whole line.
+  function outcomes(row) {
+    const parts = [];
+    if (typeof row.skipped === "number" && row.skipped > 0) {
+      parts.push(`${esc(fmtNum(row.skipped))} dropped`);
+    }
+    if (typeof row.coalesced === "number" && row.coalesced > 0) {
+      parts.push(`${esc(fmtNum(row.coalesced))} merged`);
+    }
+    return parts.length ? ` (${parts.join(", ")})` : "";
+  }
+
   function trafficLine(row, known, since) {
     if (!known) {
       return `<span class="int-quiet">no event store — traffic cannot be counted</span>`;
     }
     if (row.last_at) {
       const span = since ? ` since ${esc(relTime(since))}` : "";
-      return `<span class="int-live">${esc(fmtNum(row.inbound))} inbound${span} · last ${esc(relTime(row.last_at))}</span>`;
+      return `<span class="int-live">${esc(fmtNum(row.inbound))} inbound${span}${outcomes(row)} · last ${esc(relTime(row.last_at))}</span>`;
     }
     return `<span class="int-quiet">nothing has arrived — which is not the same as broken</span>`;
   }

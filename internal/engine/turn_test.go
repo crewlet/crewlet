@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -517,4 +518,69 @@ func eventIDs(evs []*events.Event) []string {
 		out = append(out, e.ID.String())
 	}
 	return out
+}
+
+// A MERGE HAS TO BE RECORDED HERE, because here is where the constituent
+// list exists: a coalesced digest is minted fresh and carries no memory of
+// what it absorbed, so by the time a turn is running there is nothing left
+// to count. Nothing else emits it, which is why the Integrations room could
+// report how many deliveries ARRIVED and not how many turns they became.
+func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	var seen []*events.Event
+	d.Observe = func(_ context.Context, e *events.Event) { seen = append(seen, e) }
+
+	first := inThread("notification", "slack:C1/T1")
+	first.Source = "slack"
+	first.Timestamp = clock
+	second := inThread("notification", "slack:C1/T1")
+	second.Source = "slack"
+	second.Timestamp = clock.Add(2 * time.Minute)
+
+	if got := d.Dispatch(context.Background(), "ceo",
+		[]*events.Event{first, second}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("%d observations, want one merge record", len(seen))
+	}
+	rec, ok := seen[0].Data.(*types.NotificationsCoalesced)
+	if !ok {
+		t.Fatalf("observation is %T", seen[0].Data)
+	}
+	if rec.Count != 2 || rec.AgentHandle != "ceo" {
+		t.Errorf("record = %+v", rec)
+	}
+	if rec.ConversationKey != "slack:C1/T1" {
+		t.Errorf("conversation = %q", rec.ConversationKey)
+	}
+	// The SPAN they arrived in, which is what an operator reads to see how
+	// hard batching kicked in — the count alone cannot say whether it was
+	// a burst or a slow thread.
+	if rec.FirstAt != clock.UTC().Format(time.RFC3339) ||
+		rec.LastAt != clock.Add(2*time.Minute).UTC().Format(time.RFC3339) {
+		t.Errorf("span = %s..%s", rec.FirstAt, rec.LastAt)
+	}
+	if rec.NotificationSource != "slack" {
+		t.Errorf("source = %q, want the vendor rather than the engine", rec.NotificationSource)
+	}
+}
+
+// A PARTITION OF ONE IS NOT A MERGE, and a record on every single delivery
+// would make the count meaningless.
+func TestASingleEventIsNotRecordedAsAMerge(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	var seen int
+	d.Observe = func(context.Context, *events.Event) { seen++ }
+	if got := d.Dispatch(context.Background(), "ceo",
+		[]*events.Event{ev("notification")}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if seen != 0 {
+		t.Errorf("%d observations for one event, want none", seen)
+	}
 }

@@ -98,7 +98,7 @@ each operator-gated for the same reason the prefix is.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/config` | Replace the active revision. Body JSON or `Content-Type: application/yaml`. Requires an `X-Summary` header. Optional `If-Match: <revision_id>` for optimistic concurrency (`If-Match: none` for the unconfigured case). |
+| `PUT` | `/config` | Replace the active revision. Body JSON or `Content-Type: application/yaml`. Requires a revision summary — an `X-Summary` header, **or** a top-level `_summary` key in the body. Optional `If-Match: <revision_id>` for optimistic concurrency (`If-Match: none` for the unconfigured case). |
 | `POST` | `/config/revisions/{id}/revert` | Create a new active revision whose payload equals revision `{id}` |
 
 **Per-entity write** — four collections, `PUT` only:
@@ -135,7 +135,7 @@ Three rules follow from that:
 - **The id in the path is the identity.** A body that renames the entity is
   stored as-is under that path's id; the URL is the address, not a rename
   request.
-- **The same `X-Summary` and `If-Match` rules apply**, and a node with no
+- **The same summary and `If-Match` rules apply**, and a node with no
   active revision answers `409 no_active_revision` — there is nothing to splice
   into, and building a company out of one seat is not what this route is for.
 
@@ -143,7 +143,7 @@ Three rules follow from that:
 
 - `200 OK` — successful read
 - `201 Created` — a write produced a new revision; body has `{"revision_id": ..., "epoch": ...}`. A per-entity write returns this too: it changed one entity and created one revision.
-- `400 Bad Request` — invalid body / validation error (`error` names which, and `detail` carries the field path and what to change); `summary_required` when `X-Summary` is missing on any write
+- `400 Bad Request` — invalid body / validation error (`error` names which, and `detail` carries the field path and what to change); `summary_required` when neither an `X-Summary` header nor a `_summary` body key is present on a write
 - `401 Unauthorized` — missing or invalid bearer token (`{"error": "invalid_token"}`)
 - `404 Not Found` — a revision that is not there, or `no_such_entity` on a per-entity write naming an id the active revision does not carry
 - `409 Conflict` — `revision_advanced` (stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (per-entity write on an unconfigured node)
@@ -874,11 +874,29 @@ trace anywhere except the provider's own delivery UI.
       "secret_present": true, "secret_usable": true,
       "seats": ["eng", "pm"],
       "inbound": 128,
+      "skipped": 30,
+      "coalesced": 2,
       "last_at": "2026-06-08T07:31:10+00:00"
     }
   ]
 }
 ```
+
+`inbound`, `skipped` and `coalesced` answer one question together and are
+misleading apart. `inbound` counts deliveries the edge accepted; `skipped`
+counts those the routing gate dropped without waking anybody; `coalesced`
+counts merges, where N same-conversation notifications became one turn. "128
+arrived" on its own cannot tell a working integration from one whose every
+delivery reaches nobody — "128 arrived, 30 dropped, 2 merges" can, and a seat
+draining a thread's backlog as one turn stops looking like a seat that ignored
+twelve messages.
+
+The two outcome counts are **three-valued** like the secret fields: `null`
+means this node could not read its event log, and reporting that as `0` would
+claim every delivery woke a seat on a node that cannot tell. They come from
+the engine's own `notification_skipped` and `notifications_coalesced` events
+rather than from the inbound rows, so they are bounded by the same event-log
+window `traffic_since` names.
 
 `secret_present` and `secret_usable` are **two different facts**, and the gap
 between them is a silent outage.

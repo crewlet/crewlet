@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -164,10 +165,16 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	// likely to be mistaken for a mistake.
 	add := func(kind string, enabled bool, secret *bool, detail map[string]any) {
 		row := map[string]any{
-			"key":          kind,
-			"configured":   true,
-			"enabled":      enabled,
-			"inbound":      seen.count[kind],
+			"key":        kind,
+			"configured": true,
+			"enabled":    enabled,
+			"inbound":    seen.count[kind],
+			// THREE-VALUED like the secret fields, and for the same
+			// reason: null means this node could not read the outcome
+			// events, and reporting that as 0 would say every delivery
+			// woke a seat on a node that cannot tell.
+			"skipped":      countOrNil(seen.skipped, kind),
+			"coalesced":    countOrNil(seen.coalesced, kind),
 			"inbound_kind": map[bool]string{true: "websocket", false: "webhook"}[kind == "mattermost"],
 			"inbound_path": inboundPath(kind),
 		}
@@ -303,6 +310,18 @@ type traffic struct {
 	count map[string]int
 	last  map[string]time.Time
 
+	// skipped and coalesced are what BECAME of the deliveries, counted
+	// from the engine's own events rather than from the inbound rows.
+	//
+	// The three numbers answer one question together and are useless
+	// apart: "128 arrived, 30 the routing gate dropped, 2 merges" is a
+	// working integration; "128 arrived" alone cannot tell that from an
+	// integration whose every delivery reaches nobody. Both are counted
+	// per INTEGRATION, from the notification_source the events carry, so
+	// they line up with the inbound count beside them.
+	skipped   map[string]int
+	coalesced map[string]int
+
 	// since is the timestamp of the OLDEST delivery counted, which is what
 	// makes the counts mean something. The page is capped rather than time
 	// bounded, so "42 inbound" alone could span an hour or a year; "42
@@ -321,7 +340,10 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 		log.WarnContext(ctx, "integration_counts_unreadable", "error", err)
 		return traffic{}
 	}
-	out := traffic{known: true, count: map[string]int{}, last: map[string]time.Time{}}
+	out := traffic{
+		known: true, count: map[string]int{}, last: map[string]time.Time{},
+		skipped: map[string]int{}, coalesced: map[string]int{},
+	}
 	for _, row := range rows {
 		out.count[row.Source]++
 		if row.Time.After(out.last[row.Source]) {
@@ -331,7 +353,51 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 			out.since = row.Time
 		}
 	}
+	s.countOutcomes(ctx, &out)
 	return out
+}
+
+// countOutcomes adds the two per-integration outcome counts.
+//
+// A SECOND QUERY, on the notification category, because the outcomes are
+// engine events and the deliveries are edge rows: they live under different
+// categories and no single listing holds both. Its failure leaves the
+// outcome counts absent rather than zero — see [traffic] — because a zero
+// that means "unreadable" is the number an operator would act on.
+func (s Sources) countOutcomes(ctx context.Context, out *traffic) {
+	rows, err := s.Events.List(ctx, store.ListQuery{
+		Category: "notification", Limit: MaxEventPage,
+	})
+	if err != nil {
+		log.WarnContext(ctx, "integration_outcomes_unreadable", "error", err)
+		out.skipped, out.coalesced = nil, nil
+		return
+	}
+	for _, row := range rows {
+		// THE INTEGRATION, not the event's Source: the source of an
+		// engine-published event names the engine, and what the row has
+		// to line up with is the inbound count for one vendor.
+		source := integrationOf(row)
+		if source == "" {
+			continue
+		}
+		switch row.Type {
+		case "notification_skipped":
+			out.skipped[source]++
+		case "notifications_coalesced":
+			out.coalesced[source]++
+		}
+	}
+}
+
+// integrationOf reads the vendor an outcome event concerns.
+//
+// FROM THE TAG, not the payload: a listing deliberately never selects the
+// payload column, so the tag is all a historical row carries — see
+// [store.RecordFor]. A row written before that tag existed carries none and
+// is skipped rather than guessed at.
+func integrationOf(row store.EventRecord) string {
+	return strings.TrimSpace(row.Tags["notification_source"])
 }
 
 // seatsFor lists the handles that carry this surface in their own config.
@@ -509,3 +575,11 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 
 // MemoryPageLimit bounds each half of a seat's memory page.
 const MemoryPageLimit = 50
+
+// countOrNil renders an outcome count, or null when nothing was counted.
+func countOrNil(counts map[string]int, kind string) any {
+	if counts == nil {
+		return nil
+	}
+	return counts[kind]
+}

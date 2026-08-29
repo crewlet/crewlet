@@ -447,6 +447,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.NoteDeferred == nil {
 		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred
 	}
+	if d.Observe == nil {
+		d.Observe = e.observe
+	}
 	// THE TWO LEDGERS COME FROM DIFFERENT PLACES, and the split is the
 	// point. Completions must be agreed across the FLEET — a redelivery
 	// that lands on a peer has to find the record, or the turn runs twice
@@ -778,4 +781,21 @@ func keyMaterial(boot *config.Bootstrap) []string {
 		out = append(out, key.ID+":"+key.Material)
 	}
 	return out
+}
+
+// observe publishes an engine-side observability event.
+//
+// BEST EFFORT, and loudly so: the caller is doing real work and this is the
+// feed's record of it. A publish that fails is logged and swallowed, because
+// failing the work to keep a row would be the wrong trade in every case this
+// is used for.
+func (e *Engine) observe(ctx context.Context, ev *events.Event) {
+	if e.backends == nil || e.backends.Queue == nil || ev == nil {
+		return
+	}
+	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+		log.Warn("engine_observation_dropped", "event", ev.Type,
+			"error", err.Error(),
+			"detail", "the work itself is unaffected; the feed will not show it")
+	}
 }

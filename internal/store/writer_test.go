@@ -174,3 +174,36 @@ func TestCategoriesAreKnownValues(t *testing.T) {
 		}
 	}
 }
+
+// THE VENDOR A NOTIFICATION EVENT CONCERNS IS A TAG, because a listing
+// deliberately never selects the payload column — so the Integrations room
+// aggregating "how many of this vendor's deliveries were dropped by the
+// routing gate" has no other way to read it.
+func TestRecordForTagsTheNotificationSource(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{
+		"notification_skipped", "notifications_coalesced", "external_notification",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			ev := buildEvent(t, `{
+				"id": "6f1a2b3c-0000-4000-8000-000000000009",
+				"type": "`+kind+`",
+				"timestamp": "2026-04-01T12:00:00Z",
+				"source": "engine",
+				"notification_source": "gitlab"
+			}`)
+			rec, tracked, err := store.RecordFor(ev)
+			if err != nil {
+				t.Fatalf("RecordFor: %v", err)
+			}
+			if !tracked {
+				t.Fatalf("%s must be stored", kind)
+			}
+			if got := rec.Tags["notification_source"]; got != "gitlab" {
+				t.Errorf("notification_source tag = %q, want gitlab (tags: %v)",
+					got, rec.Tags)
+			}
+		})
+	}
+}

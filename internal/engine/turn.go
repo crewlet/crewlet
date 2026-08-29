@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/workkey"
@@ -54,6 +55,17 @@ type Dispatcher struct {
 	// NoteDeferred tells the seat host a consumer stopped, so the next
 	// successful renew resumes it.
 	NoteDeferred func(handle string)
+
+	// Observe publishes an engine-side observability event.
+	//
+	// It takes a BUILT envelope rather than a payload, because
+	// [events.New] is generic over the concrete payload type — a seam
+	// typed on the interface could not construct one.
+	//
+	// BEST EFFORT and nil-safe: the feed is a feed. A node whose queue
+	// refused a coalescing record has still coalesced correctly, and
+	// failing the dispatch over it would trade real work for a row.
+	Observe func(ctx context.Context, ev *events.Event)
 
 	// Now is injectable so a test can pin the clock.
 	Now func() time.Time
@@ -140,6 +152,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 		WorkKey: routing.WorkKey, Coalesce: routing.Coalesce,
 		ConversationKey: conversationKeyOf(routing.Events),
 	}
+	d.noteCoalesced(ctx, handle, req.ConversationKey, routing)
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if history, err := d.history(ctx, handle, req.ConversationKey); err == nil {
 		req.History = history
@@ -342,4 +355,47 @@ func DescribeTrigger(evs []*events.Event) string {
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// noteCoalesced records a partition merged into one digest trigger.
+//
+// # Here, because here is where the constituent list exists
+//
+// A coalesced digest is minted fresh on every merge and carries no memory of
+// what it absorbed; by the time a turn is running there is nothing left to
+// count. So the record is written at the one frame that still holds the
+// events — the same reason the work key is derived here.
+//
+// Nothing else emits this event, which is why the Integrations room could
+// report how many deliveries ARRIVED and not how many turns they became: a
+// seat draining a thread's backlog as one turn looked, from the feed, like a
+// seat that ignored twelve messages.
+func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, conversation string,
+	routing inbox.Routing,
+) {
+	if !routing.Coalesce || d.Observe == nil || len(routing.Events) == 0 {
+		return
+	}
+	first, last := routing.Events[0].Timestamp, routing.Events[0].Timestamp
+	for _, ev := range routing.Events {
+		if ev.Timestamp.Before(first) {
+			first = ev.Timestamp
+		}
+		if ev.Timestamp.After(last) {
+			last = ev.Timestamp
+		}
+	}
+	ev := events.New(types.NotificationsCoalesced{
+		AgentHandle: handle, ConversationKey: conversation,
+		// THE SOURCE OF THE FIRST EVENT names the integration. A merge is
+		// always one conversation's worth of external notifications, and a
+		// conversation belongs to one vendor — so the constituents cannot
+		// disagree, and taking the first is a lookup rather than a choice.
+		NotificationSource: routing.Events[0].Source,
+		Count:              len(routing.Events),
+		FirstAt:            first.UTC().Format(time.RFC3339),
+		LastAt:             last.UTC().Format(time.RFC3339),
+	}, events.NewTrace())
+	ev.Source = "engine." + routing.Events[0].Source
+	d.Observe(ctx, ev)
 }

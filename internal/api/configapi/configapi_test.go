@@ -840,3 +840,96 @@ func TestAReshapedKeyListIsRefusedRatherThanStored(t *testing.T) {
 		t.Errorf("the reason does not explain what happened: %v", body["detail"])
 	}
 }
+
+// --- the summary body key -------------------------------------------------- //
+
+// THE BODY IS OFTEN THE ONLY THING A CALLER CONTROLS. A form post, a
+// `curl -d @file`, a fetch behind a proxy that strips unknown headers — all of
+// them can put a key in a document and none can necessarily add a header.
+func TestASummaryInTheBodyIsAcceptedInsteadOfTheHeader(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	res := s.do(t, http.MethodPut, "/config",
+		"_summary: imported from the body\n"+companyDoc, nil)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("got %d: %s", res.Code, res.Body)
+	}
+	// AND IT REACHES THE HISTORY, which is the whole point of requiring it.
+	if got := s.do(t, http.MethodGet, "/config/revisions", "", nil).Body.String(); !strings.Contains(got, "imported from the body") {
+		t.Errorf("the summary did not reach the revision history: %s", got)
+	}
+}
+
+// THE KEY IS REMOVED, NOT IGNORED. Tier B's parser refuses unknown fields
+// deliberately, so a `_summary` left in the document would be rejected by name
+// — actively hostile rather than merely unused.
+func TestTheSummaryKeyIsStrippedBeforeTheDocumentIsParsed(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	res := s.do(t, http.MethodPut, "/config",
+		"_summary: with a header too\n"+companyDoc,
+		map[string]string{"X-Summary": "the header wins"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("got %d: %s", res.Code, res.Body)
+	}
+	// THE HEADER WINS when both are present: it is the more explicit
+	// channel, and a `_summary` can survive in a document somebody keeps in
+	// version control long after it stopped describing the write.
+	got := s.do(t, http.MethodGet, "/config/revisions", "", nil).Body.String()
+	if !strings.Contains(got, "the header wins") {
+		t.Errorf("the header did not win: %s", got)
+	}
+	if strings.Contains(got, "with a header too") {
+		t.Errorf("the body key won over the header: %s", got)
+	}
+}
+
+// NEITHER CHANNEL IS STILL A REFUSAL, and the hint names both.
+func TestAWriteWithNoSummaryAtAllNamesBothChannels(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	res := s.do(t, http.MethodPut, "/config", companyDoc, nil)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("got %d: %s", res.Code, res.Body)
+	}
+	body := decode(t, res)
+	if body["error"] != "summary_required" {
+		t.Fatalf("body = %s", res.Body)
+	}
+	hint, _ := body["hint"].(string)
+	if !strings.Contains(hint, "X-Summary") || !strings.Contains(hint, "_summary") {
+		t.Errorf("the hint names only one channel: %q", hint)
+	}
+}
+
+// A `_summary` THAT IS NOT A STRING is a body problem, named as one.
+func TestANonStringSummaryKeyIsRefusedAsABodyProblem(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	res := s.do(t, http.MethodPut, "/config",
+		"_summary:\n  nested: true\n"+companyDoc, nil)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("got %d: %s", res.Code, res.Body)
+	}
+	if decode(t, res)["error"] != "invalid_body" {
+		t.Errorf("body = %s", res.Body)
+	}
+}
+
+// A DOCUMENT WITHOUT THE KEY IS PASSED THROUGH UNTOUCHED, so the parser's
+// errors keep naming the lines the caller wrote.
+func TestADocumentWithNoSummaryKeyKeepsItsLineNumbers(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	// Line 3 of the body is the bad one.
+	bad := "name: Acme\nnotification_coalesce_max_batch: 3\nnonsense: true\n"
+	res := s.do(t, http.MethodPut, "/config", bad,
+		map[string]string{"X-Summary": "break it"})
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("got %d: %s", res.Code, res.Body)
+	}
+	detail, _ := decode(t, res)["detail"].(string)
+	if !strings.Contains(detail, "line 3") {
+		t.Errorf("the error does not name line 3: %q", detail)
+	}
+}

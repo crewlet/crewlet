@@ -32,7 +32,25 @@ curl -X PUT $CREWLET_URL/config \
   --data-binary @examples/nimbus.company.yaml
 ```
 
-`X-Summary` is required on full PUT. Response is `201 Created` with `{"revision_id": "..."}`.
+A revision summary is required on every write. It travels in the `X-Summary`
+header, or as a top-level `_summary` key in the body:
+
+```bash
+curl -X PUT http://localhost:8080/config \
+  -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  -H "Content-Type: application/yaml" \
+  --data-binary $'_summary: bootstrap Nimbus\n'"$(cat nimbus.company.yaml)"
+```
+
+The body key exists because the body is often the only thing a caller
+controls — a form post, a proxy that strips unknown headers, a CI step piping
+a document through a tool that takes no header arguments. It is **removed
+before the document is parsed**, so it never trips the unknown-field check
+that Tier B applies deliberately. When both are present the **header wins**:
+it is the more explicit channel, and a `_summary` can survive in a document
+somebody keeps in version control long after it stopped describing the write.
+
+Response is `201 Created` with `{"revision_id": "..."}`.
 
 JSON body works too:
 
@@ -191,7 +209,7 @@ curl -X POST $CREWLET_URL/config/revisions/$REV/revert \
 |--------|-------|---------|
 | `400` | `invalid_body` | Body isn't JSON / YAML, or wrong `Content-Type` |
 | `400` | `validation_error` | The merged config failed validation — `detail` carries the message |
-| `400` | `summary_required` | Any write without an `X-Summary` header |
+| `400` | `summary_required` | Any write with neither an `X-Summary` header nor a top-level `_summary` key in the body |
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
 | `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — this route never creates |
