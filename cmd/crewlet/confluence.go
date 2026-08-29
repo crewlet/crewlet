@@ -26,6 +26,11 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("confluence import", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	bootstrapPath := bootstrapFlag(fs)
+	space := fs.String("space", "",
+		"the space tool-skill pages are published into; empty reads "+
+			"CREWLET_TOOL_SKILLS_SPACE, then integrations.confluence.skills_space")
+	prune := fs.Bool("prune", false,
+		"delete published tool-skill pages whose key no local file publishes")
 	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -43,7 +48,8 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 	}
 	if companyPath == "" || directory == "" || len(tail) > 0 {
 		fmt.Fprintln(stderr,
-			"usage: crewlet confluence import <company.yaml> <directory> [-dry-run]")
+			"usage: crewlet confluence import <company.yaml> <directory> "+
+				"[-space KEY] [-prune] [-dry-run]")
 		return errors.New("name exactly one company document and one directory")
 	}
 
@@ -57,13 +63,14 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 			"confluence: the company config has no integrations.confluence " +
 				"block, so there is no instance to publish into")
 	}
-	plan, err := confluence.Walk(directory, cfg.SkillsSpaceKey())
+	skillsSpace := skillsContainer(*space, "CREWLET_TOOL_SKILLS_SPACE", cfg.SkillsSpaceKey())
+	plan, err := confluence.Walk(directory, skillsSpace)
 	if err != nil {
 		return err
 	}
 	printConfluencePlan(stdout, plan)
 	if *dryRun {
-		fmt.Fprintln(stdout, "\n-dry-run: nothing was written.")
+		fmt.Fprintln(stdout, "\n-dry-run: nothing was written or deleted.")
 		return nil
 	}
 	if len(plan.Items) == 0 {
@@ -88,7 +95,9 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	res, err := confluence.Publish(ctx, confluence.PublishOptions{Client: client, Plan: plan})
+	res, err := confluence.Publish(ctx, confluence.PublishOptions{
+		Client: client, Plan: plan, Prune: *prune, SkillsSpace: skillsSpace,
+	})
 	if res != nil {
 		printConfluenceResult(stdout, res)
 	}
@@ -129,6 +138,10 @@ func printConfluenceResult(w io.Writer, res *confluence.PublishResult) {
 	if len(res.Updated) > 0 {
 		fmt.Fprintf(w, "Updated %d page(s):\n  %s\n",
 			len(res.Updated), strings.Join(res.Updated, "\n  "))
+	}
+	if len(res.Pruned) > 0 {
+		fmt.Fprintf(w, "Deleted %d orphaned skill page(s):\n  %s\n",
+			len(res.Pruned), strings.Join(res.Pruned, "\n  "))
 	}
 	if len(res.Failed) > 0 {
 		fmt.Fprintf(w, "\n%d page(s) FAILED:\n  %s\n",
@@ -203,9 +216,13 @@ func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	key := strings.TrimSpace(*space)
+	key := skillsContainer(*space, "CREWLET_TOOL_SKILLS_SPACE", cfg.SkillsSpaceKey())
 	if key == "" {
-		key = cfg.SkillsSpaceKey()
+		return errors.New(
+			"confluence: this company has no tool-skills space — " +
+				"integrations.confluence.skills_space is set to the empty " +
+				"string, which turns tool skills off. Pass -space KEY to " +
+				"read one anyway, or remove that setting")
 	}
 	pages, err := confluence.SkillPages(ctx, client, key)
 	if err != nil {

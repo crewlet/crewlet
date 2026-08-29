@@ -833,6 +833,32 @@ func printMembers(w io.Writer, members []plane.Account) {
 	}
 }
 
+// skillsContainer resolves the tool-skills container one CLI run writes to
+// or reads from.
+//
+// Three sources, most specific first: the -project / -space flag, then the
+// environment variable, then the company config — which is itself
+// three-valued, distinguishing "unset, take the reserved default" from an
+// explicit empty string meaning tool skills are OFF for this company.
+//
+// # The variable is a FLAG DEFAULT, and nothing more
+//
+// The engine never reads it. A running node's watched container comes from
+// the versioned company document and only from there, because a fleet whose
+// nodes each read a variable out of whoever's shell started them would
+// disagree about which project holds the skills — and the symptom is agents
+// on one node following guidance the others have never heard of. Here, in a
+// command an operator types, a variable is just a way not to retype a flag.
+func skillsContainer(flagValue, envVar, fromConfig string) string {
+	if v := strings.TrimSpace(flagValue); v != "" {
+		return strings.ToUpper(v)
+	}
+	if v := strings.TrimSpace(config.EnvOnly().Lookup(envVar)); v != "" {
+		return strings.ToUpper(v)
+	}
+	return fromConfig
+}
+
 // runPlaneImport is `crewlet plane import`.
 func runPlaneImport(args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
@@ -844,6 +870,9 @@ func runPlaneImport(args []string, stdout, stderr io.Writer) error {
 		"a Plane API key that may write the target projects; empty reads PLANE_TOKEN")
 	prune := fs.Bool("prune", false,
 		"delete published tool-skill pages whose key no local file publishes")
+	project := fs.String("project", "",
+		"the project tool-skill pages are published into; empty reads "+
+			"CREWLET_TOOL_SKILLS_PROJECT, then integrations.plane.skills_project")
 	dryRun := fs.Bool("dry-run", false,
 		"print what would be published and write nothing")
 	bootstrap := bootstrapFlag(fs)
@@ -864,7 +893,7 @@ func runPlaneImport(args []string, stdout, stderr io.Writer) error {
 	if companyPath == "" || root == "" {
 		fmt.Fprintln(stderr,
 			"usage: crewlet plane import <company.yaml> <directory> "+
-				"[-token KEY] [-prune] [-dry-run]")
+				"[-token KEY] [-project ID] [-prune] [-dry-run]")
 		return errors.New("name a company document and a directory")
 	}
 
@@ -873,7 +902,9 @@ func runPlaneImport(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	cfg := company.Integrations.Plane
-	plan, err := plane.Walk(root, cfg)
+	skillsProject := skillsContainer(*project, "CREWLET_TOOL_SKILLS_PROJECT",
+		cfg.SkillsProjectKey())
+	plan, err := plane.Walk(root, cfg, skillsProject)
 	if err != nil {
 		return err
 	}
@@ -1038,9 +1069,14 @@ func runPlaneResync(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	identifier := strings.TrimSpace(*project)
+	identifier := skillsContainer(*project, "CREWLET_TOOL_SKILLS_PROJECT",
+		cfg.SkillsProjectKey())
 	if identifier == "" {
-		identifier = cfg.SkillsProjectKey()
+		return errors.New(
+			"plane: this company has no tool-skills project — " +
+				"integrations.plane.skills_project is set to the empty " +
+				"string, which turns tool skills off. Pass -project ID to " +
+				"read one anyway, or remove that setting")
 	}
 	pages, err := plane.SkillPages(ctx, client, identifier)
 	if err != nil {

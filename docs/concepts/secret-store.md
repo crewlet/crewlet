@@ -179,7 +179,7 @@ Most `${VAR}` resolution funnels through one function, so the store covers it. A
 | Tier A bootstrap (`providers.database.dsn`, `secrets.keys[].material`) | **Env/file only** | Root of trust — this is what opens and decrypts the store |
 | Operator provisioning credentials (`GITLAB_ADMIN_TOKEN`, `PLANE_ADMIN_TOKEN`, `MATTERMOST_ADMIN_TOKEN`) | **Env only** | Human operator credentials, never persisted by Crewlet **and never read back from the store**: a GitLab admin PAT carries `api` scope over the whole group, and the store is replicated to every node holding the keyring. Reading one from it would imply it may be kept there |
 | OTLP endpoint / protocol / headers, `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | **Env only** | Deployment-environment settings that belong to the host, not the company; several are read before the store loads |
-| `CREWLET_TOOL_SKILLS_SPACE` / `_PROJECT` | **Env only** | Not secrets — container names with a default |
+| `CREWLET_TOOL_SKILLS_SPACE` / `_PROJECT` | **Env only** | Not secrets — flag defaults for the import/resync commands, read by nothing else |
 | `.env` loading (`load_dotenv`) | **Env only** | This is how the environment gets populated in the first place |
 | MCP stdio subprocess environment | **Env only, plus declared creds** | Servers read undeclared conventional variables (`PATH`, proxy vars, vendor SDK keys), so the host env is inherited. Store values are **not** poured in — each server gets exactly the credentials its `mcp_env` declares, already resolved. Injecting the whole store would hand every seat's token to every subprocess |
 

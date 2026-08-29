@@ -78,7 +78,7 @@
           "type": "string"
         },
         "skills_space": {
-          "description": "Space holding tool-skill pages; excluded from routing and knowledge search. Default TS.",
+          "description": "Space holding tool-skill pages; excluded from routing and knowledge search. Default TS; empty string disables tool skills entirely.",
           "type": "string"
         },
         "token": {
@@ -866,7 +866,7 @@
           "description": "Inputs for the provisioning CLI; ignored by the engine."
         },
         "skills_project": {
-          "description": "Project holding tool-skill pages; excluded from routing and knowledge search. Default TS.",
+          "description": "Project holding tool-skill pages; excluded from routing and knowledge search. Default TS; empty string disables tool skills entirely.",
           "type": "string"
         },
         "token": {

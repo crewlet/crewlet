@@ -51,11 +51,14 @@ func DecodeSkillPage(storage string) string {
 	if frontmatter == "" {
 		return ""
 	}
-	body := Flatten(rest)
-	if body == "" {
-		return frontmatter
-	}
-	return frontmatter + "\n\n" + body
+	// FENCED, because that is what "the same shape the skill parser reads
+	// from a file" means: the parser splits on a leading `---` block, so
+	// text without the delimiters is not a skill at all — it is an
+	// ordinary page — and every skill page in the space would be admitted
+	// as prose with nothing reporting it. The other backend's decode has
+	// always fenced; this one did not, and the tool-skill catalogue of a
+	// Confluence-backed company was empty because of it.
+	return "---\n" + frontmatter + "\n---\n" + Flatten(rest)
 }
 
 // leadingCode splits a page into its leading code block and what follows.

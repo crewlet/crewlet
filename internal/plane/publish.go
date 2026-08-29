@@ -80,7 +80,7 @@ func (p *Plan) Containers() []string {
 // fixes in their editor before running again — and a run that skipped it
 // would report success while silently leaving a skill unpublished, which
 // looks from the agent's side like a skill nobody wrote.
-func Walk(root string, cfg *config.Plane) (*Plan, error) {
+func Walk(root string, cfg *config.Plane, skillsProject string) (*Plan, error) {
 	if cfg == nil || !cfg.Enabled {
 		return nil, errors.New("plane: the company config does not enable plane")
 	}
@@ -91,7 +91,7 @@ func Walk(root string, cfg *config.Plane) (*Plan, error) {
 	plan := &Plan{}
 	seen := map[string]string{}
 	for _, path := range paths {
-		item, err := route(path, cfg)
+		item, err := route(path, skillsProject)
 		if err != nil {
 			return nil, err
 		}
@@ -117,7 +117,7 @@ func Walk(root string, cfg *config.Plane) (*Plan, error) {
 }
 
 // route decides what one file is and renders it.
-func route(path string, cfg *config.Plane) (Item, error) {
+func route(path, skillsProject string) (Item, error) {
 	doc, err := knowledge.ParseDoc(path)
 	if err != nil {
 		return Item{}, err
@@ -154,8 +154,21 @@ func route(path string, cfg *config.Plane) (Item, error) {
 	if title == "" {
 		title = skill.Key
 	}
+	if skillsProject == "" {
+		// TOOL SKILLS ARE OFF for this company, and a skill file has
+		// nowhere to go. Publishing it into its parent directory's
+		// project instead would put an instruction written for one phase
+		// of one turn into every planner's knowledge search — the exact
+		// thing the exclusion exists to prevent.
+		return Item{}, fmt.Errorf(
+			"plane: %s declares a tool-skill trigger but this company has no "+
+				"tool-skills project — integrations.plane.skills_project is "+
+				"set to the empty string, which turns tool skills off. Pass "+
+				"-project ID to publish it anyway, or remove that setting",
+			path)
+	}
 	return Item{
-		Path: path, Container: cfg.SkillsProjectKey(), Title: title,
+		Path: path, Container: skillsProject, Title: title,
 		ExternalID: SkillExternalID(skill.Key),
 		HTML:       EncodeSkillPage(frontmatter, body), Skill: true,
 	}, nil

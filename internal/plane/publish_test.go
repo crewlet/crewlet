@@ -56,7 +56,7 @@ Welcome to **Engineering**.
 
 func walk(t *testing.T, root string, cfg *config.Plane) *plane.Plan {
 	t.Helper()
-	plan, err := plane.Walk(root, cfg)
+	plan, err := plane.Walk(root, cfg, cfg.SkillsProjectKey())
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
@@ -148,7 +148,7 @@ Body.
 func TestADocWithNoTitleStopsTheWalk(t *testing.T) {
 	t.Parallel()
 	root := tree(t, map[string]string{"ENG/untitled.md": "Just prose, no heading.\n"})
-	_, err := plane.Walk(root, enabledPlane())
+	_, err := plane.Walk(root, enabledPlane(), config.DefaultSkillsProject)
 	if err == nil {
 		t.Fatal("a titleless doc was planned")
 	}
@@ -165,7 +165,7 @@ func TestTwoFilesPublishingAsOnePageStopTheWalk(t *testing.T) {
 		"ENG/a.md": "# Onboarding\n\nOne.\n",
 		"ENG/b.md": "# Onboarding\n\nTwo.\n",
 	})
-	_, err := plane.Walk(root, enabledPlane())
+	_, err := plane.Walk(root, enabledPlane(), config.DefaultSkillsProject)
 	if err == nil {
 		t.Fatal("two files were planned onto one page")
 	}
@@ -198,7 +198,7 @@ func TestASkillPageRoundTripsThroughTheCodec(t *testing.T) {
 func publish(t *testing.T, f *instance, root string, prune bool) (*plane.PublishResult, error) {
 	t.Helper()
 	cfg := enabledPlane()
-	plan, err := plane.Walk(root, cfg)
+	plan, err := plane.Walk(root, cfg, cfg.SkillsProjectKey())
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
@@ -690,5 +690,49 @@ func TestAnUndecodableSkillPageIsNamed(t *testing.T) {
 	}
 	if len(report.Undecodable) != 1 || report.Undecodable[0] != "Broken skill" {
 		t.Errorf("undecodable = %v", report.Undecodable)
+	}
+}
+
+// TOOL SKILLS OFF MEANS A SKILL FILE HAS NOWHERE TO GO, and filing it under
+// its parent directory's project instead would put an instruction written for
+// one phase of one turn into every planner's knowledge search.
+func TestASkillFileWithNoSkillsProjectStopsTheWalk(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{"skills/review.md": skillFile})
+	_, err := plane.Walk(root, enabledPlane(), "")
+	if err == nil {
+		t.Fatal("a skill was planned with tool skills off")
+	}
+	if !strings.Contains(err.Error(), "skills_project") ||
+		!strings.Contains(err.Error(), "-project") {
+		t.Errorf("the error names neither the setting nor the flag: %v", err)
+	}
+}
+
+// AN ORDINARY DOC IS UNAFFECTED. Turning tool skills off must not stop a
+// company publishing its knowledge base.
+func TestOrdinaryDocsPublishWithTheSkillsProjectOff(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{"ENG/onboarding.md": "# Onboarding\n\nProse.\n"})
+	plan, err := plane.Walk(root, enabledPlane(), "")
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(plan.Items) != 1 || plan.Items[0].Container != "ENG" {
+		t.Errorf("plan = %+v", plan.Items)
+	}
+}
+
+// THE CONTAINER THE CALLER NAMES IS THE ONE USED, which is what makes
+// `-project` a per-run override rather than decoration.
+func TestTheSkillsProjectTheCallerNamesIsWhereSkillsGo(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{"skills/review.md": skillFile})
+	plan, err := plane.Walk(root, enabledPlane(), "OVERRIDE")
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(plan.Items) != 1 || plan.Items[0].Container != "OVERRIDE" {
+		t.Errorf("plan = %+v", plan.Items)
 	}
 }

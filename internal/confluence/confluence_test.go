@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -333,7 +334,7 @@ func TestFlatteningKeepsBlockBoundaries(t *testing.T) {
 // indistinguishable from an ordinary page.
 func TestASkillPageDecodesFromEitherShape(t *testing.T) {
 	t.Parallel()
-	frontmatter := "key: deploy\ntrigger:\n  tools: [run_pipeline]"
+	frontmatter := "key: deploy\ntrigger:\n  tool: run_pipeline"
 	macro := `<ac:structured-macro ac:name="code"><ac:parameter ac:name="language">yaml` +
 		`</ac:parameter><ac:plain-text-body><![CDATA[` + frontmatter +
 		`]]></ac:plain-text-body></ac:structured-macro><p>Always tag the release.</p>`
@@ -355,16 +356,46 @@ func TestASkillPageDecodesFromEitherShape(t *testing.T) {
 // THE ENCODE IS THE INVERSE OF THE DECODE. A skill promoted from a draft is
 // re-written, and a round trip that changed what the page means would change
 // what every seat is told.
-func TestASkillPageRoundTrips(t *testing.T) {
+//
+// THE ASSERTION THAT MATTERS IS THE PARSER'S, not a substring: a decode that
+// kept every character but dropped the `---` delimiters round-trips
+// perfectly by eye and is admitted as an ordinary page by the only consumer
+// there is, which is exactly how a Confluence-backed company ran with a
+// permanently empty tool-skill catalogue and no error anywhere.
+func TestASkillPageRoundTripsIntoSomethingTheParserAccepts(t *testing.T) {
 	t.Parallel()
-	frontmatter := "key: deploy\ntrigger:\n  tools: [run_pipeline]"
+	frontmatter := "key: deploy\ntitle: Deploying\nsummary: How we deploy.\n" +
+		"phases: [execute]\ntrigger:\n  tool: run_pipeline"
 	storage := confluence.EncodeSkillPage(frontmatter, "Always tag the release.")
 	got := confluence.DecodeSkillPage(storage)
-	if !strings.Contains(got, "key: deploy") {
-		t.Fatalf("the frontmatter did not survive:\n%s", got)
+	if !skills.IsSkill(got) {
+		t.Fatalf("the parser does not see a skill in:\n%s", got)
 	}
-	if !strings.Contains(got, "Always tag the release.") {
-		t.Fatalf("the body did not survive:\n%s", got)
+	skill, err := skills.Parse(got, skills.Source{})
+	if err != nil {
+		t.Fatalf("Parse: %v\n%s", err, got)
+	}
+	if skill.Key != "deploy" {
+		t.Errorf("key = %q", skill.Key)
+	}
+	if !strings.Contains(skill.Body, "Always tag the release.") {
+		t.Errorf("the body did not survive: %q", skill.Body)
+	}
+}
+
+// AN ORDINARY PAGE STAYS ORDINARY through the same path. The decode is what
+// separates a space's home page from a broken skill, and a version that
+// fenced everything would report a finding on every page in the space.
+func TestAnOrdinaryPageIsNotAdmittedAsASkill(t *testing.T) {
+	t.Parallel()
+	if got := confluence.DecodeSkillPage("<p>Just some notes.</p>"); got != "" {
+		t.Fatalf("an ordinary page decoded to %q", got)
+	}
+	// A leading code block that is NOT frontmatter is still not a skill:
+	// the parser decides, and it wants a trigger.
+	storage := confluence.EncodeSkillPage("just: some yaml", "Notes.")
+	if skills.IsSkill(confluence.DecodeSkillPage(storage)) {
+		t.Error("a triggerless page was admitted as a skill")
 	}
 }
 

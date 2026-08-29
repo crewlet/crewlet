@@ -321,9 +321,14 @@ Each skill page opens with a literal `<pre><code class="language-yaml">` block i
 
 | Setting | Default | Description |
 |---|---|---|
-| `CREWLET_TOOL_SKILLS_SPACE` (env var) | `TS` | Confluence space key the engine watches. Set to empty string to disable the tool-skill sync entirely (the engine still boots; the rest of the Confluence integration is unaffected). |
-| `integrations.plane.skills_project` | `TS` | [Plane](../integrations/plane.md) project identifier the engine watches when Plane is the knowledge backend — read by the skill sync, the searcher's result exclusion, and the parser's routing exclusion alike. A **config field**, not an environment variable: it is a routing decision, and one that lives outside the document describing the company is one an operator cannot see when they read their config. `crewlet plane import` still defaults its `--project` to `$CREWLET_TOOL_SKILLS_PROJECT` or `TS`, so point it at the same project. |
-| `--space <key>` / `--project <id>` (CLI flags) | — | Per-invocation override of the Tool Skills container for `crewlet confluence import` / `resync` and `crewlet plane import` / `resync` respectively (skill files only — knowledge docs take their container from their parent directory). |
+| `integrations.confluence.skills_space` | `TS` | Confluence space key the engine watches when Confluence is the knowledge backend — read by the skill sync, the searcher's result exclusion and the parser's routing exclusion alike. |
+| `integrations.plane.skills_project` | `TS` | [Plane](../integrations/plane.md) project identifier the engine watches when Plane is the knowledge backend, with the same three consumers. |
+| `-space <key>` / `-project <id>` (CLI flags) | the config field | Per-invocation override of the Tool Skills container for `crewlet confluence import` / `resync` and `crewlet plane import` / `resync` respectively (skill files only — knowledge docs take their container from their parent directory). |
+| `CREWLET_TOOL_SKILLS_SPACE` / `CREWLET_TOOL_SKILLS_PROJECT` (env vars) | — | The **flag defaults** for those four commands, so an operator running them repeatedly does not retype the container. Nothing else reads them. |
+
+**Both fields are three-valued, and the empty string is an answer.** Absent takes the reserved default `TS`; a named container takes that container; an explicit `skills_space: ""` / `skills_project: ""` turns tool skills **off** — no sync, no routing exclusion, no search exclusion, and an import that meets a skill file refuses rather than filing it as prose. The off switch exists because the default reserves a real container name: a company whose ordinary work project happens to be `TS` would otherwise have it silently dropped from every knowledge search and every routing decision, with no way in the config to say otherwise.
+
+**The engine reads the config field and only the config field.** The environment variables are flag defaults for the operator commands and nothing more: a fleet whose nodes each read a container out of whoever's shell started them would disagree about which one holds the skills, and the symptom is agents on one node following guidance the others have never heard of. A routing decision belongs in the versioned document describing the company.
 
 The Tool Skills container holds engine-managed scaffolding, not general knowledge. Crewlet does not maintain a synced knowledge index, so there is nothing for the container to pollute; just don't add it to the knowledge read scope (`knowledge.confluence_spaces` / `knowledge.plane_projects`) and skill pages won't surface in the `## Relevant knowledge` query-time search — on Plane the searcher additionally drops skills-project rows from results wholesale, since a skill page's leading YAML block would dominate any snippet.
 
@@ -353,5 +358,5 @@ The container is also **excluded from notification routing**. Webhooks for tool-
 - [Agent Runtime](agent-runtime.md) — where the per-phase prompt builders live; how the registry is threaded into the turn engine.
 - [Turn Engine](turn-engine.md) — phase contracts; how `plan.tools_needed` is resolved.
 - [CLI Reference](../reference/cli.md) — full flag reference for `crewlet plane import` / `crewlet plane resync`.
-- [Environment Variables](../reference/environment-variables.md) — `CREWLET_TOOL_SKILLS_SPACE`, `CREWLET_TOOL_SKILLS_PROJECT` (the `crewlet plane import` default; the engine reads `integrations.plane.skills_project`).
+- [Environment Variables](../reference/environment-variables.md) — `CREWLET_TOOL_SKILLS_SPACE`, `CREWLET_TOOL_SKILLS_PROJECT` (import/resync flag defaults; the engine reads `integrations.confluence.skills_space` / `integrations.plane.skills_project`).
 - [Plane integration](../integrations/plane.md) — the Plane knowledge backend: search, import, sync, promotion.

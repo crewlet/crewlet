@@ -503,6 +503,7 @@ Every distinct target project must already exist; a missing one fails the run **
 | Flag | Description |
 |------|-------------|
 | `-token KEY` | A Plane API key that may write the target projects. Empty reads `$PLANE_TOKEN`, then `integrations.plane.token`. The account must be a member of every target project. |
+| `-project ID` | Publish tool skills into this project instead of `integrations.plane.skills_project`. Empty reads `$CREWLET_TOOL_SKILLS_PROJECT`, then the config field. Skill files only — a knowledge doc takes its project from its parent directory. A company that has turned tool skills off (`skills_project: ""`) and has a skill file in the tree **stops the walk** naming both the setting and this flag. |
 | `-prune` | Delete import-managed **skill** pages whose key no local file publishes. Positive-marker predicate — `external_source="crewlet"` **and** a `skill:` external id — so unmarked pages, `doc:` pages and knowledge docs are structurally out of reach: a doc absent from this run is far more likely to have moved than to be dead. Deletion follows the fork's archive-then-delete precondition, per page. When the archive lands and the delete is refused (deletion is owner-or-project-admin only), the archive is **rolled back**: left archived, the page is invisible to every agent while its external id keeps 409ing every future republish of that skill. A failed prune has to be a no-op, not a half-removal. |
 | `-dry-run` | Print the routed plan and write nothing. It is the **same** plan the run uses. |
 
@@ -694,7 +695,8 @@ See [Slack Integration](../integrations/slack.md#automated-setup-crewlet-slack-p
 ## `crewlet confluence import`
 
 ```
-crewlet confluence import <company.yaml> <directory> [-config PATH] [-dry-run]
+crewlet confluence import <company.yaml> <directory> [-space KEY] [-prune]
+    [-config PATH] [-dry-run]
 ```
 
 Publishes a tree of authored markdown into Confluence. **One walk, two destinations, decided by the file**: a file whose frontmatter declares a `trigger:` is a [tool skill](../concepts/tool-skills.md) and goes to `integrations.confluence.skills_space` with the leading code block the engine parses back out; everything else is a knowledge doc, published as prose into the space its parent directory names, titled by its first `# H1`.
@@ -703,14 +705,20 @@ The routing is the FILE'S, not the directory's, because a skill is identified by
 
 **Every target space is checked before a single page is written.** A typo in a directory name would otherwise be discovered half way through, leaving an operator to work out which pages landed. The importer never *creates* a space: that names a container the whole company then works in, and it is not this command's guess to make.
 
-**A page that already exists is updated in place**, matched by title within its space. Confluence has no external-id field, so a page somebody renamed in the UI is orphaned and a re-import creates a second one. That is the backend's limitation, reported rather than worked around — the alternative is a hidden marker page or a label convention, which is this tool inventing state the instance does not have.
+**A page that already exists is updated in place**, matched by title within its space. Confluence has no external-id field, so a page somebody renamed in the UI is orphaned and a re-import creates a second one. That is the backend's limitation, reported rather than worked around: a marker page or a label pressed into service as an *identity* would be this tool inventing a second answer to a question Confluence already answers, and the two would disagree the first time somebody moved a page.
+
+**Provenance is a different question, and it is recorded.** Every skill page this command writes gets the global label `crewlet-skill`. That says nothing about *which* page a file belongs to — it says only that the importer wrote it, which is a fact no field on the page carries and which only the writer can know. `-prune` is the one caller that needs it: an orphaned page is deleted only if this tool published it, because a lead who authored a skill by hand in the wiki has no local `.md` and would otherwise lose their work on the next import. A label that cannot be written is a note, not a page failure — the page is published and correct, and what is lost is the ability to prune it later.
 
 **Page failures are isolated**: a restricted page or one 403 does not cost the other forty. The run reports what failed and exits non-zero.
 
 | Flag | Description |
 |------|-------------|
+| `-space KEY` | Publish tool skills into this space instead of `integrations.confluence.skills_space`. Empty reads `$CREWLET_TOOL_SKILLS_SPACE`, then the config field. Skill files only — a knowledge doc takes its space from its parent directory. |
+| `-prune` | After publishing, delete skill pages in the skills space that carry the `crewlet-skill` label and whose key no local file publishes any more. **Three conditions, all required**: in the skills space, labelled, and parsing as a skill whose key this run's tree does not publish — the label protects a hand-authored page, the parse protects an ordinary page filed in the same space, and the key comparison is what makes a renamed skill a delete-and-create rather than a silent duplicate. The orphan set is derived by subtraction, so **a prune that cannot enumerate the space deletes nothing** and fails the run: a partial read would make the orphan set larger and delete live pages. The set is taken from the *plan*, not from the writes that landed, so a page whose update happened to 403 is never deleted as an orphan of itself. A page that declares a trigger and does not parse has an unknown key and is reported rather than deleted. |
 | `-config` | Tier A config naming this node's store and keyring, for resolving the `${VAR}`s in the company's `confluence:` block. |
-| `-dry-run` | Print the plan and write nothing. |
+| `-dry-run` | Print the plan and write or delete nothing. |
+
+A company that has turned tool skills off (`integrations.confluence.skills_space: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every planner searches.
 
 See [Confluence Integration](../integrations/confluence.md#publishing-local-pages-from-your-machine-cli).
 

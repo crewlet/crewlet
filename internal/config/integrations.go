@@ -190,7 +190,13 @@ type Confluence struct {
 	// from knowledge search alike: those pages are machinery, and a
 	// planner told to read one would follow an instruction written for a
 	// different phase of a different turn.
-	SkillsSpace string `yaml:"skills_space,omitempty" json:"skills_space,omitempty" desc:"Space holding tool-skill pages; excluded from routing and knowledge search. Default TS."`
+	//
+	// A POINTER because all three states are real settings and the zero
+	// value cannot say which: absent takes [DefaultSkillsSpace], a named
+	// key takes that key, and an explicit `skills_space: ""` turns the
+	// whole tool-skill mechanism OFF — no sync, no routing exclusion, no
+	// search exclusion. See [Confluence.SkillsSpaceKey].
+	SkillsSpace *string `yaml:"skills_space,omitempty" json:"skills_space,omitempty" desc:"Space holding tool-skill pages; excluded from routing and knowledge search. Default TS; empty string disables tool skills entirely."`
 }
 
 // BaseURL is the REST base.
@@ -213,19 +219,39 @@ func (c *Confluence) ShareableBaseURL() string {
 
 // DefaultSkillsSpace is where tool-skill pages live when the config names no
 // space.
+//
+// "TS" is the convention the publishing CLI writes into and the docs name, so
+// a company that follows the guide works with nothing configured.
 const DefaultSkillsSpace = "TS"
 
-// SkillsSpaceKey is the tool-skills space, normalised.
+// SkillsSpaceKey is the tool-skills space, normalised — or "" for a company
+// that has turned tool skills off.
 //
 // UPPER, because every space comparison in the integration is
 // case-insensitive and a config written in lower case must not silently mean
 // a different space from the same word written in upper.
+//
+// # The empty string is an ANSWER, not an absence
+//
+// A company whose ordinary work space happens to be `TS` would otherwise have
+// it silently dropped from every knowledge search and every routing decision,
+// with no way to say so — the default reserving a real space name is the cost
+// of having a default at all. `skills_space: ""` is how an operator says "no
+// space is reserved": every consumer already reads "" as "no exclusion and no
+// sync", so the switch is this accessor and nothing else.
 func (c *Confluence) SkillsSpaceKey() string {
+	if c == nil || c.SkillsSpace == nil {
+		return DefaultSkillsSpaceFor(c)
+	}
+	return strings.ToUpper(strings.TrimSpace(*c.SkillsSpace))
+}
+
+// DefaultSkillsSpaceFor is the key an unset field takes: none at all when
+// there is no Confluence config to hold skills, the reserved default when
+// there is.
+func DefaultSkillsSpaceFor(c *Confluence) string {
 	if c == nil {
 		return ""
-	}
-	if trimmed := strings.TrimSpace(c.SkillsSpace); trimmed != "" {
-		return strings.ToUpper(trimmed)
 	}
 	return DefaultSkillsSpace
 }
@@ -800,12 +826,12 @@ type Plane struct {
 	// tool-skill page would follow an instruction meant for a different
 	// phase of a different turn).
 	//
-	// Absent takes [DefaultSkillsProject]. There is no "off", and none is
-	// needed: a company that publishes no tool skills has no project by
-	// that identifier, so both exclusions match nothing and cost nothing.
-	// The one case that needs this field is a company whose skills live
-	// somewhere other than the reserved default.
-	SkillsProject string `yaml:"skills_project,omitempty" json:"skills_project,omitempty" desc:"Project holding tool-skill pages; excluded from routing and knowledge search. Default TS."`
+	// A POINTER because all three states are real settings and the zero
+	// value cannot say which: absent takes [DefaultSkillsProject], a named
+	// identifier takes that project, and an explicit `skills_project: ""`
+	// turns the whole tool-skill mechanism OFF — no sync, no routing
+	// exclusion, no search exclusion. See [Plane.SkillsProjectKey].
+	SkillsProject *string `yaml:"skills_project,omitempty" json:"skills_project,omitempty" desc:"Project holding tool-skill pages; excluded from routing and knowledge search. Default TS; empty string disables tool skills entirely."`
 
 	Provisioning *PlaneProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs for the provisioning CLI; ignored by the engine."`
 }
@@ -818,22 +844,36 @@ func (p *Plane) APIBase() string { return strings.TrimRight(p.URL, "/") + "/api/
 //
 // "TS" is the convention the publishing CLI writes into and the docs name, so
 // a company that follows the guide works with nothing configured. The cost is
-// that a company using TS as an ordinary work project has it silently
+// that a company using TS as an ordinary work project would have it silently
 // excluded from knowledge search — which is why the field exists: set it to
 // something else, or to "" to turn the exclusions off entirely.
 const DefaultSkillsProject = "TS"
 
-// SkillsProjectKey is the tool-skills project, normalised.
+// SkillsProjectKey is the tool-skills project, normalised — or "" for a
+// company that has turned tool skills off.
 //
 // UPPER, because every identifier comparison in the integration is
 // case-insensitive and a config written in lower case must not silently mean
 // a different project from the same word written in upper.
+//
+// # The empty string is an ANSWER, not an absence
+//
+// See [Confluence.SkillsSpaceKey]; the reasoning and the mechanism are the
+// same on both knowledge backends, and they have to agree or a company that
+// migrated between them would lose its off switch in the move.
 func (p *Plane) SkillsProjectKey() string {
+	if p == nil || p.SkillsProject == nil {
+		return DefaultSkillsProjectFor(p)
+	}
+	return strings.ToUpper(strings.TrimSpace(*p.SkillsProject))
+}
+
+// DefaultSkillsProjectFor is the key an unset field takes: none at all when
+// there is no Plane config to hold skills, the reserved default when there
+// is.
+func DefaultSkillsProjectFor(p *Plane) string {
 	if p == nil {
 		return ""
-	}
-	if trimmed := strings.TrimSpace(p.SkillsProject); trimmed != "" {
-		return strings.ToUpper(trimmed)
 	}
 	return DefaultSkillsProject
 }

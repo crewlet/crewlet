@@ -248,8 +248,24 @@ type Page struct {
 	// Ancestors are the parent chain, outermost first. It is what the
 	// auto-draft exclusion reads.
 	Ancestors []string
-	Version   int
+	// Labels are the page's global labels, which is where this tool
+	// records that it wrote a page. See [ImportedSkillLabel].
+	Labels  []string
+	Version int
 }
+
+// ImportedSkillLabel marks a skill page `crewlet confluence import` wrote.
+//
+// # Provenance is not identity
+//
+// A page here is identified by its TITLE within its space, because that is
+// Confluence's own model and this tool does not get to invent a second one —
+// see the package doc. This label answers a different question that no field
+// on the page can: did the IMPORTER write this page, or did a person? Only
+// the writer knows, only prune has to ask, and the answer decides whether an
+// orphan is deleted or left alone. A lead who authors a skill by hand in the
+// wiki gets no label and is never touched by a prune.
+const ImportedSkillLabel = "crewlet-skill"
 
 // pageWire is the shape a page arrives in.
 type pageWire struct {
@@ -270,6 +286,13 @@ type pageWire struct {
 	Version struct {
 		Number int `json:"number"`
 	} `json:"version"`
+	Metadata struct {
+		Labels struct {
+			Results []struct {
+				Name string `json:"name"`
+			} `json:"results"`
+		} `json:"labels"`
+	} `json:"metadata"`
 	Links struct {
 		WebUI string `json:"webui"`
 	} `json:"_links"`
@@ -283,7 +306,22 @@ func (w pageWire) page() Page {
 	for _, ancestor := range w.Ancestors {
 		page.Ancestors = append(page.Ancestors, ancestor.Title)
 	}
+	for _, label := range w.Metadata.Labels.Results {
+		page.Labels = append(page.Labels, label.Name)
+	}
 	return page
+}
+
+// HasLabel reports whether the page carries a label, case-insensitively —
+// Confluence lower-cases every label it stores, and a caller comparing
+// against a constant written in mixed case would silently match nothing.
+func (p Page) HasLabel(name string) bool {
+	for _, have := range p.Labels {
+		if strings.EqualFold(have, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // expandFields is what every read asks the server to inline.
@@ -292,7 +330,7 @@ func (w pageWire) page() Page {
 // things and a search that forgot `ancestors` would silently stop excluding
 // auto-drafts — a filter that quietly matches nothing looks exactly like a
 // knowledge base with no drafts in it.
-const expandFields = "body.storage,space,ancestors,version"
+const expandFields = "body.storage,space,ancestors,version,metadata.labels"
 
 // Search runs one CQL query.
 //
@@ -449,6 +487,27 @@ func (c *Client) MovePage(ctx context.Context, id, title string, version int, pa
 		body["ancestors"] = []any{}
 	}
 	return c.do(ctx, http.MethodPut, "/content/"+url.PathEscape(id), nil, body, nil)
+}
+
+// AddLabel stamps one global label onto a page.
+//
+// IDEMPOTENT at the server: re-adding a label a page already carries is a
+// success, which is what lets every import re-stamp without reading first.
+func (c *Client) AddLabel(ctx context.Context, id, name string) error {
+	body := []map[string]any{{"prefix": "global", "name": name}}
+	return c.do(ctx, http.MethodPost,
+		"/content/"+url.PathEscape(id)+"/label", nil, body, nil)
+}
+
+// DeletePage removes a page.
+//
+// Confluence moves a deleted page to the space's trash rather than
+// destroying it, which is what makes prune recoverable: an operator who
+// pruned something they wanted restores it from the trash in the UI. Nothing
+// here relies on that — the run reports every page it deleted by name — but
+// it is why this is a delete and not an archive-and-hope.
+func (c *Client) DeletePage(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/content/"+url.PathEscape(id), nil, nil, nil)
 }
 
 // SpaceExists reports whether the instance has a space, and whether this
