@@ -35,6 +35,17 @@ clustered or external stream by name, because this is the one
 misconfiguration that would otherwise silently give two processes the
 same agents.
 
+**Credentials in the environment, not in each node's secret store.** The
+[secret store](../concepts/secret-store.md#how-a-node-gets-its-secrets-in-the-first-place)
+is the node's own database, so `crewlet secrets set` reaches exactly the node
+whose Tier A file you pointed it at. Put credentials where your platform
+already puts secrets — a Kubernetes `Secret` projected as env, systemd's
+`EnvironmentFile=`, Compose's `env_file:` — and every node resolves the same
+values, including one that scales up hours later. The same goes for
+provisioner-minted credentials: use `-env-file` or `-print` rather than
+`-secret-store`, which otherwise leaves one node able to authenticate and the
+rest not, with nothing failing until a seat lands on the wrong one.
+
 **One node or three, never two.** Two embedded-KV members have no quorum
 without each other, so the fleet stops serving the moment either
 restarts — and a rolling upgrade restarts them one at a time, which makes

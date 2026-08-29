@@ -179,13 +179,66 @@ Two mechanisms share the Tier A keyring and are easy to confuse:
 | **Rotation** | New revision (a full immutable copy) | `UPDATE` of one row |
 | **Written by** | `PUT /config`, `crewlet config import` | `crewlet secrets set`, provisioners |
 
-They compose: encrypt the config document *and* keep credentials in the store. That is the recommended shape for a provisioned deployment.
+They compose: encrypt the config document *and* keep credentials in the store. That is the recommended shape for a provisioned deployment **on one node**. On a fleet, see the next section — the store is per node, so credentials belong in the environment and the store goes unused.
 
 **Why credentials belong in the store rather than inlined as literals in the config**, even though the config is itself encrypted:
 
 - **Rotation would archive the old secret forever.** Every revision is an immutable full copy and revisions are never scrubbed, so each rotation leaves the superseded credential readable in history.
 - **One credential, several pointers.** `role.integrations.slack.bot_token` and `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN` reference the *same* variable — one credential with two readers. Inlining literals duplicates it across pointers that must then update atomically or the identity split-brains. Keying by variable name keeps it one row.
 - **Blast radius.** Losing the keyring with inlined literals loses your credentials, not just your config.
+
+---
+
+## How a node gets its secrets in the first place
+
+The store is an **overlay**, not the source of truth, and knowing which is
+which answers most operational questions about it.
+
+Resolution order on any node, for any `${VAR}`:
+
+1. **Tier A** (`crewlet.yaml`) resolves from the **process environment alone**.
+   It has to: this file holds the keyring that opens the store, so a resolver
+   reaching into the store would have Tier A reading from the thing it
+   describes.
+2. The engine opens its database and takes a **snapshot** of `secret_values`.
+3. **Tier B** (the company document) resolves **store first, environment
+   second**.
+
+So a node with an empty store — or no keyring at all — resolves everything
+from the environment and runs normally. That is not a degraded mode: *"no
+keyring is a supported deployment; secrets come from the environment and the
+store is simply not in use"* is the engine's own comment at the point it
+decides. **A brand-new node always starts from the environment.** Nothing has
+to be copied to it, and there is no first-boot step that reads a peer.
+
+### Which one to use
+
+| | Where credentials live | Rotation | New node starts |
+|---|---|---|---|
+| **One node** | Store (env as the fallback) | `crewlet secrets set`, then re-activate | From the env, then the store overlays it |
+| **A fleet** | **The environment** | Update the env source, restart nodes | From the env, like every other node |
+
+**On a fleet, put credentials where your platform already puts secrets** — a
+Kubernetes `Secret` projected as env, systemd's `EnvironmentFile=`, Compose's
+`env_file:`, `source .env` in a wrapper script. Every node then resolves the
+same values, a node that scales up at 3am gets them the same way as the ones
+that were already running, and the store stays empty with nothing to
+propagate.
+
+The store is worth using on a fleet only for a value you are willing to set on
+every node, once per node — which is the same work as updating the environment
+and one more place to forget.
+
+> **Provisioner-minted credentials are the case that catches people.**
+> `crewlet gitlab provision`, `crewlet slack provision` and the rest MINT
+> credentials, and `-secret-store` writes them to **the one node whose Tier A
+> file you passed**. On a fleet use `-env-file PATH` or `-print` instead and
+> feed the result into your secret manager; `-secret-store` there produces a
+> company where one node can authenticate and the others cannot, with nothing
+> failing until a seat lands on the wrong node.
+
+Why the store is per node at all, and what moving it would cost, is
+[d-203](https://github.com/crewlet/crewlet/blob/main/decisions/203-the-secret-store-stays-node-local.md).
 
 ---
 
