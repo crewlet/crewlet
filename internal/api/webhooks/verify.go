@@ -12,10 +12,17 @@ import (
 	"github.com/crewlet/crewlet/internal/whsec"
 )
 
-// The provider signature schemes. Three of them, over six routes: GitHub's
-// prefixed hex, Atlassian's identically-shaped X-Hub-Signature (Jira and
-// Confluence are one scheme, so they are one function), Slack's v0
+// The provider signature schemes. THREE schemes in four functions, over the
+// five routes that verify a shared secret: GitHub's prefixed hex, Atlassian's
+// identically-shaped X-Hub-Signature (the same scheme, so verifyAtlassian
+// delegates; Jira and Confluence then share that one function), Slack's v0
 // basestring, and GitLab's Standard-Webhooks base64.
+//
+// Counted as schemes rather than as functions on purpose — what a reader is
+// usually checking here is whether a provider's shape is handled, not how
+// many func literals it took. The sixth route, the Forge relay, is not one of
+// them: it verifies an invocation JWT against Atlassian's published keys
+// rather than an HMAC, and lives in forge.go.
 //
 // Every one of them decodes the presented signature and compares BYTES with
 // hmac.Equal. Comparing the hex or base64 TEXT instead would make the check

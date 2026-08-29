@@ -282,7 +282,7 @@ func confluencePrompt() notify.Prompt { return confluence.Prompt{} }
 // an empty catalogue and gain it moments later, which is strictly better
 // than a boot that blocks on an instance that is down.
 func (e *Engine) startConfluenceSkillSync(ctx context.Context, c *Company) {
-	space := e.SkillsProject(c)
+	space := e.SkillsContainer(c)
 	e.notify.mu.Lock()
 	client := e.notify.confluence.pages
 	e.notify.mu.Unlock()

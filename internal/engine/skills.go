@@ -63,16 +63,18 @@ func (e *Engine) auditSkills(c *Company) {
 	e.skills.Audit(snapshot.Names(), snapshot.MCPServers())
 }
 
-// SkillsProject is the knowledge container the sync worker walks, or "".
+// SkillsContainer is the knowledge container the sync worker walks, or "".
 //
 // Empty means no sync: a company with no knowledge backend, or one whose
 // backend is configured without a skills space. Both are ordinary, and both
 // mean the catalogue stays empty rather than the engine inventing one.
 //
-// Named for the CONTAINER rather than for Confluence, because the walk it
-// feeds is backend-neutral: [Engine.SyncSkills] takes rendered pages, so the
-// backend that read them is the caller's business and not this signature's.
-func (e *Engine) SkillsProject(c *Company) string {
+// CONTAINER rather than the backend's own word, because the walk it feeds is
+// backend-neutral: [Engine.SyncSkills] takes rendered pages, so the backend
+// that read them is the caller's business and not this signature's. It was
+// `SkillsProject` while Plane was served — a name that outlived its vendor
+// and then described a Confluence SPACE, which is the drift this rename ends.
+func (e *Engine) SkillsContainer(c *Company) string {
 	if cf := c.Config.Integrations.Confluence; cf != nil {
 		return cf.SkillsSpaceKey()
 	}
@@ -113,13 +115,13 @@ func (e *Engine) SyncSkills(pages []skills.Page) {
 // with agents that do not know its conventions, which looks from the outside
 // like models that stopped following instructions.
 func (e *Engine) syncSkillsFrom(ctx context.Context, c *Company, walk func(context.Context, string) ([]skills.Page, error)) {
-	project := e.SkillsProject(c)
-	if project == "" || walk == nil {
+	container := e.SkillsContainer(c)
+	if container == "" || walk == nil {
 		return
 	}
-	pages, err := walk(ctx, project)
+	pages, err := walk(ctx, container)
 	if err != nil {
-		log.Error("tool_skill_sync_failed", "project", project, "error", err.Error(),
+		log.Error("tool_skill_sync_failed", "container", container, "error", err.Error(),
 			"detail", "the registry keeps whatever it already held; agents run "+
 				"without this company's tool guidance until the next sync")
 		return
