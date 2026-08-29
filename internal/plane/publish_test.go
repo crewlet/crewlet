@@ -736,3 +736,52 @@ func TestTheSkillsProjectTheCallerNamesIsWhereSkillsGo(t *testing.T) {
 		t.Errorf("plan = %+v", plan.Items)
 	}
 }
+
+// PLANE PAGES HAVE NO PARENT CHAIN AND NO LABELS. A docs tree is meant to
+// publish to either backend, so a file carrying those keys is not a mistake
+// — it is a file written for Confluence, and dropping it silently produces a
+// workspace that looks like the tree and is not.
+func TestFrontmatterPlaneCannotHonourIsReported(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{
+		"ENG/nested.md": "---\nparent: Handbook\n---\n\n# Nested\n\nBody.\n",
+		"ENG/tagged.md": "---\nlabels: [runbook]\n---\n\n# Tagged\n\nBody.\n",
+	})
+	plan, err := plane.Walk(root, enabledPlane(), config.DefaultSkillsProject)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	// A NOTE, NOT A REFUSAL: the content is right and both pages belong in
+	// the workspace.
+	if len(plan.Items) != 2 {
+		t.Fatalf("plan = %+v", plan.Items)
+	}
+	if !anyNote(plan.Notes, "no parent chain") || !anyNote(plan.Notes, "nested.md") {
+		t.Errorf("the parent was not reported: %v", plan.Notes)
+	}
+	if !anyNote(plan.Notes, "no labels") || !anyNote(plan.Notes, "tagged.md") {
+		t.Errorf("the labels were not reported: %v", plan.Notes)
+	}
+}
+
+// AN ORDINARY TREE SAYS NOTHING. A note on every run is a note nobody reads.
+func TestATreeWithoutThoseKeysIsQuiet(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{"ENG/plain.md": "# Plain\n\nBody.\n"})
+	plan, err := plane.Walk(root, enabledPlane(), config.DefaultSkillsProject)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if anyNote(plan.Notes, "no parent chain") || anyNote(plan.Notes, "no labels") {
+		t.Errorf("notes = %v", plan.Notes)
+	}
+}
+
+func anyNote(notes []string, want string) bool {
+	for _, note := range notes {
+		if strings.Contains(note, want) {
+			return true
+		}
+	}
+	return false
+}

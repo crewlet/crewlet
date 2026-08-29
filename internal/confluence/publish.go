@@ -38,10 +38,16 @@ import (
 
 // Item is one file, routed.
 type Item struct {
-	Path     string
-	Space    string
-	Title    string
-	Storage  string
+	Path    string
+	Space   string
+	Title   string
+	Storage string
+	// Parent is the title of the page this one nests under, within the
+	// same space. Empty publishes at the space root.
+	Parent string
+	// Labels are the author's own, without the provenance label — that
+	// one is this tool's and is added to every skill page regardless.
+	Labels   []string
 	Skill    bool
 	SkillKey string
 }
@@ -111,11 +117,82 @@ func Walk(root, skillsSpace string) (*Plan, error) {
 		seen[key] = item.Path
 		plan.Items = append(plan.Items, item)
 	}
+	ordered, cycle := parentsFirst(plan.Items)
+	if cycle != nil {
+		return nil, cycle
+	}
+	plan.Items = ordered
 	if len(plan.Items) == 0 {
 		plan.Notes = append(plan.Notes, fmt.Sprintf(
 			"no markdown files under %s, so there is nothing to publish", root))
 	}
 	return plan, nil
+}
+
+// parentsFirst orders a plan so a page named as somebody's `parent:` is
+// published before the page that names it.
+//
+// # Why an order rather than a second pass
+//
+// A parent is resolved by TITLE, and the title of a page created moments ago
+// in this same run is only findable if it exists — so a run that published
+// children first would nest half a tree at the space root and the other half
+// correctly, depending on directory walk order. Ordering is deterministic;
+// a second pass that re-parented afterwards would double every write.
+//
+// A CYCLE STOPS THE WALK naming the files. It is an authoring mistake with a
+// one-line fix, and the alternative — silently publishing the cycle flat —
+// produces a space that looks right until somebody looks for the tree.
+func parentsFirst(items []Item) ([]Item, error) {
+	byTitle := make(map[string]int, len(items))
+	for i, item := range items {
+		byTitle[itemKey(item.Space, item.Title)] = i
+	}
+	const (
+		unvisited = 0
+		inFlight  = 1
+		done      = 2
+	)
+	state := make([]int, len(items))
+	out := make([]Item, 0, len(items))
+
+	var visit func(i int, chain []string) error
+	visit = func(i int, chain []string) error {
+		switch state[i] {
+		case done:
+			return nil
+		case inFlight:
+			return fmt.Errorf(
+				"confluence: these pages nest inside each other: %s — a "+
+					"`parent:` cycle has no root to publish from",
+				strings.Join(append(chain, items[i].Path), " -> "))
+		}
+		state[i] = inFlight
+		if parent := strings.TrimSpace(items[i].Parent); parent != "" {
+			if j, ok := byTitle[itemKey(items[i].Space, parent)]; ok {
+				if err := visit(j, append(chain, items[i].Path)); err != nil {
+					return err
+				}
+			}
+		}
+		state[i] = done
+		out = append(out, items[i])
+		return nil
+	}
+	for i := range items {
+		if err := visit(i, nil); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// itemKey is how a page is addressed within a space: upper space, lower
+// title, because Confluence matches a space key case-insensitively and a
+// `parent:` an author typed is not going to match their H1's capitalisation.
+func itemKey(space, title string) string {
+	return strings.ToUpper(strings.TrimSpace(space)) + "\x00" +
+		strings.ToLower(strings.TrimSpace(title))
 }
 
 // route decides what one file is and renders it.
@@ -139,6 +216,7 @@ func route(path, skillsSpace string) (Item, error) {
 		return Item{
 			Path: path, Space: strings.ToUpper(doc.Container),
 			Title: doc.Title, Storage: storage,
+			Parent: doc.Parent, Labels: doc.Labels,
 		}, nil
 	}
 
@@ -233,6 +311,11 @@ func Publish(ctx context.Context, opts PublishOptions) (*PublishResult, error) {
 	// on this run has not stopped having a source file, and deleting it
 	// would destroy the live copy of a skill that this run could not even
 	// rewrite.
+	// written maps a page's key to the id it got, so a `parent:` naming a
+	// page published earlier in this same run resolves without a round
+	// trip — and resolves at all, which it could not before the page
+	// existed.
+	written := make(map[string]string, len(opts.Plan.Items))
 	published := make(map[string]bool, len(opts.Plan.Items))
 	for _, item := range opts.Plan.Items {
 		if item.Skill {
@@ -247,7 +330,12 @@ func Publish(ctx context.Context, opts PublishOptions) (*PublishResult, error) {
 		}
 		var id string
 		if !found {
-			created, err := opts.Client.CreatePage(ctx, item.Space, item.Title, item.Storage, "")
+			parent, note := resolveParent(ctx, opts, written, item)
+			if note != "" {
+				res.Notes = append(res.Notes, note)
+			}
+			created, err := opts.Client.CreatePage(ctx, item.Space, item.Title,
+				item.Storage, parent)
 			if err != nil {
 				res.Failed = append(res.Failed, item.Title+": "+err.Error())
 				continue
@@ -262,7 +350,13 @@ func Publish(ctx context.Context, opts PublishOptions) (*PublishResult, error) {
 			}
 			id = existing.ID
 			res.Updated = append(res.Updated, item.Space+"/"+item.Title)
+			// AN EXISTING PAGE IS NEVER RE-PARENTED. Where a page sits in
+			// the tree is a thing people move deliberately, and a run that
+			// dragged it back every time would be fighting them — with no
+			// way to say so, because the file has no idea it lost.
 		}
+		written[itemKey(item.Space, item.Title)] = id
+		res.Notes = append(res.Notes, labelPage(ctx, opts, item, id)...)
 		if !item.Skill {
 			continue
 		}
@@ -421,4 +515,67 @@ func notesOf(plan *Plan) []string {
 		return nil
 	}
 	return plan.Notes
+}
+
+// resolveParent turns an item's `parent:` title into a page id.
+//
+// # A missing parent publishes at the space root, with a note
+//
+// The alternative is failing the page, and that is the wrong trade: the
+// content is right, the position is wrong, and a doc nobody can read is
+// worse than a doc in the wrong place. The note names both pages so the fix
+// is one line — and the run still exits zero, because nothing failed.
+func resolveParent(ctx context.Context, opts PublishOptions,
+	written map[string]string, item Item,
+) (string, string) {
+	title := strings.TrimSpace(item.Parent)
+	if title == "" {
+		return "", ""
+	}
+	// THE RUN-LOCAL INDEX FIRST, which saves a round trip per nested page
+	// and — on a backend whose title search is eventually consistent —
+	// removes the window where a page created seconds ago is not yet
+	// findable by title. The lookup below is the fallback, for a parent
+	// that already existed.
+	if id, ok := written[itemKey(item.Space, title)]; ok && id != "" {
+		return id, ""
+	}
+	parent, found, err := opts.Client.PageByTitle(ctx, item.Space, title)
+	if err != nil {
+		return "", fmt.Sprintf(
+			"%s: the parent %q could not be looked up (%v), so %q was published "+
+				"at the space root — move it in the UI, or re-run this import",
+			item.Path, title, err, item.Title)
+	}
+	if !found {
+		return "", fmt.Sprintf(
+			"%s: no page titled %q exists in %s, so %q was published at the "+
+				"space root — publish the parent (a file whose `# H1` or "+
+				"`title:` is exactly that) or correct the `parent:`",
+			item.Path, title, item.Space, item.Title)
+	}
+	return parent.ID, ""
+}
+
+// labelPage attaches the author's own labels, and reports what would not
+// stick.
+//
+// EVERY RUN, not only on create: the server call is idempotent, and a label
+// an author added to a file that already publishes has to reach the page
+// somehow. Labels are normalised to lower case at parse time, which is what
+// Confluence stores — comparing against anything else would re-add the same
+// label for ever.
+func labelPage(ctx context.Context, opts PublishOptions, item Item, id string) []string {
+	var notes []string
+	for _, label := range item.Labels {
+		if err := opts.Client.AddLabel(ctx, id, label); err != nil {
+			// NOT a page failure: the page is published and correct, and
+			// a label is how a person finds it in the wiki rather than
+			// how an agent reads it.
+			notes = append(notes, fmt.Sprintf(
+				"%s/%s was published but the label %q would not attach: %v",
+				item.Space, item.Title, label, err))
+		}
+	}
+	return notes
 }

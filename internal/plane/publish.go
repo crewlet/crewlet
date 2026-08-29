@@ -109,6 +109,7 @@ func Walk(root string, cfg *config.Plane, skillsProject string) (*Plan, error) {
 		seen[key] = item.Path
 		plan.Items = append(plan.Items, item)
 	}
+	plan.Notes = append(plan.Notes, unsupportedFrontmatter(paths)...)
 	if len(plan.Items) == 0 {
 		plan.Notes = append(plan.Notes, fmt.Sprintf(
 			"no markdown files under %s, so there is nothing to publish", root))
@@ -501,4 +502,49 @@ func SkillPages(ctx context.Context, client *Client, identifier string) ([]skill
 		})
 	}
 	return out, nil
+}
+
+// unsupportedFrontmatter names the keys this backend cannot honour.
+//
+// SAID OUT LOUD, once per run, rather than dropped. Both keys are meaningful
+// on the other knowledge backend and a docs tree is meant to publish to
+// either — so a file carrying them is not a mistake, it is a file written
+// for Confluence. Silently ignoring it produces a workspace that looks like
+// the tree and is not, which somebody discovers months later looking for a
+// page they are sure they published under another.
+//
+// A NOTE, NOT A REFUSAL: the content is right and the page belongs in the
+// workspace. Only its position and its labels are lost, and neither is worth
+// refusing an import over.
+func unsupportedFrontmatter(paths []string) []string {
+	var nested, labelled []string
+	for _, path := range paths {
+		doc, err := knowledge.ParseDoc(path)
+		if err != nil {
+			// The walk itself already reported it, or will.
+			continue
+		}
+		if strings.TrimSpace(doc.Parent) != "" {
+			nested = append(nested, path)
+		}
+		if len(doc.Labels) > 0 {
+			labelled = append(labelled, path)
+		}
+	}
+	var notes []string
+	if len(nested) > 0 {
+		sort.Strings(nested)
+		notes = append(notes, fmt.Sprintf(
+			"%d file(s) declare a `parent:` and Plane pages have no parent "+
+				"chain, so they were published at the project root: %s",
+			len(nested), strings.Join(nested, ", ")))
+	}
+	if len(labelled) > 0 {
+		sort.Strings(labelled)
+		notes = append(notes, fmt.Sprintf(
+			"%d file(s) declare `labels:` and Plane pages have no labels, so "+
+				"they were published without them: %s",
+			len(labelled), strings.Join(labelled, ", ")))
+	}
+	return notes
 }

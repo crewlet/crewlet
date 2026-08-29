@@ -45,6 +45,7 @@ type wikiPage struct {
 	Space   string
 	Title   string
 	Body    string
+	Parent  string
 	Labels  []string
 	Version int
 }
@@ -136,12 +137,18 @@ func (w *wiki) serve(rw http.ResponseWriter, req *http.Request) {
 					Value string `json:"value"`
 				} `json:"storage"`
 			} `json:"body"`
+			Ancestors []struct {
+				ID string `json:"id"`
+			} `json:"ancestors"`
 		}
 		_ = json.Unmarshal(body, &in)
 		w.next++
 		page := &wikiPage{
 			ID: fmt.Sprintf("p%d", w.next), Space: in.Space.Key,
 			Title: in.Title, Body: in.Body.Storage.Value, Version: 1,
+		}
+		if len(in.Ancestors) > 0 {
+			page.Parent = in.Ancestors[len(in.Ancestors)-1].ID
 		}
 		w.pages[page.ID] = page
 		fmt.Fprint(rw, page.wire())
@@ -155,6 +162,9 @@ func (w *wiki) serve(rw http.ResponseWriter, req *http.Request) {
 					Value string `json:"value"`
 				} `json:"storage"`
 			} `json:"body"`
+			Ancestors []struct {
+				ID string `json:"id"`
+			} `json:"ancestors"`
 		}
 		_ = json.Unmarshal(body, &in)
 		page := w.pages[id]
@@ -162,6 +172,12 @@ func (w *wiki) serve(rw http.ResponseWriter, req *http.Request) {
 			rw.WriteHeader(http.StatusNotFound)
 			fmt.Fprint(rw, `{"message":"gone"}`)
 			return
+		}
+		// A PUT CARRYING `ancestors` MOVES THE PAGE — that is how
+		// Confluence re-parents, and a fake that ignored the key would
+		// make a run that re-parented look like one that did not.
+		if len(in.Ancestors) > 0 {
+			page.Parent = in.Ancestors[len(in.Ancestors)-1].ID
 		}
 		if w.lockedTitle != "" && page.Title == w.lockedTitle {
 			rw.WriteHeader(http.StatusForbidden)
@@ -210,11 +226,16 @@ func (p *wikiPage) wire() string {
 		labels = append(labels, fmt.Sprintf(`{"name":%q}`, name))
 	}
 	body, _ := json.Marshal(p.Body)
+	ancestors := ""
+	if p.Parent != "" {
+		ancestors = fmt.Sprintf(`{"title":%q}`, p.Parent)
+	}
 	return fmt.Sprintf(
 		`{"id":%q,"title":%q,"type":"page","space":{"key":%q},`+
 			`"body":{"storage":{"value":%s}},"version":{"number":%d},`+
-			`"metadata":{"labels":{"results":[%s]}}}`,
-		p.ID, p.Title, p.Space, body, p.Version, strings.Join(labels, ","))
+			`"ancestors":[%s],"metadata":{"labels":{"results":[%s]}}}`,
+		p.ID, p.Title, p.Space, body, p.Version, ancestors,
+		strings.Join(labels, ","))
 }
 
 // seed puts a page into the space directly, the way a person writing in the
@@ -266,6 +287,25 @@ func (w *wiki) refuseUpdate(t *testing.T, title string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.lockedTitle = title
+}
+
+// parentOf is the page's ancestor id, or "" for a page at the space root.
+func (w *wiki) parentOf(id string) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if page := w.pages[id]; page != nil {
+		return page.Parent
+	}
+	return ""
+}
+
+// reparent moves a page the way a person dragging it in the UI would.
+func (w *wiki) reparent(id, parent string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if page := w.pages[id]; page != nil {
+		page.Parent = parent
+	}
 }
 
 func (w *wiki) labelsOf(id string) []string {
@@ -579,4 +619,140 @@ func hasNote(notes []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// A `parent:` NESTS THE PAGE, which is the one thing a flat directory of
+// files cannot say about a wiki that has trees in it.
+func TestAParentNestsThePageUnderIt(t *testing.T) {
+	t.Parallel()
+	w := newWiki(t, "ENG")
+	root := tree(t, map[string]string{
+		"ENG/handbook.md": "# Handbook\n\nThe root.\n",
+		"ENG/onboarding.md": "---\nparent: Handbook\n---\n\n" +
+			"# Onboarding\n\nUnder the handbook.\n",
+	})
+	res := publish(t, w, root, "TS", false)
+	if len(res.Created) != 2 || len(res.Failed) != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	parent := w.seedIDOf(t, "ENG", "Handbook")
+	if got := w.parentOf(w.seedIDOf(t, "ENG", "Onboarding")); got != parent {
+		t.Errorf("the child's parent is %q, want %q", got, parent)
+	}
+}
+
+// THE PARENT IS OFTEN PUBLISHED BY THE SAME RUN, minutes before the child
+// exists — so the plan is ordered parents-first and the id is remembered.
+// Walk order alone would nest half a tree and flatten the other half.
+func TestAParentPublishedByTheSameRunResolves(t *testing.T) {
+	t.Parallel()
+	w := newWiki(t, "ENG")
+	// `a-child.md` sorts BEFORE `z-parent.md`, so the directory walk hands
+	// the child over first.
+	root := tree(t, map[string]string{
+		"ENG/a-child.md": "---\nparent: The Parent\n---\n\n# The Child\n\nHi.\n",
+		"ENG/z-parent.md": "---\ntitle: The Parent\n---\n\n" +
+			"# The Parent\n\nRoot.\n",
+	})
+	res := publish(t, w, root, "TS", false)
+	if len(res.Created) != 2 {
+		t.Fatalf("result = %+v", res)
+	}
+	if got := w.parentOf(w.seedIDOf(t, "ENG", "The Child")); got == "" {
+		t.Error("the child was published at the space root")
+	}
+	if hasNote(res.Notes, "space root") {
+		t.Errorf("notes = %v", res.Notes)
+	}
+}
+
+// A PARENT NOBODY PUBLISHES IS A NOTE, NOT A FAILURE: the content is right
+// and only its position is wrong, and a doc nobody can read is worse than a
+// doc in the wrong place.
+func TestAMissingParentPublishesAtTheRootAndSaysSo(t *testing.T) {
+	t.Parallel()
+	w := newWiki(t, "ENG")
+	root := tree(t, map[string]string{
+		"ENG/onboarding.md": "---\nparent: Nowhere\n---\n\n# Onboarding\n\nHi.\n",
+	})
+	res := publish(t, w, root, "TS", false)
+	if len(res.Created) != 1 || len(res.Failed) != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	if !hasNote(res.Notes, "space root") || !hasNote(res.Notes, "Nowhere") {
+		t.Errorf("notes = %v", res.Notes)
+	}
+}
+
+// AN EXISTING PAGE IS NEVER RE-PARENTED. Where a page sits is a thing people
+// move deliberately, and a run that dragged it back every time would be
+// fighting them.
+func TestAnExistingPageKeepsThePositionSomebodyGaveIt(t *testing.T) {
+	t.Parallel()
+	w := newWiki(t, "ENG")
+	root := tree(t, map[string]string{
+		"ENG/handbook.md": "# Handbook\n\nThe root.\n",
+		"ENG/onboarding.md": "---\nparent: Handbook\n---\n\n" +
+			"# Onboarding\n\nUnder the handbook.\n",
+	})
+	publish(t, w, root, "TS", false)
+	child := w.seedIDOf(t, "ENG", "Onboarding")
+	w.reparent(child, "")
+	publish(t, w, root, "TS", false)
+	if got := w.parentOf(child); got != "" {
+		t.Errorf("the run dragged the page back under %q", got)
+	}
+}
+
+// A CYCLE HAS NO ROOT TO PUBLISH FROM, and publishing it flat produces a
+// space that looks right until somebody looks for the tree.
+func TestAParentCycleStopsTheWalk(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{
+		"ENG/a.md": "---\nparent: B\n---\n\n# A\n\nOne.\n",
+		"ENG/b.md": "---\nparent: A\n---\n\n# B\n\nTwo.\n",
+	})
+	_, err := confluence.Walk(root, "TS")
+	if err == nil {
+		t.Fatal("a cycle was planned")
+	}
+	if !strings.Contains(err.Error(), "nest inside each other") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+// LABELS ARE THE AUTHOR'S OWN, and they are how a person finds the page in
+// the wiki rather than how an agent reads it.
+func TestAuthorLabelsAreAttached(t *testing.T) {
+	t.Parallel()
+	w := newWiki(t, "ENG")
+	root := tree(t, map[string]string{
+		"ENG/onboarding.md": "---\nlabels: [Runbook, onboarding, runbook]\n---\n\n" +
+			"# Onboarding\n\nHi.\n",
+	})
+	publish(t, w, root, "TS", false)
+	got := w.labelsOf(w.seedIDOf(t, "ENG", "Onboarding"))
+	// LOWER-CASED AND DE-DUPLICATED, because that is what Confluence
+	// stores and answers with — anything else re-adds the same label for
+	// ever.
+	if len(got) != 2 || got[0] != "runbook" || got[1] != "onboarding" {
+		t.Errorf("labels = %v", got)
+	}
+}
+
+// A LABEL THAT WILL NOT ATTACH IS A NOTE, NOT A PAGE FAILURE.
+func TestALabelThatWillNotAttachIsANote(t *testing.T) {
+	t.Parallel()
+	w := newWiki(t, "ENG")
+	w.refuseLabel = true
+	root := tree(t, map[string]string{
+		"ENG/onboarding.md": "---\nlabels: [runbook]\n---\n\n# Onboarding\n\nHi.\n",
+	})
+	res := publish(t, w, root, "TS", false)
+	if len(res.Created) != 1 || len(res.Failed) != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	if !hasNote(res.Notes, "would not attach") {
+		t.Errorf("notes = %v", res.Notes)
+	}
 }

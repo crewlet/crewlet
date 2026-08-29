@@ -19,10 +19,12 @@ import (
 //
 // A `.md` file. Its TITLE is the first `# H1`, its CONTAINER is the name of
 // the directory holding it, and its BODY is everything after the heading.
-// Optional YAML frontmatter can override the title and the container, and
-// overrides nothing else — a file's location in the tree is the authoring
-// convention, and a frontmatter that could redirect a doc anywhere would
-// make the tree meaningless.
+// Optional YAML frontmatter can override the title and the container, name a
+// PARENT page to nest under, and attach LABELS — and nothing else. A file's
+// location in the tree is the authoring convention, and a frontmatter that
+// could redirect a doc anywhere would make the tree meaningless; `parent:`
+// is not a redirection, it is the one thing a flat directory of files cannot
+// express about a wiki that has trees in it.
 //
 // # Why the title comes from the H1 rather than the filename
 //
@@ -54,6 +56,16 @@ type Doc struct {
 	// Markdown is the body, with the title heading removed: the backend
 	// renders the title itself, so leaving it would show it twice.
 	Markdown string
+	// Parent is the TITLE of the page this one nests under, within the
+	// same container. A title rather than an id, because an id is a thing
+	// the backend minted and an authored file cannot know one — and
+	// because the parent is very often published by the same run, minutes
+	// before this page exists.
+	Parent string
+	// Labels are the author's own page labels. Confluence has a
+	// first-class field for them; Plane has none, and its importer says
+	// so rather than dropping them silently.
+	Labels []string
 }
 
 // docFrontmatter is the only thing a knowledge doc may declare.
@@ -62,9 +74,11 @@ type Doc struct {
 // wrote, and a key this build does not know is far more likely to be a note
 // to a human than a typo that silently disables something.
 type docFrontmatter struct {
-	Title     string `yaml:"title"`
-	Container string `yaml:"space"`
-	Project   string `yaml:"project"`
+	Title     string   `yaml:"title"`
+	Container string   `yaml:"space"`
+	Project   string   `yaml:"project"`
+	Parent    string   `yaml:"parent"`
+	Labels    []string `yaml:"labels"`
 }
 
 // ParseDoc reads a knowledge doc from a file.
@@ -93,6 +107,8 @@ func ParseDoc(path string) (Doc, error) {
 		Path:      path,
 		Title:     strings.TrimSpace(fm.Title),
 		Container: firstNonEmpty(fm.Container, fm.Project, filepath.Base(filepath.Dir(path))),
+		Parent:    strings.TrimSpace(fm.Parent),
+		Labels:    cleanLabels(fm.Labels),
 	}
 	heading := headingPattern.FindStringSubmatchIndex(text)
 	if doc.Title == "" {
@@ -175,4 +191,27 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// cleanLabels normalises an author's label list.
+//
+// LOWER-CASED and de-duplicated, because Confluence stores labels lower-case
+// and answers with what it stored: a file declaring `Runbook` would otherwise
+// look like it had lost its label on every re-read, and a run that then
+// re-added it would write on every import for ever.
+func cleanLabels(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, label := range in {
+		label = strings.ToLower(strings.TrimSpace(label))
+		if label == "" || seen[label] {
+			continue
+		}
+		seen[label] = true
+		out = append(out, label)
+	}
+	return out
 }
