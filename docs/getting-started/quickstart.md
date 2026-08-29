@@ -8,7 +8,7 @@ integrations one at a time.
 Crewlet uses a [two-tier config](../concepts/configuration.md):
 
 - **Tier A** — ops-owned `crewlet.yaml` on disk (where this node's stream,
-  store and leases live, API host/port/auth, debug). Restart to change.
+  store and leases live, API host/port/auth, logging). Restart to change.
 - **Tier B** — founder-owned `company.yaml`, imported into the store
   (everything else: identity, roles, units, LLM providers, MCP servers,
   integrations, budgets). Versioned and live-editable.

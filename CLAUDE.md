@@ -195,7 +195,7 @@ scripts/              # The three vendor dev-loop bootstraps (bash)
 | Package | What it is for |
 |---|---|
 | `api` | REST + the dashboard. ONE wiring for embedded and standalone; what differs is only what the node can SEE, and that is one seam (`NodeRuntime`). Auth guards every route bar probes, webhooks (HMAC), OTLP (signed token) and the dashboard shell |
-| `api/webhooks` | The seven inbound vendor routes. A route whose secret is unset has nothing to verify with and answers 503 — it does not accept the delivery |
+| `api/webhooks` | The six inbound vendor routes, plus Slack's OAuth landing. A route whose secret is unset has nothing to verify with and answers 503 — it does not accept the delivery |
 | `whsec` | The Standard Webhooks signing-secret format, and the one place that decides what a valid one is: `whsec_` plus padded base64 over a 32-byte key, with the DECODED bytes as the HMAC key. Three places need the rule and none may disagree — written twice it drifted, and a `${VAR}` holding a 16-byte key was refused as a literal and silently accepted as a reference |
 | `api/secretsapi` | `/secrets`: the company's credentials, written through a running node because the coordination broker is inside its process and listens on no socket. Always guarded, reads included; the ONE route that returns a value needs an explicit `?reveal=true` and logs the access |
 | `api/stream` | The `/ws/stream` socket: pushes, plus a request/response query channel that is a thin adapter over the SAME function each REST route calls |

@@ -46,32 +46,47 @@ A revision touches subsystems that depend on each other, so the order is part of
 the contract:
 
 ```
-org → budgets → turn engine → providers → scalars → restart-required
+secrets → company → tools → learning → sandbox
+        → parties → integrations → EPOCH → mailboxes → scheduler
 ```
 
-Org first because everything downstream is keyed by seat. Budgets before the
-turn engine because a turn must never start under a cap that is about to
-change. Providers after the turn engine because a provider swap is the most
-failure-prone step and the cheapest to roll back at that point. Restart-required
-last, because reaching it is what makes a failure unrecoverable — see below.
+Secrets first, because the rotation gesture below turns on it. The company is
+built next and touches nothing while it builds, which is what makes stage 2 the
+cheapest place to refuse. Everything through `integrations` prepares the new
+epoch; the swap at `EPOCH` is the single instant it becomes current; and the two
+stages after it read the seat list and the schedules off the company that is now
+current, so arming them earlier would act for the outgoing one.
 
-**A seat is drained before its tools are mutated.** Not paused, drained: an
-in-flight turn holding an MCP child that is about to be replaced would have its
-tool calls fail mid-round, and a turn's tool surface must not change under it.
+**Nothing is drained, and no seat is paused.** An in-flight turn pins its epoch
+once and reads through that, so its tool surface cannot change under it — which
+is the whole benefit of publishing rather than mutating, and the reason this
+engine needs no quiescing step. What a pin cannot hold is a *capability*: a
+shared MCP child the apply restarted leaves a pinned tool dispatching to a
+closed client, which surfaces as a tool error the model can read rather than a
+name that vanished mid-round.
 
 ## Three outcomes, and `degraded` is the one that matters
 
 `ok` / `error` / `degraded`, and only `ok` counts as converged.
 
-`degraded` means the apply failed AFTER a restart-required subsystem was already
-mutated — so rollback could not restore the previous state, and this node is now
-running something that is neither revision. It is not a worse `error`; it is a
-different fact, and conflating them is what makes a fleet report convergence it
-does not have. A degraded node needs a restart, not a retry.
+`degraded` means the apply failed AFTER a subsystem that cannot be un-applied
+was already mutated, leaving the node running something that is neither
+revision. It is not a worse `error`; it is a different fact, and conflating them
+is what makes a fleet report convergence it does not have. A degraded node needs
+a restart, not a retry.
 
-This is why restart-required subsystems are applied LAST: every step before them
-can be rolled back cleanly, so the window in which `degraded` is reachable is as
-small as the ordering can make it.
+**It is not reachable in this build**, and the ordering is why. The two
+subsystems that genuinely cannot be un-applied — the per-role MCP children and
+the notification transports — are not on the apply path at all: the children
+belong to a seat's lease, and the transports are built once at boot. What the
+apply does mutate ahead of its last failure point is bounded and re-doable by
+the next successful apply: the resolver snapshot, the reflection workers, and
+any shared MCP child whose spec moved. None of that needs a restart to recover,
+which is the line between `error` and `degraded`.
+
+So `degraded` is a live constraint on where a new stage may go rather than a
+status with nothing behind it: wire either of those two subsystems into the
+apply ahead of the swap and it becomes reachable that day.
 
 ## Rollback is re-publishing, not un-applying
 

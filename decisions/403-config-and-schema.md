@@ -26,12 +26,15 @@ re-litigate settled choices:
 - **`${VAR}` resolution order is store-before-env**, and the validators call
   that resolution rather than reimplementing it, so a value that only resolves
   through the secret store validates the same way in both places.
-- **The resolution FINGERPRINT is preserved** (`fingerprint.go`): an opaque,
-  keyed, per-process digest of what a payload's `${VAR}` references currently
-  resolve to. It exists because re-activating an unchanged revision is the
-  documented credential-rotation gesture, so a payload-only comparison rebuilds
-  nothing. It renders as `fingerprint(redacted)` and is never persisted or
-  logged.
+- **The resolution fingerprint is NOT carried over.** The Python engine kept an
+  opaque, keyed, per-process digest of what a payload's `${VAR}` references
+  resolved to, because re-activating an unchanged revision is the documented
+  credential-rotation gesture and its payload-only comparison would otherwise
+  rebuild nothing. This engine has no such comparison to defeat — `Apply` is
+  straight-line, with no payload equality check and no early return — so there
+  is nothing for the digest to guard and no `fingerprint.go` in the tree. See
+  [`d-404`](404-hot-reload-epochs.md) for what makes the rotation gesture work
+  without one.
 
 ## Why the committed schema is not pinned against the Python generator's output
 
