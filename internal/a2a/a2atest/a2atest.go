@@ -1,9 +1,12 @@
 // Package a2atest is the channel-store conformance suite.
 //
-// One suite, two implementations. The in-memory twin is not a stub that gets a
-// lighter test: it answers the same contract, so a twin that models the
-// durable store wrongly fails here rather than certifying the bug in every
-// suite that uses it.
+// ONE implementation now — the channel record lives in the fleet's
+// coordination store, and [a2a.CoordStore] is the whole of the translation —
+// so what this suite covers is the seam rather than a second backend: the
+// sentinel every unknown-channel path has to return, the idle sweep composed
+// out of a list and a close, and the participants a closed channel still has
+// to be carrying when it comes back. The record's own semantics are certified
+// against BOTH coordination backends by internal/coord/coordtest.
 package a2atest
 
 import (

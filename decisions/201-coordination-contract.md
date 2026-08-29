@@ -100,6 +100,7 @@ which is why they move to a KV without redesign:
 | Credential cooldowns | max-merge on a deadline value |
 | Config activations | append-only stream; **epoch = stream sequence** |
 | Per-node apply status | one key per node, re-put every tick, TTL-fresh |
+| A2A channel record | one key per channel; create-only open, CAS read-modify-write for the close and the message count |
 
 Two need care. **Budget spend** charges agent and org together and Postgres did
 it in one transaction so a seat-refused turn never charges the org. A KV has no
@@ -113,6 +114,18 @@ refuses**, and keep the refusal naming its own scope — "the company is out" an
 "this seat is out" send an operator to different places, and a bare refusal
 sends them to neither. See `internal/coord/fleet.go`.
 
+**A2A channels** are the late addition, and the one whose per-node home broke a
+feature outright rather than skewing a count. The record authorizes an ANSWER,
+and the answer is published from whichever node owns the target's seat — never
+the node that opened the channel. On the node's own database that read found
+nothing, so a cross-node ask woke its target, spent a turn on an answer, and
+dropped it as "no such channel"; two seats that happened to land together
+worked, which is why it looked healthy on one node. Its bucket is the third
+with NO age, and for a reason neither of the other two has: an age cannot tell
+an open channel from a closed one, so a TTL would reap the record of an ask
+still waiting. Closing an idle channel and deleting a closed one stay decisions
+taken by the `maintenance` singleton duty.
+
 **Config activation** must append the epoch atomically with the revision flip,
 or a crash leaves the fleet converged on a revision nobody asked for — on JetStream the append IS the
 commit, so the flip is derived from the stream rather than written separately.
@@ -123,7 +136,10 @@ Carried verbatim from the Python engine; a rewrite that "harmonises" these is
 wrong. **Open** (unreachable ⇒ proceed): completion ledger in both directions
 (the safe answer is the pre-ledger one — run it), webhook dedupe (a duplicate is
 recoverable, a dropped delivery is lost work), rate valve, cooldown read.
-**Closed** (unknown ⇒ refuse or hold): budget spend; lease renew ambiguity
+**Closed** (unknown ⇒ refuse or hold): budget spend; the A2A channel read, which
+must RAISE rather than answer "no such channel" — collapsing the two turns a
+two-second broker blip into a company where every agent has stopped replying to
+every other one; lease renew ambiguity
 (keep the seat, quiesce admission); the onboarding pass claim; the secret store,
 loudly — an empty string there becomes an empty Bearer token discovered hours
 later.

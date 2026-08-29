@@ -3,6 +3,8 @@ package memory
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -32,6 +34,7 @@ type Fleet struct {
 	cooldowns map[string]time.Time
 	applies   map[string]coord.NodeApply
 	budgets   map[string]coord.Usage
+	channels  map[string]coord.Channel
 
 	epoch  int64
 	target coord.Activation
@@ -59,6 +62,7 @@ func NewFleet() *Fleet {
 		cooldowns: map[string]time.Time{},
 		applies:   map[string]coord.NodeApply{},
 		budgets:   map[string]coord.Usage{},
+		channels:  map[string]coord.Channel{},
 	}
 }
 
@@ -350,4 +354,107 @@ func (f *Fleet) Reset(_ context.Context, scope string) (int, error) {
 	cleared := len(f.budgets)
 	clear(f.budgets)
 	return cleared, nil
+}
+
+// ---- the agent-to-agent channels --------------------------------------- //
+
+// OpenChannel records a new channel, ignoring an id that already exists.
+//
+// Ignoring rather than overwriting: the id is minted per ask, so a collision
+// means a retried publish of ONE ask, and overwriting would reset the message
+// counter and replace the participants of a channel already carrying an
+// answer.
+func (f *Fleet) OpenChannel(_ context.Context, ch coord.Channel) error {
+	if ch.ID == "" {
+		return errors.New("coord/memory: a channel needs an id")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, exists := f.channels[ch.ID]; exists {
+		return nil
+	}
+	f.channels[ch.ID] = normalizeChannel(ch)
+	return nil
+}
+
+// Channel reads one record.
+func (f *Fleet) Channel(_ context.Context, id string) (coord.Channel, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ch, ok := f.channels[id]
+	// A VALUE. coord.Channel holds no reference types, so the copy is
+	// complete — a field that later does will break this, which is why the
+	// suite asserts it rather than trusting the shape.
+	return ch, ok, nil
+}
+
+// CloseChannel ends a channel, leaving an already-closed one untouched.
+func (f *Fleet) CloseChannel(_ context.Context, id string, at time.Time) (coord.Channel, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ch, ok := f.channels[id]
+	if !ok {
+		return coord.Channel{}, false, nil
+	}
+	if ch.Open() {
+		ch.ClosedAt = at.UTC()
+		ch.LastAt = at.UTC()
+		f.channels[id] = ch
+	}
+	return ch, true, nil
+}
+
+// CountChannelMessage records one message against a channel's own budget.
+func (f *Fleet) CountChannelMessage(_ context.Context, id string, at time.Time) (coord.Channel, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ch, ok := f.channels[id]
+	if !ok {
+		return coord.Channel{}, false, nil
+	}
+	ch.Messages++
+	ch.LastAt = at.UTC()
+	f.channels[id] = ch
+	return ch, true, nil
+}
+
+// OpenChannels returns every channel still open, by id.
+func (f *Fleet) OpenChannels(context.Context) ([]coord.Channel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []coord.Channel
+	for _, id := range slices.Sorted(maps.Keys(f.channels)) {
+		if ch := f.channels[id]; ch.Open() {
+			out = append(out, ch)
+		}
+	}
+	return out, nil
+}
+
+// PurgeChannels deletes channels closed before the cutoff.
+func (f *Fleet) PurgeChannels(_ context.Context, cutoff time.Time) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var n int64
+	for id, ch := range f.channels {
+		if !ch.Open() && ch.ClosedAt.Before(cutoff) {
+			delete(f.channels, id)
+			n++
+		}
+	}
+	return n, nil
+}
+
+// normalizeChannel puts every stamp in UTC.
+//
+// The KV backend gets this for free — JSON round-trips a time.Time through
+// RFC 3339 and back in UTC — so the twin has to do it explicitly or the two
+// backends disagree about a stamp a caller handed in with a zone.
+func normalizeChannel(ch coord.Channel) coord.Channel {
+	ch.OpenedAt = ch.OpenedAt.UTC()
+	ch.LastAt = ch.LastAt.UTC()
+	if !ch.ClosedAt.IsZero() {
+		ch.ClosedAt = ch.ClosedAt.UTC()
+	}
+	return ch
 }

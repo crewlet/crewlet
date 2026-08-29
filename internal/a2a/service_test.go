@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/a2a"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -56,7 +57,7 @@ var clock = time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
 
 func service(t *testing.T, seats dir) (*a2a.Service, a2a.Store, *recorder) {
 	t.Helper()
-	st := a2a.NewMemoryStore()
+	st := a2a.NewCoordStore(memory.NewFleet())
 	rec := &recorder{}
 	n := 0
 	// A nil map must reach New as a NIL INTERFACE, not as an interface
@@ -376,7 +377,7 @@ func TestAServiceNeedsBothHalves(t *testing.T) {
 	if _, err := a2a.New(nil, &recorder{}, a2a.Options{}); err == nil {
 		t.Error("a service built with no channel store")
 	}
-	if _, err := a2a.New(a2a.NewMemoryStore(), nil, a2a.Options{}); err == nil {
+	if _, err := a2a.New(a2a.NewCoordStore(memory.NewFleet()), nil, a2a.Options{}); err == nil {
 		t.Error("a service built with no publisher")
 	}
 }
@@ -388,4 +389,71 @@ func indexOf(hay []string, needle string) int {
 		}
 	}
 	return -1
+}
+
+// TWO NODES, ONE COMPANY. This is the failure the channel record moved to the
+// coordination store to fix, and it is the only test here that needs two
+// services: the ask is opened by the node that owns alice's seat and answered
+// by the node that owns bob's, which is the ordinary case rather than an edge
+// one. While the record lived in each node's own database the answering node's
+// read found nothing, so a cross-node ask woke its target, spent a turn on an
+// answer, and dropped it with "no such channel".
+func TestAnAskOpenedOnOneNodeIsAnsweredFromAnother(t *testing.T) {
+	t.Parallel()
+	fleet := memory.NewFleet()
+	seats := dir{"alice": true, "bob": true}
+
+	node := func(t *testing.T) (*a2a.Service, *recorder) {
+		t.Helper()
+		rec := &recorder{}
+		svc, err := a2a.New(a2a.NewCoordStore(fleet), rec, a2a.Options{
+			Directory: seats,
+			Now:       func() time.Time { return clock },
+			NewID:     func() string { return "a2a-cross-node" },
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return svc, rec
+	}
+	asking, askRec := node(t)
+	answering, answerRec := node(t)
+
+	id, err := asking.Open(context.Background(), a2a.Ask{
+		Requester: "alice", Target: "bob", Brief: "can you review this?",
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if len(askRec.onlyTo(topics.AgentInbox("bob"))) != 1 {
+		t.Fatalf("the ask did not wake bob (topics: %v)", askRec.topics())
+	}
+
+	// The answering node has never written this channel and must still be
+	// able to authorize the reply out of it.
+	if err := answering.Reply(context.Background(), a2a.Answer{
+		ChannelID: id, Sender: "bob", Content: "looks good",
+	}); err != nil {
+		t.Fatalf("a reply from the node that did not open the channel: %v", err)
+	}
+	replies := answerRec.onlyTo(topics.AgentInbox("alice"))
+	if len(replies) != 1 {
+		t.Fatalf("replies to alice = %d, want 1 (topics: %v)", len(replies), answerRec.topics())
+	}
+	if got := replies[0].Payload["content"]; got != "looks good" {
+		t.Errorf("the reply carries content %q", got)
+	}
+
+	// And a close performed on the answering node is what the ASKING node
+	// reads back. A channel closed on one node and still open on another
+	// is a second answer nothing refuses — one ask and one answer is the
+	// whole protocol.
+	if err := answering.Close(context.Background(), id); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := asking.Reply(context.Background(), a2a.Answer{
+		ChannelID: id, Sender: "bob", Content: "and again",
+	}); !errors.Is(err, a2a.ErrClosed) {
+		t.Errorf("a peer's close was invisible: err = %v, want ErrClosed", err)
+	}
 }

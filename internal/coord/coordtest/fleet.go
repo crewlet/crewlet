@@ -35,6 +35,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"cooldowns", cooldownCases},
 		{"budgets", budgetCases},
 		{"plane", planeCases},
+		{"channels", channelCases},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {
@@ -849,6 +850,252 @@ var budgetCases = []fleetCase{{
 		if got := h.used(coord.OrgScope); got != callers*10 {
 			h.t.Fatalf("org spend = %d after %d concurrent charges of 10, want %d",
 				got, callers, callers*10)
+		}
+	},
+}}
+
+// ---- the agent-to-agent channels --------------------------------------- //
+
+func (h *fleetHarness) openChannel(id, requester, target string, at time.Time) {
+	h.t.Helper()
+	if err := h.f.OpenChannel(h.ctx, coord.Channel{
+		ID: id, Requester: requester, Target: target, OpenedAt: at, LastAt: at,
+	}); err != nil {
+		h.t.Fatalf("OpenChannel(%s): %v", id, err)
+	}
+}
+
+func (h *fleetHarness) channel(id string) (coord.Channel, bool) {
+	h.t.Helper()
+	ch, found, err := h.f.Channel(h.ctx, id)
+	if err != nil {
+		h.t.Fatalf("Channel(%s): %v", id, err)
+	}
+	return ch, found
+}
+
+func (h *fleetHarness) closeChannel(id string, at time.Time) (coord.Channel, bool) {
+	h.t.Helper()
+	ch, found, err := h.f.CloseChannel(h.ctx, id, at)
+	if err != nil {
+		h.t.Fatalf("CloseChannel(%s): %v", id, err)
+	}
+	return ch, found
+}
+
+func (h *fleetHarness) countChannel(id string, at time.Time) coord.Channel {
+	h.t.Helper()
+	ch, found, err := h.f.CountChannelMessage(h.ctx, id, at)
+	if err != nil {
+		h.t.Fatalf("CountChannelMessage(%s): %v", id, err)
+	}
+	if !found {
+		h.t.Fatalf("CountChannelMessage(%s): channel not found", id)
+	}
+	return ch
+}
+
+func (h *fleetHarness) openChannels() []coord.Channel {
+	h.t.Helper()
+	got, err := h.f.OpenChannels(h.ctx)
+	if err != nil {
+		h.t.Fatalf("OpenChannels: %v", err)
+	}
+	return got
+}
+
+func channelIDs(chs []coord.Channel) []string {
+	out := make([]string, 0, len(chs))
+	for _, ch := range chs {
+		out = append(out, ch.ID)
+	}
+	return out
+}
+
+var channelCases = []fleetCase{{
+	// The reason this moved off the node's own database. The requester's
+	// node opens the channel; the ANSWER is published from whichever node
+	// owns the target's seat, and that node reads the record to decide
+	// whether the reply is authorized. Per-node, that read found nothing
+	// and the answer was dropped.
+	name: "a channel opened by one node is readable by another",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		h.openChannel("c1", "alice", "bob", at)
+
+		ch, found := h.channel("c1")
+		if !found {
+			h.t.Fatal("the channel a peer opened is invisible — a cross-node answer is dropped")
+		}
+		if ch.Requester != "alice" || ch.Target != "bob" {
+			h.t.Errorf("participants = %s -> %s, want alice -> bob", ch.Requester, ch.Target)
+		}
+		if !ch.Open() {
+			h.t.Error("a freshly opened channel reads as closed")
+		}
+		if !ch.OpenedAt.Equal(at) {
+			h.t.Errorf("opened at %v, want %v — a stamp must survive the boundary", ch.OpenedAt, at)
+		}
+		if ch.Messages != 0 {
+			h.t.Errorf("messages = %d, want 0", ch.Messages)
+		}
+	},
+}, {
+	// The three-valued rule at its sharpest. "No such channel" is an
+	// authorization refusal; only an ERROR may mean "the store could not
+	// be read". Every read path has to answer (zero, false, nil).
+	name: "an unknown channel is a refusal, never an error",
+	fn: func(h *fleetHarness) {
+		if _, found := h.channel("missing"); found {
+			h.t.Error("Channel invented a record")
+		}
+		if _, found := h.closeChannel("missing", h.now()); found {
+			h.t.Error("CloseChannel invented a record")
+		}
+		ch, found, err := h.f.CountChannelMessage(h.ctx, "missing", h.now())
+		if err != nil {
+			h.t.Fatalf("CountChannelMessage on an unknown channel: %v", err)
+		}
+		if found || ch.ID != "" {
+			h.t.Errorf("CountChannelMessage invented a record: %+v", ch)
+		}
+	},
+}, {
+	name: "the message counter and the activity stamp both move",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		h.openChannel("c1", "alice", "bob", at)
+
+		later := at.Add(time.Minute)
+		if ch := h.countChannel("c1", later); ch.Messages != 1 {
+			h.t.Errorf("count = %d, want 1", ch.Messages)
+		}
+		// One ask and one answer is the whole protocol, and the two are
+		// counted from DIFFERENT nodes — which is why this is a
+		// read-modify-write and not a blind put.
+		if ch := h.countChannel("c1", later); ch.Messages != 2 {
+			h.t.Errorf("count = %d, want 2", ch.Messages)
+		}
+		ch, _ := h.channel("c1")
+		if ch.Messages != 2 {
+			h.t.Errorf("stored count = %d, want 2", ch.Messages)
+		}
+		// The activity stamp moving is what keeps a live channel out of
+		// the idle sweep.
+		if !ch.LastAt.Equal(later) {
+			h.t.Errorf("last activity = %v, want %v", ch.LastAt, later)
+		}
+	},
+}, {
+	name: "a second close keeps the first close's instant",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		h.openChannel("c1", "alice", "bob", at)
+		first := at.Add(time.Hour)
+		ch, found := h.closeChannel("c1", first)
+		if !found {
+			h.t.Fatal("CloseChannel did not find the channel it just opened")
+		}
+		if ch.Open() {
+			h.t.Error("a closed channel reads as open")
+		}
+		// Both parties may close, and the second one is not a fault —
+		// but it must not move the timestamp, because the first is when
+		// it actually happened. The sweep tells the two apart by
+		// comparing the returned instant against the one it passed in.
+		second := first.Add(time.Hour)
+		again, _ := h.closeChannel("c1", second)
+		if !again.ClosedAt.Equal(first) {
+			h.t.Errorf("closed at %v, want the first close at %v", again.ClosedAt, first)
+		}
+		if stored, _ := h.channel("c1"); stored.Open() {
+			h.t.Error("the close was not persisted")
+		}
+	},
+}, {
+	// The idle sweep's read half. A CLOSED channel re-reported is a second
+	// close event for one channel, which draws two closes on a dashboard.
+	name: "only open channels are listed, in id order",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		h.openChannel("c-b", "alice", "bob", at)
+		h.openChannel("c-a", "alice", "carol", at)
+		h.openChannel("c-c", "alice", "dave", at)
+		if _, found := h.closeChannel("c-c", at.Add(time.Minute)); !found {
+			h.t.Fatal("CloseChannel lost a channel")
+		}
+
+		got := channelIDs(h.openChannels())
+		want := []string{"c-a", "c-b"}
+		if !slices.Equal(got, want) {
+			h.t.Errorf("open channels = %v, want %v", got, want)
+		}
+	},
+}, {
+	name: "an open channel is never purged, however old",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		h.openChannel("old", "alice", "bob", at)
+		h.openChannel("recent", "alice", "carol", at)
+		h.openChannel("still-open", "alice", "dave", at)
+		if _, found := h.closeChannel("old", at); !found {
+			h.t.Fatal("CloseChannel lost a channel")
+		}
+		if _, found := h.closeChannel("recent", at.Add(10*time.Hour)); !found {
+			h.t.Fatal("CloseChannel lost a channel")
+		}
+
+		n, err := h.f.PurgeChannels(h.ctx, at.Add(time.Hour))
+		if err != nil {
+			h.t.Fatalf("PurgeChannels: %v", err)
+		}
+		if n != 1 {
+			h.t.Errorf("purged %d, want 1", n)
+		}
+		if _, found := h.channel("old"); found {
+			h.t.Error("the old channel survived the purge")
+		}
+		if _, found := h.channel("recent"); !found {
+			h.t.Error("a recently-closed channel was purged")
+		}
+		// A long-running ask must not lose its authorization record
+		// while its answer is still in flight — which is exactly why
+		// this bucket has no TTL of its own.
+		if _, found := h.channel("still-open"); !found {
+			h.t.Error("an open channel was purged")
+		}
+	},
+}, {
+	// A retried publish of ONE ask presents the same id. It must not wipe
+	// the counter or the participants: the second Open is a duplicate, not
+	// a new channel.
+	name: "a duplicate open is a retry, not a reset",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		h.openChannel("c1", "alice", "bob", at)
+		h.countChannel("c1", at)
+
+		if err := h.f.OpenChannel(h.ctx, coord.Channel{
+			ID: "c1", Requester: "mallory", Target: "eve",
+			OpenedAt: at.Add(time.Hour), LastAt: at.Add(time.Hour),
+		}); err != nil {
+			h.t.Fatalf("re-OpenChannel: %v", err)
+		}
+		ch, _ := h.channel("c1")
+		if ch.Requester != "alice" || ch.Target != "bob" || ch.Messages != 1 {
+			h.t.Errorf("a duplicate open rewrote the channel: %+v", ch)
+		}
+	},
+}, {
+	name: "a caller mutating what it read cannot reach the store",
+	fn: func(h *fleetHarness) {
+		h.openChannel("c1", "alice", "bob", h.now())
+		ch, _ := h.channel("c1")
+		ch.Requester = "mallory"
+		ch.Messages = 99
+		again, _ := h.channel("c1")
+		if again.Requester != "alice" || again.Messages != 0 {
+			h.t.Errorf("the store took a caller's mutation: %+v", again)
 		}
 	},
 }}

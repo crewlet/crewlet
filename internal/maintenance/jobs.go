@@ -114,6 +114,14 @@ func StoreJobs(db *store.DB) []Job {
 // every tick. Closing is a state change and deleting is garbage collection —
 // a channel closed by this tick is a week away from being deleted, which is
 // the week an operator has to read it.
+//
+// The ONE shared record still swept here, and the exception the coordination
+// store's retention rule makes room for. Every other bucket expires on its own
+// age, which is why the four records above left this file — but a bucket's age
+// cannot tell an OPEN channel from a closed one, so a TTL would reap the
+// authorization record of an ask still waiting for its answer. Both halves are
+// therefore decisions, taken under the same singleton duty as every local
+// sweep. See coord.Channels and internal/store/schema/0012.
 func ChannelJobs(s a2a.Store) []Job {
 	if s == nil {
 		return nil

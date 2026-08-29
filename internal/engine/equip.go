@@ -111,14 +111,15 @@ func (e *Engine) sandboxLauncher() builtin.SandboxLauncher {
 // of the org — and a service holding the previous epoch's org would refuse an
 // ask to a seat the current revision added, or accept one to a seat it removed.
 //
-// Nil when the node has no store: the channel table is what makes an ask
-// durable, and an in-memory one would open channels that vanish on restart
-// while telling the asking agent its question was delivered.
+// Nil when the node has no FLEET store: a channel is the authorization record
+// the ANSWERING seat's node reads, so it has to be somewhere both nodes can
+// see. It used to be the node's own database, which is why a cross-node ask
+// woke its target and then dropped the reply as "no such channel".
 func (e *Engine) a2aFor(c *Company) builtin.Asker {
-	if e.backends == nil || e.backends.Store == nil || e.backends.Queue == nil {
+	if e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
 		return nil
 	}
-	svc, err := a2a.New(a2a.NewSQLStore(e.backends.Store), e.backends.Queue,
+	svc, err := a2a.New(a2a.NewCoordStore(e.backends.Fleet), e.backends.Queue,
 		a2a.Options{Directory: agentSeats{org: c.Org}})
 	if err != nil {
 		// Logged rather than returned: a company without agent-to-agent

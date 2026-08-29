@@ -41,11 +41,19 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		// what makes a single list of them honest rather than a
 		// coincidence: a node's short-horizon state IS its local index.
 		jobs = append(jobs, maintenance.StoreJobs(db)...)
-		jobs = append(jobs, maintenance.ChannelJobs(a2a.NewSQLStore(db))...)
 		jobs = append(jobs, maintenance.ScheduleJobs(sqlledger.New(db.SQL()))...)
 		jobs = append(jobs, maintenance.LedgerJobs(
 			ledgerstore.NewConversations(db),
 			e.ConversationRetention())...)
+	}
+	if fleet := e.backends.Fleet; fleet != nil {
+		// The one shared surface swept here, and the exception the
+		// coordination store's own retention rule makes room for: its
+		// buckets expire on age, and a bucket's age cannot tell an OPEN
+		// channel from a closed one. Closing an idle ask and deleting a
+		// closed one are decisions, so they are taken under the same
+		// singleton duty as every other sweep rather than by a clock.
+		jobs = append(jobs, maintenance.ChannelJobs(a2a.NewCoordStore(fleet))...)
 	}
 
 	e.maintenance = maintenance.New(maintenance.Options{

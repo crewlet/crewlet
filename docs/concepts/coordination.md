@@ -46,9 +46,10 @@ flowchart LR
         R[("rate<br/>notification valve")]
         CD[("cooldowns<br/>credential 429s")]
         B[("budgets<br/>org · per-seat spend")]
+        CH[("channels<br/>agent-to-agent asks")]
     end
     subgraph NODE["node — its own database"]
-        DB[("events · episodes · diary<br/>conversations · a2a<br/>company payload · secrets")]
+        DB[("events · episodes · diary<br/>conversations<br/>company payload · secrets")]
     end
     N1["node-0"] --> COORD
     N2["node-1"] --> COORD
@@ -65,6 +66,7 @@ flowchart LR
 | `rate` | The notification valve. Four nodes ran four of them, so a seat capped at five a second emitted twenty | [Event System](event-system.md) |
 | `cooldowns` | Which provider credential is cooling after a 429. Per-process monotonic values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
 | `budgets` | Org and per-seat token spend. Caps stay config-derived in memory; only *usage* is shared, because a counter per node makes an org cap of 500 000 into N × 500 000 | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
+| `channels` | Who is asking whom, and whether the ask is still open. The record authorizing an answer is read by the node that owns the *answering* seat — never the one that opened it | [Event System § Agent-to-agent](event-system.md) |
 
 A fleet is not configured — it is **discovered** from these, which is why adding a node is starting a process and removing one is stopping it.
 
@@ -95,7 +97,7 @@ A single node shares nothing, because there is no peer to tell. Cooldowns stay i
 
 ## Retention is a bucket's age
 
-Every slot above except `leases`, `config` and `budgets` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write.
+Every slot above except `leases`, `config`, `budgets` and `channels` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write.
 
 That is a constraint rather than a preference. On the default embedded backend a per-key TTL is *create-only*: an update clears it, leaving the key immortal. A rate window that is incremented four times would therefore never expire — the one key in the system guaranteed to be written more than once. So each retention is fixed when its bucket is created, which is why they are **separate buckets** rather than prefixes in one:
 
@@ -108,10 +110,11 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `status` | 4 reconcile intervals (~60 s) | A node that stops reporting must **vanish** from the fleet view rather than linger as a healthy row nobody is writing |
 | `config` | none | The pointer is the fencing sequence, and a fence that restarts is not a fence |
 | `budgets` | none | A cap is a ceiling for the life of a deployment. A counter that rolled itself over would silently re-arm a company somebody had stopped on purpose, on a horizon nobody chose — so clearing one is an operator action (`crewlet budgets reset`) |
+| `channels` | none | A bucket's age cannot tell an **open** channel from a closed one, so a TTL would reap the authorization record of an ask still waiting for its answer. Closing an idle channel and deleting a closed one are decisions instead, taken by the [maintenance duty](seat-ownership.md#singleton-duties) |
 
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a cooldown that expired in a second, a fleet view showing a node that died last week.
 
-This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for any of them: the broker expires the records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had.
+This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for any of them: the broker expires the records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. `channels` is the single exception, for the reason its row gives — an ageless bucket has nothing expiring it, so the sweep does both halves by hand.
 
 ---
 
@@ -123,7 +126,7 @@ The node's own database holds everything a *single* node is the only reader of. 
 - **Conversation history.** Replicating a long thread to the whole fleet buys nothing: the seat's owner is the only reader, and ownership already moves with the lease.
 - **The company payload.** Bulk that every node holds its own copy of. Only *which revision is current* is shared — see [Control Plane](control-plane.md).
 - **The secret store.** Each node resolves `${VAR}` through its own encrypted rows, sealed with the Tier A keyring it was deployed with.
-- **A2A channels, scheduled-run claims, pending sandbox runs, thread follows.**
+- **Scheduled-run claims, pending sandbox runs, thread follows.**
 - **`token_usage`** — the per-agent audit *record* of what was spent. Not the counter anything enforces against; that is the `budgets` slot above.
 
 And two things stay **per-process** deliberately:

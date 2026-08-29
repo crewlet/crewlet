@@ -2,6 +2,11 @@
 -- what it already did (turn_completions), what it already said in this
 -- conversation (conversation_sessions), and who it is currently asking
 -- (a2a_channels).
+--
+-- Two of the three have since left this database for the fleet's coordination
+-- store, and the migration that moved each carries the reason: turn_completions
+-- in 0010, a2a_channels in 0012. The statements below stay as written — a
+-- migration is a historical record, not a description of the current schema.
 
 
 -- turn_completions — "has this trigger already been worked?"

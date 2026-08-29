@@ -17,7 +17,7 @@ import (
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why SEVEN buckets and not one
+// # Why EIGHT buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -39,6 +39,9 @@ import (
 //	budgets    none at all either, for the opposite reason: a token cap is
 //	           a ceiling for the life of a deployment, and a counter that
 //	           rolled over would re-arm a company somebody had stopped
+//	channels   none at all, for a third reason: a bucket age cannot tell an
+//	           OPEN channel from a closed one, so it would reap the
+//	           authorization record of an ask still waiting for its answer
 //
 // Putting two of those in one bucket would give one of them the other's
 // retention, and every such mistake is silent — a cooldown that expired in a
@@ -60,6 +63,7 @@ const (
 	statusSuffix    = "_status"
 	configSuffix    = "_config"
 	budgetSuffix    = "_budgets"
+	channelSuffix   = "_channels"
 	activationKey   = "activation"
 	fleetCASRetries = 16
 )
@@ -67,7 +71,7 @@ const (
 // FleetConfig is what a [FleetStore] needs at construction. Every duration is
 // a BUCKET's retention; see the file doc for why each is its own bucket.
 type FleetConfig struct {
-	// BucketPrefix names the seven buckets. Empty means "crewlet", matching
+	// BucketPrefix names the eight buckets. Empty means "crewlet", matching
 	// the lease store — two companies on one NATS account are separated by
 	// giving them different prefixes.
 	BucketPrefix string
@@ -91,7 +95,7 @@ type FleetConfig struct {
 	// StatusFreshness is how long a node's apply status counts as current.
 	StatusFreshness time.Duration
 
-	// Replicas is the JetStream replica count for all seven.
+	// Replicas is the JetStream replica count for all eight.
 	Replicas int
 }
 
@@ -147,6 +151,7 @@ type FleetStore struct {
 	status    jetstream.KeyValue
 	config    jetstream.KeyValue
 	budgets   jetstream.KeyValue
+	channels  jetstream.KeyValue
 
 	rateWindow time.Duration
 	freshness  time.Duration
@@ -154,7 +159,7 @@ type FleetStore struct {
 
 var _ coord.Fleet = (*FleetStore)(nil)
 
-// OpenFleet creates or adopts the seven buckets and returns the backend.
+// OpenFleet creates or adopts the eight buckets and returns the backend.
 //
 // Idempotent and safe to call from every node at once, like [Open]: creating
 // a bucket that already exists with the same shape is a no-op, and a changed
@@ -208,6 +213,8 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet activation pointer; NO TTL — its revision IS the epoch", 0},
 		{&store.budgets, budgetSuffix,
 			"Crewlet token counters; NO TTL — a cap is a ceiling for the deployment's life", 0},
+		{&store.channels, channelSuffix,
+			"Crewlet agent-to-agent channels; NO TTL — an open ask must outlive any clock", 0},
 	} {
 		got, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {
@@ -815,4 +822,224 @@ func (f *FleetStore) Fleet(ctx context.Context) ([]coord.NodeApply, error) {
 		return out[i].NodeID < out[j].NodeID
 	})
 	return out, nil
+}
+
+// ---- the agent-to-agent channels --------------------------------------- //
+
+// channelRecord is one authorization row on the wire.
+//
+// The stamps travel as time.Time through JSON, which is RFC 3339 and
+// therefore round-trips in UTC. ClosedAt is a POINTER so "open" is the
+// absence of a value rather than a zero instant a decoder could confuse with
+// the epoch — the one field where a wrong reading changes whether an answer
+// is delivered.
+type channelRecord struct {
+	Requester string     `json:"requester"`
+	Target    string     `json:"target"`
+	Messages  int        `json:"messages"`
+	OpenedAt  time.Time  `json:"opened_at"`
+	LastAt    time.Time  `json:"last_at"`
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+}
+
+func encodeChannel(ch coord.Channel) ([]byte, error) {
+	record := channelRecord{
+		Requester: ch.Requester, Target: ch.Target, Messages: ch.Messages,
+		OpenedAt: ch.OpenedAt.UTC(), LastAt: ch.LastAt.UTC(),
+	}
+	if !ch.ClosedAt.IsZero() {
+		closed := ch.ClosedAt.UTC()
+		record.ClosedAt = &closed
+	}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return nil, fmt.Errorf("coord/kv: encode the channel: %w", err)
+	}
+	return raw, nil
+}
+
+func decodeChannel(id string, raw []byte) (coord.Channel, error) {
+	var record channelRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return coord.Channel{}, unavailable("decode the channel", err)
+	}
+	ch := coord.Channel{
+		ID: id, Requester: record.Requester, Target: record.Target,
+		Messages: record.Messages, OpenedAt: record.OpenedAt, LastAt: record.LastAt,
+	}
+	if record.ClosedAt != nil {
+		ch.ClosedAt = *record.ClosedAt
+	}
+	return ch, nil
+}
+
+// OpenChannel records a new channel, ignoring an id that already exists.
+//
+// Create, not Put: the id is minted per ask, so ErrKeyExists means a retried
+// publish of ONE ask. Overwriting would reset the counter and replace the
+// participants of a channel that is already carrying an answer.
+func (f *FleetStore) OpenChannel(ctx context.Context, ch coord.Channel) error {
+	if ch.ID == "" {
+		return errors.New("coord/kv: a channel needs an id")
+	}
+	raw, err := encodeChannel(ch)
+	if err != nil {
+		return err
+	}
+	_, err = f.channels.Create(ctx, encodeKey(ch.ID), raw)
+	switch {
+	case err == nil, errors.Is(err, jetstream.ErrKeyExists):
+		return nil
+	default:
+		return unavailable("open the channel", err)
+	}
+}
+
+// Channel reads one record.
+func (f *FleetStore) Channel(ctx context.Context, id string) (coord.Channel, bool, error) {
+	entry, err := f.channels.Get(ctx, encodeKey(id))
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return coord.Channel{}, false, nil
+	}
+	if err != nil {
+		return coord.Channel{}, false, unavailable("read the channel", err)
+	}
+	ch, err := decodeChannel(id, entry.Value())
+	if err != nil {
+		return coord.Channel{}, false, err
+	}
+	return ch, true, nil
+}
+
+// CloseChannel ends a channel, leaving an already-closed one untouched.
+func (f *FleetStore) CloseChannel(ctx context.Context, id string, at time.Time) (coord.Channel, bool, error) {
+	return f.mutateChannel(ctx, "close", id, func(ch coord.Channel) coord.Channel {
+		if ch.Open() {
+			ch.ClosedAt = at.UTC()
+			ch.LastAt = at.UTC()
+		}
+		return ch
+	})
+}
+
+// CountChannelMessage records one message against a channel's own budget.
+func (f *FleetStore) CountChannelMessage(ctx context.Context, id string, at time.Time) (coord.Channel, bool, error) {
+	return f.mutateChannel(ctx, "count a message on", id, func(ch coord.Channel) coord.Channel {
+		ch.Messages++
+		ch.LastAt = at.UTC()
+		return ch
+	})
+}
+
+// mutateChannel applies a read-modify-write under a compare-and-swap.
+//
+// A CAS rather than a blind Put, because the two writers are real: the
+// requester's node counts the ask while the target's node counts the answer,
+// and a lost update there is a message count that under-reports the very
+// traffic the cap on it exists to catch.
+func (f *FleetStore) mutateChannel(ctx context.Context, what, id string, apply func(coord.Channel) coord.Channel) (coord.Channel, bool, error) {
+	key := encodeKey(id)
+	for range fleetCASRetries {
+		entry, err := f.channels.Get(ctx, key)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			return coord.Channel{}, false, nil
+		}
+		if err != nil {
+			return coord.Channel{}, false, unavailable("read the channel", err)
+		}
+		ch, err := decodeChannel(id, entry.Value())
+		if err != nil {
+			return coord.Channel{}, false, err
+		}
+		next := apply(ch)
+		raw, err := encodeChannel(next)
+		if err != nil {
+			return coord.Channel{}, false, err
+		}
+		_, err = f.channels.Update(ctx, key, raw, entry.Revision())
+		switch {
+		case err == nil:
+			return next, true, nil
+		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
+			continue
+		default:
+			return coord.Channel{}, false, unavailable(what+" the channel", err)
+		}
+	}
+	return coord.Channel{}, false, contended(what, id)
+}
+
+// OpenChannels returns every channel still open, by id.
+func (f *FleetStore) OpenChannels(ctx context.Context) ([]coord.Channel, error) {
+	keys, err := f.channels.ListKeys(ctx)
+	if err != nil {
+		return nil, unavailable("list the channels", err)
+	}
+	var out []coord.Channel
+	for key := range keys.Keys() {
+		id, ok := decodeKey(key)
+		if !ok {
+			continue
+		}
+		entry, err := f.channels.Get(ctx, key)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, unavailable("read a channel", err)
+		}
+		ch, err := decodeChannel(id, entry.Value())
+		if err != nil {
+			return nil, err
+		}
+		if ch.Open() {
+			out = append(out, ch)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// PurgeChannels deletes channels closed before the cutoff.
+//
+// Purge rather than Delete, so the key's history goes with it: a Delete
+// leaves a tombstone revision, and a bucket with no TTL keeps every one of
+// them for the life of the deployment.
+func (f *FleetStore) PurgeChannels(ctx context.Context, cutoff time.Time) (int64, error) {
+	keys, err := f.channels.ListKeys(ctx)
+	if err != nil {
+		return 0, unavailable("list the channels", err)
+	}
+	var n int64
+	for key := range keys.Keys() {
+		id, ok := decodeKey(key)
+		if !ok {
+			continue
+		}
+		entry, err := f.channels.Get(ctx, key)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			return n, unavailable("read a channel", err)
+		}
+		ch, err := decodeChannel(id, entry.Value())
+		if err != nil {
+			return n, err
+		}
+		if ch.Open() || !ch.ClosedAt.Before(cutoff) {
+			continue
+		}
+		// Predicated on the revision we read: a channel somebody
+		// re-opened or counted between the read and the delete is not
+		// the one this sweep decided to drop.
+		if err := f.channels.Purge(ctx, key, jetstream.LastRevision(entry.Revision())); err != nil {
+			if errors.Is(err, jetstream.ErrKeyNotFound) || errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
+				continue
+			}
+			return n, unavailable("purge a channel", err)
+		}
+		n++
+	}
+	return n, nil
 }

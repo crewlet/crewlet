@@ -8,7 +8,7 @@ import (
 
 // The FLEET-SHARED state, beyond ownership.
 //
-// A lease answers "who runs this seat". These five answer the other questions
+// A lease answers "who runs this seat". These six answer the other questions
 // a fleet has to agree on, and they are here — beside [Backend], certified by
 // the same suite — for one reason: THEY WERE ON THE NODE'S OWN DATABASE, and
 // internal/store is documented "one file, one process". Every one of them was
@@ -26,6 +26,10 @@ import (
 //   - The config plane's apply status said it was "read back by every peer on
 //     every reconcile tick AND rendered in the fleet view". Each node was
 //     reading its own row and drawing a fleet of one.
+//   - The agent-to-agent channel is an AUTHORIZATION record, read by the node
+//     that owns the answering seat — which is precisely the node that did not
+//     write it. A cross-node ask therefore woke its target and then dropped
+//     the reply, so A2A worked only when both seats happened to land together.
 //
 // None of these is a lease: nothing here is owned, held or fenced. They are
 // counters, claims and records, and the coordination store is simply where a
@@ -87,6 +91,16 @@ const (
 	// over would silently re-arm a company somebody had stopped on
 	// purpose, on a horizon nobody chose. Clearing one is an operator
 	// action — see [Budgets.Reset].
+
+	// ChannelRetention is deliberately absent too, and for a third
+	// reason: a channel's bucket can have NO age at all because an OPEN
+	// channel must survive however long its ask goes unanswered. A bucket
+	// TTL cannot tell an open record from a closed one, so it would reap
+	// the authorization row out from under an answer still in flight —
+	// which the responder then reads as "no such channel". Closing an idle
+	// channel and deleting a closed one are BOTH decisions, taken by the
+	// maintenance sweep against [Channels.OpenChannels] and
+	// [Channels.PurgeChannels], not by a broker's clock.
 
 	// StatusFreshness bounds how old a node's apply status may be and
 	// still count. A node that stops reporting must VANISH from the fleet
@@ -350,10 +364,86 @@ type Plane interface {
 	Fleet(ctx context.Context) ([]NodeApply, error)
 }
 
+// Channel is one agent-to-agent ask, as the FLEET records it.
+//
+// A record rather than a lease: nothing here is owned, held or fenced. What
+// makes it shared is that the two parties are usually on different nodes. The
+// requester's node opens the channel; the answer is published from whichever
+// node owns the TARGET's seat, and that node has to read this record to decide
+// whether the reply it is about to deliver is authorized at all. On the node's
+// own database that read found nothing, so a cross-node ask was accepted, woke
+// the target, and then silently swallowed its answer.
+type Channel struct {
+	ID        string
+	Requester string
+	Target    string
+
+	// Messages counts what crossed the channel. One ask and one answer is
+	// the whole protocol, so a count above two is the anomaly it looks
+	// like rather than ordinary traffic.
+	Messages int
+
+	OpenedAt time.Time
+	LastAt   time.Time
+
+	// ClosedAt is zero while open. A zero time rather than a status field,
+	// so "when did it close" and "is it closed" cannot disagree.
+	ClosedAt time.Time
+}
+
+// Open reports whether the channel still accepts messages.
+func (c Channel) Open() bool { return c.ClosedAt.IsZero() }
+
+// Channels is the fleet's agent-to-agent authorization record.
+//
+// RAISES rather than answering empty, everywhere. This is the contract's
+// three-valued rule at its sharpest: "no such channel" is an authorization
+// refusal the requester sees as a colleague who never answered, and "the store
+// could not be read" is a round to retry. A backend that collapsed the second
+// into the first would turn a two-second broker blip into a company where
+// every agent has stopped replying to every other one.
+type Channels interface {
+	// OpenChannel records a new channel, IGNORING an id that already
+	// exists rather than erroring or overwriting: the id is minted per
+	// ask, so a collision means a retried publish of ONE ask, and
+	// overwriting would reset the counter and replace the participants of
+	// a channel that is already carrying an answer.
+	OpenChannel(ctx context.Context, ch Channel) error
+
+	// Channel reads one record, reporting whether it exists.
+	Channel(ctx context.Context, id string) (Channel, bool, error)
+
+	// CloseChannel marks the channel closed and returns its stored state.
+	//
+	// Closing an already-closed channel returns it UNCHANGED — both
+	// parties may close, and the first close is when it actually happened.
+	// The caller tells the two apart by comparing the returned ClosedAt
+	// against the instant it passed in, which is what stops a sweep
+	// reporting a close somebody else already made.
+	CloseChannel(ctx context.Context, id string, at time.Time) (Channel, bool, error)
+
+	// CountChannelMessage increments the message counter, bumps LastAt and
+	// returns the stored state.
+	CountChannelMessage(ctx context.Context, id string, at time.Time) (Channel, bool, error)
+
+	// OpenChannels returns every channel still open, by id.
+	//
+	// The idle sweep's read half. Only the OPEN ones, because a closed
+	// channel re-reported is a second close event for one channel, which
+	// draws two closes on a dashboard.
+	OpenChannels(ctx context.Context) ([]Channel, error)
+
+	// PurgeChannels deletes channels closed before cutoff, returning the
+	// count. An open channel is never purged however old, or a long
+	// running ask loses its authorization record while its answer is still
+	// in flight.
+	PurgeChannels(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
 // Fleet is a backend that serves all of the shared state, which is what the
 // contract suite certifies and what the engine wires from.
 //
-// One interface at the CONSTRUCTION seam and five at the call sites: the
+// One interface at the CONSTRUCTION seam and six at the call sites: the
 // webhook edge takes a Claims and nothing else, the valve takes a Counter,
 // a turn's meter takes a Budgets. A consumer that could reach the whole store
 // would eventually use it.
@@ -364,6 +454,7 @@ type Fleet interface {
 	Cooldowns
 	Budgets
 	Plane
+	Channels
 }
 
 // SortUsage puts the org counter first, then the seats by scope.
