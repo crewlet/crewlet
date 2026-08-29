@@ -33,7 +33,10 @@ crewlet llm doctor default                  # verify before the first turn
 > development, evaluation, and a small company you run yourself; a
 > metered key remains the better fit for a large, latency-sensitive
 > fleet. The two compose — see [Falling back to a metered
-> key](#falling-back-to-a-metered-key).
+> key](#falling-back-to-a-metered-key). There is also a second way to
+> spend a subscription that is not this page's backend at all — an
+> [OAuth proxy behind an ordinary HTTP entry](#the-other-shape-an-oauth-proxy-in-front-of-an-http-entry),
+> with a different set of trade-offs you own rather than Crewlet.
 
 ---
 
@@ -527,6 +530,108 @@ chain keeps the seat working while you re-run `crewlet llm login`.
 
 ---
 
+## The other shape: an OAuth proxy in front of an HTTP entry
+
+Everything above drives the vendor's CLI as a **process**. There is a
+second way to spend a subscription, which Crewlet supports without
+knowing anything about it: run a **proxy** that holds the OAuth login
+itself and re-exposes it as an ordinary Anthropic- or OpenAI-shaped HTTP
+endpoint, then point a normal provider entry at it.
+
+Crewlet needs no `cli-agent` block for this. It is an HTTP entry like any
+other, and `base_url` is all that changes:
+
+```yaml
+providers:
+  llm:
+    # The proxy speaks the Anthropic Messages API.
+    subscription-proxy:
+      type: anthropic
+      model: claude-sonnet-5
+      base_url: "${LLM_PROXY_URL}"      # e.g. http://127.0.0.1:8317
+      api_keys: ["${LLM_PROXY_KEY}"]    # the proxy's OWN inbound key
+
+    # Or it speaks the OpenAI wire format.
+    subscription-proxy-oai:
+      type: openai-compatible
+      model: gpt-5
+      base_url: "${LLM_PROXY_URL}/v1"
+      api_keys: ["${LLM_PROXY_KEY}"]
+```
+
+**`base_url` is not an `openai-compatible` field.** It is honoured on
+`anthropic` and `openai` entries too — it is only *required* for
+`openai-compatible`, which has no vendor default to fall back to. The
+same field is what points an entry at a corporate egress proxy or an
+Anthropic-API gateway, and the [code sandbox](code-sandbox.md) forwards
+an `anthropic` entry's value to Claude Code as `ANTHROPIC_BASE_URL`.
+
+**Which header your proxy will be handed** depends on the entry's type,
+because each backend sends its vendor's native one:
+
+| Entry type | Credential arrives as |
+|---|---|
+| `anthropic` | `x-api-key` — and only that. The backend builds its client with `WithoutEnvironmentDefaults`, which deliberately disables the SDK's own bearer-token path so an ambient `ANTHROPIC_AUTH_TOKEN` cannot redirect a company's auth |
+| `openai`, `openai-compatible` | `Authorization: Bearer` |
+
+The `api_keys` value is the credential for **the proxy**, not for the
+vendor: the vendor login lives inside the proxy. Rotation, cooldowns and
+the fleet-shared credential bench all apply to that inbound key as they
+would to any other.
+
+### What you gain, and what becomes yours
+
+Against the `cli-agent` backend you get a real HTTP provider back: native
+tool calls instead of the [in-prompt JSON envelope](#tool-calls), no
+process launch per call, and whatever token accounting the endpoint
+reports. Against a metered key you get flat-rate cost.
+
+What you take on is everything this page's design otherwise handles for
+you:
+
+- **The isolation guarantees do not apply.** [Per-seat homes, volatile
+  path pruning and the allowlisted child environment](#isolation-the-part-that-actually-matters)
+  exist because a CLI keeps conversation state under one home. A proxy is
+  one process serving every seat, so whatever session, cache or history
+  it keeps is shared across your whole company — that is the proxy's
+  design to answer, not Crewlet's.
+- **`crewlet llm` does not see it.** `list`, `doctor`, `login` and the
+  rest build `cli-agent` providers only, so there is no login state to
+  report and no smoke test to run. Keeping the proxy authenticated is a
+  separate operational job.
+- **A spent window is not translated.** The [prose sentinel](#falling-back-to-a-metered-key)
+  that turns "Usage limit reached" into a retryable `RATE_LIMIT` is the
+  CLI backend's. Over HTTP you get whatever status the proxy returns, and
+  only a 429 / 401 / 403 / 402 / 408 / 5xx is [retryable](turn-engine.md#per-phase-llm-models);
+  anything else is fatal and the role's fallback chain will **not** walk
+  to the next provider. Check what your proxy returns on an exhausted
+  plan before you rely on `llm: [proxy, metered]`.
+
+### Before you choose this
+
+A proxy that spends a *subscription* rather than an API key has to
+present itself to the vendor as the vendor's own client. In practice
+that means reproducing a specific client build's headers, its beta
+flags, sometimes its TLS fingerprint, and often injecting that client's
+system prompt ahead of yours — which quietly changes what your prompts
+say and where prompt-cache breakpoints land.
+
+Vendor terms generally do not permit a third-party client to route
+requests through consumer subscription credentials, and vendors have
+enforced that. Crewlet's `cli-agent` backend is on the other side of
+that line **by construction**: it runs the vendor's own unmodified CLI,
+logged in by you, as a child process — Crewlet never sees a password,
+never re-implements an auth flow, and never impersonates a client.
+Pointing `base_url` at a proxy is a supported configuration and a
+decision you are making, exactly as the note at the end of this page
+says about plan terms generally.
+
+None of this applies to an ordinary **gateway** — LiteLLM, a corporate
+egress proxy, a self-hosted vLLM — reached through the same field with a
+key you were issued. That is just an endpoint.
+
+---
+
 ## Operating it
 
 ```bash
@@ -589,7 +694,9 @@ is why `-no-smoke` exists for a scripted health check that runs often.
 - **Check the vendor's terms.** Subscription plans are generally written
   for interactive use by the subscriber. Running a fleet of agents on
   one may not be permitted by your plan — that is a decision for you,
-  not something Crewlet can decide for you.
+  not something Crewlet can decide for you. It is the sharper question
+  for [the proxy shape](#the-other-shape-an-oauth-proxy-in-front-of-an-http-entry),
+  where a third-party client is presenting itself as the vendor's own.
 
 ---
 
