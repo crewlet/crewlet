@@ -166,6 +166,54 @@ a delivery dropped because the store blinked is a message nobody ever answers.
 
 ---
 
+## The Config Diff Is Paths and Values, Not Lines
+
+The stored form of a revision is JSON produced by marshalling a struct, so
+re-ordering a map or adding a field with a default rewrites lines that mean
+nothing to a reader. A textual diff would report all of it as change. The
+question an operator actually asks is *"what changed about the company"*, and
+**paths answer it** — so `crewlet config diff` and
+`GET /config/revisions/{id}/diff` are the same differ, reporting one entry per
+changed path rather than a hunk of text.
+
+A string value is quoted and other values are not, because `"true"` and `true`
+are different settings and a renderer that printed both bare would show a type
+change as no change at all. A diff longer than the cap reports its own
+truncation rather than stopping silently.
+
+**Both sides are always redacted, and there is no flag to turn that off.** A
+diff is what an operator pastes into a ticket to ask a colleague whether a
+change looks right, which is the single most likely way a credential leaves the
+machine. `crewlet config export -revision <UUID>` covers the rare case that
+needs real values, and it takes a deliberate act.
+
+Two further properties of that surface are worth stating because they are
+easy to assume the other way round:
+
+- **`/config` is guarded in full, reads included.** Every other read follows `allow_anonymous_read`; this one never does. Reading it exposes the whole company document — the org chart, which integrations are wired, and the shape of every credential.
+- **A write does not apply anything.** `PUT /config` stores a revision and moves the activation pointer; it does not touch the running epoch, *not even on the node that served the request*. Every node applies on its own reconcile tick — which is exactly what makes a write on one node reach the whole fleet.
+
+---
+
+## Every Vendor Is Served
+
+The engine once refused an `integrations.*` block it had no parser for, on the
+theory that a config naming a vendor the build could not serve should fail
+loudly rather than be silently ignored. That mechanism is **gone**, because the
+premise stopped being true: all six vendors — Mattermost, Slack, GitLab,
+GitHub, Jira and Confluence — route end to end, so there is nothing left to
+refuse. The seventh row the table once held was not served but **dropped** —
+Plane is gone entirely, which settles the row the same way as far as this
+mechanism is concerned.
+
+What outlives it is the rule it was built to enforce: **a config block the
+engine cannot honour must fail, not be ignored.** A silently dropped
+integration block looks exactly like one that is working until someone notices
+the messages never arrived. If a vendor is ever added to the schema ahead of
+its parser again, that is the shape to rebuild.
+
+---
+
 ## Provider Abstraction via Protocols
 
 All external dependencies (LLM, embeddings, storage) are behind interfaces **defined by the package that calls them**, kept to what that caller needs — there is no `interfaces.go`, and a provider package exports a concrete type. No vendor SDK lock-in. This enables:

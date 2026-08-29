@@ -184,9 +184,10 @@ marshalling a struct, so re-ordering a map or adding a field with a default
 rewrites lines that mean nothing to a reader. The question an operator asks is
 "what changed about the company", and paths answer it — this is the same
 differ [`GET /config/revisions/{id}/diff`](api-endpoints.md) serves, and the
-shape [d-505](design-decisions.md) records. A string value is quoted and other
-values are not, because `"true"` and `true` are different settings and a
-renderer that printed both bare would show a type change as no change at all.
+shape [Design Decisions](design-decisions.md#the-config-diff-is-paths-and-values-not-lines)
+records. A string value is quoted and other values are not, because `"true"`
+and `true` are different settings and a renderer that printed both bare would
+show a type change as no change at all.
 A diff longer than the cap reports its own truncation rather than stopping
 silently.
 

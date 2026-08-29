@@ -137,7 +137,9 @@ curl -X PATCH https://engine.example.com/config \
 
 **`If-Match` matters more here than on the full write.** A `PUT` carries the caller's whole intended document; a `PATCH` is merged against whatever is active at that instant. See [Concurrent writes](#concurrent-writes) for what the engine does and does not guarantee.
 
-**Per-entity write** — four collections, `PUT` only:
+#### Per-entity write
+
+Four collections, `PUT` only:
 
 | Method | Path | Description |
 |--------|------|-------------|
