@@ -45,6 +45,17 @@ import (
 // LLM-proposed procedure during the review window.
 const AutoDraftedParent = "Auto-Drafted Skills"
 
+// DraftPage is an auto-drafted page a promotion writer created or found.
+//
+// Declared here rather than in internal/learning because BOTH sides need it —
+// the pass that asks for a draft and the two vendor writers that make one —
+// and internal/knowledge is the package neither of them would have to import
+// the other to reach.
+type DraftPage struct {
+	ID    string
+	Title string
+}
+
 // AutoDraftTitlePrefix is stamped on every auto-drafted page's title.
 //
 // The FAIL-CLOSED BACKSTOP, not the primary mechanism: the ancestor

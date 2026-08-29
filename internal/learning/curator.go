@@ -50,6 +50,7 @@ type Background struct {
 	lifecycle *Lifecycle
 	skills    *Skills
 	cluster   *Synthesizer
+	promoter  *Promoter
 	roleFor   func(handle string) *org.Role
 	policy    CuratorPolicy
 	seats     Seats
@@ -58,6 +59,7 @@ type Background struct {
 	curatorEvery   time.Duration
 	lifecycleEvery time.Duration
 	clusterEvery   time.Duration
+	promoteEvery   time.Duration
 	claimDuty      func(ctx context.Context) (bool, error)
 	now            func() time.Time
 }
@@ -81,6 +83,11 @@ type BackgroundOptions struct {
 	// the org would charge one seat's work to another's chain.
 	RoleFor func(handle string) *org.Role
 
+	// Promoter distils what several seats in a unit independently learned
+	// into a knowledge-base draft; nil disables that pass, which is what a
+	// company with no knowledge base resolves to.
+	Promoter *Promoter
+
 	// Policy is the disuse schedule. Zero values take the defaults.
 	Policy CuratorPolicy
 
@@ -100,6 +107,7 @@ type BackgroundOptions struct {
 	CuratorInterval   time.Duration
 	LifecycleInterval time.Duration
 	ClusterInterval   time.Duration
+	PromotionInterval time.Duration
 
 	// ClaimDuty gates a tick in a fleet. Nil means single-node — there is
 	// nobody to be a singleton among.
@@ -112,11 +120,11 @@ type BackgroundOptions struct {
 func NewBackground(opts BackgroundOptions) *Background {
 	b := &Background{
 		lifecycle: opts.Lifecycle, skills: opts.Skills,
-		cluster: opts.Cluster, roleFor: opts.RoleFor,
+		cluster: opts.Cluster, promoter: opts.Promoter, roleFor: opts.RoleFor,
 		policy: opts.Policy, seats: opts.Seats, publish: opts.Publish,
 		curatorEvery: opts.CuratorInterval, lifecycleEvery: opts.LifecycleInterval,
-		clusterEvery: opts.ClusterInterval,
-		claimDuty:    opts.ClaimDuty, now: opts.Now,
+		clusterEvery: opts.ClusterInterval, promoteEvery: opts.PromotionInterval,
+		claimDuty: opts.ClaimDuty, now: opts.Now,
 	}
 	if b.roleFor == nil {
 		// A clustering pass without one resolves no model and would fail
@@ -132,6 +140,9 @@ func NewBackground(opts BackgroundOptions) *Background {
 	}
 	if b.clusterEvery <= 0 {
 		b.clusterEvery = ClusterInterval
+	}
+	if b.promoteEvery <= 0 {
+		b.promoteEvery = PromotionInterval
 	}
 	if b.now == nil {
 		b.now = func() time.Time { return time.Now().UTC() }
@@ -154,6 +165,26 @@ func (b *Background) Start(ctx context.Context) {
 	}
 	if b.cluster != nil {
 		go b.loop(ctx, "skill_clustering", b.clusterEvery, b.clusterPass)
+	}
+	if b.promoter != nil {
+		go b.loop(ctx, "skill_promotion", b.promoteEvery, b.promotePass)
+	}
+}
+
+// promotePass drafts what each unit's seats converged on.
+//
+// The pass walks every unit itself, so unlike the other three this is a
+// single call: a promotion is per UNIT rather than per seat, and the unit
+// list is the pass's own input.
+func (b *Background) promotePass(ctx context.Context) {
+	for _, payload := range b.promoter.Pass(ctx) {
+		if b.publish != nil {
+			// SOURCED to nothing in particular. A promotion has several
+			// authors and no single seat, which is why its event carries a
+			// unit rather than a handle — and stamping one contributor's
+			// would file a team's finding under one agent.
+			b.publish(ctx, "", payload)
+		}
 	}
 }
 

@@ -77,6 +77,9 @@ type instance struct {
 	// failPageNamed refuses to write the page with this name, to reach
 	// the isolated-failure path.
 	failPageNamed string
+	// failPageWalk refuses the page enumeration, which must stop a
+	// promotion draft rather than let it create a second copy.
+	failPageWalk bool
 	// refuseDelete makes a page delete 403 after its archive landed,
 	// which is the state a failed prune has to undo.
 	refuseDelete bool
@@ -108,6 +111,57 @@ type pageRow struct {
 	ExternalSource string
 	Archived       bool
 }
+
+// pageNamed finds one page by exact name.
+func (f *instance) pageNamed(name string) (pageRow, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, page := range f.pages {
+		if page.Name == name {
+			return *page, true
+		}
+	}
+	return pageRow{}, false
+}
+
+// pagesNamed counts the pages carrying a name — the duplicate check.
+func (f *instance) pagesNamed(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, page := range f.pages {
+		if page.Name == name {
+			n++
+		}
+	}
+	return n
+}
+
+// renamePage is a reviewer editing a draft's title in the UI.
+func (f *instance) renamePage(from, to string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, page := range f.pages {
+		if page.Name == from {
+			page.Name = to
+		}
+	}
+}
+
+// addForeignPage plants a row another tool owns, carrying an external id this
+// engine would otherwise recognise.
+func (f *instance) addForeignPage(project, name, externalID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := "foreign-" + name
+	f.pages[id] = &pageRow{
+		ID: id, Project: project, Name: name,
+		ExternalID: externalID, ExternalSource: "some-other-importer",
+	}
+}
+
+// Managed reports a row this engine published.
+func (p pageRow) Managed() bool { return p.ExternalSource == plane.ExternalSource }
 
 // recorded is one write, as it arrived.
 type recorded struct {
@@ -224,6 +278,10 @@ func (f *instance) serve(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"id": owner})
 
 	case strings.HasSuffix(path, "/pages/") && r.Method == http.MethodGet:
+		if f.failPageWalk {
+			deny(w, http.StatusInternalServerError, "upstream is unwell")
+			return
+		}
 		project := strings.TrimSuffix(strings.TrimPrefix(path, ws+"/projects/"), "/pages/")
 		out := make([]map[string]any, 0, len(f.pages))
 		for _, page := range f.pages {

@@ -131,9 +131,14 @@ learning:                               # optional — agent-learning subsystem
                                         # is refused, not truncated
     max_versions_kept: 10               # history retention per skill (older pruned)
   skill_promotion:
-    enabled: true                       # cross-agent promotion pass in the scheduler
-    min_sibling_count: 3                # distinct siblings needed to promote
-    jaccard_threshold: 0.6              # similarity threshold for cross-agent clustering
+    enabled: true                       # daily cross-agent promotion pass. Needs a
+                                        #   knowledge base (integrations.confluence
+                                        #   or .plane) — a promoted skill is a draft
+                                        #   page a unit lead reviews
+    min_sibling_count: 3                # distinct SEATS that must converge. One seat
+                                        #   with four similar skills is a catalogue
+                                        #   to curate, not a team practice
+    jaccard_threshold: 0.6              # similarity that pools two seats' skills
     budget_tokens: 4000                 # soft cap on the promotion LLM call
   personal_memory:
     max_refreshes_per_turn: 3           # cap on distinct context_hint values per turn

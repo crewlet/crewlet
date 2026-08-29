@@ -320,8 +320,9 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 	}
 
 	cluster := e.clusteringPass(company)
+	promoter := e.buildPromoter(company)
 
-	if lifecycle == nil && skills == nil && cluster == nil {
+	if lifecycle == nil && skills == nil && cluster == nil && promoter == nil {
 		return
 	}
 
@@ -329,6 +330,7 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 		Lifecycle: lifecycle,
 		Skills:    skills,
 		Cluster:   cluster,
+		Promoter:  promoter,
 		// FRESH through the epoch, like Seats below: a captured resolver
 		// would keep answering with the roles of the revision this call
 		// saw, and charge a renamed seat's clustering to a chain the
@@ -346,6 +348,7 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 		Publish:           e.publishLearning,
 		CuratorInterval:   hours(cfg.SkillCurator.IntervalHours),
 		ClusterInterval:   seconds(float64(cfg.SkillSynthesis.SchedulerIntervalSeconds)),
+		PromotionInterval: 0, // learning.PromotionInterval; no knob configures it
 		ClaimDuty:         e.workerDuty(skillCuratorDutyName, learningDutyTTL),
 		LifecycleInterval: 0,
 	})

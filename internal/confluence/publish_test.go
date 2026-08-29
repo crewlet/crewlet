@@ -38,6 +38,41 @@ type wiki struct {
 	// lockedTitle refuses updates to one page — the transient failure a
 	// prune must not read as "this skill is gone".
 	lockedTitle string
+	// refusedTitle refuses to CREATE one page by title, which is how the
+	// promotion writer's "no parent, no draft" rule is exercised.
+	refusedTitle string
+}
+
+// refuseCreate makes the wiki reject creating one titled page.
+func (w *wiki) refuseCreate(title string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.refusedTitle = title
+}
+
+// pageTitled finds one page by exact title.
+func (w *wiki) pageTitled(title string) (wikiPage, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, id := range w.sortedIDs() {
+		if w.pages[id].Title == title {
+			return *w.pages[id], true
+		}
+	}
+	return wikiPage{}, false
+}
+
+// countTitled is how many pages carry a title — the duplicate check.
+func (w *wiki) countTitled(title string) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n := 0
+	for _, page := range w.pages {
+		if page.Title == title {
+			n++
+		}
+	}
+	return n
 }
 
 type wikiPage struct {
@@ -142,6 +177,11 @@ func (w *wiki) serve(rw http.ResponseWriter, req *http.Request) {
 			} `json:"ancestors"`
 		}
 		_ = json.Unmarshal(body, &in)
+		if w.refusedTitle != "" && in.Title == w.refusedTitle {
+			rw.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(rw, `{"message":"that page may not be created here"}`)
+			return
+		}
 		w.next++
 		page := &wikiPage{
 			ID: fmt.Sprintf("p%d", w.next), Space: in.Space.Key,
