@@ -237,8 +237,11 @@ and one more place to forget.
 > company where one node can authenticate and the others cannot, with nothing
 > failing until a seat lands on the wrong node.
 
-Why the store is per node at all, and what moving it would cost, is
-[d-203](https://github.com/crewlet/crewlet/blob/main/decisions/203-the-secret-store-stays-node-local.md).
+The store being per node is a gap rather than a design — the company config,
+which may itself carry credentials, already replicates fleet-wide through the
+coordination store under the same encryption. Closing it is
+[d-203](https://github.com/crewlet/crewlet/blob/main/decisions/203-secrets-follow-the-config-path.md);
+until then the environment is the fleet-wide path.
 
 ---
 
