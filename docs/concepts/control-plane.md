@@ -175,19 +175,13 @@ That is the whole of the comparison, and it is over resolved values rather than 
 
 ## What a running turn sees
 
-A live apply mutates engine state **in place** so in-flight work keeps working: the LLM provider map is `clear()` + `update()`d (identity preserved on purpose), `_role_mcp_tools` is rewritten per role, an `AgentDefinition` is reassigned on the running instance, and the turn-engine settings cell hands out a new model in one shot.
+**Nothing moves under a running turn, because nothing is mutated in place.** An epoch is published rather than edited, so the question is only ever *which* epoch a turn is reading — and a turn answers that once. `runTurn` pins the company in a local at the top and builds everything from that one value: the runner, the round caps, the prefetch, the telemetry. Two reads could straddle a publish, and a turn that built its runner from one revision and took its round caps from the next would be running a company that never existed. That is the failure publishing-instead-of-mutating exists to remove ([d-404](https://github.com/crewlet/crewlet/blob/main/decisions/404-hot-reload-epochs.md)), and the pin is what collects the benefit.
 
-In-place is right — the alternative is a turn holding a reference to a dict nobody updates any more. But *keeps working* is not *stays coherent*, and each of those is read repeatedly within one turn: the ~18 turn-engine settings accessors re-read the cell on **every access**, `_role_mcp_tools` is read twice from two different places, and the agent's definition is read from roughly twenty. A turn could plan against one company and execute against another — one round cap for Plan and a different one for Execute, or a sub-agent budget sized from a fraction its parent never saw.
+The prompt is frozen harder still: it is **rendered to strings before the runner is built**, so the runner has nowhere to re-fetch from and a `self_iterate` loop cannot move the system prompt underneath the planner between rounds.
 
-Two mechanisms, and the split between them is the point.
+**What a pin cannot hold is a capability.** It holds a *catalogue* — the tool objects the epoch's registry names — and an MCP tool object holds the client it dispatches to. If the apply restarted that server, the client behind a pinned tool is closed, and the call comes back as a tool error the model can read (`MCP tool error (server/tool): …`) rather than as a name that vanished mid-turn or a panic. A model that sees a failed tool result can say so; one whose tool disappeared cannot.
 
-**The pin.** A turn captures those four things once, at the top, and reads through the capture for the rest of it. The capture rides the turn's own `context.Context`, so it reaches every goroutine the turn spawns — a sub-agent inherits the turn that spawned it — without threading a parameter through every phase signature. It is keyed by owner and seat, so a concurrent turn for a different seat, or a second engine in the same process, reads live state.
-
-**The drain.** A pin holds a *catalogue*, not a *capability*: pinning an MCP tool wrapper does not keep the client it dispatches to alive, so a pinned turn whose server was respawned fails as a dead tool rather than as a name that vanished. So before the apply mutates a seat — swapping its definition, respawning its per-role MCP children, decommissioning it — it waits for that seat's in-flight turns, capped at 10 s.
-
-The cap is on the tail of an LLM round: that is the unit of work a turn cannot be interrupted inside, and the reason a mid-turn rewire is visible at all. Past it the apply proceeds and logs `seat_drain_timed_out` — an apply that blocks indefinitely on one busy seat is strictly worse than one turn seeing a mid-flight rewire, which is what every turn saw before the drain existed.
-
-The drain counts turns, deliberately, rather than reading `AgentState`. A seat parked on a detached sandbox run stays `AWAITING_SANDBOX` for the whole run plus any clarification pause, so draining on the state would let one agent's pending question block a config apply — and through it the whole node. A suspended turn releases its count and its resume takes a fresh one.
+That is the whole exposure, and it is small enough that **the apply does not wait for in-flight turns at all** — there is no drain, and no seat is quiesced before an epoch is published. It stays small because of what the apply restarts: only a *shared* server whose resolved spec actually moved, and per-role children are not on the apply path at all, so the common config change restarts nothing a turn is holding.
 
 ---
 

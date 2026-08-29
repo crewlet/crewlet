@@ -190,8 +190,15 @@ needs real values, and it takes a deliberate act.
 Two further properties of that surface are worth stating because they are
 easy to assume the other way round:
 
-- **`/config` is guarded in full, reads included.** It is one of exactly two prefixes — `/secrets` is the other — that a read can never reach through `allow_anonymous_read`, held in one list so a third surface cannot be added to half of the rule. Reading it exposes the whole company document: the org chart, which integrations are wired, and the shape of every credential.
-- **A write does not apply anything.** `PUT /config` stores a revision and moves the activation pointer; it does not touch the running epoch, *not even on the node that served the request*. Every node applies on its own reconcile tick — which is exactly what makes a write on one node reach the whole fleet.
+- **`/config` is guarded in full, reads included.** It is one of exactly two
+  prefixes — `/secrets` is the other — that a read can never reach through
+  `allow_anonymous_read`, held in one list so a third surface cannot be added
+  to half of the rule. Reading it exposes the whole company document: the org
+  chart, which integrations are wired, and the shape of every credential.
+- **A write does not apply anything.** `PUT /config` stores a revision and
+  moves the activation pointer; it does not touch the running epoch, *not even
+  on the node that served the request*. Every node applies on its own reconcile
+  tick — which is exactly what makes a write on one node reach the whole fleet.
 
 ---
 
