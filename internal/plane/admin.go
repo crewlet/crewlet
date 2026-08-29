@@ -470,3 +470,38 @@ const (
 	RoleMember = 15
 	RoleGuest  = 5
 )
+
+// ProjectMember is one membership row, as the list endpoint serves it.
+type ProjectMember struct {
+	ID     string `json:"id"`
+	Member string `json:"member"`
+	Role   int    `json:"role"`
+	// Active is what a UI "remove from project" actually sets. Plane keeps
+	// the row and flips this, so the membership still EXISTS — which is why
+	// a re-add answers "duplicate" and a provisioner that reads only the
+	// duplicate reports the seat joined to a project it cannot see.
+	Active bool `json:"is_active"`
+}
+
+// ProjectMembers lists a project's memberships, including deactivated ones.
+func (c *Client) ProjectMembers(ctx context.Context, projectID string) ([]ProjectMember, error) {
+	path := c.ws("/projects/" + url.PathEscape(projectID) + "/members/")
+	var payload json.RawMessage
+	if err := c.get(ctx, path, nil, &payload); err != nil {
+		return nil, err
+	}
+	// The same bare-list-or-envelope shape Tokens handles: the fork paginates
+	// some collections and not others, and which is which has changed
+	// between versions.
+	var out []ProjectMember
+	if err := json.Unmarshal(payload, &out); err == nil {
+		return out, nil
+	}
+	var envelope struct {
+		Results []ProjectMember `json:"results"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return nil, fmt.Errorf("plane: project members: %w", err)
+	}
+	return envelope.Results, nil
+}

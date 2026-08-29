@@ -194,10 +194,11 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	var made []minted
 	for _, seat := range opts.Plan.Seats {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		account, created, err := ensureAccount(ctx, opts, accounts, seat)
+		account, created, drift, err := ensureAccount(ctx, opts, accounts, seat)
 		if err != nil {
 			return nil, rollback(ctx, opts, made, fmt.Errorf("plane: %s: %w", seat.Handle, err))
 		}
+		res.Notes = append(res.Notes, drift...)
 		if created {
 			// TRACKED THE INSTANT IT EXISTS, before the membership calls
 			// and before the record: the create response already handed
@@ -213,6 +214,14 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 				return nil, rollback(ctx, opts, made,
 					fmt.Errorf("plane: %s: membership of %s: %w",
 						seat.Handle, project.Identifier, err))
+			}
+			// A DUPLICATE IS NOT ALWAYS A MEMBERSHIP. "Remove from project"
+			// in the Plane UI keeps the row and flips is_active, so the add
+			// above answers "already a member" for a seat that cannot see
+			// the project at all — and the run reports it joined. This is
+			// the one case where the vendor's success is not the answer.
+			if note := inactiveNote(ctx, opts, project, account, seat); note != "" {
+				res.Notes = append(res.Notes, note)
 			}
 		}
 
@@ -251,6 +260,9 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		switch verdict {
 		case provision.VerdictSelf:
 			res.Kept = append(res.Kept, seat.Handle)
+			if note := expiryNote(ctx, opts, account, seat); note != "" {
+				res.Notes = append(res.Notes, note)
+			}
 			continue
 		case provision.VerdictOther:
 			// A COPY-PASTED VARIABLE. Minting over it hands this seat a
@@ -410,6 +422,48 @@ func credentialFor(ctx context.Context, opts Options, account Account, seat prov
 	return opts.Client.verify(ctx, value, account.ID), true, nil
 }
 
+// ExpiryWarning is how far ahead a kept credential's death is announced.
+//
+// NOTHING IN CREWLET RENEWS A TOKEN. `expiry` says it outright: an expiry
+// nobody renews is an outage with a date on it, and the only thing that mints
+// a replacement is an operator running this command again. So the window is
+// sized to the human loop rather than to the machine — 30 days spans a
+// monthly ops cadence with room to schedule the re-run, where a week would
+// land inside a single holiday and a quarter would be noise on every run for
+// three months.
+const ExpiryWarning = 30 * 24 * time.Hour
+
+// expiryNote warns that the credential this run kept has a death date.
+//
+// Only ever a NOTE. The token still authenticates — that is what put the run
+// on this branch — and re-minting a working credential early would break
+// whatever is holding the old value for no reason other than a calendar.
+func expiryNote(ctx context.Context, opts Options, account Account, seat provision.Seat) string {
+	tokens, err := opts.Client.Tokens(ctx, account.ID)
+	if err != nil {
+		// The seat is fine: its credential was just verified against the
+		// instance. This is a second opinion about how long that lasts.
+		return ""
+	}
+	label := TokenLabel(seat.Handle)
+	deadline := now(opts).Add(ExpiryWarning)
+	for _, token := range tokens {
+		if !token.Active || !strings.EqualFold(token.Label, label) {
+			continue
+		}
+		if token.ExpiresAt.IsZero() || token.ExpiresAt.After(deadline) {
+			continue
+		}
+		return fmt.Sprintf(
+			"%s: the token in %s expires %s and NOTHING renews it — re-run "+
+				"this command with -rotate before then, or the seat stops "+
+				"authenticating with no other warning",
+			seat.Handle, seat.TokenVar,
+			token.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	return ""
+}
+
 // verify asks the instance who a credential authenticates as.
 func (c *Client) verify(ctx context.Context, value, wantID string) provision.Verdict {
 	probe, err := NewClient(ClientOptions{
@@ -528,10 +582,40 @@ func humanSeatNotes(o *org.Organization, members []Account) []string {
 	return notes
 }
 
+// inactiveNote reports a membership Plane is keeping deactivated.
+//
+// A NOTE rather than a repair: reactivating is a workspace-admin decision
+// about a person's deliberate act, and a provisioner that silently undid
+// "remove from project" every run would be fighting the operator. Saying it
+// out loud is the honest half — the alternative is a seat that looks
+// provisioned and reads nothing.
+func inactiveNote(ctx context.Context, opts Options, project Project,
+	account Account, seat provision.Seat,
+) string {
+	members, err := opts.Client.ProjectMembers(ctx, project.ID)
+	if err != nil {
+		// Not worth failing the run: the add succeeded, and this is a
+		// second opinion about it.
+		return ""
+	}
+	for _, member := range members {
+		if member.Member != account.ID || member.Active {
+			continue
+		}
+		return fmt.Sprintf(
+			"%s is a member of %s but the membership is DEACTIVATED — Plane "+
+				"keeps the row when somebody removes a member in the UI, so "+
+				"the add reported success and the seat still cannot see the "+
+				"project. Re-activate it in the project's member list",
+			seat.Handle, project.Identifier)
+	}
+	return ""
+}
+
 // ensureAccount finds or creates a seat's service account.
 func ensureAccount(ctx context.Context, opts Options, accounts map[string]Account,
 	seat provision.Seat,
-) (Account, bool, error) {
+) (Account, bool, []string, error) {
 	p := opts.Config.Provisioning
 	username := AccountUsername(p, seat.Handle)
 	if existing, ok := accounts[strings.ToLower(username)]; ok {
@@ -539,18 +623,23 @@ func ensureAccount(ctx context.Context, opts Options, accounts map[string]Accoun
 			// A HUMAN WHOSE NAME COLLIDES. Minting into their account
 			// would hand an agent a person's identity, and every action
 			// the agent took would be attributed to them.
-			return Account{}, false, fmt.Errorf(
+			return Account{}, false, nil, fmt.Errorf(
 				"the workspace member %q is not a service account — refusing "+
 					"to provision a seat onto a person's identity; change "+
 					"integrations.plane.provisioning.username_prefix", username)
 		}
-		return existing, false, nil
+		// DRIFT IS REPORTED, NOT REPAIRED. The account exists and works;
+		// what has moved is how it presents itself, and a provisioner that
+		// silently rewrote a display name an admin set by hand would be
+		// undoing somebody's deliberate edit on every run. Naming it is what
+		// lets them decide.
+		return existing, false, accountDrift(opts, existing, seat), nil
 	}
 
 	account, err := opts.Client.CreateAccount(ctx, username, seat.Role,
 		AccountRole(p, seat.Handle))
 	if err != nil {
-		return Account{}, false, err
+		return Account{}, false, nil, err
 	}
 	if !strings.EqualFold(strings.TrimSpace(account.Username), username) {
 		// THE INSTANCE GENERATED ITS OWN NAME. The account exists and is
@@ -558,24 +647,67 @@ func ensureAccount(ctx context.Context, opts Options, accounts map[string]Accoun
 		// next run would create another — which is the duplicate-account
 		// failure, arriving one run later. Undo it and stop.
 		if err := opts.Client.DeleteAccount(context.WithoutCancel(ctx), account.ID); err != nil {
-			return Account{}, false, fmt.Errorf(
+			return Account{}, false, nil, fmt.Errorf(
 				"this instance ignored the requested username (it created %q "+
 					"instead of %q), and the account it made could not be "+
 					"removed: %w — delete it by hand before re-running",
 				account.Username, username, err)
 		}
-		return Account{}, false, fmt.Errorf(
+		return Account{}, false, nil, fmt.Errorf(
 			"this instance ignored the requested username and created %q "+
 				"instead of %q, so no later run could find the account "+
 				"again. The account was deleted and nothing was minted",
 			account.Username, username)
 	}
 	if strings.TrimSpace(account.Token) == "" {
-		return Account{}, false, errors.New(
+		return Account{}, false, nil, errors.New(
 			"the account was created but the response carried no token, and " +
 				"a service account's first token is served exactly once")
 	}
-	return account, true, nil
+	return account, true, nil, nil
+}
+
+// accountDrift names the ways an existing service account has moved away
+// from what the company config would create today.
+//
+// REPORTED, NEVER REPAIRED. Both fields are ones a workspace admin can set
+// by hand in the Plane UI, and a provisioner that rewrote them on every run
+// would silently undo a deliberate edit — and would do it without ever
+// saying so, because a converged run prints nothing. The workspace role in
+// particular is a privilege decision: quietly demoting an account somebody
+// promoted for a reason is the failure mode with teeth, and quietly
+// promoting one is worse.
+//
+// # An absent field is unknown, not drift
+//
+// Both comparisons skip a zero value, because the member listing is the only
+// place they are read from and which fields a given Plane build serves there
+// has moved between versions. An account this tool created always has both,
+// so the cost of the guard is one missed note on a workspace where somebody
+// blanked a display name by hand — and the cost of not having it is the same
+// two notes on every seat, on every run, on an instance that simply does not
+// serve the column.
+func accountDrift(opts Options, existing Account, seat provision.Seat) []string {
+	var notes []string
+	if have, want := strings.TrimSpace(existing.DisplayName), strings.TrimSpace(seat.Role); have != "" &&
+		want != "" && !strings.EqualFold(have, want) {
+		notes = append(notes, fmt.Sprintf(
+			"%s: the account's display name in Plane is %q, but the company "+
+				"config calls the seat %q — every issue it touches is "+
+				"attributed under the Plane name. Rename it in the workspace "+
+				"member list, or change the role's title",
+			seat.Handle, have, want))
+	}
+	if want := AccountRole(opts.Config.Provisioning, seat.Handle); existing.Role != 0 &&
+		existing.Role != want {
+		notes = append(notes, fmt.Sprintf(
+			"%s: the account holds the %s workspace role and this config "+
+				"would create it as %s — the provisioner does not change the "+
+				"role of an account that already exists, so change it in "+
+				"Plane or set integrations.plane.provisioning.roles.%s",
+			seat.Handle, roleName(existing.Role), roleName(want), seat.Handle))
+	}
+	return notes
 }
 
 // rotate mints a fresh token for an existing account and retires the old

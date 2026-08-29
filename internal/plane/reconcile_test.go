@@ -1655,3 +1655,231 @@ func TestAnUnverifiableCredentialIsLeftAloneWithANote(t *testing.T) {
 		t.Errorf("%d tokens were revoked on an unverifiable seat", n)
 	}
 }
+
+// A DEACTIVATED MEMBERSHIP LOOKS EXACTLY LIKE A CONVERGED ONE from the add
+// call's answer, which is the whole reason the check exists.
+func TestADeactivatedMembershipIsReportedRatherThanRead(t *testing.T) {
+	t.Parallel()
+	f := newInstance()
+	if _, err := run(t, f, plane.Options{}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.deactivateMembership("p-eng")
+	res, err := run(t, f, plane.Options{})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if !anyContains(res.Notes, "DEACTIVATED") {
+		t.Errorf("nothing named the deactivated membership: %v", res.Notes)
+	}
+	if !anyContains(res.Notes, "ENG") {
+		t.Errorf("the note does not name the project: %v", res.Notes)
+	}
+}
+
+// AN ACTIVE MEMBERSHIP SAYS NOTHING. A note on every converged run is a
+// note nobody reads.
+func TestAnActiveMembershipIsQuiet(t *testing.T) {
+	t.Parallel()
+	f := newInstance()
+	if _, err := run(t, f, plane.Options{}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	res, err := run(t, f, plane.Options{})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if anyContains(res.Notes, "DEACTIVATED") {
+		t.Errorf("an active membership was reported as deactivated: %v", res.Notes)
+	}
+}
+
+// THE SECOND OPINION NEVER FAILS THE RUN. An instance that does not serve
+// the membership list has still had every seat added successfully.
+func TestAnInstanceWithoutAMembershipListStillProvisions(t *testing.T) {
+	t.Parallel()
+	f := newInstance()
+	f.noProjectMemberList = true
+	res, err := run(t, f, plane.Options{})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(res.Created) != 1 {
+		t.Errorf("created %v", res.Created)
+	}
+	if anyContains(res.Notes, "DEACTIVATED") {
+		t.Errorf("an unreadable list was reported as a deactivation: %v", res.Notes)
+	}
+}
+
+// DRIFT IS REPORTED, NOT REPAIRED — the display name an admin edited by hand
+// survives the run, and the run says it moved.
+func TestADisplayNameThatDriftedIsNamedAndLeftAlone(t *testing.T) {
+	t.Parallel()
+	f := newInstance()
+	if _, err := run(t, f, plane.Options{}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.renameAccount("crewlet-swe", "Senior Engineer (do not touch)")
+	res, err := run(t, f, plane.Options{})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if !anyContains(res.Notes, "display name") {
+		t.Errorf("the drifted display name was not reported: %v", res.Notes)
+	}
+	if got := f.displayName("crewlet-swe"); got != "Senior Engineer (do not touch)" {
+		t.Errorf("the run rewrote the display name to %q", got)
+	}
+}
+
+// THE WORKSPACE ROLE IS THE ONE WITH TEETH: quietly demoting an account
+// somebody promoted is the failure this note exists to prevent.
+func TestAWorkspaceRoleThatDriftedIsNamedAndLeftAlone(t *testing.T) {
+	t.Parallel()
+	f := newInstance()
+	if _, err := run(t, f, plane.Options{}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.setRole("crewlet-swe", plane.RoleAdmin)
+	res, err := run(t, f, plane.Options{})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if !anyContains(res.Notes, "admin workspace role") {
+		t.Errorf("the drifted role was not reported: %v", res.Notes)
+	}
+	if got := f.roleOf("crewlet-swe"); got != plane.RoleAdmin {
+		t.Errorf("the run changed the role to %d", got)
+	}
+}
+
+// A CONVERGED ACCOUNT SAYS NOTHING about drift.
+func TestAnUndriftedAccountReportsNoDrift(t *testing.T) {
+	t.Parallel()
+	f := newInstance()
+	if _, err := run(t, f, plane.Options{}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	res, err := run(t, f, plane.Options{})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if anyContains(res.Notes, "display name") || anyContains(res.Notes, "workspace role") {
+		t.Errorf("a converged account reported drift: %v", res.Notes)
+	}
+}
+
+// NOTHING RENEWS A TOKEN, so a kept credential with a death date inside the
+// warning window is the last chance to say so.
+func TestAKeptCredentialAboutToExpireIsAnnounced(t *testing.T) {
+	t.Parallel()
+	f := newInstance()
+	sink := newTrackerSink()
+	days := 40
+	// The FIRST run creates; the SECOND mints the labelled, expiring token
+	// this tool owns; the THIRD is the one that keeps it.
+	if _, err := run(t, f, plane.Options{}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := run(t, f, plane.Options{Sink: sink, ExpiryDays: &days}); err != nil {
+		t.Fatalf("mint run: %v", err)
+	}
+	clock := func() time.Time { return time.Date(2026, 1, 21, 0, 0, 0, 0, time.UTC) }
+	res, err := run(t, f, plane.Options{Sink: sink, Now: clock})
+	if err != nil {
+		t.Fatalf("keep run: %v", err)
+	}
+	if len(res.Kept) != 1 {
+		t.Fatalf("the working credential was not kept: %+v", res)
+	}
+	if !anyContains(res.Notes, "NOTHING renews it") {
+		t.Errorf("the expiry was not announced: %v", res.Notes)
+	}
+}
+
+// A DEATH DATE BEYOND THE WINDOW IS NOISE, and a note on every run for a
+// quarter is a note nobody reads by the time it matters.
+func TestACredentialExpiringBeyondTheWindowIsQuiet(t *testing.T) {
+	t.Parallel()
+	f := newInstance()
+	sink := newTrackerSink()
+	days := 400
+	if _, err := run(t, f, plane.Options{}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := run(t, f, plane.Options{Sink: sink, ExpiryDays: &days}); err != nil {
+		t.Fatalf("mint run: %v", err)
+	}
+	res, err := run(t, f, plane.Options{Sink: sink})
+	if err != nil {
+		t.Fatalf("keep run: %v", err)
+	}
+	if len(res.Kept) != 1 {
+		t.Fatalf("the working credential was not kept: %+v", res)
+	}
+	if anyContains(res.Notes, "NOTHING renews it") {
+		t.Errorf("a distant expiry was announced: %v", res.Notes)
+	}
+}
+
+// A TOKEN THAT NEVER EXPIRES — the default — is never announced.
+func TestACredentialThatNeverExpiresIsQuiet(t *testing.T) {
+	t.Parallel()
+	f := newInstance()
+	sink := newTrackerSink()
+	if _, err := run(t, f, plane.Options{}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := run(t, f, plane.Options{Sink: sink}); err != nil {
+		t.Fatalf("mint run: %v", err)
+	}
+	res, err := run(t, f, plane.Options{Sink: sink})
+	if err != nil {
+		t.Fatalf("keep run: %v", err)
+	}
+	if len(res.Kept) != 1 {
+		t.Fatalf("the working credential was not kept: %+v", res)
+	}
+	if anyContains(res.Notes, "NOTHING renews it") {
+		t.Errorf("a token with no expiry was announced: %v", res.Notes)
+	}
+}
+
+// AN INSTANCE THAT DOES NOT SERVE display_name reports no drift at all —
+// absent is unknown, and two notes per seat per run on a whole workspace is
+// what reading it as drift would cost.
+func TestAMemberListingWithoutDisplayNamesReportsNoDrift(t *testing.T) {
+	t.Parallel()
+	f := newInstance()
+	if _, err := run(t, f, plane.Options{}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.noDisplayNames = true
+	res, err := run(t, f, plane.Options{})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if anyContains(res.Notes, "display name") {
+		t.Errorf("an unserved column was read as drift: %v", res.Notes)
+	}
+}
+
+// AN UNSERVED role COLUMN DECODES AS 0, which is not a Plane role at all —
+// reading it as a demotion would report every seat as drifted on a build
+// that simply does not serve the field.
+func TestAMemberListingWithoutRolesReportsNoDrift(t *testing.T) {
+	t.Parallel()
+	f := newInstance()
+	if _, err := run(t, f, plane.Options{}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	f.noRoles = true
+	res, err := run(t, f, plane.Options{})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if anyContains(res.Notes, "workspace role") {
+		t.Errorf("an unserved column was read as drift: %v", res.Notes)
+	}
+}

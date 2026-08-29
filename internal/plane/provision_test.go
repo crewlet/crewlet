@@ -83,6 +83,19 @@ type instance struct {
 	// bodies are the write payloads, so a test can assert what was SENT
 	// rather than what the fake chose to remember about it.
 	bodies []recorded
+	// inactive marks a project:member row Plane is keeping deactivated —
+	// what "remove from project" in the UI actually does.
+	inactive map[string]bool
+	// noProjectMemberList refuses the membership list, the degraded case
+	// the inactive check has to survive without failing a run.
+	noProjectMemberList bool
+	// noDisplayNames drops display_name from the member listing, which is
+	// the build the drift check must not read as "every name has moved".
+	noDisplayNames bool
+	// noRoles drops role from the member listing. Plane's role ints are
+	// 20/15/5, so an unserved column decodes as 0 — a value that is not a
+	// role, and must not be read as a demotion.
+	noRoles bool
 }
 
 // pageRow is a page as the workspace holds it.
@@ -108,10 +121,59 @@ func newInstance() *instance {
 		accounts: map[string]*plane.Account{},
 		tokens:   map[string][]*plane.Token{},
 		member:   map[string]bool{},
+		inactive: map[string]bool{},
 		pages:    map[string]*pageRow{},
 		projects: []plane.Project{{ID: "p-eng", Identifier: "ENG", Name: "Engineering"}},
 		now:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
+}
+
+// deactivateMembership flips every membership of a project to inactive,
+// which is what "remove from project" in the Plane UI does to the row.
+func (f *instance) deactivateMembership(project string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key := range f.member {
+		if owner, _, _ := strings.Cut(key, ":"); owner == project {
+			f.inactive[key] = true
+		}
+	}
+}
+
+// renameAccount edits a display name the way a workspace admin would.
+func (f *instance) renameAccount(username, display string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if a := f.accounts[username]; a != nil {
+		a.DisplayName = display
+	}
+}
+
+func (f *instance) displayName(username string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if a := f.accounts[username]; a != nil {
+		return a.DisplayName
+	}
+	return ""
+}
+
+// setRole promotes or demotes an account the way a workspace admin would.
+func (f *instance) setRole(username string, role int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if a := f.accounts[username]; a != nil {
+		a.Role = role
+	}
+}
+
+func (f *instance) roleOf(username string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if a := f.accounts[username]; a != nil {
+		return a.Role
+	}
+	return 0
 }
 
 func (f *instance) id(prefix string) string {
@@ -297,9 +359,15 @@ func (f *instance) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		out := make([]map[string]any, 0, len(f.accounts))
 		for _, a := range f.accounts {
-			row := map[string]any{"id": a.ID, "is_bot": a.IsBot, "role": a.Role}
+			row := map[string]any{"id": a.ID, "is_bot": a.IsBot}
+			if !f.noRoles {
+				row["role"] = a.Role
+			}
 			if !f.noUsernames {
 				row["username"] = a.Username
+			}
+			if !f.noDisplayNames {
+				row["display_name"] = a.DisplayName
 			}
 			out = append(out, row)
 		}
@@ -397,6 +465,26 @@ func (f *instance) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.WriteHeader(http.StatusNoContent)
+
+	case strings.HasPrefix(path, ws+"/projects/") &&
+		strings.HasSuffix(path, "/members/") && r.Method == http.MethodGet:
+		project := strings.TrimSuffix(strings.TrimPrefix(path, ws+"/projects/"), "/members/")
+		if f.noProjectMemberList {
+			deny(w, http.StatusNotFound, "no such route")
+			return
+		}
+		out := make([]map[string]any, 0, len(f.member))
+		for key := range f.member {
+			owner, member, _ := strings.Cut(key, ":")
+			if owner != project {
+				continue
+			}
+			out = append(out, map[string]any{
+				"id": "pm-" + member, "member": member,
+				"is_active": !f.inactive[key],
+			})
+		}
+		json.NewEncoder(w).Encode(map[string]any{"results": out})
 
 	case strings.HasSuffix(path, "/members/") && r.Method == http.MethodPost:
 		project := strings.TrimSuffix(strings.TrimPrefix(path, ws+"/projects/"), "/members/")
