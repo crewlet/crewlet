@@ -248,7 +248,7 @@ func TestDiffingARevisionAgainstItselfSaysSo(t *testing.T) {
 // so a command run while the engine is stopped genuinely cannot reach it.
 // Saying so is the whole value — an operator who activated a revision and saw
 // nothing change would reasonably conclude the command failed, and neither
-// remedy (restart, or POST /config) is guessable.
+// remedy (restart, or PUT /config) is guessable.
 //
 // That the pointer then MOVES on the next start is asserted where it happens:
 // TestAnOfflineActivationReachesTheFleetAtTheNextStart in reconcile_test.go.
@@ -266,7 +266,7 @@ func TestAnOfflineActivationSaysWhatItDidAndDidNot(t *testing.T) {
 	if !strings.Contains(out, id) {
 		t.Errorf("the output does not name the revision: %q", out)
 	}
-	for _, want := range []string{"next start", "POST /config"} {
+	for _, want := range []string{"next start", "PUT /config"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the output does not mention %q, so an operator cannot tell "+
 				"how to reach a running fleet: %q", want, out)

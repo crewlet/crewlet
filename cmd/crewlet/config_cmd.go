@@ -247,7 +247,7 @@ func importConfig(ctx context.Context, cs *configStore, path string, stdout io.W
 // failed, and the fix — restart, or use the API — is not guessable.
 const publishNote = "This node will publish it to the fleet at its next start. " +
 	"To activate it on a RUNNING fleet without a restart, use the API: " +
-	"POST /config to a node that is up."
+	"PUT /config to a node that is up."
 
 // exportConfig prints one revision as YAML.
 func exportConfig(ctx context.Context, cs *configStore, revisionID string,
