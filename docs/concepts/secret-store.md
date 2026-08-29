@@ -140,16 +140,22 @@ for that than an encrypted table the engine reads back itself.
 
 **The store is the node's own**, like the database it lives in, and a fleet is where that shows. `crewlet secrets set` writes the rows of the one node whose `crewlet.yaml` it was pointed at; nothing propagates them. On more than one node a rotated credential has to be set on **every** node — run the command once per node's Tier A file, or supply the value through the process environment, which every node's resolver falls back to. The activation epoch propagates; the value it re-resolves does not.
 
-> ⚠️ **Stop the node's engine before running `crewlet secrets`.** The store is
-> **one file, one process** — the driver does not support a second opener, and
-> it does not reliably refuse one either, so a rotation run against a live
-> `crewlet run` on the same path can corrupt the database rather than fail.
-> The CLI warns on every subcommand and cannot check for you: nothing here
-> knows whether the engine is up. On a fleet this is per node and the nodes are
-> independent, so the rotation is a rolling one — stop a node, set the value,
-> start it, move on. Where downtime is not acceptable, supply the value through
-> the process environment instead (the resolver falls back to it) and restart
-> nodes on your own schedule.
+> **Stop the node's engine before running `crewlet secrets`.** The store is
+> **one file, one process**, and the engine takes an exclusive lock on it for
+> as long as it runs — so `crewlet secrets` against a live node is **refused**,
+> naming the process holding the file and what to do about it. It is not a
+> caution you can run past: the driver does not support two writers and does
+> not reliably refuse the second one, so before the lock existed this corrupted
+> the database silently.
+>
+> The lock is released by the kernel when the engine exits, however it exits —
+> a crash, a `kill -9` and an OOM all free it, and there is no stale lock to
+> clear by hand.
+>
+> On a fleet the nodes are independent, so a rotation is a rolling one: stop a
+> node, set the value, start it, move on. Where that downtime is not
+> acceptable, supply the value through the process environment instead — the
+> resolver falls back to it — and restart nodes on your own schedule.
 
 So `crewlet secrets set` takes effect at the next config activation or restart — the CLI says so after each write. Re-activating the *current* revision is a valid way to ask a running engine to pick up a rotated credential; the refresh happens before the no-op check precisely so that gesture works, and the activation log is append-only precisely so a re-activation still moves the pointer every node is watching (see [Control Plane](control-plane.md)).
 

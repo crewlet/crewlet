@@ -3,11 +3,17 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // bootstrapWithKeyring writes a Tier A config with a real keyring and a
@@ -380,37 +386,97 @@ func TestTheProvenanceOfAWriteIsRecorded(t *testing.T) {
 	}
 }
 
-// THE ONE-PROCESS HAZARD IS SAID, EVERY TIME, ON EVERY SUBCOMMAND.
+// A LOCKED STORE IS ANSWERED WITH THE REMEDY, not just the refusal.
 //
-// The store is one file, one process: the driver does not support a second
-// opener, and it does not reliably refuse one either — so an operator
-// rotating a secret against a running engine corrupts the file with nothing
-// telling them. This command cannot check whether the engine is up, which is
-// exactly why it has to say so rather than imply safety by silence.
-func TestEverySecretsSubcommandWarnsAboutTheRunningEngine(t *testing.T) {
-	cfg := bootstrapWithKeyring(t, "k1")
-	if _, _, err := secretsCmd(t, cfg, "set", "TOKEN", "-value", "sk-not-real"); err != nil {
-		t.Fatalf("set: %v", err)
+// internal/store proves the exclusion itself, across a real process boundary
+// — it has to, since a second PROCESS is the whole property and a Go test
+// shares one. What this side owns is the message: store.ErrLocked can say
+// which pid holds the file, but not that the second opener was `crewlet
+// secrets` and therefore not what its operator should do instead.
+func TestALockedStoreIsAnsweredWithTheRemedy(t *testing.T) {
+	t.Parallel()
+	locked := fmt.Errorf("open store: %w: /var/lib/crewlet/index.db is held by "+
+		"pid 41 on host-a since 2026-01-01T00:00:00Z", store.ErrLocked)
+
+	got := engineHasTheStore(locked, "crewlet.yaml")
+	if !errors.Is(got, store.ErrLocked) {
+		t.Fatalf("the sentinel was lost, so a caller can no longer tell this "+
+			"from any other failure: %v", got)
 	}
-	for _, args := range [][]string{
-		{"set", "OTHER", "-value", "x"},
-		{"get", "TOKEN", "-reveal"},
-		{"list"},
-		{"unset", "TOKEN"},
+	for _, want := range []string{
+		"crewlet.yaml", // which node
+		"crewlet run",  // what is holding it
+		"stop",         // the first way out
+		"environment",  // the way out that needs no downtime
+		"pid 41",       // the original, still there to act on
 	} {
-		out, errs, err := secretsCmd(t, cfg, args...)
-		if err != nil {
-			t.Fatalf("%v: %v", args, err)
+		if !strings.Contains(got.Error(), want) {
+			t.Errorf("the refusal omits %q, so an operator is told they are "+
+				"blocked and not what to do: %v", want, got)
 		}
-		if !strings.Contains(errs, "one process") {
-			t.Errorf("%v: stderr does not warn about the single-process store: %q",
-				args, errs)
+	}
+}
+
+// EVERY OTHER FAILURE KEEPS ITS OWN MESSAGE. Telling an operator to stop the
+// engine when the real problem is a missing keyring or an unreadable path
+// sends them to fix something that is not broken.
+func TestOnlyALockedStoreGetsTheStopTheEngineRemediation(t *testing.T) {
+	t.Parallel()
+	other := errors.New("the keyring cannot open this store")
+	got := engineHasTheStore(other, "crewlet.yaml")
+	if !errors.Is(got, other) {
+		t.Fatalf("the original error was replaced: %v", got)
+	}
+	if strings.Contains(got.Error(), "crewlet run") {
+		t.Fatalf("an unrelated failure was answered with the lock's "+
+			"remediation: %v", got)
+	}
+}
+
+// EVERY SECRET-STORE OPENER GOES THROUGH THE REMEDIATION.
+//
+// Derived from the source rather than driven through the CLI, because the
+// case that would drive it needs a second OS PROCESS holding the file — which
+// internal/store tests and a Go test here cannot. What can go wrong on this
+// side is a path that opens the store and returns store.ErrLocked raw, and
+// the symptom is only ever a worse error message: nothing fails, no test goes
+// red, and an operator is told "the database is open in another process" with
+// no idea that they are the second process.
+func TestOpeningTheSecretStoreAlwaysExplainsALockedOne(t *testing.T) {
+	t.Parallel()
+	const file = "secrets.go"
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, file, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", file, err)
+	}
+
+	var checked bool
+	for _, decl := range parsed.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "openSecretStore" {
+			continue
 		}
-		// ON STDERR, so `secrets get -reveal | …` still pipes only the
-		// value. A warning mixed into stdout would land in whatever the
-		// operator piped the secret into.
-		if strings.Contains(out, "one process") {
-			t.Errorf("%v: the warning reached stdout, where a pipe consumes it", args)
+		checked = true
+		var wraps bool
+		ast.Inspect(fn, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "engineHasTheStore" {
+				wraps = true
+			}
+			return true
+		})
+		if !wraps {
+			t.Errorf("openSecretStore returns the store's error without "+
+				"engineHasTheStore at %s — a locked store would be reported "+
+				"with no remedy", fset.Position(fn.Pos()))
 		}
+	}
+	if !checked {
+		t.Fatal("openSecretStore is gone from secrets.go, so this guard is " +
+			"asserting nothing — point it at whatever replaced it")
 	}
 }

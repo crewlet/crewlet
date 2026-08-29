@@ -21,6 +21,12 @@ import (
 // back as returned errors.
 func TestMain(m *testing.M) {
 	logging.Configure(slog.LevelError, logging.FormatText, io.Discard)
+	// THE LOCK HELPER SHARES THIS ENTRY POINT. A re-exec of the test binary
+	// is the only way to get a second OS process, and the second process is
+	// the only thing the store's file lock is about — see lock_ext_test.go.
+	if path := os.Getenv(helperEnv); path != "" {
+		os.Exit(runLockHelper(path, os.Getenv(helperModeEnv)))
+	}
 	os.Exit(m.Run())
 }
 

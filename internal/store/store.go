@@ -4,13 +4,29 @@
 //
 // # One file, one process
 //
-// The engine owns its database file EXCLUSIVELY. Turso does not support
-// multi-process access to a file, so a second binary pointed at the same path
-// is not a degraded configuration, it is corruption waiting for a schedule to
-// collide. Everything that genuinely needs cross-process coordination — seat
-// leases, config activations, the completion ledger, dedupe and rate valves —
-// lives in the KV layer instead (decisions/201), and that separation is why
-// nothing here has to be safe against a peer.
+// The engine owns its database file EXCLUSIVELY. A second binary pointed at
+// the same path is not a degraded configuration, it is corruption waiting for
+// a schedule to collide — and the two certified drivers disagree about it,
+// which is worse than either answer alone. Measured: turso refuses, but as an
+// opaque connect error and only while the first process holds live
+// connections; modernc sqlite ACCEPTS IT SILENTLY. So on the fallback driver
+// the failure arrives later as a corrupt file with no event to trace it to,
+// and on the default one it arrives as a message about locking that names no
+// holder.
+//
+// [Open] therefore takes an advisory OS lock for the life of the handle and
+// answers a second PROCESS with [ErrLocked] — before any driver work, the
+// same way on both drivers, naming the pid that holds the file. See lock.go
+// for why an OS lock rather than a pid file, and why two handles inside one
+// process share the claim instead. That is what makes the rule above true
+// rather than merely stated: the secret-store CLIs open this database from a
+// second process as their documented gesture, and before the lock the only
+// defence was this comment.
+//
+// Everything that genuinely needs cross-process coordination — seat leases,
+// config activations, the completion ledger, dedupe and rate valves — lives in
+// the KV layer instead (decisions/201), and that separation is why nothing
+// here has to be safe against a peer.
 //
 // It also collapses a whole idiom. The Postgres migrator took an advisory lock
 // because `crewlet run`, `crewlet run api` and `crewlet config import` could
@@ -131,6 +147,12 @@ type DB struct {
 	path string
 	caps Capabilities
 	dim  int
+
+	// lock is this process's exclusive claim on path, held for the life of
+	// the handle and released by Close — or by the kernel, if this process
+	// does not get to run Close. Nil for an in-memory database, which has
+	// no file to exclude anyone from. See lock.go.
+	lock *fileLock
 }
 
 var log = logging.Get("store")
@@ -138,13 +160,31 @@ var log = logging.Get("store")
 // Open opens (creating if absent) the database at path, applies any pending
 // schema, and probes the driver's capabilities.
 //
-// path is a filesystem path. The caller owns it exclusively for the life of
-// the process — see the package doc.
+// path is a filesystem path, and this process takes an EXCLUSIVE lock on it
+// for the life of the handle — see the package doc for why, and lock.go for
+// how. A second crewlet process opening the same path gets [ErrLocked] rather
+// than a database the two of them corrupt between them.
 func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	drv, err := resolveDriver(opts.Driver)
 	if err != nil {
 		return nil, err
 	}
+	// THE LOCK FIRST, before the native library and before the pool: both
+	// of those touch shared state on the way up, and taking them for a
+	// database this process turns out not to own is work done against a
+	// file somebody else is writing.
+	lock, err := lockStore(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		// Released on every failure below. A handle that never reached a
+		// caller has no Close coming, and the lock would outlive the
+		// attempt for the life of the process.
+		if err != nil {
+			lock.release()
+		}
+	}()
 	// BEFORE THE POOL, because the Turso driver loads its native library on
 	// the first connection and PANICS if the shared cache it loads from is
 	// half-written — see turso.go. Preparing it here turns a process that
@@ -180,7 +220,7 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 		return nil, fmt.Errorf("store: open %s (%s): %w", path, drv, err)
 	}
 
-	db := &DB{sql: pool, drv: drv, path: path, dim: opts.EmbeddingDim}
+	db := &DB{sql: pool, drv: drv, path: path, dim: opts.EmbeddingDim, lock: lock}
 	applied, err := db.migrate(ctx)
 	if err != nil {
 		_ = pool.Close()
@@ -218,12 +258,18 @@ func resolveDriver(want Driver) (Driver, error) {
 	}
 }
 
-// Close releases the pool.
+// Close releases the pool and this process's claim on the file.
+//
+// THE LOCK LAST, after the pool: a peer that saw the lock free while this
+// process still had connections open would be the two-writer case the lock
+// exists to prevent, in the one window where it looked safe.
 func (d *DB) Close() error {
 	if d == nil || d.sql == nil {
 		return nil
 	}
-	return d.sql.Close()
+	err := d.sql.Close()
+	d.lock.release()
+	return err
 }
 
 // Caps reports what the live driver can do. Probed once at Open — the answers

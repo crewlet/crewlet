@@ -96,7 +96,7 @@ func runSecrets(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	sv, closeStore, err := openSecretStore(ctx, *bootstrapPath, stderr)
+	sv, closeStore, err := openSecretStore(ctx, *bootstrapPath)
 	if err != nil {
 		return err
 	}
@@ -154,41 +154,44 @@ func isFlagSet(fs *flag.FlagSet, name string) bool {
 // process environment, which every resolver falls back to. Said in the CLI's
 // own output after each write, because the failure otherwise is a credential
 // that works on the node an operator tested and nowhere else.
-func openSecretStore(ctx context.Context, bootstrapPath string, stderr io.Writer) (*store.SecretValues, func(), error) {
+func openSecretStore(ctx context.Context, bootstrapPath string) (*store.SecretValues, func(), error) {
 	boot, err := loadBootstrapForStore(bootstrapPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	warnEngineMayBeRunning(stderr, boot.Store.Path)
 	if len(boot.Secrets.Keys) == 0 {
 		return nil, nil, fmt.Errorf(
 			"%s declares no secrets.keys, so there is no keyring to open the "+
 				"store with; run `crewlet secrets keygen` and add one",
 			bootstrapPath)
 	}
-	return openSecretValues(ctx, boot)
+	sv, closeStore, err := openSecretValues(ctx, boot)
+	if err != nil {
+		return nil, nil, engineHasTheStore(err, bootstrapPath)
+	}
+	return sv, closeStore, nil
 }
 
-// warnEngineMayBeRunning says what this command cannot check for itself.
+// engineHasTheStore turns the store's lock refusal into a remediation.
 //
-// The store is ONE FILE, ONE PROCESS (see internal/store): the driver does not
-// support multi-process access, so this command and a running `crewlet run`
-// pointed at the same path is not a degraded configuration — it is corruption
-// waiting for two schedules to collide. Nothing here can tell whether the
-// engine is up: there is no lock file to consult, and the driver does not
-// reliably refuse the second opener, which is exactly why the hazard is
-// silent and why saying so is the least this command owes an operator.
+// [store.ErrLocked] already says which file and which pid. What it cannot say
+// is what an operator of THIS command should do about it, because the store
+// does not know it was opened by `crewlet secrets` rather than by a second
+// engine. So the sentinel is caught here and answered in this command's own
+// terms.
 //
-// TO STDERR, so a `crewlet secrets get -reveal … | …` pipeline still carries
-// only the value.
-func warnEngineMayBeRunning(stderr io.Writer, path string) {
-	if stderr == nil {
-		return
+// A REFUSAL RATHER THAN A WARNING, which is the whole change: before the lock
+// existed this command printed a caution and opened the file anyway, so an
+// operator who did not read it corrupted the database. Now it cannot.
+func engineHasTheStore(err error, bootstrapPath string) error {
+	if !errors.Is(err, store.ErrLocked) {
+		return err
 	}
-	fmt.Fprintf(stderr,
-		"warning: %s is the engine's own database and the driver allows only "+
-			"one process to open it. Stop `crewlet run` on this node before "+
-			"running this, or the two writers may corrupt the file.\n", path)
+	return fmt.Errorf("%w\n\nthe engine for %s is running and holds its "+
+		"database; the driver allows only one process on a file. Either stop "+
+		"`crewlet run` on this node and re-run this, or supply the value "+
+		"through the process environment instead — the resolver falls back to "+
+		"it, so a rotation needs no downtime that way", err, bootstrapPath)
 }
 
 // loadBootstrapForStore reads the Tier A document that names the store.

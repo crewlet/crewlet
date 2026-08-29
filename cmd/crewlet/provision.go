@@ -62,12 +62,12 @@ func bootstrapFlag(fs *flag.FlagSet) *string {
 
 // open builds the chosen sink, refusing an ambiguous or absent choice.
 //
-// Both writers are threaded through rather than read from a package
-// variable, and that is not tidiness: the variable they replaced was written
-// by each of the three provision commands just before this call, so two
-// running at once raced on it — which the race detector caught the moment the
-// CLI's tests ran in parallel. A writer is an argument the caller already has.
-func (s sinkFlags) open(ctx context.Context, stdout, stderr io.Writer) (provision.TokenSink, func(), error) {
+// stdout is threaded through rather than read from a package variable, and
+// that is not tidiness: the variable it replaced was written by each of the
+// three provision commands just before this call, so two running at once
+// raced on it — which the race detector caught the moment the CLI's tests
+// ran in parallel. A writer is an argument the caller already has.
+func (s sinkFlags) open(ctx context.Context, stdout io.Writer) (provision.TokenSink, func(), error) {
 	chosen := 0
 	for _, on := range []bool{*s.secretStore, *s.envFile != "", *s.print} {
 		if on {
@@ -95,7 +95,7 @@ func (s sinkFlags) open(ctx context.Context, stdout, stderr io.Writer) (provisio
 		return sink, func() {}, err
 	}
 
-	sv, closeStore, err := openSecretStore(ctx, *s.bootstrap, stderr)
+	sv, closeStore, err := openSecretStore(ctx, *s.bootstrap)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -284,7 +284,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
-	sink, closeSink, err := sinks.open(ctx, stdout, stderr)
+	sink, closeSink, err := sinks.open(ctx, stdout)
 	if err != nil {
 		return err
 	}
@@ -575,7 +575,7 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	sink, closeSink, err := sinks.open(ctx, stdout, stderr)
+	sink, closeSink, err := sinks.open(ctx, stdout)
 	if err != nil {
 		return err
 	}
@@ -736,7 +736,7 @@ func runPlaneProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	sink, closeSink, err := sinks.open(ctx, stdout, stderr)
+	sink, closeSink, err := sinks.open(ctx, stdout)
 	if err != nil {
 		return err
 	}

@@ -253,7 +253,7 @@ func TestEachRunPrintsToTheWriterItWasGiven(t *testing.T) {
 		if err := fs.Parse([]string{"-print"}); err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		sink, closeSink, err := sinks.open(t.Context(), w, io.Discard)
+		sink, closeSink, err := sinks.open(t.Context(), w)
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}

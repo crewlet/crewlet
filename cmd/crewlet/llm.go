@@ -147,7 +147,7 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "Logged %s out and removed its credentials.\n", key)
 		return nil
 	case "export":
-		return exportLLM(ctx, providers, key, *secretStore, *bootstrapPath, stdout, stderr)
+		return exportLLM(ctx, providers, key, *secretStore, *bootstrapPath, stdout)
 	case "import":
 		return importLLM(providers, key, os.Stdin, stdout)
 	default:
@@ -380,7 +380,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 					"Reference it as ${%s}.\n", tokenVar)
 			return nil
 		}
-		if err := storeLLMSecret(ctx, req.bootstrapPath, tokenVar, token, stderr); err != nil {
+		if err := storeLLMSecret(ctx, req.bootstrapPath, tokenVar, token); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout,
@@ -419,7 +419,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 	}
 }
 
-func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout, stderr io.Writer) error {
+func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)
 	if err != nil {
 		return err
@@ -439,7 +439,7 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 		return nil
 	}
 	name := cliagent.BundleVarName(key)
-	if err := storeLLMSecret(ctx, bootstrapPath, name, bundle, stderr); err != nil {
+	if err := storeLLMSecret(ctx, bootstrapPath, name, bundle); err != nil {
 		return err
 	}
 	// NOT "any engine sharing that database". The store is one file, one
@@ -457,8 +457,8 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 }
 
 // storeLLMSecret writes one value into the encrypted secret store.
-func storeLLMSecret(ctx context.Context, bootstrapPath, name, value string, stderr io.Writer) error {
-	sv, closeStore, err := openSecretStore(ctx, bootstrapPath, stderr)
+func storeLLMSecret(ctx context.Context, bootstrapPath, name, value string) error {
+	sv, closeStore, err := openSecretStore(ctx, bootstrapPath)
 	if err != nil {
 		return fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
 	}

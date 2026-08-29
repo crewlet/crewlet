@@ -118,7 +118,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	sink, closeSink, err := sinks.open(ctx, stdout, stderr)
+	sink, closeSink, err := sinks.open(ctx, stdout)
 	if err != nil {
 		return err
 	}
