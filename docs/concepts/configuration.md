@@ -204,53 +204,79 @@ in a fixed order, and names each stage it got through:
 2. **`company`** — validate and build the new epoch, resolving `${VAR}` where each provider is *constructed*. A refusal here changes nothing: this node keeps serving the previous epoch.
 3. **`tools`** — equip the new epoch with this node's builtins. An epoch is published, never mutated, so each one gets its own registry; a node that equipped only its first would serve a company whose agents silently lost every builtin at the first config change.
 4. **`learning`** — rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting.
-5. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows.
+5. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows. **Conditional:** only where this node booted with a sandbox coordinator (see below).
 6. **`parties`** — rebuild the party index *before* the epoch is published, so a seat the revision **adds** is addressable the instant the epoch carrying it is current.
-7. **`integrations`** — re-derive the Confluence / Jira / GitLab / GitHub lead maps from the new org, so work items route by the new chart rather than the boot-time one.
+7. **`integrations`** — rebuild the four trackers against the new epoch, so work items route by the new chart rather than the boot-time one. Confluence and Jira re-derive a **lead map** from the org — space and project key to unit lead — which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
 8. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
-9. **`mailboxes`** — ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained.
+9. **`mailboxes`** — ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. **Conditional:** only where the engine has a node — `crewlet validate` applies to nothing.
 10. **`scheduler`** — re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
 
 Then `crewlet.config.revision_applied` is published with `status`, the
 `applied_subsystems` list and any error.
 
-**A failure is reported by how far it got, not undone.** The epoch swap is step
-8, so any refusal before it leaves the previous epoch current and serving —
-that, rather than a rollback, is what makes a failed apply safe. The returned
-list is the stages that *did* complete, so the dashboard renders
-"applied: secrets, company; failed at: tools" rather than an empty list, and it
-travels on `ConfigRevisionApplied` into the audit event log where it outlives
-the fleet view's one-minute bucket. The active row stays active either way; the
-control plane records the outcome so peers can see it (see
-[Control Plane](control-plane.md)).
+**A failure is reported by how far it got, not undone.** Every refusal above
+happens before the epoch swap, so it leaves the previous epoch current and
+serving — that, rather than a rollback, is what makes a failed apply safe. The
+returned list is the stages that *did* complete, in the order they completed,
+so "secrets, company" names both what was rebuilt and where the refusal landed.
+It travels on `ConfigRevisionApplied` into the audit event log, where it
+outlives the fleet view's one-minute bucket. The fleet view carries each node's
+epoch, revision, status and failure text but *not* the stage list, so that
+detail lives on the event rather than on the operator surfaces reading the
+bucket. The active row stays active either way; the control plane records
+the outcome so peers can see it (see [Control Plane](control-plane.md)).
 
-> **One live mutation precedes the last failure point.** Step 4 rebuilds the
-> reflection workers in place and cannot fail; step 5 can. A sandbox-build
-> refusal therefore leaves this node's learning workers on the new org while it
-> still serves the previous epoch. Nothing else is mutated before the swap, so
-> the tool surface, party index and transports are untouched.
+**Read that list by name, never by number.** Two of the ten stages are
+conditional, so a successful apply on a node that booted without a sandbox
+reports nine names and the swap is the seventh of them. The numbering above is
+the order the code runs, not an index into what a node reports.
+
+> **"No rollback" is not "no mutation".** What the build-first ordering buys is
+> that a revision which cannot be *built* changes nothing: `NewCompany`
+> validates, resolves the org and constructs the providers without reaching the
+> network, so stage 2 is the cheapest place to refuse and the one that costs
+> nothing at all. Past it the guarantee narrows. **Stage 5 is the last stage
+> that can refuse** — stages 6 and 7 return no error, and stage 8 is the swap —
+> and by the time it runs, three things are already mutated: the resolver
+> snapshot (stage 1), any shared MCP child whose spec moved plus the skill
+> variables (stage 3), and the reflection workers (stage 4). So a sandbox-build
+> refusal leaves this node's tool surface and learning workers on the new
+> company while it still *serves* the previous epoch, and reports `error`. The
+> party index and the trackers are not among them: they are rebuilt after the
+> last failure point, which is why they are ordered there. Widening that window
+> is what would make `degraded` reachable, which is why everything an apply
+> cannot un-apply stays behind the swap.
 
 Two knobs are refused rather than applied live, because applying them would
 corrupt data rather than merely disrupt it:
 
 - **`providers.embeddings.dimensions`** — rows already written carry vectors of the old width, and a similarity query across two widths compares nothing. The apply fails naming the declared width and the width the store already holds. Changing it means re-embedding, not a restart. Adding or removing the whole `embeddings` block *is* live in both directions: a company that drops it degrades to recency-only recall on the next turn.
-- **`providers.sandbox`** — a revision whose sandbox block cannot be built is refused rather than published, because the alternative serves a company whose sandbox-enabled seats plan around a box that will never be minted.
+- **`providers.sandbox`** — on a node that booted with a sandbox, a revision whose sandbox block cannot be built is refused rather than published, because the alternative serves a company whose sandbox-enabled seats plan around a box that will never be minted. The coordinator itself is built once, at boot, and only where the booting company had a workable block — so **adding** `providers.sandbox` to a company that started without one is not live in either direction: no coordinator is minted, no `run_sandbox` tool appears, and a broken block is published rather than refused, until the process restarts.
 
-**Per-seat token caps are a projection of the active org, not an
-accumulation.** Every epoch re-derives the whole cap set: each agent seat with a
-positive `token_budget` gets its cap (usage history preserved), and every cap
-whose seat is gone — role removed, flipped to human, budget dropped to `0`
-(= unlimited) — is dropped. The caps cover **every seat in the company on every
-node**, not just the seats a node happens to be running: caps are config while
-only *usage* is shared, and a missing local cap reads as "unlimited", so a node
-that seeded selectively would run a seat with no cap the moment it took that
-seat over.
+**Token caps need no apply stage at all, because there is no cap set to
+maintain.** Usage is shared and caps are not: the fleet's counter stores only
+what each scope has *spent*, and the limit travels in as an argument on every
+charge, read straight off the epoch the turn is pinned to. So a revision that
+raises a ceiling takes effect on the next turn on every node at once, with
+nothing seeded and nothing to drop when a seat goes away — a role removed,
+flipped to human, or dropped to `0` (= unlimited) simply stops having a limit
+passed for it. The alternative, caps replicated per node, is what makes an org
+ceiling of 500 000 quietly become N × 500 000.
 
-MCP children are reconciled per server against the new epoch's specs, comparing
-every field: a change to `url`, `headers` or a role's `mcp_env` — which carries
-the per-agent Slack/GitHub credentials — restarts **only that server**, and a
-seat picks up its new tool surface on its **next turn** rather than at the next
-engine restart.
+**Shared** MCP children are reconciled per server against the new epoch's specs,
+comparing every field: a change to `url` or `headers` restarts **only that
+server**, and every other child keeps running and keeps contributing the tools
+it is already serving. The comparison is over *resolved* values, so a rotated
+credential reads as a changed spec — see
+[Rotation](control-plane.md#rotation).
+
+**Per-role children are not on this path.** They belong to a seat's *lease*
+rather than to the epoch: the apply-time reconcile skips every non-shared
+server, and a role's `mcp_env` — which carries the per-agent Slack/GitHub
+credentials — is never part of a spec an apply compares. Such a child is
+spawned when its seat is claimed and torn down when it is released, so an
+`mcp_env` change reaches it when the seat next changes hands, not on the apply
+that carried it.
 
 ### The API half
 

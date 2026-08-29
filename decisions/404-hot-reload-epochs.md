@@ -94,10 +94,21 @@ references resolved to — because it HAD a payload short-circuit to defeat.
 
 This engine has no short-circuit to defeat, so it carries no digest either.
 `Apply` is straight-line: the reconciler skips on the EPOCH it has applied,
-never on content, and an append-only activation log mints a new epoch even for
-an unchanged payload — so a re-activation always reaches an apply that re-reads
-the secret store first (`internal/engine/epoch.go`). Nothing compares live
-credentials, which also means nothing has to hold a digest of them in memory.
+never on content, and the pointer's own KV sequence IS the epoch, which the
+store advances on every write. A byte-identical re-activation therefore mints a
+new epoch, and always reaches an apply that re-reads the secret store first
+(`internal/engine/epoch.go`).
+
+One comparison survives, one layer down and over resolved values rather than a
+digest of them: `mcp.Bridge.Reconcile` compares each shared child's spec against
+the one it is already running, because a child is a PROCESS and restarting every
+one on every apply would tear down working servers to arrive back where they
+started. That is safe for a rotation only because the spec's `env`, `headers`
+and `url` are resolved at the edge before the comparison — comparing the stored
+entry, where `${VAR}` stays verbatim, would silently stop rotation reaching MCP
+children at all. Nothing persists a digest of a live credential across applies,
+which is the property the Python fingerprint was reaching for and the one that
+would have turned the fix into a leak the moment it reached a log line.
 
 ## Lag is not divergence
 
