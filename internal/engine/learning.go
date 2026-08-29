@@ -57,9 +57,15 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 		return nil
 	}
 
+	// EVERY WORKER RESOLVES ITS MODEL THROUGH THIS, so auxiliary spend is
+	// charged against the same fleet counter a turn is. Wrapping the seam
+	// rather than each call site is what makes a worker added later charge
+	// without anyone remembering to — see learningbudget.go.
+	models := e.meteredModelsFor(c)
+
 	var workers []learning.Worker
 	if cfg.Reflect.Enabled.Or(true) && cfg.Reflect.PersistDecider.Or(true) {
-		decider, err := learning.NewPersistDecider(c.Models, learning.NewDiary(db),
+		decider, err := learning.NewPersistDecider(models, learning.NewDiary(db),
 			learning.PersistOptions{MaxTokens: cfg.Reflect.BudgetTokens})
 		if err != nil {
 			log.Warn("persist_decider_unavailable", "error", err,
@@ -96,7 +102,7 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	}
 
 	if cfg.Counterparty.Enabled.Or(true) {
-		profiler, err := learning.NewProfiler(c.Models, learning.NewCounterparties(db),
+		profiler, err := learning.NewProfiler(models, learning.NewCounterparties(db),
 			learning.ProfilerOptions{MaxTokens: cfg.Counterparty.BudgetTokens})
 		if err != nil {
 			log.Warn("counterparty_profiler_unavailable", "error", err,
@@ -118,7 +124,7 @@ func (e *Engine) reconfigureReflection(c *Company) {
 		return
 	}
 	workers := e.buildReflectionWorkers(c)
-	if err := e.reflector.Reconfigure(c.Org, workers); err != nil {
+	if err := e.reflector.Reconfigure(c.Org, workers, e.learningBudget(c)); err != nil {
 		// The previous epoch's workers keep serving. Reflecting with a
 		// stale org is a far smaller wrong than not reflecting at all,
 		// and this is a bug in the wiring above rather than in the
@@ -150,7 +156,7 @@ func (e *Engine) startReflection(ctx context.Context) error {
 		return nil
 	}
 	reflector, err := learning.NewReflector(company.Org, e.backends.Queue,
-		e.buildReflectionWorkers(company))
+		e.buildReflectionWorkers(company), e.learningBudget(company))
 	if err != nil {
 		return fmt.Errorf("engine: build the reflect dispatcher: %w", err)
 	}
@@ -353,7 +359,7 @@ func (e *Engine) auxSummarizer(c *Company) learning.CompleteFunc {
 		if seat == nil {
 			return "", fmt.Errorf("engine: compaction for %q: this revision has no such role", role)
 		}
-		member, err := c.Models.Head(seat, phase.Auxiliary)
+		member, err := e.meteredModelsFor(c).Head(seat, phase.Auxiliary)
 		if err != nil {
 			return "", fmt.Errorf("engine: compaction for %q: %w", role, err)
 		}

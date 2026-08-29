@@ -178,7 +178,23 @@ type Reflector struct {
 type reflectorEpoch struct {
 	org     *org.Organization
 	workers []Worker
+
+	// budget is the pre-flight gate: may this seat spend on reflection at
+	// all? Nil always admits, which is the single-node case and the case
+	// where no ceiling is configured.
+	//
+	// On the EPOCH rather than the Reflector because the answer depends on
+	// the company's ceilings, and those move with a revision.
+	budget BudgetGate
 }
+
+// BudgetGate reports whether a seat may spend auxiliary tokens right now.
+//
+// Three-valued in the way this codebase insists on: true/false is the
+// answer, and an error is "the counter could not be reached", which is NOT a
+// refusal. A blip must not silently stop a company learning — the charge on
+// the way out is what keeps an unreachable counter from also being free.
+type BudgetGate func(ctx context.Context, seat *org.Role) (bool, error)
 
 // NewReflector builds a dispatcher over an org and a publisher.
 //
@@ -188,7 +204,7 @@ type reflectorEpoch struct {
 // an optional worker without checking it, and the alternative to refusing it
 // here is a nil dereference on the first completed turn, which is a stack
 // trace naming this package for a mistake made in the engine's wiring.
-func NewReflector(o *org.Organization, pub queue.Publisher, workers []Worker) (*Reflector, error) {
+func NewReflector(o *org.Organization, pub queue.Publisher, workers []Worker, budget BudgetGate) (*Reflector, error) {
 	if o == nil {
 		return nil, fmt.Errorf("learning: reflection needs an organization to resolve seats against")
 	}
@@ -199,7 +215,7 @@ func NewReflector(o *org.Organization, pub queue.Publisher, workers []Worker) (*
 		return nil, err
 	}
 	r := &Reflector{pub: pub, seen: newRecentTurns(ReflectSeen)}
-	r.live.Store(&reflectorEpoch{org: o, workers: slices.Clone(workers)})
+	r.live.Store(&reflectorEpoch{org: o, workers: slices.Clone(workers), budget: budget})
 	return r, nil
 }
 
@@ -213,14 +229,14 @@ func NewReflector(o *org.Organization, pub queue.Publisher, workers []Worker) (*
 // An in-flight pass finishes on the epoch it started with — it read the
 // pointer once — which is the same guarantee a turn gets about its own
 // config pin.
-func (r *Reflector) Reconfigure(o *org.Organization, workers []Worker) error {
+func (r *Reflector) Reconfigure(o *org.Organization, workers []Worker, budget BudgetGate) error {
 	if o == nil {
 		return fmt.Errorf("learning: reflection needs an organization to resolve seats against")
 	}
 	if err := validateWorkers(workers); err != nil {
 		return err
 	}
-	r.live.Store(&reflectorEpoch{org: o, workers: slices.Clone(workers)})
+	r.live.Store(&reflectorEpoch{org: o, workers: slices.Clone(workers), budget: budget})
 	log.Info("reflect_engine_reconfigured", "workers", r.names())
 	return nil
 }
@@ -335,6 +351,15 @@ const (
 	SkipRoleDisabled = "role_disabled"
 	SkipDuplicate    = "duplicate"
 	SkipNoEngagement = "no_engagement"
+
+	// SkipNoBudget is the pass declining to START because the company or
+	// the seat is already at its ceiling.
+	//
+	// Reflection is best effort, so this is a skip rather than a failure —
+	// but it is the skip that costs nothing, which is the entire point: a
+	// pass that runs and then fails has already made its auxiliary calls
+	// and spent the tokens it was supposed to be saving.
+	SkipNoBudget = "no_budget"
 )
 
 // Reflect runs one pass over a completed turn.
@@ -371,16 +396,44 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 		return Reflection{Skip: SkipRoleDisabled}
 	}
 
+	// THE BUDGET PRE-FLIGHT, and it sits here — BEFORE the redelivery mark —
+	// for a reason worth stating.
+	//
+	// An exhausted budget is the one TRANSIENT refusal in this sequence:
+	// every other gate is a property of the turn that will still hold on a
+	// redelivery, while this one flips the moment an operator raises the
+	// ceiling or the window rolls. Marking first and skipping second would
+	// burn the turn's one chance to be learned from on a condition that had
+	// nothing to do with the turn. Checking first means a redelivery after
+	// the cap moves gets a real pass, and nothing has to release a mark.
+	if gate := live.budget; gate != nil {
+		ok, err := gate(ctx, role)
+		if err != nil {
+			// UNKNOWN, not refused. A counter that cannot be reached must
+			// not silently stop a company learning; what keeps that from
+			// also being free is that the completion charges on the way
+			// out either way.
+			log.Warn("reflection_budget_unknown", "turn_id", tc.TurnID,
+				"agent_handle", tc.AgentHandle, "error", err,
+				"detail", "reflecting anyway; the spend is still charged")
+		} else if !ok {
+			log.Info("reflection_skipped_no_budget", "turn_id", tc.TurnID,
+				"agent_handle", tc.AgentHandle, "role", role.Name,
+				"detail", "the company or this seat is at its token ceiling, "+
+					"so no auxiliary call is made for this turn")
+			return Reflection{Skip: SkipNoBudget}
+		}
+	}
+
 	// Redelivery guard. Every backend may redeliver, and reflection is not
 	// idempotent: each pass is a fresh auxiliary-LLM call that can write a
 	// second, differently-worded row for the same fact.
 	//
-	// Marked BEFORE the remaining gates and never released. Python
-	// released the mark on its transient early returns (budget exhausted,
-	// concurrency slot unavailable) so a later redelivery would get a real
-	// pass; neither gate is ported here, so there is no path left that
-	// wants a retry — and a mark released on a path that cannot happen is
-	// a mark that does nothing.
+	// Marked AFTER the budget gate and never released. The budget is the
+	// only transient refusal, and taking the mark after it is what lets a
+	// redelivery get a real pass once the ceiling moves — so no path left
+	// here wants a mark released, and a release on a path that cannot
+	// happen is a release that does nothing.
 	if !r.mark(tc.TurnID) {
 		log.Debug("reflection_skipped_duplicate", "turn_id", tc.TurnID)
 		return Reflection{Skip: SkipDuplicate}

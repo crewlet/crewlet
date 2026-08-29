@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -144,9 +145,21 @@ func settledTurn() types.TurnCompleted {
 	}
 }
 
+// reflector builds one with NO budget gate: every case in this file is about
+// a different gate, and a nil gate admits — which is also the ordinary
+// configuration, since a company with no ceiling has nothing to check.
 func reflector(t *testing.T, o *org.Organization, pub queue.Publisher, workers ...learning.Worker) *learning.Reflector {
 	t.Helper()
-	r, err := learning.NewReflector(o, pub, workers)
+	return reflectorGated(t, nil, o, pub, workers...)
+}
+
+// reflectorGated is the same with a budget gate, for the cases that are about
+// one.
+func reflectorGated(t *testing.T, budget learning.BudgetGate, o *org.Organization,
+	pub queue.Publisher, workers ...learning.Worker,
+) *learning.Reflector {
+	t.Helper()
+	r, err := learning.NewReflector(o, pub, workers, budget)
 	if err != nil {
 		t.Fatalf("NewReflector: %v", err)
 	}
@@ -572,23 +585,23 @@ func TestAWorkerWithNothingToAnnounceStillCounts(t *testing.T) {
 
 func TestADispatcherRefusesWiringItCannotWorkWithout(t *testing.T) {
 	t.Parallel()
-	if _, err := learning.NewReflector(nil, &recordingPub{}, nil); err == nil {
+	if _, err := learning.NewReflector(nil, &recordingPub{}, nil, nil); err == nil {
 		t.Error("a dispatcher with no org was accepted; every turn would skip on an unresolvable seat")
 	}
-	if _, err := learning.NewReflector(devOrg(), nil, nil); err == nil {
+	if _, err := learning.NewReflector(devOrg(), nil, nil, nil); err == nil {
 		t.Error("a dispatcher with no publisher was accepted")
 	}
-	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, []learning.Worker{nil}); err == nil {
+	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, []learning.Worker{nil}, nil); err == nil {
 		t.Error("a nil worker was accepted; it panics on the first completed turn")
 	}
-	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, nil); err != nil {
+	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, nil, nil); err != nil {
 		t.Errorf("a dispatcher with no workers yet was refused: %v", err)
 	}
 	// A pass reports its skips and failures BY WORKER NAME, so two workers
 	// sharing one would each erase the other's entry and an operator would
 	// read one worker's failure as the other's.
 	twins := []learning.Worker{&stubWorker{name: "same"}, &stubWorker{name: "same"}}
-	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, twins); err == nil {
+	if _, err := learning.NewReflector(devOrg(), &recordingPub{}, twins, nil); err == nil {
 		t.Error("two workers under one name were accepted")
 	}
 }
@@ -697,7 +710,7 @@ func TestReconfigureSwapsTheWorkerSet(t *testing.T) {
 	before, after := &stubWorker{name: "before"}, &stubWorker{name: "after"}
 	r := reflector(t, devOrg(), &recordingPub{}, before)
 
-	if err := r.Reconfigure(devOrg(), []learning.Worker{after}); err != nil {
+	if err := r.Reconfigure(devOrg(), []learning.Worker{after}, nil); err != nil {
 		t.Fatalf("Reconfigure: %v", err)
 	}
 	res := reflectOnce(r, settledTurn())
@@ -720,7 +733,7 @@ func TestAReconfigureDoesNotForgetWhatWasAlreadyReflected(t *testing.T) {
 		t.Fatalf("the first pass was skipped: %s", res.Skip)
 	}
 
-	if err := r.Reconfigure(devOrg(), []learning.Worker{w}); err != nil {
+	if err := r.Reconfigure(devOrg(), []learning.Worker{w}, nil); err != nil {
 		t.Fatalf("Reconfigure: %v", err)
 	}
 	if res := reflectOnce(r, settledTurn()); res.Skip != learning.SkipDuplicate {
@@ -741,11 +754,11 @@ func TestARefusedReconfigureKeepsThePreviousEpochServing(t *testing.T) {
 		{&stubWorker{name: "dup"}, &stubWorker{name: "dup"}},
 		{nil},
 	} {
-		if err := r.Reconfigure(devOrg(), bad); err == nil {
+		if err := r.Reconfigure(devOrg(), bad, nil); err == nil {
 			t.Fatalf("Reconfigure accepted %d bad workers", len(bad))
 		}
 	}
-	if err := r.Reconfigure(nil, []learning.Worker{good}); err == nil {
+	if err := r.Reconfigure(nil, []learning.Worker{good}, nil); err == nil {
 		t.Fatal("Reconfigure accepted a nil org")
 	}
 	if res := reflectOnce(r, settledTurn()); len(res.Ran) != 1 || res.Ran[0] != "good" {
@@ -759,7 +772,7 @@ func TestReconfiguringToNoWorkersStopsThePasses(t *testing.T) {
 	t.Parallel()
 	w := &stubWorker{name: "w"}
 	r := reflector(t, devOrg(), &recordingPub{}, w)
-	if err := r.Reconfigure(devOrg(), nil); err != nil {
+	if err := r.Reconfigure(devOrg(), nil, nil); err != nil {
 		t.Fatalf("Reconfigure: %v", err)
 	}
 	if res := reflectOnce(r, settledTurn()); res.Skip != learning.SkipNoWorkers {
@@ -775,7 +788,7 @@ func TestReconfigureSwapsTheOrgTheSeatIsResolvedAgainst(t *testing.T) {
 	r := reflector(t, devOrg(), &recordingPub{}, w)
 
 	renamed := &org.Organization{Name: "Acme", Roles: []*org.Role{{Name: "Engineer"}}}
-	if err := r.Reconfigure(renamed, []learning.Worker{w}); err != nil {
+	if err := r.Reconfigure(renamed, []learning.Worker{w}, nil); err != nil {
 		t.Fatalf("Reconfigure: %v", err)
 	}
 	if res := reflectOnce(r, settledTurn()); res.Skip != learning.SkipNoRole {
@@ -824,5 +837,99 @@ func TestTheRedeliveryGuardEvictsRatherThanGrowing(t *testing.T) {
 	recent.TurnID = fmt.Sprintf("filler-%d", learning.ReflectSeen-1)
 	if res := reflectOnce(r, recent); res.Skip != learning.SkipDuplicate {
 		t.Fatalf("skip = %q for the most recent turn, want it deduped", res.Skip)
+	}
+}
+
+// THE BUDGET PRE-FLIGHT.
+//
+// Every auxiliary call this package makes is money, and until the gate
+// existed a company sitting at its `token_budget` ceiling kept making them on
+// every completed turn — forever, and uncounted. These cases are about the
+// gate declining to START, which is the only version of the check worth
+// having: a pass that runs and then discovers it is over budget has already
+// spent the tokens.
+
+// A SEAT AT ITS CEILING IS NOT REFLECTED ON, and no worker runs.
+func TestAnExhaustedBudgetSkipsTheWholePass(t *testing.T) {
+	t.Parallel()
+	w := &stubWorker{name: "persist"}
+	r := reflectorGated(t, func(context.Context, *org.Role) (bool, error) {
+		return false, nil
+	}, devOrg(), &recordingPub{}, w)
+
+	got := r.Reflect(t.Context(), settledTurn(), events.TraceContext{})
+	if got.Skip != learning.SkipNoBudget {
+		t.Fatalf("skip = %q, want %q", got.Skip, learning.SkipNoBudget)
+	}
+	if len(w.turns()) != 0 {
+		t.Errorf("a worker ran %d times past an exhausted budget — the point of "+
+			"the gate is that the auxiliary call is never made", len(w.turns()))
+	}
+}
+
+// AN UNREACHABLE COUNTER REFLECTS ANYWAY. Unknown is not "no": a coordination
+// blip must not silently stop a company learning, and what keeps that from
+// also being free is that the completion is still charged on the way out.
+func TestAnUnreachableCounterDoesNotStopReflection(t *testing.T) {
+	t.Parallel()
+	w := &stubWorker{name: "persist"}
+	r := reflectorGated(t, func(context.Context, *org.Role) (bool, error) {
+		return false, errors.New("coordination store unreachable")
+	}, devOrg(), &recordingPub{}, w)
+
+	if got := r.Reflect(t.Context(), settledTurn(), events.TraceContext{}); got.Skip != "" {
+		t.Fatalf("skip = %q, want the pass to run", got.Skip)
+	}
+	if len(w.turns()) != 1 {
+		t.Errorf("worker ran %d times; a store blip must not cost the company "+
+			"its learning", len(w.turns()))
+	}
+}
+
+// THE GATE RUNS BEFORE THE REDELIVERY MARK, so a turn skipped for budget is
+// still reflectable when the ceiling moves.
+//
+// This is the ordering the whole design turns on. An exhausted budget is the
+// one TRANSIENT refusal in the sequence — every other gate is a property of
+// the turn that will still hold on a redelivery — so marking first would burn
+// the turn's single chance on a condition that had nothing to do with it.
+func TestABudgetSkipLeavesTheTurnReflectableLater(t *testing.T) {
+	t.Parallel()
+	w := &stubWorker{name: "persist"}
+	var allowed atomic.Bool
+	r := reflectorGated(t, func(context.Context, *org.Role) (bool, error) {
+		return allowed.Load(), nil
+	}, devOrg(), &recordingPub{}, w)
+
+	tc := settledTurn()
+	if got := r.Reflect(t.Context(), tc, events.TraceContext{}); got.Skip != learning.SkipNoBudget {
+		t.Fatalf("first pass skip = %q, want %q", got.Skip, learning.SkipNoBudget)
+	}
+	// The operator raises the ceiling; the same turn is redelivered.
+	allowed.Store(true)
+	if got := r.Reflect(t.Context(), tc, events.TraceContext{}); got.Skip != "" {
+		t.Fatalf("after the budget cleared, the redelivery was skipped as %q — "+
+			"the budget check must not consume the redelivery mark", got.Skip)
+	}
+	if len(w.turns()) != 1 {
+		t.Errorf("worker ran %d times, want the one real pass", len(w.turns()))
+	}
+}
+
+// AND THE MARK STILL GUARDS A GENUINE DUPLICATE once a pass has really run.
+func TestTheMarkStillCollapsesARealRedelivery(t *testing.T) {
+	t.Parallel()
+	w := &stubWorker{name: "persist"}
+	r := reflectorGated(t, func(context.Context, *org.Role) (bool, error) {
+		return true, nil
+	}, devOrg(), &recordingPub{}, w)
+
+	tc := settledTurn()
+	_ = r.Reflect(t.Context(), tc, events.TraceContext{})
+	if got := r.Reflect(t.Context(), tc, events.TraceContext{}); got.Skip != learning.SkipDuplicate {
+		t.Fatalf("skip = %q, want %q", got.Skip, learning.SkipDuplicate)
+	}
+	if len(w.turns()) != 1 {
+		t.Errorf("worker ran %d times on one turn", len(w.turns()))
 	}
 }
