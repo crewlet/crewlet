@@ -162,7 +162,7 @@ scripts/              # The three vendor dev-loop bootstraps (bash)
 
 | Package | What it is for |
 |---|---|
-| `agent/turn` | The turn loop — Onboarding, Plan, Execute, Review — and the guards between phases |
+| `agent/turn` | The turn loop — Plan, Execute, Review — and the guards between phases |
 | `agent/runner` | Drives the three phases against real models and real tools — the wiring between the prompt builder, the tool registry, the provider chain and the turn loop's contract, none of which knows the others. Plumbing, plus the two rules plumbing cannot express: how a phase's structured answer is extracted, and what happens when the model never gives one |
 | `agent/phase` | The per-phase vocabulary: which phase is running, which model it runs on, and the one question a phase's outcome turns on — did it actually DELIVER? |
 | `agent/toolloop` | The model↔tool round-trip, and the `Suspend` primitive a detached coding run returns through |
@@ -267,7 +267,7 @@ This applies to every commit, not just "big" changes. A one-line config rename s
 The implementation must follow the architecture docs in `docs/concepts/`. Key subsystems:
 1. **Event Queue** — durable pub/sub behind one contract: an embedded NATS JetStream by default, an external NATS or Apache Pulsar for a fleet, an in-memory twin for tests
 2. **Organization Model** — hierarchy is the execution graph
-3. **Agent Runtime** — queue-driven seats, a four-phase turn, an LLM tool loop that can suspend
+3. **Agent Runtime** — queue-driven seats, a three-phase turn, an LLM tool loop that can suspend
 4. **Task Engine** — there is none: task state lives in the PM tool, and the engine mirrors nothing
 5. **Decision Framework** — DACI behavioral guidance (via chat channels, no dedicated engine)
 6. **Knowledge System** — query-time knowledge-base search for shared docs (Confluence CQL — single-homed, one per company, behind a seam that keeps it swappable) + per-agent diary

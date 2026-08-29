@@ -151,7 +151,7 @@ internal/
 ├── config/               # The two config tiers → typed structs → JSON Schema
 ├── org/                  # Organization model (hierarchy, roles, seat identity)
 ├── agent/                # The agent runtime, one package per hard part:
-│                         #   turn/ (the four-phase loop), toolloop/ (the
+│                         #   turn/ (the three-phase loop), toolloop/ (the
 │                         #   model↔tool round-trip and its suspend),
 │                         #   inbox/ (what wakes a seat, and what must not
 │                         #   wake it twice), ledger/ (iteration, conversation
