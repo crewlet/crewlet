@@ -262,7 +262,13 @@ func TestAnEntityPathRefusesEveryVerbButPut(t *testing.T) {
 	s.seed(t, companyDoc, nil)
 
 	for _, kind := range configapi.EntityKinds() {
-		for _, method := range []string{http.MethodDelete, http.MethodPost, http.MethodPatch} {
+		// GET is in the list because an operator has every reason to try
+		// it: the entity paths look like resources, and reading one goes
+		// through /query/config_entities instead. A 405 naming PUT is the
+		// answer that sends them there.
+		for _, method := range []string{
+			http.MethodDelete, http.MethodPost, http.MethodPatch, http.MethodGet,
+		} {
 			res := s.do(t, method, "/config/"+kind+"/ceo", "", nil)
 			if res.Code != http.StatusMethodNotAllowed {
 				t.Errorf("%s /config/%s/ceo = %d, want 405 — an entity path serves "+
