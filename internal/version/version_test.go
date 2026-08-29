@@ -91,15 +91,18 @@ func TestTheReleaseConfigStampsThisVariable(t *testing.T) {
 // stampTarget pulls the `-X <importpath>.<name>=<value>` ldflag out of the
 // release config and splits it where the linker does.
 //
-// EVERY BUILD STAMPS, AND THEY ALL STAMP THE SAME THING. There is more than
-// one build now — the glibc linux/darwin matrix and the musl linux one — and
-// a second build id is exactly the shape that ships an UNSTAMPED binary: the
-// ldflags block is per-build, so a copied entry that lost the -X line links
-// fine and reports its module build info instead of the tag. Nothing else
-// would notice, because the artifact that went out is the one nobody checked.
+// EVERY BUILD STAMPS, AND THEY ALL STAMP THE SAME THING.
 //
-// So the count is compared against the number of builds rather than against
-// 1, and the targets have to agree with each other.
+// There is one build id today, so this reads much like an assertion that there
+// is exactly one `-X` flag — and it is deliberately not that. A second build id
+// is the shape that ships an UNSTAMPED binary: the ldflags block is per-build,
+// so a copied entry that lost its `-X` line links fine and reports its module
+// build info instead of the tag, and nothing else would notice because the
+// artifact that went out is the one nobody checked. A musl build was very
+// nearly added for exactly that reason and would have been the first case.
+//
+// So the count is compared against the NUMBER OF BUILDS rather than against 1,
+// and the targets have to agree with each other.
 //
 // The split is on the first dot AFTER the last slash: an import path is full
 // of dots (github.com), and only the final path element can carry the one that

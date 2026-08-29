@@ -92,15 +92,15 @@ applied to nothing produced a green release. A check whose failure mode is
 silence has to compare against something the tree computes, not against a
 constant somebody remembered to write down.
 
-## Six archives, four platforms
+## Four targets
 
-`linux` and `darwin` × `amd64` and `arm64`, plus a second `linux` build tagged
-`musl` for each architecture. All of them cross-compile from one machine with
-`CGO_ENABLED=0`, because everything underneath is pure Go — the store driver
-(`turso.tech/database/tursogo`) and the embedded NATS server. That is what
-keeps this a plain GOOS/GOARCH loop instead of a cross-toolchain estate, and it
-is worth protecting: a dependency that needs cgo turns this section into a zig
-toolchain and a build container.
+`linux` and `darwin` × `amd64` and `arm64`. All four cross-compile from one
+machine with `CGO_ENABLED=0`, because everything underneath is pure Go — the
+store driver (`turso.tech/database/tursogo`) and the embedded NATS server. That
+is what keeps this a plain GOOS/GOARCH loop instead of a cross-toolchain
+estate, and it is worth protecting: a dependency that needs cgo turns this
+section into a zig toolchain and a build container. It is also, as the rest of
+this section works through, the property a musl target would cost.
 
 **"Pure Go" is not "self-contained", and that is what bounds the list.** The
 driver's database engine is a native shared object embedded in its module and

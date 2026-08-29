@@ -119,9 +119,10 @@ available: knowledge search is the external backend behind
 
 **The driver also decides what Crewlet ships for.** "Pure Go" is not
 "self-contained" here: the database engine is a native library embedded in the
-driver module and extracted at run time. Upstream embeds it for linux and
-macOS on amd64 and arm64 — linux in a glibc and a musl variant — and for
-windows/amd64, and for nothing else.
+driver module and extracted at run time. Upstream embeds that library for
+linux and macOS on amd64 and arm64 — linux in a glibc and a musl variant — and
+for windows/amd64, and for nothing else. What Crewlet ships is narrower than
+that list, and the two bullets below are why.
 
 - **There is no Windows build.** The release used to publish windows/amd64 and
   windows/arm64, and the second had no library at all: it started, then failed
@@ -129,11 +130,15 @@ windows/amd64, and for nothing else.
   silently breaking the other is worse than shipping neither, and a Windows
   binary was in any case the one that refused
   [`providers.sandbox: {type: local}`](../concepts/code-sandbox.md).
-- **musl is a separate archive**, not a runtime switch, because the C library
-  is fixed when the binary is built. Take `crewlet_<version>_linux_<arch>_musl.tar.gz`
-  on Alpine. Run the glibc one there and the library extracts, verifies, and
-  then will not load — the engine says exactly that and names the archive to
-  use instead.
+- **There is no musl build either, so the linux binaries need glibc.** Loading
+  that native library means `dlopen`, which makes the binary dynamically linked
+  against `libc.so.6` even though it is pure Go and built with
+  `CGO_ENABLED=0`. On Alpine and other musl systems it fails at `execve`,
+  reported as `no such file or directory` about a file that plainly exists. Use
+  a glibc base image — the published one is `debian:trixie-slim` for exactly
+  this reason — or a glibc host. Building it `-static` is not the way out: a
+  static program has no dynamic loader and cannot `dlopen` at all. macOS is
+  unaffected.
 
 ---
 
