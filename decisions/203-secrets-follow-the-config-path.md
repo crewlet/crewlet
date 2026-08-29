@@ -111,8 +111,15 @@ arriving silently. `Rekey` aborts for the same reason: a pass that moved 12 of
 
 ## Transport
 
-The coordination slot already takes a NATS `credentials` file (NKey/JWT) and a
-`token`, and a `tls://` URL. Client-certificate mTLS is a small addition to
-that block if a deployment wants it, and is orthogonal to this decision: the
-values are sealed with the Tier A keyring before they reach the wire either
-way, so the transport protects metadata and access rather than the secret.
+Orthogonal to this decision, and worth stating so nobody reads it as load
+bearing: the values are sealed with the Tier A keyring before they reach the
+wire either way, so the transport protects metadata and access rather than the
+secret. A peer that can read the bucket learns which names exist and when they
+changed, not what they are.
+
+It was built anyway, because the question exposed a real gap. The coordination
+slot took a NATS `credentials` file (NKey/JWT) and a `token`, but nothing for
+the TCP layer underneath — so a broker configured `tls { verify: true }`, the
+hardened default every NATS operator guide recommends, was unreachable, as was
+any estate behind a private CA. `stream.tls` and `coordination.nats.tls` now
+carry `ca`, `cert` and `key`. Neither can express "do not verify".
