@@ -35,11 +35,10 @@ integrations:
     enabled: true
     url: https://mm.example.com
     team: acme
-  plane:
-    enabled: true
-    url: https://plane.example.com
-    workspace: acme
-    webhook_secret: pl-literal-secret
+  confluence:
+    url: https://wiki.example.com
+    token: cf-literal-token
+    webhook_secret: cf-literal-secret
   gitlab:
     enabled: true
     url: https://gitlab.example.com
@@ -195,9 +194,9 @@ func TestARealChangeToACredentialIsKept(t *testing.T) {
 	// old one — which would make rotation through this surface impossible.
 	original := credentialCompany(t)
 	edited := original.Redact()
-	edited.Integrations.Plane.WebhookSecret = "a-new-secret"
+	edited.Integrations.Confluence.WebhookSecret = "a-new-secret"
 	edited.RestoreRedacted(original)
-	if got := edited.Integrations.Plane.WebhookSecret; got != "a-new-secret" {
+	if got := edited.Integrations.Confluence.WebhookSecret; got != "a-new-secret" {
 		t.Errorf("webhook secret = %q, want the caller's new value", got)
 	}
 }

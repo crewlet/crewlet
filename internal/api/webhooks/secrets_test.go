@@ -49,15 +49,14 @@ integrations:
     enabled: true
     url: https://gitlab.example.com
     signing_secret: ` + gitLabFixtureSecret + `
-  plane:
-    enabled: true
-    url: https://plane.example.com
-    workspace: acme
-    webhook_secret: pl
   jira:
     url: https://jira.example.com
     token: t
     webhook_secret: jr
+  confluence:
+    url: https://wiki.example.com
+    token: t
+    webhook_secret: cf
   github:
     enabled: true
     webhook_secret: gh
@@ -113,41 +112,18 @@ integrations:
     enabled: true
     url: https://gitlab.example.com
     signing_secret: ${GL}
-  plane:
-    enabled: true
-    url: https://plane.example.com
-    workspace: acme
-    webhook_secret: ${PL}
   jira:
     url: https://jira.example.com
     token: t
     webhook_secret: ${JR}
+  confluence:
+    url: https://wiki.example.com
+    token: t
+    webhook_secret: ${CF}
   github:
     enabled: true
     webhook_secret: ${GH}
   forge_app_id: ${FORGE}
-roles:
-  - name: CEO
-    handle: ceo
-    llm: primary
-`
-
-// confluenceYAML is the knowledge base on its own. It cannot join the
-// fixture above: the knowledge backend is single-homed, and that config
-// already runs Plane.
-var confluenceYAML = `
-name: Acme
-providers:
-  llm:
-    primary:
-      type: anthropic
-      model: claude-sonnet-5
-      api_keys: ["key"]
-integrations:
-  confluence:
-    url: https://wiki.example.com
-    token: t
-    webhook_secret: cf
 roles:
   - name: CEO
     handle: ceo
@@ -173,9 +149,8 @@ func TestSecretsComeFromTheEpoch(t *testing.T) {
 
 	for _, tc := range []struct{ name, got, want string }{
 		{"gitlab", served.GitLab, gitLabFixtureSecret},
-		{"plane", served.Plane, "pl"},
 		{"jira", served.Jira, "jr"},
-		{"confluence", secretsFor(t, confluenceYAML).Confluence, "cf"},
+		{"confluence", served.Confluence, "cf"},
 		{"forge app id", served.ForgeAppID, "forge-app"},
 		{"github", served.GitHub, "gh"},
 	} {
@@ -213,7 +188,7 @@ func TestAnIntegrationLeftOutIsNotHalfConfigured(t *testing.T) {
 	if got.GitLab != gitLabFixtureSecret {
 		t.Fatalf("the one integration this config names lost its secret: %q", got.GitLab)
 	}
-	if got.Plane != "" || got.GitHub != "" || got.Jira != "" ||
+	if got.GitHub != "" || got.Jira != "" ||
 		got.Confluence != "" || got.ForgeAppID != "" {
 		t.Errorf("a config naming only GitLab produced other integrations' "+
 			"secrets: %+v", got)
@@ -320,8 +295,8 @@ func TestVerifiableNamesWhatCouldActuallyAcceptADelivery(t *testing.T) {
 		},
 		{
 			"the surfaces whose secret is any non-empty string",
-			webhooks.Secrets{GitHub: "gh", Plane: "pl", Jira: "jr", Confluence: "cf", ForgeAppID: "forge"},
-			[]string{"confluence", "forge", "github", "jira", "plane"},
+			webhooks.Secrets{GitHub: "gh", Jira: "jr", Confluence: "cf", ForgeAppID: "forge"},
+			[]string{"confluence", "forge", "github", "jira"},
 		},
 		{
 			// Mattermost holds a websocket rather than a route, and Slack's
@@ -361,7 +336,7 @@ func literal(value string) string { return value }
 func TestEveryVerifierGetsAResolvedSecret(t *testing.T) {
 	t.Parallel()
 	values := map[string]string{
-		"${GL}": "gl-value", "${PL}": "pl-value", "${GH}": "gh-value",
+		"${GL}": "gl-value", "${GH}": "gh-value",
 		"${JR}": "jr-value", "${CF}": "cf-value", "${FORGE}": "forge-value",
 		"${SLACK_CEO}": "slack-value",
 	}
@@ -382,7 +357,7 @@ func TestEveryVerifierGetsAResolvedSecret(t *testing.T) {
 
 	got := webhooks.SecretsOf(company, organization, resolve)
 	for label, value := range map[string]string{
-		"gitlab": got.GitLab, "plane": got.Plane,
+		"gitlab": got.GitLab, "confluence": got.Confluence,
 		"jira": got.Jira, "forge app id": got.ForgeAppID,
 		"github": got.GitHub,
 	} {
@@ -405,7 +380,7 @@ func TestWithoutAResolverNothingVerifies(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	got := webhooks.SecretsOf(company, nil, nil)
-	if got.GitLab != "" || got.Plane != "" || got.Jira != "" || got.ForgeAppID != "" ||
+	if got.GitLab != "" || got.Jira != "" || got.ForgeAppID != "" ||
 		got.Confluence != "" || got.GitHub != "" {
 		t.Errorf("secrets appeared with nothing to resolve them: %+v", got)
 	}

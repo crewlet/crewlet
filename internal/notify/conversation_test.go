@@ -70,15 +70,15 @@ func TestStampingAnEventWithNoPayloadWorks(t *testing.T) {
 // Two vendors mint the same local key routinely — a work item and an issue are
 // both plausibly "42" — and an un-namespaced key merges their events.
 func TestALocalKeyIsNamespacedByItsSource(t *testing.T) {
-	if a, b := notify.Namespaced("plane", "42"), notify.Namespaced("gitlab", "42"); a == b {
+	if a, b := notify.Namespaced("jira", "42"), notify.Namespaced("gitlab", "42"); a == b {
 		t.Fatalf("two sources produced the same key %q", a)
 	}
-	if got := notify.Namespaced("plane", "42"); got != "plane:42" {
+	if got := notify.Namespaced("jira", "42"); got != "jira:42" {
 		t.Fatalf("Namespaced = %q", got)
 	}
 	// Half a key is no key: namespacing an empty local half would produce
-	// "plane:", which every event from that source would share.
-	if got := notify.Namespaced("plane", ""); got != "" {
+	// "jira:", which every event from that source would share.
+	if got := notify.Namespaced("jira", ""); got != "" {
 		t.Fatalf("Namespaced with no local key = %q, want empty", got)
 	}
 	if got := notify.Namespaced("", "42"); got != "" {
@@ -91,7 +91,7 @@ func TestALocalKeyIsNamespacedByItsSource(t *testing.T) {
 func TestDerivedTellsAReplyableConversationFromAnEventFallback(t *testing.T) {
 	cases := map[string]bool{
 		"chat:C1:1718.003": true,
-		"plane:uuid-1":     true,
+		"jira:ENG-42":      true,
 		"event:018f-abc":   false,
 		"":                 false,
 	}

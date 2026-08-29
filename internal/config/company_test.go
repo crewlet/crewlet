@@ -222,16 +222,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"integrations.mattermost.team", ErrMissing,
 		},
 		{
-			"plane enabled with no workspace",
-			"name: Acme\nintegrations:\n  plane:\n    enabled: true\n    url: https://plane.example.com\n    webhook_secret: s\n",
-			"integrations.plane.workspace", ErrMissing,
-		},
-		{
-			"a negative plane token expiry",
-			"name: Acme\nintegrations:\n  plane:\n    enabled: true\n    url: https://plane.example.com\n    workspace: acme\n    webhook_secret: s\n    provisioning:\n      token_expiry_days: -1\n",
-			"integrations.plane.provisioning.token_expiry_days", ErrOutOfRange,
-		},
-		{
 			"an unknown gitlab access level",
 			"name: Acme\nintegrations:\n  gitlab:\n    enabled: true\n    url: https://gitlab.com\n    signing_secret: s\n    provisioning:\n      access_level: owner\n",
 			"integrations.gitlab.provisioning.access_level", ErrUnknownValue,
@@ -356,32 +346,16 @@ func TestCompanyValidatorRejections(t *testing.T) {
 	}
 }
 
-// The knowledge backend is single-homed. Backend selection keys on block
-// PRESENCE, because the scope lists default to empty (unscoped) and cannot
-// be the signal.
-func TestKnowledgeBackendIsSingleHomed(t *testing.T) {
+// The knowledge backend is single-homed, and with one backend that is now
+// structural: what is still enforced is that a read scope names a backend
+// the company actually configures. Selection keys on block PRESENCE, because
+// the scope list defaults to empty (unscoped) and cannot be the signal.
+func TestAKnowledgeScopeNeedsItsBackend(t *testing.T) {
 	t.Parallel()
 
-	// BOTH IS REFUSED. Two searchers would make an agent's answer to "what
-	// do we already know about this" depend on which one was asked, and
-	// neither would be wrong — so a migration between them is a cut-over
-	// rather than an overlap.
-	t.Run("both backends at once", func(t *testing.T) {
-		t.Parallel()
-		err := rejects(t, `
-name: Acme
-integrations:
-  confluence: {url: "https://x/wiki", token: t, webhook_secret: s}
-  plane: {enabled: true, url: "https://p", workspace: w, webhook_secret: s}
-`, "integrations.confluence")
-		if !errors.Is(err, ErrConflict) {
-			t.Fatalf("want ErrConflict, got %v", err)
-		}
-	})
-
 	// A SCOPE FOR A BACKEND THAT IS NOT THERE reads as a working narrowing
-	// and narrows nothing — the same silence as the block itself, one
-	// level down.
+	// and narrows nothing — the silence this rule exists to end, one level
+	// down from the block itself.
 	t.Run("a confluence scope with no confluence", func(t *testing.T) {
 		t.Parallel()
 		err := rejects(t, "name: Acme\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
@@ -391,8 +365,9 @@ integrations:
 		}
 	})
 
-	// AND EITHER BACKEND ON ITS OWN LOADS, with its own scope.
-	t.Run("confluence alone", func(t *testing.T) {
+	// AND THE WORKING SHAPE STILL WORKS: the backend with its own scope,
+	// and the reserved skills space defaulted rather than invented.
+	t.Run("confluence with a confluence scope is accepted", func(t *testing.T) {
 		t.Parallel()
 		cfg := mustCompany(t, `
 name: Acme
@@ -404,24 +379,6 @@ knowledge:
 		if got := cfg.Integrations.Confluence.SkillsSpaceKey(); got != "TS" {
 			t.Errorf("skills space = %q, want the default", got)
 		}
-	})
-
-	t.Run("a plane scope with no plane", func(t *testing.T) {
-		t.Parallel()
-		rejects(t, "name: Acme\nknowledge:\n  plane_projects: [ENG]\n", "knowledge.plane_projects")
-	})
-
-	// AND THE WORKING SHAPE STILL WORKS: the one backend this build serves,
-	// with its own scope.
-	t.Run("plane with a plane scope is accepted", func(t *testing.T) {
-		t.Parallel()
-		mustCompany(t, `
-name: Acme
-integrations:
-  plane: {enabled: true, url: "https://p", workspace: w, webhook_secret: s}
-knowledge:
-  plane_projects: [ENG]
-`)
 	})
 }
 

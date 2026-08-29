@@ -158,7 +158,7 @@ func TestAssemblyIsDeterministic(t *testing.T) {
 	// A wide MCP surface, so a map-order leak has plenty of room to show.
 	o := acme()
 	o.Role("Engineer").MCPEnv = map[string]map[string]string{
-		"atlassian": {}, "github": {}, "gitlab": {}, "plane": {},
+		"atlassian": {}, "github": {}, "gitlab": {},
 		"slack": {}, "mattermost": {}, "custom-a": {}, "custom-b": {},
 	}
 	seat := seatIn(o, "Engineer")
@@ -166,7 +166,7 @@ func TestAssemblyIsDeterministic(t *testing.T) {
 		{key: "mcp:slack", mcpServer: "slack", summary: "S"},
 		{key: "mcp:github", mcpServer: "github", summary: "G"},
 		{key: "mcp:atlassian", mcpServer: "atlassian", summary: "A"},
-		{key: "mcp:plane", mcpServer: "plane", summary: "P"},
+		{key: "mcp:mattermost", mcpServer: "mattermost", summary: "M"},
 	}}
 	in := PlanInput{Skills: cat, ToolCatalogue: "- x: does x"}
 
@@ -180,7 +180,7 @@ func TestAssemblyIsDeterministic(t *testing.T) {
 	// Guard: the catalogue really did render, so the loop compared prompts
 	// that had something to disagree about.
 	contains(t, first, "- `mcp:atlassian` — A", "- `mcp:slack` — S")
-	order(t, first, "mcp:atlassian", "mcp:github", "mcp:plane", "mcp:slack")
+	order(t, first, "mcp:atlassian", "mcp:github", "mcp:mattermost", "mcp:slack")
 }
 
 // A system prompt is a pure function of turn-start inputs. A round counter

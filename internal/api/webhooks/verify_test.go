@@ -71,24 +71,6 @@ func TestASignatureOverADifferentBodyIsRefused(t *testing.T) {
 	}
 }
 
-func TestPlaneSignatureIsBareHex(t *testing.T) {
-	t.Parallel()
-	// Plane sends the digest with no algorithm prefix. A verifier that
-	// expected GitHub's shape would refuse every genuine delivery.
-	e := newEdge(t)
-	body := []byte(`{"event":"issue","action":"created"}`)
-	if got := e.post(t, "/webhooks/plane", body, planeDelivery(body, "pl-secret")).Code; got != http.StatusOK {
-		t.Fatalf("got %d", got)
-	}
-	// And a prefixed one is not a Plane signature.
-	res := e.post(t, "/webhooks/plane", body, map[string]string{
-		"X-Plane-Signature": "sha256=" + hexMAC("pl-secret", body),
-	})
-	if res.Code != http.StatusUnauthorized {
-		t.Errorf("a prefixed digest got %d, want 401", res.Code)
-	}
-}
-
 func TestAHeaderTheClientMadeUpCannotBecomeA500(t *testing.T) {
 	t.Parallel()
 	// Header values arrive as arbitrary bytes. A verifier that assumed a
@@ -102,7 +84,6 @@ func TestAHeaderTheClientMadeUpCannotBecomeA500(t *testing.T) {
 	} {
 		for _, route := range []struct{ path, header string }{
 			{"/webhooks/github", "X-Hub-Signature-256"},
-			{"/webhooks/plane", "X-Plane-Signature"},
 			{"/webhooks/jira", "X-Hub-Signature"},
 		} {
 			res := e.post(t, route.path, body, map[string]string{route.header: signature})
@@ -326,11 +307,11 @@ func TestEachRouteUsesItsOwnSecret(t *testing.T) {
 	e := newEdge(t)
 	body := []byte(`{"action":"opened"}`)
 	res := e.post(t, "/webhooks/github", body, map[string]string{
-		"X-Hub-Signature-256": "sha256=" + hexMAC("pl-secret", body),
+		"X-Hub-Signature-256": "sha256=" + hexMAC("jira-secret", body),
 		"X-GitHub-Event":      "issues",
 	})
 	if res.Code != http.StatusUnauthorized {
-		t.Fatalf("a GitHub delivery signed with Plane's secret got %d, want 401", res.Code)
+		t.Fatalf("a GitHub delivery signed with Jira's secret got %d, want 401", res.Code)
 	}
 }
 

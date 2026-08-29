@@ -20,8 +20,8 @@ const Backend = "gitlab"
 //
 // # Typed, where the tracker's is not
 //
-// The Plane parser reads its payloads through map lookups because it targets
-// a FORK whose serializer shapes change under rebases. GitLab's webhook
+// A parser reads its payloads through map lookups when the vendor's
+// serializer shapes are not something it can rely on. GitLab's webhook
 // payloads are the opposite: documented, versioned, and stable across
 // releases — so they decode into structs, and every field a branch reads is
 // declared where the next reader can see it rather than spelled as a string

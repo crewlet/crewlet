@@ -376,27 +376,19 @@ func constField(field string, value any) map[string]any {
 	}
 }
 
-func companyRules() []any {
-	planeEnabled := has("plane", constField("enabled", true))
-
-	// ONE CROSS-FIELD RULE, AND IT IS THE ONE THE SCHEMA CAN STATE.
-	//
-	// The validator holds three: a Plane read scope needs an enabled Plane,
-	// a Confluence read scope needs a Confluence block, and the two
-	// knowledge backends are mutually exclusive. Only the first is
-	// expressible as a clause that fires on what a document CONTAINS; the
-	// other two turn on a block's mere presence, which a JSON Schema `if`
-	// can express only by enumerating what "present" means for every shape
-	// the block can take. An editor that got that subtly wrong would
-	// red-underline a config the engine runs, which the package doc above
-	// calls worse than no schema at all.
-	planeScopeNeedsPlane := map[string]any{
-		"$comment": "knowledge.plane_projects requires an enabled integrations.plane.",
-		"if":       has("knowledge", has("plane_projects", map[string]any{"minItems": 1})),
-		"then":     has("integrations", planeEnabled),
-	}
-	return []any{planeScopeNeedsPlane}
-}
+// companyRules is empty, and that is a statement rather than an omission.
+//
+// NO CROSS-FIELD RULE THE SCHEMA CAN STATE. The company tier's one remaining
+// cross-field rule — a Confluence read scope needs an integrations.confluence
+// block — turns on a block's mere PRESENCE, which a JSON Schema `if` can
+// express only by enumerating what "present" means for every shape the block
+// can take. An editor that got that subtly wrong would red-underline a config
+// the engine runs, which the package doc above calls worse than no schema at
+// all. So the validator holds it alone, and this returns nothing.
+//
+// Kept as a function rather than dropped so the two tiers stay symmetric and
+// the next expressible rule has an obvious home.
+func companyRules() []any { return nil }
 
 func bootstrapRules() []any {
 	embeddedKV := has("coordination", constField("type", string(CoordinationEmbeddedKV)))

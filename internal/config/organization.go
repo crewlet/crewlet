@@ -36,7 +36,6 @@ func (c *Company) organization() *org.Organization {
 		Policies:         append([]string(nil), c.Policies...),
 		TokenBudget:      c.TokenBudget,
 		ConfluenceSpaces: append([]string(nil), c.Knowledge.ConfluenceSpaces...),
-		PlaneProjects:    append([]string(nil), c.Knowledge.PlaneProjects...),
 	}
 	for i := range c.Roles {
 		o.Roles = append(o.Roles, c.Roles[i].Seat())

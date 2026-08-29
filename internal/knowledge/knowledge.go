@@ -90,9 +90,9 @@ type Hit struct {
 	// round to discover, where an absent one costs nothing.
 	URL string
 
-	// Container is the Confluence space key or Plane project identifier
-	// the page lives in — named neutrally because the seam's whole job is
-	// that a caller never learns which.
+	// Container is the backend container the page lives in — a Confluence
+	// space key today — named neutrally because the seam's whole job is
+	// that a caller never learns which backend answered.
 	Container string
 
 	PageID  string

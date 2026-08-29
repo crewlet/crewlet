@@ -23,8 +23,6 @@ func TestEveryKnownShapeIsReplaced(t *testing.T) {
 		"github_pat_" + strings.Repeat("d", 60):                           "github-token",
 		"glpat-" + strings.Repeat("e", 20):                                "gitlab-token",
 		"glrt-" + strings.Repeat("f", 20):                                 "gitlab-token",
-		"plane_api_" + strings.Repeat("g", 32):                            "plane-token",
-		"plane_wh_" + strings.Repeat("h", 32):                             "plane-webhook-secret",
 		"password: hunter2":                                               "password",
 		"PASSWORD=hunter2":                                                "password",
 		"pwd = hunter2":                                                   "password",

@@ -49,7 +49,7 @@
 # silent disagreement is exactly the failure this reconcile exists to
 # prevent.
 #
-# Unlike the gitlab and plane loops, nothing here has to reach the engine:
+# Unlike the gitlab loop, nothing here has to reach the engine:
 # Mattermost has no usable inbound webhook, so the engine dials OUT over a
 # websocket per agent seat. This stack works behind NAT with no tunnel.
 #

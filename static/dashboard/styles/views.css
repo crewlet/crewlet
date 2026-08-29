@@ -163,13 +163,6 @@
   border-color: color-mix(in srgb, var(--blue) 26%, transparent);
   background: color-mix(in srgb, var(--blue) var(--tint), transparent);
 }
-.source-badge.mcp-plane {
-  /* Orange, not green: green is the builtin badge above, and a
-     disambiguation badge must not read as "builtin". */
-  color: var(--orange-ink);
-  border-color: color-mix(in srgb, var(--orange) 26%, transparent);
-  background: color-mix(in srgb, var(--orange) var(--tint), transparent);
-}
 .source-badge.mcp {
   color: var(--cyan-ink);
   border-color: color-mix(in srgb, var(--cyan) 26%, transparent);

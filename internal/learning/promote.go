@@ -93,7 +93,7 @@ type PromotionUnit struct {
 	Handles []string
 
 	// Container is the unit's configured knowledge container (a Confluence
-	// space key, a Plane project). Empty when it has none.
+	// space key). Empty when it has none.
 	Container string
 
 	// Hint names what an operator must set when Container is empty. A unit
@@ -110,8 +110,8 @@ type PromotionUnit struct {
 // ONE METHOD, and cross-tick dedup is behind it. The pass re-clusters the
 // same persisted rows every tick, so without dedup one converging team would
 // yield one draft per day forever. Each backend already has the mechanism —
-// Confluence refuses a duplicate title in a space, Plane's external id is
-// unique per project — so the honest place for it is the writer, which
+// Confluence refuses a duplicate title in a space — so the honest place for
+// it is the writer, which
 // returns the EXISTING page rather than an error when the draft is already
 // there.
 type PromotionWriter interface {
@@ -173,8 +173,8 @@ func NewPromoter(opts PromoterOptions) (*Promoter, error) {
 	switch {
 	case opts.Writer == nil:
 		return nil, fmt.Errorf("learning: skill promotion needs a knowledge " +
-			"base to draft into — configure integrations.confluence or " +
-			"integrations.plane, or set learning.skill_promotion.enabled: false")
+			"base to draft into — configure integrations.confluence, or set " +
+			"learning.skill_promotion.enabled: false")
 	case opts.Skills == nil:
 		return nil, fmt.Errorf("learning: skill promotion needs a skill store to read")
 	case opts.Models == nil:

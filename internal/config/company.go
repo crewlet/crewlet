@@ -216,41 +216,23 @@ func (c *Company) Validate() error {
 	return p.err()
 }
 
-// validateKnowledgeBackend holds the single-homed rule: the knowledge
-// backend is Confluence XOR Plane.
+// validateKnowledgeBackend holds the rule that a read scope needs the
+// backend it narrows.
 //
-// Backend selection keys on integration-block PRESENCE, because the scope
-// lists default to empty (which means unscoped) and so cannot be the
-// signal. Enabling both is refused — a Confluence-to-Plane migration is a
-// cut-over, not an overlap — and a scope list for the disabled backend is
-// refused too, because it reads as a working scope and narrows nothing.
+// The knowledge base is single-homed, and since Confluence is the only
+// backend that is now structural rather than enforced — there is no pair of
+// searchers left to disagree about what the company already knows. What is
+// still worth refusing is a scope for a backend that is not configured: it
+// reads as a working narrowing and narrows nothing, which is the silence
+// this rule exists to end, one level down from the block itself.
+//
+// Selection keys on integration-block PRESENCE, because the scope list
+// defaults to empty (which means unscoped) and so cannot be the signal.
 func (c *Company) validateKnowledgeBackend() error {
 	var p problems
-	planeActive := c.Integrations.Plane != nil && c.Integrations.Plane.Enabled
-
-	confluenceActive := c.Integrations.Confluence != nil
-
-	// BOTH IS REFUSED. Two backends would mean an agent's answer to "what
-	// do we already know about this" depends on which searcher happened to
-	// be asked, and neither would be wrong — so a Confluence-to-Plane
-	// migration is a cut-over rather than an overlap.
-	if planeActive && confluenceActive {
-		p.add("integrations.confluence", ErrConflict,
-			"the knowledge base is single-homed and integrations.plane is "+
-				"already enabled — two searchers would make an agent's answer "+
-				"to \"what do we already know about this\" depend on which one "+
-				"was asked. Remove one; a migration between them is a cut-over")
-	}
-	// A SCOPE FOR A BACKEND THAT IS NOT THERE reads as a working narrowing
-	// and narrows nothing — which is the silence this rule exists to end,
-	// one level down from the block itself.
-	if len(c.Knowledge.ConfluenceSpaces) > 0 && !confluenceActive {
+	if len(c.Knowledge.ConfluenceSpaces) > 0 && c.Integrations.Confluence == nil {
 		p.add("knowledge.confluence_spaces", ErrConflict,
 			"a Confluence read scope needs integrations.confluence")
-	}
-	if len(c.Knowledge.PlaneProjects) > 0 && !planeActive {
-		p.add("knowledge.plane_projects", ErrConflict,
-			"a Plane read scope needs integrations.plane enabled")
 	}
 	return p.err()
 }
@@ -258,8 +240,8 @@ func (c *Company) validateKnowledgeBackend() error {
 // Knowledge is the org-wide read scope for the shared-knowledge search.
 //
 // It is the ONLY thing that narrows the query-time search, and it is
-// role-independent on purpose: a unit's own space or project is integration
-// IDENTITY (where its webhooks route, where it files work) and letting an
+// role-independent on purpose: a unit's own space is integration IDENTITY
+// (where its webhooks route, where it files work) and letting an
 // identity double as a read scope is how an agent ends up unable to read
 // the page it was told to follow.
 //
@@ -268,7 +250,6 @@ func (c *Company) validateKnowledgeBackend() error {
 // can read. Set this only to NARROW to a curated floor.
 type Knowledge struct {
 	ConfluenceSpaces []string `yaml:"confluence_spaces,omitempty" json:"confluence_spaces,omitempty" desc:"Org-wide Confluence read scope. Empty = unscoped, bounded by each seat's own ACLs. Requires integrations.confluence."`
-	PlaneProjects    []string `yaml:"plane_projects,omitempty" json:"plane_projects,omitempty" desc:"Org-wide Plane read scope. Empty = unscoped. Requires integrations.plane."`
 }
 
 // validateProviderKeys holds the rule that a seat may only name a model the

@@ -11,7 +11,7 @@ it is how the two of you stay aligned.
 ## Channel — use A2A, keep it private
 
 Open the 1:1 on a **private A2A channel** with `a2a_ask`. A 1:1 is private,
-so it does **not** go in Mattermost or Plane — those are for things the whole team
+so it does **not** go in Mattermost or Jira — those are for things the whole team
 should see. (This is the one review-type conversation that belongs on A2A
 *because* it is private.) If your manager is a **human teammate**, they are
 not on A2A: reach them in a Mattermost DM / thread instead, leave the full
@@ -29,7 +29,7 @@ worse ending than agreeing on the action items and stopping.
 
 1. **Prepare.** Use `query_episodes` to recall what you actually did since
    the last 1:1 — what you shipped, what stalled, what you learned. Pull the
-   relevant Plane work items if you need specifics.
+   relevant Jira work items if you need specifics.
 2. **Walk your manager through it in one message.** Be concrete and be
    candid about blockers — a 1:1 is the place to raise what isn't working,
    not to hide it. Your manager answers the message you actually sent, so
@@ -39,12 +39,12 @@ worse ending than agreeing on the action items and stopping.
 4. **Capture the outcome.** Note the action items you agree on. You do not
    need to "save" the conversation — the engine persists durable facts from
    the turn automatically — but do record concrete commitments (e.g. open or
-   update the Plane work items for the action items).
+   update the Jira work items for the action items).
 
 ## If you are the manager
 
 1. **Review before you respond.** Look at the report's recent work (their
-   Plane board, the team channel, the MRs) so your feedback is specific, not
+   Jira board, the team channel, the MRs) so your feedback is specific, not
    generic.
 2. **Give actionable feedback** — concrete, tied to real work, balanced
    between what went well and what to change.
@@ -56,7 +56,7 @@ worse ending than agreeing on the action items and stopping.
    back-and-forth.
 5. **Route standing rules to the team, not just the 1:1.** If the feedback is
    a *standing rule* the whole team should follow ("always get a review before
-   merging"), it belongs in the **team's Plane pages**, not buried in one
+   merging"), it belongs in the **team's Confluence pages**, not buried in one
    person's 1:1 — update the relevant page (or hand off to whoever owns it) so
    every report picks it up. A 1:1 changes one person; team policy changes the
    team.
@@ -70,5 +70,5 @@ You don't manage this — the engine does it for you:
 - **Standing directives** are recognised as team policy and nudged toward the
   team docs rather than your personal memory.
 - The conversation itself is private and ephemeral — nobody can browse it
-  later; only the **outcomes** — your memory, the Plane action items, any
+  later; only the **outcomes** — your memory, the Jira action items, any
   team page you updated — persist and are visible.

@@ -51,7 +51,8 @@ type Doc struct {
 	// Title is the page name, and half the idempotency key.
 	Title string
 	// Container is the backend container it belongs in — a Confluence
-	// space or a Plane project identifier.
+	// space key today, named neutrally for the same reason the searcher's
+	// is.
 	Container string
 	// Markdown is the body, with the title heading removed: the backend
 	// renders the title itself, so leaving it would show it twice.
@@ -63,8 +64,8 @@ type Doc struct {
 	// before this page exists.
 	Parent string
 	// Labels are the author's own page labels. Confluence has a
-	// first-class field for them; Plane has none, and its importer says
-	// so rather than dropping them silently.
+	// first-class field for them; a backend without one must say so rather
+	// than dropping them silently.
 	Labels []string
 }
 

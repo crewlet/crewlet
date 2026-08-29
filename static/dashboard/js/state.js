@@ -232,7 +232,6 @@ export const CONTACT_FIELDS = [
   ["atlassian_account_id", "jira"],
   ["github_login", "github"],
   ["gitlab_username", "gitlab"],
-  ["plane_user_id", "plane"],
 ];
 
 export function contactIntegrations(contact) {
@@ -313,7 +312,6 @@ export const INTEGRATIONS = {
   github: { label: "GitHub", icon: "git", color: "var(--text)" },
   gitlab: { label: "GitLab", icon: "git", color: "var(--orange-ink)" },
   confluence: { label: "Confluence", icon: "book", color: "var(--cyan-ink)" },
-  plane: { label: "Plane", icon: "clipboard", color: "var(--green-ink)" },
   email: { label: "Email", icon: "inbox", color: "var(--amber-ink)" },
 };
 

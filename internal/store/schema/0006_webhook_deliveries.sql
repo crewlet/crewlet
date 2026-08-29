@@ -21,7 +21,7 @@
 -- inbound work; a duplicate is recoverable noise, a dropped delivery is a
 -- message nobody ever answers.
 CREATE TABLE webhook_deliveries (
-    -- The integration that sent it: 'github', 'gitlab', 'plane', …
+    -- The integration that sent it: 'github', 'gitlab', 'jira', …
     source       TEXT    NOT NULL,
     -- The provider's own identity for this delivery.
     delivery_key TEXT    NOT NULL,

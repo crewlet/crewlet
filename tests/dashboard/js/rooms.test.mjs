@@ -344,11 +344,11 @@ test("integrations: a resolved secret says so, and an unknown one does not claim
             last_at: null,
           },
           {
-            key: "plane",
+            key: "jira",
             configured: true,
             enabled: true,
             inbound_kind: "webhook",
-            inbound_path: "/webhooks/plane",
+            inbound_path: "/webhooks/jira",
             secret_present: true,
             secret_usable: null,
             routes: true,

@@ -84,9 +84,9 @@ func (e *APIError) Error() string {
 // Status reports the HTTP status a call was refused with, or 0 when the
 // failure was not an API error.
 //
-// The same accessor the Plane and Mattermost clients export, for the same
-// reason: a caller deciding what to do about a refusal needs the number, and
-// three vendor packages spelling that three ways is three places to get it
+// The same accessor the other vendor clients export, for the same reason: a
+// caller deciding what to do about a refusal needs the number, and each
+// vendor package spelling that its own way is another place to get it
 // wrong.
 func Status(err error) int {
 	var e *APIError

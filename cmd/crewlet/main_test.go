@@ -489,7 +489,7 @@ func parseOverrides(t *testing.T, args []string) (*flag.FlagSet, string, string,
 //
 // Nothing connects the switch in run() to the text in usage(), so a command
 // added to one and not the other works perfectly and is discoverable only by
-// reading the source. `crewlet plane` shipped that way for the whole of the
+// reading the source. A vendor CLI shipped that way for the whole of the
 // rewrite: provisioning, import and resync all worked, and the only list of
 // commands an operator ever sees named GitLab and Mattermost.
 //

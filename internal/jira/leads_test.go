@@ -9,9 +9,9 @@ import (
 
 // THE JIRA MAP READS THE JIRA FIELD.
 //
-// A unit can declare a project on both trackers, and they are different
+// A unit declares a tracker project and a wiki space, and they are different
 // places. A lead map that read the wrong field would route every Jira event
-// by the Plane project's ownership — and it would look right, because the
+// by the Confluence space's ownership — and it would look right, because the
 // two are usually the same team.
 func TestTheLeadMapReadsTheTrackersOwnField(t *testing.T) {
 	t.Parallel()
@@ -22,8 +22,8 @@ func TestTheLeadMapReadsTheTrackersOwnField(t *testing.T) {
 			{Name: "Ops Lead", DeclaredHandle: "ops"},
 		},
 		Units: []*org.Unit{
-			{Name: "Engineering", Lead: "CTO", JiraProject: "eng", PlaneProject: "platform"},
-			{Name: "Operations", Lead: "Ops Lead", PlaneProject: "ops"},
+			{Name: "Engineering", Lead: "CTO", JiraProject: "eng", ConfluenceSpace: "PLATFORM"},
+			{Name: "Operations", Lead: "Ops Lead", ConfluenceSpace: "OPS"},
 		},
 	}
 	o.Normalize()
@@ -32,7 +32,7 @@ func TestTheLeadMapReadsTheTrackersOwnField(t *testing.T) {
 	if leads["ENG"] != "cto" {
 		t.Fatalf("ENG → %q, want cto (leads = %v)", leads["ENG"], leads)
 	}
-	// The Plane-only unit contributes nothing here: it names no Jira
+	// The wiki-only unit contributes nothing here: it names no Jira
 	// project, so a Jira event can never be routed by it.
 	if len(leads) != 1 {
 		t.Fatalf("a unit with no Jira project reached the Jira lead map: %v", leads)

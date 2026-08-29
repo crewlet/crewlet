@@ -110,9 +110,9 @@ test("payload text an outsider chose is escaped", async () => {
 // ---------------------------------------------------------------------
 // Per-source webhook layouts.
 //
-// GitLab and Plane are the two most heavily routed sources in the
-// project's own example company, and both used to fall through to a raw
-// JSON dump. Each case below pins the fields an operator reads to answer
+// GitLab is the most heavily routed source in the project's own example
+// company, and it used to fall through to a raw JSON dump. Each case below
+// pins the fields an operator reads to answer
 // "what happened, who did it, and why did it wake anyone" — the ones the
 // engine's own routers key on.
 // ---------------------------------------------------------------------
@@ -231,8 +231,8 @@ test("a gitlab push shows the branch and its commits", async () => {
       total_commits_count: 2,
       project: { path_with_namespace: "nimbus/platform" },
       commits: [
-        { id: "abcdef1234567890", title: "fix(plane): warm the cache" },
-        { id: "1234567890abcdef", message: "test(plane): cover the miss\n\nbody" },
+        { id: "abcdef1234567890", title: "fix(cache): warm the project map" },
+        { id: "1234567890abcdef", message: "test(cache): cover the miss\n\nbody" },
       ],
     }),
   );
@@ -242,7 +242,7 @@ test("a gitlab push shows the branch and its commits", async () => {
   assert.strictEqual(row(html, "Commits"), "2");
   assert.strictEqual(
     block(html, "Commits"),
-    "abcdef12 fix(plane): warm the cache\n12345678 test(plane): cover the miss",
+    "abcdef12 fix(cache): warm the project map\n12345678 test(cache): cover the miss",
     "a commit body was rendered instead of its first line",
   );
 });
@@ -267,100 +267,6 @@ test("a gitlab note renders the comment and the item it hangs off", async () => 
   assert.strictEqual(block(html, "Comment"), "@ada can you take this?");
 });
 
-test("a plane work-item update shows the field and the value that moved", async () => {
-  const { markup } = makeView(
-    webhook("plane", {
-      event: "issue",
-      action: "updated",
-      workspace_slug: "nimbus",
-      data: {
-        id: "11111111-1111-1111-1111-111111111111",
-        name: "Warm the project cache",
-        sequence_id: 42,
-        project: { id: "22222222-2222-2222-2222-222222222222", identifier: "ENG" },
-        assignees: [{ id: "33333333-3333-3333-3333-333333333333", display_name: "ada" }],
-      },
-      activity: {
-        actor: { id: "44444444-4444-4444-4444-444444444444", display_name: "kai" },
-        field: "state",
-        old_value: "Todo",
-        new_value: "In Progress",
-      },
-    }),
-  );
-  const html = await markup();
-  assert.strictEqual(row(html, "Event"), "issue.updated");
-  assert.strictEqual(row(html, "Actor"), "kai");
-  assert.strictEqual(row(html, "Workspace"), "nimbus");
-  assert.strictEqual(row(html, "Project"), "ENG");
-  assert.strictEqual(row(html, "Work item"), "ENG-42 Warm the project cache");
-  assert.strictEqual(row(html, "Field"), "state");
-  assert.strictEqual(row(html, "Change"), "Todo → In Progress");
-  assert.strictEqual(row(html, "Assignees"), "ada");
-  assert.ok(html.includes("Raw payload"), "the raw payload block was dropped");
-});
-
-test("a plane comment flattens its html and lists the mentioned ids", async () => {
-  // `data.id` is the COMMENT row here; the work item is `data.issue` —
-  // reading the wrong one produces a pointer that 404s.
-  const { markup } = makeView(
-    webhook("plane", {
-      event: "issue_comment",
-      action: "created",
-      workspace_slug: "nimbus",
-      data: {
-        id: "55555555-5555-5555-5555-555555555555",
-        issue: "11111111-1111-1111-1111-111111111111",
-        project: { id: "22222222-2222-2222-2222-222222222222", identifier: "ENG" },
-        comment_html:
-          '<p>Ship it <mention-component id="m1" entity_identifier="33333333-3333-3333-3333-333333333333" entity_name="user_mention"></mention-component> &amp; rebase</p>',
-      },
-      activity: { actor: "44444444-4444-4444-4444-444444444444" },
-    }),
-  );
-  const html = await markup();
-  assert.strictEqual(
-    row(html, "Work item id"),
-    "11111111-1111-1111-1111-111111111111",
-    "the work item id was taken from the comment row",
-  );
-  assert.strictEqual(
-    block(html, "Comment"),
-    "Ship it @33333333-3333-3333-3333-333333333333 &amp; rebase",
-    "the comment html was not flattened",
-  );
-  assert.strictEqual(
-    row(html, "Mentions"),
-    "33333333-3333-3333-3333-333333333333",
-    "the mentioned ids — the routing targets — are missing",
-  );
-});
-
-test("a plane page event identifies the page rather than a work item", async () => {
-  const { markup } = makeView(
-    webhook("plane", {
-      event: "page",
-      action: "updated",
-      workspace_slug: "nimbus",
-      data: {
-        id: "66666666-6666-6666-6666-666666666666",
-        name: "Runbook: cache warmup",
-        projects: ["22222222-2222-2222-2222-222222222222"],
-      },
-      activity: { actor: { display_name: "ada" } },
-    }),
-  );
-  const html = await markup();
-  assert.strictEqual(row(html, "Event"), "page.updated");
-  assert.strictEqual(row(html, "Actor"), "ada");
-  assert.strictEqual(row(html, "Page"), "Runbook: cache warmup");
-  assert.strictEqual(row(html, "Page id"), "66666666-6666-6666-6666-666666666666");
-  // A page's project ref is the `projects` M2M, not the scalar FK a work
-  // item carries.
-  assert.strictEqual(row(html, "Project"), "22222222-2222-2222-2222-222222222222");
-  assert.strictEqual(row(html, "Work item"), null, "a page was rendered as a work item");
-});
-
 test("webhook text an outsider chose is escaped in the new branches", async () => {
   const nasty = '<img src=x onerror="alert(1)">';
   for (const ev of [
@@ -368,12 +274,6 @@ test("webhook text an outsider chose is escaped in the new branches", async () =
       object_kind: "issue",
       user: { username: nasty },
       object_attributes: { iid: 1, title: nasty, description: nasty, url: nasty },
-    }),
-    webhook("plane", {
-      event: "issue",
-      action: "updated",
-      data: { name: nasty, description_html: `<p>${nasty}</p>` },
-      activity: { actor: { display_name: nasty }, field: nasty, new_value: nasty },
     }),
   ]) {
     const { markup } = makeView(ev);
@@ -408,9 +308,9 @@ test("a notification says how it was routed", async () => {
   // appear exactly once.
   const { markup } = makeView({
     ...BASE,
-    source: "notification_service.plane",
+    source: "notification_service.jira",
     payload: {
-      notification_source: "plane",
+      notification_source: "jira",
       sender: "kai",
       subject: "[ENG-42] Warm the project cache",
       metadata: { routed_via: "assignee_added", project: "ENG" },

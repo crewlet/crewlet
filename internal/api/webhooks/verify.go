@@ -12,10 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/whsec"
 )
 
-// The provider signature schemes. Four of them, over seven routes: GitHub's
+// The provider signature schemes. Three of them, over six routes: GitHub's
 // prefixed hex, Atlassian's identically-shaped X-Hub-Signature (Jira and
-// Confluence are one scheme, so they are one function), Plane's bare hex,
-// Slack's v0 basestring, and GitLab's Standard-Webhooks base64.
+// Confluence are one scheme, so they are one function), Slack's v0
+// basestring, and GitLab's Standard-Webhooks base64.
 //
 // Every one of them decodes the presented signature and compares BYTES with
 // hmac.Equal. Comparing the hex or base64 TEXT instead would make the check
@@ -52,11 +52,6 @@ func verifyGitHub(body []byte, secret, signature string) bool {
 // silent, because each half stays self-consistent.
 func verifyAtlassian(body []byte, secret, signature string) bool {
 	return verifyGitHub(body, secret, signature)
-}
-
-// verifyPlane checks X-Plane-Signature: the bare hex digest of the raw body.
-func verifyPlane(body []byte, secret, signature string) bool {
-	return equalHex(signature, mac(secret, body))
 }
 
 // verifySlack checks Slack's v0 scheme over "v0:{timestamp}:{body}".

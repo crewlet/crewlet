@@ -721,7 +721,7 @@ roles:
     contact:
       slack_user_id: U0FOUNDER
       github_login: JaneDoe
-      plane_user_id: "${PLANE_FOUNDER_USER_ID}"
+      gitlab_username: "${GL_FOUNDER_USERNAME}"
   - name: Dev C
     unit: Backend
 units:
@@ -796,8 +796,8 @@ units:
 	if got := founder.Contact.GitHubLogin; got != "janedoe" {
 		t.Errorf("github_login = %q, want it lowercased", got)
 	}
-	if got := founder.Contact.PlaneUserID; got != "${PLANE_FOUNDER_USER_ID}" {
-		t.Errorf("plane_user_id = %q, want the reference verbatim", got)
+	if got := founder.Contact.GitLabUsername; got != "${GL_FOUNDER_USERNAME}" {
+		t.Errorf("gitlab_username = %q, want the reference verbatim", got)
 	}
 	if o.Unit("Backend").Role("Dev C") == nil {
 		t.Error("the unit: reference did not move the seat")

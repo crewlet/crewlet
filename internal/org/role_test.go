@@ -115,7 +115,6 @@ func TestHumanSeatRejectsEveryRuntimeField(t *testing.T) {
 		{"mattermost", func(r *Role) { r.Mattermost = MattermostIdentity{BotToken: "mm-1"} }},
 		{"integrations.jira", func(r *Role) { r.JiraProject = "ENG" }},
 		{"integrations.confluence", func(r *Role) { r.ConfluenceSpace = "ENG" }},
-		{"integrations.plane", func(r *Role) { r.PlaneProject = "eng" }},
 		{"mcp_env", func(r *Role) { r.MCPEnv = MCPEnv{"atlassian": {"JIRA_USERNAME": "s"}} }},
 		{"behavioral_guidelines", func(r *Role) { r.BehavioralGuidelines = []string{"Reply fast"} }},
 	} {
@@ -177,7 +176,7 @@ func TestHumanSeatNeedsAContactIdentity(t *testing.T) {
 	}
 	// A ${VAR} reference IS a declared identity — the id is instance
 	// specific and lives in the environment, not in a committed file.
-	r := human(func(r *Role) { r.Contact = &HumanContact{PlaneUserID: "${PLANE_FOUNDER_USER_ID}"} })
+	r := human(func(r *Role) { r.Contact = &HumanContact{GitLabUsername: "${GL_FOUNDER_USERNAME}"} })
 	if err := r.Validate(); err != nil {
 		t.Errorf("Validate() = %v, want nil", err)
 	}
@@ -242,8 +241,8 @@ func TestContactNormalization(t *testing.T) {
 	}{
 		{
 			name: "case-normalised fields are lowercased",
-			in:   HumanContact{GitHubLogin: "JaneDoe", GitLabUsername: "JaneDoe", PlaneUserID: "AB12CD34"},
-			want: HumanContact{GitHubLogin: "janedoe", GitLabUsername: "janedoe", PlaneUserID: "ab12cd34"},
+			in:   HumanContact{GitHubLogin: "JaneDoe", GitLabUsername: "Jane.Doe"},
+			want: HumanContact{GitHubLogin: "janedoe", GitLabUsername: "jane.doe"},
 		},
 		{
 			name: "opaque ids keep their case",
@@ -259,8 +258,8 @@ func TestContactNormalization(t *testing.T) {
 			// Lowercasing a reference would make it permanently
 			// unresolvable: variable names are case-sensitive.
 			name: "a whole ${VAR} reference is stored verbatim",
-			in:   HumanContact{GitHubLogin: "${GH_FOUNDER_LOGIN}", PlaneUserID: " ${PLANE_FOUNDER_USER_ID} "},
-			want: HumanContact{GitHubLogin: "${GH_FOUNDER_LOGIN}", PlaneUserID: "${PLANE_FOUNDER_USER_ID}"},
+			in:   HumanContact{GitHubLogin: "${GH_FOUNDER_LOGIN}", GitLabUsername: " ${GL_FOUNDER_USERNAME} "},
+			want: HumanContact{GitHubLogin: "${GH_FOUNDER_LOGIN}", GitLabUsername: "${GL_FOUNDER_USERNAME}"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -290,7 +289,7 @@ func TestContactRejectsEmbeddedEnvRefs(t *testing.T) {
 		{"slack_user_id", HumanContact{SlackUserID: "U${SLACK_SUFFIX}"}},
 		// Two adjacent whole references still resolve to a concatenation,
 		// which is not an identity.
-		{"plane_user_id", HumanContact{PlaneUserID: "${A}${B}"}},
+		{"gitlab_username", HumanContact{GitLabUsername: "${A}${B}"}},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			t.Parallel()
@@ -330,8 +329,8 @@ func TestResolvedIdentitiesEnumeration(t *testing.T) {
 // and a different method.
 func TestIdentitiesAreConfigVerbatim(t *testing.T) {
 	t.Parallel()
-	c := HumanContact{SlackUserID: "U1", PlaneUserID: "${PLANE_FOUNDER_USER_ID}"}
-	want := []Identity{{TransportSlack, "U1"}, {TransportPlane, "${PLANE_FOUNDER_USER_ID}"}}
+	c := HumanContact{SlackUserID: "U1", GitLabUsername: "${GL_FOUNDER_USERNAME}"}
+	want := []Identity{{TransportSlack, "U1"}, {TransportGitLab, "${GL_FOUNDER_USERNAME}"}}
 	if got := c.Identities(); !slices.Equal(got, want) {
 		t.Errorf("Identities() = %v, want %v", got, want)
 	}
@@ -342,10 +341,10 @@ func TestIdentitiesAreConfigVerbatim(t *testing.T) {
 
 func TestResolvedIdentitiesResolveThenNormalize(t *testing.T) {
 	t.Parallel()
-	c := HumanContact{SlackUserID: "U1", PlaneUserID: "${PLANE_FOUNDER_USER_ID}"}
-	env := lookupFrom(map[string]string{"PLANE_FOUNDER_USER_ID": " AB12CD34-0000 "})
+	c := HumanContact{SlackUserID: "U1", GitLabUsername: "${GL_FOUNDER_USERNAME}"}
+	env := lookupFrom(map[string]string{"GL_FOUNDER_USERNAME": " Jane.Doe-0000 "})
 	got := c.ResolvedIdentities(env)
-	want := []Identity{{TransportSlack, "U1"}, {TransportPlane, "ab12cd34-0000"}}
+	want := []Identity{{TransportSlack, "U1"}, {TransportGitLab, "jane.doe-0000"}}
 	if !slices.Equal(got, want) {
 		t.Errorf("ResolvedIdentities() = %v, want %v", got, want)
 	}
@@ -357,13 +356,13 @@ func TestResolvedIdentitiesResolveThenNormalize(t *testing.T) {
 // mentioned.
 func TestResolvedIdentitiesOmitUnresolved(t *testing.T) {
 	t.Parallel()
-	c := HumanContact{SlackUserID: "U1", PlaneUserID: "${PLANE_FOUNDER_USER_ID}"}
+	c := HumanContact{SlackUserID: "U1", GitLabUsername: "${GL_FOUNDER_USERNAME}"}
 	for _, tc := range []struct {
 		name string
 		env  EnvLookup
 	}{
 		{"unset", lookupFrom(nil)},
-		{"set but empty", lookupFrom(map[string]string{"PLANE_FOUNDER_USER_ID": "  "})},
+		{"set but empty", lookupFrom(map[string]string{"GL_FOUNDER_USERNAME": "  "})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -387,7 +386,7 @@ func TestContactFieldTableIsConsistent(t *testing.T) {
 	t.Parallel()
 	want := []string{
 		"slack_user_id", "mattermost_user_id", "atlassian_account_id",
-		"github_login", "gitlab_username", "plane_user_id",
+		"github_login", "gitlab_username",
 	}
 	for i, key := range want {
 		if contactFields[i].key != key {

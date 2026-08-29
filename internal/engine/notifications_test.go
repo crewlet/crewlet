@@ -165,7 +165,7 @@ func TestEveryIntegrationResolvesItsAddress(t *testing.T) {
 	// NOT parallel: the addresses come from the process environment.
 	t.Setenv("TEST_MM_URL", "http://127.0.0.1:1")
 	t.Setenv("TEST_GL_URL", "http://127.0.0.1:2")
-	t.Setenv("TEST_PLANE_URL", "http://127.0.0.1:3")
+	t.Setenv("TEST_CF_URL", "http://127.0.0.1:3")
 	t.Setenv("MM_CEO_TOKEN", "tok-ceo")
 
 	doc := strings.Replace(companyDoc, `  - name: CEO
@@ -185,11 +185,10 @@ integrations:
     enabled: true
     url: ${TEST_GL_URL}
     signing_secret: whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM=
-  plane:
-    enabled: true
-    url: ${TEST_PLANE_URL}
-    workspace: acme
-    webhook_secret: plane-secret
+  confluence:
+    url: ${TEST_CF_URL}
+    token: cf-token
+    webhook_secret: cf-secret
 `
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
 	if e.Company() == nil {
@@ -205,12 +204,11 @@ integrations:
 	if got := mm.URL(); got != "http://127.0.0.1:1" {
 		t.Errorf("mattermost url = %q, want the resolved address", got)
 	}
-	// The tracker's client is only built when its token resolves, and
-	// this company declares none — but a url that failed to resolve is
-	// refused outright, so reaching a live company at all is the
-	// assertion for those two.
+	// The other two wirings refuse a url that failed to resolve outright,
+	// so reaching a live company at all is the assertion for them: an
+	// unresolved reference would have taken the surface down instead.
 	if e.Company() == nil {
-		t.Error("the company stopped, which is what an unresolved tracker url does")
+		t.Error("the company stopped, which is what an unresolved address does")
 	}
 }
 
@@ -285,7 +283,7 @@ func TestAnUnconfiguredNodeHasNoWebhookSecrets(t *testing.T) {
 	e := newEngine(t, engine.Options{})
 	// The fixture company declares no integrations, so every field is
 	// empty — the same answer a node mid-boot gives.
-	if s := e.WebhookSecrets(); s.GitLab != "" || s.GitHub != "" || s.Plane != "" {
+	if s := e.WebhookSecrets(); s.GitLab != "" || s.GitHub != "" || s.Jira != "" {
 		t.Errorf("secrets appeared with no integration configured: %+v", s)
 	}
 }

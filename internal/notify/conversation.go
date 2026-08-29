@@ -76,9 +76,9 @@ func Fallback(eventID string) string { return EventPrefix + eventID }
 
 // Namespaced turns a vendor's SOURCE-LOCAL key into a global one.
 //
-// Two vendors can and do mint the same local key — a Plane work item and a
-// GitLab issue are both plausibly "42" — and an un-namespaced key would merge
-// their events into one trigger. The prompt returns the local half precisely
+// Two vendors can and do mint the same local key — a Jira issue and a GitLab
+// issue are both plausibly "42" — and an un-namespaced key would merge their
+// events into one trigger. The prompt returns the local half precisely
 // so it never has to know this rule.
 func Namespaced(source, local string) string {
 	if source == "" || local == "" {

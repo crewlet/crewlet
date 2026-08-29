@@ -64,7 +64,7 @@ type Options struct {
 	Rotate bool
 
 	// Decommission disables managed bot accounts whose seats have left the
-	// company document, matching the flag GitLab and Plane already have.
+	// company document, matching the flag GitLab already has.
 	//
 	// DISABLE, never delete: a deleted bot takes its posts with it, so this
 	// would silently rewrite the history of every channel the seat spoke

@@ -21,7 +21,6 @@ import (
 type Secrets struct {
 	GitHub     string
 	GitLab     string
-	Plane      string
 	Jira       string
 	Confluence string
 
@@ -62,7 +61,6 @@ func (s Secrets) Verifiable() []string {
 		kind, secret string
 	}{
 		{"github", s.GitHub},
-		{"plane", s.Plane},
 		{"jira", s.Jira},
 		{"confluence", s.Confluence},
 		{"forge", s.ForgeAppID},
@@ -117,9 +115,6 @@ func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) stri
 		}
 		if in.GitLab != nil {
 			s.GitLab = resolve(in.GitLab.SigningSecret)
-		}
-		if in.Plane != nil {
-			s.Plane = resolve(in.Plane.WebhookSecret)
 		}
 		if in.Jira != nil {
 			s.Jira = resolve(in.Jira.WebhookSecret)

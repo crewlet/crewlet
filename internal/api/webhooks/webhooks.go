@@ -170,7 +170,6 @@ func New(opts Options) *Receiver {
 func (r *Receiver) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /webhooks/github", r.github)
 	mux.HandleFunc("POST /webhooks/gitlab", r.gitlab)
-	mux.HandleFunc("POST /webhooks/plane", r.plane)
 	mux.HandleFunc("POST /webhooks/jira", r.jira)
 	mux.HandleFunc("POST /webhooks/confluence", r.confluence)
 	mux.HandleFunc("POST /webhooks/slack/{handle}", r.slack)
@@ -516,12 +515,13 @@ func noSecret(w http.ResponseWriter, source string) {
 //
 // # Byte identity IS delivery identity here
 //
-// Three routes have no per-delivery header: Plane sends only a per-ATTEMPT
-// id, and a Cloud event relayed through Forge carries none at all. What they
-// do send is a payload that is byte-identical across the provider's own
-// retries and different for any two distinct events — every one of these
-// vendors stamps its payloads with entity ids and timestamps, so two events
-// cannot serialize the same.
+// A Cloud event relayed through Forge carries no per-delivery header at all,
+// and an Atlassian Data Center delivery carries one only from the versions
+// that send X-Atlassian-Webhook-Identifier — so all three Atlassian routes
+// reach here. What they do send is a payload that is byte-identical across
+// the provider's own retries and different for any two distinct events: every
+// one of these vendors stamps its payloads with entity ids and timestamps, so
+// two events cannot serialize the same.
 //
 // # Why a hash of the whole body rather than derived coordinates
 //
