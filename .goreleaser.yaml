@@ -11,10 +11,13 @@
 # local `go build` — reports its module build info instead, so it names itself
 # honestly rather than claiming to be a release.
 #
-# Rehearse locally with `goreleaser release --snapshot --clean`, which builds
-# every target and the container image without touching GitHub. That is the
-# whole point of keeping this declarative: the PyPI pipeline it replaced
-# could only rehearse by uploading to TestPyPI.
+# Rehearse locally with `make snapshot`, which builds every target and the
+# container image without touching GitHub. Run it that way rather than by
+# hand: signing is NOT part of the publish phase `--snapshot` skips, so the
+# bare command mints a real Sigstore certificate over a throwaway build, and
+# the target passes the `--skip=sign` that stops it (RELEASING.md). That a
+# rehearsal exists at all is the whole point of keeping this declarative: the
+# PyPI pipeline it replaced could only rehearse by uploading to TestPyPI.
 version: 2
 
 project_name: crewlet
