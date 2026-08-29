@@ -102,20 +102,29 @@ func spaceActivity(b *strings.Builder, n notify.Inbound, parties notify.Parties)
 		b.WriteString("\n**What changed:**\n" + n.Body + "\n")
 	}
 	// THE ROUTING REASON IS WORTH STATING, because it is unusual: this is
-	// not a page the seat subscribed to. Confluence has no per-agent
-	// watch the engine can read, so a space's activity has exactly one
-	// place to go — and a lead who is not told that reads every edit as a
-	// request.
+	// not a page the seat subscribed to, and nobody was named on it. A
+	// lead who is not told that reads every edit as a request.
+	//
+	// THE DELEGATION SENTENCE IS LOAD-BEARING, not encouragement. Nothing
+	// else subscribes a seat to a page it has not touched, so a lead who
+	// answers by hand keeps receiving every later event on that page —
+	// and a lead who mentions the right teammate stops, because the
+	// mention subscribes them. Saying so is what makes the loop close.
 	b.WriteString("\nYou received this as the lead of the team that owns the" +
-		" space — Confluence has no per-agent page watchers the engine can" +
-		" read, so space activity routes to you by default.\n" +
+		" space: nobody was named on the page, and no seat has worked on it" +
+		" before, so it routes to you by default.\n" +
 		"\n## How to handle this" +
 		"\n**Staying silent is the ordinary outcome.** Documentation" +
 		" changing is not a request. Read the change only if it plausibly" +
 		" bears on work your team has in flight; if it does, adjust your" +
 		" plans or tell the teammate it concerns. Do NOT comment to" +
 		" acknowledge it — a wiki whose comments are acknowledgements is a" +
-		" wiki whose comments nobody reads.\n")
+		" wiki whose comments nobody reads.\n" +
+		"\nIf this page belongs to a teammate, **@mention them in a comment**" +
+		" rather than answering it yourself. A mention subscribes them to the" +
+		" page, so the next change reaches them instead of you. Editing the" +
+		" page yourself subscribes YOU, and every later change comes back" +
+		" here.\n")
 }
 
 // header is the identifying block both openers share.

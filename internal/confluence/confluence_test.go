@@ -3,11 +3,13 @@ package confluence_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/confluence"
@@ -618,4 +620,354 @@ func TestADigestCollapsesPageSnapshots(t *testing.T) {
 	if got := (confluence.Prompt{}).DigestBody("comment_created", "what somebody said"); got == "" {
 		t.Error("a comment was collapsed")
 	}
+}
+
+// --- page subscriptions ------------------------------------------------ //
+
+// watchList is the engine's page-subscription list, as the parser sees it.
+type watchList struct {
+	mu    sync.Mutex
+	pages map[string]map[string]bool
+	err   error
+	// reads counts membership tests, so a test can assert the read is one
+	// call whatever the page's history — the reason the seam is a
+	// membership test rather than an enumeration.
+	reads int
+}
+
+func newWatchList(subscribed ...string) *watchList {
+	w := &watchList{pages: map[string]map[string]bool{}}
+	for _, handle := range subscribed {
+		w.set("1001", handle)
+	}
+	return w
+}
+
+func (w *watchList) set(page, handle string) {
+	if w.pages[page] == nil {
+		w.pages[page] = map[string]bool{}
+	}
+	w.pages[page][handle] = true
+}
+
+func (w *watchList) Watching(_ context.Context, page string, handles []string) (map[string]bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.reads++
+	if w.err != nil {
+		return nil, w.err
+	}
+	out := map[string]bool{}
+	for _, handle := range handles {
+		if w.pages[page][handle] {
+			out[handle] = true
+		}
+	}
+	return out, nil
+}
+
+func (w *watchList) Watch(_ context.Context, page, handle string, _ time.Time) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.err != nil {
+		return w.err
+	}
+	w.set(page, handle)
+	return nil
+}
+
+func (w *watchList) watching(page, handle string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.pages[page][handle]
+}
+
+func withWatchers(w *watchList) func(*confluence.ParserOptions) {
+	return func(o *confluence.ParserOptions) { o.Watchers = w }
+}
+
+func viaOf(copies []notify.Routed) []string {
+	out := make([]string, 0, len(copies))
+	for _, c := range copies {
+		out = append(out, c.Metadata[confluence.RoutedViaField])
+	}
+	return out
+}
+
+// A SEAT THAT TOUCHED A PAGE HEARS WHAT HAPPENS NEXT ON IT. Without this every
+// change that is not an explicit mention falls through to the space lead —
+// including the follow-up to a page the seat edited five minutes ago.
+func TestASubscribedSeatIsWokenByLaterActivity(t *testing.T) {
+	t.Parallel()
+	w := newWatchList("swe")
+	got := route(t, parser(t, withWatchers(w)),
+		pageEvent("comment_created", "ENG", "<p>Anything else?</p>", acctWriter))
+	if len(got) != 1 {
+		t.Fatalf("want one copy, got %d: %v", len(got), viaOf(got))
+	}
+	if got[0].To.Handle != "swe" {
+		t.Errorf("addressed to %+v", got[0].To)
+	}
+	if got[0].Metadata[confluence.RoutedViaField] != confluence.ViaWatcher {
+		t.Errorf("routed via %q", got[0].Metadata[confluence.RoutedViaField])
+	}
+}
+
+// A MENTION SUBSCRIBES THE SEAT NAMED, which is what closes the delegation
+// loop the lead-fallback prompt tells a lead to use: mention the right
+// teammate and the NEXT change reaches them instead of you.
+func TestAMentionSubscribesTheSeatItNames(t *testing.T) {
+	t.Parallel()
+	w := newWatchList()
+	p := parser(t, withWatchers(w))
+	// The lead DELEGATES BY COMMENTING, which is exactly what the
+	// lead-fallback prompt tells it to do.
+	storage := `<p>Can <ri:user ri:account-id="` + acctSWE + `"/> take this?</p>`
+	route(t, p, pageEvent("comment_created", "ENG", storage, acctLead))
+	if !w.watching("1001", "swe") {
+		t.Fatal("the mentioned seat was not subscribed")
+	}
+	// AND THE LEAD IS NOT SUBSCRIBED BY COMMENTING, or the delegation
+	// achieved nothing: every later event would come straight back to it.
+	if w.watching("1001", "lead") {
+		t.Fatal("commenting subscribed the lead, so the delegation loop never closes")
+	}
+	// SO THE NEXT EVENT REACHES THE DELEGATE, and only them. This is the
+	// whole loop.
+	got := route(t, p, pageEvent("comment_created", "ENG", "<p>Bumping.</p>", acctWriter))
+	if len(got) != 1 || got[0].To.Handle != "swe" {
+		t.Fatalf("the follow-up went to %v (%v)", got, viaOf(got))
+	}
+}
+
+// AN EDIT IS A CLAIM ON A PAGE; A COMMENT IS OFTEN THE OPPOSITE — handing it
+// over. Only the first subscribes its author, which is also the rule
+// Confluence applies to people.
+func TestOnlyAnEditSubscribesItsAuthor(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		event string
+		want  bool
+	}{
+		{"page_updated", true},
+		{"page_created", true},
+		{"blog_updated", true},
+		{"comment_created", false},
+		{"comment_updated", false},
+	} {
+		t.Run(tc.event, func(t *testing.T) {
+			t.Parallel()
+			w := newWatchList()
+			route(t, parser(t, withWatchers(w)),
+				pageEvent(tc.event, "ENG", "<p>Words.</p>", acctSWE))
+			if got := w.watching("1001", "swe"); got != tc.want {
+				t.Errorf("%s subscribed its author = %v, want %v", tc.event, got, tc.want)
+			}
+		})
+	}
+}
+
+// AN EDIT SUBSCRIBES THE EDITOR, which is the rule Confluence applies to
+// people and the reason a lead who answers a page by hand keeps receiving it.
+func TestTouchingAPageSubscribesTheSeatThatTouchedIt(t *testing.T) {
+	t.Parallel()
+	w := newWatchList()
+	p := parser(t, withWatchers(w))
+	route(t, p, pageEvent("page_updated", "ENG", "<p>Fixed a typo.</p>", acctSWE))
+	if !w.watching("1001", "swe") {
+		t.Error("the editing seat was not subscribed")
+	}
+}
+
+// THE ACTOR IS NEVER NOTIFIED ABOUT ITS OWN ACTION, subscribed or not — that
+// is the self-notification loop the whole routing layer is built to avoid.
+func TestASubscribedSeatIsNotWokenByItsOwnEdit(t *testing.T) {
+	t.Parallel()
+	w := newWatchList("swe")
+	got := route(t, parser(t, withWatchers(w)),
+		pageEvent("page_updated", "ENG", "<p>Fixed a typo.</p>", acctSWE))
+	for _, copy := range got {
+		if copy.To.Handle == "swe" {
+			t.Errorf("the actor was woken by its own edit: %v", viaOf(got))
+		}
+	}
+}
+
+// SUBSCRIBERS AND MENTIONS ARE ONE TIER. Ordering them against each other is
+// the wrong question — a mention is a directed ask and a subscription is a
+// declared interest, and suppressing either loses a recipient who wanted the
+// event.
+func TestAMentionAndASubscriptionBothReceiveTheEvent(t *testing.T) {
+	t.Parallel()
+	w := newWatchList("swe")
+	storage := `<p>Can <ri:user ri:account-id="` + acctWriter + `"/> review?</p>`
+	got := route(t, parser(t, withWatchers(w)),
+		pageEvent("page_updated", "ENG", storage, acctLead))
+	if len(got) != 2 {
+		t.Fatalf("want two copies, got %d: %v", len(got), viaOf(got))
+	}
+	reasons := map[string]bool{}
+	for _, c := range got {
+		reasons[c.Metadata[confluence.RoutedViaField]] = true
+	}
+	if !reasons[confluence.ViaMention] || !reasons[confluence.ViaWatcher] {
+		t.Errorf("reasons = %v", viaOf(got))
+	}
+}
+
+// ONE SEAT, ONE NOTIFICATION. A seat both mentioned and subscribed must not
+// get two copies — that is two turns for one page change.
+func TestASeatBothMentionedAndSubscribedIsNotifiedOnce(t *testing.T) {
+	t.Parallel()
+	w := newWatchList("swe")
+	storage := `<p>Can <ri:user ri:account-id="` + acctSWE + `"/> confirm?</p>`
+	got := route(t, parser(t, withWatchers(w)),
+		pageEvent("page_updated", "ENG", storage, acctLead))
+	if len(got) != 1 {
+		t.Fatalf("want one copy, got %d: %v", len(got), viaOf(got))
+	}
+	// UNDER THE STRONGER REASON: being named is a directed ask, and the
+	// prompt suppresses the lead-fallback hint on both anyway.
+	if got[0].Metadata[confluence.RoutedViaField] != confluence.ViaMention {
+		t.Errorf("routed via %q, want the stronger reason",
+			got[0].Metadata[confluence.RoutedViaField])
+	}
+}
+
+// SUBSCRIBERS SUPPRESS THE LEAD FALLBACK, which is the point: a lead who
+// delegated stops receiving the page.
+func TestASubscriberSuppressesTheSpaceLead(t *testing.T) {
+	t.Parallel()
+	w := newWatchList("swe")
+	got := route(t, parser(t, withWatchers(w)),
+		pageEvent("page_updated", "ENG", "<p>Changed.</p>", acctWriter))
+	for _, c := range got {
+		if c.Metadata[confluence.RoutedViaField] == confluence.ViaSpaceLead {
+			t.Errorf("the lead was notified anyway: %v", viaOf(got))
+		}
+	}
+}
+
+// AN UNREADABLE LIST FALLS THROUGH TO THE LEAD — where the event went before
+// subscriptions existed. Waking every seat instead would turn a store blip
+// into a company-wide interrupt.
+func TestAnUnreadableSubscriptionListFallsBackToTheLead(t *testing.T) {
+	t.Parallel()
+	w := newWatchList("swe")
+	w.err = errors.New("the coordination store is unwell")
+	got := route(t, parser(t, withWatchers(w)),
+		pageEvent("page_updated", "ENG", "<p>Changed.</p>", acctWriter))
+	if len(got) != 1 || got[0].Metadata[confluence.RoutedViaField] != confluence.ViaSpaceLead {
+		t.Fatalf("got %v (%v)", got, viaOf(got))
+	}
+}
+
+// NO SUBSCRIPTION LIST AT ALL IS A SUPPORTED SHAPE, not a degraded one: a
+// single node with no coordination store routes by mention and space lead
+// alone, exactly as this build did before.
+func TestAParserWithNoSubscriptionListStillRoutes(t *testing.T) {
+	t.Parallel()
+	got := route(t, parser(t, nil),
+		pageEvent("page_updated", "ENG", "<p>Changed.</p>", acctWriter))
+	if len(got) != 1 || got[0].Metadata[confluence.RoutedViaField] != confluence.ViaSpaceLead {
+		t.Fatalf("got %v (%v)", got, viaOf(got))
+	}
+}
+
+// THE READ IS ONE CALL whatever the page's history, which is why the seam is
+// a membership test rather than an enumeration.
+func TestTheSubscriptionReadIsOneCallPerEvent(t *testing.T) {
+	t.Parallel()
+	w := newWatchList("swe", "writer", "lead")
+	route(t, parser(t, withWatchers(w)),
+		pageEvent("page_updated", "ENG", "<p>Changed.</p>", acctLead))
+	if w.reads != 1 {
+		t.Errorf("%d membership reads for one event, want 1", w.reads)
+	}
+}
+
+// A SKILLS-SPACE PAGE SUBSCRIBES NOBODY. Its events are machinery — excluded
+// from routing entirely — and subscribing seats to them would build a list
+// that can only ever produce notifications the parser then drops.
+func TestASkillsSpacePageSubscribesNobody(t *testing.T) {
+	t.Parallel()
+	w := newWatchList()
+	route(t, parser(t, withWatchers(w)),
+		pageEvent("page_updated", "TS", "<p>Changed.</p>", acctSWE))
+	if w.watching("1001", "swe") {
+		t.Error("a tool-skill page subscribed the seat that edited it")
+	}
+}
+
+// A PERSON IS NEVER SUBSCRIBED, and never tested. Confluence already watches
+// for them and has already notified them natively — and worse, a human found
+// "subscribed" would suppress the space-lead fallback in favour of a
+// notification the service then skips.
+func TestAHumanSeatIsNeitherSubscribedNorWoken(t *testing.T) {
+	t.Parallel()
+	const acctHuman = "712020:dddd-human"
+	humans := func(t *testing.T) *notify.Registry {
+		t.Helper()
+		o := &org.Organization{Name: "nimbus", Roles: []*org.Role{
+			{Name: "Eng Lead", DeclaredHandle: "lead"},
+			{Name: "SWE", DeclaredHandle: "swe"},
+			{Name: "Dana", Kind: org.KindHuman, Contact: &org.HumanContact{}},
+		}}
+		o.Normalize()
+		reg := notify.NewRegistry(o)
+		for id, handle := range map[string]string{
+			acctLead: "lead", acctSWE: "swe", acctHuman: "dana",
+		} {
+			if err := reg.Register(confluence.Backend, id, handle); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return reg
+	}
+
+	// A PERSON ALREADY IN THE LIST DOES NOT ROUTE, and — the part with
+	// teeth — does not suppress the fallback either. Somebody else acts,
+	// so the self-ignore cannot mask the rule.
+	t.Run("a subscribed person does not route and does not suppress the lead", func(t *testing.T) {
+		t.Parallel()
+		w := newWatchList()
+		w.set("1001", "dana")
+		out, err := parser(t, withWatchers(w)).Parse(context.Background(),
+			pageEvent("page_updated", "ENG", "<p>Words.</p>", acctSWE), humans(t))
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		if len(out) != 1 || out[0].Metadata[confluence.RoutedViaField] != confluence.ViaSpaceLead {
+			t.Fatalf("got %v (%v)", out, viaOf(out))
+		}
+	})
+
+	// AND EDITING DOES NOT ADD ONE, so the list never grows a party the
+	// engine cannot wake.
+	t.Run("a person editing a page is not subscribed", func(t *testing.T) {
+		t.Parallel()
+		w := newWatchList()
+		if _, err := parser(t, withWatchers(w)).Parse(context.Background(),
+			pageEvent("page_updated", "ENG", "<p>Words.</p>", acctHuman), humans(t)); err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		if w.watching("1001", "dana") {
+			t.Error("a person was subscribed by editing")
+		}
+	})
+
+	// NOR DOES BEING MENTIONED, for the same reason: Confluence's own
+	// mention notification already reached them.
+	t.Run("a person mentioned is not subscribed", func(t *testing.T) {
+		t.Parallel()
+		w := newWatchList()
+		storage := `<p>Hey <ri:user ri:account-id="` + acctHuman + `"/>.</p>`
+		if _, err := parser(t, withWatchers(w)).Parse(context.Background(),
+			pageEvent("comment_created", "ENG", storage, acctSWE), humans(t)); err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		if w.watching("1001", "dana") {
+			t.Error("a person was subscribed by being mentioned")
+		}
+	})
 }

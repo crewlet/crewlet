@@ -110,6 +110,12 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 			// routing, so an indexer that only saw routable events would
 			// never see a skill change at all.
 			OnPage: e.reindexConfluenceSkill(skillsSpace),
+			// A TYPED NIL WOULD NOT BE NIL. confluenceWatchers returns a
+			// *pageWatchers, and assigning one straight into an interface
+			// field makes a non-nil interface holding a nil pointer — so
+			// the parser's `watchers == nil` check would pass and every
+			// call would go through a nil receiver.
+			Watchers: watchersFor(e.confluenceWatchers()),
 		}),
 		pages: orgClient,
 	}

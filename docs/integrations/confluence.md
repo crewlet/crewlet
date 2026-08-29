@@ -217,7 +217,7 @@ flowchart TD
     C -- "verified" --> D["Published to<br/>crewlet.notifications.inbound"]
     D --> E["notify.Service.Handle<br/>(internal/notify/service.go)"]
     E --> F["confluence.Parser.Parse<br/>one Routed per recipient"]
-    F --> G["Route, by specificity:<br/>1. page watchers · 2. @mentions<br/>3. space leads · 4. standard resolution"]
+    F --> G["Route:<br/>subscribers ∪ @mentions,<br/>else the space lead"]
     G --> H["Prompt.Build renders the<br/>tool-agnostic task description"]
     H --> I["crewlet.agent.{handle}.inbox"]
     I --> J["The seat wakes, reads the page<br/>through its own MCP tools, acts"]
@@ -225,46 +225,107 @@ flowchart TD
 
 ### Routing Strategy
 
-Routing follows the same watcher-based pattern as Jira, adapted for Confluence's behaviors:
+A wiki page event names only who edited it — there are no assignees — so
+routing has three signals, and the last is a fallback in the strict sense: it
+says "this concerns your team", never "this is yours".
 
-1. **Watchers** — The transport fetches page watchers via the Confluence REST API. Confluence **auto-adds users as watchers when they edit a page** — this includes the page creator, so there is no separate "page creator" routing step. Agents who have edited a page will automatically receive notifications about subsequent activity on it.
-2. **@mentions** — When a comment contains `@mention` markup (`<ri:user ri:account-id="..."/>`), the mentioned agents receive the notification. The Confluence UI does not allow mentioning service accounts, but **the API can insert mention markup** — so agents commenting via MCP tools can direct notifications to other agents. Mentioned agents are **automatically added as page watchers** so they receive future events on that page.
-3. **Space leads** — If no watchers or mentions resolved to a known agent (steps 1-2), all unit leads mapped to the space key receive the notification — **except the agent that triggered the event**. Multiple units can share the same space key.
+1. **Subscribers** — seats that have **touched this page before**. A seat is
+   subscribed when it *edits* the page or when somebody *@mentions* it there.
+2. **@mentions** — a comment or page body containing `<ri:user
+   ri:account-id="…"/>` markup routes to the seats named. The Confluence UI
+   does not allow mentioning service accounts, but **the API can insert
+   mention markup**, so agents commenting through their MCP tools can direct a
+   page to a colleague.
+3. **Space leads** — if neither produced a recipient, every unit lead mapped
+   to the space key gets it, minus the actor.
 
-"Resolved to a known agent" means the account maps to an **agent seat in the org**, not to an agent running in the node that received the webhook — a watcher owned by another node is routed to normally, since the notification is addressed by handle and consumed by whichever node owns that seat. Human watchers deliberately resolve to nothing here: Confluence already notified them natively, and counting one as a delivered recipient would suppress the space-lead fallback in favour of a notification the engine then skips.
-4. **Standard resolution** — If no space mapping exists, the notification is returned for generic handle/email resolution.
+**Steps 1 and 2 are one tier, not a precedence.** Ordering them against each
+other is the wrong question: a mention is a directed ask and a subscription is
+a declared interest, and suppressing either in favour of the other loses a
+recipient who genuinely wanted the event. Both fire, and a seat that is *both*
+mentioned and subscribed gets exactly **one** notification (under the mention,
+the stronger reason) — two copies would be two turns for one page change. Only
+the lead fallback is exclusive: it exists for the case where nobody was found
+at all.
 
-When specific recipients are found (steps 1-2), space leads are **not** notified — this prevents leads from being flooded with events that already have a clear recipient.
+"Resolved to a known agent" means the account maps to an **agent seat in the
+org**, not to an agent running on the node that received the webhook — a
+recipient owned by another node is routed to normally, since the notification
+is addressed by handle and consumed by whichever node owns that seat. Humans
+resolve to nothing here, deliberately: Confluence already notified them
+natively, and counting one as a delivered recipient would suppress the
+space-lead fallback in favour of a notification the engine then skips.
+
+#### The subscription list is the engine's, not Confluence's
+
+Confluence does keep watchers, and reading them is the obvious design. It is
+the wrong one here, for three reasons that compound:
+
+- the watcher list is mostly **people**, who Confluence has already notified
+  and who resolve to nothing the engine can wake;
+- reading it costs **a call per event**, on a path that has to stay cheap;
+- a **per-role token frequently cannot read another user's watch state**, so
+  the answer would be "nobody watching" on exactly the deployments this is
+  documented for.
+
+So the engine keeps its own list, of the only parties it can route to anyway,
+on the coordination store — a seat subscribed by a mention one node handled
+has to be found by whichever node handles the next event. Membership is asked
+as a single question per event ("which of my seats is subscribed to this
+page?"), so the cost does not grow with a page's history.
+
+The list is bounded by the **coordination bucket's retention** rather than a
+per-page expiry: a page nobody has touched inside that window drops its
+subscribers, which is the right forgetting — a seat that edited a page a year
+ago is not waiting on it.
+
+A node with **no coordination store** (a single embedded node) has no list and
+routes by mentions and space leads alone. That is a supported shape, not a
+degraded one; what it costs is step 1.
+
+#### An edit subscribes you; a comment does not
+
+This asymmetry is the whole delegation loop, and it is also the rule
+Confluence applies to people. Editing a page is a claim on it. Commenting on
+one is often the opposite — handing it over — so a lead answering a page with
+"@teammate, this is yours" must **not** thereby subscribe itself, or every
+later event comes straight back and the delegation achieved nothing. The
+mention subscribes the teammate; the comment does not subscribe the lead.
+
+Pages in the **Tool Skills space** subscribe nobody: their events are
+machinery and are excluded from routing entirely, so a subscription there
+could only ever produce notifications the parser drops.
 
 #### Self-ignore: an agent is never notified about its own action
 
 Every routing step excludes the user who triggered the webhook — the agent already knows about the action it just performed. This matters most for **space-lead routing**: a lead acting in the space it leads (e.g. a CEO commenting on a page in the leadership space) is the *default* space-lead recipient for the resulting `comment_created` / `page_updated` webhook. Without the exclusion, that webhook routes straight back to the lead, which wakes it to "acknowledge" the change — posting another comment that triggers another webhook, an endless self-notification loop.
 
-When the **only** candidate recipient is the trigger user (the sole watcher, or the sole space lead), the event is **dropped** rather than falling through to a later routing step. The notification service adds a transport-agnostic backstop: any inbound notification whose `actor_external_id` resolves to the recipient itself is skipped (recorded as a `NotificationSkipped` event). `actor_external_id` is the **one** actor key every integration stamps — a per-vendor key protects the vendors somebody remembered and silently protects none of the others — and the actor is *resolved* through the handle registry rather than string-matched, so a seat's bot identity and its member identity compare equal. Both layers depend on each agent authenticating as a **distinct Atlassian user** (per-role `CONFLUENCE_API_TOKEN`) so the engine can tell whose action it was — see the per-role-token note below.
+When the **only** candidate recipient is the trigger user (the sole subscriber, or the sole space lead), the event is **dropped** rather than falling through to a later routing step. The notification service adds a transport-agnostic backstop: any inbound notification whose `actor_external_id` resolves to the recipient itself is skipped (recorded as a `NotificationSkipped` event). `actor_external_id` is the **one** actor key every integration stamps — a per-vendor key protects the vendors somebody remembered and silently protects none of the others — and the actor is *resolved* through the handle registry rather than string-matched, so a seat's bot identity and its member identity compare equal. Both layers depend on each agent authenticating as a **distinct Atlassian user** (per-role `CONFLUENCE_API_TOKEN`) so the engine can tell whose action it was — see the per-role-token note below.
 
 ### Lead-fallback prompt hint
 
 When a lead receives an event via `routed_via = "space_lead"` (steps 1-2 produced no recipient), the Confluence notification prompt adds a `## Why You Received This` section that names the space, warns the lead that no one else is watching the page, and lays out three explicit decisions:
 
-- **Delegate** — `@mention` the right teammate in a comment on the page; the mention markup auto-adds them as a watcher so they pick up future events.
+- **Delegate** — `@mention` the right teammate in a **comment** on the page. The mention subscribes them, so the next event on the page reaches them instead. Commenting does not subscribe the lead; *editing* the page would.
 - **Act yourself** — if the page concerns the lead's own work or needs a lead-level response, reply directly.
-- **Escalate** — if the page is outside the team's scope or the lead can't identify the right reviewer, `@mention` their own manager (named in the identity prompt) in a comment so the manager is added as a watcher and can decide where the page belongs. Space-lead fallback fires only when nobody else is involved, so silently walking away would leave the page unwatched.
+- **Escalate** — if the page is outside the team's scope or the lead can't identify the right reviewer, `@mention` their own manager (named in the identity prompt) in a comment, which subscribes the manager and lets them decide where the page belongs. Space-lead fallback fires only when nobody else is involved, so silently walking away would leave the page with no subscriber at all.
 
 The hint is suppressed for `watcher` / `mention` routings — those carry their own signal of personal involvement.
 
-**Example 1**: Agent SWE edits a page (auto-added as watcher). A human comments on it:
-- Agent SWE gets the notification (via watcher)
-- Unit leads do NOT get it (watcher routing succeeded)
+**Example 1**: Agent SWE edits a page, which subscribes it. A human then comments:
+- Agent SWE gets the notification (`routed_via: watcher`)
+- Unit leads do NOT get it — a subscriber was found
 
 **Example 2**: Agent PM comments on a page mentioning `@Agent CTO` via the API:
-- Agent CTO gets the notification (via @mention) and is auto-added as a page watcher
-- Next time someone updates this page, Agent CTO will receive the event (via watcher)
+- Agent CTO gets the notification (`routed_via: mention`) and is subscribed to the page
+- The next event on the page reaches Agent CTO (`routed_via: watcher`)
+- Agent PM is **not** subscribed by having commented — see [An edit subscribes you; a comment does not](#an-edit-subscribes-you-a-comment-does-not)
 
-> **Important: Per-role tokens required for watcher and creator routing.** Watcher and page-creator routing only work when each agent authenticates to Confluence as a **distinct Atlassian user** (via per-role `CONFLUENCE_API_TOKEN` in `mcp_env`). If all agents share a single service account token, Confluence records the same user for all edits, and routing cannot distinguish between agents. See [Jira Integration](jira.md) for the `mcp_env` pattern.
+> **Important: per-role tokens are what make subscriptions work.** A seat is subscribed by editing or being mentioned, and both are attributed to whichever Atlassian user acted — so this only distinguishes agents when each authenticates as a **distinct** one (per-role `CONFLUENCE_API_TOKEN` in `mcp_env`). If every agent shares one service account, Confluence records the same user for every edit, one seat's subscription is every seat's, and the self-ignore rule silences the page for all of them. See [Jira Integration](jira.md) for the `mcp_env` pattern.
 
-> **Confluence does NOT auto-add commenters as watchers.** When an agent comments on a page, they are not automatically added as a watcher (unlike page edits). The transport provides an the watcher registration method to explicitly watch a page after commenting, ensuring the agent receives future events.
+> **Commenting deliberately does not subscribe you.** Only an *edit* subscribes its author. That asymmetry is what makes delegation work — a lead handing a page over by comment must not stay subscribed to it — and it matches what Confluence does for people. A seat that wants a page it only commented on has to edit it, or be mentioned on it by somebody.
 
-> **@mentions via API only.** The Confluence UI does not allow `@mentioning` service accounts. However, the API can insert mention markup (`<ri:user ri:account-id="..."/>`) when agents create comments via MCP tools. The transport extracts these mentions and routes accordingly. For human users wanting to direct a comment to an agent, they must use the agent's display name in the comment text (not @mention) — the transport will still route via watchers/page creator.
+> **@mentions via API only.** The Confluence UI does not allow `@mentioning` service accounts. However, the API can insert mention markup (`<ri:user ri:account-id="..."/>`) when agents create comments via MCP tools. The transport extracts these mentions and routes accordingly. For human users wanting to direct a comment to an agent, they must use the agent's display name in the comment text (not @mention) — the notification still routes to the page's subscribers, and to the space lead if it has none.
 
 ### Outbound: Agents Write to Confluence
 
@@ -341,7 +402,7 @@ The Confluence UI does not allow `@mentioning` service accounts, but agents can 
 <p>Hey <ac:link><ri:user ri:account-id="ACCOUNT_ID"/></ac:link>, please review this page.</p>
 ```
 
-Replace `ACCOUNT_ID` with the target agent's Atlassian account ID. The transport will extract the mention, route the notification to the mentioned agent, and auto-add them as a page watcher.
+Replace `ACCOUNT_ID` with the target agent's Atlassian account ID. The parser extracts the mention, routes the notification to the agent named, and subscribes them to the page so later events reach them too.
 
 **This syntax is carried by a [Tool Skill](../concepts/tool-skills.md)** — a Confluence-sourced prompt fragment triggered for any role with `atlassian` in its `mcp_env`. The skill's summary appears in the per-phase catalogue and the full mention-syntax body loads on demand via `load_tool_skill`, so agents with Confluence tools know how to mention others without paying the token cost on every turn.
 
