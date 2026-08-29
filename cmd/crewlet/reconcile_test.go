@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -262,8 +263,9 @@ func TestAStaleLocalRevisionDoesNotOverwriteTheFleet(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	// A PEER activated something else, later.
-	peer, err := fleet.Activate(t.Context(), "peer-revision", "from a peer",
-		[]byte(`{"name":"Peer"}`), time.Now().Add(2*time.Hour))
+	peer, err := fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "peer-revision", Summary: "from a peer",
+		Payload: []byte(`{"name":"Peer"}`), At: time.Now().Add(2 * time.Hour)})
 	if err != nil {
 		t.Fatalf("peer activate: %v", err)
 	}

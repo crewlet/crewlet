@@ -201,21 +201,38 @@ func (f *Fleet) Since(_ context.Context, now time.Time) (map[string]time.Time, e
 }
 
 // Activate publishes a new target revision.
-func (f *Fleet) Activate(_ context.Context, revisionID, summary string, payload []byte, at time.Time) (coord.Activation, error) {
-	if revisionID == "" {
+func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.Activation, error) {
+	if req.RevisionID == "" {
 		return coord.Activation{}, errors.New("coord/memory: an activation needs a revision id")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	// THE EXPECTATION FIRST, and before the payload write, so a caller
+	// that has already lost the race leaves nothing behind — the same
+	// ordering the KV holds, for the same reason.
+	//
+	// The mutex makes the compare and the set one step here, which is
+	// exactly what the KV buys with a sequence: the twin has to REFUSE the
+	// same writes, not merely be safe by construction, or a suite that
+	// passes against it proves nothing about the real store.
+	// An unset pointer is NOT a race — see the KV's own note and
+	// [coord.ActivationRequest.Expect].
+	if req.Expect != "" && f.set && f.target.RevisionID != req.Expect {
+		return coord.Activation{}, fmt.Errorf(
+			"%w: expected %s, the fleet is on %s",
+			coord.ErrActivationRaced, req.Expect, f.target.RevisionID)
+	}
+
 	// The payload lands before the pointer, matching the KV's two writes.
 	// The twin gets both under one mutex, so the window cannot open here —
 	// which is the point of holding it to the same order anyway: a reader
 	// of this file should find the same invariant stated in both places.
-	f.payload = slices.Clone(payload)
+	f.payload = slices.Clone(req.Payload)
 	f.epoch++
 	f.target = coord.Activation{
-		Epoch: f.epoch, RevisionID: revisionID, At: at.UTC(), Summary: summary,
+		Epoch: f.epoch, RevisionID: req.RevisionID,
+		At: req.At.UTC(), Summary: req.Summary,
 	}
 	f.set = true
 	return f.target, nil

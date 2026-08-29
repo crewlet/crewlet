@@ -2,6 +2,7 @@ package coordtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -451,7 +452,7 @@ var planeCases = []fleetCase{{
 }, {
 	name: "an activation is readable with the epoch the store assigned",
 	fn: func(h *fleetHarness) {
-		published, err := h.f.Activate(h.ctx, "rev-1", "first", []byte(`{"name":"Acme"}`), h.now())
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Summary: "first", Payload: []byte(`{"name":"Acme"}`), At: h.now()})
 		if err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
@@ -473,7 +474,7 @@ var planeCases = []fleetCase{{
 	fn: func(h *fleetHarness) {
 		var last int64
 		for i := range 4 {
-			got, err := h.f.Activate(h.ctx, fmt.Sprintf("rev-%d", i), "", []byte("{}"), h.now())
+			got, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: fmt.Sprintf("rev-%d", i), Payload: []byte("{}"), At: h.now()})
 			if err != nil {
 				h.t.Fatalf("Activate: %v", err)
 			}
@@ -481,6 +482,151 @@ var planeCases = []fleetCase{{
 				h.t.Fatalf("epoch %d did not advance past %d", got.Epoch, last)
 			}
 			last = got.Epoch
+		}
+	},
+}, {
+	// THE LOSER OF A RACE IS TOLD. There is no leader here — any node's
+	// API may write the config — so without a compare-and-set two
+	// operators editing at the same moment both succeed and the later
+	// write silently wins. That is a lost edit with a 201 in the operator's
+	// hand, and nothing anywhere to find it by.
+	name: "an activation expecting a revision the fleet has left is refused",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now()}); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		// Somebody else moves the pointer, the way a second node's API
+		// would: expecting what this caller also read.
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-2", Payload: []byte(`{"v":2}`), At: h.now(),
+			Expect: "rev-1"}); err != nil {
+			h.t.Fatalf("the second write was refused: %v", err)
+		}
+		// And now the first caller's edit, built on rev-1, arrives.
+		_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-3", Payload: []byte(`{"v":3}`), At: h.now(),
+			Expect: "rev-1"})
+		if !errors.Is(err, coord.ErrActivationRaced) {
+			h.t.Fatalf("err = %v, want coord.ErrActivationRaced", err)
+		}
+		// AND IT CHANGED NOTHING. A refusal that had already moved the
+		// pointer, or left rev-3's body behind for the next reader, is
+		// the same lost edit wearing an error.
+		target, found, err := h.f.Target(h.ctx)
+		if err != nil || !found {
+			h.t.Fatalf("Target: %v found=%v", err, found)
+		}
+		if target.RevisionID != "rev-2" {
+			h.t.Fatalf("the fleet is on %s, want the write that won", target.RevisionID)
+		}
+		body, ok, err := h.f.Payload(h.ctx, "rev-2")
+		if err != nil || !ok || string(body) != `{"v":2}` {
+			h.t.Fatalf("payload = %q ok=%v err=%v, want the winner's", body, ok, err)
+		}
+	},
+}, {
+	// The matching expectation SUCCEEDS, or the guard above is just a way
+	// of refusing every conditional write.
+	name: "an activation expecting the current revision succeeds",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now()}); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		got, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-2", Summary: "second", Payload: []byte(`{"v":2}`),
+			At: h.now(), Expect: "rev-1"})
+		if err != nil {
+			h.t.Fatalf("a matching expectation was refused: %v", err)
+		}
+		if got.RevisionID != "rev-2" {
+			h.t.Fatalf("published %+v", got)
+		}
+	},
+}, {
+	// EXPECTING SOMETHING WHEN NOTHING IS ACTIVE IS NOT A RACE.
+	//
+	// The comparison is "if a pointer exists it must still name this", and
+	// with no pointer there is no winner to have lost to. Refusing here
+	// looks defensible and breaks a state nodes reach constantly: one
+	// seeded from a file has a locally-active revision before it has
+	// published anything, so every config write on it would fail until it
+	// did — measured as a 409 on a single-node deployment that had done
+	// nothing wrong.
+	name: "an activation expecting a revision on an empty store still lands",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
+			Expect: "rev-0"}); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		target, found, err := h.f.Target(h.ctx)
+		if err != nil || !found || target.RevisionID != "rev-1" {
+			h.t.Fatalf("target = %+v found=%v err=%v, want the write to land",
+				target, found, err)
+		}
+	},
+}, {
+	// AN EMPTY EXPECTATION IS UNCONDITIONAL, which is the boot publish:
+	// a node asserting what it holds rather than editing what it read.
+	// Turning that into a race would make a first boot fail against a
+	// fleet that had legitimately moved on.
+	name: "an activation with no expectation overwrites whatever is there",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now()}); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-2", Payload: []byte("{}"), At: h.now()}); err != nil {
+			h.t.Fatalf("an unconditional activation was refused: %v", err)
+		}
+		target, found, err := h.f.Target(h.ctx)
+		if err != nil || !found || target.RevisionID != "rev-2" {
+			h.t.Fatalf("target = %+v found=%v err=%v", target, found, err)
+		}
+	},
+}, {
+	// EXACTLY ONE OF N CONCURRENT EDITS ON ONE BASE LANDS. This is the
+	// property the whole mechanism exists for, and it cannot be read off
+	// the single-threaded cases: they prove the comparison happens, this
+	// proves it is atomic.
+	name: "concurrent edits on one base leave exactly one winner",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "base", Payload: []byte("{}"), At: h.now()}); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		var wg sync.WaitGroup
+		won := make(chan string, 8)
+		raced := make(chan error, 8)
+		for i := range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				id := fmt.Sprintf("edit-%d", i)
+				_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+					RevisionID: id, Payload: []byte("{}"), At: h.now(),
+					Expect: "base"})
+				switch {
+				case err == nil:
+					won <- id
+				case errors.Is(err, coord.ErrActivationRaced):
+					raced <- err
+				default:
+					h.t.Errorf("Activate: %v", err)
+				}
+			}()
+		}
+		wg.Wait()
+		close(won)
+		close(raced)
+		if got := len(won); got != 1 {
+			h.t.Fatalf("%d of 8 edits on one base were accepted, want exactly 1", got)
+		}
+		if got := len(raced); got != 7 {
+			h.t.Fatalf("%d edits were told they lost, want 7", got)
 		}
 	},
 }, {
@@ -494,7 +640,7 @@ var planeCases = []fleetCase{{
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				got, err := h.f.Activate(h.ctx, fmt.Sprintf("rev-%d", i), "", []byte("{}"), h.now())
+				got, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: fmt.Sprintf("rev-%d", i), Payload: []byte("{}"), At: h.now()})
 				if err == nil {
 					epochs <- got.Epoch
 				}
@@ -1369,7 +1515,7 @@ var payloadCases = []fleetCase{{
 	name: "the revision a peer activated is readable by every node",
 	fn: func(h *fleetHarness) {
 		body := []byte(`{"name":"Acme","agents":{}}`)
-		published, err := h.f.Activate(h.ctx, "rev-1", "first", body, h.now())
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Summary: "first", Payload: body, At: h.now()})
 		if err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
@@ -1390,10 +1536,10 @@ var payloadCases = []fleetCase{{
 	// revision the fleet is not pointed at, and report success.
 	name: "a superseded revision's payload is absent, not stale",
 	fn: func(h *fleetHarness) {
-		if _, err := h.f.Activate(h.ctx, "rev-1", "first", []byte(`{"v":1}`), h.now()); err != nil {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Summary: "first", Payload: []byte(`{"v":1}`), At: h.now()}); err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
-		if _, err := h.f.Activate(h.ctx, "rev-2", "second", []byte(`{"v":2}`), h.now()); err != nil {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-2", Summary: "second", Payload: []byte(`{"v":2}`), At: h.now()}); err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
 		if _, found, err := h.f.Payload(h.ctx, "rev-1"); err != nil || found {
@@ -1423,7 +1569,7 @@ var payloadCases = []fleetCase{{
 	// handed to a decoder that unseals in place on some paths.
 	name: "a caller mutating a payload cannot reach the store",
 	fn: func(h *fleetHarness) {
-		if _, err := h.f.Activate(h.ctx, "rev-1", "", []byte(`{"v":1}`), h.now()); err != nil {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now()}); err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
 		got, _, _ := h.f.Payload(h.ctx, "rev-1")

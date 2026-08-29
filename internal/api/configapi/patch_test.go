@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // summaryHeader is what every write on this surface needs.
@@ -266,5 +268,65 @@ func TestAPatchAcceptsYAML(t *testing.T) {
 	patchOnly(t, s, "mission: from yaml\n", summaryHeader)
 	if !strings.Contains(s.activeDocument(t), "from yaml") {
 		t.Errorf("a YAML patch did not apply: %s", s.activeDocument(t))
+	}
+}
+
+// A WRITE THAT LOST A RACE IS TOLD, rather than silently overwriting.
+//
+// There is no leader on this surface: any node's API may write the config.
+// Before the activation became a compare-and-set, two operators editing at
+// the same moment both got 201 and the later write won — a lost edit with a
+// success in the loser's hand and nothing anywhere to find it by.
+//
+// Driven by moving the pointer out from under a write the way a second node
+// would, which is the only thing a single-process test can do honestly: the
+// conformance suite proves the store's half on both backends.
+func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	base := s.seed(t, companyDoc, nil)
+
+	// A peer activates something else, expecting the same base this
+	// surface is about to build on.
+	if _, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "from-a-peer", Summary: "a peer got there first",
+		Payload: []byte("{}"), At: pinned, Expect: base,
+	}); err != nil {
+		t.Fatalf("peer activate: %v", err)
+	}
+
+	res := s.do(t, http.MethodPatch, "/config", `{"mission": "mine"}`, summaryHeader)
+	if res.Code != http.StatusConflict {
+		t.Fatalf("PATCH = %d %s, want 409", res.Code, res.Body.String())
+	}
+	for _, want := range []string{
+		"revision_advanced",
+		"stored_revision_id", // the operator's work survives as history
+		"from-a-peer",        // what actually won, so they can re-read it
+	} {
+		if !strings.Contains(res.Body.String(), want) {
+			t.Errorf("the conflict omits %q: %s", want, res.Body.String())
+		}
+	}
+}
+
+// AND A WRITE WITH NOTHING IN ITS WAY STILL LANDS, or the guard above is
+// just a way of refusing every write on a fleet.
+func TestAWriteWithNoRaceStillActivates(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc, nil)
+
+	patchOnly(t, s, `{"mission": "mine"}`, summaryHeader)
+
+	target, found, err := s.plane.Target(t.Context())
+	if err != nil || !found {
+		t.Fatalf("Target: %v found=%v", err, found)
+	}
+	if !strings.Contains(s.activeDocument(t), "mine") {
+		t.Fatalf("the write did not land: %s", s.activeDocument(t))
+	}
+	if target.RevisionID == "" {
+		t.Error("the fleet was not pointed at the new revision")
 	}
 }

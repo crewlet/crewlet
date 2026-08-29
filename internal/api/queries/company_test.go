@@ -574,7 +574,8 @@ func TestFleetCarriesEachNodesConfigState(t *testing.T) {
 		t.Fatal(err)
 	}
 	plane := coordmemory.NewFleet()
-	published, err := plane.Activate(t.Context(), "rev-1", "", []byte("{}"), pinned)
+	published, err := plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-1", Payload: []byte("{}"), At: pinned})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1012,7 +1013,7 @@ func (brokenPlane) Payload(context.Context, string) ([]byte, bool, error) {
 	return nil, false, errUnreadablePlane
 }
 
-func (brokenPlane) Activate(context.Context, string, string, []byte, time.Time) (coord.Activation, error) {
+func (brokenPlane) Activate(context.Context, coord.ActivationRequest) (coord.Activation, error) {
 	return coord.Activation{}, errUnreadablePlane
 }
 

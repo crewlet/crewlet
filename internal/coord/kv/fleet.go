@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -744,41 +745,124 @@ type activationRecord struct {
 }
 
 // Activate publishes a new target revision.
-func (f *FleetStore) Activate(ctx context.Context, revisionID, summary string, payload []byte, at time.Time) (coord.Activation, error) {
-	if revisionID == "" {
+func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
+	if req.RevisionID == "" {
 		return coord.Activation{}, errors.New("coord/kv: an activation needs a revision id")
 	}
-	raw, err := json.Marshal(activationRecord{RevisionID: revisionID, At: at.UTC(), Summary: summary})
+	// THE EXPECTATION IS RESOLVED FIRST, before anything is written: a
+	// caller that has already lost the race must not leave a payload
+	// behind for a revision the fleet will never point at.
+	seq, err := f.expectedSeq(ctx, req.Expect)
+	if err != nil {
+		return coord.Activation{}, err
+	}
+	raw, err := json.Marshal(activationRecord{
+		RevisionID: req.RevisionID, At: req.At.UTC(), Summary: req.Summary,
+	})
 	if err != nil {
 		return coord.Activation{}, fmt.Errorf("coord/kv: encode the activation: %w", err)
 	}
 	// THE PAYLOAD FIRST. A crash here leaves a body nothing points at,
 	// which the next activation replaces; the other order points the fleet
 	// at bytes no node can read.
-	body, err := json.Marshal(payloadRecord{RevisionID: revisionID, Payload: payload})
+	body, err := json.Marshal(payloadRecord{RevisionID: req.RevisionID, Payload: req.Payload})
 	if err != nil {
 		return coord.Activation{}, fmt.Errorf("coord/kv: encode the revision payload: %w", err)
 	}
 	if _, put := f.config.Put(ctx, payloadKey, body); put != nil {
 		return coord.Activation{}, unavailable("publish the revision payload", put)
 	}
-	// ONE WRITE for the flip. Put returns the revision it assigned, and
-	// that revision IS the epoch — so the append and the flip cannot come
-	// apart, and two nodes activating at the same instant are handed two
-	// epochs by the store rather than racing over a counter this engine
+	// ONE WRITE for the flip. The store returns the revision it assigned,
+	// and that revision IS the epoch — so the append and the flip cannot
+	// come apart, and two nodes activating at the same instant are handed
+	// two epochs by the store rather than racing over a counter this engine
 	// keeps. Writing the payload into the same bucket moves the sequence
 	// too, which is harmless: the epoch has to be monotonic and unique,
 	// never dense.
-	revision, err := f.config.Put(ctx, activationKey, raw)
+	//
+	// UPDATE RATHER THAN PUT when the caller said what it was replacing.
+	// Update carries the sequence read above, so anything that wrote in
+	// between makes this fail rather than overwrite — which is the only
+	// thing standing between two operators editing at once and one of them
+	// losing their change with a 201 in hand.
+	revision, err := f.flip(ctx, req.Expect, seq, raw)
 	if err != nil {
-		return coord.Activation{}, unavailable("publish the activation", err)
+		return coord.Activation{}, err
 	}
 	return coord.Activation{
 		Epoch:      int64(revision),
-		RevisionID: revisionID,
-		At:         at.UTC(),
-		Summary:    summary,
+		RevisionID: req.RevisionID,
+		At:         req.At.UTC(),
+		Summary:    req.Summary,
 	}, nil
+}
+
+// expectedSeq resolves the caller's expectation to the KV sequence to
+// compare-and-set against, or reports the race.
+//
+// Zero means unconditional — see [coord.ActivationRequest.Expect].
+func (f *FleetStore) expectedSeq(ctx context.Context, expect string) (uint64, error) {
+	if expect == "" {
+		return 0, nil
+	}
+	entry, err := f.config.Get(ctx, activationKey)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		// NOTHING TO HAVE RACED WITH. A node seeded from a file holds a
+		// locally-active revision before it has published anything, and
+		// treating that as a race would refuse every config write on it
+		// until it did. See [coord.ActivationRequest.Expect].
+		return 0, nil
+	}
+	if err != nil {
+		return 0, unavailable("read the activation to compare against", err)
+	}
+	var record activationRecord
+	if err = json.Unmarshal(entry.Value(), &record); err != nil {
+		return 0, fmt.Errorf("coord/kv: decode the activation: %w", err)
+	}
+	if record.RevisionID != expect {
+		return 0, fmt.Errorf("%w: expected %s, the fleet is on %s",
+			coord.ErrActivationRaced, expect, record.RevisionID)
+	}
+	return entry.Revision(), nil
+}
+
+// flip writes the pointer, conditionally when there was an expectation.
+func (f *FleetStore) flip(ctx context.Context, expect string, seq uint64, raw []byte) (uint64, error) {
+	if expect == "" {
+		revision, err := f.config.Put(ctx, activationKey, raw)
+		if err != nil {
+			return 0, unavailable("publish the activation", err)
+		}
+		return revision, nil
+	}
+	revision, err := f.config.Update(ctx, activationKey, raw, seq)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrKeyExists) || isWrongLastSequence(err) {
+			// SOMEBODY WROTE BETWEEN the read and this. Reported as the
+			// race rather than as an unavailable store, because the
+			// caller's fix is to re-read and rebuild rather than retry.
+			return 0, fmt.Errorf("%w: %s was replaced while this write was "+
+				"being prepared", coord.ErrActivationRaced, expect)
+		}
+		return 0, unavailable("publish the activation", err)
+	}
+	return revision, nil
+}
+
+// isWrongLastSequence reports a compare-and-set refusal.
+//
+// MATCHED ON THE MESSAGE, which is not something to do lightly: the client
+// surfaces this as an API error whose typed form is not exported, so there is
+// nothing else to match on. Getting it wrong is not silent — a refusal read as
+// an outage answers 503 instead of 409, which an operator sees immediately —
+// and the conformance suite exercises the real store rather than trusting it.
+func isWrongLastSequence(err error) bool {
+	var api *jetstream.APIError
+	if errors.As(err, &api) && api.ErrorCode == jetstream.JSErrCodeStreamWrongLastSequence {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "wrong last sequence")
 }
 
 // payloadRecord is the current revision's sealed body on the wire. The

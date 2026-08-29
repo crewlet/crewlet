@@ -2,6 +2,7 @@ package coord
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 )
@@ -362,6 +363,54 @@ type NodeApply struct {
 	UpdatedAt time.Time
 }
 
+// ActivationRequest is one activation, and what the caller believed it was
+// replacing.
+//
+// A STRUCT rather than five positional arguments, because the fifth was the
+// one that changed the meaning of the call: an Activate that expects nothing
+// and an Activate that expects a particular revision are different operations,
+// and a bare string in the fifth position is how a caller passes the wrong one
+// without noticing.
+type ActivationRequest struct {
+	// RevisionID is what the fleet will be pointed at. Required.
+	RevisionID string
+
+	Summary string
+
+	// Payload is the SEALED body, travelling with the pointer so a peer
+	// can apply the revision it names.
+	Payload []byte
+
+	At time.Time
+
+	// Expect is the revision the caller read before building this one.
+	//
+	// EMPTY IS UNCONDITIONAL, and that is a real posture rather than a
+	// missing value: a node publishing its own locally-active revision at
+	// boot is ASSERTING, not editing — it has nothing to have raced with
+	// and no earlier state to compare against. An editor always has one,
+	// and passing it is what makes a concurrent edit visible.
+	//
+	// # An UNSET pointer is not a race, whatever Expect says
+	//
+	// The comparison is "if a pointer exists, it must still name this".
+	// With no pointer at all there is nothing to have lost a race to, and
+	// refusing would break the state a node reaches legitimately and often:
+	// a node seeded from a file has a locally-active revision before it has
+	// published anything, and every config write on it would fail until it
+	// did. The lost-update this exists to catch needs a winner, and an
+	// empty pointer has none.
+	Expect string
+}
+
+// ErrActivationRaced reports an activation whose Expect no longer matches.
+//
+// Its own sentinel because the caller's answer is specific: re-read the
+// pointer and rebuild the edit on what is actually current. Collapsing it into
+// an unavailable-store error would have an API answer 500 for something the
+// operator can fix by retrying, and a store outage look like a lost race.
+var ErrActivationRaced = errors.New("coord: the activation moved under this write")
+
 // Plane is the fleet's config activation pointer and per-node apply status.
 type Plane interface {
 	// Activate publishes a revision's PAYLOAD and then points the fleet at
@@ -390,7 +439,16 @@ type Plane interface {
 	// — a node reads it with the Tier A keyring it was deployed with, and
 	// the coordination store holds ciphertext exactly as the node's own
 	// database does.
-	Activate(ctx context.Context, revisionID, summary string, payload []byte, at time.Time) (Activation, error)
+	//
+	// # COMPARE-AND-SET, when the caller says what it was editing
+	//
+	// [ActivationRequest.Expect] names the revision the caller read before
+	// building this one. There is no leader here — any node's API may
+	// write — so without it two operators editing at the same moment both
+	// succeed and the later write silently wins. With it the loser gets
+	// [ErrActivationRaced] and can re-read, which is the whole difference
+	// between a lost edit and a 409.
+	Activate(ctx context.Context, req ActivationRequest) (Activation, error)
 
 	// Payload returns the sealed payload of the revision the fleet is
 	// pointed at, and false when the store holds a DIFFERENT revision's.

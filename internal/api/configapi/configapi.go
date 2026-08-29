@@ -525,7 +525,40 @@ func (s *Service) store(w http.ResponseWriter, r *http.Request, company *config.
 	// — this node's own history, diffs and revert targets read that table
 	// — but the fleet's copy is what every OTHER node applies from, and
 	// without it a live config change reached exactly this node.
-	published, err := s.plane.Activate(r.Context(), id, summary, payload, at)
+	//
+	// EXPECT IS THE REVISION THIS EDIT WAS BUILT ON, which is what `parent`
+	// already means: every write on this surface reads the active revision,
+	// derives from it, and names it as the parent. Passing it makes the flip
+	// a compare-and-set, so a concurrent write on ANY node is refused here
+	// rather than silently overwritten — and that holds whether or not the
+	// caller sent If-Match, because the server knows what it read.
+	//
+	// Empty on a first import, where there is nothing to have raced with.
+	published, err := s.plane.Activate(r.Context(), coord.ActivationRequest{
+		RevisionID: id, Summary: summary, Payload: payload, At: at, Expect: parent,
+	})
+	if errors.Is(err, coord.ErrActivationRaced) {
+		// THE REVISION IS KEPT, not unwound. It is stored, valid and
+		// inert — the operator's work survives as history they can
+		// revert to — and this node's reconciler adopts whichever
+		// revision actually won at its next tick. Unwinding instead
+		// would mean a second write that can itself fail, on the path
+		// where something has already gone wrong.
+		log.InfoContext(r.Context(), "config_activation_raced",
+			"revision", id, "expected", parent, "by", operator)
+		current, _, terr := s.plane.Target(r.Context())
+		body := map[string]any{
+			"error": "revision_advanced", "your_base": parent,
+			"stored_revision_id": id,
+			"hint": "another write activated first; this revision was stored " +
+				"but not activated. Re-read /config and send the edit again",
+		}
+		if terr == nil {
+			body["current_revision_id"] = current.RevisionID
+		}
+		writeJSON(w, http.StatusConflict, body)
+		return
+	}
 	if err != nil {
 		s.fail(w, "activate the config", err)
 		return

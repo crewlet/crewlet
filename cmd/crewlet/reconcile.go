@@ -123,7 +123,14 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 	if err != nil {
 		return fmt.Errorf("seed the company config: %w", err)
 	}
-	published, err := plane.Activate(ctx, id, summary, payload, time.Now().UTC())
+	// UNCONDITIONAL, and that is the seed's whole posture: it is asserting
+	// what this node booted with, not editing something it read. There is
+	// no earlier revision it derived from, so there is nothing it could
+	// have raced with — and an expectation here would make a first boot
+	// fail against a fleet that had moved on for perfectly good reasons.
+	published, err := plane.Activate(ctx, coord.ActivationRequest{
+		RevisionID: id, Summary: summary, Payload: payload, At: time.Now().UTC(),
+	})
 	if err != nil {
 		return fmt.Errorf("activate the seeded company config: %w", err)
 	}
@@ -177,8 +184,16 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publis
 	// The payload goes up with it. This node is telling the fleet to serve
 	// a revision only it holds, so the body has to travel or every peer
 	// converges on a pointer whose revision it cannot read.
-	published, err := plane.Activate(ctx, active.ID, active.Summary,
-		active.Payload, active.ActivatedAt)
+	// UNCONDITIONAL for the same reason as the seed. Two nodes booting at
+	// once may both decide to publish, and last-write-wins is the right
+	// answer there: each is offering the revision IT holds, both are
+	// legitimate, and every node converges on whichever landed. A
+	// compare-and-set would turn that into a boot-time failure to retry
+	// for nothing. It is the EDIT path that must not lose a write.
+	published, err := plane.Activate(ctx, coord.ActivationRequest{
+		RevisionID: active.ID, Summary: active.Summary,
+		Payload: active.Payload, At: active.ActivatedAt,
+	})
 	if err != nil {
 		return fmt.Errorf("publish the active revision: %w", err)
 	}

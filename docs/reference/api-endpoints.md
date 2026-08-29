@@ -198,13 +198,15 @@ why the CLI goes through a running node rather than writing the KV itself.
 
 ### Concurrent writes
 
-**There is no leader, and writes are not serialized.** Any node's API can write the config; the coordination KV is the shared truth. What that means concretely, because it is easy to assume otherwise:
+**There is no leader** — any node's API can write the config, and the coordination KV is the shared truth. Writes are **not** serialized by a lock, but a concurrent one is *detected*: the activation is a compare-and-set.
 
-- `If-Match: <revision_id>` is checked against the revision that was active **when the request arrived**. It closes the window a human leaves between reading and writing, which is the one that matters in practice — but nothing holds a lock between the check and the write, so two requests that overlap inside that gap can both be accepted.
-- The activation pointer is written with a plain put, so on a tie the **later write wins** and both callers see `201`. The loser's revision still exists in the history of the node that stored it; it is simply not what the fleet runs.
-- A node whose write lost adopts the winning revision at its next reconcile, so the divergence does not persist.
+- Every write on this surface reads the active revision, derives from it, and names it as the new revision's parent. That parent is what the flip compares against, so a write that lost is refused with **`409 revision_advanced`** — **whether or not the caller sent `If-Match`**, because the server knows what it read.
+- `If-Match: <revision_id>` is still worth sending: it is checked before any work is done, so a caller editing a revision that has already moved is told so without a document being built, validated and stored first.
+- A losing write's revision **is kept**, and the `409` names it as `stored_revision_id`. It is stored, valid and inert — the operator's work survives as history they can revert to — and this node's reconciler adopts whichever revision actually won at its next tick. Unwinding it instead would mean a second write that can itself fail, on the path where something has already gone wrong.
+- **An unset pointer is not a race.** A node seeded from a file holds a locally-active revision before it has published anything; refusing there would fail every config write on a fresh single-node deployment that had done nothing wrong.
+- The **boot publish** is deliberately unconditional. Two nodes starting at once may both offer the revision they hold; both are legitimate, last-write-wins is the right answer, and every node converges. It is the *edit* path that must not lose a write.
 
-For an operator editing through the dashboard or a script, send `If-Match` and act on a `409`. For two automated writers changing the **same** section continuously, treat the config plane as last-write-wins and serialize upstream.
+On a `409`, re-read `/config` and send the edit again.
 
 ### Status codes
 

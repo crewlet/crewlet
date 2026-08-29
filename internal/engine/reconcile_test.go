@@ -111,7 +111,7 @@ func (p *plane) activate(t *testing.T, doc string) int64 {
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
 	}
-	published, err := p.fleet.Activate(t.Context(), id, "revision", document, pinnedNow)
+	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: id, Summary: "revision", Payload: document, At: pinnedNow})
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
@@ -130,7 +130,7 @@ func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMe
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
 	}
-	published, err := p.fleet.Activate(t.Context(), id, summary, payload, pinnedNow)
+	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: id, Summary: summary, Payload: payload, At: pinnedNow})
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-activate: %v", err)
 	}
-	republished, err := p.fleet.Activate(t.Context(), active.ID, summary, active.Payload, pinnedNow)
+	republished, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: active.ID, Summary: summary, Payload: active.Payload, At: pinnedNow})
 	if err != nil {
 		t.Fatalf("re-publish: %v", err)
 	}
@@ -347,8 +347,9 @@ func TestAPointerNamingAMissingRevisionIsReported(t *testing.T) {
 	p := newPlane(t)
 	// No payload with it either: a pointer whose revision is in neither
 	// store is exactly the ghost this reports.
-	if _, err := p.fleet.Activate(t.Context(),
-		"00000000-0000-0000-0000-000000000000", "ghost", nil, pinnedNow); err != nil {
+	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "00000000-0000-0000-0000-000000000000",
+		Summary:    "ghost", At: pinnedNow}); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.recon.Tick(t.Context()); err == nil {
