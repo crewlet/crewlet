@@ -7,7 +7,10 @@ import "time"
 //
 // The scheduler starts only when it is enabled, a store exists (it needs
 // the at-most-once ledger), and at least one seat or unit declares a
-// schedule. A company with no schedules never spins up the tick loop.
+// schedule. A company with no schedules never spins up the tick loop — and
+// the three conditions are re-evaluated on every config apply, so a
+// founder's FIRST schedule arms the loop without a restart and their last
+// one removed releases its fleet duty. See engine.reconcileScheduler.
 type Scheduling struct {
 	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Master switch for the scheduler (default on)."`
 
@@ -53,6 +56,19 @@ func DefaultScheduling() Scheduling {
 
 // Runs reports whether the scheduler runs, applying the true default.
 func (s *Scheduling) Runs() bool { return s.Enabled.Or(true) }
+
+// Tick is the poll interval as a duration, applying the shipped default.
+//
+// An accessor rather than a raw read for the same reason CatchupMax is one:
+// the field is a number of SECONDS at the config edge and a Duration
+// everywhere above it, and converting once here is what keeps a caller from
+// handing the scheduler a 10-nanosecond tick.
+func (s *Scheduling) Tick() time.Duration {
+	if s.TickSeconds <= 0 {
+		return 0 // the scheduler's own DefaultTick
+	}
+	return time.Duration(s.TickSeconds) * time.Second
+}
 
 // CatchupMax is the upper clamp as a duration. It is also the retention
 // floor for the completion ledger, which is why it has an accessor rather

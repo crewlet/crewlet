@@ -250,6 +250,28 @@ minute.
 
 ---
 
+## When the loop runs
+
+The engine arms the tick loop when three things hold, and re-checks all three
+on **every config apply**:
+
+1. `scheduling.enabled` is not `false`,
+2. this node has a store — the at-most-once claim ledger lives there, and a
+   scheduler with a process-local claim looks identical to a correct one until
+   there are two nodes, and then every company gets two standups,
+3. the company actually declares at least one role or unit schedule.
+
+Because the third condition is re-evaluated live, adding the **first** schedule
+to a running company arms the loop on that apply, and removing the last one
+disarms it and releases its fleet duty — neither needs a restart. The tick
+*knobs* (`tick_seconds`, the catchup clamps) are read when the loop is armed,
+so changing those lands at the next arm, like the retention sweep's horizons.
+
+Whether this node is ticking is visible on the engine as `SchedulerRunning`,
+and the `scheduler_armed` / `scheduler_disarmed` log lines say when it changed.
+
+---
+
 ## Observability
 
 - **Dashboard.** The **Schedules** view lists every configured schedule

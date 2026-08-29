@@ -161,6 +161,12 @@ type Engine struct {
 	// second one against the same rows.
 	maintenance *maintenance.Worker
 
+	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
+	// epoch for the same reason maintenance is: it is a loop this process
+	// runs, and rebuilding it on an apply would leave two loops racing for
+	// one company's fires. reconcileScheduler arms and disarms it instead.
+	scheduler schedulerLoop
+
 	// cooldowns is the loop that pulls the fleet's credential bench into
 	// this node's pools. On the ENGINE rather than on an epoch because it
 	// is a loop this process runs — see cooldowns.go.
@@ -382,6 +388,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return fail(fmt.Errorf("engine: sandbox waiter: %w", err))
 	}
 	e.startMaintenance(ctx)
+	e.startScheduler(ctx)
 	// The credential pools were attached to the fleet's ledger by equip,
 	// above, so a bench already publishes. This arms the other half: the
 	// pull that tells this node what its peers have already benched.
@@ -495,6 +502,7 @@ func (e *Engine) Stop(ctx context.Context) {
 	e.stopSandbox()
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
+	e.stopScheduler()
 	e.stopCooldownRefresh()
 	e.node.Stop(ctx)
 	// AFTER the seats are released, so a per-role child is normally

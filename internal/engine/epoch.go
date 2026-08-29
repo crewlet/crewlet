@@ -150,6 +150,12 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	if e.node != nil {
 		e.node.EnsureMailboxes(ctx)
 	}
+	// AFTER the epoch is published too, and for a sharper version of the
+	// same reason: the tick reads schedules off the CURRENT company, so
+	// arming from `next` before it is current would open a window in which
+	// the loop fires the outgoing company's crons. A founder's first
+	// schedule starts the loop here; their last one removed stops it.
+	e.reconcileScheduler(ctx, next)
 
 	log.InfoContext(ctx, "config_applied",
 		"company", next.Config.Name, "seats", len(next.Seats()),
