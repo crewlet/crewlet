@@ -111,7 +111,7 @@ func (p *plane) activate(t *testing.T, doc string) int64 {
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
 	}
-	published, err := p.fleet.Activate(t.Context(), id, "revision", pinnedNow)
+	published, err := p.fleet.Activate(t.Context(), id, "revision", document, pinnedNow)
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
@@ -130,7 +130,7 @@ func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMe
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
 	}
-	published, err := p.fleet.Activate(t.Context(), id, summary, pinnedNow)
+	published, err := p.fleet.Activate(t.Context(), id, summary, payload, pinnedNow)
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-activate: %v", err)
 	}
-	republished, err := p.fleet.Activate(t.Context(), active.ID, summary, pinnedNow)
+	republished, err := p.fleet.Activate(t.Context(), active.ID, summary, active.Payload, pinnedNow)
 	if err != nil {
 		t.Fatalf("re-publish: %v", err)
 	}
@@ -345,8 +345,10 @@ func TestAPointerNamingAMissingRevisionIsReported(t *testing.T) {
 	// A fleet where every node quietly ignores an unreadable pointer
 	// converges on nothing while reporting convergence.
 	p := newPlane(t)
+	// No payload with it either: a pointer whose revision is in neither
+	// store is exactly the ghost this reports.
 	if _, err := p.fleet.Activate(t.Context(),
-		"00000000-0000-0000-0000-000000000000", "ghost", pinnedNow); err != nil {
+		"00000000-0000-0000-0000-000000000000", "ghost", nil, pinnedNow); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.recon.Tick(t.Context()); err == nil {
@@ -741,4 +743,91 @@ func waitForApplied(t *testing.T, ch <-chan *events.Event) *events.Event {
 		t.Fatal("no config_revision_applied event was published")
 		return nil
 	}
+}
+
+// THE PAYLOAD HAS TO TRAVEL WITH THE POINTER. A revision is written to the
+// database of whichever node served the write, and every other node meets it
+// for the first time when the pointer names it. While the body lived only in
+// that one node's file, a peer read nothing and reported "no such revision"
+// once per reconcile tick — for the life of the deployment. A live config
+// change reached exactly the node it was posted to, which on a fleet is the
+// whole feature.
+func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
+	t.Parallel()
+	author := newPlane(t)
+	// A second node: its own database, the same coordination store. That is
+	// the shape of a fleet, and the only thing the two share.
+	peer := newPlane(t, func(o *engine.ReconcilerOptions) { o.Fleet = author.fleet })
+
+	epoch := author.activate(t, grownCompanyDoc)
+	target, found, err := author.fleet.Target(t.Context())
+	if err != nil || !found {
+		t.Fatalf("Target: found=%v err=%v", found, err)
+	}
+	if _, held, err := peer.store.Configs().Get(t.Context(), target.RevisionID); err != nil || held {
+		t.Fatalf("the peer already holds the revision (held=%v err=%v) — this test proves nothing", held, err)
+	}
+
+	if err := peer.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("the peer could not converge on a revision it had never seen: %v", err)
+	}
+	if got := peer.recon.Applied(); got != epoch {
+		t.Errorf("the peer applied epoch %d, want %d", got, epoch)
+	}
+	// And it KEPT the revision. company_config is where this node's own
+	// history, diffs and revert targets are read from, so a node that
+	// applied without adopting would serve an epoch its operator surface
+	// cannot show.
+	adopted, held, err := peer.store.Configs().Get(t.Context(), target.RevisionID)
+	if err != nil || !held {
+		t.Fatalf("the peer did not keep its own copy (held=%v err=%v)", held, err)
+	}
+	if !adopted.Active {
+		t.Error("the adopted revision is not the peer's active one")
+	}
+	// The seats of the revision it converged on, not the one it booted with.
+	if seats := peer.seats(t); !slices.Contains(seats, "designer") {
+		t.Errorf("the peer's seats are %v, want the revision it converged on", seats)
+	}
+}
+
+// The nudge, end to end. The reconcile interval is fifteen seconds; an
+// operator's config change has to land in milliseconds, and the only thing
+// that makes that true is a node hearing the activation and running its tick
+// early. Until this the event type was registered with a topic and NOTHING
+// anywhere published or consumed it, so every node waited out its poll.
+func TestAnActivationNudgeWakesTheLoop(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	if err := p.engine.Backends().Queue.Start(t.Context()); err != nil {
+		t.Fatalf("queue start: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); p.recon.Run(ctx) }()
+
+	// Activated AFTER the loop is running, so the only thing that can make
+	// it converge inside the window below is the nudge — a poll is a full
+	// interval away.
+	epoch := p.activate(t, grownCompanyDoc)
+	ev := events.New(types.ConfigRevisionActivated{RevisionID: "any", RevisionSummary: "x"},
+		events.NewTrace())
+	// Bounded well under the reconcile interval: only the nudge can get the
+	// node there in this window.
+	deadline := time.Now().Add(configplane.ReconcileInterval / 2)
+	for p.recon.Applied() != epoch {
+		if time.Now().After(deadline) {
+			t.Fatal("the node did not converge before its next poll could have " +
+				"run — the nudge is not waking the loop")
+		}
+		// Republished each round: the loop subscribes inside Run, so a
+		// single publish racing the attach would flake.
+		_ = p.engine.Backends().Queue.Publish(ctx, topics.ConfigRevisionActivated, ev)
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+	<-done
 }

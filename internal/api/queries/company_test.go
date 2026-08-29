@@ -574,7 +574,7 @@ func TestFleetCarriesEachNodesConfigState(t *testing.T) {
 		t.Fatal(err)
 	}
 	plane := coordmemory.NewFleet()
-	published, err := plane.Activate(t.Context(), "rev-1", "", pinned)
+	published, err := plane.Activate(t.Context(), "rev-1", "", []byte("{}"), pinned)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1008,7 +1008,11 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 // fleet view has to survive one of its columns being unreadable.
 type brokenPlane struct{}
 
-func (brokenPlane) Activate(context.Context, string, string, time.Time) (coord.Activation, error) {
+func (brokenPlane) Payload(context.Context, string) ([]byte, bool, error) {
+	return nil, false, errUnreadablePlane
+}
+
+func (brokenPlane) Activate(context.Context, string, string, []byte, time.Time) (coord.Activation, error) {
 	return coord.Activation{}, errUnreadablePlane
 }
 

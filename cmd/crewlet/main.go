@@ -794,6 +794,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// written here is one no node can read.
 	configSurface := configapi.New(configapi.Options{
 		Store: e.Backends().Store, Cipher: cipher,
+		// THE POINTER, without which the write routes have nothing to
+		// activate against. It was missing, so every /config write on
+		// this binary reached a nil plane — the live-edit path that is
+		// the whole of Tier B.
+		Plane: e.Backends().Fleet,
+		// And the nudge, so an operator's change lands on every node in
+		// milliseconds rather than at the next reconcile poll.
+		Queue: e.Backends().Queue,
 	})
 
 	app := api.New(api.Options{

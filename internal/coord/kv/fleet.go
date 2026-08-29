@@ -62,17 +62,22 @@ import (
 // different revisions rather than racing over a counter this engine keeps.
 
 const (
-	rateSuffix      = "_rate"
-	claimsSuffix    = "_claims"
-	ledgerSuffix    = "_ledger"
-	cooldownSuffix  = "_cooldowns"
-	statusSuffix    = "_status"
-	configSuffix    = "_config"
-	budgetSuffix    = "_budgets"
-	channelSuffix   = "_channels"
-	firesSuffix     = "_fires"
-	runsSuffix      = "_sandbox_runs"
-	activationKey   = "activation"
+	rateSuffix     = "_rate"
+	claimsSuffix   = "_claims"
+	ledgerSuffix   = "_ledger"
+	cooldownSuffix = "_cooldowns"
+	statusSuffix   = "_status"
+	configSuffix   = "_config"
+	budgetSuffix   = "_budgets"
+	channelSuffix  = "_channels"
+	firesSuffix    = "_fires"
+	runsSuffix     = "_sandbox_runs"
+	activationKey  = "activation"
+	// payloadKey holds the CURRENT revision's sealed body, in the same
+	// bucket as the pointer and for the same reason: neither may expire,
+	// and a payload in a bucket the pointer is not in could age out from
+	// under the epoch it belongs to.
+	payloadKey      = "revision_payload"
 	fleetCASRetries = 16
 )
 
@@ -731,7 +736,7 @@ type activationRecord struct {
 }
 
 // Activate publishes a new target revision.
-func (f *FleetStore) Activate(ctx context.Context, revisionID, summary string, at time.Time) (coord.Activation, error) {
+func (f *FleetStore) Activate(ctx context.Context, revisionID, summary string, payload []byte, at time.Time) (coord.Activation, error) {
 	if revisionID == "" {
 		return coord.Activation{}, errors.New("coord/kv: an activation needs a revision id")
 	}
@@ -739,10 +744,23 @@ func (f *FleetStore) Activate(ctx context.Context, revisionID, summary string, a
 	if err != nil {
 		return coord.Activation{}, fmt.Errorf("coord/kv: encode the activation: %w", err)
 	}
-	// ONE WRITE. Put returns the revision it assigned, and that revision
-	// IS the epoch — so the append and the flip cannot come apart, and two
-	// nodes activating at the same instant are handed two epochs by the
-	// store rather than racing over a counter this engine keeps.
+	// THE PAYLOAD FIRST. A crash here leaves a body nothing points at,
+	// which the next activation replaces; the other order points the fleet
+	// at bytes no node can read.
+	body, err := json.Marshal(payloadRecord{RevisionID: revisionID, Payload: payload})
+	if err != nil {
+		return coord.Activation{}, fmt.Errorf("coord/kv: encode the revision payload: %w", err)
+	}
+	if _, put := f.config.Put(ctx, payloadKey, body); put != nil {
+		return coord.Activation{}, unavailable("publish the revision payload", put)
+	}
+	// ONE WRITE for the flip. Put returns the revision it assigned, and
+	// that revision IS the epoch — so the append and the flip cannot come
+	// apart, and two nodes activating at the same instant are handed two
+	// epochs by the store rather than racing over a counter this engine
+	// keeps. Writing the payload into the same bucket moves the sequence
+	// too, which is harmless: the epoch has to be monotonic and unique,
+	// never dense.
 	revision, err := f.config.Put(ctx, activationKey, raw)
 	if err != nil {
 		return coord.Activation{}, unavailable("publish the activation", err)
@@ -753,6 +771,41 @@ func (f *FleetStore) Activate(ctx context.Context, revisionID, summary string, a
 		At:         at.UTC(),
 		Summary:    summary,
 	}, nil
+}
+
+// payloadRecord is the current revision's sealed body on the wire. The
+// revision id travels WITH it so a reader can tell "the payload for the epoch
+// I am converging on" from "a payload a newer activation has already
+// replaced" — the two are one key, and only the id separates them.
+type payloadRecord struct {
+	RevisionID string `json:"revision_id"`
+	Payload    []byte `json:"payload"`
+}
+
+// Payload returns the current revision's sealed payload.
+func (f *FleetStore) Payload(ctx context.Context, revisionID string) ([]byte, bool, error) {
+	if revisionID == "" {
+		return nil, false, errors.New("coord/kv: a payload read needs a revision id")
+	}
+	entry, err := f.config.Get(ctx, payloadKey)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, unavailable("read the revision payload", err)
+	}
+	var record payloadRecord
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		return nil, false, unavailable("decode the revision payload", err)
+	}
+	if record.RevisionID != revisionID {
+		// A newer activation has replaced it. Reported as absent rather
+		// than as the wrong body: a node that applied whatever happened
+		// to be there would converge on a revision the fleet is not
+		// pointed at, and say it succeeded.
+		return nil, false, nil
+	}
+	return record.Payload, true, nil
 }
 
 // Target reads the pointer.

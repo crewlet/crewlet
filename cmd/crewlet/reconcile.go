@@ -12,6 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -37,7 +41,7 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 ) (*engine.Reconciler, error) {
 	db := e.Backends().Store
 	plane := e.Backends().Fleet
-	if err := seedCompany(ctx, db, plane, seed, cipher, log); err != nil {
+	if err := seedCompany(ctx, db, plane, e.Backends().Queue, seed, cipher, log); err != nil {
 		return nil, err
 	}
 
@@ -76,8 +80,8 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 // imports once. Silently ignoring the edited file instead would be the worst
 // of the three — an operator changes a config, restarts, and nothing happens,
 // with nothing anywhere saying why.
-func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, seed *config.Company,
-	cipher secrets.Cipher, log *slog.Logger,
+func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue.Publisher,
+	seed *config.Company, cipher secrets.Cipher, log *slog.Logger,
 ) error {
 	document, err := json.Marshal(seed)
 	if err != nil {
@@ -99,7 +103,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, seed *con
 			// The file has not changed, so there is nothing to import.
 			// The node may still owe the fleet a POINTER — see
 			// publishLocalActive for the case that puts it there.
-			return publishLocalActive(ctx, plane, active, log)
+			return publishLocalActive(ctx, plane, pub, active, log)
 		}
 		parent = active.ID
 	}
@@ -119,10 +123,11 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, seed *con
 	if err != nil {
 		return fmt.Errorf("seed the company config: %w", err)
 	}
-	published, err := plane.Activate(ctx, id, summary, time.Now().UTC())
+	published, err := plane.Activate(ctx, id, summary, payload, time.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("activate the seeded company config: %w", err)
 	}
+	nudge(ctx, pub, id, summary, log)
 	log.Info("company_config_seeded", "revision", id, "epoch", published.Epoch,
 		"parent", parent, "sealed", cipher != nil)
 	return nil
@@ -151,7 +156,9 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, seed *con
 // and the consequence is bounded and stated: a node whose clock is ahead can
 // republish its own revision once, which every peer then converges on — the
 // same outcome as an operator re-activating it deliberately.
-func publishLocalActive(ctx context.Context, plane coord.Plane, active store.Revision, log *slog.Logger) error {
+func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publisher,
+	active store.Revision, log *slog.Logger,
+) error {
 	target, found, err := plane.Target(ctx)
 	if err != nil {
 		return fmt.Errorf("read the activation pointer: %w", err)
@@ -167,10 +174,34 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, active store.Rev
 			"detail", "this node converges on the fleet's revision")
 		return nil
 	}
-	published, err := plane.Activate(ctx, active.ID, active.Summary, active.ActivatedAt)
+	// The payload goes up with it. This node is telling the fleet to serve
+	// a revision only it holds, so the body has to travel or every peer
+	// converges on a pointer whose revision it cannot read.
+	published, err := plane.Activate(ctx, active.ID, active.Summary,
+		active.Payload, active.ActivatedAt)
 	if err != nil {
 		return fmt.Errorf("publish the active revision: %w", err)
 	}
+	nudge(ctx, pub, active.ID, active.Summary, log)
 	log.Info("local_revision_published", "revision", active.ID, "epoch", published.Epoch)
 	return nil
+}
+
+// nudge announces an activation this node made, so peers converge in
+// milliseconds instead of at their next poll.
+//
+// BEST EFFORT, and thin by design: the event carries no payload, because the
+// authoritative path is the pointer and a node acts by re-reading it. Losing
+// one costs a reconcile interval and never a revision.
+func nudge(ctx context.Context, pub queue.Publisher, revisionID, summary string, log *slog.Logger) {
+	if pub == nil {
+		return
+	}
+	ev := events.New(types.ConfigRevisionActivated{
+		RevisionID: revisionID, RevisionSummary: summary, CreatedBy: "node",
+	}, events.NewTrace())
+	if err := pub.Publish(ctx, topics.ConfigRevisionActivated, ev); err != nil {
+		log.Warn("activation_nudge_not_published", "revision", revisionID,
+			"error", err, "detail", "peers converge on their reconcile interval instead")
+	}
 }

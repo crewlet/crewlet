@@ -37,7 +37,7 @@ type Reconciler struct {
 	engine  *Engine
 	configs *store.Configs
 	plane   coord.Plane
-	queue   queue.Publisher
+	queue   Nudger
 	nodeID  string
 	cipher  secrets.Cipher
 
@@ -51,6 +51,13 @@ type Reconciler struct {
 	// revision resets the budget, so the runbook's fix actually works.
 	attempts int
 	target   int64
+
+	// nudged carries an activation from the broadcast subscription to the
+	// loop. Buffered at ONE and written non-blocking: a storm of
+	// activations must collapse into a single early wake, not into a queue
+	// of them — the loop re-reads the pointer when it runs, so N nudges and
+	// one nudge lead to the same place.
+	nudged chan struct{}
 
 	// onApply is called after every apply with the outcome, so the API
 	// half of a merged node learns whether it is configured without
@@ -70,13 +77,13 @@ type ReconcilerOptions struct {
 	// reading its own database would converge on itself.
 	Fleet coord.Plane
 
-	// Queue is where this node's apply outcome is published as a durable
-	// event. Required: the coordination record it accompanies ages out in a
-	// minute by design, so a reconciler without a publisher leaves a bad
-	// rollout with no post-mortem trail at all — and that absence is
-	// invisible, which is how the event type came to exist with nothing
-	// publishing it.
-	Queue queue.Publisher
+	// Queue carries this node's apply outcome out as a durable event and
+	// brings activations in as a nudge. Required: the coordination record
+	// the outcome accompanies ages out in a minute by design, so a
+	// reconciler without a publisher leaves a bad rollout with no
+	// post-mortem trail at all — and that absence is invisible, which is
+	// how the event type came to exist with nothing publishing it.
+	Queue Nudger
 
 	// NodeID identifies this node's row in the apply status. Required: the
 	// table upserts on it, so an empty one makes every node that forgot it
@@ -94,6 +101,20 @@ type ReconcilerOptions struct {
 
 	// Now is injectable so a test can pin the freshness window.
 	Now func() time.Time
+}
+
+// Nudger is the queue surface this loop uses: it publishes what it did, and
+// listens for an activation so an operator's change lands in milliseconds
+// rather than at the next poll.
+//
+// The subscription is an EPHEMERAL BROADCAST, never a consumer group. Every
+// node has to hear every activation — a competing group would hand each one to
+// exactly one node, which is the delivery shape that made config a fleet of
+// one before the pointer existed. Losing a nudge costs one poll interval and
+// never a revision, because the poll asks rather than replays.
+type Nudger interface {
+	queue.Publisher
+	SubscribeStream(ctx context.Context, topicPattern string, h queue.StreamHandler) (queue.Unsubscribe, error)
 }
 
 // ErrNoStore reports a reconciler built without somewhere to read revisions.
@@ -128,6 +149,7 @@ func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Reconciler{
+		nudged:  make(chan struct{}, 1),
 		engine:  e,
 		configs: opts.Store.Configs(),
 		plane:   opts.Fleet,
@@ -278,12 +300,18 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 			target.RevisionID, err)
 	}
 	if !found {
-		// The pointer names a revision that is not there. An error
-		// rather than a silent skip: this node cannot reach the epoch,
-		// and a fleet where every node quietly ignores an unreadable
-		// pointer converges on nothing while reporting convergence.
-		return configplane.StatusError, nil, fmt.Errorf("engine: %w: %s",
-			store.ErrNoRevision, target.RevisionID)
+		// THE ORDINARY CASE ON A PEER, not an anomaly: the payload is
+		// written to the database of whichever node served the write,
+		// and every other node meets the revision for the first time
+		// here. Fetching it from the coordination store — where
+		// Activate puts it before it moves the pointer — is what makes
+		// a live config change reach a fleet at all. Before this, a
+		// peer read nothing and reported "no such revision" once per
+		// tick for the life of the deployment.
+		revision, err = r.fetchRevision(ctx, target)
+		if err != nil {
+			return configplane.StatusError, nil, err
+		}
 	}
 	document, err := secrets.Open(r.cipher, revision.Payload)
 	if err != nil {
@@ -307,6 +335,41 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 			target.RevisionID, err)
 	}
 	return r.engine.Apply(ctx, cfg)
+}
+
+// fetchRevision pulls the target's payload off the coordination store and
+// keeps this node's own copy of it.
+//
+// PERSISTED, not merely used: company_config is where this node's history,
+// its diffs and its revert targets live, and a node that applied a revision it
+// never recorded would serve an epoch its own operator surface cannot show.
+// The local write is best effort for the same reason the apply status is —
+// the revision is applied either way, and a node that could not write its copy
+// re-fetches on its next miss.
+func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation) (store.Revision, error) {
+	payload, found, err := r.plane.Payload(ctx, target.RevisionID)
+	if err != nil {
+		return store.Revision{}, fmt.Errorf("engine: fetch revision %s: %w",
+			target.RevisionID, err)
+	}
+	if !found {
+		// The pointer names a revision whose body is nowhere. An error
+		// rather than a silent skip: this node cannot reach the epoch,
+		// and a fleet where every node quietly ignores an unreadable
+		// pointer converges on nothing while reporting convergence.
+		return store.Revision{}, fmt.Errorf("engine: %w: %s",
+			store.ErrNoRevision, target.RevisionID)
+	}
+	revision := store.Revision{
+		ID: target.RevisionID, Source: "fleet", CreatedBy: "peer",
+		Summary: target.Summary, Payload: payload, CreatedAt: target.At,
+	}
+	if err := r.configs.Adopt(ctx, revision); err != nil {
+		log.WarnContext(ctx, "revision_not_cached", "revision", target.RevisionID,
+			"error", err, "detail", "the revision is applied; this node's config "+
+				"history will not show it and it will be re-fetched next time")
+	}
+	return revision, nil
 }
 
 // record writes this node's outcome twice, to two surfaces with two
@@ -404,6 +467,9 @@ func applyStatus(status configplane.ApplyStatus) types.ApplyStatus {
 // the shed rule delaying convergence means delaying the moment a node stops
 // being the anomaly.
 func (r *Reconciler) Run(ctx context.Context) {
+	stop := r.listen(ctx)
+	defer stop()
+
 	timer := time.NewTimer(configplane.ReconcileDelay())
 	defer timer.Stop()
 	for {
@@ -411,12 +477,75 @@ func (r *Reconciler) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
+		case <-r.nudged:
+			// An activation arrived. The tick below re-reads the
+			// POINTER — it does not act on the event — so a nudge for
+			// a revision this node already serves costs one wasted
+			// read, and a lost nudge costs nothing but latency.
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 		}
 		if err := r.Tick(ctx); err != nil {
 			log.WarnContext(ctx, "reconcile_tick_failed", "error", err)
 		}
+		// A full jittered interval after every tick, nudged or not: an
+		// activation storm must not become an apply storm.
 		timer.Reset(configplane.ReconcileDelay())
 	}
+}
+
+// listen attaches the activation nudge, returning a stop that is safe to call
+// however the attach went.
+//
+// A FAILED ATTACH IS NOT FATAL, and saying so is the whole design: the pointer
+// is the authoritative path and the poll is what reads it, so a node that
+// cannot hear nudges converges one interval later than its peers rather than
+// not at all. That is the property that let this event be a nudge in the first
+// place.
+func (r *Reconciler) listen(ctx context.Context) func() {
+	if r.queue == nil {
+		return func() {}
+	}
+	unsubscribe, err := r.queue.SubscribeStream(ctx, topics.ConfigRevisionActivated,
+		func(_ context.Context, _ string, ev *events.Event) {
+			log.Debug("config_activation_nudge", "revision", nudgeRevision(ev))
+			select {
+			case r.nudged <- struct{}{}:
+			default:
+				// Already pending. Collapsing is correct: the
+				// loop re-reads the pointer, so the second
+				// nudge would send it to the same place.
+			}
+		})
+	if err != nil {
+		log.WarnContext(ctx, "activation_nudge_unavailable", "error", err,
+			"detail", "this node converges on its reconcile interval instead")
+		return func() {}
+	}
+	return func() {
+		// WithoutCancel: the loop's context is what ended, and a
+		// teardown that inherited it would leave the subscription behind
+		// on the broker.
+		if err := unsubscribe(context.WithoutCancel(ctx)); err != nil {
+			log.Warn("activation_nudge_unsubscribe_failed", "error", err)
+		}
+	}
+}
+
+// nudgeRevision reads the revision id off a nudge, for the log line only.
+func nudgeRevision(ev *events.Event) string {
+	if ev == nil {
+		return ""
+	}
+	if payload, ok := ev.Data.(*types.ConfigRevisionActivated); ok {
+		return payload.RevisionID
+	}
+	id, _ := ev.Payload["revision_id"].(string)
+	return id
 }
 
 // peerHealth counts the PEERS that reported success at an epoch, and how many

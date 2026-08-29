@@ -152,6 +152,67 @@ func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time)
 	return summary, nil
 }
 
+// Adopt records a revision this node fetched from the FLEET and makes it the
+// active one locally.
+//
+// The peer's path. A revision is stored in the database of whichever node
+// served the write, so every other node meets it for the first time when the
+// activation pointer names it — and this is where that node keeps its own
+// copy. Without it a peer would apply revisions it can never show: the config
+// history, the diffs and the revert targets are all read out of this table.
+//
+// IDEMPOTENT on the revision id, unlike [Configs.InsertActive], because a
+// re-fetch is ordinary: the local write is best effort, so a node whose disk
+// was full when it first adopted comes back through here on its next miss.
+// The body is left as it was found — the fleet's copy and this one are the
+// same sealed bytes, and rewriting it would be a no-op that could only differ
+// if something had already gone wrong.
+//
+// The id is REQUIRED, and that is the difference from InsertActive minting
+// one: this row's identity belongs to the fleet, and a generated id would
+// make the node's own history disagree with the pointer it converged on.
+func (c *Configs) Adopt(ctx context.Context, r Revision) error {
+	if r.ID == "" {
+		return fmt.Errorf("store: adopting a revision needs its fleet id")
+	}
+	at := r.CreatedAt
+	if at.IsZero() {
+		at = now()
+	}
+	payload := r.Payload
+	if len(payload) == 0 {
+		payload = json.RawMessage("{}")
+	}
+	err := c.db.Tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE company_config SET is_active = 0 WHERE is_active <> 0`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO company_config
+			     (revision_id, parent_revision_id, created_at, created_by,
+			      source, summary, payload, is_active, activated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+			 ON CONFLICT (revision_id) DO NOTHING`,
+			r.ID, NullText(r.ParentID), EncodeTime(at), r.CreatedBy,
+			r.Source, r.Summary, string(payload), EncodeTime(at)); err != nil {
+			return err
+		}
+		// The row may already have been here — the conflict above did
+		// nothing — and the deactivate above cleared its flag, so the
+		// activate is unconditional rather than part of the insert.
+		_, err := tx.ExecContext(ctx,
+			`UPDATE company_config SET is_active = 1, activated_at = ?
+			 WHERE revision_id = ?`, EncodeTime(at), r.ID)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("store: adopt config revision %s: %w", r.ID, err)
+	}
+	log.InfoContext(ctx, "config_revision_adopted", "revision", r.ID, "source", r.Source)
+	return nil
+}
+
 // Active returns the currently-active revision, and whether there is one.
 func (c *Configs) Active(ctx context.Context) (Revision, bool, error) {
 	return c.one(ctx,

@@ -1,6 +1,7 @@
 package configapi_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -69,6 +73,13 @@ type surface struct {
 
 func newSurface(t *testing.T, cipher secrets.Cipher) *surface {
 	t.Helper()
+	return newSurfaceWith(t, func(o *configapi.Options) { o.Cipher = cipher })
+}
+
+// newSurfaceWith is newSurface with the options a case needs to vary — a
+// missing plane, a queue to record the nudge on.
+func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
+	t.Helper()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
@@ -79,12 +90,18 @@ func newSurface(t *testing.T, cipher secrets.Cipher) *surface {
 		mux: http.NewServeMux(), configs: db.Configs(), db: db,
 		plane: coordmemory.NewFleet(),
 	}
-	s.svc = configapi.New(configapi.Options{
-		Store: db, Plane: s.plane, Cipher: cipher,
+	opts := configapi.Options{
+		Store: db, Plane: s.plane,
 		Now: func() time.Time { return pinned },
-	})
+	}
+	if mutate != nil {
+		mutate(&opts)
+	}
+	// Assigned back onto the surface so a case that dropped the plane sees
+	// the same nil the service does.
+	s.plane, s.cipher = opts.Plane, opts.Cipher
+	s.svc = configapi.New(opts)
 	s.svc.Routes(s.mux)
-	s.cipher = cipher
 	return s
 }
 
@@ -932,4 +949,94 @@ func TestADocumentWithNoSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 	if !strings.Contains(detail, "line 3") {
 		t.Errorf("the error does not name line 3: %q", detail)
 	}
+}
+
+// A process with no coordination store cannot activate anything, and the
+// binary shipped without one wired in at all — so every /config write reached
+// a nil plane. Refused with a 503 that says where to post instead, never a
+// 201 for a change that takes effect nowhere and never a panic.
+func TestAWriteWithoutAControlPlaneIsRefused(t *testing.T) {
+	t.Parallel()
+	s := newSurfaceWith(t, func(o *configapi.Options) { o.Plane = nil })
+
+	res := s.do(t, http.MethodPut, "/config", companyDoc,
+		map[string]string{"X-Summary": "first import"})
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body %s)", res.Code, res.Body)
+	}
+	if got := decode(t, res)["error"]; got != "no_control_plane" {
+		t.Errorf("error = %v, want no_control_plane", got)
+	}
+	// And nothing was stored: a revision this process cannot point the
+	// fleet at is a change that takes effect nowhere.
+	if _, found, err := s.configs.Active(t.Context()); err != nil || found {
+		t.Errorf("a refused write stored a revision (found=%v err=%v)", found, err)
+	}
+}
+
+// The nudge. Every node has to hear an activation, so it is published — and it
+// is deliberately thin, because a node acts by re-reading the pointer. Until
+// this the event type was registered with a topic and nothing anywhere
+// constructed it, so the "lands in milliseconds" the control-plane docs
+// promise was a poll interval in every deployment.
+func TestAWritePublishesTheActivationNudge(t *testing.T) {
+	t.Parallel()
+	pub := &nudgeRecorder{}
+	s := newSurfaceWith(t, func(o *configapi.Options) { o.Queue = pub })
+
+	res := s.do(t, http.MethodPut, "/config", companyDoc,
+		map[string]string{"X-Summary": "raise the cap"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", res.Code, res.Body)
+	}
+
+	if len(pub.sent) != 1 {
+		t.Fatalf("published %d events, want the one nudge (topics %v)", len(pub.sent), pub.topics)
+	}
+	if pub.topics[0] != topics.ConfigRevisionActivated {
+		t.Errorf("topic = %q, want %q", pub.topics[0], topics.ConfigRevisionActivated)
+	}
+	payload, ok := pub.sent[0].Data.(*types.ConfigRevisionActivated)
+	if !ok {
+		t.Fatalf("payload is %T", pub.sent[0].Data)
+	}
+	active, _, err := s.configs.Active(t.Context())
+	if err != nil {
+		t.Fatalf("Active: %v", err)
+	}
+	if payload.RevisionID != active.ID {
+		t.Errorf("nudge names revision %q, want the one just activated %q",
+			payload.RevisionID, active.ID)
+	}
+	if payload.RevisionSummary != "raise the cap" {
+		t.Errorf("summary = %q — an operator reading the feed wants to know WHAT changed",
+			payload.RevisionSummary)
+	}
+}
+
+// A queue that is not there costs a poll interval, never a revision: the
+// pointer is the authoritative path and the write must land regardless.
+func TestAWriteWithoutAQueueStillActivates(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	res := s.do(t, http.MethodPut, "/config", companyDoc,
+		map[string]string{"X-Summary": "first import"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", res.Code, res.Body)
+	}
+	if _, found, err := s.plane.Target(t.Context()); err != nil || !found {
+		t.Errorf("the pointer did not move without a queue (found=%v err=%v)", found, err)
+	}
+}
+
+// nudgeRecorder captures what the surface published.
+type nudgeRecorder struct {
+	topics []string
+	sent   []*events.Event
+}
+
+func (n *nudgeRecorder) Publish(_ context.Context, topic string, ev *events.Event) error {
+	n.topics = append(n.topics, topic)
+	n.sent = append(n.sent, ev)
+	return nil
 }

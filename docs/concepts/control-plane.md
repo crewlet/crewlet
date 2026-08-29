@@ -24,26 +24,33 @@ Broadcasting the event fixes the fan-out but not the reliability. An ephemeral b
 ```mermaid
 flowchart TD
     ACT["activation<br/>(PUT /config, revert,<br/>crewlet config import)"]
-    DB[("company_config<br/><b>node-local payload</b>")]
-    PTR[("coordination: <code>activation</code><br/><b>pointer, revision = epoch</b>")]
+    DB[("company_config<br/><b>each node's own copy</b>")]
+    PTR[("coordination: <code>activation</code><br/><b>pointer + payload, revision = epoch</b>")]
     NUDGE(["broadcast nudge<br/>revision_activated"])
     N1["node-0<br/>reconcile poll"]
     N2["node-1<br/>reconcile poll"]
     STATUS[("coordination: status bucket<br/><b>one key per node</b>")]
     ACT --> DB
-    ACT -->|one write| PTR
+    ACT -->|payload, then pointer| PTR
     ACT -.->|best effort| NUDGE
     NUDGE -.->|wake early| N1
     NUDGE -.->|wake early| N2
     PTR --> N1
     PTR --> N2
+    N1 -.->|adopt on first sight| DB
     N1 --> STATUS
     N2 --> STATUS
     STATUS --> N1
     STATUS --> N2
 ```
 
-**The `activation` key is the authoritative pointer**, and it lives in the coordination store rather than in a node's own database. The split is the whole point: the *payload* is bulk that every node can hold its own copy of, but *which revision is current* is a question the fleet has to agree on, and a pointer each node reads out of its own file is a fleet of one.
+**The `activation` key is the authoritative pointer**, and it lives in the coordination store rather than in a node's own database. The split is the whole point: *which revision is current* is a question the fleet has to agree on, and a pointer each node reads out of its own file is a fleet of one.
+
+**The payload travels with it.** A revision is written to the database of whichever node served the write, so every *other* node meets it for the first time when the pointer names it — and a peer with no copy has nothing to apply. So `Activate` publishes the sealed body and then moves the pointer, in that order: a crash between them leaves a body nothing points at, which the next activation replaces, while the other order points the fleet at bytes no node can read.
+
+Only the **current** revision's body is kept there. A node that has fallen behind needs exactly the revision the pointer names and never an older one, so a per-revision history in a bucket with no retention would be unbounded growth for rows nothing would ever read. A node that fetches a revision **adopts** it into its own `company_config` — which is where its history, its diffs and its revert targets are read from, so a node that applied without adopting would serve an epoch its own operator surface cannot show.
+
+The body is whatever the node sealed. With a keyring configured the coordination store holds ciphertext exactly as the node's database does, and a node opens it with the Tier A keyring it was deployed with.
 
 **Its revision is the epoch.** The coordination store assigns every key write a monotonic revision, so publishing the pointer appends and flips in a single write — there is no instant where a node can read an epoch whose target has not been published, and two operators activating at once get two different epochs rather than racing over a counter the engine keeps. It also gives the counter the property a plain revision-id pointer could never have: it moves on every activation *including re-activation of an unchanged revision*, which is the documented gesture for picking up a rotated credential (see [Secret Store § Propagation](secret-store.md#propagation)).
 
@@ -53,7 +60,9 @@ The pointer's bucket has **no retention at all**. Everything else the fleet shar
 
 **Every node polls it** every ~15 s (±20 % jitter). A poll cannot miss anything, because it asks. The jitter exists only to break lock-step after a synchronized fleet restart — a rolling deploy boots every pod within the same second — and is deliberately applied to the *interval*, never to the apply.
 
-**The `revision_activated` event survives as a nudge.** It wakes the loop so an operator's change lands in milliseconds instead of seconds. Losing it costs one poll interval, never a revision. After a nudge fires, the next iteration still waits a full jittered interval, so an activation storm cannot become an apply storm.
+**The `revision_activated` event survives as a nudge.** It wakes the loop so an operator's change lands in milliseconds instead of seconds. It is delivered as an **ephemeral broadcast**, never a consumer group: every node has to hear every activation, and a competing group would hand each one to exactly one node — the delivery shape that made config a fleet of one before the pointer existed.
+
+It is also deliberately thin. The event carries the revision id and its summary and nothing a node acts on: the woken loop re-reads the *pointer*. That is what makes losing a nudge cost one poll interval and never a revision, and it is why a node that cannot subscribe at all — an attach failure is logged, not fatal — simply converges on its interval like any other. After a nudge fires, the next iteration still waits a full jittered interval, so an activation storm cannot become an apply storm.
 
 **The status bucket is what each node managed to do** — one key per node, last-write-wins. This is what makes partial apply visible, and it has three outcomes rather than two:
 

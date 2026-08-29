@@ -35,6 +35,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"cooldowns", cooldownCases},
 		{"budgets", budgetCases},
 		{"plane", planeCases},
+		{"payload", payloadCases},
 		{"channels", channelCases},
 		{"fires", fireCases},
 		{"sandbox_runs", runCases},
@@ -449,7 +450,7 @@ var planeCases = []fleetCase{{
 }, {
 	name: "an activation is readable with the epoch the store assigned",
 	fn: func(h *fleetHarness) {
-		published, err := h.f.Activate(h.ctx, "rev-1", "first", h.now())
+		published, err := h.f.Activate(h.ctx, "rev-1", "first", []byte(`{"name":"Acme"}`), h.now())
 		if err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
@@ -471,7 +472,7 @@ var planeCases = []fleetCase{{
 	fn: func(h *fleetHarness) {
 		var last int64
 		for i := range 4 {
-			got, err := h.f.Activate(h.ctx, fmt.Sprintf("rev-%d", i), "", h.now())
+			got, err := h.f.Activate(h.ctx, fmt.Sprintf("rev-%d", i), "", []byte("{}"), h.now())
 			if err != nil {
 				h.t.Fatalf("Activate: %v", err)
 			}
@@ -492,7 +493,7 @@ var planeCases = []fleetCase{{
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				got, err := h.f.Activate(h.ctx, fmt.Sprintf("rev-%d", i), "", h.now())
+				got, err := h.f.Activate(h.ctx, fmt.Sprintf("rev-%d", i), "", []byte("{}"), h.now())
 				if err == nil {
 					epochs <- got.Epoch
 				}
@@ -1351,6 +1352,86 @@ var runCases = []fleetCase{{
 		}
 		if created {
 			h.t.Error("CreateSandboxRun created a run with no turn id")
+		}
+	},
+}}
+
+// ---- the revision payload ---------------------------------------------- //
+
+var payloadCases = []fleetCase{{
+	// The reason the payload travels with the pointer. A peer applies the
+	// revision the pointer NAMES by reading it — and while the body lived
+	// only in the node's own database, the peer read nothing. A live config
+	// change reached exactly the node it was posted to, and every other
+	// node served whatever it had booted with, reporting "no such revision"
+	// once per reconcile tick for the life of the deployment.
+	name: "the revision a peer activated is readable by every node",
+	fn: func(h *fleetHarness) {
+		body := []byte(`{"name":"Acme","agents":{}}`)
+		published, err := h.f.Activate(h.ctx, "rev-1", "first", body, h.now())
+		if err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		got, found, err := h.f.Payload(h.ctx, published.RevisionID)
+		if err != nil {
+			h.t.Fatalf("Payload: %v", err)
+		}
+		if !found {
+			h.t.Fatal("the payload a peer activated is invisible — the node cannot converge")
+		}
+		if string(got) != string(body) {
+			h.t.Errorf("payload = %q, want %q", got, body)
+		}
+	},
+}, {
+	// A node converging on epoch N must not be handed epoch N+1's body.
+	// Applying whatever happened to be there would converge it on a
+	// revision the fleet is not pointed at, and report success.
+	name: "a superseded revision's payload is absent, not stale",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.Activate(h.ctx, "rev-1", "first", []byte(`{"v":1}`), h.now()); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		if _, err := h.f.Activate(h.ctx, "rev-2", "second", []byte(`{"v":2}`), h.now()); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		if _, found, err := h.f.Payload(h.ctx, "rev-1"); err != nil || found {
+			h.t.Errorf("the superseded payload is still served (found=%v err=%v)", found, err)
+		}
+		got, found, err := h.f.Payload(h.ctx, "rev-2")
+		if err != nil || !found {
+			h.t.Fatalf("the current payload is missing (found=%v err=%v)", found, err)
+		}
+		if string(got) != `{"v":2}` {
+			h.t.Errorf("payload = %q, want the current revision's", got)
+		}
+	},
+}, {
+	name: "nothing activated means no payload, not an error",
+	fn: func(h *fleetHarness) {
+		got, found, err := h.f.Payload(h.ctx, "rev-1")
+		if err != nil {
+			h.t.Fatalf("Payload before any activation: %v", err)
+		}
+		if found || got != nil {
+			h.t.Errorf("payload = %q found=%v, want nothing", got, found)
+		}
+	},
+}, {
+	// A caller mutating what it read must not reach the store: the body is
+	// handed to a decoder that unseals in place on some paths.
+	name: "a caller mutating a payload cannot reach the store",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.Activate(h.ctx, "rev-1", "", []byte(`{"v":1}`), h.now()); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		got, _, _ := h.f.Payload(h.ctx, "rev-1")
+		for i := range got {
+			got[i] = 'x'
+		}
+		again, _, _ := h.f.Payload(h.ctx, "rev-1")
+		if string(again) != `{"v":1}` {
+			h.t.Errorf("the store took a caller's mutation: %q", again)
 		}
 	},
 }}

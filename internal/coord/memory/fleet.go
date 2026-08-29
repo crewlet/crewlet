@@ -38,9 +38,10 @@ type Fleet struct {
 	fires     map[string]time.Time
 	runs      map[string]coord.Record
 
-	epoch  int64
-	target coord.Activation
-	set    bool
+	epoch   int64
+	target  coord.Activation
+	set     bool
+	payload []byte
 }
 
 type windowKey struct {
@@ -197,19 +198,34 @@ func (f *Fleet) Since(_ context.Context, now time.Time) (map[string]time.Time, e
 }
 
 // Activate publishes a new target revision.
-func (f *Fleet) Activate(_ context.Context, revisionID, summary string, at time.Time) (coord.Activation, error) {
+func (f *Fleet) Activate(_ context.Context, revisionID, summary string, payload []byte, at time.Time) (coord.Activation, error) {
 	if revisionID == "" {
 		return coord.Activation{}, errors.New("coord/memory: an activation needs a revision id")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	// The payload lands before the pointer, matching the KV's two writes.
+	// The twin gets both under one mutex, so the window cannot open here —
+	// which is the point of holding it to the same order anyway: a reader
+	// of this file should find the same invariant stated in both places.
+	f.payload = slices.Clone(payload)
 	f.epoch++
 	f.target = coord.Activation{
 		Epoch: f.epoch, RevisionID: revisionID, At: at.UTC(), Summary: summary,
 	}
 	f.set = true
 	return f.target, nil
+}
+
+// Payload returns the current revision's sealed payload.
+func (f *Fleet) Payload(_ context.Context, revisionID string) ([]byte, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.set || f.target.RevisionID != revisionID || f.payload == nil {
+		return nil, false, nil
+	}
+	return slices.Clone(f.payload), true, nil
 }
 
 // Target reads the pointer.

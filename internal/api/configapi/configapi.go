@@ -16,6 +16,7 @@
 package configapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -29,7 +30,11 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -54,6 +59,7 @@ const (
 type Service struct {
 	configs *store.Configs
 	plane   coord.Plane
+	queue   queue.Publisher
 	cipher  secrets.Cipher
 	now     func() time.Time
 }
@@ -73,6 +79,13 @@ type Options struct {
 	// writes plaintext, which is the documented opt-out.
 	Cipher secrets.Cipher
 
+	// Queue publishes the activation NUDGE, so an operator's change lands
+	// on every node in milliseconds instead of at the next reconcile poll.
+	// Nil skips it: the pointer is the authoritative path and the poll is
+	// what reads it, so a missing nudge costs one interval and never a
+	// revision.
+	Queue queue.Publisher
+
 	// Now is injectable so a test can pin the revision timestamps.
 	Now func() time.Time
 }
@@ -90,7 +103,18 @@ func New(opts Options) *Service {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{configs: opts.Store.Configs(), plane: opts.Plane, cipher: opts.Cipher, now: now}
+	if opts.Plane == nil {
+		// SAID AT REGISTRATION, because the write routes answer 503
+		// rather than panicking and a 503 with no explanation anywhere
+		// is a support ticket. A standalone API process with no
+		// coordination store genuinely cannot activate anything.
+		log.Warn("config_writes_disabled",
+			"hint", "this process has no coordination store, so /config is read-only")
+	}
+	return &Service{
+		configs: opts.Store.Configs(), plane: opts.Plane,
+		cipher: opts.Cipher, queue: opts.Queue, now: now,
+	}
 }
 
 // Routes registers the surface on the API's mux.
@@ -346,6 +370,19 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 
 // store seals and activates a document, and answers.
 func (s *Service) store(w http.ResponseWriter, r *http.Request, company *config.Company, parent, summary string) {
+	if s.plane == nil {
+		// REFUSED, not stored. Writing a revision this process cannot
+		// point the fleet at would answer 201 for a change that never
+		// takes effect anywhere — the exact failure the control plane
+		// exists to remove.
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "no_control_plane",
+			"detail": "this process has no coordination store, so it cannot " +
+				"activate a revision",
+			"hint": "post to a node running the engine",
+		})
+		return
+	}
 	document, err := json.Marshal(company)
 	if err != nil {
 		s.fail(w, "encode the config", err)
@@ -370,15 +407,42 @@ func (s *Service) store(w http.ResponseWriter, r *http.Request, company *config.
 		s.fail(w, "store the config", err)
 		return
 	}
-	published, err := s.plane.Activate(r.Context(), id, summary, at)
+	// The SEALED payload travels with the pointer. It is stored here too
+	// — this node's own history, diffs and revert targets read that table
+	// — but the fleet's copy is what every OTHER node applies from, and
+	// without it a live config change reached exactly this node.
+	published, err := s.plane.Activate(r.Context(), id, summary, payload, at)
 	if err != nil {
 		s.fail(w, "activate the config", err)
 		return
 	}
+	s.nudge(r.Context(), id, summary, operator)
 	log.InfoContext(r.Context(), "config_revision_written",
 		"revision", id, "epoch", published.Epoch, "by", operator, "summary", summary)
 	writeJSON(w, http.StatusCreated,
 		map[string]any{"revision_id": id, "epoch": published.Epoch})
+}
+
+// nudge tells every node an activation happened.
+//
+// BEST EFFORT and deliberately thin — the event carries no payload, because
+// the authoritative path is the pointer and a node acts by re-reading it. That
+// is what makes losing one cost a poll interval rather than a revision, and
+// what makes an ephemeral broadcast the right delivery: every node has to
+// hear it, and none of them has to.
+func (s *Service) nudge(ctx context.Context, revisionID, summary, operator string) {
+	if s.queue == nil {
+		return
+	}
+	ev := events.New(types.ConfigRevisionActivated{
+		RevisionID: revisionID, RevisionSummary: summary, CreatedBy: operator,
+	}, events.NewTrace())
+	ev.Timestamp = s.now()
+	ev.Source = operator
+	if err := s.queue.Publish(ctx, topics.ConfigRevisionActivated, ev); err != nil {
+		log.WarnContext(ctx, "activation_nudge_not_published", "revision", revisionID,
+			"error", err, "detail", "peers converge on their reconcile interval instead")
+	}
 }
 
 // checkPrecondition enforces If-Match, the optimistic-concurrency guard.

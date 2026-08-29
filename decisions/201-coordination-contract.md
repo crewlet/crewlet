@@ -152,6 +152,18 @@ forgot detached sandbox runs — billed boxes — entirely.
 or a crash leaves the fleet converged on a revision nobody asked for — on JetStream the append IS the
 commit, so the flip is derived from the stream rather than written separately.
 
+**The revision PAYLOAD goes with the pointer**, which this decision originally
+left out and which made the whole plane a fleet of one anyway. A revision is
+stored in the database of whichever node served the write; every other node
+meets it when the pointer names it, and a peer with no copy has nothing to
+apply. It read nothing and reported "no such revision" once per reconcile tick,
+for the life of the deployment. So Activate is two writes in a fixed order —
+the sealed body, then the pointer — and a node that fetches a body ADOPTS it
+into its own `company_config`, which is where its history and its revert
+targets are read from. Only the CURRENT body is kept: a node behind the fleet
+needs the revision the pointer names and never an older one, and a per-revision
+history in an ageless bucket would grow without bound for rows nothing reads.
+
 ## 5. Fail-open vs fail-closed is per store, and deliberate
 
 Carried verbatim from the Python engine; a rewrite that "harmonises" these is

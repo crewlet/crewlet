@@ -49,7 +49,7 @@ func TestAFirstRunSeedsTheStore(t *testing.T) {
 	// store finds it unconfigured.
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, parse(t, companyYAML), nil, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, parse(t, companyYAML), nil, quiet()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	active, found, err := db.Configs().Active(t.Context())
@@ -78,7 +78,7 @@ func TestAnUnchangedFileSeedsNothing(t *testing.T) {
 	db := seedStore(t)
 	company := parse(t, companyYAML)
 	for range 5 {
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), company, nil, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, company, nil, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -98,12 +98,12 @@ func TestAnEditedFileIsImportedOnce(t *testing.T) {
 	// with nothing anywhere saying why.
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, parse(t, companyYAML), nil, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, parse(t, companyYAML), nil, quiet()); err != nil {
 		t.Fatal(err)
 	}
 	edited := strings.Replace(companyYAML, "name: Acme", "name: Acme Renamed", 1)
 	for range 3 {
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), parse(t, edited), nil, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, parse(t, edited), nil, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -147,7 +147,7 @@ func TestASealedStoreDoesNotReseedOnEveryBoot(t *testing.T) {
 	}
 	company := parse(t, companyYAML)
 	for range 4 {
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), company, cipher, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, company, cipher, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -181,10 +181,10 @@ func TestASealedStoreWithNoKeyringRefusesRatherThanReseeding(t *testing.T) {
 		t.Fatal(err)
 	}
 	company := parse(t, companyYAML)
-	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), company, cipher, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, company, cipher, quiet()); err != nil {
 		t.Fatal(err)
 	}
-	err = seedCompany(t.Context(), db, coordmemory.NewFleet(), company, nil, quiet())
+	err = seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, company, nil, quiet())
 	if err == nil {
 		t.Fatal("a node with no keyring seeded over a sealed revision")
 	}
@@ -227,7 +227,7 @@ func TestANodeWithNoPointerPublishesItsActiveRevision(t *testing.T) {
 	company := parse(t, companyYAML)
 
 	// A first start, which seeds the revision and publishes the pointer.
-	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), company, nil, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, company, nil, quiet()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	active, found, err := db.Configs().Active(t.Context())
@@ -238,7 +238,7 @@ func TestANodeWithNoPointerPublishesItsActiveRevision(t *testing.T) {
 	// A restart onto a FRESH coordination store, with the same file and
 	// the same database.
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, company, nil, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, company, nil, quiet()); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	target, found, err := fleet.Target(t.Context())
@@ -258,16 +258,16 @@ func TestAStaleLocalRevisionDoesNotOverwriteTheFleet(t *testing.T) {
 	t.Parallel()
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, parse(t, companyYAML), nil, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, parse(t, companyYAML), nil, quiet()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// A PEER activated something else, later.
 	peer, err := fleet.Activate(t.Context(), "peer-revision", "from a peer",
-		time.Now().Add(2*time.Hour))
+		[]byte(`{"name":"Peer"}`), time.Now().Add(2*time.Hour))
 	if err != nil {
 		t.Fatalf("peer activate: %v", err)
 	}
-	if err := seedCompany(t.Context(), db, fleet, parse(t, companyYAML), nil, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, parse(t, companyYAML), nil, quiet()); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	after, _, err := fleet.Target(t.Context())

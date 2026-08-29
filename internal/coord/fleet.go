@@ -364,14 +364,48 @@ type NodeApply struct {
 
 // Plane is the fleet's config activation pointer and per-node apply status.
 type Plane interface {
-	// Activate publishes a new target revision and returns it with the
-	// epoch the store assigned.
+	// Activate publishes a revision's PAYLOAD and then points the fleet at
+	// it, returning the activation with the epoch the store assigned.
 	//
-	// The append and the flip are ONE WRITE: the pointer key's new
-	// revision IS the epoch, so there is no window in which a node can
-	// read an epoch whose revision has not been published, and no way for
-	// two concurrent activations to be handed the same number.
-	Activate(ctx context.Context, revisionID, summary string, at time.Time) (Activation, error)
+	// THE PAYLOAD TRAVELS WITH THE POINTER, and it has to: a peer applies
+	// the revision the pointer names by reading it, and while the payload
+	// lived only in the node's own database the peer read nothing. A live
+	// config change therefore reached exactly the node it was posted to,
+	// and every other node served whatever it had booted with — for the
+	// life of the deployment, reporting the failure as "no such revision"
+	// once per reconcile tick.
+	//
+	// TWO WRITES, in this order, and the order is the invariant: the
+	// payload first, then the pointer. A crash between them leaves a
+	// payload nothing points at, which the next activation replaces. The
+	// other order points the fleet at bytes no node can read — the exact
+	// thing the seeding path's own comment says must never happen.
+	//
+	// The flip itself is still ONE write: the pointer key's new revision
+	// IS the epoch, so there is no window in which a node can read an
+	// epoch whose pointer has not been published, and no way for two
+	// concurrent activations to be handed the same number.
+	//
+	// The payload is whatever the caller sealed. This store never opens it
+	// — a node reads it with the Tier A keyring it was deployed with, and
+	// the coordination store holds ciphertext exactly as the node's own
+	// database does.
+	Activate(ctx context.Context, revisionID, summary string, payload []byte, at time.Time) (Activation, error)
+
+	// Payload returns the sealed payload of the revision the fleet is
+	// pointed at, and false when the store holds a DIFFERENT revision's.
+	//
+	// Only the current one is kept. A node that has fallen behind needs
+	// exactly the revision the pointer names — never an older one — so a
+	// per-revision history here would be unbounded growth in a bucket with
+	// no retention, for rows nothing would ever read. Each node's own
+	// company_config table is still where its history and its diffs live.
+	//
+	// RAISES rather than answering false on an unreachable store, for the
+	// same reason [Plane.Target] does: "the fleet has a revision I cannot
+	// build" and "I cannot reach the store" send a node down opposite
+	// paths.
+	Payload(ctx context.Context, revisionID string) ([]byte, bool, error)
 
 	// Target reads the pointer, reporting whether one has ever been set.
 	//
