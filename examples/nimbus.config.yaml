@@ -89,6 +89,14 @@ node:
   id: "${CREWLET_NODE_ID}"
   # roles: [ingress, seats, workers]   # omit for all three
   # labels: {zone: eu-west}            # what a role's placement selector matches
+  # max_concurrent: 32                 # agent turns THIS PROCESS runs at once.
+                                       #   Per node, so a fleet's ceiling is
+                                       #   N x this.  Omit for the default (32),
+                                       #   which is above the seat count of a
+                                       #   single-node company.  Not the same
+                                       #   knob as a cli-agent provider's own
+                                       #   max_concurrent, which caps that
+                                       #   provider's subprocesses.
 
 api:
   host: "0.0.0.0"

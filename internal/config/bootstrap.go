@@ -257,6 +257,23 @@ type Node struct {
 	// Nothing here means anything to the engine on its own — the org
 	// decides what to select on.
 	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty" desc:"Free-form node facts a seat's placement selector matches on."`
+
+	// MaxConcurrent bounds how many agent turns this PROCESS runs at
+	// once. Zero — the shape an absent key takes — means the engine's
+	// own default, node.DefaultMaxConcurrent, which is where the number
+	// and its rationale live: the layer that enforces a limit is the one
+	// that gets to say what it is when nobody said. Same arrangement as
+	// coordination.lease_ttl_seconds and seat.SeatLeaseTTL.
+	//
+	// Per node, deliberately, which is why it is Tier A: a fleet's ceiling
+	// is N × this value, so it is sized against the host a process runs on
+	// rather than against the company. It is the one knob a fleet genuinely
+	// changes the meaning of.
+	//
+	// There is no "unbounded". Zero is unset rather than a setting — a cap
+	// of zero turns is not a thing an operator can want — and somebody who
+	// wants effectively no bound writes a large number they can see.
+	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty" js:"min=0" desc:"Agent turns this process runs at once; 0 takes the engine default. Per node, so a fleet's ceiling is N times this."`
 }
 
 // nodeRoleNames is the vocabulary, for the error message and the schema.
@@ -270,6 +287,17 @@ var nodeRoleNames = []string{
 
 func (n *Node) validate(path string) error {
 	var p problems
+
+	// Zero is unset and takes the engine's default. A NEGATIVE is refused
+	// rather than treated the same way: it is a value somebody typed, and
+	// silently running the default after being told -1 hides a config the
+	// operator believes is in effect.
+	if n.MaxConcurrent < 0 {
+		p.add(at(path, "max_concurrent"), ErrOutOfRange,
+			"must be 0 (the engine default) or a positive number of turns, "+
+				"got %d — there is no \"unbounded\"; write a large number for "+
+				"effectively no limit", n.MaxConcurrent)
+	}
 
 	if n.ID != "" && !envref.Has(n.ID) && !nodeIDPattern.MatchString(n.ID) {
 		// A reference is checked after resolution, in ResolveNodeID — the

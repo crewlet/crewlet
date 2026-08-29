@@ -85,12 +85,19 @@ node:
   roles: [seats]                  # agents only: no API, no duties
   labels:
     zone: eu                      # what a role will select on
+  max_concurrent: 4               # this host runs one or two seats, not a
+                                  #   company's worth — see below
 
-providers:
-  database:
-    dsn: "${CREWLET_DATABASE_DSN}"
-  queue:
-    url: "${CREWLET_PULSAR_URL}"
+store:
+  path: "/var/lib/crewlet/sat-eu-1.db"   # this node's own file, not shared
+
+stream:
+  type: nats
+  url: "${CREWLET_STREAM_URL}"
+
+coordination:
+  type: embedded-kv               # the fleet's replicated KV, reached over
+                                  #   the same NATS cluster
 ```
 
 `${VAR}` references are resolved in `node.labels` and `node.id` like
@@ -233,8 +240,10 @@ key is rejected, since the company schema forbids unknown fields.)
 
 **Two more, inherited from running a fleet at all:**
 
-- `max_concurrent` is per process, so the satellite has its own ceiling.
-  Size it for one agent, not for the company.
+- `node.max_concurrent` is per process, so the satellite has its own ceiling.
+  Size it for one agent, not for the company — the default of 32 is sized for
+  a node holding a company's worth of seats, and a satellite running one seat
+  wants a much smaller number.
 - A rolling upgrade across a lease-protocol bump makes new nodes wait
   for old ones. Upgrade the satellite in the same rollout as the core —
   see [mixed-version fleets](../concepts/seat-ownership.md#mixed-version-fleets).

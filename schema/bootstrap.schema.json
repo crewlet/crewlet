@@ -132,6 +132,11 @@
           "description": "Free-form node facts a seat's placement selector matches on.",
           "type": "object"
         },
+        "max_concurrent": {
+          "description": "Agent turns this process runs at once; 0 takes the engine default. Per node, so a fleet's ceiling is N times this.",
+          "minimum": 0,
+          "type": "integer"
+        },
         "roles": {
           "description": "What this node does: ingress, seats, workers. Omit for all three.",
           "items": {

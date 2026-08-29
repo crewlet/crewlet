@@ -86,6 +86,11 @@ type Config struct {
 	// BatchOptions tunes inbox coalescing. Nil uses the defaults.
 	BatchOptions *queue.BatchOptions
 
+	// MaxConcurrent bounds how many turns this process runs at once
+	// (Tier A `node.max_concurrent`). Zero takes [DefaultMaxConcurrent];
+	// there is no unbounded — see [gate].
+	MaxConcurrent int
+
 	// LeaseTTL, HeartbeatInterval and SweepInterval override the seat
 	// host's timings. Zero uses its defaults, which are the measured
 	// production values; a test shrinks them so a fleet settles in
@@ -105,6 +110,9 @@ type Node struct {
 	cfg  Config
 	log  *slog.Logger
 	host *seat.Host
+
+	// turns is the per-node concurrency gate every turn passes through.
+	turns *gate
 
 	// attached records which seats this node currently consumes, so a
 	// release detaches exactly what an acquire attached. Guarded because
@@ -130,6 +138,7 @@ func New(cfg Config) (*Node, error) {
 		cfg:      cfg,
 		log:      logging.Get("node").With("node_id", cfg.NodeID),
 		attached: map[string]struct{}{},
+		turns:    newGate(cfg.MaxConcurrent),
 	}
 
 	host, err := seat.New(seat.Config{
@@ -293,6 +302,15 @@ const drainLogInterval = 10 * time.Second
 func (n *Node) Drain(ctx context.Context) {
 	n.host.BeginDrain(ctx)
 
+	// THE GATE FIRST, before the mailboxes quiesce. Quiescing stops NEW
+	// deliveries, but a turn already delivered and parked behind a slot is
+	// past that point — and it has not called a model or fired a side
+	// effect, so it is the one kind of in-flight work that costs nothing
+	// to abandon. Without this, a backlog admitted before the quiesce runs
+	// full Plan → Execute → Review turns one after another through a
+	// shutdown that waits for them indefinitely.
+	n.turns.close()
+
 	// Quiescing is what makes the wait terminate on a busy seat. Without
 	// it the mailbox keeps feeding this node work for as long as its peers
 	// keep publishing, and "wait until nothing is running" never comes
@@ -387,6 +405,21 @@ func (n *Node) runTurn(ctx context.Context, handle string, evs []*events.Event) 
 		n.host.NoteDeliveryDeferred(handle)
 		return queue.Defer("seat is not owned here")
 	}
+	// THE SLOT AFTER THE OWNERSHIP CHECK and before the turn, which is
+	// before its first model round-trip. Ordered this way because a turn
+	// on a seat this node has lost must not sit in the queue for a slot
+	// it has no business taking — the successor is already entitled to
+	// the delivery.
+	release, ok := n.turns.acquire(ctx)
+	if !ok {
+		// DRAINING, or the delivery's own context ended. Deferred, not
+		// failed: the events are healthy and nothing has been done with
+		// them, so leaving them unacked hands them straight on rather
+		// than waiting out a redelivery timer.
+		n.host.NoteDeliveryDeferred(handle)
+		return queue.Defer("node is draining, so this turn was not started")
+	}
+	defer release()
 	return n.cfg.Turn(ctx, handle, evs)
 }
 
@@ -446,6 +479,29 @@ func (n *Node) OnAdmission(ctx context.Context, handle string, admitted bool) er
 	n.log.Debug("seat_admission", "handle", handle, "admitted", admitted)
 	return nil
 }
+
+// ResumeClaiming undoes [Node.Drain] for a node that is staying.
+//
+// The posture path's other half: a node that shed on config divergence and
+// then converged must serve again rather than sit out until it restarts. It
+// re-opens the concurrency gate, re-admits the seats the drain quiesced and
+// tells the host to claim again — in that order, so no delivery arrives at a
+// gate that is still shut.
+//
+// It is not the inverse of [Node.Stop]. Stop releases the seats; this is for
+// a node that still holds them.
+func (n *Node) ResumeClaiming(ctx context.Context) {
+	n.turns.open()
+	for _, handle := range n.host.Held() {
+		if err := n.OnAdmission(ctx, handle, true); err != nil {
+			n.log.Warn("resume_admit_failed", "handle", handle, "error", err)
+		}
+	}
+	n.host.ResumeClaiming(ctx)
+}
+
+// InFlightTurns is how many turns hold a concurrency slot right now.
+func (n *Node) InFlightTurns() int { return n.turns.inFlight() }
 
 // Attached reports the seats this node currently consumes. Diagnostics and
 // the fleet suite's "attached to exactly what I own" assertion read it.

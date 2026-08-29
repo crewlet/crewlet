@@ -138,7 +138,7 @@ The node's own database holds everything a *single* node is the only reader of. 
 
 And two things stay **per-process** deliberately:
 
-- **`max_concurrent`.** The concurrency gate is per node, so an org's ceiling is N × the configured value. Size it per node, not per company. This is the one knob a fleet genuinely changes the meaning of.
+- **`max_concurrent`.** Tier A's `node.max_concurrent` (default 32) is the gate every agent turn passes through, and it is per node — so an org's ceiling is N × the configured value. Size it per node, not per company. This is the one knob a fleet genuinely changes the meaning of.
 - **A seat's MCP subprocesses.** They are children of the node that claimed the seat, and they die with the release.
 
 ---

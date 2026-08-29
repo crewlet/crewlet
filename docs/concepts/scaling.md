@@ -27,6 +27,7 @@ node:
   id: "${CREWLET_NODE_ID}"           # distinct and stable, per process
   roles: [ingress, seats, workers]   # the default; omit the key
   labels: {zone: eu}                 # optional, matched by role.placement
+  max_concurrent: 32                 # agent turns this process runs at once
 ```
 
 | Role | What it does |
@@ -118,9 +119,12 @@ no connected consumer and both reapers delete exactly that. See
 
 ### What stays per-process, deliberately
 
-- **`max_concurrent`.** The concurrency gate is per node, so an org's ceiling is
+- **`max_concurrent`.** Tier A's `node.max_concurrent` (default 32) is the gate
+  every agent turn passes through, and it is per node — so an org's ceiling is
   N × the configured value. Size it per node, not per company. This is the one
-  knob a fleet genuinely changes the meaning of.
+  knob a fleet genuinely changes the meaning of. (A cli-agent provider's own
+  `max_concurrent`, under `providers.llm.<name>.cli`, is a different knob: it
+  caps that provider's subprocesses.)
 - **A seat's MCP subprocesses.** They are children of the node that claimed the
   seat, and they die with the release.
 - **The tool-skill registry.** It warms a local cache rather than producing

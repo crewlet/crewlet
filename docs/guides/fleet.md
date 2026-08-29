@@ -16,7 +16,7 @@ Run a fleet when one of these is true:
 - **Some seats have to run somewhere specific.** A seat that needs a
   network zone, a filesystem, or a GPU that only one host has.
 
-It is not a throughput lever on its own: `max_concurrent` is per process,
+It is not a throughput lever on its own: `node.max_concurrent` is per process,
 so N nodes is N × that ceiling whether you wanted it or not. Size it per
 node.
 

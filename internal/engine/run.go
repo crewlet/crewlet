@@ -376,6 +376,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		},
 		SeatDone: e.releaseSeat,
 		LeaseTTL: leaseTTL(opts.Bootstrap),
+		// The host's own ceiling, from Tier A. Per NODE, so a fleet's is
+		// N times this. Passed through unresolved: zero is the shape of an
+		// absent key and node.New is what turns it into the default, so
+		// the number lives in one place — see node.DefaultMaxConcurrent.
+		MaxConcurrent: opts.Bootstrap.Node.MaxConcurrent,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("engine: node: %w", err))

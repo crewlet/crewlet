@@ -214,8 +214,14 @@ The engine runs **genuinely parallel** work within a single process:
 
 - Each delivery is handled in its own goroutine, so seats make progress independently rather than taking turns
 - Multiple agents can be in the `Working` state simultaneously
-- A concurrency gate limits how many agent turns run at once, with optional per-role limits
-- A turn takes a slot before its LLM loop and releases it when done
+- A **per-node concurrency gate** limits how many agent turns run at once: Tier A's `node.max_concurrent` (default 32)
+- A turn takes a slot after the ownership check and before its first model round-trip, and releases it when the turn ends
+
+**What the gate is for, and what already bounds itself.** A seat's mailbox is a durable subscription whose handler runs one batch at a time, so a *seat* is already serial — it never runs two turns at once. What is not bounded is how many seats run at once: that is [placement](seat-ownership.md)'s arithmetic over the company's seat count and the live node count, not a statement about the machine this process is on. A node handed forty seats would open forty simultaneous model round-trips and their tool loops. `max_concurrent` is the knob that says how many the host can actually take.
+
+**A turn past the ceiling waits, in this process.** It is not handed back for the broker to redeliver on the broker's own schedule — for a chat message someone is waiting on, that turns a busy moment into a visible stall. The waiting turn starts the instant a slot frees. The one exception is a drain, below.
+
+**Sizing it.** It is per *node*, so a fleet's ceiling is N × the value — see [Scaling Out](scaling.md#what-stays-per-process-deliberately). The default of 32 is above the seat count of a single-node company (the example company runs a handful of seats; a large one runs tens) so it changes nothing for a company running today, while still bounding a node that has been handed far more seats than its host can serve. Raise it on a bigger host; lower it on a satellite running one agent. There is no "unbounded" — `0` means "take the default", and effectively-no-limit is a large number you can see in your config. Note this is a *different* knob from a cli-agent provider's own `max_concurrent`, which caps that provider's subprocesses; see [Subscription LLM backends](subscription-llm-backends.md).
 
 That is real parallelism rather than one cooperative loop, which is the
 single biggest behavioural difference from the engine's first
@@ -245,9 +251,15 @@ flowchart TD
    publishing, and "wait until nothing is running" never comes true.
    Quiesce is also the *reversible* verb, so a drain that turns out to be a
    shed can be undone.
-2. **Stop work producers** — deadline timers and the cron scheduler. Turns
-   still parked at the concurrency gate are NAK'd back to the broker
-   (redelivered promptly) instead of starting fresh LLM rounds mid-drain.
+2. **Stop work producers** — deadline timers and the cron scheduler, and
+   close the concurrency gate. Turns still parked at it are released at
+   once and their deliveries deferred — left unacked, so a peer picks them
+   up rather than waiting out a redelivery timer — instead of starting
+   fresh LLM rounds mid-drain. The gate closes *before* the mailboxes
+   quiesce: quiescing stops new deliveries, but a turn already delivered
+   and parked behind a slot is past that point. Closing is reversible, so
+   a node that drained and then converged serves again rather than
+   holding its seats and refusing every turn.
 3. **Wait for in-flight handlers** — indefinitely; running turns finish
    their rounds until the count hits 0, with `drain_in_progress` logging the
    in-flight count every 10 s.
@@ -259,7 +271,7 @@ flowchart TD
 6. **API server exits** — the dashboard is served through the whole drain,
    and is brought down only after the engine has fully stopped.
 
-**Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (LLM rounds under way) run to completion. Turns that were delivered before the quiesce but are still *waiting* for a slot abort immediately — they haven't called an LLM or fired a side effect yet, so the NAK'd trigger simply redelivers. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute Plan → Execute → Review turns one after another during shutdown.
+**Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute Plan → Execute → Review turns one after another during a shutdown that waits for them indefinitely.
 
 **No engine-level timeout on the drain.** Step 3 waits as long as in-flight turns need. We don't try to second-guess "too long" — the host already provides that cutoff:
 
@@ -282,8 +294,8 @@ A turn killed that way leaves its trigger **unacknowledged** rather than
 NAK'd, because nothing gets to run. The broker redelivers it once its ack
 window elapses, so the work is not lost — it is just slower to come back
 than after a graceful drain, where each finished turn acks normally and
-each turn still queued behind the concurrency gate is NAK'd for prompt
-redelivery. A redelivered turn runs from scratch, and side effects the
+each turn still parked at the concurrency gate is deferred, so a peer takes
+it straight over. A redelivered turn runs from scratch, and side effects the
 killed turn already fired (a chat post, a work-item comment) may
 duplicate — the [completion ledger](seat-ownership.md#the-completion-ledger)
 covers a turn that *finished*, and this one did not. That is the trade-off

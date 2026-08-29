@@ -312,9 +312,10 @@ What a fleet gets right, each of which was a real defect before:
 - *Duplicate auto-drafted skill pages and N× LLM spend on synthesis.* Skill clustering and curation are [singleton duties](../concepts/seat-ownership.md#singleton-duties) now, along with the scheduler tick, the sandbox waiter, the seat-subscription walk and the retention sweeps — six `worker:{duty}` leases, each claimed per tick so a node that dies mid-duty hands it back by lapsing.
 - *Unbounded table growth.* `scheduled_runs`, `conversation_sessions` and `chat_thread_follows` all answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger, the credential cooldowns and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
-The one thing that is still per-process: `max_concurrent`. The concurrency
-gate is per node, so an org's ceiling becomes N × the configured value.
-Size it per node, not per company.
+The one thing that is still per-process: `max_concurrent`. Tier A's
+`node.max_concurrent` (default 32) is the gate every agent turn takes a slot
+from, and it is per node — so an org's ceiling becomes N × the configured
+value. Size it per node, not per company.
 
 For the model underneath all of this — what a node is, what the fleet shares,
 and where the constants come from — see
