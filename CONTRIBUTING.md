@@ -5,8 +5,10 @@ need to get a development environment running and land a change.
 
 ## Development setup
 
-Prerequisites: **Go 1.27+** and **node** (any version with ES modules — the
-dashboard's suites use `node:assert` and nothing else). **Docker** only for
+Prerequisites: **Go 1.27+**, **node** (any version with ES modules — the
+dashboard's suites use `node:assert` and nothing else) and
+**[golangci-lint](https://golangci-lint.run/welcome/install/)**, which
+`make check` runs and CI's own job downloads for itself. **Docker** only for
 the vendor loops below; the engine itself needs no services.
 
 ```bash
