@@ -13,6 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -75,6 +79,7 @@ func newPlane(t *testing.T, opts ...func(*engine.ReconcilerOptions)) *plane {
 	options := engine.ReconcilerOptions{
 		Store:  p.store,
 		Fleet:  p.fleet,
+		Queue:  e.Backends().Queue,
 		NodeID: "node-a",
 		Now:    func() time.Time { return pinnedNow },
 	}
@@ -431,7 +436,14 @@ func TestAReconcilerNeedsAStoreAndAnIdentity(t *testing.T) {
 	if _, err := e.NewReconciler(engine.ReconcilerOptions{NodeID: "n"}); !errors.Is(err, engine.ErrNoStore) {
 		t.Errorf("err = %v, want ErrNoStore", err)
 	}
-	if _, err := e.NewReconciler(engine.ReconcilerOptions{Store: e.Backends().Store}); err == nil {
+	if _, err := e.NewReconciler(engine.ReconcilerOptions{
+		Store: e.Backends().Store, Fleet: e.Backends().Fleet,
+	}); !errors.Is(err, engine.ErrNoPublisher) {
+		t.Errorf("err = %v, want ErrNoPublisher", err)
+	}
+	if _, err := e.NewReconciler(engine.ReconcilerOptions{
+		Store: e.Backends().Store, Fleet: e.Backends().Fleet, Queue: e.Backends().Queue,
+	}); err == nil {
 		t.Error("a reconciler with no node id was built")
 	}
 }
@@ -588,5 +600,145 @@ func TestTheNodeSeesTheNewEpochsSeats(t *testing.T) {
 	}
 	if !slices.Equal(handles, []string{"ceo", "cto", "designer"}) {
 		t.Errorf("seats = %v, want the new epoch's three, sorted", handles)
+	}
+}
+
+// The post-mortem trail. The coordination record this accompanies is one key
+// per node in a bucket whose age is sixty seconds, by design — so the epoch,
+// status and error text of a node that crashed or was scaled in during a bad
+// rollout are gone a minute later, which is exactly the node an incident
+// review is looking for. The event is what outlives it, and until this it was
+// a registered type with a topic and NO PUBLISHER anywhere in the tree.
+func TestAnApplyLeavesADurableTrail(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	applies := subscribeApplied(t, p)
+
+	epoch := p.activate(t, companyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if got := p.recon.Applied(); got != epoch {
+		t.Fatalf("applied epoch = %d, want %d", got, epoch)
+	}
+
+	ev := waitForApplied(t, applies)
+	if ev.Source != "node-a" {
+		t.Errorf("source = %q, want the node id — the payload deliberately does not repeat it", ev.Source)
+	}
+	got := appliedPayload(t, ev)
+	if got.Status != types.ApplyOK {
+		t.Errorf("status = %q, want %q", got.Status, types.ApplyOK)
+	}
+	if got.Error != "" {
+		t.Errorf("error = %q on a successful apply", got.Error)
+	}
+	// The subsystems this apply got through, in the order it went through
+	// them. On a failure it is what was already mutated when the refusal
+	// happened, which is the whole of what makes a degraded apply
+	// diagnosable after the fact.
+	if len(got.AppliedSubsystems) == 0 {
+		t.Fatal("applied_subsystems is empty on a successful apply")
+	}
+	if got.AppliedSubsystems[0] != "secrets" ||
+		got.AppliedSubsystems[len(got.AppliedSubsystems)-1] != "scheduler" {
+		t.Errorf("subsystems = %v, want the apply's own order from secrets to scheduler",
+			got.AppliedSubsystems)
+	}
+	if !slices.Contains(got.AppliedSubsystems, "epoch") {
+		t.Errorf("subsystems = %v, want the epoch publish among them", got.AppliedSubsystems)
+	}
+}
+
+// A refused revision is the case the trail exists for, and the subsystem list
+// is what says how far it got before the refusal.
+func TestARefusedApplySaysHowFarItGot(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	applies := subscribeApplied(t, p)
+
+	// A payload that DECODES as a company — the stored-form reader is
+	// lenient, so a rolling upgrade can boot on a newer peer's revision —
+	// and is refused when the company is BUILT, because the seat's model
+	// names a provider the revision does not configure.
+	p.activatePayload(t, "broken", brokenRevision)
+	if err := p.recon.Tick(t.Context()); err == nil {
+		t.Fatal("a revision naming an unconfigured provider was applied")
+	}
+
+	got := appliedPayload(t, waitForApplied(t, applies))
+	if got.Status != types.ApplyError {
+		t.Errorf("status = %q, want %q", got.Status, types.ApplyError)
+	}
+	if got.Error == "" {
+		t.Error("a failed apply published no error text — there is nothing to review")
+	}
+	// Refused before the engine was asked to apply anything, so NOTHING on
+	// this node was mutated — which is the difference between a node that
+	// is serving its previous epoch correctly and one that is degraded.
+	if len(got.AppliedSubsystems) != 0 {
+		t.Errorf("subsystems = %v, want none — the revision never reached Apply",
+			got.AppliedSubsystems)
+	}
+}
+
+// And the partial list, at its own seam. An apply that fails PART WAY has
+// already mutated everything before the failure, and the list is the only
+// record of how much — the coordination status carries a status and an error
+// string and nothing else.
+func TestApplyReportsHowFarItGotBeforeARefusal(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	status, applied, err := e.Apply(t.Context(), &config.Company{})
+	if err == nil {
+		t.Fatal("a company with no name was applied")
+	}
+	if status != configplane.StatusError {
+		t.Errorf("status = %q, want %q", status, configplane.StatusError)
+	}
+	// The secret snapshot is taken FIRST — it is what makes re-activating
+	// an unchanged revision pick up a rotated credential — so it is the one
+	// step that ran before the company itself was refused.
+	if !slices.Equal(applied, []string{"secrets"}) {
+		t.Errorf("applied = %v, want just the step that ran before the refusal", applied)
+	}
+}
+
+// appliedPayload reads the typed payload back off the envelope.
+func appliedPayload(t *testing.T, ev *events.Event) types.ConfigRevisionApplied {
+	t.Helper()
+	got, ok := ev.Data.(*types.ConfigRevisionApplied)
+	if !ok {
+		t.Fatalf("payload is %T, want *types.ConfigRevisionApplied", ev.Data)
+	}
+	return *got
+}
+
+// subscribeApplied attaches to the apply topic before anything is activated.
+func subscribeApplied(t *testing.T, p *plane) <-chan *events.Event {
+	t.Helper()
+	got := make(chan *events.Event, 4)
+	if err := p.engine.Backends().Queue.Subscribe(t.Context(),
+		topics.ConfigRevisionApplied, "apply-trail",
+		func(_ context.Context, e *events.Event) queue.Result {
+			select {
+			case got <- e:
+			default:
+			}
+			return queue.Ack()
+		}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	return got
+}
+
+func waitForApplied(t *testing.T, ch <-chan *events.Event) *events.Event {
+	t.Helper()
+	select {
+	case ev := <-ch:
+		return ev
+	case <-time.After(5 * time.Second):
+		t.Fatal("no config_revision_applied event was published")
+		return nil
 	}
 }

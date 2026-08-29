@@ -191,7 +191,7 @@ func TestApplyingANewOrgMovesTheTrackerOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}
-	if _, err := n.engine.Apply(t.Context(), cfg); err != nil {
+	if _, _, err := n.engine.Apply(t.Context(), cfg); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 

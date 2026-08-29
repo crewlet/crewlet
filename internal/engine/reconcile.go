@@ -10,6 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -33,6 +37,7 @@ type Reconciler struct {
 	engine  *Engine
 	configs *store.Configs
 	plane   coord.Plane
+	queue   queue.Publisher
 	nodeID  string
 	cipher  secrets.Cipher
 
@@ -65,6 +70,14 @@ type ReconcilerOptions struct {
 	// reading its own database would converge on itself.
 	Fleet coord.Plane
 
+	// Queue is where this node's apply outcome is published as a durable
+	// event. Required: the coordination record it accompanies ages out in a
+	// minute by design, so a reconciler without a publisher leaves a bad
+	// rollout with no post-mortem trail at all — and that absence is
+	// invisible, which is how the event type came to exist with nothing
+	// publishing it.
+	Queue queue.Publisher
+
 	// NodeID identifies this node's row in the apply status. Required: the
 	// table upserts on it, so an empty one makes every node that forgot it
 	// share a row, and the fleet view shows one anonymous entry where a
@@ -91,6 +104,11 @@ var ErrNoStore = errors.New("engine: reconciler needs a store")
 // database, the other a node with no coordination store to converge through.
 var ErrNoPlane = errors.New("engine: reconciler needs a coordination plane")
 
+// ErrNoPublisher reports a reconciler built with nowhere to publish its apply
+// outcome. Its own sentinel for the same reason as ErrNoPlane: the fix is a
+// queue, not a database or a coordination store.
+var ErrNoPublisher = errors.New("engine: reconciler needs a publisher")
+
 // NewReconciler builds the loop.
 func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 	if opts.Store == nil {
@@ -98,6 +116,9 @@ func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 	}
 	if opts.Fleet == nil {
 		return nil, ErrNoPlane
+	}
+	if opts.Queue == nil {
+		return nil, ErrNoPublisher
 	}
 	if opts.NodeID == "" {
 		return nil, fmt.Errorf("engine: reconciler needs a node id")
@@ -110,6 +131,7 @@ func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 		engine:  e,
 		configs: opts.Store.Configs(),
 		plane:   opts.Fleet,
+		queue:   opts.Queue,
 		nodeID:  opts.NodeID,
 		cipher:  opts.Cipher,
 		onApply: opts.OnApply,
@@ -232,8 +254,8 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 // apply loads, opens, parses and publishes one revision, then records what
 // happened for the rest of the fleet to read.
 func (r *Reconciler) apply(ctx context.Context, target coord.Activation) error {
-	status, err := r.applyRevision(ctx, target)
-	r.record(ctx, target, status, err)
+	status, applied, err := r.applyRevision(ctx, target)
+	r.record(ctx, target, status, applied, err)
 	if status == configplane.StatusOK {
 		r.applied.Store(target.Epoch)
 		r.attempts = 0
@@ -245,10 +267,14 @@ func (r *Reconciler) apply(ctx context.Context, target coord.Activation) error {
 }
 
 // applyRevision is the part that can fail, separated so every exit records.
-func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation) (configplane.ApplyStatus, error) {
+//
+// The subsystem list is empty on every exit before [Engine.Apply] is reached:
+// nothing on this node has been mutated yet when the revision cannot be read,
+// opened or parsed, and an empty list says exactly that.
+func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation) (configplane.ApplyStatus, []string, error) {
 	revision, found, err := r.configs.Get(ctx, target.RevisionID)
 	if err != nil {
-		return configplane.StatusError, fmt.Errorf("engine: read revision %s: %w",
+		return configplane.StatusError, nil, fmt.Errorf("engine: read revision %s: %w",
 			target.RevisionID, err)
 	}
 	if !found {
@@ -256,12 +282,12 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 		// rather than a silent skip: this node cannot reach the epoch,
 		// and a fleet where every node quietly ignores an unreadable
 		// pointer converges on nothing while reporting convergence.
-		return configplane.StatusError, fmt.Errorf("engine: %w: %s",
+		return configplane.StatusError, nil, fmt.Errorf("engine: %w: %s",
 			store.ErrNoRevision, target.RevisionID)
 	}
 	document, err := secrets.Open(r.cipher, revision.Payload)
 	if err != nil {
-		return configplane.StatusError, fmt.Errorf("engine: open revision %s: %w",
+		return configplane.StatusError, nil, fmt.Errorf("engine: open revision %s: %w",
 			target.RevisionID, err)
 	}
 	// The STORED-form reader, not the authored one. A revision carries
@@ -277,19 +303,36 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 	// the same values.
 	cfg, err := config.DecodeCompany(document)
 	if err != nil {
-		return configplane.StatusError, fmt.Errorf("engine: parse revision %s: %w",
+		return configplane.StatusError, nil, fmt.Errorf("engine: parse revision %s: %w",
 			target.RevisionID, err)
 	}
 	return r.engine.Apply(ctx, cfg)
 }
 
-// record writes this node's outcome where every peer reads it.
+// record writes this node's outcome twice, to two surfaces with two
+// lifetimes, and both are needed.
 //
-// Best effort by necessity: the apply has already happened, and failing the
-// tick because the note could not be written would retry an apply that
-// succeeded. What it costs is that peers see this node as stale, which the
-// freshness bound already treats as "no evidence" rather than as failure.
-func (r *Reconciler) record(ctx context.Context, target coord.Activation, status configplane.ApplyStatus, cause error) {
+// The COORDINATION record is the live fleet view: one key per node, re-put
+// every tick, and its bucket's own age is what makes a node that stops
+// reporting VANISH rather than linger as a healthy row nobody is writing. That
+// age is a minute — so sixty seconds after a bad rollout, the epoch, status and
+// error text of the node that crashed or was scaled in are gone, which is
+// precisely the node somebody reviewing the incident is looking for.
+//
+// The EVENT is the durable trail that answers them. It goes to the audit event
+// log like every other event, keyed by the node in the envelope's Source and
+// carrying the subsystems the apply got through, and it outlives both the
+// node and the bucket. ConfigRevisionApplied has been a registered event type
+// with its own topic since the control plane shipped and NOTHING EVER
+// PUBLISHED IT, so the post-mortem the fleet view was never meant to serve had
+// no other home either.
+//
+// Both are best effort by necessity: the apply has already happened, and
+// failing the tick because a note could not be written would retry an apply
+// that succeeded.
+func (r *Reconciler) record(ctx context.Context, target coord.Activation,
+	status configplane.ApplyStatus, applied []string, cause error,
+) {
 	message := ""
 	if cause != nil {
 		message = cause.Error()
@@ -300,6 +343,55 @@ func (r *Reconciler) record(ctx context.Context, target coord.Activation, status
 	}); err != nil {
 		log.WarnContext(ctx, "apply_status_write_failed", "epoch", target.Epoch,
 			"error", err, "detail", "peers will read this node as stale")
+	}
+	r.publishApplied(ctx, target, status, applied, message)
+}
+
+// publishApplied puts one node's outcome into the audit event log.
+//
+// The error text is TRUNCATED to the same bound the coordination record uses.
+// A driver's own message with a query in it runs to kilobytes, and this one is
+// kept for the retention horizon rather than a minute — so an unbounded copy
+// would be a permanent one.
+func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation,
+	status configplane.ApplyStatus, applied []string, message string,
+) {
+	if r.queue == nil {
+		return
+	}
+	ev := events.New(types.ConfigRevisionApplied{
+		RevisionID:        target.RevisionID,
+		Status:            applyStatus(status),
+		AppliedSubsystems: applied,
+		Error:             coord.TruncateApplyError(message),
+	}, events.NewTrace())
+	ev.Timestamp = r.now()
+	// The NODE, not a seat. Every other field of the payload describes the
+	// revision; which node is reporting lives in the envelope, and the
+	// payload deliberately does not repeat it (see the type's own doc).
+	ev.Source = r.nodeID
+	if err := r.queue.Publish(ctx, topics.ConfigRevisionApplied, ev); err != nil {
+		log.WarnContext(ctx, "apply_event_publish_failed", "epoch", target.Epoch,
+			"error", err, "detail", "this apply leaves no durable trail; "+
+				"the fleet view still has it for the next minute")
+	}
+}
+
+// applyStatus maps the control plane's posture onto the event vocabulary.
+//
+// Two closed sets that happen to share their spellings, kept apart on purpose:
+// configplane's is what a node reports to its peers and the event's is what
+// goes on the wire and can never change. An unknown posture becomes error
+// rather than passing through, because the payload's own doc says an unset
+// status reads as not-ok and a value nothing recognises is worse than that.
+func applyStatus(status configplane.ApplyStatus) types.ApplyStatus {
+	switch status {
+	case configplane.StatusOK:
+		return types.ApplyOK
+	case configplane.StatusDegraded:
+		return types.ApplyDegraded
+	default:
+		return types.ApplyError
 	}
 }
 

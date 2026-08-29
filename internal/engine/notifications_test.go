@@ -42,7 +42,7 @@ func TestThePartyRegistryFollowsTheAppliedCompany(t *testing.T) {
     handle: staff
     llm: alpha
 `)
-	if _, err := e.Apply(t.Context(), grown); err != nil {
+	if _, _, err := e.Apply(t.Context(), grown); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -141,7 +141,7 @@ func TestTheValveIsOffWithoutAStore(t *testing.T) {
 
 	limited := parsedCompany(t, strings.Replace(companyDoc,
 		"name: Acme", "name: Acme\nnotification_rate_limit: 5", 1))
-	if _, err := e.Apply(t.Context(), limited); err != nil {
+	if _, _, err := e.Apply(t.Context(), limited); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if got := e.Company().Config.NotificationRateLimit; got != 5 {

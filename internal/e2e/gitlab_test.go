@@ -294,7 +294,7 @@ func TestApplyingARevisionKeepsTheCodeHostIdentitiesWithoutReasking(t *testing.T
 	}
 
 	for range 3 {
-		if _, err := n.engine.Apply(t.Context(), n.engine.Company().Config); err != nil {
+		if _, _, err := n.engine.Apply(t.Context(), n.engine.Company().Config); err != nil {
 			t.Fatalf("Apply: %v", err)
 		}
 	}
@@ -329,7 +329,7 @@ func TestARotatedCredentialIsReresolved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}
-	if _, err := n.engine.Apply(t.Context(), rotated); err != nil {
+	if _, _, err := n.engine.Apply(t.Context(), rotated); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if got := instance.identityLookups(); got != atBoot+1 {
@@ -360,7 +360,7 @@ func TestAnUnresolvableCredentialDoesNotStopTheCompany(t *testing.T) {
 	instance.mu.Lock()
 	instance.byToken["glpat-ceo"] = "ceo-bot"
 	instance.mu.Unlock()
-	if _, err := n.engine.Apply(t.Context(), n.engine.Company().Config); err != nil {
+	if _, _, err := n.engine.Apply(t.Context(), n.engine.Company().Config); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	gitlabWebhook(t, n, issueOpened("human-dev", "ceo-bot"))

@@ -245,7 +245,7 @@ func TestTheRateValveFollowsTheAppliedConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}
-	if _, err := n.engine.Apply(t.Context(), raised); err != nil {
+	if _, _, err := n.engine.Apply(t.Context(), raised); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	// A fresh window, so the earlier refusals do not colour this.

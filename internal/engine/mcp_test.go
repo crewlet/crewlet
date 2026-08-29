@@ -232,7 +232,7 @@ func TestASharedServersToolsSurviveAConfigApply(t *testing.T) {
 
 	// The same document, re-applied — the rotation gesture an operator
 	// makes, and what the reconciler does at boot straight after seeding.
-	if _, err := e.Apply(t.Context(), parsedCompany(t, doc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc)); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -266,7 +266,7 @@ func TestAnUnchangedServerIsNotRestartedByAnApply(t *testing.T) {
 	if !ok {
 		t.Fatal("the boot epoch has no shared tool to compare")
 	}
-	if _, err := e.Apply(t.Context(), parsedCompany(t, doc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc)); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	second, ok := e.Company().Tools.Lookup("tracker_probe")
@@ -296,7 +296,7 @@ func TestAChangedServerSpecIsRestartedByAnApply(t *testing.T) {
 	// actually replaced.
 	next := strings.Replace(mcpCompany(true, "PATH"),
 		toolServerEchoEnv+`: "PATH"`, toolServerEchoEnv+`: "SEAT_TOKEN"`, 1)
-	if _, err := e.Apply(t.Context(), parsedCompany(t, next)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, next)); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 

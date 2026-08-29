@@ -210,6 +210,40 @@ A node that stopped reporting **drops out of this list** once its status ages pa
 
 One node `error` while peers are `ok` is a per-node problem: a missing env var, an image without some MCP binary. Every node `error` on the same epoch is the revision — revert it. Any node `degraded` needs a **restart** of that process specifically; rollback did not restore what the apply tore down, and nothing short of a restart will.
 
+### After the fact
+
+The fleet view above is a **live** view and deliberately forgetful: a node that stops reporting drops out of it within a minute, which is exactly the node — the one that crashed, or was scaled in mid-rollout — an incident review is looking for.
+
+The durable answer is the event log. Every apply publishes `config_revision_applied`, with the reporting node in the event's `source`:
+
+```bash
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  "http://localhost:8080/query/events?type=config_revision_applied&limit=50" |
+  jq '.events[] | {id, source, timestamp, failed, summary}'
+```
+
+The `summary` reads as a failure for every status other than `ok` — `degraded` included, because a node that could not finish an apply has not converged and a line that hedged would let the fleet look healthier than it is.
+
+A listing never carries payloads (see [API § An event on the wire](../reference/api-endpoints.md#an-event-on-the-wire)), so fetch the one you want by id for the detail:
+
+```bash
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  http://localhost:8080/events/$EVENT_ID | jq '.payload'
+```
+
+```json
+{
+  "revision_id": "cfg-…",
+  "status": "degraded",
+  "error": "engine: apply: …",
+  "applied_subsystems": ["secrets", "company", "tools", "learning"]
+}
+```
+
+`applied_subsystems` is the ordered list of what this node had already rebuilt when it stopped — `secrets`, `company`, `tools`, `learning`, `sandbox`, `parties`, `integrations`, `epoch`, `mailboxes`, `scheduler`. That is the difference between "refused before anything changed" and "torn down halfway", which is precisely what decides whether the node needs a restart. An `error` with an **empty** list never reached the apply at all: the revision could not be read, opened or parsed.
+
+Like every other event this lives in each node's own log, so a node whose disk is gone took its rows with it — but a node that merely stopped reporting, or was replaced, still has them.
+
 ---
 
 ## See also

@@ -99,7 +99,7 @@ which is why they move to a KV without redesign:
 | Rate valve | fixed-window counter key, compared in app code |
 | Credential cooldowns | max-merge on a deadline value |
 | Config activations | append-only stream; **epoch = stream sequence** |
-| Per-node apply status | one key per node, re-put every tick, TTL-fresh |
+| Per-node apply status | one key per node, re-put every tick, TTL-fresh — and the LIVE view only: the same outcome also goes into each node's event log as `config_revision_applied`, because a bucket whose age makes a dead node vanish in a minute is the wrong place to look for the node that died |
 | A2A channel record | one key per channel; create-only open, CAS read-modify-write for the close and the message count |
 
 Two need care. **Budget spend** charges agent and org together and Postgres did

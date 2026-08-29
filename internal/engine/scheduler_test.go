@@ -95,7 +95,7 @@ func TestAddingTheFirstScheduleLiveArmsTheLoop(t *testing.T) {
 	}
 
 	withSchedule := scheduledCompany(t)
-	if _, err := e.Apply(t.Context(), withSchedule); err != nil {
+	if _, _, err := e.Apply(t.Context(), withSchedule); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if !e.SchedulerRunning() {
@@ -104,7 +104,7 @@ func TestAddingTheFirstScheduleLiveArmsTheLoop(t *testing.T) {
 	}
 
 	// ...and back again.
-	if _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if e.SchedulerRunning() {

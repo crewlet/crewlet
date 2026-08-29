@@ -46,7 +46,8 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 		return nil, fmt.Errorf("node identity: %w", err)
 	}
 	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
-		Store: db, Fleet: plane, NodeID: nodeID, Cipher: cipher,
+		Store: db, Fleet: plane, Queue: e.Backends().Queue,
+		NodeID: nodeID, Cipher: cipher,
 		OnApply: func(epoch int64, status configplane.ApplyStatus) {
 			log.Info("config_revision_applied",
 				"epoch", epoch, "status", string(status))
