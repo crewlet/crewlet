@@ -360,7 +360,7 @@ func (e *Engine) RouteInbound(_ context.Context, parsers []notify.Parser, prompt
 // It lives here rather than at the call site because both halves are the
 // engine's: the applied company and the resolver. The CLI assembling it
 // meant one line deciding a security property, and the mistake it invites —
-// passing the config through unresolved — leaves seven routes verifying
+// passing the config through unresolved — leaves six routes verifying
 // against the literal "${GITLAB_SIGNING_SECRET}".
 func (e *Engine) WebhookSecrets() webhooks.Secrets {
 	company := e.Company()

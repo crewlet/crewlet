@@ -13,7 +13,7 @@ import (
 // The body must be read BEFORE the signature can be checked — the signature is
 // over the body — so without a bound anyone who can reach the port picks the
 // allocation size. 25 MiB is GitHub's own documented ceiling and the largest of
-// the seven providers', so no legitimate delivery is refused by it.
+// the six providers', so no legitimate delivery is refused by it.
 const MaxBodyBytes = 25 << 20
 
 // errBodyTooLarge is what a body over the cap surfaces as.

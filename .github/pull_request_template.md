@@ -4,11 +4,11 @@
 
 ## Checklist
 
-- [ ] `gofmt -l .` prints nothing
-- [ ] `go vet ./...` passes
-- [ ] `golangci-lint run` passes
-- [ ] `go test ./... -race` passes — and a suite that *skipped* is not a suite
-      that passed (see CONTRIBUTING.md, "A skip is not a pass")
+- [ ] `make check` passes — gofmt, `go vet`, golangci-lint, the build, the
+      full suite under `-race`, and the store suite on both certified drivers
+- [ ] A suite that *skipped* is not a suite that passed (see CONTRIBUTING.md,
+      "A skip is not a pass") — and neither is one `make check` never runs:
+      it names those on the way out
 - [ ] Tests added/updated for the change
 - [ ] Docs updated (`docs/`) — config, CLI, or behavior changes are reflected
 - [ ] Commit subjects are `type(scope): summary` (see CONTRIBUTING.md)

@@ -7,18 +7,35 @@ services:
   # It embeds its own JetStream server and creates its own store file, so a
   # company runs with no service here at all.
   #
-  # Bring this up with `docker compose --profile pulsar up -d` when working
-  # on the Pulsar backend itself, or to run the conformance suite locally:
+  # Bring this up with `make pulsar-up` (or `docker compose --profile pulsar
+  # up -d --wait`) when working on the Pulsar backend itself, and certify the
+  # backend against it with:
+  #
+  #   make test-pulsar
+  #
+  # which is the same run CI makes, flags included:
   #
   #   CREWLET_TEST_PULSAR_URL=pulsar://localhost:6650 \
   #   CREWLET_TEST_PULSAR_ADMIN_URL=http://localhost:8080 \
-  #     go test ./internal/queue/pulsar/...
+  #     go test ./internal/queue/pulsar/... -race -count=1 -timeout 25m
   #
   # That suite SKIPS without those variables, and skipping is not passing —
   # it is the only place the Pulsar backend is certified at all.
   # ---------------------------------------------------------------------------
   pulsar:
-    image: apachepulsar/pulsar:latest
+    # Pinned, and this is the ONLY place the broker's version lives. The
+    # conformance job in ci.yml starts THIS service rather than pinning a
+    # broker of its own, so a local run and CI certify the same build by
+    # construction -- they were two pins held equal by an assertion, which
+    # works right until somebody moves one and both runs stay green against
+    # different brokers. It also means Dependabot's docker-compose entry is
+    # what moves the version CI certifies: the bump pull request IS the
+    # re-certification. `latest` would undo both halves -- no version for
+    # Dependabot to bump, on a service watched by nothing that looks exactly
+    # like one with nothing to update, and a conformance pass naming a build
+    # nobody can identify afterwards. internal/version asserts it stays one
+    # pin, and that ci.yml still brings this service up.
+    image: apachepulsar/pulsar:4.2.4
     profiles: [pulsar]
     # Standalone runs broker + metadata + BookKeeper in one container.
     # Functions worker and stream storage are unused by crewlet, so disable
@@ -70,6 +87,22 @@ services:
       # ``delete_when_subscriptions_caught_up``: it will not delete a
       # topic whose subscriptions still hold a backlog.
       PULSAR_PREFIX_brokerDeleteInactiveTopicsEnabled: "false"
+      # Force namespace deletion, for the conformance suite alone -- and it
+      # is what makes the run above a rehearsal of CI rather than something
+      # subtly different. Each queue under test gets its OWN namespace
+      # (parallel subtests share subject names), and the suite deliberately
+      # leaves subscriptions and backlogs behind, because that is what
+      # several cases assert about. Its cleanup therefore deletes with
+      # ``?force=true``, which the broker refuses unless this is set.
+      #
+      # The refusal is silent by design: the cleanup logs and moves on
+      # rather than failing a green run over a leaked namespace
+      # (internal/queue/pulsar/conformance_test.go). So without this every
+      # local run leaves its namespaces, topics and subscriptions on the
+      # broker for the next one to accumulate behind -- with nothing but a
+      # t.Logf, on a run that passed, to say so. The CI job that certifies
+      # this backend sets it for the same reason.
+      PULSAR_PREFIX_forceDeleteNamespaceAllowed: "true"
       # Token auth (off by default for local dev). Uncomment to require
       # JWTs and confine the engine to its own namespace via grants --
       # full recipe (key/token generation, grants, engine + Dekaf config,
@@ -104,8 +137,8 @@ services:
   # Open http://localhost:8090.  (CLI alternative:
   #   docker compose exec pulsar bin/pulsar-admin topics list public/default)
   dekaf:
-    # Dekaf publishes no ``:latest`` tag, so this is an explicit pin --
-    # every other service in this file tracks a floating one.
+    # Dekaf publishes no ``:latest`` tag, so this is an explicit pin -- as is
+    # the broker above, for a different reason.
     # Dependabot opens the bump as a pull request when a newer version ships
     # (see .github/dependabot.yml), so noticing the release is not a job.
     image: visortelle/dekaf:1.2.1

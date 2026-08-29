@@ -299,9 +299,10 @@ Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers 
 dev setup, conventions, and the checks CI runs:
 
 ```bash
-go build ./...
-go test ./... -race
-gofmt -l . && go vet ./... && golangci-lint run
+make build    # go build ./...
+make check    # every gate CI runs: gofmt, vet, golangci-lint, build,
+              #   the race suite, and the store suite on both drivers
+make help     # everything else
 ```
 
 Releases are cut by pushing a `v*` tag — see [RELEASING.md](RELEASING.md).
