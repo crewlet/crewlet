@@ -395,7 +395,7 @@ each), then wire them in:
   workspace admin and compliance setup you already have. It needs a public
   URL for its Events API and one OAuth **Allow** click per agent:
   ```bash
-  crewlet slack provision company.yaml --base-url https://your-server.com
+  crewlet slack provision company.yaml -public-url https://your-server.com
   ```
   To try chat on this machine first,
   [Mattermost](../integrations/mattermost.md) ships in this repo's

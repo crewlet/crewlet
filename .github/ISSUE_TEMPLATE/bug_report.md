@@ -11,7 +11,9 @@ labels: bug
 ## Environment
 
 - Crewlet version (`crewlet --version`):
-- Python version:
+- OS and architecture (a release ships six of them):
+- How it was installed (release archive, `go install`, container image, built
+  from source):
 - Deployment shape (embedded / split API, docker compose or own infra):
 
 ## Config shape
