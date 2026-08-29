@@ -604,3 +604,410 @@ func TestNarrowingTheRunSkipsEveryOtherSeat(t *testing.T) {
 		t.Errorf("a narrowed run made %d app(s)", ws.called("apps.manifest.create"))
 	}
 }
+
+// --- a ledger entry that names a dead app ---------------------------------- //
+
+// AN APP DELETED IN THE CONSOLE LEAVES A LEDGER ENTRY THAT LIES. Its manifest
+// hash still matches, so the seat reads as kept — while the token in its
+// ${VAR} authenticates as nothing and nobody is told.
+func TestADeletedAppIsReplacedRatherThanReportedKept(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	res, ledger, _, err := run(t, ws, nil)
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if len(res.Created) != 1 {
+		t.Fatalf("first run = %+v", res)
+	}
+	first := ledger.Apps["swe"].AppID
+
+	// Somebody deletes the app at api.slack.com/apps. The ledger still
+	// names it and its manifest hash still matches.
+	ws.refuseOnce["apps.manifest.validate"] = "app_not_found"
+	ws.replies["apps.manifest.create"] = `{"ok":true,"app_id":"A0REPLACED",
+		"credentials":{"client_id":"9.9","client_secret":"cs2","signing_secret":"ss2"}}`
+	res, ledger, _, err = runWith(t, ws, ledger, nil)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(res.Created) != 1 || len(res.Kept) != 0 {
+		t.Fatalf("second run = %+v", res)
+	}
+	if got := ledger.Apps["swe"].AppID; got == first || got != "A0REPLACED" {
+		t.Errorf("the ledger still names %q", got)
+	}
+	if !anySlackNote(res.Notes, "no longer exists") {
+		t.Errorf("nothing reported the replacement: %v", res.Notes)
+	}
+}
+
+// THE STALE BOT TOKEN IS THE COMPOUNDING HALF. It belongs to the dead app, it
+// satisfies the "already installed" check, and a run that trusted it would
+// create a replacement app nobody ever installs.
+func TestReplacingADeadAppForcesAFreshInstall(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-first",
+		"bot_user_id":"U0BOT","app_id":"A0SWE","team":{"id":"T0"}}`
+	s := newSink()
+	installer := func(context.Context, string, string) (string, error) { return "code", nil }
+	res, ledger, _, err := run(t, ws, func(o *slack.Options) {
+		o.Sink = s
+		o.Install = installer
+	})
+	if err != nil || len(res.Installed) != 1 {
+		t.Fatalf("first run: %+v %v", res, err)
+	}
+
+	ws.refuseOnce["apps.manifest.validate"] = "app_not_found"
+	ws.replies["apps.manifest.create"] = `{"ok":true,"app_id":"A0REPLACED",
+		"credentials":{"client_id":"9.9","client_secret":"cs2","signing_secret":"ss2"}}`
+	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-second",
+		"bot_user_id":"U0BOT2","app_id":"A0REPLACED","team":{"id":"T0"}}`
+	res, _, _, err = runWith(t, ws, ledger, func(o *slack.Options) {
+		o.Sink = s
+		o.Install = installer
+	})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(res.Installed) != 1 {
+		t.Fatalf("the replacement was not installed: %+v", res)
+	}
+	if got := s.value("SWE_SLACK_TOKEN"); got != "xoxb-second" {
+		t.Errorf("the seat still holds %q", got)
+	}
+}
+
+// A REFUSAL IS NOT AN ABSENCE. An app this credential may not touch still
+// EXISTS, and replacing it would leave two apps for one seat.
+func TestAnAppThisCredentialCannotSeeIsNotReplaced(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	_, ledger, _, err := run(t, ws, nil)
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	ws.refuse["apps.manifest.validate"] = "not_authed"
+	res, ledger, _, err := runWith(t, ws, ledger, nil)
+	if err == nil {
+		t.Fatal("a permission refusal was read as a missing app")
+	}
+	if len(res.Created) != 0 {
+		t.Errorf("a replacement was created: %+v", res)
+	}
+	if got := ledger.Apps["swe"].AppID; got != "A0SWE" {
+		t.Errorf("the ledger entry was dropped: %q", got)
+	}
+}
+
+// --- adopting an app created by hand --------------------------------------- //
+
+// A HALF-SEEDED ENTRY NAMES WHAT TO COPY. An app id alone builds an authorize
+// URL with an empty client_id, which Slack answers with a page saying nothing
+// — or an invalid_client_id from the exchange minutes later.
+func TestAHandSeededEntryMissingItsOAuthKeysSaysWhatToCopy(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	path := filepath.Join(t.TempDir(), slack.LedgerName)
+	ledger, err := slack.LoadLedger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What an operator adopting an app by hand writes: the id, and not
+	// much else.
+	ledger.Apps["swe"] = slack.AppRecord{AppID: "A0BYHAND"}
+	_, _, _, err = runWith(t, ws, ledger, nil)
+	if err == nil {
+		t.Fatal("a half-seeded entry ran")
+	}
+	for _, want := range []string{"client_id", "client_secret", "A0BYHAND"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not name %s: %v", want, err)
+		}
+	}
+}
+
+// A FULLY SEEDED ENTRY IS ADOPTED, which is the supported path: an operator
+// who made the app in the console pastes its four values in and this command
+// takes over.
+func TestAFullyHandSeededEntryIsAdopted(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-adopted",
+		"bot_user_id":"U0BOT","app_id":"A0BYHAND","team":{"id":"T0"}}`
+	path := filepath.Join(t.TempDir(), slack.LedgerName)
+	ledger, err := slack.LoadLedger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger.Apps["swe"] = slack.AppRecord{
+		AppID: "A0BYHAND", ClientID: "9.9", ClientSecret: "cs",
+		SigningSecret: "ss",
+	}
+	s := newSink()
+	res, _, _, err := runWith(t, ws, ledger, func(o *slack.Options) {
+		o.Sink = s
+		o.Install = func(context.Context, string, string) (string, error) {
+			return "code", nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(res.Created) != 0 {
+		t.Errorf("an adopted app was re-created: %+v", res)
+	}
+	if got := s.value("SWE_SLACK_TOKEN"); got != "xoxb-adopted" {
+		t.Errorf("the adopted app's token is %q", got)
+	}
+}
+
+// --- the cross-app guard --------------------------------------------------- //
+
+// ONE AUTHORIZE URL IS PRINTED PER SEAT AND THEY LOOK ALIKE. Pasting the wrong
+// one mints another app's bot token into this seat's ${VAR}, and the seat then
+// posts as a colleague with nothing anywhere reporting it.
+func TestACodeBelongingToAnotherAppIsRefusedAndRecordsNothing(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-someone-else",
+		"bot_user_id":"U0OTHER","app_id":"A0CTO","team":{"id":"T0"}}`
+	s := newSink()
+	_, _, _, err := run(t, ws, func(o *slack.Options) {
+		o.Sink = s
+		o.Install = func(context.Context, string, string) (string, error) {
+			return "code", nil
+		}
+	})
+	if err == nil {
+		t.Fatal("another app's code was accepted")
+	}
+	if !strings.Contains(err.Error(), "A0CTO") || !strings.Contains(err.Error(), "A0SWE") {
+		t.Errorf("the error names neither app: %v", err)
+	}
+	if got := s.value("SWE_SLACK_TOKEN"); got != "" {
+		t.Errorf("the wrong app's token was recorded: %q", got)
+	}
+}
+
+// AN INSTANCE THAT SERVES NO app_id IS NOT A MISMATCH. The guard has to be a
+// comparison, not a requirement — an unknown answer must not fail an install
+// that is fine.
+func TestAnExchangeThatNamesNoAppStillInstalls(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-fine",
+		"bot_user_id":"U0BOT","team":{"id":"T0"}}`
+	s := newSink()
+	res, _, _, err := run(t, ws, func(o *slack.Options) {
+		o.Sink = s
+		o.Install = func(context.Context, string, string) (string, error) {
+			return "code", nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(res.Installed) != 1 || s.value("SWE_SLACK_TOKEN") != "xoxb-fine" {
+		t.Errorf("result = %+v, token = %q", res, s.value("SWE_SLACK_TOKEN"))
+	}
+}
+
+// --- the config-token precedence ------------------------------------------- //
+
+// THE LEDGER'S PAIR BEATS THE SHELL, which is the reverse of the usual rule
+// and the reverse is the point: Slack's rotation is single-use in both
+// directions, so a value left in an export is dead the moment this command
+// first used it. Preferring it trades the only live pair for a retired one.
+func TestAStaleExportDoesNotShadowTheLedgersRefreshToken(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	_, ledger, _, err := run(t, ws, nil)
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	// The access token has expired; only a refresh can get in.
+	ledger.ConfigToken.Token = ""
+	ws.replies["tooling.tokens.rotate"] = `{"ok":true,"token":"xoxe.xoxp-second",
+		"refresh_token":"xoxe-1-third","exp":4102444800}`
+	if _, _, _, err := runWith(t, ws, ledger, func(o *slack.Options) {
+		o.ConfigRefreshToken = "xoxe-1-stale-from-the-shell"
+	}); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	sent, _ := ws.lastBody("tooling.tokens.rotate")["refresh_token"].(string)
+	if sent != "xoxe-1-next" {
+		t.Errorf("the run rotated with %q, not the ledger's live pair", sent)
+	}
+}
+
+// THE FLAG IS A BOOTSTRAP, and it has to work: a ledger holding nothing has
+// no pair to prefer.
+func TestTheFlagSeedsALedgerThatHoldsNothing(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	if _, _, _, err := run(t, ws, nil); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	sent, _ := ws.lastBody("tooling.tokens.rotate")["refresh_token"].(string)
+	if sent != "xoxe-1-refresh" {
+		t.Errorf("the bootstrap token was not used: %q", sent)
+	}
+}
+
+// --- the dry run's manifest validation ------------------------------------- //
+
+// A DRY RUN CHECKS THE MANIFESTS, because apps.manifest.create is rate
+// limited to roughly one request a minute: discovering a malformed manifest
+// from the create costs a minute per seat and leaves the seats before the bad
+// one already created.
+func TestADryRunValidatesEveryManifestAndWritesNothing(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	res, err := slack.Validate(context.Background(), validateOptions(t, ws, nil))
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if len(res.Validated) != 1 || res.Validated[0] != "swe" {
+		t.Fatalf("result = %+v", res)
+	}
+	if ws.called("apps.manifest.validate") != 1 {
+		t.Errorf("validate was called %d time(s)", ws.called("apps.manifest.validate"))
+	}
+	for _, method := range []string{"apps.manifest.create", "apps.manifest.update", "oauth.v2.access"} {
+		if ws.called(method) != 0 {
+			t.Errorf("a dry run called %s", method)
+		}
+	}
+}
+
+// A REFUSED MANIFEST IS NAMED AND THE RUN EXITS NON-ZERO.
+func TestADryRunReportsAManifestSlackRefuses(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	ws.refuse["apps.manifest.validate"] = "invalid_manifest"
+	res, err := slack.Validate(context.Background(), validateOptions(t, ws, nil))
+	if err == nil {
+		t.Fatal("a refused manifest passed")
+	}
+	if len(res.Validated) != 0 || len(res.Failed) != 1 {
+		t.Errorf("result = %+v", res)
+	}
+}
+
+// NO CONFIG TOKEN IS A NOTE, NOT A FAILURE. The plan is the more valuable
+// half of a dry run, and an operator who has not made a config token yet is
+// exactly the person reading it.
+func TestADryRunWithNoConfigTokenStillPrintsThePlan(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	res, err := slack.Validate(context.Background(),
+		validateOptions(t, ws, func(o *slack.Options) { o.ConfigRefreshToken = "" }))
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if len(res.Failed) != 0 {
+		t.Errorf("result = %+v", res)
+	}
+	if !anySlackNote(res.Notes, "no manifest could be checked") {
+		t.Errorf("notes = %v", res.Notes)
+	}
+}
+
+// A MANIFEST WITHOUT A PUBLIC URL IS NOT THE MANIFEST A REAL RUN SENDS, so
+// validating one would prove the wrong thing.
+func TestADryRunWithNoPublicURLChecksNothingAndSaysSo(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	res, err := slack.Validate(context.Background(),
+		validateOptions(t, ws, func(o *slack.Options) { o.BaseURL = "" }))
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if ws.called("apps.manifest.validate") != 0 {
+		t.Error("a manifest with no base URL was checked")
+	}
+	if !anySlackNote(res.Notes, "no -public-url") {
+		t.Errorf("notes = %v", res.Notes)
+	}
+}
+
+// A NEW APP'S MANIFEST IS CHECKED BEFORE IT IS CREATED, for the same
+// rate-limit reason — and a refusal must not leave an app behind.
+func TestAMalformedManifestIsRefusedBeforeTheAppIsCreated(t *testing.T) {
+	t.Parallel()
+	ws := newWorkspace(t)
+	withCreate(ws)
+	ws.refuse["apps.manifest.validate"] = "invalid_manifest"
+	res, ledger, _, err := run(t, ws, nil)
+	if err == nil {
+		t.Fatal("a malformed manifest created an app")
+	}
+	if ws.called("apps.manifest.create") != 0 {
+		t.Error("the create was attempted anyway")
+	}
+	if len(res.Created) != 0 || len(ledger.Apps) != 0 {
+		t.Errorf("result = %+v, ledger = %+v", res, ledger.Apps)
+	}
+}
+
+// --- helpers --------------------------------------------------------------- //
+
+// runWith is [run] against a ledger a test has already shaped.
+func runWith(t *testing.T, ws *workspace, ledger *slack.Ledger,
+	mutate func(*slack.Options),
+) (*slack.Result, *slack.Ledger, string, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), slack.LedgerName)
+	opts := slack.Options{
+		Admin: slack.NewAdmin(rewriting(ws.URL)), Seats: plans(),
+		Ledger: ledger, LedgerPath: path, Sink: newSink(),
+		BaseURL: "https://engine.example.com", ConfigRefreshToken: "xoxe-1-refresh",
+	}
+	if mutate != nil {
+		mutate(&opts)
+	}
+	res, err := slack.Reconcile(context.Background(), opts)
+	return res, ledger, path, err
+}
+
+func validateOptions(t *testing.T, ws *workspace, mutate func(*slack.Options)) slack.Options {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), slack.LedgerName)
+	ledger, err := slack.LoadLedger(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := slack.Options{
+		Admin: slack.NewAdmin(rewriting(ws.URL)), Seats: plans(),
+		Ledger: ledger, LedgerPath: path,
+		BaseURL: "https://engine.example.com", ConfigRefreshToken: "xoxe-1-refresh",
+	}
+	if mutate != nil {
+		mutate(&opts)
+	}
+	return opts
+}
+
+func anySlackNote(notes []string, want string) bool {
+	for _, note := range notes {
+		if strings.Contains(note, want) {
+			return true
+		}
+	}
+	return false
+}

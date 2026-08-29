@@ -157,6 +157,10 @@ type Result struct {
 	// of a re-run, which has to be visible or a quiet report reads as a
 	// run that did nothing.
 	Kept []string
+	// Validated names the seats whose manifest Slack accepted on a dry
+	// run. Only a dry run fills it; a real run's create and update are
+	// the validation.
+	Validated []string
 	// Pending names the seats that still need an operator's click, with
 	// the URL to click.
 	Pending map[string]string
@@ -269,9 +273,20 @@ func (o Options) configToken(ctx context.Context, at time.Time) (string, error) 
 	if held.Token != "" && (held.ExpiresAt.IsZero() || held.ExpiresAt.After(at.Add(time.Minute))) {
 		return held.Token, nil
 	}
-	refresh := strings.TrimSpace(o.ConfigRefreshToken)
+	// THE LEDGER'S PAIR BEATS THE OPERATOR'S SHELL, which is the reverse
+	// of the usual "an explicit input wins" rule and the reverse is the
+	// point. Slack's rotation is single-use in BOTH directions: every
+	// successful rotate invalidates the refresh token it was given, so the
+	// value in a shell export is dead the moment this command first used
+	// it. Preferring it would take the ledger's live pair — the only way
+	// back into the operator's apps — and trade it for a token Slack has
+	// already retired, on every run after the first, for ever.
+	//
+	// The flag and the variable are therefore a BOOTSTRAP: they seed a
+	// ledger that holds nothing, and are ignored once it does.
+	refresh := strings.TrimSpace(held.RefreshToken)
 	if refresh == "" {
-		refresh = held.RefreshToken
+		refresh = strings.TrimSpace(o.ConfigRefreshToken)
 	}
 	if refresh == "" {
 		return "", errors.New(
@@ -299,14 +314,101 @@ func (o Options) configToken(ctx context.Context, at time.Time) (string, error) 
 	return rotated.Token, nil
 }
 
+// appGone reports a Slack error meaning the recorded app is not there any
+// more — deleted in the console, or moved to a workspace this credential
+// cannot see.
+//
+// # Why it is a set of codes rather than a status
+//
+// Every Web API answer is a 200 carrying `"ok": false`, so the only signal is
+// the code string. These three are what the app-management methods answer for
+// an id that does not resolve, and they are not interchangeable with a
+// permission refusal: an app this operator may not touch still EXISTS, and
+// replacing it would leave two.
+func appGone(err error) bool {
+	var api *APIError
+	if !errors.As(err, &api) {
+		return false
+	}
+	switch api.Code {
+	case "app_not_found", "invalid_app_id", "invalid_app":
+		return true
+	}
+	return false
+}
+
+// adoptable reports a hand-seeded ledger entry that cannot be installed, and
+// says what is missing.
+//
+// ADOPTION IS A SUPPORTED PATH: an operator who created an app in the Slack
+// console by hand pastes its four values into the ledger and this command
+// takes over from there. What it must not do is proceed on a HALF-seeded
+// entry — an app id alone produces an authorize URL with an empty client_id,
+// which Slack answers with a page saying nothing useful, or an
+// `invalid_client_id` from the exchange minutes later.
+func adoptable(record AppRecord) []string {
+	var missing []string
+	if strings.TrimSpace(record.ClientID) == "" {
+		missing = append(missing, "client_id")
+	}
+	if strings.TrimSpace(record.ClientSecret) == "" {
+		missing = append(missing, "client_secret")
+	}
+	return missing
+}
+
 // seat brings one agent's app in line.
 func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, res *Result) error {
 	manifest := Manifest(seat.RoleName, seat.Handle, o.BaseURL)
 	fingerprint := Fingerprint(manifest)
 	record := o.Ledger.Apps[seat.Handle]
 
+	// A LEDGER ENTRY THAT NAMES A DEAD APP IS WORSE THAN NO ENTRY: the
+	// seat reads as provisioned, its recorded manifest hash matches, and
+	// the run reports it kept — while the app it names was deleted in the
+	// console months ago and the token in its ${VAR} authenticates as
+	// nothing. Probing costs one validate call against an app id this run
+	// already holds, and the recovery is to fall into the create branch.
+	if record.AppID != "" {
+		if err := o.Admin.ValidateManifest(ctx, configToken, manifest, record.AppID); err != nil {
+			if !appGone(err) {
+				return fmt.Errorf("slack: %s: %w", seat.Handle, err)
+			}
+			res.Notes = append(res.Notes, fmt.Sprintf(
+				"%s: the recorded app %s no longer exists in Slack, so a "+
+					"replacement was created — anything holding the old app's "+
+					"bot token has to be restarted with the new one",
+				seat.Handle, record.AppID))
+			// THE HELD TOKEN IS A LEFTOVER. It belongs to the dead app
+			// and it satisfies the sink's half of the "already
+			// installed" check — but the replacement record carries no
+			// bot user id, and that is the half that can only come from
+			// a completed OAuth exchange. So the install runs, and the
+			// stale value is overwritten rather than trusted.
+			record = AppRecord{}
+			delete(o.Ledger.Apps, seat.Handle)
+		}
+	}
+	if record.AppID != "" {
+		if missing := adoptable(record); len(missing) > 0 {
+			return fmt.Errorf(
+				"slack: %s: the ledger entry for app %s has no %s, so the "+
+					"OAuth install cannot run — for an app adopted by hand, "+
+					"copy both from its Basic Information page into %s",
+				seat.Handle, record.AppID, strings.Join(missing, "/"),
+				o.LedgerPath)
+		}
+	}
+
 	switch {
 	case record.AppID == "":
+		// VALIDATED FIRST. apps.manifest.create is Tier 1 — roughly one
+		// request a minute — so discovering a malformed manifest from
+		// the create means a company of seven spends seven minutes
+		// finding out seven times.
+		if err := o.Admin.ValidateManifest(ctx, configToken, manifest, ""); err != nil {
+			return fmt.Errorf("slack: %s: %w", seat.Handle, err)
+		}
 		created, err := o.Admin.CreateApp(ctx, configToken, manifest)
 		if err != nil {
 			return fmt.Errorf("slack: %s: %w", seat.Handle, err)
@@ -390,6 +492,18 @@ func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, r
 	if err != nil {
 		return fmt.Errorf("slack: %s: %w", seat.Handle, err)
 	}
+	// THE CODE HAS TO BELONG TO THIS SEAT'S APP. One authorize URL is
+	// printed per seat and they look alike; pasting the wrong one mints
+	// another app's bot token into this seat's ${VAR}, and the seat then
+	// posts as a colleague with nothing anywhere reporting it. The whole
+	// point of an app per seat is that identities do not cross.
+	if got := strings.TrimSpace(installed.AppID); got != "" && got != record.AppID {
+		return fmt.Errorf(
+			"slack: %s: that approve code belongs to app %s, not this seat's "+
+				"%s — the click used another agent's authorize URL. Re-run "+
+				"and use the URL printed for %s. Nothing was recorded",
+			seat.Handle, got, record.AppID, seat.Handle)
+	}
 	if err := o.Sink.Record(ctx, seat.TokenVar, installed.BotToken); err != nil {
 		return fmt.Errorf("slack: %s: record %s: %w", seat.Handle, seat.TokenVar, err)
 	}
@@ -410,4 +524,76 @@ func seatNotes(seat SeatPlan) []string {
 		out = append(out, seat.Handle+": "+note)
 	}
 	return out
+}
+
+// Validate checks every planned seat's manifest against Slack and changes
+// nothing.
+//
+// # Why a dry run makes network calls at all
+//
+// Because the alternative is discovering a malformed manifest from
+// apps.manifest.create, which is Tier 1 — about one request a minute — so a
+// company of seven finds out seven times over seven minutes, having already
+// created the apps for the seats before the bad one. `apps.manifest.validate`
+// is the method Slack provides for exactly this, and it writes nothing.
+//
+// It still needs an app-configuration token, so a dry run with no ledger and
+// no refresh token cannot validate. That is a NOTE rather than a failure: the
+// plan is the more valuable half of a dry run, and an operator who has not
+// yet made a config token is exactly the person reading the plan.
+func Validate(ctx context.Context, opts Options) (*Result, error) {
+	if opts.Admin == nil {
+		return nil, errors.New("slack: no admin client")
+	}
+	if opts.Ledger == nil {
+		return nil, errors.New("slack: no ledger")
+	}
+	res := &Result{Pending: map[string]string{}, Failed: map[string]string{}}
+	if strings.TrimSpace(opts.BaseURL) == "" {
+		res.Notes = append(res.Notes,
+			"no -public-url, so no manifest could be checked: every app's "+
+				"request URL and redirect URL are built from it, and a "+
+				"manifest without one is not the manifest a real run sends")
+		return res, nil
+	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+	// THE TOKEN IS TAKEN THE SAME WAY A REAL RUN TAKES IT, rotation and
+	// all: a dry run that could not reach the config token is a dry run
+	// that has not tested the thing most likely to be wrong. The rotate
+	// persists, which is the one write a dry run does make — and it must,
+	// because Slack invalidated the refresh token the moment it answered.
+	configToken, err := opts.configToken(ctx, now())
+	if err != nil {
+		res.Notes = append(res.Notes, fmt.Sprintf(
+			"no manifest could be checked: %v", err))
+		return res, nil
+	}
+	only := map[string]bool{}
+	for _, handle := range opts.Only {
+		only[handle] = true
+	}
+	for _, seat := range opts.Seats {
+		if len(only) > 0 && !only[seat.Handle] {
+			continue
+		}
+		if !seat.Provisionable() {
+			continue
+		}
+		res.attempted++
+		// AGAINST THE RECORDED APP ID where there is one, because Slack
+		// validates an update differently from a create: a manifest that
+		// is fine for a new app can still be refused as a change to an
+		// existing one (a scope an installed app may not drop, say).
+		manifest := Manifest(seat.RoleName, seat.Handle, opts.BaseURL)
+		if err := opts.Admin.ValidateManifest(ctx, configToken, manifest,
+			opts.Ledger.Apps[seat.Handle].AppID); err != nil {
+			res.Failed[seat.Handle] = err.Error()
+			continue
+		}
+		res.Validated = append(res.Validated, seat.Handle)
+	}
+	return res, res.Err()
 }

@@ -19,17 +19,24 @@ import (
 type workspace struct {
 	*httptest.Server
 
-	mu      sync.Mutex
-	calls   []string
-	bodies  []map[string]any
-	tokens  []string
-	refuse  map[string]string
-	replies map[string]string
+	mu     sync.Mutex
+	calls  []string
+	bodies []map[string]any
+	tokens []string
+	refuse map[string]string
+	// refuseOnce refuses a method exactly once and then lets it through,
+	// which is how a run that recovers from a refusal is told apart from
+	// one that never hit it.
+	refuseOnce map[string]string
+	replies    map[string]string
 }
 
 func newWorkspace(t *testing.T) *workspace {
 	t.Helper()
-	w := &workspace{refuse: map[string]string{}, replies: map[string]string{}}
+	w := &workspace{
+		refuse: map[string]string{}, refuseOnce: map[string]string{},
+		replies: map[string]string{},
+	}
 	w.Server = httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		method := strings.TrimPrefix(req.URL.Path, "/api/")
 		var body map[string]any
@@ -40,6 +47,10 @@ func newWorkspace(t *testing.T) *workspace {
 		w.bodies = append(w.bodies, body)
 		w.tokens = append(w.tokens, strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "))
 		code, refused := w.refuse[method]
+		if once, only := w.refuseOnce[method]; only {
+			code, refused = once, true
+			delete(w.refuseOnce, method)
+		}
 		reply, canned := w.replies[method]
 		w.mu.Unlock()
 

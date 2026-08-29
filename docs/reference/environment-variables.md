@@ -34,11 +34,11 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 |----------|-------------|-----------------|
 | `SLACK_BOT_TOKEN_<ROLE>` | Bot User OAuth Token (`xoxb-...`) | Written by `crewlet slack provision`, or Slack app > OAuth & Permissions |
 | `SLACK_SIGNING_SECRET_<ROLE>` | Signing Secret | Written by `crewlet slack provision`, or Slack app > Basic Information |
-| `SLACK_CONFIG_TOKEN` | App configuration token (`xoxe.xoxp-...`, 12 h lifetime) authenticating the App Manifest APIs used by [`crewlet slack provision`](../integrations/slack.md) | [api.slack.com/apps](https://api.slack.com/apps) > Your App Configuration Tokens (once); rotated near expiry + persisted to the env file automatically |
-| `SLACK_CONFIG_REFRESH_TOKEN` | Refresh token (`xoxe-1-...`) minting the next config-token pair via `tooling.tokens.rotate` | Issued alongside `SLACK_CONFIG_TOKEN`; rotated automatically |
-| `SLACK_CONFIG_TOKEN_EXPIRES_AT` | Unix timestamp of the access token's expiry — lets re-runs skip rotation while the token is fresh | Written by `crewlet slack provision`; never set by hand |
+| `SLACK_CONFIG_REFRESH_TOKEN` | **Bootstrap only.** The app-configuration *refresh* token (`xoxe-1-...`) that seeds an empty [app ledger](../integrations/slack.md#the-app-ledger); `crewlet slack provision` exchanges it for a 12-hour access token and stores **both** halves of the rotated pair in the ledger. Once the ledger holds a pair, this variable is ignored — see the precedence note below. | [api.slack.com/apps](https://api.slack.com/apps) > Your App Configuration Tokens (once) |
 
 Replace `<ROLE>` with the role name in uppercase (e.g., `SLACK_BOT_TOKEN_ENGINEER`). The per-role names are conventions — any `${VAR}` name referenced from `role.integrations.slack` works, and `crewlet slack provision` writes whatever names the YAML uses.
+
+> **The ledger beats the shell**, which is the reverse of the usual "an explicit input wins" rule, and the reverse is the point. Slack's config-token rotation is **single-use in both directions**: every successful rotate invalidates the refresh token it was given, so the value sitting in a `SLACK_CONFIG_REFRESH_TOKEN` export is dead the moment this command first used it. Preferring it would trade the ledger's live pair — the only way back into the operator's apps — for a token Slack has already retired, on every run after the first, for ever. So `-config-token` and `$SLACK_CONFIG_REFRESH_TOKEN` seed a ledger that holds nothing, and are ignored once it does.
 
 ---
 

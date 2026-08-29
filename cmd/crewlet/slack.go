@@ -83,9 +83,29 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	printSlackPlan(stdout, plans, ledger, *ledgerPath, *publicURL)
+
+	refresh := strings.TrimSpace(*refreshToken)
+	if refresh == "" {
+		refresh = operatorCredential("SLACK_CONFIG_REFRESH_TOKEN")
+	}
+
 	if *dryRun {
+		// THE MANIFESTS ARE CHECKED, which is the whole reason a dry run
+		// touches the network: apps.manifest.create is rate limited to
+		// roughly one request a minute, so discovering a malformed
+		// manifest from the create costs a minute per seat and leaves
+		// the seats before the bad one already created.
+		res, checked := slack.Validate(context.Background(), slack.Options{
+			Admin: slack.NewAdmin(nil), Seats: plans,
+			Ledger: ledger, LedgerPath: *ledgerPath,
+			BaseURL: *publicURL, ConfigRefreshToken: refresh,
+			Only: splitHandles(*only),
+		})
+		if res != nil {
+			printSlackValidation(stdout, res)
+		}
 		fmt.Fprintln(stdout, "\n-dry-run: no app was created, updated or installed.")
-		return nil
+		return checked
 	}
 	if len(plans) == 0 {
 		return nil
@@ -103,11 +123,6 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	defer closeSink()
-
-	refresh := strings.TrimSpace(*refreshToken)
-	if refresh == "" {
-		refresh = operatorCredential("SLACK_CONFIG_REFRESH_TOKEN")
-	}
 
 	opts := slack.Options{
 		Admin: slack.NewAdmin(nil), Seats: plans,
@@ -236,4 +251,24 @@ func splitHandles(raw string) []string {
 		}
 	}
 	return out
+}
+
+// printSlackValidation renders what a dry run's manifest check found.
+func printSlackValidation(w io.Writer, res *slack.Result) {
+	if len(res.Validated) > 0 {
+		fmt.Fprintf(w, "\nSlack accepted %d manifest(s): %s\n",
+			len(res.Validated), strings.Join(res.Validated, ", "))
+	}
+	if len(res.Failed) > 0 {
+		handles := make([]string, 0, len(res.Failed))
+		for handle := range res.Failed {
+			handles = append(handles, handle)
+		}
+		sort.Strings(handles)
+		fmt.Fprintf(w, "\n%d manifest(s) FAILED validation:\n", len(handles))
+		for _, handle := range handles {
+			fmt.Fprintf(w, "  %s: %s\n", handle, res.Failed[handle])
+		}
+	}
+	printNotes(w, res.Notes)
 }

@@ -676,7 +676,11 @@ For each seat whose `integrations.slack` credentials are whole `${VAR}` referenc
 
 **One seat's failure does not cost the others.** A mistyped code paste or a refused manifest is recorded against that handle, the remaining seats still provision, and the command exits non-zero naming what failed. Everything completed is durable — the ledger is written after every mutation — so a re-run resumes.
 
-**The app-configuration token is persisted before it is used.** Slack's rotation is single-use in both directions: the call that returns a new refresh token invalidates the one it was given. A run that rotated and then failed to record the result would lock the operator out of their own apps, so the pair is written to the ledger first, and a still-valid access token is reused rather than rotated again.
+**The app-configuration token is persisted before it is used.** Slack's rotation is single-use in both directions: the call that returns a new refresh token invalidates the one it was given. A run that rotated and then failed to record the result would lock the operator out of their own apps, so the pair is written to the ledger first, and a still-valid access token is reused rather than rotated again. For the same reason **the ledger's pair beats `-config-token` and `$SLACK_CONFIG_REFRESH_TOKEN`**, which is the reverse of the usual rule: a value left in a shell export is dead the moment the first run used it, and preferring it would trade the only live pair for a retired one on every run after. The flag and the variable are a bootstrap for a ledger that holds nothing.
+
+**A recorded app that no longer exists is replaced, not reported kept.** Its manifest fingerprint still matches, so without a probe the seat reads as healthy while the bot token in its `${VAR}` authenticates as nothing. Every run validates each recorded app id first — one call, no write — and reads `app_not_found` / `invalid_app_id` / `invalid_app` as gone; a permission refusal is not an absence and never triggers a replacement, because an app this credential may not touch still exists and replacing it would leave two.
+
+**A code that belongs to another app is refused and records nothing.** One authorize URL is printed per seat and they look alike; pasting the wrong one would mint a colleague's bot token into this seat's variable, and the seat would post as them with nothing reporting it.
 
 | Flag | Description |
 |------|-------------|
@@ -687,7 +691,7 @@ For each seat whose `integrations.slack` credentials are whole `${VAR}` referenc
 | `-handles a,b` | Only provision these seats. Worth having against a method that allows about one request a minute. |
 | `-reinstall` | Redo the OAuth install even where a token is already recorded. **Required for a scope change to take effect** — a bot token carries only the scopes it was minted with — and destructive: the new install revokes the token every running node is authenticating with. |
 | `-no-install` | Create and update the apps and record the signing secrets, then print the authorize URLs instead of asking for codes. For a non-interactive run. |
-| `-dry-run` | Print the plan and touch nothing: no app created, no manifest pushed, no token rotated. The sink is not opened either, so it prompts for no passphrase. |
+| `-dry-run` | Print the plan and **check every manifest** through `apps.manifest.validate`, which writes nothing: no app created, no manifest pushed, no install run, and the sink is not opened either, so it prompts for no passphrase. That check is why a dry run touches the network at all — `apps.manifest.create` is Tier 1, roughly one request a minute, so a malformed manifest discovered from the create costs a minute per seat and leaves the seats before the bad one already created. Validating needs a config token, so a dry run that cannot get one prints the plan and says the manifests were not checked; getting that token may rotate it, which is the one write a dry run makes and has to. |
 
 Run the API server first, publicly reachable at `-public-url`: Slack verifies each app's request URL with a `url_verification` challenge, which the edge answers unconditionally — it has to, because during provisioning the signing secret does not exist yet and a verified handshake would be impossible.
 

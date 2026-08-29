@@ -114,16 +114,40 @@ Slack requires HTTPS for both URLs — for local development put a tunnel (ngrok
 |------|-------------|
 | `-public-url URL` | Public HTTPS base URL of the Crewlet API. **Required**: every app's request URL and redirect URL are built from it, so an app created without one delivers nowhere and cannot be installed. |
 | `-secret-store` / `-env-file PATH` / `-print` | Where the minted bot token and signing secret go — exactly one, no default. |
-| `-config-token TOKEN` | The app-configuration **refresh** token; empty reads `$SLACK_CONFIG_REFRESH_TOKEN`. |
+| `-config-token TOKEN` | The app-configuration **refresh** token; empty reads `$SLACK_CONFIG_REFRESH_TOKEN`. **Bootstrap only** — see [The ledger beats the shell](#the-ledger-beats-the-shell). |
 | `-ledger PATH` | The app ledger (default: `slack-apps.json` beside the company YAML). |
 | `-handles a,b` | Only provision these handles. Worth having against a method that allows about one request a minute: fixing one seat in a company of twenty should not cost twenty minutes. |
 | `-reinstall` | Redo the OAuth install even where a bot token is already recorded. Required for a scope change to take effect, and destructive — it revokes the seat's current token. |
 | `-no-install` | Create and update the apps and write the signing secrets, then print the authorize URLs instead of asking for codes. For a non-interactive run, e.g. pushing a scope change from CI. |
-| `-dry-run` | Print the plan and touch nothing. No app is created, no manifest pushed, no token rotated — and the sink is not opened, so it prompts for no passphrase. |
+| `-dry-run` | Print the plan **and check every manifest** through `apps.manifest.validate`, which writes nothing. No app is created, no manifest pushed, no install run — and the sink is not opened, so it prompts for no passphrase. The check is the reason a dry run touches the network at all: `apps.manifest.create` is rate limited to roughly one request a minute, so discovering a malformed manifest from the create costs a minute per seat *and* leaves the seats before the bad one already created. Validating needs a config token, so a dry run that cannot get one prints the plan and says the manifests were not checked — that is a note, not a failure, because an operator who has not made a config token yet is exactly the person reading the plan. It does make one write: getting the config token may rotate it, and a rotation has to be persisted the moment Slack answers. |
 
 ### The ledger (`slack-apps.json`)
 
 Maps each handle to its Slack `app_id`, the fingerprint of the last-pushed manifest (what makes unchanged re-runs free), and the credentials **Slack only returns once, at creation**: the OAuth client id and secret (needed to redo an install later) and the signing secret. It also holds the rotating app-configuration token pair.
+
+#### The ledger beats the shell
+
+Slack's config-token rotation is **single-use in both directions**: every successful rotate invalidates the refresh token it was given. So the value in a `SLACK_CONFIG_REFRESH_TOKEN` export is dead the moment this command first used it, and preferring it over the ledger's stored pair would trade the only live way back into the operator's apps for a token Slack has already retired — on every run after the first, for ever. `-config-token` and the variable therefore **seed a ledger that holds nothing, and are ignored once it does**. There is no way to force the shell's value short of clearing `config_token` out of the ledger by hand, which is the honest shape: if the stored pair is wrong, the pair is what has to change.
+
+#### Recovering from an app deleted in the console
+
+A ledger entry naming an app that no longer exists is worse than no entry: its manifest fingerprint still matches, so the seat reads as **kept**, while the bot token in its `${VAR}` authenticates as nothing. Every run therefore probes each recorded app with `apps.manifest.validate` before deciding anything — one call against an id the run already holds — and reads `app_not_found` / `invalid_app_id` / `invalid_app` as *gone*. A gone app is replaced: the entry is dropped, a fresh app is created, and the run says so. The install re-runs even though the `${VAR}` still holds a value, because the replacement record carries no bot user id and that is the half of "already installed" that can only come from a completed OAuth exchange — so the stale token is overwritten rather than trusted.
+
+A **permission** refusal is not an absence and is never treated as one: an app this credential may not touch still exists, and replacing it would leave two apps for one seat.
+
+#### Adopting an app you created by hand
+
+Create the app in the Slack console, then add its entry to the ledger yourself:
+
+```json
+{"apps": {"swe": {"app_id": "A0…", "client_id": "…", "client_secret": "…", "signing_secret": "…"}}}
+```
+
+From there `crewlet slack provision` takes over — it pushes the manifest, records the signing secret and runs the install. A **half**-seeded entry is refused naming exactly what to copy: an app id alone builds an authorize URL with an empty `client_id`, which Slack answers with a page saying nothing useful, or an `invalid_client_id` from the exchange minutes later.
+
+#### One authorize URL per seat, and they look alike
+
+The OAuth exchange's answer names the app it was for, and the run **refuses a code belonging to a different app than the seat's**, recording nothing. Pasting the URL printed for one agent into another agent's prompt would otherwise mint that app's bot token into this seat's `${VAR}` — and the seat would post as a colleague, with nothing anywhere reporting it. An app per seat is only an identity boundary if the identities cannot cross.
 
 It is a **secrets file** — written `0600` through a temp file and a rename, because a truncate-then-write interrupted half way would destroy values that cannot be read back. It is gitignored by name in the repo's own `.gitignore`; if you keep your company document elsewhere, gitignore it there too. Committing it publishes credentials nothing can rotate for you.
 
