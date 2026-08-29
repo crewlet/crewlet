@@ -5,15 +5,26 @@
 // A credential file has TWO readers and they do not agree, so a line that
 // satisfies one can silently break the other:
 //
-//   - the ENGINE reads it with a dotenv loader, which expands ${...} inside
-//     unquoted and double-quoted values;
 //   - an OPERATOR reads it with `source .env`, where a bare space ends the
 //     assignment and the rest of the line becomes a command — and the shell
-//     then abandons every credential BELOW it in the file.
+//     then abandons every credential BELOW it in the file;
+//   - a DOTENV TOOL reads it — direnv, docker compose's env_file, a CI
+//     step's loader — and expands ${...} inside unquoted and double-quoted
+//     values, so a token containing one is silently rewritten.
 //
-// The second failure is the one that hurts: it is silent, it is positional,
+// The first failure is the one that hurts: it is silent, it is positional,
 // and the symptom is a company where the seats defined after some particular
 // token stop authenticating.
+//
+// # The ENGINE is not one of the readers
+//
+// It reads `${VAR}` from this node's secret store and then from the PROCESS
+// environment, and from nowhere else — so a file written here has to be
+// sourced, or fed to the process some other way, before the engine starts.
+// A dotenv loader in the engine would be a third source of truth for
+// secrets, discovered by filename, able to override the Tier A keyring that
+// opens the store: exactly the inversion the two-tier design refuses. The
+// path that needs no file at all is `-secret-store`.
 //
 // Every provisioner that mints a credential writes one of these lines. When
 // each built its own, whether a minted token survived depended on which CLI

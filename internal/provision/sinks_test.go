@@ -292,6 +292,52 @@ func TestThePrintSinkAnnouncesARollback(t *testing.T) {
 	if !strings.Contains(body, "REVOKED") || !strings.Contains(body, "TOKEN_A") {
 		t.Fatalf("a rollback said %q, want it to name the dead credential", body)
 	}
+	// AND IT IS A STATEMENT, NOT A COMMENT. The stream is meant to be
+	// sourced — that is the whole reason it emits `export` lines — and a
+	// comment is a no-op to a shell, so an operator who piped it into
+	// `source` and then hit a rollback would keep a revoked token exported
+	// in their session.
+	if !strings.Contains(body, "\nunset TOKEN_A\n") {
+		t.Errorf("a rollback emitted no `unset`, so sourcing it leaves the "+
+			"revoked value exported:\n%s", body)
+	}
+}
+
+// SOURCING THE WHOLE STREAM LEAVES THE ENVIRONMENT AS IT STARTED, which is
+// the property the `unset` lines exist for and the one a reader cannot check
+// by eye on a multi-seat run.
+func TestSourcingARolledBackPrintStreamUnsetsEverything(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	sink, err := provision.NewPrintSink(&out)
+	if err != nil {
+		t.Fatalf("NewPrintSink: %v", err)
+	}
+	names := []string{"TOKEN_A", "TOKEN_B", "TOKEN_C"}
+	for _, name := range names {
+		if err := sink.Record(t.Context(), name, "v-"+name); err != nil {
+			t.Fatalf("Record %s: %v", name, err)
+		}
+	}
+	if err := sink.Discard(t.Context()); err != nil {
+		t.Fatalf("Discard: %v", err)
+	}
+	// Replay the stream the way a shell would: an `export` sets, an
+	// `unset` clears, and a comment does nothing at all.
+	env := map[string]string{}
+	for _, line := range strings.Split(out.String(), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "export "):
+			name, value, _ := strings.Cut(strings.TrimPrefix(line, "export "), "=")
+			env[name] = value
+		case strings.HasPrefix(line, "unset "):
+			delete(env, strings.TrimPrefix(line, "unset "))
+		}
+	}
+	if len(env) != 0 {
+		t.Errorf("sourcing the rolled-back stream leaves %v exported", env)
+	}
 }
 
 // A SINK WITH NOWHERE TO WRITE IS REFUSED BEFORE ANYTHING IS MINTED.

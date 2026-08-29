@@ -305,6 +305,18 @@ archive is an execution surface if it is unpacked on trust.
 Only the credential files travel. Sessions, history, and caches never go
 into a bundle.
 
+**Between two hosts that share no database**, pipe it instead:
+
+```bash
+crewlet llm export default | ssh other-host crewlet llm import default
+```
+
+`import` reads the bundle from **stdin** — a credential on argv is visible in
+`ps` and lands in shell history — and refuses to overwrite a login the target
+already has. A host that has been running holds the fresher refresh token, and
+restoring a boot-time blob over it is how a fleet logs itself out; `crewlet
+llm logout <KEY>` first if you mean to replace it.
+
 ### Token refresh across seats
 
 OAuth access tokens expire in hours, and the CLI refreshes them

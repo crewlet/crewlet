@@ -185,6 +185,19 @@ Most `${VAR}` resolution funnels through one function, so the store covers it. A
 
 Nothing writes a minted value back into the process environment. **The sink is the only durability path**, and a value minted this run is read back through the sink — which is why a run must name one before it touches the vendor, and why `-print` reports itself as holding nothing rather than pretending otherwise.
 
+A `-print` run that ROLLS BACK emits `unset VAR` for every value it printed,
+followed by the comment saying why. The stream is meant to be sourced — that
+is the whole reason it emits `export` lines — and a comment is a no-op to a
+shell, so an operator who piped the output into `source` and then hit a
+rollback would keep a revoked token exported in their session. Sourcing the
+stream to its end now leaves the environment as it started.
+
+**No sink feeds the engine directly.** `-env-file` writes a file to `source`
+before the engine starts; the engine itself reads `${VAR}` from this store and
+then from the process environment, and from nowhere else. `-secret-store` is
+the one that needs no file and no restart — see [`crewlet config
+activate`](../reference/cli.md#crewlet-config-activate).
+
 ---
 
 ## Operational notes

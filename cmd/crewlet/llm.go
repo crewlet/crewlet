@@ -48,18 +48,22 @@ Usage:
   crewlet llm login KEY                   Broker the vendor's own interactive login
   crewlet llm login KEY -from-host        Adopt a login already on this machine
   crewlet llm login KEY -capture-token    Mint a headless token into the secret store
+  crewlet llm login KEY -capture-token -print-token
+                                          ... or to stdout, storing nothing
   crewlet llm login KEY -token-stdin      Store a token you already have
   crewlet llm login KEY -username U -password-stdin
                                           Where the CLI genuinely has a credential login
   crewlet llm status KEY                  Ask the CLI who it is logged in as
   crewlet llm logout KEY                  Revoke locally and delete the credentials
-  crewlet llm export KEY -secret-store    Pack the login into the secret store for other hosts
+  crewlet llm export KEY [-secret-store]  Pack the login into a blob, or into the secret store
+  crewlet llm import KEY                  Restore a bundle from stdin onto this host
 
 Flags:
   -company PATH  Tier B, the company document naming the providers (default %q)
   -config PATH   Tier A, carrying the store and the secret keyring (default %q)
   -home PATH     Read a host login from somewhere other than this user's home
   -no-smoke      Skip doctor's real completion
+  -print-token   Write a captured token to stdout instead of the store (login only)
 `
 
 func runLLM(args []string, stdout, stderr io.Writer) error {
@@ -95,6 +99,8 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 		"write the bundle into the encrypted secret store (export only)")
 	noSmoke := fs.Bool("no-smoke", false,
 		"skip the real completion (doctor only)")
+	printToken := fs.Bool("print-token", false,
+		"write a captured token to stdout instead of storing it (login only)")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -122,7 +128,7 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 			providers: providers, key: key, home: *home,
 			fromHost: *fromHost, captureToken: *captureToken,
 			tokenStdin: *tokenStdin, username: *username, passwordStdin: *passwordStdin,
-			bootstrapPath: *bootstrapPath,
+			bootstrapPath: *bootstrapPath, printToken: *printToken,
 		}, stdout, stderr)
 	case "status":
 		p, err := oneProvider(providers, key)
@@ -142,6 +148,8 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 		return nil
 	case "export":
 		return exportLLM(ctx, providers, key, *secretStore, *bootstrapPath, stdout)
+	case "import":
+		return importLLM(providers, key, os.Stdin, stdout)
 	default:
 		fmt.Fprintf(stderr, llmUsage, defaultCompanyPath, defaultBootstrapPath)
 		return fmt.Errorf("unknown llm command %q", sub)
@@ -276,6 +284,7 @@ type loginRequest struct {
 	username      string
 	passwordStdin bool
 	bootstrapPath string
+	printToken    bool
 }
 
 func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) error {
@@ -346,6 +355,30 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 		tokenVar, err := cliagent.TokenVarName(p.Profile())
 		if err != nil {
 			return fmt.Errorf("cannot store a token for %q: %w", p.Agent(), err)
+		}
+		if req.printToken {
+			// TO STDOUT, STORING NOTHING. An operator whose secrets live
+			// in somebody else's manager should not have to write the
+			// token into Crewlet's store on the way past — which is
+			// exactly what the two-step alternative (-capture-token then
+			// `secrets get -reveal`) does, leaving a copy behind in a
+			// revision history that keeps what a later write deletes.
+			//
+			// REFUSED ON A TERMINAL: this is a credential, and printing
+			// one into a scrollback that a screen-share or a shell
+			// history will outlive is the accident the flag exists to
+			// enable, not to cause. Redirect it or pipe it.
+			if isTerminal(stdout) {
+				return errors.New(
+					"-print-token writes a credential to stdout and refuses to " +
+						"do it on a terminal: pipe it into your secret manager, " +
+						"or redirect it to a file you then remove")
+			}
+			fmt.Fprintln(stdout, token)
+			fmt.Fprintf(stderr,
+				"Wrote the headless token to stdout and stored NOTHING. "+
+					"Reference it as ${%s}.\n", tokenVar)
+			return nil
 		}
 		if err := storeLLMSecret(ctx, req.bootstrapPath, tokenVar, token); err != nil {
 			return err
@@ -429,4 +462,80 @@ func storeLLMSecret(ctx context.Context, bootstrapPath, name, value string) erro
 		return fmt.Errorf("writing %s: %w", name, err)
 	}
 	return nil
+}
+
+// importLLM restores an exported credential bundle onto this host.
+//
+// # The other half of export
+//
+// `crewlet llm export KEY` writes a blob to stdout and, without this, nothing
+// read it back: the documented way to "move a login onto another host" ended
+// at a string in a terminal. The `-secret-store` half reaches a second host
+// only where the two share a database, which a fleet does and two laptops do
+// not.
+//
+// FROM STDIN, never from a path argument: a credential bundle on argv is
+// visible in `ps` and lands in shell history, and the natural spelling —
+// `crewlet llm export k | ssh host crewlet llm import k` — is a pipe anyway.
+//
+// It REFUSES TO OVERWRITE an existing login, which is [Provider.RestoreBundle]'s
+// own rule: a host that has been running holds the fresher refresh token, and
+// restoring a blob over it is how a fleet logs itself out. That is reported
+// here rather than swallowed, because "nothing happened" and "restored" look
+// identical from the outside and only one of them means the host is ready.
+func importLLM(providers []cliAgentProvider, key string, stdin io.Reader, stdout io.Writer) error {
+	p, err := oneProvider(providers, key)
+	if err != nil {
+		return err
+	}
+	if key == "" {
+		key = providers[0].key
+	}
+	if p.Workspace().HasLogin() {
+		return fmt.Errorf(
+			"%s already has a login in %s, and restoring over it would replace "+
+				"a fresher refresh token with an older one — log it out first "+
+				"(`crewlet llm logout %s`) if you mean to replace it",
+			key, p.Workspace().CredentialsDir(), key)
+	}
+	raw, err := io.ReadAll(io.LimitReader(stdin, maxBundleBytes))
+	if err != nil {
+		return fmt.Errorf("reading the bundle from stdin: %w", err)
+	}
+	blob := strings.TrimSpace(string(raw))
+	if blob == "" {
+		return errors.New(
+			"stdin held no bundle: pipe one in, e.g. " +
+				"`crewlet llm export " + key + " | ssh host crewlet llm import " + key + "`")
+	}
+	if err := p.RestoreBundle(blob); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Restored %s into %s.\nVerify it with `crewlet llm doctor %s`.\n",
+		key, p.Workspace().CredentialsDir(), key)
+	return nil
+}
+
+// maxBundleBytes bounds what import will read.
+//
+// A credential directory is a handful of small JSON files; 8 MiB is orders of
+// magnitude above any real one and still refuses to buffer whatever a
+// mistyped pipe happens to be carrying.
+const maxBundleBytes = 8 << 20
+
+// isTerminal reports whether a writer is a character device.
+//
+// Used by exactly one caller, to refuse printing a credential into a
+// scrollback. A conservative answer: anything this cannot inspect is treated
+// as NOT a terminal, because the alternative refuses a legitimate pipe.
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }

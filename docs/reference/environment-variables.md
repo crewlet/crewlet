@@ -179,6 +179,17 @@ A keyring lets you retire the per-secret env vars on this page (`LLM_API_KEY`, `
 
 Either way, `${VAR}` references that remain unanswered by the store still resolve from the environment.
 
+**Those are the only two sources. The engine does not read a `.env` file.**
+`crewlet … provision -env-file PATH` writes one for an operator to `source`,
+and the values reach the engine only once they are in the process
+environment — so an `-env-file` run ends with "source it and restart", every
+time. A dotenv loader in the engine would be a third source of truth for
+secrets, discovered by filename and able to override the Tier A keyring that
+opens the store, which is the inversion the two-tier design exists to refuse.
+`-secret-store` is the path that needs no file and no restart: the values land
+in the encrypted table, and [`crewlet config activate`](cli.md#crewlet-config-activate)
+makes a running fleet re-read them.
+
 **Nothing in Tier A can move into the store**, no matter how it is configured — `CREWLET_SECRET_KEY_<ID>` above all. Tier A is what locates and decrypts the store, so it is always env- or file-sourced; it resolves with the store deliberately switched off.
 
 ---

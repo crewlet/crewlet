@@ -31,10 +31,11 @@ subcommand below is served by it.
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key |
 | `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and login state |
 | `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns (`-no-smoke` stops before the completion) |
-| `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md), `-token-stdin` for one you already hold |
+| `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's credential files |
 | `crewlet llm export <KEY> [-secret-store]` | Pack the login into one portable blob — stdout, or the secret store under the name the engine restores from on a fresh host |
+| `crewlet llm import <KEY>` | Restore a bundle from **stdin** onto this host; refuses to overwrite a login that is already there |
 | `crewlet plane import <company.yaml> <directory>` | Publish local [Tool Skill](../concepts/tool-skills.md) + [knowledge-doc](../concepts/knowledge-system.md#publishing-knowledge-docs) markdown into [Plane](../integrations/plane.md) — `trigger:` ⇒ skill in the Tool Skills project, otherwise ⇒ doc in its parent-directory project. Idempotent by `external_id`; `-prune` removes orphaned skill pages. |
 | `crewlet plane resync <company.yaml>` | Re-run the engine's own skills walk against a throwaway registry and print what loads — a read-only diagnostic, not a way to change a running engine |
 | `crewlet plane provision <company.yaml>` | Reconcile the config into [Plane](../integrations/plane.md): one service account per agent seat, project memberships, per-agent API tokens (minted from the config's `${VAR}` references), the `crewlet-engine` read account, and the workspace webhook (secret captured) — idempotent, with rotation and decommission paths |
@@ -52,6 +53,19 @@ subcommand below is served by it.
 
 > **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **this node's secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the vendor. With no bootstrap at that path, or one declaring no `secrets.keys`, the run resolves from the environment alone and says so on its first line. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
 
+
+> **Every command except `crewlet run` logs at `warn`.** They open a store,
+> which logs a migration line per schema file and an open line per call —
+> noise on a one-shot command whose stdout is meant to be piped, read or
+> diffed. That is a default, not a ceiling: export `CREWLET_LOG_LEVEL=debug`
+> (or `info` / `error`) to turn it up, which is exactly what a half-applied
+> migration or a failing deploy gate needs. It is an environment variable
+> rather than a flag on a dozen commands because it belongs to the
+> *invocation* — a CI step exports it once and everything it runs answers. A
+> value this build does not recognise resolves to `warn`: a bad log level must
+> never be why an operator cannot run a migration, and it must not quietly
+> change the default either. `crewlet run` has its own `-log-level` / `-debug`
+> flags and its own default of `info`.
 ## `crewlet run`
 
 ```
@@ -456,9 +470,11 @@ crewlet llm list
 crewlet llm doctor [KEY] [-no-smoke]
 crewlet llm login  <KEY> [-from-host | -capture-token | -token-stdin |
                           -username U -password-stdin] [-home PATH]
+                          [-print-token]
 crewlet llm status <KEY>
 crewlet llm logout <KEY>
 crewlet llm export <KEY> [-secret-store]
+crewlet llm import <KEY>          # bundle on stdin
 ```
 
 The operator side of a [subscription LLM backend](../concepts/subscription-llm-backends.md):
@@ -481,20 +497,35 @@ catches a plan whose quota is exhausted.
 | *(no flag)* | Broker the vendor's own interactive login and keep the result |
 | `-from-host` | Adopt a login this machine already has, e.g. from running the CLI by hand |
 | `-capture-token` | Mint a **headless token** into the secret store — the only shape a remote [code sandbox](../concepts/code-sandbox.md) can use, because a token is one scoped revocable variable and credential *files* never leave the engine host |
+| `-capture-token -print-token` | The same mint, written to **stdout** and stored nowhere — for an operator whose secrets live in somebody else's manager. It **refuses to run on a terminal**: this is a credential, and a token in a scrollback outlives the command, while a screen-share or a shell history outlives the scrollback. Pipe it or redirect it. The two-step alternative (`-capture-token`, then `secrets get -reveal`) writes the token into the store on the way past, which is precisely what this avoids. |
 | `-token-stdin` / `-username U -password-stdin` | Store a credential you already hold, where the CLI genuinely has one |
 
 **`export`** packs a login into one portable blob so another host can come up
-already authenticated. There is no matching `import`: the engine restores the
-blob **itself**, at boot, from `cli.auth.credential_bundle` or the conventional
-`CREWLET_LLM_CLI_<KEY>_CREDENTIALS` variable, and only into an empty credential
-directory — so a fresh container is authenticated before its first turn rather
-than after an operator remembers a command. See
-[environment variables](environment-variables.md).
+already authenticated. `-secret-store` writes it to this node's [secret
+store](../concepts/secret-store.md) instead of stdout; without it the blob goes
+to stdout in the clear, which is what you want when piping into your own
+secret manager and never what you want in a shell history.
 
-`-secret-store` writes to this node's [secret store](../concepts/secret-store.md)
-instead of stdout. Without it the blob goes to stdout in the clear, which is
-what you want when piping into your own secret manager and never what you want
-in a shell history.
+**`import`** is the other half, and it reads the bundle from **stdin** — a
+credential on argv is visible in `ps` and lands in shell history, and the
+natural spelling is a pipe anyway:
+
+```bash
+crewlet llm export claude | ssh other-host crewlet llm import claude
+```
+
+It **refuses to overwrite an existing login**, loudly: a host that has been
+running holds the fresher refresh token, and restoring a boot-time blob over
+it is how a fleet logs itself out. `crewlet llm logout <KEY>` first if you
+mean to replace it.
+
+The engine also restores a bundle **itself**, at boot, from
+`cli.auth.credential_bundle` or the conventional
+`CREWLET_LLM_CLI_<KEY>_CREDENTIALS` variable — and only into an empty
+credential directory, by the same rule. That path authenticates a fresh
+container before its first turn rather than after an operator remembers a
+command; `import` is for the hosts that are already up. See [environment
+variables](environment-variables.md).
 
 ---
 
@@ -517,7 +548,7 @@ Unlike the Slack provisioner there is **no app manifest, no local ledger and no 
 | Flag | Description |
 |------|-------------|
 | `-admin-token` | System-admin personal access token. Falls back to `$MATTERMOST_ADMIN_TOKEN`. The bots' own tokens are what this run mints, so it cannot bootstrap itself from them. |
-| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). |
+| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). `-print` writes `export VAR=…` lines and, when a run rolls back, `unset VAR` for each — the stream is meant to be sourced, and a comment is a no-op to a shell, so an operator who piped it into `source` would otherwise keep a revoked token exported. |
 | `-rotate` | Mint a fresh token for every bot, including bots whose current one still works. **Restart the engine afterwards.** |
 | `-dry-run` | Print the plan and touch nothing. It is the **same** plan the run uses. |
 
@@ -604,7 +635,7 @@ Idempotent reconcile from company config to Plane state — the [`crewlet gitlab
 | Flag | Description |
 |------|-------------|
 | `-admin-token` | Operator credential — a **workspace-admin** API key, never stored in config. Falls back to `$PLANE_ADMIN_TOKEN`. The seats' own keys are what this run mints, so it cannot bootstrap itself from them. |
-| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials at the vendor and prints none of them. See [the secret store](../concepts/secret-store.md). |
+| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials at the vendor and prints none of them. See [the secret store](../concepts/secret-store.md). `-print` writes `export VAR=…` lines and, when a run rolls back, `unset VAR` for each — the stream is meant to be sourced, and a comment is a no-op to a shell, so an operator who piped it into `source` would otherwise keep a revoked token exported. |
 | `-public-url` | This deployment's public base URL; the webhook is registered at `<url>/webhooks/plane`. Omitted, no webhook is registered and the report says so — a hook pointing at the wrong host is worse than none, because the workspace then reports a healthy integration. |
 | `-rotate` | Mint a fresh credential for every seat, including seats whose current one still works. **Restart the engine afterwards** — the old values are revoked. |
 | `-decommission` | Delete managed service accounts whose seats have left the config. Scoped by `provisioning.username_prefix` (never empty — it defaults to `crewlet-`) and to service accounts only; a person whose name matches the prefix is left alone and reported. The instance's delete cascades tokens, memberships and the account. |

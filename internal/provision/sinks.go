@@ -244,8 +244,9 @@ func (s *EnvFileSink) rewrite() error {
 	sort.Strings(names)
 
 	var body strings.Builder
-	body.WriteString("# Written by `crewlet ... provision`. Values are single-quoted so\n" +
-		"# `source` and the engine's dotenv reader agree on them.\n")
+	body.WriteString("# Written by `crewlet ... provision`. Values are single-quoted\n" +
+		"# for `source`; the engine reads its ${VAR}s from the process\n" +
+		"# environment, so this file has to be sourced before it starts.\n")
 	for _, name := range names {
 		line, err := envfile.FormatAssignment(name, s.values[name])
 		if err != nil {
@@ -337,14 +338,25 @@ func (s *PrintSink) Record(_ context.Context, name, value string) error {
 
 // Discard implements [TokenSink].
 //
-// It cannot unprint. What it can do is SAY so, by name, which is the whole
-// of what an operator needs: these credentials have been revoked, so the
-// lines above are dead and must not be pasted anywhere.
+// # It emits `unset`, not a comment
+//
+// It cannot unprint, but this stream is meant to be SOURCED — that is the
+// whole reason it emits `export` lines — and a comment is a no-op to a shell.
+// An operator who piped the output into `source` and then hit a rollback
+// would keep a revoked token exported in their session, with the only warning
+// being a line the shell threw away. So the rollback is itself a statement:
+// sourcing the stream to its end leaves the environment as it started.
+//
+// The comment stays too, after the statements, because a person READING the
+// output needs the sentence and `unset` alone does not say why.
 func (s *PrintSink) Discard(_ context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.written) == 0 {
 		return nil
+	}
+	for _, name := range s.written {
+		fmt.Fprintf(s.w, "unset %s\n", name)
 	}
 	fmt.Fprintf(s.w, "\n# THE VALUES ABOVE ARE REVOKED and must not be used: %s\n",
 		strings.Join(s.written, ", "))

@@ -77,8 +77,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 	// noise on a one-shot command whose stdout is meant to be piped, read
 	// or diffed. `run` configures its own level from its own flag, and
 	// nothing here silences a WARNING.
+	//
+	// QUIET IS A DEFAULT, NOT A CEILING. A half-applied migration or a
+	// deploy gate that failed is exactly the run whose detail an operator
+	// needs, and pinning every non-`run` command at warn with no override
+	// left them nothing to turn up. $CREWLET_LOG_LEVEL is the escape
+	// hatch, and it is an environment variable rather than a flag on nine
+	// commands because it belongs to the INVOCATION rather than to any one
+	// of them — a CI step exports it once and every command it runs
+	// answers.
 	if cmd != "run" {
-		logging.Configure(slog.LevelWarn, logging.FormatText, stderr)
+		logging.Configure(operatorLogLevel(), logging.FormatText, stderr)
 	}
 
 	switch cmd {
@@ -1136,4 +1145,27 @@ func splitRoles(value string) []string {
 		}
 	}
 	return out
+}
+
+// operatorLogLevel is the level every non-`run` command logs at.
+//
+// Warn unless $CREWLET_LOG_LEVEL names another. A TYPO RESOLVES TO WARN —
+// this command's own default — rather than failing or drifting to info: a bad
+// log level must never be why an operator cannot run a migration, and it must
+// not quietly change the default either. `run` applies the same
+// never-fail rule to its own flag; only the fallback differs, because its
+// default is info.
+//
+// Recognised against the closed set explicitly, because logging.ParseLevel
+// cannot report "I did not recognise that" — it answers info for everything
+// it does not know, which is the right answer for `run` and the wrong one
+// here.
+func operatorLogLevel() slog.Level {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("CREWLET_LOG_LEVEL")))
+	switch raw {
+	case "debug", "info", "warn", "warning", "error":
+		return logging.ParseLevel(raw)
+	default:
+		return slog.LevelWarn
+	}
 }
