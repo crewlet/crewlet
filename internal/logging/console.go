@@ -108,6 +108,12 @@ func isTerminal(w io.Writer) bool {
 // so the eye lands on the event name. `text` and `json` are unchanged and
 // remain what a log shipper should be pointed at.
 //
+// A line with NO component renders that column blank, which is deliberate. It
+// happens to anything reaching slog.Default without going through [Get] — the
+// stdlib `log` bridge, a dependency that took the default logger — and a
+// placeholder there would be indistinguishable from a real component while
+// putting punctuation in a column whose only job is alignment.
+//
 // # Why not a logging library
 //
 // See decisions/001. The short version: the engine's logger is `*slog.Logger`

@@ -171,15 +171,38 @@ func install(level slog.Level, format Format, w io.Writer) {
 // Unknown names resolve to info rather than failing: a typo in a log level
 // must never be the reason a company will not boot.
 func ParseLevel(name string) slog.Level {
+	level, _ := ParseLevelName(name)
+	return level
+}
+
+// ParseLevelName is [ParseLevel], and additionally reports whether the name
+// was one this build knows.
+//
+// # Falling back is right; falling back in SILENCE is not
+//
+// Every level and format this package parses fails soft, and that is
+// deliberate — a misspelled log level must never be why a company will not
+// boot. But a soft failure nobody is told about is how `debug: true` spent
+// its whole life doing nothing: the operator sees the behaviour they did not
+// ask for and has nothing pointing at the reason. A caller that can name the
+// source of the value (a flag, an environment variable) says so instead.
+//
+// An empty name is RECOGNISED: nothing was said, and the default is the
+// correct answer to that rather than a fallback from a mistake.
+func ParseLevelName(name string) (slog.Level, bool) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "debug":
-		return slog.LevelDebug
+		return slog.LevelDebug, true
 	case "warn", "warning":
-		return slog.LevelWarn
+		// "warning" is accepted here and refused in a config file — see
+		// [Level.Valid]. This is the path that may not fail.
+		return slog.LevelWarn, true
 	case "error":
-		return slog.LevelError
+		return slog.LevelError, true
+	case "info", "":
+		return slog.LevelInfo, true
 	default:
-		return slog.LevelInfo
+		return slog.LevelInfo, false
 	}
 }
 
@@ -193,11 +216,21 @@ func ParseLevel(name string) slog.Level {
 // typo goes unnoticed; a config file's `logging.format` is checked against
 // [Formats] and refused outright, which is where a typo should surface.
 func ParseFormat(name string) Format {
+	format, _ := ParseFormatName(name)
+	return format
+}
+
+// ParseFormatName is [ParseFormat], and additionally reports whether the
+// name was one this build knows — see [ParseLevelName] for why a caller
+// wants to be told.
+func ParseFormatName(name string) (Format, bool) {
 	switch f := Format(strings.ToLower(strings.TrimSpace(name))); {
+	case f == "":
+		return FormatConsole, true
 	case f.Valid():
-		return f
+		return f, true
 	default:
-		return FormatConsole
+		return FormatConsole, false
 	}
 }
 

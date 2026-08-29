@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -162,6 +164,73 @@ func TestOperatorLogFormat(t *testing.T) {
 			t.Setenv("CREWLET_LOG_FORMAT", tc.set)
 			if got := operatorLogFormat(); got != tc.want {
 				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A SOFT FAILURE SAYS SO. Both of these fall back rather than failing — a
+// misspelled log level must never be why a company will not boot — but a
+// fallback nobody is told about is precisely how `debug: true` went its whole
+// life doing nothing: the operator gets behaviour they did not ask for, with
+// nothing anywhere pointing at why.
+//
+// Not parallel: it reconfigures the process-wide logger. See [TestMain].
+func TestUnrecognisedLogNamesAreReported(t *testing.T) {
+	cases := []struct {
+		name          string
+		level, format string
+		wantEvents    []string
+		quiet         bool
+	}{
+		{name: "both good", level: "debug", format: "json", quiet: true},
+		{name: "nothing said", level: "", format: "", quiet: true},
+		// "warning" is accepted by the flag parser even though a config
+		// file refuses it, so it must not be reported here.
+		{name: "the warning alias", level: "warning", format: "text", quiet: true},
+		{
+			name: "a misspelled level", level: "dbug", format: "json",
+			wantEvents: []string{"log_level_unrecognised"},
+		},
+		{
+			name: "a misspelled format", level: "info", format: "jsonn",
+			wantEvents: []string{"log_format_unrecognised"},
+		},
+		{
+			name: "both misspelled", level: "wrn", format: "pretty",
+			wantEvents: []string{"log_level_unrecognised", "log_format_unrecognised"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var sink bytes.Buffer
+			logging.Configure(slog.LevelWarn, logging.FormatText, &sink)
+			t.Cleanup(func() {
+				logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+			})
+
+			warnUnrecognisedLogNames(logging.Get("cli"), "flag",
+				"-log-level", tc.level, "-log-format", tc.format)
+
+			got := sink.String()
+			if tc.quiet {
+				if got != "" {
+					t.Fatalf("a valid pair was reported as a mistake: %q", got)
+				}
+				return
+			}
+			for _, want := range tc.wantEvents {
+				if !strings.Contains(got, want) {
+					t.Errorf("missing %s in %q", want, got)
+				}
+			}
+			// The message has to carry BOTH what was written and what the
+			// build would have taken, or it names a problem without
+			// naming the fix.
+			for _, want := range []string{`value=`, `using=`, `want=`, `source=flag`} {
+				if !strings.Contains(got, want) {
+					t.Errorf("the warning does not carry %s: %q", want, got)
+				}
 			}
 		})
 	}

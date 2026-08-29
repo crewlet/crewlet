@@ -528,13 +528,23 @@ its default whether or not anyone typed it, so `crewlet run` distinguishes
 default. `-debug` only ever *raises*: to quieten a node whose file says
 `debug: true`, pass `-log-level info`.
 
+**The first lines of a run come out in the flag's shape, not the file's.**
+The `${VAR}` warnings a Tier A document produces are emitted while it is being
+read, so a node configured `format: json` writes those few lines as `console`
+before switching. That is the best a process can do about a file it has not
+opened yet, and it is the right way round: `-debug` is turned on most often to
+watch the config load itself fail, so the flags have to take effect first.
+
 A value the build does not recognise is treated differently in the two
 places, on purpose. In a **flag** it resolves to the default — a bad log level
 must never be why a company will not boot. In the **file** it is refused, with
 the field path, by `crewlet validate` and at boot: a flag is typed by someone
 watching the process start, and a file is written once and deployed for
 months, so a misspelled level there would run quietly at `info` for as long as
-nobody looked.
+nobody looked. Either way the fallback is never *silent*: an unrecognised
+`-log-level` / `-log-format`, or `$CREWLET_LOG_LEVEL` / `$CREWLET_LOG_FORMAT`,
+logs a `log_level_unrecognised` / `log_format_unrecognised` warning naming what
+was written, what the build used instead, and what it accepts.
 
 #### The three formats
 

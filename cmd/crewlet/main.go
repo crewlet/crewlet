@@ -108,6 +108,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		// data race, and one test's log lines landing in another's
 		// output. See [logging.Configure].
 		logging.SetVerbosity(operatorLogLevel(), operatorLogFormat())
+		warnUnrecognisedLogNames(logging.Get("cli"), "environment",
+			"CREWLET_LOG_LEVEL", os.Getenv("CREWLET_LOG_LEVEL"),
+			"CREWLET_LOG_FORMAT", os.Getenv("CREWLET_LOG_FORMAT"))
 	}
 
 	switch cmd {
@@ -602,6 +605,7 @@ func runEngine(args []string, stderr io.Writer) error {
 	// command's to install.
 	logging.SetVerbosity(flagLogLevel(*logLevel, *debug), logging.ParseFormat(*logFormat))
 	log := logging.Get("cli")
+	warnUnrecognisedLogNames(log, "flag", "-log-level", *logLevel, "-log-format", *logFormat)
 
 	boot, company, err := cfg.load()
 	if err != nil {
@@ -1155,6 +1159,56 @@ func flagLogLevel(logLevel string, debug bool) slog.Level {
 		return slog.LevelDebug
 	}
 	return logging.ParseLevel(logLevel)
+}
+
+// warnUnrecognisedLogNames says so when a level or format name did not
+// resolve to what it spells.
+//
+// # The fallback stays; the silence does not
+//
+// Both of these fail SOFT on purpose — a misspelled log level must never be
+// why a company will not boot, and a CI step must never lose a migration to
+// a typo in an export. But a soft failure nobody is told about is exactly
+// how `debug: true` went its whole life doing nothing: the operator sees
+// behaviour they did not ask for, with nothing anywhere pointing at why.
+// Warning costs one line on the runs that have a mistake in them and nothing
+// at all on the runs that do not.
+//
+// It logs rather than returning an error because the FILE is where a bad
+// value is refused — see config.Logging.validate. A flag and an environment
+// variable belong to one invocation and may not fail it.
+func warnUnrecognisedLogNames(log *slog.Logger, source,
+	levelField, level, formatField, format string,
+) {
+	if resolved, ok := logging.ParseLevelName(level); !ok {
+		log.Warn("log_level_unrecognised", "source", source, "field", levelField,
+			"value", level, "using", resolved.String(),
+			"want", strings.Join(levelNames(), ", "))
+	}
+	if resolved, ok := logging.ParseFormatName(format); !ok {
+		log.Warn("log_format_unrecognised", "source", source, "field", formatField,
+			"value", format, "using", string(resolved),
+			"want", strings.Join(formatNames(), ", "))
+	}
+}
+
+// levelNames and formatNames render the closed sets for the message above,
+// FROM the sets themselves — a hand-written list here would tell an operator
+// to write a value the next release stopped accepting.
+func levelNames() []string {
+	out := make([]string, 0, len(logging.Levels))
+	for _, l := range logging.Levels {
+		out = append(out, string(l))
+	}
+	return out
+}
+
+func formatNames() []string {
+	out := make([]string, 0, len(logging.Formats))
+	for _, f := range logging.Formats {
+		out = append(out, string(f))
+	}
+	return out
 }
 
 // logSettings resolves how loud `crewlet run` is, and in what shape, from

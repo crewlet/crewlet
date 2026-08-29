@@ -3,6 +3,8 @@ package logging
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -336,5 +338,35 @@ func TestTermDumbIsNotAColourableTerminal(t *testing.T) {
 	t.Setenv("TERM", "dumb")
 	if isTerminal(os.Stdout) {
 		t.Fatal("TERM=dumb should never be treated as a colourable terminal")
+	}
+}
+
+// EVERY DECLARED FORMAT HAS ITS OWN CASE IN install.
+//
+// The switch falls through to console for anything it does not recognise,
+// which is right for a typo and wrong for a format this package advertises:
+// a fourth entry in [Formats] with no case beside it would validate, pass a
+// config round-trip, appear in the generated schema and in an editor's
+// completion list, and then render as console with nothing saying so. The
+// closed set and the constructor that serves it are asserted against each
+// other here, the way providers.sandbox.type's already are.
+func TestEveryDeclaredFormatInstallsItsOwnHandler(t *testing.T) {
+	t.Cleanup(func() { Configure(slog.LevelInfo, FormatConsole, io.Discard) })
+
+	byHandler := map[string]Format{}
+	for _, format := range Formats {
+		install(slog.LevelInfo, format, io.Discard)
+		name := fmt.Sprintf("%T", root.Load().Handler())
+		if other, dup := byHandler[name]; dup {
+			t.Errorf("formats %q and %q both install %s — install's switch "+
+				"has no case for one of them, so it renders as the fallback",
+				format, other, name)
+		}
+		byHandler[name] = format
+	}
+
+	install(slog.LevelInfo, FormatConsole, io.Discard)
+	if _, ok := root.Load().Handler().(*consoleHandler); !ok {
+		t.Errorf("the console format installed %T", root.Load().Handler())
 	}
 }

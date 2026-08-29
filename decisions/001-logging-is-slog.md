@@ -36,8 +36,36 @@ encoder is a handler in this package.**
 2. **Nothing here needs the performance.** zap's case is zero-allocation structured
    logging at very high rates. This engine's hot paths are network calls — an LLM
    completion, a JetStream publish, a store write. A handful of `Debug` lines around
-   those are not measurable against them, and `lazy.Enabled` already answers a
-   suppressed debug line without allocating.
+   those are not measurable against them.
+
+   Measured, not asserted — `go test ./internal/logging -bench .`, and the
+   benchmarks are committed beside the package so the next reader can re-run them
+   rather than trust this table (Xeon @ 2.10 GHz, Go 1.27):
+
+   | | ns/op | B/op | allocs/op |
+   |---|---|---|---|
+   | An emitted line, through `lazy` | 976 | 296 | 5 |
+   | The same line, straight at the handler | 714 | 8 | 1 |
+   | A **suppressed** debug line | 9.6 | 0 | 0 |
+
+   A suppressed debug line already costs nothing, because `lazy.Enabled` answers
+   from the root without replaying the recorded ops — so a `Debug` call in a loop
+   needs no hand-written guard. That is the case that would have mattered.
+
+### The 262 ns this design does cost, and why it stays
+
+`lazy.resolve` rebuilds the handler chain for **every emitted record** — the gap in
+the table above, ~262 ns and 4 allocations a line. It buys the guarantee this package
+exists for: a `var log = logging.Get("store")` evaluated at package init still follows
+a `Configure` that happens after flag parsing.
+
+It could be cached behind a generation counter bumped by `install`, which would
+recover most of it. That is deliberately **not** done, for the same reason zap is not
+adopted: there is no hot path, the volume is low, and the object in question is the
+process-wide logging root — where a stale cache entry after a reconfiguration is
+exactly the bug `lazy` exists to prevent. Buying 262 ns with that risk would
+contradict the argument three paragraphs up. Revisit it if a profile ever shows
+logging in it; the benchmarks above are how you would know.
 
 3. **Sampling would be wrong here anyway.** zap's other headline feature drops
    duplicate lines under load. A seat's event log is an audit trail an operator
@@ -60,6 +88,12 @@ makes the format readable, and it is the part a general-purpose library cannot s
 parser, and something a runbook may already depend on. Colouring it in place would
 have put escape codes into a format whose whole value is being machine-legible
 without one.
+
+`install`'s switch falls through to `console` for anything it does not recognise,
+which is right for a typo and wrong for a format the package advertises.
+`TestEveryDeclaredFormatInstallsItsOwnHandler` asserts the closed set against the
+constructor, so a fourth entry in `Formats` with no case beside it fails rather than
+silently rendering as `console`.
 
 So there are three, and each has one reader:
 
@@ -114,3 +148,9 @@ The two layers disagree on purpose about a value the build does not recognise. A
 **flag** resolves a typo to the default, because a bad log level must never be why a
 company will not boot. The **file** refuses it, with the field path: a flag is typed by
 someone watching the process start, and a file is written once and deployed for months.
+
+Neither layer is *silent* about it. The flag and environment paths log
+`log_level_unrecognised` / `log_format_unrecognised`, naming what was written, what was
+used instead, and the closed set — because a soft failure nobody is told about is the
+entire mechanism by which `debug: true` stayed broken. The fallback was always the
+right behaviour; the silence never was.
