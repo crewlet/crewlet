@@ -23,13 +23,18 @@ services:
   # it is the only place the Pulsar backend is certified at all.
   # ---------------------------------------------------------------------------
   pulsar:
-    # Pinned, and pinned to the version CI certifies against. This service is
-    # the local half of the ONE suite that certifies the Pulsar backend, so a
-    # floating tag would mean a local pass says nothing about the broker the
-    # job will run -- and `latest` gives Dependabot's docker-compose entry no
-    # version to bump, which is a service watched by nothing that looks
-    # exactly like a service with nothing to update. internal/version asserts
-    # this tag and the workflow's are the same.
+    # Pinned, and this is the ONLY place the broker's version lives. The
+    # conformance job in ci.yml starts THIS service rather than pinning a
+    # broker of its own, so a local run and CI certify the same build by
+    # construction -- they were two pins held equal by an assertion, which
+    # works right until somebody moves one and both runs stay green against
+    # different brokers. It also means Dependabot's docker-compose entry is
+    # what moves the version CI certifies: the bump pull request IS the
+    # re-certification. `latest` would undo both halves -- no version for
+    # Dependabot to bump, on a service watched by nothing that looks exactly
+    # like one with nothing to update, and a conformance pass naming a build
+    # nobody can identify afterwards. internal/version asserts it stays one
+    # pin, and that ci.yml still brings this service up.
     image: apachepulsar/pulsar:4.2.4
     profiles: [pulsar]
     # Standalone runs broker + metadata + BookKeeper in one container.

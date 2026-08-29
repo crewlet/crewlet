@@ -230,6 +230,12 @@ whether it lands. Three things are worth knowing:
   readable, and Dekaf publishes no floating tag. Closing that pull request is
   the right answer; Dependabot does not reopen one for a version you have
   already turned down.
+- **The Pulsar bump re-certifies the backend.** The conformance job starts the
+  broker from `docker-compose.yml` rather than pinning one of its own, so that
+  file is the only place the version lives and merging its bump is what moves
+  the build the Pulsar backend is certified against. Read it as a
+  re-certification rather than a routine bump — CI proves the new broker still
+  holds the close-driven handoff seat ownership depends on.
 - **`docker` and `docker-compose` are two ecosystems, not one.** The first
   reads `Dockerfile`s and the second reads Compose files; neither sees the
   other's manifests, so a repository with both needs both entries.
