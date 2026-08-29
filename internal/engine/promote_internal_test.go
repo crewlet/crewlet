@@ -212,11 +212,14 @@ func TestPromotionIsBuiltWhenThereIsSomewhereToDraft(t *testing.T) {
 	}
 }
 
-// WITH NO KNOWLEDGE BASE THERE IS NO PROMOTION. A promoted skill is a page a
-// person reviews, and there is nowhere to put one — writing it into an
-// agent's own catalogue instead would be exactly the unreviewed cross-agent
-// skill the review step exists to prevent.
-func TestPromotionIsIdleWithoutAKnowledgeBase(t *testing.T) {
+// THE WRITER IS READ AT PASS TIME, NOT WHEN THE PASS IS ARMED.
+//
+// The background passes are armed BEFORE startNotifications builds the
+// vendor clients, so a promoter that resolved its writer at arm time held a
+// nil for every company that ever ran — and the only symptom was one boot
+// line saying no knowledge base was configured while one was. A pass that
+// runs after the wiring catches up must find it.
+func TestAPromoterArmedBeforeTheKnowledgeBaseStillFindsIt(t *testing.T) {
 	t.Parallel()
 	e := engineOver(t)
 	c := promotionCompany(t, `units:
@@ -229,8 +232,46 @@ func TestPromotionIsIdleWithoutAKnowledgeBase(t *testing.T) {
         llm: gateway
 `)
 	setEpoch(e, c)
-	if got := e.buildPromoter(c); got != nil {
-		t.Fatal("a promoter was built with no knowledge base to draft into")
+
+	// Armed with nothing wired — the boot order this reproduces.
+	promoter := e.buildPromoter(c)
+	if promoter == nil {
+		t.Fatal("no promoter was armed, so a company whose knowledge base " +
+			"wires moments later can never promote")
+	}
+	if e.promotionWriter() != nil {
+		t.Fatal("a writer resolved before the knowledge base was wired")
+	}
+
+	// The inbound service catches up, as it does two lines later at boot.
+	wireConfluence(e)
+	if e.promotionWriter() == nil {
+		t.Fatal("the writer stayed nil after the knowledge base was wired")
+	}
+	// And the armed pass runs against it rather than the nil it was armed
+	// with: a captured writer would panic here, and a pass that re-checked
+	// nothing would report idle for ever.
+	promoter.Pass(t.Context())
+}
+
+// THE TOGGLE IS WHAT DECIDES, not the wiring. A company with promotion on
+// and no knowledge base yet is armed; the pass itself reports the idleness.
+func TestPromotionIsArmedBeforeTheKnowledgeBaseIsWired(t *testing.T) {
+	t.Parallel()
+	e := engineOver(t)
+	c := promotionCompany(t, `units:
+  - name: Platform
+    integrations:
+      confluence: {space: ENG}
+    roles:
+      - name: Engineer
+        handle: eng
+        llm: gateway
+`)
+	setEpoch(e, c)
+	if got := e.buildPromoter(c); got == nil {
+		t.Fatal("promotion was left unarmed because the knowledge base was " +
+			"not wired yet, which is the boot order it always sees")
 	}
 }
 

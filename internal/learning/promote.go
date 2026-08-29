@@ -131,9 +131,23 @@ type PromotionWriter interface {
 // promoting into a space the company has moved off.
 type PromotionUnits func() []PromotionUnit
 
+// PromotionWriterFor resolves the knowledge base to draft into, or nil.
+//
+// A FUNCTION, for the reason [PromotionUnits] is one: the answer is a
+// function of the live epoch, and a writer captured when the pass was built
+// is a writer captured before the knowledge backend was wired. That is not
+// hypothetical — the background passes are armed after the node exists and
+// BEFORE the inbound service builds its vendor clients, so a captured writer
+// was nil for every company, and the only symptom was one boot line saying
+// no knowledge base was configured while one was.
+//
+// Nil is an ordinary answer — the company has no knowledge base — and the
+// pass says so once rather than failing.
+type PromotionWriterFor func() PromotionWriter
+
 // Promoter distils what several seats in a unit independently learned.
 type Promoter struct {
-	writer PromotionWriter
+	writer PromotionWriterFor
 	skills *Skills
 	models Models
 	units  PromotionUnits
@@ -147,7 +161,7 @@ type Promoter struct {
 // PromoterOptions configures the pass. Zero values take the shipped defaults,
 // which are the numbers config.DefaultLearning carries.
 type PromoterOptions struct {
-	Writer PromotionWriter
+	Writer PromotionWriterFor
 	Skills *Skills
 	Models Models
 	Units  PromotionUnits
@@ -172,9 +186,10 @@ type PromoterOptions struct {
 func NewPromoter(opts PromoterOptions) (*Promoter, error) {
 	switch {
 	case opts.Writer == nil:
-		return nil, fmt.Errorf("learning: skill promotion needs a knowledge " +
-			"base to draft into — configure integrations.confluence, or set " +
-			"learning.skill_promotion.enabled: false")
+		// The RESOLVER is missing, which is a wiring mistake rather than a
+		// configuration one: a company with no knowledge base has a
+		// resolver that answers nil, and the pass reports that itself.
+		return nil, fmt.Errorf("learning: skill promotion needs a writer resolver")
 	case opts.Skills == nil:
 		return nil, fmt.Errorf("learning: skill promotion needs a skill store to read")
 	case opts.Models == nil:
@@ -210,12 +225,25 @@ func NewPromoter(opts PromoterOptions) (*Promoter, error) {
 // re-clusters the same rows and tries again, which is the retry, and failing
 // the pass would take the units after it down with the one that broke.
 func (p *Promoter) Pass(ctx context.Context) []events.Payload {
+	// RESOLVED ONCE, before the walk: which knowledge base a company drafts
+	// into cannot change inside one pass, and asking per unit would ask the
+	// engine for the same answer once per team.
+	writer := p.writer()
+	if writer == nil {
+		log.Info("skill_promotion_idle",
+			"reason", "no knowledge base is configured",
+			"detail", "a promoted skill is a draft page a unit lead reviews, "+
+				"and there is nowhere to put one; configure "+
+				"integrations.confluence, or set "+
+				"learning.skill_promotion.enabled: false")
+		return nil
+	}
 	var out []events.Payload
 	for _, unit := range p.units() {
 		if ctx.Err() != nil {
 			return out
 		}
-		payload, err := p.promoteUnit(ctx, unit)
+		payload, err := p.promoteUnit(ctx, writer, unit)
 		if err != nil {
 			log.Warn("skill_promotion_failed", "unit", unit.ID, "error", err.Error())
 			continue
@@ -228,7 +256,7 @@ func (p *Promoter) Pass(ctx context.Context) []events.Payload {
 }
 
 // promoteUnit promotes one unit's strongest convergence, or reports why not.
-func (p *Promoter) promoteUnit(ctx context.Context, unit PromotionUnit) (events.Payload, error) {
+func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit PromotionUnit) (events.Payload, error) {
 	if len(unit.Handles) < p.minSiblings {
 		// Fewer seats than the threshold, so no cluster in this unit can
 		// ever reach it. Checked before the catalogue read because it is
@@ -287,7 +315,7 @@ func (p *Promoter) promoteUnit(ctx context.Context, unit PromotionUnit) (events.
 	// the auto-drafted parent by title prefix, so a draft published without
 	// it reaches every agent in the company unreviewed.
 	title := knowledge.AutoDraftTitlePrefix + draft.Name
-	page, created, err := p.writer.CreateDraft(ctx, unit.Container, title,
+	page, created, err := writer.CreateDraft(ctx, unit.Container, title,
 		renderPromotion(unit, best, draft))
 	if err != nil {
 		return nil, fmt.Errorf("drafting %q into %s: %w", title, unit.Container, err)

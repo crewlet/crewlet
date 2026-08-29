@@ -60,7 +60,8 @@ func promoter(t *testing.T, db *store.DB, w *fakeWriter, answer string,
 ) (*learning.Promoter, *auxProvider) {
 	t.Helper()
 	p := &auxProvider{replies: []llm.Completion{{Content: answer}}}
-	opts.Writer, opts.Skills, opts.Models = w, learning.NewSkills(db), &stubModels{p: p}
+	opts.Writer = func() learning.PromotionWriter { return w }
+	opts.Skills, opts.Models = learning.NewSkills(db), &stubModels{p: p}
 	opts.Units = func() []learning.PromotionUnit { return []learning.PromotionUnit{unit} }
 	built, err := learning.NewPromoter(opts)
 	if err != nil {
@@ -254,7 +255,9 @@ func TestAFailedDraftCostsOneUnitNotThePass(t *testing.T) {
 	failing := &fakeWriter{err: errors.New("the wiki is down")}
 	fine := &fakeWriter{}
 	p, err := learning.NewPromoter(learning.PromoterOptions{
-		Writer: splitWriter{broken: failing, ok: fine},
+		Writer: func() learning.PromotionWriter {
+			return splitWriter{broken: failing, ok: fine}
+		},
 		Skills: learning.NewSkills(db),
 		Models: &stubModels{p: &auxProvider{replies: []llm.Completion{{Content: promotionDraft}}}},
 		Units: func() []learning.PromotionUnit {
@@ -346,7 +349,8 @@ func TestAPromoterNeedsEveryHalf(t *testing.T) {
 	t.Parallel()
 	db := newStore(t)
 	full := learning.PromoterOptions{
-		Writer: &fakeWriter{}, Skills: learning.NewSkills(db),
+		Writer: func() learning.PromotionWriter { return &fakeWriter{} },
+		Skills: learning.NewSkills(db),
 		Models: &stubModels{p: &auxProvider{}},
 		Units:  func() []learning.PromotionUnit { return nil },
 	}
@@ -382,5 +386,53 @@ func TestAPromotionTheModelDeclinesDraftsNothing(t *testing.T) {
 	}
 	if len(w.calls()) != 0 {
 		t.Fatalf("drafts = %d — a declined promotion still wrote a page", len(w.calls()))
+	}
+}
+
+// THE WRITER IS RESOLVED PER PASS, not once when the promoter is built.
+//
+// The engine arms the background passes BEFORE the inbound service builds
+// its vendor clients, so a promoter that resolved its writer at construction
+// held a nil for every company that ever ran. A resolver that answers late
+// must be picked up by the pass that runs after it does — and the failure
+// this guards is silent: a captured nil promotes nothing for the life of the
+// process while the pass reports itself idle.
+func TestThePassResolvesItsWriterEachTime(t *testing.T) {
+	t.Parallel()
+	db := newStore(t)
+	for _, h := range []string{"dev", "sre", "qa"} {
+		seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
+	}
+
+	var writer learning.PromotionWriter // nil until the backend "wires"
+	w := &fakeWriter{}
+	p, err := learning.NewPromoter(learning.PromoterOptions{
+		Writer: func() learning.PromotionWriter { return writer },
+		Skills: learning.NewSkills(db),
+		Models: &stubModels{p: &auxProvider{
+			replies: []llm.Completion{{Content: promotionDraft}},
+		}},
+		Units:       func() []learning.PromotionUnit { return []learning.PromotionUnit{unitOf("dev", "sre", "qa")} },
+		MinSiblings: 3,
+	})
+	if err != nil {
+		t.Fatalf("NewPromoter: %v", err)
+	}
+
+	if got := p.Pass(t.Context()); len(got) != 0 {
+		t.Fatalf("a pass with no knowledge base promoted %d thing(s)", len(got))
+	}
+	if calls := w.calls(); len(calls) != 0 {
+		t.Fatalf("a draft was written with no knowledge base: %v", calls)
+	}
+
+	writer = w // the inbound service catches up
+	if got := p.Pass(t.Context()); len(got) != 1 {
+		t.Fatalf("the pass promoted %d thing(s) after the knowledge base "+
+			"wired, want 1 — the writer was captured when the pass was built",
+			len(got))
+	}
+	if calls := w.calls(); len(calls) != 1 {
+		t.Fatalf("draft calls = %d, want 1", len(calls))
 	}
 }

@@ -29,6 +29,12 @@ func (e *Engine) promotionWired() bool {
 
 // promotionWriter builds the writer for the wired knowledge base.
 //
+// READ AT PASS TIME, never captured — it is handed to the pass as the
+// resolver [learning.PromotionWriterFor], because the background passes are
+// armed BEFORE the inbound service builds its vendor clients. A writer read
+// at arm time is nil for every company, and the symptom is one boot line
+// saying no knowledge base is configured while one is.
+//
 // Nil means no backend is wired, which disables promotion rather than failing
 // it. A company with no wiki has nowhere to put a page a person reviews, and
 // there is no fallback worth having — writing the draft into an agent's own
@@ -132,18 +138,9 @@ func (e *Engine) buildPromoter(c *Company) *learning.Promoter {
 	if !cfg.Promotes() || e.backends.Store == nil {
 		return nil
 	}
-	writer := e.promotionWriter()
-	if writer == nil {
-		log.Info("skill_promotion_idle",
-			"reason", "no knowledge base is configured",
-			"detail", "a promoted skill is a draft page a unit lead reviews, "+
-				"and there is nowhere to put one; configure "+
-				"integrations.confluence, or set "+
-				"learning.skill_promotion.enabled: false")
-		return nil
-	}
 	promoter, err := learning.NewPromoter(learning.PromoterOptions{
-		Writer:           writer,
+		// THE RESOLVER, not a writer: see [Engine.promotionWriter].
+		Writer:           e.promotionWriter,
 		Skills:           learning.NewSkills(e.backends.Store),
 		Models:           e.meteredModelsFor(c),
 		Units:            e.promotionUnits,
