@@ -315,6 +315,12 @@ esac
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// The same wait fakeRuntime takes, for the same reason: this script is
+	// written and then exec'd by parallel subtests, so it inherits the same
+	// ETXTBSY window. It fails differently here — Create's mount proof cannot
+	// start the container at all — and that reads as the proof legitimately
+	// refusing a box, which is exactly what these cases assert.
+	waitExecutable(t, path)
 	return path
 }
 
