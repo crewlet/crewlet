@@ -57,6 +57,17 @@ type Deps struct {
 	// apply its own default.
 	SkillVersionsKept int
 
+	// Recall is the Plan phase's semantic search, re-run on demand. Nil
+	// leaves query_episodes on recency and conversation and refresh_memory
+	// on recency — which is what a company with no embeddings has, and what
+	// EVERY company had while the tools declared no way to search at all.
+	Recall Recaller
+
+	// RefreshesPerTurn is how many DISTINCT context hints one turn may
+	// re-filter its notes on: learning.personal_memory.max_refreshes_per_turn.
+	// Zero takes [DefaultRefreshesPerTurn].
+	RefreshesPerTurn int
+
 	// Events is where the skill lifecycle's own telemetry goes. Nil
 	// publishes nothing, which is what a registry built outside an engine
 	// has — and what the shipped binary had until this existed, so
@@ -104,9 +115,14 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		}, deps.Refinable != nil},
 		{&queryEpisodes{
 			episodes: deps.Episodes,
+			recall:   deps.Recall,
 			limit:    orDefault(deps.EpisodeLimit, DefaultEpisodeLimit),
 		}, deps.Episodes != nil},
-		{&refreshMemory{diary: deps.Diary}, deps.Diary != nil},
+		{&refreshMemory{
+			diary:    deps.Diary,
+			recall:   deps.Recall,
+			maxHints: deps.RefreshesPerTurn,
+		}, deps.Diary != nil},
 		{&reflectAndPersist{diary: deps.Diary}, deps.Diary != nil},
 		{&markOnboarded{onboarding: deps.Onboarding}, deps.Onboarding != nil},
 		{&runSandbox{launcher: deps.Sandbox}, deps.Sandbox != nil},

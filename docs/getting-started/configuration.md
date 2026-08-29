@@ -107,9 +107,14 @@ learning:                               # optional — agent-learning subsystem
     cluster_jaccard_threshold: 0.6      # similarity threshold for joining a cluster
     episode_fetch_limit: 200            # max episodes pulled per agent per tick
   skill_refinement:
-    enabled: true                       # SkillRefiner + refine_skill tool
+    enabled: true                       # both halves: the post-turn refiner AND
+                                        # the refine_skill tool. false withdraws
+                                        # the tool too — they write the same rows
     auto_refine_on_success: true        # append "Observed in practice" on done
-    auto_refine_on_failure: true        # append "Counter-example" on failed/self_iterate
+    auto_refine_on_failure: true        # append "Counter-example" on failed.
+                                        # self_iterate is never refined: the turn
+                                        # is not settled yet. Both false leaves
+                                        # the refiner unbuilt
     budget_tokens: 3000                 # soft cap on the refiner's LLM call
     max_body_chars: 20000               # a refinement whose result exceeds this
                                         # is refused, not truncated

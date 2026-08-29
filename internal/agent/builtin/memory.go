@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -190,6 +191,11 @@ func (t *useSkill) suggest(ctx context.Context, handle, name string) string {
 type queryEpisodes struct {
 	episodes EpisodeStore
 
+	// recall is the Plan phase's own similarity search, re-run on demand.
+	// Nil leaves the tool on the recency and conversation paths, which is
+	// what a company with no embeddings has.
+	recall Recaller
+
 	// limit is the company's configured default hit count. Bounded by
 	// maxEpisodeLimit whatever it says, because the ceiling is about what
 	// fits in a prompt rather than what an operator wants.
@@ -201,20 +207,33 @@ var _ tools.SeatCallable = (*queryEpisodes)(nil)
 func (t *queryEpisodes) Name() string { return QueryEpisodesTool }
 
 func (t *queryEpisodes) Description() string {
-	return "Recall your own recent turns — what you were asked, what you " +
-		"did, how it went. Use it when the current task resembles work you " +
-		"have done before, or to check what you already told someone. Pass " +
-		"`conversation` to narrow it to one thread, issue or pull request."
+	return "Recall your own past turns — what you were asked, what you " +
+		"did, how it went. Pass `query` to search by MEANING once you know " +
+		"what this task actually involves; that is the one to use after " +
+		"recon on a thin trigger, when the block at the top of your prompt " +
+		"said it found nothing. Pass `conversation` to narrow to one thread, " +
+		"issue or pull request instead. With neither, you get your most " +
+		"recent turns."
 }
 
 func (t *queryEpisodes) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"query": map[string]any{
+				"type": "string",
+				"description": "Optional: what this task is about, in your " +
+					"own words. Searches by meaning rather than by recency",
+			},
 			"conversation": map[string]any{
 				"type": "string",
 				"description": "Optional: narrow to one conversation " +
 					"(a thread, issue or PR key)",
+			},
+			"outcome_filter": map[string]any{
+				"type": "string",
+				"description": "Optional: keep only turns that ended this " +
+					"way — done, self_iterate, escalate, failed",
 			},
 			"limit": map[string]any{
 				"type": "integer",
@@ -232,6 +251,26 @@ func (t *queryEpisodes) defaultLimit() int {
 	return clampInt(orDefault(t.limit, DefaultEpisodeLimit), 1, maxEpisodeLimit)
 }
 
+// similar runs the Plan phase's own vector recall, or explains why it cannot.
+//
+// The REFUSAL is a message rather than an empty answer: "nothing resembles
+// this" and "this deployment cannot search by meaning" send a model to
+// opposite places, and the second one has a fallback it can still use.
+func (t *queryEpisodes) similar(ctx context.Context, turn *turnctx.Turn, query string, limit int) ([]learning.Episode, error) {
+	if t.recall == nil {
+		return nil, errNoSimilarity
+	}
+	hits, err := t.recall.RecallEpisodes(ctx, turn.Seat, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]learning.Episode, 0, len(hits))
+	for _, hit := range hits {
+		out = append(out, hit.Episode)
+	}
+	return out, nil
+}
+
 func (t *queryEpisodes) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
 	return t.CallForTurn(ctx, nil, args)
 }
@@ -245,20 +284,39 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		return failed("Episode memory is not configured on this deployment."), nil
 	}
 	limit := clampInt(argInt(args, "limit", t.defaultLimit()), 1, maxEpisodeLimit)
+	outcome := strings.TrimSpace(argString(args, "outcome_filter"))
 
 	var (
 		found []learning.Episode
 		err   error
 		scope string
 	)
-	if conversation := strings.TrimSpace(argString(args, "conversation")); conversation != "" {
+	switch query := strings.TrimSpace(argString(args, "query")); {
+	case query != "":
+		// OVER-FETCHED when an outcome filter is set, because the search
+		// ranks by similarity and the filter is applied to what came
+		// back: asking for five and keeping only the failures would
+		// otherwise return one. Bounded, so a filter that matches
+		// nothing costs one wider search rather than the whole history.
+		want := limit
+		if outcome != "" {
+			want = clampInt(limit*outcomeOverfetch, 1, maxEpisodeLimit)
+		}
+		found, err = t.similar(ctx, turn, query, want)
+		scope = fmt.Sprintf(" like %s", clip(query))
+	case argString(args, "conversation") != "":
+		conversation := strings.TrimSpace(argString(args, "conversation"))
 		found, err = t.episodes.ForConversation(ctx, handle, conversation, limit)
 		scope = fmt.Sprintf(" in %s", clip(conversation))
-	} else {
+	default:
 		found, err = t.episodes.Recent(ctx, handle, limit)
 	}
 	if err != nil {
 		return failed(fmt.Sprintf("Could not recall your turns: %v", err)), nil
+	}
+	if outcome != "" {
+		found = keepOutcome(found, outcome, limit)
+		scope += fmt.Sprintf(" that ended %s", clip(outcome))
 	}
 	if len(found) == 0 {
 		return tools.Result{Output: fmt.Sprintf(
@@ -282,7 +340,25 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 
 // --- refresh_memory ------------------------------------------------------- //
 
-type refreshMemory struct{ diary DiaryStore }
+type refreshMemory struct {
+	diary  DiaryStore
+	recall Recaller
+
+	// maxHints is learning.personal_memory.max_refreshes_per_turn: how many
+	// DISTINCT hints one turn may filter on. Zero takes
+	// [DefaultRefreshesPerTurn].
+	//
+	// The cap exists because the filter is an auxiliary model call, so a
+	// model that re-hints on every round spends a completion per round for
+	// answers that converge after the second. Repeats of a hint it has
+	// already used are free — see [hintLedger].
+	maxHints int
+
+	// hints remembers which hints each turn has already filtered on. It is
+	// per TURN and bounded; see [hintLedger] for why it lives on the tool
+	// rather than on the turn.
+	hints hintLedger
+}
 
 var _ tools.SeatCallable = (*refreshMemory)(nil)
 
@@ -290,14 +366,22 @@ func (t *refreshMemory) Name() string { return RefreshMemoryTool }
 
 func (t *refreshMemory) Description() string {
 	return "Re-read your own durable notes — the facts you chose to keep " +
-		"across turns. Use it when you need something you learned earlier " +
-		"and it is not in front of you."
+		"across turns. Pass `context_hint` describing what this task is " +
+		"actually about, and the notes are re-filtered for relevance to it; " +
+		"that is the one to use after recon on a thin trigger, when the " +
+		"block at the top of your prompt said it found nothing. Without a " +
+		"hint you get your most recent notes."
 }
 
 func (t *refreshMemory) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"context_hint": map[string]any{
+				"type": "string",
+				"description": "Optional: what this task is about, in your " +
+					"own words. Re-filters your notes for relevance to it",
+			},
 			"limit": map[string]any{
 				"type":        "integer",
 				"description": fmt.Sprintf("How many notes (default %d, max %d)", noteLimit, maxEpisodeLimit),
@@ -320,6 +404,9 @@ func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 	limit := clampInt(argInt(args, "limit", noteLimit), 1, maxEpisodeLimit)
 
+	if hint := strings.TrimSpace(argString(args, "context_hint")); hint != "" {
+		return t.filtered(ctx, turn, agentID, hint, limit)
+	}
 	entries, err := t.diary.Recent(ctx, agentID, time.Now().UTC(), limit)
 	if err != nil {
 		return failed(fmt.Sprintf("Could not read your notes: %v", err)), nil
@@ -333,6 +420,76 @@ func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		fmt.Fprintf(&b, "- [%s] %s\n", e.Kind, e.Content)
 	}
 	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}, nil
+}
+
+// filtered re-runs the personal-memory relevance filter against a hint.
+//
+// THE SAME FILTER the Plan phase ran, which is why this is a pull rather than
+// a second implementation: the block at the top of the prompt and this tool
+// have to agree about what is relevant, and two answers to that question drift
+// in the direction nobody looks.
+func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
+	agentID, hint string, limit int,
+) (tools.Result, error) {
+	if t.recall == nil {
+		return failed("This deployment cannot re-filter your notes by " +
+			"relevance — call refresh_memory without `context_hint` for your " +
+			"most recent ones instead."), nil
+	}
+	take := t.hints.take(turn.ID, hint, t.hintBudget())
+	switch {
+	case take.Hit:
+		// ANSWERED FROM THE LEDGER, which is what makes a repeat free
+		// rather than merely uncharged — see [hintLedger]. Re-rendered
+		// rather than replayed, so a repeat asking for more notes than
+		// the first call printed gets them.
+		return renderHintedNotes(take.Cached, hint, limit), nil
+	case !take.Allowed:
+		// REFUSED with the count, so the model learns the shape of the
+		// limit rather than that the tool became unreliable.
+		return failed(fmt.Sprintf(
+			"You have already re-filtered your notes on %d different hints this "+
+				"turn, which is this company's limit. Re-use one of those hints "+
+				"(that is free), or call refresh_memory without one.",
+			take.Spent)), nil
+	}
+
+	entries, err := t.recall.RecallMemories(ctx, turn.Seat, agentID, hint)
+	if err != nil {
+		return failed(fmt.Sprintf("Could not re-filter your notes: %v", err)), nil
+	}
+	// Kept even when the filter found nothing: "nothing bears on this" is
+	// an answer, and a repeat of the hint would otherwise cost another
+	// completion to be told it again.
+	t.hints.keep(turn.ID, hint, entries)
+	return renderHintedNotes(entries, hint, limit), nil
+}
+
+// renderHintedNotes prints a hint's filtered rows, newest-first as the filter
+// ordered them, capped at limit.
+//
+// An empty result is NOT a fallback to recency. "The most recent eight" would
+// put a note about one person in front of a turn about another, which is the
+// failure the filter exists to prevent.
+func renderHintedNotes(entries []learning.DiaryEntry, hint string, limit int) tools.Result {
+	if len(entries) == 0 {
+		return tools.Result{Output: fmt.Sprintf(
+			"Nothing in your notes bears on %s.", clip(hint))}
+	}
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Your notes that bear on %s:\n\n", clip(hint))
+	for _, e := range entries {
+		fmt.Fprintf(&b, "- [%s] %s\n", e.Kind, e.Content)
+	}
+	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}
+}
+
+// hintBudget is the company's max_refreshes_per_turn, or the shipped default.
+func (t *refreshMemory) hintBudget() int {
+	return orDefault(t.maxHints, DefaultRefreshesPerTurn)
 }
 
 // --- reflect_and_persist -------------------------------------------------- //
@@ -488,7 +645,13 @@ func seatAgentID(turn *turnctx.Turn) (string, string) {
 	return id.String(), ""
 }
 
-func clampInt(v, lo, hi int) int {
+// clampInt bounds a model-supplied count into what a prompt can carry.
+//
+// The floor is 1 at every call site and stays a parameter rather than a
+// constant, because the two bounds mean different things: the ceiling is about
+// prompt weight and the floor is about a tool that returns nothing, and
+// folding one into the function hides which of the two a caller is asking for.
+func clampInt(v, lo, hi int) int { //nolint:unparam // see the doc comment
 	return min(max(v, lo), hi)
 }
 
@@ -498,4 +661,38 @@ func clipTo(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// outcomeOverfetch widens a similarity search when an outcome filter is set.
+//
+// Four: the filter is applied to what the search returned, so asking for five
+// and keeping only the failures would routinely return one. Wide enough that a
+// filter matching a quarter of a seat's turns still fills the answer, bounded
+// so one that matches none costs a single wider search rather than a scan.
+const outcomeOverfetch = 4
+
+// errNoSimilarity is what a deployment with no embeddings answers a `query`
+// with. Its own sentinel so the tool can say which of two very different
+// things happened.
+var errNoSimilarity = errors.New("no embeddings are configured on this deployment")
+
+// keepOutcome filters recalled turns by how they ended, preserving order.
+//
+// Case-insensitive on the operator's side of the comparison, because the
+// outcomes are a closed set the model is told about in the parameter
+// description and a model that capitalised one should not silently get an
+// empty answer.
+func keepOutcome(found []learning.Episode, outcome string, limit int) []learning.Episode {
+	want := strings.ToLower(strings.TrimSpace(outcome))
+	out := make([]learning.Episode, 0, min(len(found), limit))
+	for _, ep := range found {
+		if strings.ToLower(ep.ReviewOutcome) != want {
+			continue
+		}
+		out = append(out, ep)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out
 }

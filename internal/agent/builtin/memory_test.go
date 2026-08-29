@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The company's own retrieval_limit, honoured. It was validated (1..20),
@@ -240,4 +242,353 @@ func (r *recordingTelemetry) Publish(_ context.Context, topic string, ev *events
 	r.topics = append(r.topics, topic)
 	r.sent = append(r.sent, ev)
 	return r.err
+}
+
+// --- the pull side of the Plan phase's two searches ----------------------- //
+
+// The re-query-after-recon path the docs lean on, and which did not exist:
+// query_episodes declared `conversation` and `limit` and nothing else, so the
+// escape hatch for a thin trigger — a pointer with no content, where the Plan
+// block deliberately renders a hint instead of a search — had nothing to
+// search with.
+func TestQueryEpisodesSearchesByMeaning(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{hits: []learning.Hit{
+		{Episode: learning.Episode{TaskSummary: "fixed the search indexing bug",
+			ReviewOutcome: "done"}},
+	}}
+	episodes := &countingEpisodes{}
+	tool := registered(t, builtin.Deps{Episodes: episodes, Recall: recall},
+		builtin.QueryEpisodesTool)
+
+	res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{
+		"query": "search indexing",
+	})
+	if res.Failed {
+		t.Fatalf("query_episodes failed: %q", res.Output)
+	}
+	if recall.text != "search indexing" {
+		t.Errorf("searched for %q, want the model's own words", recall.text)
+	}
+	if episodes.limit != 0 {
+		t.Error("a semantic query fell through to the recency read")
+	}
+	if !strings.Contains(res.Output, "fixed the search indexing bug") {
+		t.Errorf("output = %q, want the hit", res.Output)
+	}
+}
+
+// "Nothing resembles this" and "this deployment cannot search by meaning" send
+// a model to opposite places: the second has a fallback it can still use, so
+// it must not read as the first.
+func TestQueryEpisodesSaysWhenItCannotSearchByMeaning(t *testing.T) {
+	t.Parallel()
+	tool := registered(t, builtin.Deps{Episodes: &countingEpisodes{}},
+		builtin.QueryEpisodesTool)
+
+	res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{"query": "anything"})
+	if !res.Failed {
+		t.Fatalf("a query with no recall configured reported success: %q", res.Output)
+	}
+	if !strings.Contains(res.Output, "embeddings") {
+		t.Errorf("the refusal does not say why: %q", res.Output)
+	}
+}
+
+// The outcome filter, and the over-fetch that makes it usable: the search
+// ranks by similarity and the filter is applied to what came back, so asking
+// for two and keeping only the failures would otherwise return none.
+func TestQueryEpisodesFiltersByOutcome(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{hits: []learning.Hit{
+		{Episode: learning.Episode{TaskSummary: "one", ReviewOutcome: "done"}},
+		{Episode: learning.Episode{TaskSummary: "two", ReviewOutcome: "failed"}},
+		{Episode: learning.Episode{TaskSummary: "three", ReviewOutcome: "done"}},
+	}}
+	tool := registered(t, builtin.Deps{Episodes: &countingEpisodes{}, Recall: recall},
+		builtin.QueryEpisodesTool)
+
+	res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{
+		"query": "anything", "outcome_filter": "FAILED", "limit": 2,
+	})
+	if strings.Contains(res.Output, "one") || strings.Contains(res.Output, "three") {
+		t.Errorf("output = %q, want only the failed turn", res.Output)
+	}
+	if !strings.Contains(res.Output, "two") {
+		t.Errorf("output = %q, want the failed turn", res.Output)
+	}
+	if recall.limit <= 2 {
+		t.Errorf("searched for %d hits with a filter on a limit of 2 — a filter "+
+			"applied to what came back needs a wider search", recall.limit)
+	}
+}
+
+// refresh_memory's own escape hatch. It declared `limit` and nothing else, so
+// the mid-turn re-filter its own docs describe — with the per-turn cap and the
+// idempotency cache — was advertised and absent.
+func TestRefreshMemoryRefiltersOnAHint(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{notes: []learning.DiaryEntry{
+		{Kind: "convention", Content: "semantic commit messages"},
+	}}
+	diary := &countingDiary{}
+	tool := registered(t, builtin.Deps{Diary: diary, Recall: recall},
+		builtin.RefreshMemoryTool)
+
+	res := callFor(t, tool, turnFor(t, "agent-ceo"), map[string]any{
+		"context_hint": "fixing the indexing bug",
+	})
+	if res.Failed {
+		t.Fatalf("refresh_memory failed: %q", res.Output)
+	}
+	if recall.hint != "fixing the indexing bug" {
+		t.Errorf("filtered on %q", recall.hint)
+	}
+	if diary.limit != 0 {
+		t.Error("a hinted refresh fell through to the recency dump")
+	}
+	if !strings.Contains(res.Output, "semantic commit messages") {
+		t.Errorf("output = %q, want the selected note", res.Output)
+	}
+}
+
+// The cap, and the idempotency that makes it fair. The filter is an auxiliary
+// model call, so a model that re-hints every round spends a completion per
+// round for answers that converge after the second — but charging a REPEAT
+// against the cap would teach it to vary its wording instead.
+func TestRefreshMemoryCapsDistinctHintsAndNotRepeats(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{notes: []learning.DiaryEntry{{Kind: "k", Content: "c"}}}
+	tool := registered(t, builtin.Deps{
+		Diary: &countingDiary{}, Recall: recall, RefreshesPerTurn: 2,
+	}, builtin.RefreshMemoryTool)
+	turn := turnFor(t, "agent-ceo")
+
+	for _, hint := range []string{"first thing", "second thing"} {
+		if res := callFor(t, tool, turn, map[string]any{"context_hint": hint}); res.Failed {
+			t.Fatalf("hint %q was refused inside the budget: %q", hint, res.Output)
+		}
+	}
+	// A repeat, spelled differently. Case and surrounding whitespace are
+	// normalised because a model does not spell consistently and the same
+	// question asked twice is not a second question.
+	if res := callFor(t, tool, turn, map[string]any{"context_hint": "  First Thing "}); res.Failed {
+		t.Errorf("a repeat of an already-used hint was charged against the cap: %q", res.Output)
+	}
+	res := callFor(t, tool, turn, map[string]any{"context_hint": "third thing"})
+	if !res.Failed {
+		t.Fatalf("a third distinct hint was allowed under a cap of 2: %q", res.Output)
+	}
+	if !strings.Contains(res.Output, "2") {
+		t.Errorf("the refusal does not say what the limit is: %q", res.Output)
+	}
+
+	// PER TURN. A different turn starts with the whole budget, or one busy
+	// turn would silence the tool for every turn after it.
+	other := turnFor(t, "agent-ceo")
+	other.ID = "wk-2"
+	if res := callFor(t, tool, other, map[string]any{"context_hint": "third thing"}); res.Failed {
+		t.Errorf("a new turn inherited the previous turn's spend: %q", res.Output)
+	}
+}
+
+// A REPEAT IS ANSWERED FROM THE LEDGER, not merely left uncharged.
+//
+// The filter is an auxiliary model call. If a repeat re-ran it for free the
+// cap would bound nothing: a model alternating two hints could spend a
+// completion per round for the rest of the turn without ever taking a third
+// slot.
+func TestARepeatedHintCostsNoSecondFilterCall(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{notes: []learning.DiaryEntry{
+		{Kind: "preference", Content: "one"},
+		{Kind: "preference", Content: "two"},
+	}}
+	tool := registered(t, builtin.Deps{
+		Diary: &countingDiary{}, Recall: recall, RefreshesPerTurn: 2,
+	}, builtin.RefreshMemoryTool)
+	turn := turnFor(t, "agent-ceo")
+
+	first := callFor(t, tool, turn, map[string]any{"context_hint": "the indexing bug"})
+	if first.Failed {
+		t.Fatalf("the first call was refused: %q", first.Output)
+	}
+	if recall.memoryCalls != 1 {
+		t.Fatalf("filter calls = %d, want 1", recall.memoryCalls)
+	}
+	again := callFor(t, tool, turn, map[string]any{"context_hint": "The Indexing Bug  "})
+	if again.Failed {
+		t.Fatalf("the repeat was refused: %q", again.Output)
+	}
+	if recall.memoryCalls != 1 {
+		t.Fatalf("filter calls = %d — a repeat fired a second auxiliary call, "+
+			"so the per-turn cap bounds nothing", recall.memoryCalls)
+	}
+	// The same notes, in the same order. The heading echoes the caller's
+	// own spelling of the hint, so only the rows are compared.
+	if notesIn(again.Output) != notesIn(first.Output) {
+		t.Fatalf("the repeat answered with different notes:\n%q\nvs\n%q",
+			again.Output, first.Output)
+	}
+}
+
+// THE CACHE HOLDS THE ROWS, NOT THE RENDERING. A repeat asking for more notes
+// than the first call printed gets them — the auxiliary call is the expensive
+// half, and keying the cap on `limit` instead would let a model spend a
+// completion per integer.
+func TestARepeatedHintHonoursItsOwnLimit(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{notes: []learning.DiaryEntry{
+		{Kind: "preference", Content: "one"},
+		{Kind: "preference", Content: "two"},
+		{Kind: "preference", Content: "three"},
+	}}
+	tool := registered(t, builtin.Deps{
+		Diary: &countingDiary{}, Recall: recall, RefreshesPerTurn: 2,
+	}, builtin.RefreshMemoryTool)
+	turn := turnFor(t, "agent-ceo")
+
+	narrow := callFor(t, tool, turn, map[string]any{"context_hint": "indexing", "limit": 1})
+	if strings.Contains(narrow.Output, "two") {
+		t.Fatalf("limit=1 printed more than one note:\n%s", narrow.Output)
+	}
+	wide := callFor(t, tool, turn, map[string]any{"context_hint": "indexing", "limit": 3})
+	if !strings.Contains(wide.Output, "three") {
+		t.Fatalf("the repeat was answered with the first call's rendering:\n%s", wide.Output)
+	}
+	if recall.memoryCalls != 1 {
+		t.Fatalf("filter calls = %d, want the second answered from the ledger", recall.memoryCalls)
+	}
+}
+
+// A HINT WHOSE FILTER FAILED STILL COSTS ITS SLOT, and is not answered from an
+// empty cache entry. Otherwise a failing call is retryable without bound —
+// the same unbounded spend the cap exists to stop.
+func TestAFailedFilterSpendsItsSlotAndIsNotCached(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{err: errors.New("the aux model is down")}
+	tool := registered(t, builtin.Deps{
+		Diary: &countingDiary{}, Recall: recall, RefreshesPerTurn: 1,
+	}, builtin.RefreshMemoryTool)
+	turn := turnFor(t, "agent-ceo")
+
+	if res := callFor(t, tool, turn, map[string]any{"context_hint": "indexing"}); !res.Failed {
+		t.Fatalf("a failed filter reported success: %q", res.Output)
+	}
+	// The retry is allowed — the slot is already this hint's — and reaches
+	// the filter rather than being answered with nothing.
+	res := callFor(t, tool, turn, map[string]any{"context_hint": "indexing"})
+	if !res.Failed || recall.memoryCalls != 2 {
+		t.Fatalf("retry: failed=%v calls=%d, want the filter re-tried",
+			res.Failed, recall.memoryCalls)
+	}
+	// But a DIFFERENT hint is refused: the failed one spent the budget.
+	if res := callFor(t, tool, turn, map[string]any{"context_hint": "something else"}); !res.Failed {
+		t.Fatalf("a second distinct hint was allowed under a cap of 1: %q", res.Output)
+	}
+	if recall.memoryCalls != 2 {
+		t.Fatalf("filter calls = %d — the refused hint reached the model", recall.memoryCalls)
+	}
+}
+
+// "NOTHING BEARS ON THIS" IS AN ANSWER, and is cached like any other. A repeat
+// would otherwise cost another completion to be told the same thing — and the
+// empty answer is exactly the one a model is most likely to ask again.
+func TestAnEmptyFilterAnswerIsCachedToo(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{} // the filter matches nothing
+	tool := registered(t, builtin.Deps{
+		Diary: &countingDiary{}, Recall: recall, RefreshesPerTurn: 2,
+	}, builtin.RefreshMemoryTool)
+	turn := turnFor(t, "agent-ceo")
+
+	first := callFor(t, tool, turn, map[string]any{"context_hint": "indexing"})
+	if first.Failed || !strings.Contains(first.Output, "Nothing in your notes") {
+		t.Fatalf("first call: failed=%v %q", first.Failed, first.Output)
+	}
+	again := callFor(t, tool, turn, map[string]any{"context_hint": "INDEXING"})
+	if again.Failed || !strings.Contains(again.Output, "Nothing in your notes") {
+		t.Fatalf("repeat: failed=%v %q", again.Failed, again.Output)
+	}
+	if recall.memoryCalls != 1 {
+		t.Fatalf("filter calls = %d — an empty answer was not cached, so the "+
+			"hint a model repeats most costs a completion every time", recall.memoryCalls)
+	}
+}
+
+// THE LEDGER IS BOUNDED. A turn's entries are dead the moment it ends and
+// nothing tells the tool when that was, so without the bound this map is a
+// leak that grows for the life of the process.
+func TestTheHintLedgerForgetsOldTurns(t *testing.T) {
+	t.Parallel()
+	recall := &fakeRecall{notes: []learning.DiaryEntry{{Kind: "k", Content: "c"}}}
+	tool := registered(t, builtin.Deps{
+		Diary: &countingDiary{}, Recall: recall, RefreshesPerTurn: 1,
+	}, builtin.RefreshMemoryTool)
+
+	oldest := turnFor(t, "agent-ceo")
+	oldest.ID = "wk-oldest"
+	if res := callFor(t, tool, oldest, map[string]any{"context_hint": "indexing"}); res.Failed {
+		t.Fatalf("the first call was refused: %q", res.Output)
+	}
+	// Well past the bound, so the first turn's entry must have fallen out.
+	for i := range builtin.HintLedgerTurns + 1 {
+		turn := turnFor(t, "agent-ceo")
+		turn.ID = fmt.Sprintf("wk-%d", i)
+		callFor(t, tool, turn, map[string]any{"context_hint": "indexing"})
+	}
+	before := recall.memoryCalls
+	// The oldest turn asking its own hint again is a MISS now: its entry
+	// is gone, so the filter runs rather than the answer being replayed.
+	callFor(t, tool, oldest, map[string]any{"context_hint": "indexing"})
+	if recall.memoryCalls != before+1 {
+		t.Fatalf("filter calls %d -> %d: the ledger still holds a turn %d turns "+
+			"old, so it grows for the life of the process",
+			before, recall.memoryCalls, builtin.HintLedgerTurns+1)
+	}
+}
+
+// notesIn is the bullet lines of a rendered digest, without its heading.
+func notesIn(out string) string {
+	_, notes, _ := strings.Cut(out, "\n\n")
+	return notes
+}
+
+// fakeRecall stands in for the Plan phase's searches.
+type fakeRecall struct {
+	hits  []learning.Hit
+	notes []learning.DiaryEntry
+	err   error
+	text  string
+	hint  string
+	limit int
+	// memoryCalls counts what the ledger's cache is there to avoid.
+	memoryCalls int
+}
+
+func (f *fakeRecall) RecallEpisodes(_ context.Context, _ *org.Role, text string, limit int) ([]learning.Hit, error) {
+	f.text, f.limit = text, limit
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.hits, nil
+}
+
+func (f *fakeRecall) RecallMemories(_ context.Context, _ *org.Role, _, hint string) ([]learning.DiaryEntry, error) {
+	f.hint = hint
+	f.memoryCalls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.notes, nil
+}
+
+// countingDiary records the limit its recency read was asked for.
+type countingDiary struct{ limit int }
+
+func (c *countingDiary) Write(context.Context, learning.DiaryEntry) error { return nil }
+
+func (c *countingDiary) Recent(_ context.Context, _ string, _ time.Time, limit int) ([]learning.DiaryEntry, error) {
+	c.limit = limit
+	return nil, nil
 }

@@ -98,7 +98,7 @@ Crewlet's multi-party equivalent of Hermes's "model of who you are."
 
 Agents can search their own prior turns.
 
-- **Source:** the `episodes` hypertable — one row per completed turn (`agent_handle`, `task_summary`, `plan_summary`, `tool_sequence`, `skills_used`, `review_outcome`, `started_at`, `ended_at`, `duration_ms`, `embedding`).
+- **Source:** the `episodes` table in the node's own store — one row per completed turn (`agent_handle`, `task_summary`, `plan_summary`, `tool_sequence`, `skills_used`, `review_outcome`, `started_at`, `ended_at`, `duration_ms`, `embedding`).
 - **Builtin:** `query_episodes(query, limit, outcome_filter?)` — vector similarity over `task_summary | plan_summary` concat, scoped to the calling agent's handle, available in Plan phase.
 - **Auxiliary summarization:** raw episode hits are passed through the role's `llm_auxiliary` model (a cheap one) before reaching the planner, keeping the planner's context window small. Falls back to raw bullets when no aux model is configured.
 - **Frozen-at-turn-start:** the Plan-phase `## Similar prior work` prefetch resolves once per turn and bakes the summary into the system prompt. Re-iteration (Review → Plan again) reuses the same prefix so the LLM provider's prompt cache keeps working.
@@ -118,10 +118,15 @@ Mines recurring successful trajectories and drafts a new procedural skill.
 
 When a synthesized skill was central to a successful turn, append an *observed-in-practice* bullet; when it contributed to a failed turn, append a *counter-example*.
 
-- **Auto path:** the reflect engine dispatches the refiner after every turn whose `skills_used` is non-empty. The auxiliary model picks one observation (or NOOP); successful turns produce `Observed in practice: …`, failures produce `Counter-example: …`.
-- **Manual path:** the LLM-facing `refine_skill` builtin lets the planner patch its own skills mid-Plan — `action="append"` adds a bullet, `action="replace_body"` rewrites the steps. Patch-on-encounter: if the plan finds a skill outdated, it patches immediately rather than waiting for a separate consolidation pass.
+- **Auto path:** the reflect engine dispatches the refiner after every **settled** turn (`done` or `failed`) whose `skills_used` is non-empty. A `self_iterate` round is not refined — it is work the agent itself judged incomplete, so a lesson drawn from it is one the next round may contradict, and the turn will emit another `turn_completed` when it does settle. The auxiliary model picks one observation (or NOOP); successful turns produce `Observed in practice: …`, failures produce `Counter-example: …`.
+- **One call, one bullet, at most one skill.** The turn's whole offered catalogue goes into a single prompt and the model chooses which skill — if any — learned something. Per-skill calls would cost a completion per skill per turn for answers that are almost always NOOP, and a turn rarely teaches two procedures something new at once. A name the model invents is dropped rather than matched onto the nearest candidate: a bullet appended to the wrong procedure is worse than no bullet.
+- **NOOP is the expected answer**, and it is not an error. A model asked what a turn taught will produce something for any turn at all, and a skill that grows a bullet per turn stops being a procedure and becomes a diary of the turns that read it. The prompt says twice that answering nothing is correct.
+- **Only skills that still exist.** The turn's `skills_used` is a list of ids captured when its prompt was built; the refiner intersects it with the live catalogue, so a skill the [curator](#8-skillcurator--keep-the-catalogue-honest) archived in the meantime is not resurrected. A turn whose skills have all been archived costs no model call at all.
+- **Bullets collect under one `## What practice added` heading** at the end of the body, rather than scattering a new section through the steps on every refinement — a reader sees the procedure first and what practice added to it second.
+- **Manual path:** the LLM-facing `refine_skill` builtin lets the planner correct its own skills mid-turn. It takes `skill_name`, the **full** corrected `content` and an optional `reason`; the new text replaces the body in its entirety. A whole-body replacement rather than a patch, because a model asked for a diff produces something diff-shaped that does not apply, and a half-applied edit leaves a procedure that is neither the old one nor the new — with nothing to compare against, since the prior body is already archived by then. Patch-on-encounter: if the plan finds a skill outdated, it corrects it immediately rather than waiting for a separate consolidation pass. A seat may only refine its **own** skills.
 - **Versioning:** every refinement archives the prior state to `synthesized_skill_versions` and bumps the live row's `version`. Rollback is a forward-step operation (the archived body becomes the body of a new version), so rewinding then un-rewinding works without losing history. History is bounded by `max_versions_kept` (default 10) per skill.
-- **Body cap:** `max_body_chars` (default 20 000) — refinements that would breach the cap are rejected so a runaway loop can't blow up a skill body.
+- **Body cap:** `max_body_chars` (default 20 000) — a refinement that would breach the cap is **refused, never truncated**, so a runaway loop can't blow up a skill body. A clip lands mid-step and the model reads the remainder as the whole procedure. The auto path skips silently and logs it; the manual tool refuses with the field name, because there a model can tighten the text and retry.
+- **`enabled` gates both halves.** `learning.skill_refinement.enabled: false` withdraws the `refine_skill` tool *and* leaves the post-turn refiner unwired — they write the same rows through the same version archive, so a company that turned refinement off and still had the tool would watch its skills change under a knob it had set to false. `use_skill` is unaffected: reading a skill is not changing one. Setting **both** `auto_refine_on_success` and `auto_refine_on_failure` to false is refinement-off spelled the long way, and the engine leaves the worker unbuilt rather than skipping every turn.
 
 ### 7. ReflectEngine — *the orchestrator*
 
@@ -200,9 +205,9 @@ The prefetch filters against the **salient inbound message** — the raw message
 
 The `refresh_memory(context_hint=…)` builtin fixes both. The `refresh_memory` line of the bundled `retrieval-research` [Tool Skill](tool-skills.md) (`examples/tool-skills/retrieval-research.md`) tells the planner to call refresh after any tool call that materially changed its understanding of the conversation — *even when the initial block already had entries*, not only as an escape hatch from the empty case. The tool re-runs the filter with the planner's enriched `context_hint` appended to the original task and returns the freshly-rendered digest as the tool result. Bounded by:
 
-- **Per-turn cap** — `learning.personal_memory.max_refreshes_per_turn` (default 3). Distinct hints exceeding the cap return an error so the planner stops trying instead of silently no-op'ing.
-- **Idempotency cache** — repeat calls with the same hint within one turn (case- and whitespace-normalised) return the cached output without firing a fresh LLM call.
-- **Per-turn isolation** — state keyed by `turn_id`, bounded by an LRU on the closure; state from one turn never leaks into another.
+- **Per-turn cap** — `learning.personal_memory.max_refreshes_per_turn` (default 3). A hint beyond the cap is refused with the count spent, so the planner learns the shape of the limit and stops trying instead of silently no-op'ing. A hint whose filter call *failed* still spends its slot — otherwise a failing call is retryable without bound, which is the same unbounded spend the cap exists to stop — but retrying that same hint is allowed and does re-run the filter.
+- **Idempotency cache** — a repeat of a hint already used this turn (case- and whitespace-normalised) is answered from the ledger without a fresh auxiliary call, including when the answer was "nothing bears on this". A repeat is free *because it is answered from here*, not merely uncharged: re-running the filter for free would leave the cap bounding nothing, since a model alternating two hints could spend a completion per round forever. What is cached is the **filtered rows**, not the rendered text, so a repeat asking for a larger `limit` gets the extra notes rather than the first call's rendering.
+- **Per-turn isolation** — state keyed by `turn_id` and bounded to the most recent 256 turns, far more than a node runs at once; the bound is what makes it a cache rather than a leak, since nothing tells the tool when a turn ended. State from one turn never leaks into another.
 - **Frozen-prefix-cache safe** — refresh output lands as a tool-result message, not a system-prompt rewrite. The LLM provider's prompt cache stays valid across iterations.
 
 ---
@@ -364,7 +369,7 @@ Vector similarity returns both kinds in one query. Callers branch on `kind` at r
 - **`query_episodes` builtin** — kinds=both; renders raw entries as single past turns, compacted entries as `[pattern, observed N×]` aggregates.
 - **`## Similar prior work` Plan-prompt block** — kinds=both; the auxiliary `summarize_episodes` step has a kind-aware prompt that emits the right bullet shape per row.
 - **`SkillSynthesizer`** — kinds=`['raw']` only. Compacted aggregates are too coarse to draft a clean skill body from.
-- **`SkillRefiner`** — same: raw-only.
+- **`SkillRefiner`** — reads no episodes at all. It is shown the skills the turn was offered and the turn itself (task, plan, tool sequence, outcome), which is the whole question it answers.
 
 ### What this protects
 
@@ -455,7 +460,7 @@ Every telemetry write — `mark_used`, `SkillUsed` publish, `PlanPrefetchSummary
 | `internal/tools` (registry) | Builtins: `query_episodes`, `reflect_and_persist`, `refresh_memory`, `refine_skill`, `use_skill`, `mark_onboarded`. |
 | `internal/events` | `turn_completed`, `episode_written`, `persist_decider_completed`, `counterparty_profile_updated`, `reflection_completed`, `skill_synthesized`, `skill_refined`, `skill_promoted`, `skill_used`, `skill_staled`, `skill_archived`, `skill_revived`, `skill_telemetry_write_failed`, `plan_prefetch_summary`, `relevant_knowledge_refetched`, `compaction_requested`, `compaction_completed`. |
 | `internal/store` | Holds `episodes`, `agent_diary` and the dashboard's event log, in the node's own file. |
-| `internal/learning` | The reflect dispatcher and its per-turn workers (`PersistDecider`, `Episodist`, `Profiler`, `SkillUse`), the two background passes (`Lifecycle` for episodes, `Background` for the skill curator), `Skills` for synthesis, refinement and promotion, `Diary`, the onboarding marker store, and the relevant-knowledge prefetch. |
+| `internal/learning` | The reflect dispatcher and its per-turn workers (`PersistDecider`, `Episodist`, `Profiler`, `SkillUse`, `Synthesizer`, `Refiner`), the two background passes (`Lifecycle` for episodes, `Background` for the skill curator), `Skills` for synthesis and refinement, `Diary`, the onboarding marker store, and the relevant-knowledge prefetch. |
 | `internal/config` | `learning:` block — per-role enable flag, reflection budget, promotion thresholds, lifecycle knobs. See [Configuration](../getting-started/configuration.md). |
 | `internal/api` | `GET /agents/{id}/memory` aggregates personal memories, episodes, counterparty profiles, and synthesized skills for the dashboard's per-agent memory view. See [API endpoints](../reference/api-endpoints.md#get-agentsidmemory). |
 

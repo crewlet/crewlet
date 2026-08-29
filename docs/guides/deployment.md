@@ -492,7 +492,7 @@ When this env var is set, the engine configures a `BatchSpanProcessor` with an `
 
 #### Querying Traces in the Event Store
 
-The `crewlet_events` hypertable stores `trace_id`, `span_id`, and `parent_span_id` as first-class columns, so trace queries are a direct column filter:
+The `crewlet_events` table stores `trace_id`, `span_id`, and `parent_span_id` as first-class columns, so trace queries are a direct column filter:
 
 ```sql
 -- All events in a specific trace

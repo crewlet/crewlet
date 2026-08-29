@@ -43,14 +43,24 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		A2A:               e.a2aFor(c),
 		Sandbox:           e.sandboxLauncher(),
 		Events:            e.telemetry(),
+		Recall:            e.prefetcher(c),
 		EpisodeLimit:      c.Config.Learning.Episodic.RetrievalLimit,
+		RefreshesPerTurn:  c.Config.Learning.PersonalMemory.MaxRefreshesPerTurn,
 		SkillBodyMax:      refinement.MaxBodyChars,
 		SkillVersionsKept: refinement.MaxVersionsKept,
 	}
 	if db := e.backends.Store; db != nil {
 		skills := learning.NewSkills(db)
 		deps.Skills = skills
-		deps.Refinable = skills
+		if refinement.Refines() {
+			// learning.skill_refinement.enabled gates BOTH halves — the
+			// post-turn refiner and this tool — because they write the
+			// same rows through the same version archive. A company that
+			// turned refinement off and still had the tool would have
+			// skills changing under it with the knob that says they
+			// cannot set to false.
+			deps.Refinable = skills
+		}
 		deps.Episodes = learning.NewEpisodes(db)
 		deps.Diary = learning.NewDiary(db)
 		deps.Onboarding = learning.NewOnboarding(db)

@@ -6,6 +6,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -65,4 +67,24 @@ func skillUsed(turn *turnctx.Turn, name, skillID, file string,
 		TurnID: turn.ID, SkillName: name, SkillID: skillID,
 		SourceKind: kind, FileLoaded: file,
 	}
+}
+
+// Recaller is the Plan phase's own semantic search, reachable as a tool.
+//
+// Satisfied by *prefetch.Fetcher, and declared here as the two methods this
+// package needs rather than imported as that type: a builtin that could reach
+// the whole prefetch could render a block, and the seam is the search.
+//
+// THE SAME implementation the push side uses, deliberately. A second answer to
+// "which of this seat's memories bear on this text" would drift from the block
+// the model was shown at turn start, in the direction nobody looks.
+type Recaller interface {
+	// RecallEpisodes returns past turns similar to text. An error means the
+	// search could not run — a deployment with no embeddings, or a store
+	// that could not be read — which is a different answer from none.
+	RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) ([]learning.Hit, error)
+
+	// RecallMemories re-runs the personal-memory relevance filter against a
+	// hint, returning what it picked.
+	RecallMemories(ctx context.Context, seat *org.Role, agentID, hint string) ([]learning.DiaryEntry, error)
 }

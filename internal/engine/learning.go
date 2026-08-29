@@ -122,6 +122,33 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 		}
 	}
 
+	// THE REFINER, the auto half of what refine_skill does by hand. Both
+	// were documented from the start; only the manual one existed, so
+	// `auto_refine_on_success` and `auto_refine_on_failure` validated,
+	// shipped in the example company and had no reader — a company whose
+	// skills only ever improved when a model happened to notice.
+	if cfg.SkillRefinement.Refines() {
+		switch {
+		case !cfg.SkillRefinement.OnSuccess() && !cfg.SkillRefinement.OnFailure():
+			// Both halves off is refinement off, spelled the long way.
+			// Building the worker anyway would cost a Skip per turn and
+			// report a reason that reads like a bug.
+			log.Info("skill_refiner_idle",
+				"detail", "auto_refine_on_success and auto_refine_on_failure "+
+					"are both false, so no turn's outcome is refined")
+		default:
+			refiner, err := learning.NewRefiner(models, learning.NewSkills(db),
+				refinerOptions(cfg.SkillRefinement))
+			if err != nil {
+				log.Warn("skill_refiner_unavailable", "error", err,
+					"detail", "no skill will be refined after a turn; only the "+
+						"refine_skill tool will ever change one")
+			} else {
+				workers = append(workers, refiner)
+			}
+		}
+	}
+
 	if cfg.Counterparty.Enabled.Or(true) {
 		profiler, err := learning.NewProfiler(models, learning.NewCounterparties(db),
 			learning.ProfilerOptions{MaxTokens: cfg.Counterparty.BudgetTokens})
@@ -134,6 +161,28 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 		}
 	}
 	return workers
+}
+
+// refinerOptions carries the company's refinement knobs to the worker.
+//
+// A NAMED FUNCTION rather than a struct literal inline, because every field
+// here is a knob that validated and did nothing before the worker existed —
+// the exact failure a literal buried in a switch arm reintroduces silently
+// when a field is dropped. This is the seam a test can hold.
+//
+// The two toggles are resolved to concrete bools and taken by address: the
+// config Toggle's zero value is UNSET rather than false, and passing it
+// through as a nil pointer would leave the worker applying its own default
+// instead of the company's answer.
+func refinerOptions(cfg config.SkillRefinement) learning.RefinerOptions {
+	onSuccess, onFailure := cfg.OnSuccess(), cfg.OnFailure()
+	return learning.RefinerOptions{
+		OnSuccess:    &onSuccess,
+		OnFailure:    &onFailure,
+		MaxTokens:    cfg.BudgetTokens,
+		MaxBodyChars: cfg.MaxBodyChars,
+		KeepVersions: cfg.MaxVersionsKept,
+	}
 }
 
 // reconfigureReflection points the dispatcher at this epoch.
