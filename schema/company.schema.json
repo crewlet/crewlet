@@ -529,7 +529,7 @@
           "type": "array"
         },
         "base_url": {
-          "description": "Endpoint for openai-compatible providers.",
+          "description": "Endpoint override, ${VAR} supported. Required for openai-compatible; optional for openai and anthropic (a gateway or proxy).",
           "type": "string"
         },
         "cli": {

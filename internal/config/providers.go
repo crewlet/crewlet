@@ -319,7 +319,12 @@ type LLMProvider struct {
 	// marked cooled-down.
 	Cooldowns CredentialCooldowns `yaml:"cooldowns,omitempty" json:"cooldowns"`
 
-	BaseURL string `yaml:"base_url,omitempty" json:"base_url,omitempty" desc:"Endpoint for openai-compatible providers."`
+	// BaseURL redirects any HTTP backend, not just openai-compatible: an
+	// Anthropic-API gateway is an `anthropic` entry with one of these, and
+	// the code sandbox forwards it to Claude Code as ANTHROPIC_BASE_URL.
+	// It is only REQUIRED for openai-compatible, which has no vendor
+	// default to fall back to.
+	BaseURL string `yaml:"base_url,omitempty" json:"base_url,omitempty" desc:"Endpoint override, ${VAR} supported. Required for openai-compatible; optional for openai and anthropic (a gateway or proxy)."`
 
 	// Reasoning turns on extended thinking.
 	Reasoning bool `yaml:"reasoning,omitempty" json:"reasoning,omitempty" desc:"Enable extended thinking (openai and anthropic only)."`

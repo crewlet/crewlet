@@ -70,6 +70,14 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 	// send the literal "${ANTHROPIC_API_KEY}" as its credential and get a
 	// 401 that names the vendor rather than the misconfiguration.
 	keys := spec.ResolvedKeys(r)
+	// The SAME resolution the keys get, for the other two scalars a Tier B
+	// document is allowed to write a reference into. Tier B stores "${VAR}"
+	// verbatim, so a backend handed the raw field receives the literal
+	// "${LLM_BASE_URL}" and sends every request to a URL that is not one —
+	// and examples/nimbus.company.yaml ships exactly that reference, against
+	// the variable docs/reference/environment-variables.md documents.
+	model := r.Value(spec.Model)
+	baseURL := r.Value(spec.BaseURL)
 	// Through the accessors, not the raw fields: those apply the bounds and
 	// the defaults, and reading the fields directly would send a zero
 	// cooldown for every provider that did not configure one.
@@ -81,15 +89,31 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 	switch spec.Type {
 	case config.LLMAnthropic:
 		return anthropic.New(anthropic.Config{
-			Model: spec.Model, APIKeys: keys, BaseURL: spec.BaseURL,
+			Model: model, APIKeys: keys, BaseURL: baseURL,
 			Timeout: timeout, Cooldowns: cooldowns,
 			Reasoning: spec.Reasoning, ThinkingBudget: spec.ReasoningBudgetTokens,
+			// The conventional-key fallback — ANTHROPIC_API_KEY, taken when
+			// the entry names no api_keys — reads a VARIABLE rather than
+			// expanding a reference, so it needs the resolver itself.
+			// os.Getenv cannot see what `crewlet secrets set` put in the
+			// store, and the fallback would answer "unset" for a credential
+			// the operator deliberately stored.
+			LookupEnv: r.Lookup,
 		})
 	case config.LLMOpenAI, config.LLMOpenAICompatible:
+		// Name labels errors, logs and the chain's telemetry. An
+		// openai-compatible entry passes its CONFIG KEY so a failure names
+		// the endpoint that answered rather than claiming to be OpenAI;
+		// a plain openai entry leaves it empty and keeps the vendor's name.
+		name := ""
+		if spec.Type == config.LLMOpenAICompatible {
+			name = key
+		}
 		return openai.New(openai.Config{
-			Model: spec.Model, APIKeys: keys, BaseURL: spec.BaseURL,
+			Model: model, Name: name, APIKeys: keys, BaseURL: baseURL,
 			Timeout: timeout, Cooldowns: cooldowns,
 			Reasoning: spec.Reasoning, ReasoningEffort: string(spec.ReasoningEffort),
+			LookupEnv: r.Lookup,
 		})
 	case config.LLMCLIAgent:
 		return buildCLIAgent(key, spec, r, keys)
@@ -164,8 +188,11 @@ func buildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver, apiK
 	bundle := resolveOrConvention(r, cli.Auth.CredentialBundle, cliagent.BundleVarName(key))
 
 	return cliagent.New(cliagent.Config{
-		Key:              key,
-		Model:            spec.Model,
+		Key: key,
+		// Resolved for the same reason cli.env is: a model written as a
+		// reference would reach the CLI's --model flag as the literal
+		// "${VAR}", and the CLI would reject a model by that name.
+		Model:            r.Value(spec.Model),
 		Agent:            cli.Name(),
 		StateDir:         stateDir,
 		Overrides:        cli.Overrides,

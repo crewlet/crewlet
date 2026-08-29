@@ -224,7 +224,10 @@ providers:
                                         #   repeated auth failures on one key back off exponentially)
                                         #   a bench is SHARED across the fleet, so a peer's 429 benches the
                                         #   key here too — see concepts/coordination.md
-      base_url: "..."                   # optional — custom endpoint (required for openai-compatible)
+      base_url: "${LLM_BASE_URL}"       # optional — custom endpoint; supports ${ENV_VAR} references.
+                                        #   Required for openai-compatible (it has no vendor default);
+                                        #   on `openai` / `anthropic` it points the vendor's own wire
+                                        #   format at a gateway or proxy instead of the vendor host
       timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
       reasoning: false                  # optional — enable reasoning/extended thinking (default: false)
