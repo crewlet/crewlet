@@ -99,12 +99,23 @@ learning:                               # optional — agent-learning subsystem
     budget_tokens: 4000                 # soft cap on the synthesizer's LLM call
     max_skills_per_agent: 50            # hard cap; once reached the synthesizer no-ops
     duplicate_jaccard_threshold: 0.7    # reject near-duplicates of existing skills
-    # Scheduler (opt-in; drives the clustered-synthesis path)
+    # Clustered synthesis (opt-in). A fleet singleton: one node runs the tick.
     scheduler_enabled: false            # set true to enable the background tick
-    scheduler_interval_seconds: 3600    # seconds between ticks
-    cluster_window_hours: 168           # look-back window for clustering (7d)
-    cluster_min_size: 3                 # min matches to form a cluster
-    cluster_jaccard_threshold: 0.6      # similarity threshold for joining a cluster
+    scheduler_interval_seconds: 3600    # seconds between ticks. Hourly is cheap:
+                                        #   a tick is one indexed scan per seat
+                                        #   and only calls the model when a NEW
+                                        #   cluster qualified
+    cluster_window_hours: 168           # look-back window (7d). Bounds the QUIET
+                                        #   seat, whose last 200 turns can span a
+                                        #   year; episode_fetch_limit bounds the
+                                        #   busy one
+    cluster_min_size: 3                 # turns that must converge before a
+                                        #   cluster earns a skill. Two is a
+                                        #   coincidence
+    cluster_jaccard_threshold: 0.6      # similarity that pools two turns. Lower
+                                        #   than duplicate_jaccard_threshold on
+                                        #   purpose: pooling asks "same kind of
+                                        #   work", rejecting asks "same skill"
     episode_fetch_limit: 200            # max episodes pulled per agent per tick
   skill_refinement:
     enabled: true                       # both halves: the post-turn refiner AND

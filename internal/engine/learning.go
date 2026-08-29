@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -107,12 +108,7 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	// one, so all of it ran correctly over an empty table.
 	if cfg.SkillSynthesis.Enabled.Or(true) {
 		synth, err := learning.NewSynthesizer(models, learning.NewSkills(db),
-			learning.SynthesizerOptions{
-				MinToolCalls:              cfg.SkillSynthesis.MinToolCalls,
-				MaxSkillsPerAgent:         cfg.SkillSynthesis.MaxSkillsPerAgent,
-				DuplicateJaccardThreshold: cfg.SkillSynthesis.DuplicateJaccardThreshold,
-				MaxTokens:                 cfg.SkillSynthesis.BudgetTokens,
-			})
+			synthesizerOptions(cfg.SkillSynthesis))
 		if err != nil {
 			log.Warn("skill_synthesizer_unavailable", "error", err,
 				"detail", "no skill will ever be drafted, so use_skill and the "+
@@ -237,16 +233,17 @@ func (e *Engine) startReflection(ctx context.Context) error {
 	return nil
 }
 
-// ---- the two fleet singletons ----------------------------------------- //
+// ---- the fleet singletons --------------------------------------------- //
 
-// skillCuratorDutyName is the singleton BOTH background passes claim.
+// skillCuratorDutyName is the singleton EVERY background pass claims.
 //
-// One name for two loops, deliberately: BackgroundOptions takes a single
-// ClaimDuty, so the skill-ageing pass and the episode compaction run on the
-// same node — which is also what learningDutyTTL is sized against. The name
-// is the skill curator's for history rather than accuracy: renaming it would
-// change the coordination key, and during a rolling upgrade a node on each
-// name would both believe they held "the" duty.
+// One name for three loops, deliberately: BackgroundOptions takes a single
+// ClaimDuty, so the skill-ageing pass, the episode compaction and the skill
+// clustering all run on the same node — which is also what learningDutyTTL is
+// sized against. The name is the skill curator's for history rather than
+// accuracy: renaming it would change the coordination key, and during a
+// rolling upgrade a node on each name would both believe they held "the"
+// duty.
 const skillCuratorDutyName = "skill-curator"
 
 // lifecycleOptions projects the operator's episode-lifecycle config onto the
@@ -278,7 +275,7 @@ func days(n int) time.Duration {
 	return time.Duration(n) * 24 * time.Hour
 }
 
-// startLearningBackground arms the two passes no turn drives.
+// startLearningBackground arms the passes no turn drives.
 //
 // LAST, like the sandbox waiter and the retention sweep, because both are
 // fleet singletons claimed under this node's own incarnation — which does
@@ -321,13 +318,22 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 	if cfg.SkillCurator.Enabled.Or(true) {
 		skills = learning.NewSkills(db)
 	}
-	if lifecycle == nil && skills == nil {
+
+	cluster := e.clusteringPass(company)
+
+	if lifecycle == nil && skills == nil && cluster == nil {
 		return
 	}
 
 	e.learning = learning.NewBackground(learning.BackgroundOptions{
 		Lifecycle: lifecycle,
 		Skills:    skills,
+		Cluster:   cluster,
+		// FRESH through the epoch, like Seats below: a captured resolver
+		// would keep answering with the roles of the revision this call
+		// saw, and charge a renamed seat's clustering to a chain the
+		// company has replaced.
+		RoleFor: e.seatRole,
 		Policy: learning.CuratorPolicy{
 			StaleAfter:   days(cfg.SkillCurator.StaleAfterDays),
 			ArchiveAfter: days(cfg.SkillCurator.ArchiveAfterDays),
@@ -339,6 +345,7 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 		Seats:             func() []string { return e.seatHandles() },
 		Publish:           e.publishLearning,
 		CuratorInterval:   hours(cfg.SkillCurator.IntervalHours),
+		ClusterInterval:   seconds(float64(cfg.SkillSynthesis.SchedulerIntervalSeconds)),
 		ClaimDuty:         e.workerDuty(skillCuratorDutyName, learningDutyTTL),
 		LifecycleInterval: 0,
 	})
@@ -348,14 +355,73 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 	e.learning.Start(context.WithoutCancel(ctx))
 }
 
+// synthesizerOptions carries the company's synthesis knobs to the worker.
+//
+// ONE MAPPING for both paths — the inline worker and the clustering pass —
+// because the four gates they share must not diverge: a company that raised
+// `max_skills_per_agent` would otherwise find one path honouring it and the
+// other capped at the shipped default, with nothing failing.
+//
+// A named function rather than a struct literal at each call site for the
+// same reason refinerOptions is one: every field here is a knob that
+// validated and did nothing until its worker existed, and a literal buried in
+// a constructor call is where one silently goes missing again. Episodes is
+// NOT set here — it is what distinguishes the two paths, and the inline
+// worker needs none.
+func synthesizerOptions(cfg config.SkillSynthesis) learning.SynthesizerOptions {
+	return learning.SynthesizerOptions{
+		MinToolCalls:              cfg.MinToolCalls,
+		MaxSkillsPerAgent:         cfg.MaxSkillsPerAgent,
+		DuplicateJaccardThreshold: cfg.DuplicateJaccardThreshold,
+		MaxTokens:                 cfg.BudgetTokens,
+		ClusterMinSize:            cfg.ClusterMinSize,
+		ClusterJaccardThreshold:   cfg.ClusterJaccardThreshold,
+		EpisodeFetchLimit:         cfg.EpisodeFetchLimit,
+		ClusterWindow:             hours(cfg.ClusterWindowHours),
+	}
+}
+
+// clusteringPass builds the pass `skill_synthesis.scheduler_enabled` turns on,
+// or nil when the company did not ask for it.
+//
+// A NAMED FUNCTION rather than a block inside the wiring, because every field
+// it reads is a knob that validated and did nothing before the pass existed —
+// `cluster_min_size`, `cluster_jaccard_threshold`, `episode_fetch_limit` — and
+// a literal buried in a constructor call is where one silently goes missing
+// again. This is the seam a test can hold.
+//
+// Gated on BOTH toggles: `scheduler_enabled` under a company that turned
+// skill synthesis off would draft skills for a company that said not to.
+func (e *Engine) clusteringPass(c *Company) *learning.Synthesizer {
+	db := e.backends.Store
+	cfg := c.Config.Learning.SkillSynthesis
+	if db == nil || !cfg.Enabled.Or(true) || !cfg.Clusters() {
+		return nil
+	}
+	opts := synthesizerOptions(cfg)
+	opts.Episodes = learning.NewEpisodes(db)
+	built, err := learning.NewSynthesizer(e.meteredModelsFor(c), learning.NewSkills(db), opts)
+	if err != nil {
+		log.Warn("skill_clustering_unavailable", "error", err,
+			"detail", "scheduler_enabled is on but no clustering pass could be "+
+				"built, so a seat's repeated procedures are never distilled")
+		return nil
+	}
+	return built
+}
+
 // learningDutyTTL is how long a background duty survives without a re-claim.
 //
-// Sized off the SHORTER of the two cadences, because both loops claim
-// through the same helper and a TTL shorter than a loop's interval would
-// hand the duty to a peer between every tick. Three lifecycle intervals
-// matches the ratio the retention sweep and the sandbox waiter use: one
-// missed tick must not move the duty, and a dead node's is picked up within
-// a few hours.
+// Sized off the SHORTEST of the three cadences, because every loop claims
+// through the same helper and a TTL shorter than a loop's interval would hand
+// the duty to a peer between every tick. Lifecycle and clustering both tick
+// hourly, so three of those matches the ratio the retention sweep and the
+// sandbox waiter use: one missed tick must not move the duty, and a dead
+// node's is picked up within a few hours.
+//
+// A company that lowers `scheduler_interval_seconds` below this does not
+// break it — the clustering loop simply claims more often than it needs to,
+// which is what a shared duty lease is for.
 const learningDutyTTL = 3 * learning.LifecycleInterval
 
 // seatHandles is the current epoch's agent seats.
@@ -370,6 +436,19 @@ func (e *Engine) seatHandles() []string {
 		out = append(out, s.Handle)
 	}
 	return out
+}
+
+// seatRole resolves a seat handle against the CURRENT epoch.
+//
+// Read fresh, never captured: a background pass holding the roster it started
+// with would charge a renamed seat's auxiliary call to a chain the company
+// has replaced, and would answer nil for a seat an apply has just added.
+func (e *Engine) seatRole(handle string) *org.Role {
+	company := e.Company()
+	if company == nil || company.Org == nil {
+		return nil
+	}
+	return company.Org.AgentSeatByHandle(handle)
 }
 
 // publishLearning announces one background pass, best effort.

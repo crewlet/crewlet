@@ -6,16 +6,18 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
-// The two BACKGROUND passes, which are the half of learning no turn drives.
+// The BACKGROUND passes, which are the half of learning no turn drives.
 //
-// Everything else here hangs off a completed turn. These two do not: a skill
-// goes stale because nothing used it, and episodes are compacted because
-// they piled up. Both are therefore loops, both are fleet SINGLETONS — two
-// nodes compacting one seat's episodes would summarise the same cluster
-// twice and pay for it twice — and both are deliberately slow: their unit of
-// change is a day, not a tick.
+// Everything else here hangs off a completed turn. These do not: a skill goes
+// stale because nothing used it, episodes are compacted because they piled
+// up, and a repeated procedure becomes visible only across turns. All three
+// are therefore loops, all three are fleet SINGLETONS — two nodes compacting
+// one seat's episodes would summarise the same cluster twice and pay for it
+// twice — and all three are deliberately slow: their unit of change is a day,
+// not a tick.
 
 // CuratorInterval is how often the skill state machine walks the catalogue.
 //
@@ -43,16 +45,19 @@ const LifecycleInterval = time.Hour
 // removed and never touch one it added.
 type Seats func() []string
 
-// Background runs the two passes no turn drives.
+// Background runs the passes no turn drives.
 type Background struct {
 	lifecycle *Lifecycle
 	skills    *Skills
+	cluster   *Synthesizer
+	roleFor   func(handle string) *org.Role
 	policy    CuratorPolicy
 	seats     Seats
 	publish   Announce
 
 	curatorEvery   time.Duration
 	lifecycleEvery time.Duration
+	clusterEvery   time.Duration
 	claimDuty      func(ctx context.Context) (bool, error)
 	now            func() time.Time
 }
@@ -64,6 +69,17 @@ type BackgroundOptions struct {
 
 	// Skills ages the catalogue; nil disables that pass.
 	Skills *Skills
+
+	// Cluster drafts skills from the shapes a seat repeats; nil disables
+	// that pass, which is what `skill_synthesis.scheduler_enabled: false`
+	// — the default — resolves to.
+	Cluster *Synthesizer
+
+	// RoleFor resolves a seat handle to the role whose auxiliary model the
+	// clustering pass runs on. Required alongside Cluster: a pass with no
+	// role cannot resolve a model, and answering with the first role in
+	// the org would charge one seat's work to another's chain.
+	RoleFor func(handle string) *org.Role
 
 	// Policy is the disuse schedule. Zero values take the defaults.
 	Policy CuratorPolicy
@@ -79,9 +95,11 @@ type BackgroundOptions struct {
 	// company forgetting what it should forget.
 	Publish Announce
 
-	// CuratorInterval and LifecycleInterval override the cadences above.
+	// CuratorInterval, LifecycleInterval and ClusterInterval override the
+	// cadences above.
 	CuratorInterval   time.Duration
 	LifecycleInterval time.Duration
+	ClusterInterval   time.Duration
 
 	// ClaimDuty gates a tick in a fleet. Nil means single-node — there is
 	// nobody to be a singleton among.
@@ -94,15 +112,26 @@ type BackgroundOptions struct {
 func NewBackground(opts BackgroundOptions) *Background {
 	b := &Background{
 		lifecycle: opts.Lifecycle, skills: opts.Skills,
+		cluster: opts.Cluster, roleFor: opts.RoleFor,
 		policy: opts.Policy, seats: opts.Seats, publish: opts.Publish,
 		curatorEvery: opts.CuratorInterval, lifecycleEvery: opts.LifecycleInterval,
-		claimDuty: opts.ClaimDuty, now: opts.Now,
+		clusterEvery: opts.ClusterInterval,
+		claimDuty:    opts.ClaimDuty, now: opts.Now,
+	}
+	if b.roleFor == nil {
+		// A clustering pass without one resolves no model and would fail
+		// per seat, per tick, forever. Refusing the pass is the honest
+		// answer and it is logged where NewBackground's caller sees it.
+		b.cluster = nil
 	}
 	if b.curatorEvery <= 0 {
 		b.curatorEvery = CuratorInterval
 	}
 	if b.lifecycleEvery <= 0 {
 		b.lifecycleEvery = LifecycleInterval
+	}
+	if b.clusterEvery <= 0 {
+		b.clusterEvery = ClusterInterval
 	}
 	if b.now == nil {
 		b.now = func() time.Time { return time.Now().UTC() }
@@ -122,6 +151,42 @@ func (b *Background) Start(ctx context.Context) {
 	}
 	if b.skills != nil {
 		go b.loop(ctx, "skill_curator", b.curatorEvery, b.curatePass)
+	}
+	if b.cluster != nil {
+		go b.loop(ctx, "skill_clustering", b.clusterEvery, b.clusterPass)
+	}
+}
+
+// clusterPass drafts from the shapes each seat repeats.
+//
+// PER SEAT and in sequence, like the compaction pass and for the same
+// reason: each seat's pass is a scan plus at most one auxiliary call, and
+// running the roster concurrently would turn one tick into a company-wide
+// spike against the auxiliary model for work that has a day to happen in.
+func (b *Background) clusterPass(ctx context.Context) {
+	for _, handle := range b.handles() {
+		role := b.roleFor(handle)
+		if role == nil {
+			// A seat in the roster the epoch cannot resolve — mid-apply,
+			// or a handle the org no longer carries. Skipped rather than
+			// run with no role, which would charge its auxiliary call to
+			// whichever chain answered.
+			log.Debug("skill_clustering_skipped", "reason", "unknown_seat",
+				"agent_handle", handle)
+			continue
+		}
+		payloads, err := b.cluster.ClusterPass(ctx, role, handle)
+		if err != nil {
+			log.Warn("skill_clustering_failed", "seat", handle, "error", err.Error())
+		}
+		for _, payload := range payloads {
+			if b.publish != nil {
+				b.publish(ctx, handle, payload)
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
 	}
 }
 

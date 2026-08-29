@@ -61,6 +61,14 @@ type Synthesizer struct {
 	timeout      time.Duration
 	maxTokens    int
 	now          func() time.Time
+
+	// The clustered path's own inputs. episodes is nil for a synthesizer
+	// built for the inline path alone, and ClusterPass answers empty.
+	episodes      *Episodes
+	clusterMin    int
+	clusterAt     float64
+	fetchLimit    int
+	clusterWindow time.Duration
 }
 
 // SynthesizerOptions configures the worker. Zero values take the shipped
@@ -84,6 +92,28 @@ type SynthesizerOptions struct {
 	// MaxTokens caps one draft; zero takes DefaultSynthesisTokens.
 	MaxTokens int
 
+	// Episodes backs the clustered pass. Nil leaves [Synthesizer.ClusterPass]
+	// answering empty — the inline path needs no episode store, because a
+	// completed turn carries its own tool sequence.
+	Episodes *Episodes
+
+	// ClusterMinSize is how many turns must converge before a cluster earns
+	// a skill; zero takes DefaultClusterMinSize.
+	ClusterMinSize int
+
+	// ClusterJaccardThreshold is how similar two tool runs must be to pool
+	// into one cluster; zero takes DefaultClusterJaccard.
+	ClusterJaccardThreshold float64
+
+	// EpisodeFetchLimit is how many recent turns one pass reads; zero
+	// takes DefaultEpisodeFetchLimit.
+	EpisodeFetchLimit int
+
+	// ClusterWindow is how far back a pass looks; zero takes
+	// DefaultClusterWindow. The second bound, for the quiet seat whose
+	// last 200 turns span a year.
+	ClusterWindow time.Duration
+
 	Now func() time.Time
 }
 
@@ -103,6 +133,22 @@ const (
 
 	// DefaultSynthesisTokens caps one draft.
 	DefaultSynthesisTokens = 4000
+
+	// DefaultClusterMinSize is three: two turns that ran the same tools is
+	// a coincidence, and drafting from it teaches a seat a procedure it
+	// has performed once more than by accident.
+	DefaultClusterMinSize = 3
+
+	// DefaultClusterJaccard is LOWER than the duplicate threshold on
+	// purpose. Pooling asks "is this the same kind of work" and rejecting
+	// a draft asks "is this the same skill" — a stricter question, so a
+	// cluster that forms at 0.6 can still be found new at 0.7.
+	DefaultClusterJaccard = 0.6
+
+	// DefaultEpisodeFetchLimit is how far back one pass looks. Two hundred
+	// turns is weeks of work for a busy seat and the seat's whole history
+	// for a quiet one, read as one indexed scan on a daily cadence.
+	DefaultEpisodeFetchLimit = 200
 )
 
 // Skip reasons this worker reports.
@@ -124,12 +170,17 @@ func NewSynthesizer(models Models, s *Skills, opts SynthesizerOptions) (*Synthes
 	}
 	syn := &Synthesizer{
 		models: models, skills: s,
-		minToolCalls: opts.MinToolCalls,
-		maxPerAgent:  opts.MaxSkillsPerAgent,
-		duplicateAt:  opts.DuplicateJaccardThreshold,
-		timeout:      opts.CallTimeout,
-		maxTokens:    opts.MaxTokens,
-		now:          opts.Now,
+		minToolCalls:  opts.MinToolCalls,
+		maxPerAgent:   opts.MaxSkillsPerAgent,
+		duplicateAt:   opts.DuplicateJaccardThreshold,
+		timeout:       opts.CallTimeout,
+		maxTokens:     opts.MaxTokens,
+		now:           opts.Now,
+		episodes:      opts.Episodes,
+		clusterMin:    opts.ClusterMinSize,
+		clusterAt:     opts.ClusterJaccardThreshold,
+		fetchLimit:    opts.EpisodeFetchLimit,
+		clusterWindow: opts.ClusterWindow,
 	}
 	if syn.minToolCalls <= 0 {
 		syn.minToolCalls = DefaultMinToolCalls
@@ -145,6 +196,18 @@ func NewSynthesizer(models Models, s *Skills, opts SynthesizerOptions) (*Synthes
 	}
 	if syn.maxTokens <= 0 {
 		syn.maxTokens = DefaultSynthesisTokens
+	}
+	if syn.clusterMin <= 0 {
+		syn.clusterMin = DefaultClusterMinSize
+	}
+	if syn.clusterAt <= 0 {
+		syn.clusterAt = DefaultClusterJaccard
+	}
+	if syn.fetchLimit <= 0 {
+		syn.fetchLimit = DefaultEpisodeFetchLimit
+	}
+	if syn.clusterWindow <= 0 {
+		syn.clusterWindow = DefaultClusterWindow
 	}
 	if syn.now == nil {
 		syn.now = func() time.Time { return time.Now().UTC() }
