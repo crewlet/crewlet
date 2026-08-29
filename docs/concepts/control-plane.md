@@ -147,13 +147,15 @@ The **scheduler** is gated too, and differently: a tick on a shedding node is sk
 
 ## Rotation
 
-A config revision and the *values* its `${VAR}` references resolve to are two different things, and the apply used to compare only the first.
+A config revision and the *values* its `${VAR}` references resolve to are two different things, and re-activating an unchanged revision is the documented gesture for picking up a rotated credential. The payload is byte-identical, so an apply that compared payloads would rebuild nothing on exactly the operation an operator performs to make it rebuild: MCP children would keep the credential they captured at spawn, LLM providers the revoked key, transports the old token.
 
-That gap was the whole of secret rotation. Re-activating an unchanged revision produces a byte-identical payload, so the no-op early-out fired and nothing rebuilt: MCP children kept the credential they captured at spawn, LLM providers kept the revoked key, transports kept the old token.
+**The engine compares nothing.** There is no payload-equality check on the apply path, so there is nothing for a rotation to slip through. The property falls out of the control plane's shape instead:
 
-The engine now compares a **resolution fingerprint** alongside the payload — a process-local *keyed* digest (`blake2b`, per-process random key) over what every `${VAR}` the payload references currently resolves to. Equal payload **and** equal fingerprint is a true no-op; equal payload with a moved fingerprint is a rotation, and the credential-bearing subsystems rebuild.
+- The activation log is **append-only**, so re-activating a revision mints a **new epoch** even though the payload has not moved.
+- A node's reconciler skips on the **epoch it has already applied**, never on payload content — so a re-activation always reaches `Apply`.
+- `Apply` **re-reads the secret store first**, before it builds anything, and `${VAR}` references stay verbatim in the stored revision and are resolved where a provider is *constructed*. Every subsystem that captures a resolved value is then rebuilt against the fresh snapshot.
 
-The key is per-process and never persisted or logged. A bare hash of a short credential in a log line or a database row is offline-brute-forceable, which would turn the fix into a leak. A fingerprint is meaningful only as "has this changed since the last apply *in this process*" — which is exactly, and only, what it is asked.
+The cost of having no comparison is that a rotation rebuilds the whole epoch on that node rather than only the credential-bearing subsystems — the same work as any other apply. That is deliberate: a selective rebuild needs a trustworthy answer to "did this value change", and the only way to hold one across applies is to keep a digest of live credentials in process memory. The epoch rebuild is cheap enough, and bounded enough, not to be worth that.
 
 > One surface this cannot reach: a **running code sandbox** received its credentials in the box's environment at launch, and no engine-side refresh reaches a live box. There the bound is the run's duration plus any clarification pause, not seconds. Tear the run down if a rotation is a revocation.
 

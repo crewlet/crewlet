@@ -173,7 +173,7 @@ for that than an encrypted table the engine reads back itself.
 > a crash, a `kill -9` and an OOM all free it, and there is no stale lock to
 > clear by hand.
 
-So `crewlet secrets set` against a running node takes effect fleet-wide at the next config activation or restart — the CLI says so after each write. Re-activating the *current* revision is a valid way to ask a running engine to pick up a rotated credential; the refresh happens before the no-op check precisely so that gesture works, and the activation log is append-only precisely so a re-activation still moves the pointer every node is watching (see [Control Plane](control-plane.md)).
+So `crewlet secrets set` against a running node takes effect fleet-wide at the next config activation or restart — the CLI says so after each write. Re-activating the *current* revision is a valid way to ask a running engine to pick up a rotated credential; the apply re-reads the store before it builds anything precisely so that gesture works, and the activation log is append-only precisely so a re-activation still moves the pointer every node is watching (see [Control Plane](control-plane.md)).
 
 **What "picks up" means.** A rotated value is not useful until the things that *captured* it are rebuilt — an MCP child baked the resolved value into its spawn environment, an LLM provider holds it inside a constructed client, a transport holds it in a header. So re-activating an unchanged revision has to rebuild them, even though its payload is byte-identical.
 

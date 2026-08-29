@@ -195,37 +195,86 @@ This replaced a pair of Pulsar **competing-consumer** subscriptions (`engine-con
 
 ### The engine half
 
-Converging applies the payload, which:
+Converging applies the payload. `Engine.Apply` is a **straight line with no
+comparison and no early return** — there is no apply lock, no payload
+short-circuit and no rollback of captured state. It rebuilds the whole epoch,
+in a fixed order, and names each stage it got through:
 
-1. Takes the apply lock, so the CLI path, the reconcile loop and tests serialise against one another.
-2. Re-reads the secret store, then validates the payload as `CompanyConfig` (defence in depth).
-3. **No-op short-circuit:** if the new payload equals the current active config **and** its [resolution fingerprint](control-plane.md#rotation) is unchanged, returns `[]` immediately — no snapshot capture, no per-subsystem comparison passes. Same payload with a *moved* fingerprint is a credential rotation, not a no-op: the credential-bearing subsystems (LLM providers, shared and per-role MCP servers, notification transports) rebuild and the rest is skipped.
-4. Snapshots in-memory state for rollback (including `_scheduling_config` so a rollback after `_apply_scheduling_live` restores the prior scheduler settings).
-5. Dispatches per-subsystem diff handlers in order:
-   - **`org`** — spawn new roles, terminate removed (stopping their per-role MCP subprocesses), swap `AgentDefinition` for changed roles, re-derive the per-seat `token_budget` caps from the new org, and re-seed the running notification transports' fall-through routing maps (Jira project / Confluence space → unit lead) from the new org — the freshly built map is always pushed, so removing the last `integrations.*` identity *clears* live routing rather than leaving the stale map until restart
-   - **`budgets`** — update org `token_budget` (per-role caps are applied by the `org` branch above, since they live on `Role`)
+1. **`secrets`** — re-read the secret store and install a fresh resolver snapshot. **First**, because re-activating an unchanged revision is the documented [rotation gesture](secret-store.md): the payload has not moved, so the only thing that can have is what its `${VAR}` references resolve to.
+2. **`company`** — validate and build the new epoch, resolving `${VAR}` where each provider is *constructed*. A refusal here changes nothing: this node keeps serving the previous epoch.
+3. **`tools`** — equip the new epoch with this node's builtins. An epoch is published, never mutated, so each one gets its own registry; a node that equipped only its first would serve a company whose agents silently lost every builtin at the first config change.
+4. **`learning`** — rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting.
+5. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows.
+6. **`parties`** — rebuild the party index *before* the epoch is published, so a seat the revision **adds** is addressable the instant the epoch carrying it is current.
+7. **`integrations`** — re-derive the Confluence / Jira / GitLab / GitHub lead maps from the new org, so work items route by the new chart rather than the boot-time one.
+8. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
+9. **`mailboxes`** — ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained.
+10. **`scheduler`** — re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
 
-   > **Per-seat caps are a projection of the active org, not an accumulation.** Every org swap re-derives the whole cap set: each agent seat with a positive `token_budget` gets its cap (usage history preserved), and every cap whose seat is gone — role removed, flipped to human, budget dropped to `0` (= unlimited) — is dropped. Crucially the caps cover **every seat in the company on every node**, not just the seats a node happens to be running: caps are config while only *usage* is shared, and a missing local cap is read as "unlimited", so a node that seeded selectively would run a seat with no cap the moment it took that seat over.
-   - **`turn_engine`** — push new settings into the turn-engine settings cell; in-flight turns finish on the prior snapshot
-   - **`providers`** — LLM providers are rebuilt and swapped in place. The **embeddings** provider is rebuilt with them — model, key and base URL are all live — with **one exception that is refused rather than applied**: `dimensions`. Rows already written carry vectors of the old width, and a similarity query across two widths compares nothing; the apply fails with an error naming the declared width and the width this store already holds. Changing it means re-embedding, not a restart. Adding or removing the whole `embeddings` block *is* live, in both directions: a company that drops it degrades to recency-only recall on the next turn rather than at the next restart.
-   - **`scalars`** — `integrations.forge_app_id`, `notification_rate_limit` (the rate limit is propagated onto the running notification service so it takes effect on the next notification), and `notification_coalesce_window_seconds` / `notification_coalesce_max_batch` (mutated in place on the shared `BatchOptions` the inbox batch consume loops read every cycle — takes effect on the next batch, no re-subscription; see [Event System — Inbox batching](event-system.md#inbox-batching--coalescing))
-   - **`restart_required`** — MCP server start/stop/restart for both stdio and remote http (a `url` / `headers` change is a restart of that one server), per-role MCP respawn when a role's `mcp_env` changes — this carries the per-agent Slack/GitHub credentials too — notification transport swap with routing re-seed (Slack apps + Jira/Confluence project/space key→lead maps), and integration handle-registry refresh. **Only the changed server restarts**, and a seat picks up its new tool surface on its **next turn**, not at the next engine restart. **Learning** is the one subsystem that does NOT live-restart — the new `learning:` config is stored for the next engine restart and a WARNING is logged; the running reflect engine / `EpisodeLifecycleWorker` / `SkillCuratorWorker` keep the prior config until then.
-6. Refreshes derived state (`DelegationHandler`).
-7. Publishes `crewlet.config.revision_applied` with `status`, `applied_subsystems`, optional `error`.
+Then `crewlet.config.revision_applied` is published with `status`, the
+`applied_subsystems` list and any error.
 
-On any mid-apply failure the rollback restores all captured state — and, after the org and the transports are back, re-derives both the per-seat token caps and the running transports' routing maps from the rolled-back org, so a failed apply never leaves live spend limits or webhook routing derived from a revision that was never activated. The error carries which subsystem failed and which ones had already applied. The active row stays active either way — the dashboard banner surfaces divergence. The converge path carries that partial list onto the `config_revision_applied` event so the dashboard can render "applied: org, budgets; failed at: providers" rather than an empty list, and records the outcome in the fleet's [apply status](control-plane.md) so peers can see it.
+**A failure is reported by how far it got, not undone.** The epoch swap is step
+8, so any refusal before it leaves the previous epoch current and serving —
+that, rather than a rollback, is what makes a failed apply safe. The returned
+list is the stages that *did* complete, so the dashboard renders
+"applied: secrets, company; failed at: tools" rather than an empty list, and it
+travels on `ConfigRevisionApplied` into the audit event log where it outlives
+the fleet view's one-minute bucket. The active row stays active either way; the
+control plane records the outcome so peers can see it (see
+[Control Plane](control-plane.md)).
 
-Rollback **restarts** the transports it restores, routing them through the same swap the apply used, so a failed apply cannot leave the node with a live config and a dead inbound path.
+> **One live mutation precedes the last failure point.** Step 4 rebuilds the
+> reflection workers in place and cannot fail; step 5 can. A sandbox-build
+> refusal therefore leaves this node's learning workers on the new org while it
+> still serves the previous epoch. Nothing else is mutated before the swap, so
+> the tool surface, party index and transports are untouched.
 
-What it still cannot undo is per-role MCP respawn: the failed revision's children are already running, and re-running the spawn sequence for every role inside an already-failing apply trades one failure for a longer, less predictable one. The apply error therefore carries a `degraded` flag, set when the failure came *after* a restart-required subsystem was mutated. Such a node reports the prior epoch while its tool surface may be amputated, so the control plane records it as `degraded`, never counts it as converged, and fails its readiness probe — see [Control Plane](control-plane.md).
+Two knobs are refused rather than applied live, because applying them would
+corrupt data rather than merely disrupt it:
+
+- **`providers.embeddings.dimensions`** — rows already written carry vectors of the old width, and a similarity query across two widths compares nothing. The apply fails naming the declared width and the width the store already holds. Changing it means re-embedding, not a restart. Adding or removing the whole `embeddings` block *is* live in both directions: a company that drops it degrades to recency-only recall on the next turn.
+- **`providers.sandbox`** — a revision whose sandbox block cannot be built is refused rather than published, because the alternative serves a company whose sandbox-enabled seats plan around a box that will never be minted.
+
+**Per-seat token caps are a projection of the active org, not an
+accumulation.** Every epoch re-derives the whole cap set: each agent seat with a
+positive `token_budget` gets its cap (usage history preserved), and every cap
+whose seat is gone — role removed, flipped to human, budget dropped to `0`
+(= unlimited) — is dropped. The caps cover **every seat in the company on every
+node**, not just the seats a node happens to be running: caps are config while
+only *usage* is shared, and a missing local cap reads as "unlimited", so a node
+that seeded selectively would run a seat with no cap the moment it took that
+seat over.
+
+MCP children are reconciled per server against the new epoch's specs, comparing
+every field: a change to `url`, `headers` or a role's `mcp_env` — which carries
+the per-agent Slack/GitHub credentials — restarts **only that server**, and a
+seat picks up its new tool surface on its **next turn** rather than at the next
+engine restart.
 
 ### The API half
 
-The API's cached projection refreshes `app.state.org_data`, `agent_roles`, `tools_data`, `github_webhook_secret`, `forge_app_id`, `configured` from the new payload. Without this, `GET /agents` / `/org` / `/health` would drift stale — and, far worse, a rotated webhook signing secret would never be picked up, so inbound HMAC verification would fail against every delivery.
+**There is no second projection to keep in step.** The API answers every read
+through closures over the engine's *current* epoch rather than from a cached
+copy of the payload — `GET /agents`, `/org` and the dashboard's queries all
+resolve against whatever `Apply` last published, and the inbound webhook
+secrets are re-read per delivery the same way. So a rotated signing secret is
+picked up by the epoch swap itself; there is nothing that could drift stale and
+nothing to refresh.
 
-It follows the same activation pointer, and deliberately follows the **pointer rather than the local apply outcome**: these fields decide whether inbound verification succeeds, and refusing deliveries because an apply failed would drop events the queue could otherwise have held. Keeping a stale node from *processing* work is the posture gate's job, not the receiver's.
+That is the point of there being one wiring for the embedded and standalone
+topologies: what differs between them is only what the node can *see*, through
+a single seam, never how many loops are chasing the pointer. Every node runs
+exactly one reconciler whatever its `node.roles`, so the two halves cannot
+disagree about which epoch they are on.
 
-A merged node (one that runs both `ingress` and `seats`) drives that refresh from the engine's own reconcile tick rather than a second loop, so the two halves can never disagree about which epoch they are on. An ingress-only node runs the loop itself.
+`configured` is the one field that is not derived per read. It is set **true at
+construction and stays true for the life of the process**: the engine only
+exists because a company config parsed, validated and built an epoch, and a
+failed apply leaves the node serving the previous epoch — which is still a
+configured node. What a failed apply changes is the **posture**, and `/ready`
+reads that. Collapsing the two would take a correctly-serving node out of a
+load balancer's rotation for being behind.
 
 ---
 
