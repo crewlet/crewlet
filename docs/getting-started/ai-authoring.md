@@ -303,7 +303,7 @@ Then just say what you want:
 
 **Any other assistant** — Cursor, Copilot, Codex, the ChatGPT/Claude web
 apps: paste the file, attach it, or add it to your rules/context
-directory. If you installed Crewlet with `pip` and don't have a repo
+directory. If you installed a released binary and don't have a repo
 checkout, fetch it from
 [GitHub](https://github.com/crewlet/crewlet/blob/main/skills/company-architect/SKILL.md).
 
