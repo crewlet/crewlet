@@ -192,6 +192,10 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 			"one still works (the engine has to be restarted after)")
 	decommission := fs.Bool("decommission", false,
 		"delete managed service accounts whose seats have left the config")
+	mode := fs.String("mode", string(gitlab.ModeGroup),
+		"where service accounts are owned: group (the default, and all "+
+			"GitLab.com offers) or instance (self-managed only; needs an "+
+			"instance-administrator token)")
 	expiryDays := fs.Int("token-expiry-days", 0,
 		"lifetime for minted tokens; 0 sends none and lets the instance "+
 			"policy decide")
@@ -216,11 +220,20 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stderr,
 			"usage: crewlet gitlab provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
-				"[-rotate] [-decommission] [-token-expiry-days N] [-dry-run]")
+				"[-mode group|instance] [-rotate] [-decommission] "+
+				"[-token-expiry-days N] [-dry-run]")
 		return errors.New("name exactly one company document")
 	}
 	if expiry != nil && *expiry < 0 {
 		return errors.New("-token-expiry-days must not be negative")
+	}
+	// REFUSED BEFORE THE CONFIG IS EVEN LOADED. A typo here is the one
+	// input that decides which endpoint every account is created on, and
+	// discovering it from a 404 half way through a run leaves an operator
+	// working out which seats landed.
+	if !gitlab.Mode(*mode).Valid() {
+		return fmt.Errorf("-mode %q is not one of %s",
+			*mode, strings.Join(gitlab.Modes(), ", "))
 	}
 
 	company, err := config.LoadCompany(companyPath)
@@ -302,6 +315,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 		SigningSecret:    env.Value(cfg.SigningSecret),
 		SigningSecretVar: signingVar,
 		Rotate:           *rotate, Decommission: *decommission, ExpiryDays: expiry,
+		Mode: gitlab.Mode(*mode),
 	})
 	if err != nil {
 		return err

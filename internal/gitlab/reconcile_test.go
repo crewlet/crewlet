@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -69,6 +71,20 @@ type adminInstance struct {
 	// for the refusals that are NOT absence.
 	projectStatus int
 
+	// instanceOnly refuses the GROUP service-account create with a 403,
+	// the way an instance-admin-only deployment does — and the way a
+	// token that is not a group Owner does.
+	instanceOnly bool
+	// noInstanceRoute answers the instance service-account routes with a
+	// 404, which is how GitLab.com answers: they are self-managed only.
+	noInstanceRoute bool
+	// instanceForbidden answers them with a 403, which is how a
+	// non-administrator's token is refused.
+	instanceForbidden bool
+	// instanceOwned names the accounts created through the instance
+	// route, so a delete down the wrong route can be caught.
+	instanceOwned map[string]bool
+
 	// failToken makes minting fail for this username, to reach the
 	// rollback path.
 	failToken string
@@ -100,8 +116,9 @@ const adminToken = "admin-token"
 func newAdminInstance() *adminInstance {
 	return &adminInstance{
 		users: map[string]int{}, tokens: map[int][]*gitlab.Token{},
-		people:  map[string]bool{},
-		members: map[string]int{}, nextID: 100, nextToken: 1,
+		people:        map[string]bool{},
+		instanceOwned: map[string]bool{},
+		members:       map[string]int{}, nextID: 100, nextToken: 1,
 		now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 }
@@ -148,13 +165,23 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 			out = append(out, map[string]any{"id": id, "username": name})
 		}
 		sortByUsername(out)
-		json.NewEncoder(w).Encode(out)
+		// PAGED, because a fake that served everything on page 1 makes a
+		// caller that never asks for page 2 look correct.
+		json.NewEncoder(w).Encode(pageOf(out, r.URL.Query()))
 
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/groups/7/service_accounts/"):
 		id := atoi(strings.TrimPrefix(path, "/groups/7/service_accounts/"))
 		for name, uid := range f.users {
 			if uid != id {
 				continue
+			}
+			if f.instanceOwned[name] {
+				// THE GROUP DOES NOT OWN IT, so the group route answers
+				// "no such account" — which a caller reads as "already
+				// gone" for an account that is still live.
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte(`{"message":"404 Not Found"}`))
+				return
 			}
 			if f.people[name] {
 				// GitLab refuses to delete an account that is not a
@@ -188,6 +215,11 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(out)
 
 	case r.Method == http.MethodPost && path == "/groups/7/service_accounts":
+		if f.instanceOnly {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"message":"403 Forbidden"}`))
+			return
+		}
 		var body map[string]string
 		json.NewDecoder(r.Body).Decode(&body)
 		f.nextID++
@@ -195,6 +227,44 @@ func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"id": f.nextID, "username": body["username"],
 		})
+
+	case r.Method == http.MethodPost && path == "/service_accounts":
+		if f.noInstanceRoute {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"message":"404 Not Found"}`))
+			return
+		}
+		if f.instanceForbidden {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"message":"403 Forbidden"}`))
+			return
+		}
+		var body map[string]string
+		json.NewDecoder(r.Body).Decode(&body)
+		f.nextID++
+		f.users[body["username"]] = f.nextID
+		f.instanceOwned[body["username"]] = true
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": f.nextID, "username": body["username"],
+		})
+
+	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/service_accounts/"):
+		id := atoi(strings.TrimPrefix(path, "/service_accounts/"))
+		for name, uid := range f.users {
+			if uid != id {
+				continue
+			}
+			if !f.instanceOwned[name] {
+				// The instance route does not own a group's account.
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte(`{"message":"404 Not Found"}`))
+				return
+			}
+			delete(f.users, name)
+			delete(f.instanceOwned, name)
+			delete(f.tokens, id)
+		}
+		w.WriteHeader(http.StatusNoContent)
 
 	case r.Method == http.MethodPost && path == "/groups/7/members":
 		var body map[string]int
@@ -435,6 +505,49 @@ func (f *adminInstance) liveTokens() int {
 }
 
 // forget clears the counters, so a test can measure ONE run.
+// pageOf serves one page of a listing, the way GitLab does: `per_page` is
+// clamped at 100 and `page` is 1-based.
+func pageOf(rows []map[string]any, q url.Values) []map[string]any {
+	size := atoi(q.Get("per_page"))
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+	page := atoi(q.Get("page"))
+	if page <= 0 {
+		page = 1
+	}
+	start := (page - 1) * size
+	if start >= len(rows) {
+		return []map[string]any{}
+	}
+	return rows[start:min(start+size, len(rows))]
+}
+
+// called reports whether the instance saw this request.
+func (f *adminInstance) called(want string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Contains(f.calls, want)
+}
+
+// hasUser reports whether an account still exists.
+func (f *adminInstance) hasUser(username string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.users[username]
+	return ok
+}
+
+// addPerson seeds a group member who is NOT a service account — a real
+// human, the thing a decommission sweep must never propose.
+func (f *adminInstance) addPerson(username string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextID++
+	f.users[username] = f.nextID
+	f.people[username] = true
+}
+
 func (f *adminInstance) forget() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1894,5 +2007,196 @@ func TestRotateReportsASigningSecretItCannotReplace(t *testing.T) {
 	if !said {
 		t.Errorf("the run said nothing about the signing secret it could not "+
 			"replace: %v", res.Notes)
+	}
+}
+
+// --- instance mode -------------------------------------------------------- //
+
+// AN INSTANCE SERVICE ACCOUNT IS CREATED ON THE INSTANCE ROUTE, and is still
+// made a member of the company's group — that is what gives a seat access to
+// the repositories, and it is what keeps a decommission scan scoped.
+func TestInstanceModeCreatesOnTheInstanceRoute(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	// The group route is refused, so a run that fell back to it fails
+	// rather than passing by accident.
+	f.instanceOnly = true
+	res, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
+		func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance })
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(res.Created) != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	if !f.called("POST /service_accounts") {
+		t.Errorf("the instance route was never used: %v", f.calls)
+	}
+	if !f.called("POST /groups/7/members") {
+		t.Errorf("the account was not made a group member: %v", f.calls)
+	}
+}
+
+// THE DEFAULT IS THE GROUP ROUTE, which is the only shape GitLab.com has.
+func TestTheDefaultModeCreatesUnderTheGroup(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.noInstanceRoute = true
+	if _, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
+		func(*gitlab.Options) {}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !f.called("POST /groups/7/service_accounts") {
+		t.Errorf("the group route was never used: %v", f.calls)
+	}
+	if f.called("POST /service_accounts") {
+		t.Errorf("the instance route was used by default: %v", f.calls)
+	}
+}
+
+// GITLAB.COM DOES NOT SERVE THE ROUTE AT ALL, and a bare 404 tells an
+// operator nothing about which of their two flags was wrong.
+func TestInstanceModeOnAnInstanceThatHasNoSuchRouteSaysSo(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	f.noInstanceRoute = true
+	_, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
+		func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance })
+	if err == nil {
+		t.Fatal("the run succeeded on an instance without the route")
+	}
+	if !strings.Contains(err.Error(), "self-managed only") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+// A 403 MEANS TWO DIFFERENT THINGS depending on the mode, so the message has
+// to name the credential this mode actually needs.
+func TestEachModesRefusalNamesTheCredentialItNeeds(t *testing.T) {
+	t.Parallel()
+	t.Run("instance", func(t *testing.T) {
+		t.Parallel()
+		f := newAdminInstance()
+		f.instanceForbidden = true
+		_, err := reconcileWith(t, f, newRecordingSink(),
+			map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
+			func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance })
+		if err == nil || !strings.Contains(err.Error(), "INSTANCE ADMINISTRATOR") {
+			t.Errorf("error = %v", err)
+		}
+	})
+	t.Run("group", func(t *testing.T) {
+		t.Parallel()
+		f := newAdminInstance()
+		f.instanceOnly = true
+		_, err := reconcileWith(t, f, newRecordingSink(),
+			map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
+			func(*gitlab.Options) {})
+		if err == nil || !strings.Contains(err.Error(), "Owner of provisioning.group") {
+			t.Errorf("error = %v", err)
+		}
+	})
+}
+
+// AN ACCOUNT THAT ALREADY EXISTS IS FOUND WHATEVER OWNS IT, which is what
+// makes switching modes safe: the lookup is /users?username=, and an
+// operator moving a company between modes must not collide with its own
+// usernames.
+func TestSwitchingModesFindsTheAccountsTheCompanyAlreadyHas(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	if _, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
+		func(*gitlab.Options) {}); err != nil {
+		t.Fatalf("group run: %v", err)
+	}
+	f.instanceForbidden = true // a second create would fail
+	res, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
+		func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance })
+	if err != nil {
+		t.Fatalf("instance run: %v", err)
+	}
+	if len(res.Created) != 0 {
+		t.Errorf("the second run created %v", res.Created)
+	}
+}
+
+// THE DELETE ROUTE IS NOT INTERCHANGEABLE. The group route answers "no such
+// account" for one the instance owns, which a caller reads as "already gone"
+// — a decommission that silently kept every credential it was asked to
+// destroy.
+func TestInstanceModeDecommissionsDownTheInstanceRoute(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	instance := func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance }
+	if _, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}", "qa": "${GITLAB_TOKEN_QA}"},
+		instance); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	res, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
+		func(o *gitlab.Options) { instance(o); o.Decommission = true })
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(res.Decommissioned) != 1 || res.Decommissioned[0] != "crewlet-qa" {
+		t.Fatalf("decommissioned = %v", res.Decommissioned)
+	}
+	if f.hasUser("crewlet-qa") {
+		t.Error("the account is still live")
+	}
+}
+
+// AN UNKNOWN MODE IS REFUSED BEFORE ANYTHING IS TOUCHED: it decides which
+// endpoint every account is created on, and finding out from a 404 half way
+// through leaves an operator working out which seats landed.
+func TestAnUnknownModeIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	_, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
+		func(o *gitlab.Options) { o.Mode = gitlab.Mode("cluster") })
+	if err == nil {
+		t.Fatal("an unknown mode ran")
+	}
+	if !strings.Contains(err.Error(), "group, instance") {
+		t.Errorf("the error does not name the modes: %v", err)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("the instance was touched: %v", f.calls)
+	}
+}
+
+// A GROUP LISTING IS PAGED TO EXHAUSTION. It asked for one page and took
+// what came back — so on a group with more members than a page, every
+// managed account past the first was invisible to a decommission and stayed
+// live for ever, with the run reporting success.
+func TestADecommissionSeesPastTheFirstPageOfMembers(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	// 130 members, and the 128 people SORT BEFORE the managed accounts —
+	// so both of those land on page two, which is the only arrangement
+	// that can tell a paged walk from a single-page one.
+	for i := range 128 {
+		f.addPerson(fmt.Sprintf("aaa-person-%03d", i))
+	}
+	if _, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}", "qa": "${GITLAB_TOKEN_QA}"},
+		func(*gitlab.Options) {}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	res, err := reconcileWith(t, f, newRecordingSink(),
+		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
+		func(o *gitlab.Options) { o.Decommission = true })
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(res.Decommissioned) != 1 || res.Decommissioned[0] != "crewlet-qa" {
+		t.Fatalf("decommissioned = %v", res.Decommissioned)
 	}
 }

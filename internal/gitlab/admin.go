@@ -104,6 +104,19 @@ func (e *APIError) Forbidden() bool {
 	return e.Status == http.StatusForbidden || e.Status == http.StatusUnauthorized
 }
 
+const (
+	// userPageSize is one page of an account listing. GitLab's own
+	// ceiling for `per_page` is 100 and a larger value is silently
+	// clamped, which would make a partial walk look complete.
+	userPageSize = 100
+
+	// userWalkCeiling bounds a full account walk. Every page is a request
+	// against an instance an operator is waiting on, and an instance with
+	// more managed service accounts than this is not one a single company
+	// config describes — it is a prefix matching things it should not.
+	userWalkCeiling = 5000
+)
+
 // User is a GitLab account as a provisioning run needs it.
 type User struct {
 	ID       int    `json:"id"`
@@ -147,6 +160,69 @@ func (c *Client) CreateServiceAccount(ctx context.Context, groupID int, name, us
 		"/groups/"+strconv.Itoa(groupID)+"/service_accounts",
 		map[string]string{"name": name, "username": username, "email": email}, &out)
 	return out, err
+}
+
+// CreateInstanceServiceAccount creates a service account that belongs to the
+// INSTANCE rather than to a group.
+//
+// The self-managed path, and the difference is ownership rather than
+// capability: the account is not a member of anything until this run adds it,
+// so it can hold seats for several top-level groups and it survives a group
+// being deleted. The cost is that it needs an INSTANCE ADMIN token — the
+// group route is satisfied by a group Owner — and that nothing scopes a
+// decommission sweep except the username prefix and the fact that the
+// instance service-account listing holds no people.
+func (c *Client) CreateInstanceServiceAccount(ctx context.Context, name, username, email string) (User, error) {
+	var out User
+	err := c.send(ctx, http.MethodPost, "/service_accounts",
+		map[string]string{"name": name, "username": username, "email": email}, &out)
+	return out, err
+}
+
+// InstanceServiceAccounts lists the instance's service accounts.
+//
+// PAGED TO EXHAUSTION, because it is the enumeration a decommission decides
+// from: a truncated read makes an account look absent, and the next run
+// creates a second one under a username the instance has already taken.
+func (c *Client) InstanceServiceAccounts(ctx context.Context) ([]User, error) {
+	var out []User
+	for page := 1; ; page++ {
+		var batch []User
+		err := c.get(ctx, "/service_accounts", url.Values{
+			"per_page": {strconv.Itoa(userPageSize)},
+			"page":     {strconv.Itoa(page)},
+		}, &batch)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, batch...)
+		if len(batch) < userPageSize {
+			return out, nil
+		}
+		if len(out) >= userWalkCeiling {
+			return nil, fmt.Errorf(
+				"gitlab: this instance has more than %d service accounts, "+
+					"which is not an instance Crewlet provisions into — "+
+					"use -mode group, or narrow "+
+					"provisioning.username_prefix", userWalkCeiling)
+		}
+	}
+}
+
+// DeleteInstanceServiceAccount removes an instance service account.
+//
+// The symmetric route to the create, not the instance-wide user delete: the
+// user route would remove a PERSON just as readily, and the only thing
+// standing between a mistyped id and somebody's account would be this
+// caller's own care.
+func (c *Client) DeleteInstanceServiceAccount(ctx context.Context, userID int) error {
+	err := c.send(ctx, http.MethodDelete,
+		"/service_accounts/"+strconv.Itoa(userID), nil, nil)
+	if isNotFound(err) {
+		// Already gone, which is what a re-run finds.
+		return nil
+	}
+	return err
 }
 
 // Group is a GitLab group.
@@ -339,11 +415,33 @@ func (c *Client) RevokeTokens(ctx context.Context, userID int) error {
 // The enumeration decommission targets from: an account is "managed" only
 // if it is in the group this company provisions into, so a service account
 // somebody else made elsewhere on the instance is never a candidate.
+//
+// PAGED TO EXHAUSTION. It asked for one page of 100 and took whatever came
+// back, which is silent truncation on the one listing a destructive decision
+// is made from: on a group with more members than that, every managed
+// account past the first page was invisible to a decommission sweep and
+// stayed live for ever, with the run reporting success.
 func (c *Client) GroupMembers(ctx context.Context, groupID int) ([]User, error) {
 	var out []User
-	err := c.get(ctx, "/groups/"+strconv.Itoa(groupID)+"/members",
-		url.Values{"per_page": {"100"}}, &out)
-	return out, err
+	for page := 1; ; page++ {
+		var batch []User
+		err := c.get(ctx, "/groups/"+strconv.Itoa(groupID)+"/members", url.Values{
+			"per_page": {strconv.Itoa(userPageSize)},
+			"page":     {strconv.Itoa(page)},
+		}, &batch)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, batch...)
+		if len(batch) < userPageSize {
+			return out, nil
+		}
+		if len(out) >= userWalkCeiling {
+			return nil, fmt.Errorf(
+				"gitlab: group %d has more than %d members, which is not a "+
+					"group Crewlet provisions into", groupID, userWalkCeiling)
+		}
+	}
 }
 
 // DeleteServiceAccount removes a group service account.

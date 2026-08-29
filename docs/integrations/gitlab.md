@@ -117,6 +117,7 @@ GITLAB_ADMIN_TOKEN="$GITLAB_ADMIN_TOKEN" crewlet gitlab provision company.yaml \
 | `-config PATH` | Tier A config naming this node's store and secret keyring (default `crewlet.yaml`). Only `-secret-store` reads it |
 | `-rotate` | Mint a fresh token for **every** seat, including seats whose current one still works. Not the default, and not what a re-run does: GitLab returns a token's value once, so minting every run would revoke the credential every agent is currently authenticating with — an operator adding a tenth seat would take the other nine down. **Restart the engine after** |
 | `-decommission` | Delete managed service accounts whose seats have left the config. Off by default: it is the one destructive direction, and a company mid-edit looks exactly like a company that removed a seat |
+| `-mode group\|instance` | Where service accounts are **owned**. `group` (the default) creates them under `provisioning.group`; `instance` creates them on the instance itself. Self-managed only — GitLab.com does not serve the instance route, and a run that asks for it there is refused naming this flag. An unknown value is refused before the config is even loaded: it decides which endpoint every account is created on, and discovering a typo from a `404` half way through leaves an operator working out which seats landed |
 | `-token-expiry-days N` | Lifetime minted onto each token. `0` sends no expiry and lets the instance policy decide |
 | `-dry-run` | Print what the run would do and touch nothing |
 
@@ -129,7 +130,9 @@ The CLI probes the operator credential with `GET /user` up front and fails fast 
 
 For each **agent** seat that declares GitLab credentials (presence of `mcp_env.gitlab`, the same convention GitHub uses):
 
-1. **Ensure the service account exists.** Look it up by username — `<username_prefix><handle>` — under the configured group; create it if missing. The display name is `role.name`; the email is `role.email` when set.
+1. **Ensure the service account exists.** Look it up by username — `<username_prefix><handle>` — and create it if missing, under the configured group or (with `-mode instance`) on the instance. The display name is `role.name`; the email is `role.email` when set.
+
+   > **The lookup is mode-independent**, `GET /users?username=`, which sees every account on the instance whatever owns it. That is what makes switching modes safe: an operator who moves a company from `group` to `instance` finds the accounts it already has instead of colliding with their own usernames. Nothing migrates an existing account between owners — GitLab has no such operation — so a company that wants its accounts genuinely instance-owned decommissions and re-provisions them.
 2. **Ensure membership.** Add the account to the configured top-level group at its access level (`access_level`, with `access_levels` per-handle overrides), plus any explicitly listed `projects`.
 
    > **Access level and merging.** A **Developer** can push a branch and open an MR, but GitLab's default protected branch (`main`) only permits **Maintainers** to *merge* — so for an autonomous review→merge loop (no human doing the final merge), provision the code-active seats as **`maintainer`**. The trade-off: membership here is **group-wide and uniform**, so group-Maintainer means an agent can merge *any* project in the group; scope that behaviourally with an "own your repos" policy. Hard per-repo scoping (Maintainer only on owned projects, Developer elsewhere) would need per-`(seat, project)` access levels, which the reconcile does not model today — provision the group at `developer` and add per-project `maintainer` memberships out of band if you need it. Alternatively, keep `developer` and relax each project's protected-branch *"Allowed to merge"* to include Developers (a project setting the provisioner does not manage).
@@ -189,7 +192,8 @@ The provisioner's own credential is an **operator credential**, passed by `-admi
 | Target | Required credential |
 |--------|---------------------|
 | **GitLab.com** (primary) | A **top-level group Owner PAT with the `api` scope** — no instance admin. Everything the provisioner touches (service accounts, their PATs, memberships, hooks) is group-Owner-callable on GitLab.com |
-| **Self-managed** | An **instance admin PAT**, **or** a group Owner PAT with the instance setting `allow_top_level_group_owners_to_create_service_accounts` enabled |
+| **Self-managed**, `-mode group` (default) | An **instance admin PAT**, **or** a group Owner PAT with the instance setting `allow_top_level_group_owners_to_create_service_accounts` enabled |
+| **Self-managed**, `-mode instance` | An **instance admin PAT**, always — a group Owner cannot create an account the instance owns. A `403` on this route says so by name, because the same status means a different remedy in each mode and "403 Forbidden" alone tells an operator nothing about which |
 
 On the GitLab.com Free tier, **annual token rotation is the norm** — every new PAT expires within 365 days (non-expiring service-account tokens require the Premium group setting). Wire `crewlet gitlab provision -rotate` into a yearly cron.
 

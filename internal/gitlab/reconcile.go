@@ -68,6 +68,52 @@ type Result struct {
 	Recorded int
 }
 
+// Mode is where a run's service accounts live.
+//
+// # Two ownerships, not two capabilities
+//
+// A GROUP service account is owned by the top-level group the company
+// provisions into. It is the default and the only shape GitLab.com offers,
+// and a group Owner PAT is enough to create one.
+//
+// An INSTANCE service account belongs to the instance itself. It is a
+// self-managed-only route that needs an instance-admin PAT, and what it buys
+// is an account that is not a member of anything until this run adds it — so
+// one company's seats can span several top-level groups, and an account
+// survives its group being deleted. Everything downstream is identical:
+// memberships are added the same way, and the token API is user-scoped on
+// both, so a token minted on either kind is minted the same way.
+type Mode string
+
+const (
+	// ModeGroup owns service accounts from the configured top-level group.
+	ModeGroup Mode = "group"
+	// ModeInstance owns them from the instance. Self-managed only.
+	ModeInstance Mode = "instance"
+)
+
+// Valid reports a mode this build serves. The empty string is [ModeGroup]:
+// a caller that says nothing means the default, and the alternative is every
+// call site defaulting it separately until one of them forgets.
+func (m Mode) Valid() bool {
+	switch m {
+	case "", ModeGroup, ModeInstance:
+		return true
+	}
+	return false
+}
+
+// Or resolves the mode, folding the empty string to the default.
+func (m Mode) Or() Mode {
+	if m == "" {
+		return ModeGroup
+	}
+	return m
+}
+
+// Modes is every mode, for an error that has to name them.
+func Modes() []string { return []string{string(ModeGroup), string(ModeInstance)} }
+
 // Options are one reconcile's inputs.
 type Options struct {
 	// Client talks to the instance as an administrator.
@@ -104,6 +150,10 @@ type Options struct {
 	// reference. Mirrors the seat tokens' mint-into-${VAR} contract: the
 	// config's reference is what says where the value belongs.
 	SigningSecretVar string
+
+	// Mode is where service accounts are owned — see [Mode]. The zero
+	// value is [ModeGroup], which is the only shape GitLab.com has.
+	Mode Mode
 
 	// Decommission deletes managed service accounts whose seats have left
 	// the config. Off by default: it is the one destructive direction,
@@ -147,15 +197,24 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	if opts.Plan == nil || opts.Plan.Empty() {
 		return &Result{Notes: notesOf(opts.Plan)}, nil
 	}
+	if !opts.Mode.Valid() {
+		return nil, fmt.Errorf("gitlab: unknown mode %q — it is one of %s",
+			opts.Mode, strings.Join(Modes(), ", "))
+	}
 	p := opts.Config.Provisioning
+	// THE GROUP IS RESOLVED IN BOTH MODES. An instance service account is
+	// not OWNED by the group, but it is still made a member of it — that
+	// is what gives a seat access to the company's repositories — so a
+	// group that does not exist is fatal either way, before anything is
+	// created.
 	group, found, err := opts.Client.GroupByPath(ctx, p.Group)
 	if err != nil {
 		return nil, fmt.Errorf("gitlab: resolve group %q: %w", p.Group, err)
 	}
 	if !found {
 		return nil, fmt.Errorf(
-			"gitlab: no group %q on this instance — service accounts are "+
-				"owned by a group, so it has to exist before seats can be "+
+			"gitlab: no group %q on this instance — every seat is made a "+
+				"member of it, so it has to exist before seats can be "+
 				"provisioned", p.Group)
 	}
 
@@ -175,7 +234,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	minted := map[string]mintedToken{}
 
 	for _, seat := range opts.Plan.Seats {
-		user, created, err := ensureAccount(ctx, opts.Client, group.ID, p, seat)
+		user, created, err := ensureAccount(ctx, opts, group.ID, seat)
 		if err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("gitlab: %s: %w", seat.Handle, err))
@@ -436,22 +495,72 @@ func clock(opts Options) time.Time {
 }
 
 // ensureAccount finds or creates a seat's service account.
-func ensureAccount(ctx context.Context, c *Client, groupID int,
-	p *config.GitLabProvisioning, seat provision.Seat,
+//
+// THE LOOKUP IS MODE-INDEPENDENT: /users?username= sees every account on the
+// instance whatever owns it, which is what makes switching modes safe — an
+// operator who moves a company from group to instance finds the accounts it
+// already has rather than colliding with their usernames.
+func ensureAccount(ctx context.Context, opts Options, groupID int,
+	seat provision.Seat,
 ) (User, bool, error) {
+	p := opts.Config.Provisioning
 	username := Username(p, seat.Handle)
-	user, found, err := c.UserByUsername(ctx, username)
+	user, found, err := opts.Client.UserByUsername(ctx, username)
 	if err != nil {
 		return User{}, false, err
 	}
 	if found {
 		return user, false, nil
 	}
-	user, err = c.CreateServiceAccount(ctx, groupID, seat.Role, username, seat.Email)
+	if opts.Mode.Or() == ModeInstance {
+		user, err = opts.Client.CreateInstanceServiceAccount(
+			ctx, seat.Role, username, seat.Email)
+	} else {
+		user, err = opts.Client.CreateServiceAccount(
+			ctx, groupID, seat.Role, username, seat.Email)
+	}
 	if err != nil {
-		return User{}, false, err
+		return User{}, false, modeError(opts.Mode, err)
 	}
 	return user, true, nil
+}
+
+// modeError turns a refusal into the sentence that names the credential the
+// chosen mode actually needs.
+//
+// A 403 IS UNREADABLE ON ITS OWN here: group creation is satisfied by a group
+// Owner and instance creation is not, so the same status means two different
+// remedies and an operator reading "403 Forbidden" has no way to tell which
+// they hit. A 404 on the instance route means the same thing a third way —
+// GitLab.com does not serve it at all.
+func modeError(mode Mode, err error) error {
+	var api *APIError
+	if !errors.As(err, &api) {
+		return err
+	}
+	if mode.Or() != ModeInstance {
+		if api.Forbidden() {
+			return fmt.Errorf(
+				"%w — creating a group service account needs a token whose "+
+					"owner is an Owner of provisioning.group (or an instance "+
+					"administrator)", err)
+		}
+		return err
+	}
+	switch {
+	case api.Forbidden():
+		return fmt.Errorf(
+			"%w — -mode instance creates service accounts the instance owns, "+
+				"which only an INSTANCE ADMINISTRATOR may do. Use an admin "+
+				"PAT, or drop -mode instance to create them under "+
+				"provisioning.group instead", err)
+	case api.Status == http.StatusNotFound:
+		return fmt.Errorf(
+			"%w — this deployment does not serve the instance service-account "+
+				"route, which is how GitLab.com answers: instance service "+
+				"accounts are self-managed only. Drop -mode instance", err)
+	}
+	return err
 }
 
 // decommission deletes the managed accounts whose seats have left.
@@ -469,6 +578,18 @@ func ensureAccount(ctx context.Context, c *Client, groupID int,
 // account is left alone and reported: that refusal is GitLab catching what
 // this scan should not have proposed, so it is a signal about the prefix
 // rather than an error to abort on.
+//
+// # The GROUP scan is used in both modes, and that is deliberate
+//
+// An instance service account is not owned by the group, so the obvious
+// enumeration for -mode instance is the instance's own service-account
+// listing. It is the wrong one: every seat this run provisions is made a
+// member of provisioning.group whatever mode created it, so a managed
+// account of THIS company is always in that group — while the instance
+// listing also holds the accounts of every other company on the box, which a
+// shared username prefix would then sweep. The only account the group scan
+// misses is one somebody removed from the group by hand, and leaving that
+// alone is the right answer. Only the DELETE route differs by mode.
 func decommission(ctx context.Context, opts Options, groupID int) ([]string, []string, error) {
 	p := opts.Config.Provisioning
 	prefix := strings.ToLower(Username(p, ""))
@@ -486,7 +607,7 @@ func decommission(ctx context.Context, opts Options, groupID int) ([]string, []s
 		if !strings.HasPrefix(username, prefix) || keep[username] {
 			continue
 		}
-		if err := opts.Client.DeleteServiceAccount(ctx, groupID, member.ID); err != nil {
+		if err := deleteAccount(ctx, opts, groupID, member.ID); err != nil {
 			var api *APIError
 			if errors.As(err, &api) && api.Status == http.StatusBadRequest {
 				notes = append(notes, fmt.Sprintf(
@@ -989,4 +1110,18 @@ func notesOf(p *provision.Plan) []string {
 		return nil
 	}
 	return p.Notes
+}
+
+// deleteAccount removes a service account by whichever route owns it.
+//
+// The routes are not interchangeable: the group route 404s on an account the
+// instance owns, and the instance route needs an administrator. Sending a
+// delete down the wrong one reports "already gone" for an account that is
+// still live — a decommission that silently kept every credential it was
+// asked to destroy.
+func deleteAccount(ctx context.Context, opts Options, groupID, userID int) error {
+	if opts.Mode.Or() == ModeInstance {
+		return opts.Client.DeleteInstanceServiceAccount(ctx, userID)
+	}
+	return opts.Client.DeleteServiceAccount(ctx, groupID, userID)
 }
