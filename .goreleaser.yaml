@@ -40,13 +40,21 @@ builds:
       # CGO_ENABLED=0 is statically linked, so this is the dependency and
       # not the toolchain.)
       #
-      # Adding `-linkmode external -extldflags -static` DOES produce a
-      # binary file(1) calls "statically linked", and that binary SIGSEGVs on
-      # its first query — on the machine that built it. A static program has
-      # no dynamic loader, so it cannot dlopen anything; glibc's linker even
-      # warns about it. decisions/901 records the run. ci.yml's `cross` job
-      # asserts the artifact is still dynamic so this cannot be re-discovered
-      # by a release.
+      # The CGO_ENABLED=0 above therefore does NOT mean "static", which is
+      # the one thing everyone assumes it means. purego's no-cgo file is the
+      # one that forces this: dlfcn_nocgo_linux.go is `//go:build !cgo` and
+      # declares dlopen/dlsym/dlerror/dlclose with //go:cgo_import_dynamic,
+      # which the linker honours with cgo off.
+      #
+      # Nor does adding `-extldflags -static` here change anything: that flag
+      # is for the EXTERNAL linker and a cgo-free build links internally, so
+      # nothing reads it. Forcing a static ELF needs external linking, which
+      # needs cgo — and THAT build produces a binary file(1) calls "statically
+      # linked" which SIGSEGVs on its first query, on the machine that built
+      # it, because a static program has no dynamic loader and cannot dlopen
+      # anything. glibc's linker warns about it up front. decisions/901 has
+      # the table; ci.yml's `cross` job asserts the artifact is still dynamic
+      # so this cannot be re-discovered by a release.
       #
       # The linux binaries therefore require GLIBC; on a musl system they
       # fail at execve, before any Go code runs, and `-tags musl` does NOT

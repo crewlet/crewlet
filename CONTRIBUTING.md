@@ -126,12 +126,19 @@ without it** — a green run has simply not exercised them.
   shared object the driver embeds, not this binary's own linkage. That is why
   there is no musl archive.
 
-  `-linkmode external -extldflags -static` does produce a binary `file(1)`
-  calls static, and it SIGSEGVs on its first query on the machine that built
-  it: a static program has no dynamic loader, so it cannot `dlopen` the
-  database engine at all. `decisions/901` records the run. The `cross` CI job
-  asserts the artifact is still dynamic, so this is a red build rather than a
-  release.
+  Note what that means: `CGO_ENABLED=0` does not give a static binary here,
+  even though it does for any other Go program (a hello-world on the same
+  machine comes out static). purego's `dlfcn_nocgo_linux.go` is
+  `//go:build !cgo` — the file that applies precisely when cgo is OFF — and it
+  is the one declaring the dynamic imports.
+
+  Adding `-extldflags -static` to a cgo-free build changes nothing either: the
+  flag is for the external linker and a cgo-free build links internally.
+  Forcing a static ELF needs `-linkmode external`, which needs cgo — and that
+  binary, which `file(1)` does call static, SIGSEGVs on its first query on the
+  machine that built it, because a static program cannot `dlopen`.
+  `decisions/901` has the full table. The `cross` CI job asserts the artifact
+  is still dynamic, so this is a red build rather than a release.
 
   ```bash
   # What CI cross-compiles on every pull request.

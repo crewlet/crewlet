@@ -110,28 +110,54 @@ else. The compiler would happily produce a binary for any GOOS; that binary
 would fail at its first query. `internal/store/platform.go` makes it fail at
 build time instead, with a sentence.
 
-**A static binary is not the answer, and this is the measurement.** It is the
-first thing anyone will reach for on reading the paragraph above, so:
+**A static binary is not the answer, and the surprising part is why
+`CGO_ENABLED=0` does not already give us one.** That is the normal Go rule and
+it is the first thing anyone will reach for, so here is the whole chain,
+measured on one machine:
+
+| build | result |
+|---|---|
+| `CGO_ENABLED=0 go build` — a hello-world | **statically linked** |
+| `CGO_ENABLED=0 go build` — crewlet | **dynamically linked**, interpreter `/lib64/ld-linux-x86-64.so.2` |
+| `CGO_ENABLED=0` + `-extldflags "-static"` — crewlet | **dynamically linked** (unchanged) |
+| `CGO_ENABLED=1 -linkmode external -extldflags "-static"` — crewlet | statically linked, and **SIGSEGV at the first query** |
+
+Row 1 is the control: the toolchain makes static binaries perfectly well, so
+row 2 is the dependency and not the environment. The cause is in purego, and
+its build tag is the joke — `dlfcn_nocgo_linux.go` is `//go:build !cgo`, the
+file that applies *precisely when cgo is off*, and it says so: "if there is no
+Cgo we must link to each of the functions from dlfcn.h". It declares `dlopen`,
+`dlsym`, `dlerror` and `dlclose` with `//go:cgo_import_dynamic`, which the Go
+linker honours whether or not cgo is enabled, and the binary comes out with an
+ELF interpreter and `DT_NEEDED` entries. `readelf --dyn-syms` on the shipped
+artifact lists exactly those four as undefined.
+
+Row 3 is why `CGO_ENABLED=1` appears at all in row 4, which otherwise reads
+backwards. `-extldflags` is passed to the EXTERNAL linker, and a cgo-free build
+links internally — the flag reaches nothing. External linking is the only way
+to force a static ELF, and external linking requires cgo. So row 4 is not "the
+normal way to build static", it is the only lever left after rows 2 and 3.
+
+And it does not work:
 
 ```
-CGO_ENABLED=1 go build -ldflags '-linkmode external -extldflags "-static"'
-  -> /usr/bin/ld: warning: Using 'dlopen' in statically linked applications
-     requires at runtime the shared libraries from the glibc version used
-     for linking
-  -> file(1): "statically linked"
-  -> ./crewlet migrate: SIGSEGV, signal arrived during cgo execution,
-     inside purego.RegisterFunc -> the first call into the Turso library
+/usr/bin/ld: warning: Using 'dlopen' in statically linked applications
+  requires at runtime the shared libraries from the glibc version used
+  for linking
+file(1): "statically linked"
+./crewlet migrate: SIGSEGV, signal arrived during cgo execution,
+  inside purego.RegisterFunc -> the first call into the Turso library
 ```
 
 On the machine that built it, against the glibc it linked against, with a
 clean library cache. The identical run on the ordinary dynamic build applies
-13 migrations. The reason is not a flag that needs tuning: the driver reaches
-its engine with `dlopen`, and a statically linked program has no dynamic
-loader to do that with. Static linking and a runtime-loaded shared object are
-mutually exclusive, so a "static build" here is an artifact that looks more
-portable and crashes at its first query. `ci.yml`'s `cross` job asserts the
-binary is still dynamic for exactly this reason — the assertion is guarding
-against an improvement that isn't one.
+13 migrations. This is not a flag that wants tuning: the driver reaches its
+engine with `dlopen`, and a statically linked program has no dynamic loader to
+do that with. Static linking and a runtime-loaded shared object are mutually
+exclusive, so a "static build" here is an artifact that looks more portable and
+crashes at its first query. `ci.yml`'s `cross` job asserts the binary is still
+dynamic for exactly this reason — the assertion is guarding against an
+improvement that isn't one.
 
 The version that WOULD work is upstream's to make: `turso-go-platform-libs`
 ships `libturso_sync_sdk_kit.a` beside the `.so` for both musl targets, and a
