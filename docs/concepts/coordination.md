@@ -131,7 +131,7 @@ The node's own database holds everything a *single* node is the only reader of. 
 - **The event log, the diary, episodes, counterparty profiles, synthesized skills.** A seat's memory is read by the node running that seat.
 - **Conversation history.** Replicating a long thread to the whole fleet buys nothing: the seat's owner is the only reader, and ownership already moves with the lease.
 - **The company payload.** Bulk that every node holds its own copy of. Only *which revision is current* is shared — see [Control Plane](control-plane.md).
-- **The secret store.** Each node resolves `${VAR}` through its own encrypted rows, sealed with the Tier A keyring it was deployed with.
+- **The secret store.** Each node resolves `${VAR}` through its own encrypted rows, sealed with the Tier A keyring it was deployed with. This one is node-local *and* the fleet has no substitute for it: `crewlet secrets set` writes one node's rows, so on more than one node a rotated credential has to be set on each — see [Secret Store § Propagation](secret-store.md#propagation).
 - **`scheduled_runs`** — this node's dispatch *history*, for the dashboard and the retention sweep. Not the claim; that is the `fires` slot above.
 - **Thread follows.**
 - **`token_usage`** — the per-agent audit *record* of what was spent. Not the counter anything enforces against; that is the `budgets` slot above.

@@ -196,7 +196,10 @@ theoretical one:
   high-volume path swept on a TTL, where a guard costs more than the skew.
   Budget *enforcement* is unaffected: it reads the fleet's shared
   counter. `episodes` and the counterparty interaction
-  count are collapsed, and onboarding was already exclusive; see
+  count are collapsed against the reader that matters — both live in the
+  node's own database, which only that node reads, so the duplicate the
+  work key removes is the one *that* node would otherwise write twice — and
+  onboarding was already exclusive; see
   [Keying a write on the work](seat-ownership.md#keying-a-write-on-the-work).
 - **Per-company singletons remain singletons.** They sit behind leases so any
   node can host them, but the scheduler tick, the curator, clustering and the

@@ -132,8 +132,10 @@ for that than an encrypted table the engine reads back itself.
 | When | What picks up a new value |
 |---|---|
 | `crewlet run` boot (every node role) | Reads the whole table before resolving any Tier B `${VAR}` |
-| A config revision activates (`PUT /config`, `crewlet config import`) | **Every** node re-reads the store as it converges on the new activation epoch — engine and API halves alike |
+| A config revision activates (`PUT /config`, `crewlet config import`) | Each node re-reads **its own** store as it converges on the new activation epoch — engine and API halves alike |
 | Otherwise | The running process keeps its snapshot |
+
+**The store is the node's own**, like the database it lives in, and a fleet is where that shows. `crewlet secrets set` writes the rows of the one node whose `crewlet.yaml` it was pointed at; nothing propagates them. On more than one node a rotated credential has to be set on **every** node — run the command once per node's Tier A file, or supply the value through the process environment, which every node's resolver falls back to. The activation epoch propagates; the value it re-resolves does not.
 
 So `crewlet secrets set` on a live engine takes effect at the next config activation or restart — the CLI says so after each write. Re-activating the *current* revision is a valid way to ask a running engine to pick up a rotated credential; the refresh happens before the no-op check precisely so that gesture works, and the activation log is append-only precisely so a re-activation still moves the pointer every node is watching (see [Control Plane](control-plane.md)).
 

@@ -798,9 +798,12 @@ func (l *Lifecycle) sweepOrphans(ctx context.Context, handle string, orphans []E
 // THE SUMMARY'S WORK KEY NAMES THE FOLD, not a turn. It is derived from the
 // member ids, so re-folding the same set collides with the unique index on
 // (agent_handle, work_key) and does nothing instead of writing a second
-// summary — which is what stops two nodes racing one seat from double
-// counting, since the in-process single-flight cannot see the other node. The
-// "compact:" prefix keeps the two namespaces apart: a turn's key is 32 hex
+// summary. That covers what the in-process single-flight cannot: a fold this
+// node already made in an earlier pass, or one it makes concurrently in
+// another goroutine. A peer folding the same seat is not the case — the
+// episodes it folds are rows in ITS database, which this node never reads, so
+// the two folds are two summaries of two separate copies of the memory.
+// The "compact:" prefix keeps the two namespaces apart: a turn's key is 32 hex
 // characters (internal/workkey), so no turn can ever mint this one.
 //
 // A COLLIDING INSERT STILL DELETES. That is not a fallthrough — it is the

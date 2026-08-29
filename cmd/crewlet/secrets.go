@@ -117,7 +117,8 @@ func runSecrets(args []string, stdout, stderr io.Writer) error {
 	case "list":
 		return listSecrets(ctx, sv, stdout)
 	case "set":
-		return setSecret(ctx, sv, name, *value, isFlagSet(fs, "value"), *source, stdout, stderr)
+		return setSecret(ctx, sv, name, *value, isFlagSet(fs, "value"), *source,
+			*bootstrapPath, stdout, stderr)
 	case "get":
 		return getSecret(ctx, sv, name, *reveal, stdout)
 	case "unset":
@@ -146,6 +147,13 @@ func isFlagSet(fs *flag.FlagSet, name string) bool {
 }
 
 // openSecretStore opens the node's store under its Tier A keyring.
+//
+// ONE NODE'S rows. There is no fleet secret store: a value set here reaches
+// the engine that runs on this `crewlet.yaml`'s database and no peer, so a
+// fleet rotation is this command once per node — or the value in each node's
+// process environment, which every resolver falls back to. Said in the CLI's
+// own output after each write, because the failure otherwise is a credential
+// that works on the node an operator tested and nowhere else.
 func openSecretStore(ctx context.Context, bootstrapPath string) (*store.SecretValues, func(), error) {
 	boot, err := loadBootstrapForStore(bootstrapPath)
 	if err != nil {
@@ -214,7 +222,7 @@ func listSecrets(ctx context.Context, sv *store.SecretValues, stdout io.Writer) 
 }
 
 func setSecret(ctx context.Context, sv *store.SecretValues, name, value string,
-	valueGiven bool, source string, stdout, stderr io.Writer,
+	valueGiven bool, source, bootstrapPath string, stdout, stderr io.Writer,
 ) error {
 	if name == "" {
 		return errors.New("secrets set needs a name")
@@ -237,6 +245,12 @@ func setSecret(ctx context.Context, sv *store.SecretValues, name, value string,
 	// The NAME and nothing else. Confirming the value would undo the whole
 	// reason it was read from stdin.
 	fmt.Fprintf(stdout, "stored %s (%d bytes) as %s\n", name, len(value), who)
+	// SAID EVERY TIME, because the failure is silent otherwise: a rotation
+	// that works on the node an operator tested and nowhere else. The store
+	// is this node's database; the activation epoch propagates, the value
+	// does not.
+	fmt.Fprintf(stdout, "this is %s's own store — on a fleet, run this once per node\n",
+		bootstrapPath)
 	return nil
 }
 

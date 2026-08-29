@@ -99,11 +99,19 @@ ON CONFLICT (agent_handle, work_key) DO NOTHING`
 // Append records one episode, at most once per (seat, work key).
 //
 // EXACTLY-ONCE ON THE WORK KEY, and it is a real unique index rather than a
-// read-then-write. Two nodes can both complete a turn for one trigger — a
-// zombie finishing between fence checks, or an honest re-run after the
-// completion ledger fails open — and an episode keyed on nothing simply lands
-// twice, then feeds every later recall and skill synthesis, weighting the
-// agent's behaviour with an event that happened once.
+// read-then-write: two writers racing inside one process cannot both see "not
+// there" and both insert. A turn can legitimately be worked twice — a
+// redelivery, or an honest re-run after the completion ledger fails open — and
+// an episode keyed on nothing simply lands twice, then feeds every later
+// recall and skill synthesis, weighting the agent's behaviour with an event
+// that happened once.
+//
+// THE INDEX IS THIS NODE'S, like the table. That is the whole scope of the
+// guarantee and it is the right one: episodes are a seat's memory, read by the
+// node running that seat and never by a peer, so a duplicate written on two
+// DIFFERENT nodes is two rows in two databases neither of which the other
+// reads — no recall sees both. What is collapsed here is the duplicate one
+// reader would otherwise be shown twice.
 //
 // An empty work key maps to SQL NULL, which the index treats as distinct from
 // every other NULL — so an unkeyed turn is never deduped against another. That

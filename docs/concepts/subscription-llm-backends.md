@@ -296,9 +296,11 @@ encrypted secret store:
 crewlet llm export default -secret-store
 ```
 
-Any engine sharing that database restores it at boot when its own
-`credentials/` directory is empty, so a fresh container comes up already
-authenticated. The blob is validated on the way back in — only the
+That engine restores it at boot when its own `credentials/` directory is
+empty, so a fresh container on the same store comes up already authenticated.
+It is **that node's** store and nothing else's — the rows do not travel, and a
+second host needs its own `crewlet llm login`, or the same bundle handed to it
+through `providers.llm[].auth.credential_bundle`. The blob is validated on the way back in — only the
 profile's own credential paths, files only, size-capped — because an
 archive is an execution surface if it is unpacked on trust.
 

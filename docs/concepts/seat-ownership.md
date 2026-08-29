@@ -104,7 +104,7 @@ It is **not** on every seat-scoped write, and the honest inventory is narrower t
 
 | Table | A second writer today |
 |---|---|
-| `episodes` | **Collapsed.** One row per unit of work — see [Keying a write on the work](#keying-a-write-on-the-work) below |
+| `episodes` | **Collapsed** against the reader that matters. One row per unit of work in the node's own store, which is the only one its recall reads — see [Keying a write on the work](#keying-a-write-on-the-work) below |
 | `counterparty_profiles.interaction_count` | **Collapsed.** The increment is skipped when the last counted work key repeats |
 | `agent_onboarding_markers` | Upsert *plus* `try_claim_pass`, a cross-process single-flight claim: already exclusive |
 | `agent_diary` | Byte-identical content collapses on write. Two turns that word the same fact differently still land twice |
@@ -120,11 +120,13 @@ So the write is keyed on the work rather than fenced on the writer. Every turn d
 
 |  | epoch fence | work key |
 |---|---|---|
-| Zombie and owner both complete | one row | one row |
+| Zombie and owner both complete, same node | one row | one row |
 | Owner completes, acks, *then* lapses | **row lost** | one row |
 | Ledger fails open, turn legitimately re-runs | two rows | one row |
 
-Exclusion is an advisory lock on `(agent_handle, work_key)` plus `INSERT … WHERE NOT EXISTS`, not a unique index — `episodes` is a hypertable partitioned on `ended_at`, so every unique index must contain `ended_at`, and the two duplicate turns end at different times. `WHERE NOT EXISTS` alone is evaluated under the statement's snapshot, so without the lock two concurrent writers both see "not there" and both insert; the lock is what closes that, and the test suite measures it rather than asserting it.
+Exclusion is a **unique index** on `(agent_handle, work_key)` plus `INSERT … ON CONFLICT DO NOTHING` — one statement, no read-then-write, so two writers racing inside one process cannot both see "not there" and both insert. It is per agent rather than global: two seats legitimately act on one trigger (a broadcast, a task assigned to a unit) and each one's episode is its own memory. The column is nullable and an empty key maps to SQL `NULL`, which SQLite's index treats as distinct from every other `NULL` — so an unkeyed turn is never deduped against another, which is the whole reason it is nullable rather than defaulting to `''`.
+
+**The index is the node's**, like the table it is on, and that is the honest scope of the guarantee. `episodes` is a seat's memory and lives in [the node's own database](coordination.md#what-stays-node-local) — read by the node running that seat, never by a peer. So a duplicate written on two *different* nodes is two rows in two databases, neither of which the other reads, and no recall or synthesis anywhere sees both. What the index collapses is the case that actually recurs against one reader: **one node writing twice** — a redelivery it worked again, or a legitimate re-run after the [completion ledger](#the-completion-ledger) failed open.
 
 A turn with no ledgerable trigger — a scheduled fire, a sub-agent, a sandbox resume — carries an empty key, skips the guard entirely, and writes exactly as it always did. It has no cross-node duplicate to collapse.
 
