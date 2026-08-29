@@ -136,8 +136,32 @@ out, which is the one thing `Kill` exists to avoid (`Connect` is the path that
 resumes). `Close` keeps its SIGCONT — a stopped process really never runs to
 handle SIGTERM.
 
-## E2B is post-v1
+## The remote backend, and the one field the two disagree on
 
-The `Provider` seam ships; the backend lands when a deployment needs it. It is
-**refused explicitly** rather than silently downgraded to local, which would
-run an operator's code on the engine host without saying so.
+Both backends ship. The remote one (`providers.sandbox.type: e2b`) gives every
+run a fresh VM on E2B cloud or a self-hosted cluster, which is what the local
+backend cannot offer a company that is not one person's machine: an agent that
+deletes the wrong directory takes its own box with it.
+
+A configured backend that cannot be constructed is still **refused explicitly**
+rather than silently downgraded to local — the original reason stands, since
+falling back would run an operator's code on the engine host without saying so.
+
+**`Spec.CredentialFiles` is honoured locally and IGNORED remotely**, and this
+is the one field on which the two deliberately diverge. Those files carry a
+subscription CLI's refresh token, whose rotation is shared fleet state; pushing
+it onto a VM somebody else operates is a materially larger trust step than the
+scoped headless token the run environment already exports. A subscription still
+works remotely through that token, so the divergence costs a capability only
+for a CLI that mints no headless token — which needs the local backend.
+
+**A box is sized by its template, never by a per-run field.** vCPU and RAM are
+fixed when a template is built and the create API accepts no resource
+arguments, so `Spec` has no CPU/memory/disk fields to silently ignore. A
+company naming no template gets the one matching its coding agent.
+
+**A reconnect is one call.** `/connect` returns the sandbox and resumes it if
+it was paused (200 already running, 201 woken), so the completion path neither
+asks first nor races a reaper between a read and a decision. The GET-then-
+`/resume` pair it replaced needed a 409 "already running" mapped onto success
+by hand, and `/resume` is deprecated in E2B's own spec for that reason.
