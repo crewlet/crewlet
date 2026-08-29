@@ -243,7 +243,7 @@ cannot race, because they are not migrating the same file — every node owns
 its own. Running the explicit step first turns a schema change into an
 observable step rather than a side effect of startup.
 
-Both take the **Tier A** bootstrap file (`config.yaml`) — the founder-owned company YAML is seeded separately (`crewlet config import`, or `crewlet run -company`).
+Both take the **Tier A** bootstrap file (`crewlet.yaml`) — the founder-owned company YAML is seeded separately (`crewlet config import`, or `crewlet run -company`).
 
 - **`-roles seats`** runs the agents — claims seat leases, boots the instances, processes their turns
 - **`-roles ingress`** serves the REST API — receives webhooks (Slack, Plane, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue

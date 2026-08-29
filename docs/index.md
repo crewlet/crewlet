@@ -25,7 +25,7 @@ author it — see
 - **[Installation](getting-started/installation.md)** — Install the binary; why there is no infrastructure to bring up, and what the compose profiles are for
 - **[Quickstart](getting-started/quickstart.md)** — Build a four-agent company and watch its first turn, with LLM provider options (Anthropic / OpenAI / any OpenAI-compatible)
 - **[Choosing Your Stack](getting-started/choosing-your-stack.md)** — The decision guide for every external dependency: the tracker and knowledge base, the code host, the code sandbox, chat, email — what each path sets up for you, and what you must create manually
-- **[Authoring with an AI Assistant](getting-started/ai-authoring.md)** — Let an AI write your company config: a step-by-step walkthrough, the `company-architect` skill, `crewlet schema` for editor autocomplete, and the `crewlet validate --json` fix loop
+- **[Authoring with an AI Assistant](getting-started/ai-authoring.md)** — Let an AI write your company config: a step-by-step walkthrough, the `company-architect` skill, `crewlet schema` for editor autocomplete, and the `crewlet validate -json` fix loop
 - **[Configuration Reference](getting-started/configuration.md)** — Full YAML config schema and examples
 
 ## Core Concepts
@@ -33,7 +33,7 @@ author it — see
 How the engine works, one subsystem per page:
 
 - **[Overview](concepts/overview.md)** — The org chart as execution graph, design principles, high-level architecture
-- **[Configuration](concepts/configuration.md)** — Two-tier config (ops-owned `config.yaml` + a founder-owned revision in the store), bootstrap sequence, unconfigured state, live propagation, auth, snapshot/rollback, whole-config encryption at rest
+- **[Configuration](concepts/configuration.md)** — Two-tier config (ops-owned `crewlet.yaml` + a founder-owned revision in the store), bootstrap sequence, unconfigured state, live propagation, auth, snapshot/rollback, whole-config encryption at rest
 - **[Scaling Out](concepts/scaling.md)** — Why one node is the design's degenerate case rather than a lesser path, what a node is (`ingress` / `seats` / `workers`), the five kinds of coupling that had to be resolved and which one a lock actually fixes, what the fleet shares in the coordination slot versus what stays per-node, the measured broker numbers the lease TTL and prefetch cap come from, and what the design does not promise
 - **[Coordination](concepts/coordination.md)** — The fleet's shared store and the line between it and the node's own database: the three-valued answer every question here returns, which direction each contract fails in when the store cannot be reached, the slots a fleet is discovered from, why every retention is a bucket's age rather than a per-write TTL, and what stays node-local or per-process on purpose
 - **[Seat Ownership](concepts/seat-ownership.md)** — How a fleet decides which node runs which seat, and why no two ever run the same one: TTL leases with epoch fencing, fair-share placement with give-back, the two release modes, freshness-based admission, owner-only inbox and sandbox-control attachment, the durable subscription that holds an unowned seat's mail, the broker settings that must not delete it, and why a wedged-but-alive node ends its own process

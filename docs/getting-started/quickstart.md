@@ -7,7 +7,7 @@ integrations one at a time.
 
 Crewlet uses a [two-tier config](../concepts/configuration.md):
 
-- **Tier A** — ops-owned `config.yaml` on disk (where this node's stream,
+- **Tier A** — ops-owned `crewlet.yaml` on disk (where this node's stream,
   store and leases live, API host/port/auth, debug). Restart to change.
 - **Tier B** — founder-owned `company.yaml`, imported into the store
   (everything else: identity, roles, units, LLM providers, MCP servers,
@@ -31,7 +31,7 @@ external address when a deployment outgrows that; see
 The compose file in a repo checkout is for the *integration* loops
 (Mattermost, Plane, GitLab) further down this page, not for the engine.
 
-## 1. Write the Tier A bootstrap (`config.yaml`)
+## 1. Write the Tier A bootstrap (`crewlet.yaml`)
 
 ```yaml
 debug: true
@@ -272,14 +272,14 @@ references are checked as references, so it works before any secret is
 exported):
 
 ```bash
-crewlet validate -config config.yaml -company company.yaml
+crewlet validate            # both tiers, from ./crewlet.yaml and ./company.yaml
 ```
 
 **One command** — migrate the store, seed the Tier B company and run the
 engine in a single invocation:
 
 ```bash
-crewlet run -config config.yaml -company company.yaml
+crewlet run crewlet.yaml -company company.yaml
 ```
 
 `-company` is a **seed**: it is imported when the store does not already
@@ -290,8 +290,8 @@ running node then serves the store, not the file.
 **Or two steps** — import once, then run:
 
 ```bash
-crewlet config import company.yaml -config config.yaml
-crewlet run -config config.yaml         # boots from the store
+crewlet config import company.yaml
+crewlet run                             # boots from the store
 ```
 
 Both flags default to files in the working directory — `crewlet.yaml` and
@@ -344,8 +344,8 @@ you restart the agents, or the two on different hosts. Same command, given
 different roles:
 
 ```bash
-crewlet run -config config.yaml -roles seats,workers -api-port 0   # terminal 1
-crewlet run -config config.yaml -roles ingress -api-port 8000     # terminal 2
+crewlet run -roles seats,workers -api-port 0   # terminal 1
+crewlet run -roles ingress -api-port 8000      # terminal 2
 ```
 
 The ingress node exposes the same REST endpoints, webhook handlers
@@ -370,7 +370,7 @@ Automating a deployment means driving `crewlet` and the REST API:
 ```bash
 crewlet validate                       # check both tiers in CI
 crewlet config import company.yaml     # write a new active revision
-crewlet run -config config.yaml        # start the node
+crewlet run                            # start the node
 ```
 
 See [Configure via the API](../guides/configure-via-api.md) for editing a

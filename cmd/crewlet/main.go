@@ -8,15 +8,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -38,12 +42,20 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/version"
+
+	"gopkg.in/yaml.v3"
 )
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return
+		}
+		// errSilent has already said everything it has to say, on stdout,
+		// in the shape its caller asked for. Printing a second copy on
+		// stderr is what makes a machine consumer's log unreadable.
+		if errors.Is(err, errSilent) {
+			os.Exit(1)
 		}
 		fmt.Fprintln(os.Stderr, "crewlet:", err)
 		os.Exit(1)
@@ -180,44 +192,339 @@ func (c configFlags) load() (*config.Bootstrap, *config.Company, error) {
 	// from the store it is describing.
 	boot, bootErr := config.LoadBootstrap(*c.bootstrap, config.EnvOnly())
 	company, companyErr := config.LoadCompany(*c.company)
-	if err := errors.Join(bootErr, companyErr); err != nil {
+	if err := errors.Join(nameTheNeighbour(*c.bootstrap, bootErr), companyErr); err != nil {
 		return nil, nil, err
 	}
 	return boot, company, nil
 }
 
+// nameTheNeighbour adds the one hint that answers the commonest first-run
+// failure.
+//
+// This repository's own quickstart, its example file and half its
+// documentation have called the Tier A document `config.yaml`, while the
+// binary's default is `crewlet.yaml`. An operator who followed the guide gets
+// "no such file" about a name they never typed, with their file sitting right
+// there. Naming it costs one stat and saves the whole diagnosis.
+//
+// A HINT, not a fallback: silently loading a file the operator did not ask
+// for is how a node boots from the wrong document on a machine that has both.
+func nameTheNeighbour(path string, err error) error {
+	if err == nil || !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	neighbour := filepath.Join(filepath.Dir(path), "config.yaml")
+	if filepath.Clean(neighbour) == filepath.Clean(path) {
+		return err
+	}
+	if _, statErr := os.Stat(neighbour); statErr != nil {
+		return err
+	}
+	return fmt.Errorf("%w\n  (%s is there — this build's Tier A default is %q; "+
+		"pass it as `crewlet run %s` or with -config)",
+		err, neighbour, defaultBootstrapPath, neighbour)
+}
+
+// Tier is which config document a validation is about.
+//
+// A NAMED TYPE with a closed set, because the value decides which validator
+// runs and an unrecognised one must be a refusal rather than a silent fall
+// through to "company" — a Tier A file validated as Tier B fails on every
+// field it has, and the operator reads a wall of nonsense.
+type Tier string
+
+const (
+	// TierAuto picks by reading the document — see [detectTier].
+	TierAuto Tier = "auto"
+	// TierCompany is Tier B: the company's org, providers, integrations.
+	TierCompany Tier = "company"
+	// TierBootstrap is Tier A: this node's broker, store and API.
+	TierBootstrap Tier = "bootstrap"
+)
+
+// tiers is the closed set, for the flag's error and for validation.
+var tiers = []Tier{TierAuto, TierCompany, TierBootstrap}
+
+func (t Tier) Valid() bool {
+	return slices.Contains(tiers, t)
+}
+
+// detectTier reads a document and says which tier it is.
+//
+// # By the keys it has, not by its filename
+//
+// A filename is a convention an operator can break and routinely does — and
+// the one thing this must get right is the case where they named the file
+// something else. The two tiers share no top-level key at all, which is what
+// makes the test cheap and unambiguous: `name` and `agents` belong to a
+// company, `node`, `stream`, `store` and `coordination` to a bootstrap.
+//
+// An UNDECIDABLE document is an error naming -tier, never a guess. Guessing
+// wrong reports every field of the file as invalid, and an operator reading
+// that has no way to tell it from a genuinely broken document.
+func detectTier(raw []byte) (Tier, error) {
+	var doc map[string]any
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		// NOT AN ERROR HERE: whichever validator runs will report the
+		// parse failure with its own line numbers. Company is the
+		// likelier document by far, so it is the one that gets to speak.
+		//
+		//nolint:nilerr // Deliberate: see the paragraph above.
+		return TierCompany, nil
+	}
+	company := 0
+	bootstrap := 0
+	for key := range doc {
+		switch key {
+		case "name", "agents", "providers", "integrations", "knowledge", "learning":
+			company++
+		case "node", "stream", "store", "coordination", "api", "secrets", "logging":
+			bootstrap++
+		}
+	}
+	switch {
+	case company > bootstrap:
+		return TierCompany, nil
+	case bootstrap > company:
+		return TierBootstrap, nil
+	default:
+		return "", fmt.Errorf(
+			"cannot tell which tier this document is: it carries %d key(s) "+
+				"only a company has and %d only a bootstrap has. Name it with "+
+				"-tier company or -tier bootstrap", company, bootstrap)
+	}
+}
+
+// validation is what one `crewlet validate` run found.
+//
+// THE SHAPE IS THE JSON, so the two output modes cannot drift: the text
+// renderer reads this struct too, rather than being a second pass over the
+// same data that eventually disagrees with it.
+type validation struct {
+	Valid   bool              `json:"valid"`
+	Tier    Tier              `json:"tier"`
+	File    string            `json:"file,omitempty"`
+	Errors  []validationError `json:"errors"`
+	Summary map[string]any    `json:"summary,omitempty"`
+}
+
+// validationError is one problem, with the parts an authoring loop needs to
+// jump to the field and decide what to do.
+type validationError struct {
+	Path    string `json:"path"`
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+func faultsOf(err error) []validationError {
+	faults := config.Faults(err)
+	out := make([]validationError, 0, len(faults))
+	for _, f := range faults {
+		out = append(out, validationError{
+			Path: f.Path, Type: f.KindName(), Message: f.Detail,
+		})
+	}
+	return out
+}
+
+// validateConfigs is `crewlet validate`.
+//
+// # Two shapes, because it has two callers
+//
+// An OPERATOR names one file and reads a sentence. An AUTHORING LOOP — a
+// model editing a config until it is valid — names one file and reads
+// -json, where every problem carries the exact path to the field. Those are
+// the same command because they are the same question, and a loop that had
+// to parse prose would converge on whatever the prose happened to say.
+//
+// The two-flag form (-config plus -company) checks BOTH tiers at once, which
+// is what a CI step wants.
 func validateConfigs(args []string, stdout, stderr io.Writer) error {
+	file, args := splitSubject(args)
+
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cfg := addConfigFlags(fs)
+	tier := fs.String("tier", string(TierAuto),
+		"which document a positional file is: auto, company or bootstrap")
+	asJSON := fs.Bool("json", false,
+		"emit {valid, tier, errors:[{path,type,message}], summary} instead of prose")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// LEFTOVERS ARE REFUSED, not ignored. Go's flag package stops at the
+	// first non-flag token, so `crewlet validate company.yaml -json` used
+	// to parse ZERO flags, discard both tokens and validate ./crewlet.yaml
+	// and ./company.yaml instead — printing a success line about files it
+	// never opened. A fix loop reading that converges on nothing.
+	tail := fs.Args()
+	if file == "" && len(tail) == 1 {
+		file, tail = tail[0], nil
+	}
+	if len(tail) > 0 {
+		fmt.Fprintln(stderr,
+			"usage: crewlet validate [<file.yaml>] [-tier auto|company|bootstrap] [-json]\n"+
+				"   or: crewlet validate [-config <tier-a.yaml>] [-company <tier-b.yaml>] [-json]")
+		return errors.New("name at most one document")
+	}
+	if !Tier(*tier).Valid() {
+		return fmt.Errorf("-tier %q is not one of %s", *tier, tierNames())
+	}
+	if file != "" {
+		return validateOne(file, Tier(*tier), *asJSON, stdout)
+	}
+	return validateBoth(cfg, *asJSON, stdout)
+}
 
-	boot, company, err := cfg.load()
+func tierNames() string {
+	out := make([]string, 0, len(tiers))
+	for _, t := range tiers {
+		out = append(out, string(t))
+	}
+	return strings.Join(out, ", ")
+}
+
+// validateOne checks the single document an operator named.
+func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
+	res := validation{File: file, Tier: tier, Errors: []validationError{}}
+	raw, err := os.ReadFile(file)
 	if err != nil {
-		return err
+		res.Errors = faultsOf(err)
+		return report(stdout, res, asJSON)
+	}
+	if tier == TierAuto {
+		detected, detErr := detectTier(raw)
+		if detErr != nil {
+			res.Errors = faultsOf(detErr)
+			return report(stdout, res, asJSON)
+		}
+		res.Tier = detected
+	}
+
+	if res.Tier == TierBootstrap {
+		// TIER A RESOLVES FROM THE ENVIRONMENT ALONE, which is not a
+		// default but a rule: it carries the store's address and the keys
+		// that open it, so a resolver reaching the secret store would have
+		// Tier A reading from the store it is describing.
+		boot, bootErr := config.LoadBootstrap(file, config.EnvOnly())
+		if bootErr != nil {
+			res.Errors = faultsOf(bootErr)
+			return report(stdout, res, asJSON)
+		}
+		res.Valid = true
+		res.Summary = map[string]any{
+			"stream": boot.Stream.Type, "coordination": boot.Coordination.Type,
+			"store": boot.Store.Path, "roles": boot.Node.Roles,
+		}
+		return report(stdout, res, asJSON)
+	}
+
+	company, companyErr := config.LoadCompany(file)
+	if companyErr != nil {
+		res.Errors = faultsOf(companyErr)
+		return report(stdout, res, asJSON)
 	}
 	// Building the epoch is the rest of the check, and it reaches nothing:
 	// no broker, no store, no provider is dialled. It is what catches the
 	// problems a schema cannot — a seat whose llm names no configured
 	// provider, a role reporting to a unit that does not exist.
+	epoch, epochErr := engine.NewCompany(company)
+	if epochErr != nil {
+		res.Errors = faultsOf(epochErr)
+		return report(stdout, res, asJSON)
+	}
+	res.Valid = true
+	res.Summary = map[string]any{
+		"company": company.Name, "seats": len(epoch.Seats()),
+		"llm_providers": len(epoch.Models.Keys()),
+	}
+	return report(stdout, res, asJSON)
+}
+
+// validateBoth is the two-flag form: check a Tier A and a Tier B together.
+//
+// BOTH, not just the first to fail: an operator fixing a broker URL only to be
+// told about their org chart on the next boot has been made to pay twice for
+// one edit. It is the same rule each tier's own validator follows internally.
+func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
+	res := validation{Tier: TierAuto, Errors: []validationError{}}
+	boot, company, err := cfg.load()
+	if err != nil {
+		res.Errors = faultsOf(err)
+		return report(stdout, res, asJSON)
+	}
 	epoch, err := engine.NewCompany(company)
 	if err != nil {
-		return err
+		res.Errors = faultsOf(err)
+		return report(stdout, res, asJSON)
 	}
-	// Both slot types are read straight off the config: ParseBootstrap
-	// decodes over DefaultBootstrap, so a file that names neither comes
-	// back carrying the defaults rather than empty strings. A helper here
-	// naming them again would be a second copy of the defaults, and the
-	// two would eventually disagree about what an unset slot does.
-	fmt.Fprintf(stdout, "%s: %d agent seats, %d LLM providers, stream %q, coordination %q\n",
-		company.Name, len(epoch.Seats()), len(epoch.Models.Keys()),
-		boot.Stream.Type, boot.Coordination.Type)
+	res.Valid = true
+	res.Summary = map[string]any{
+		"company": company.Name, "seats": len(epoch.Seats()),
+		"llm_providers": len(epoch.Models.Keys()),
+		"stream":        boot.Stream.Type, "coordination": boot.Coordination.Type,
+	}
+	return report(stdout, res, asJSON)
+}
+
+// report renders a validation and returns the run's exit disposition.
+//
+// A FAILED VALIDATION IS A NON-ZERO EXIT IN BOTH MODES. The -json caller is a
+// CI step as often as it is a model, and `crewlet validate x.yaml -json ||
+// exit 1` has to be able to fail — a mode that printed {"valid": false} and
+// exited 0 would pass every gate built on it.
+func report(stdout io.Writer, res validation, asJSON bool) error {
+	if asJSON {
+		raw, err := json.MarshalIndent(res, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, string(raw))
+		if res.Valid {
+			return nil
+		}
+		// SILENT, because the payload already carries every problem and a
+		// second copy on stderr is what makes a JSON consumer's log
+		// unreadable.
+		return errSilent
+	}
+	if !res.Valid {
+		var b strings.Builder
+		for _, e := range res.Errors {
+			if e.Path != "" {
+				b.WriteString("\n  " + e.Path + ": " + e.Message)
+				continue
+			}
+			b.WriteString("\n  " + e.Message)
+		}
+		return errors.New(strings.TrimPrefix(b.String(), "\n  "))
+	}
+	fmt.Fprintln(stdout, summaryLine(res))
 	return nil
 }
 
+// summaryLine is the one prose line a successful validation prints.
+func summaryLine(res validation) string {
+	if name, ok := res.Summary["company"].(string); ok {
+		line := fmt.Sprintf("%s: %d agent seats, %d LLM providers",
+			name, res.Summary["seats"], res.Summary["llm_providers"])
+		if stream, both := res.Summary["stream"]; both {
+			line += fmt.Sprintf(", stream %q, coordination %q",
+				stream, res.Summary["coordination"])
+		}
+		return line
+	}
+	return fmt.Sprintf("%s: stream %q, coordination %q, store %q, roles %v",
+		res.File, res.Summary["stream"], res.Summary["coordination"],
+		res.Summary["store"], res.Summary["roles"])
+}
+
+// errSilent asks the caller to exit non-zero without printing anything more.
+var errSilent = errors.New("")
+
 func runEngine(args []string, stderr io.Writer) error {
+	file, args := splitSubject(args)
+
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cfg := addConfigFlags(fs)
@@ -231,6 +538,29 @@ func runEngine(args []string, stderr io.Writer) error {
 		"bind port, overriding api.port; 0 serves no HTTP at all")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	// THE POSITIONAL IS THE TIER A PATH, and a leftover is REFUSED rather
+	// than ignored. Go's flag package stops at the first non-flag token,
+	// so `crewlet run /etc/crewlet.yaml -debug` used to parse no flags at
+	// all, discard the path, and boot from ./crewlet.yaml — or from
+	// nothing — without ever mentioning the file the operator named.
+	tail := fs.Args()
+	if file == "" && len(tail) == 1 {
+		file, tail = tail[0], nil
+	}
+	if len(tail) > 0 {
+		fmt.Fprintln(stderr, "usage: crewlet run [<config.yaml>] "+
+			"[-company <company.yaml>] [-roles …] [-api-host …] [-api-port …]")
+		return errors.New("name at most one config document")
+	}
+	if file != "" {
+		if isFlagSet(fs, "config") {
+			return errors.New(
+				"the config document is named twice, as a positional argument " +
+					"and as -config; they would have to agree and nothing " +
+					"checks that they do")
+		}
+		*cfg.bootstrap = file
 	}
 
 	level := logging.ParseLevel(*logLevel)

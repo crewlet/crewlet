@@ -157,9 +157,8 @@ func TestADiffIsRedactedAndNamesWhatMoved(t *testing.T) {
 	}
 	firstID := activeRevisionID(t, cfg)
 
-	// A CHANGE IN THE MIDDLE of the document, so the elision has something
-	// to elide on both sides — the company name is the first line, where a
-	// common prefix cannot exist.
+	// ONE FIELD, deep in the document: a structural diff has to report the
+	// path to it, not the lines around it.
 	second := companyFile(t, dir, "two.yaml", func(doc string) string {
 		return strings.Replace(doc, "model: claude-sonnet-5", "model: claude-opus-5", 1)
 	})
@@ -174,21 +173,53 @@ func TestADiffIsRedactedAndNamesWhatMoved(t *testing.T) {
 	if !strings.Contains(out, "claude-opus-5") || !strings.Contains(out, "claude-sonnet-5") {
 		t.Fatalf("the diff does not show the change:\n%s", out)
 	}
-	// THE UNCHANGED BULK IS ELIDED ON BOTH SIDES, which is what an
-	// operator opened a diff to avoid. Both markers, because the change is
-	// one line in the middle of a long document: asserting only one lets
-	// half the elision be dropped while the test still passes.
-	for _, marker := range []string{"identical line(s) above", "identical line(s) below"} {
-		if !strings.Contains(out, marker) {
-			t.Fatalf("the diff is missing %q, so it printed the "+
-				"unchanged bulk:\n%s", marker, out)
+	// PATHS AND VALUES, not lines — the shape d-505 records and the shape
+	// the API's own diff route answers with. The path is what makes the
+	// change actionable: an operator reading `~ providers.llm.…` knows
+	// which setting moved without counting lines.
+	if !strings.Contains(out, "providers.llm.") || !strings.Contains(out, ".model:") {
+		t.Fatalf("the diff does not name the path that changed:\n%s", out)
+	}
+	// THE UNCHANGED BULK IS ABSENT because a structural diff has nothing to
+	// elide: it reports only what moved. One edit is one line of output.
+	var moved int
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.HasPrefix(line, "~ ") || strings.HasPrefix(line, "+ ") ||
+			strings.HasPrefix(line, "- ") {
+			moved++
 		}
 	}
-	// AND THE CHANGE ITSELF IS SMALL. A diff that elides nothing and one
-	// that elides everything both "contain" a marker.
-	if changed := strings.Count(out, "\n-") + strings.Count(out, "\n+"); changed > 6 {
-		t.Fatalf("the diff shows %d changed lines for a one-line edit:\n%s",
-			changed, out)
+	if moved != 1 {
+		t.Fatalf("the diff reports %d changes for a one-field edit:\n%s", moved, out)
+	}
+}
+
+// A STRING AND THE SAME TEXT UNQUOTED ARE DIFFERENT SETTINGS, and a renderer
+// that printed both bare would show a type change as no change at all.
+func TestTheDiffQuotesStringsAndNotOtherValues(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	if _, _, err := configCmd(t, cfg, "import",
+		companyFile(t, dir, "one.yaml", nil)); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	firstID := activeRevisionID(t, cfg)
+
+	second := companyFile(t, dir, "two.yaml", func(doc string) string {
+		return strings.Replace(doc, "model: claude-sonnet-5", "model: claude-opus-5", 1)
+	})
+	if _, _, err := configCmd(t, cfg, "import", second); err != nil {
+		t.Fatalf("second import: %v", err)
+	}
+	out, _, err := configCmd(t, cfg, "diff", firstID)
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	// THE DIRECTION IS "what `against` became", so the ACTIVE value is on
+	// the left: `config diff <rev>` answers "what would reverting to <rev>
+	// change", and the header says so.
+	if !strings.Contains(out, `"claude-opus-5" -> "claude-sonnet-5"`) {
+		t.Errorf("string values are not quoted, or the direction inverted:\n%s", out)
 	}
 }
 

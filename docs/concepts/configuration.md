@@ -8,12 +8,12 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
-| **A** | `config.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, debug |
+| **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, debug |
 | **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Plane / Forge), org roles & units, extensions, token budgets |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
 
-### Tier A example (`config.yaml`)
+### Tier A example (`crewlet.yaml`)
 
 ```yaml
 debug: false
@@ -110,7 +110,7 @@ Everything that defines the company — see [examples/nimbus.company.yaml](https
 
 The engine boots in this order:
 
-1. Read `config.yaml` (Tier A only — DSN, queue URL, api host/port/auth, debug)
+1. Read `crewlet.yaml` (Tier A only — DSN, queue URL, api host/port/auth, debug)
 2. `configure_logging(level)`
 3. Open the store file and start or dial the stream
 4. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
@@ -339,13 +339,13 @@ Crewlet has two secret-handling behaviours for Tier B. Which one is in effect de
 
 ### Default: `${VAR}` references (no keyring)
 
-With no `secrets:` block in `config.yaml`, the DB stores `${ENV_VAR}` reference strings verbatim and resolution happens at provider / transport / integration construction time (`internal/engine`). The `company_config` table never holds a real secret; the environment is the source of truth. Safe to back up / export, but every deployment must re-provision the referenced env vars, and rotating a key means editing the env + restarting.
+With no `secrets:` block in `crewlet.yaml`, the DB stores `${ENV_VAR}` reference strings verbatim and resolution happens at provider / transport / integration construction time (`internal/engine`). The `company_config` table never holds a real secret; the environment is the source of truth. Safe to back up / export, but every deployment must re-provision the referenced env vars, and rotating a key means editing the env + restarting.
 
 A configured keyring also unlocks a second, independent place a `${VAR}` can resolve from: the encrypted [secret store](secret-store.md) (`secret_values`), consulted ahead of the environment. That is what lets a provisioner hand a minted credential straight to the engine instead of writing a file someone has to source. It is opt-in and inert until a secret is actually stored.
 
 ### Encrypted at rest (Tier A keyring configured)
 
-Add a keyring to `config.yaml` and Crewlet encrypts the **entire** `company_config` payload as one opaque blob (AES-256-GCM) before it reaches the DB:
+Add a keyring to `crewlet.yaml` and Crewlet encrypts the **entire** `company_config` payload as one opaque blob (AES-256-GCM) before it reaches the DB:
 
 ```yaml
 # config.yaml (Tier A) — the keyring is the sole root of trust

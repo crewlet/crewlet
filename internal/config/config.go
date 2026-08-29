@@ -106,10 +106,104 @@ func fault(path string, kind error, detail string, args ...any) error {
 	if len(args) > 0 {
 		detail = fmt.Sprintf(detail, args...)
 	}
-	if path == "" {
-		return fmt.Errorf("%w: %s", kind, detail)
+	return &Fault{Path: path, Kind: kind, Detail: detail}
+}
+
+// Fault is one validation failure, with its parts still separate.
+//
+// # Why a type rather than a formatted string
+//
+// Because two consumers need the parts back. `crewlet validate -json` emits
+// {path, type, message} so an authoring loop can jump to the field, and the
+// API's write surface reports the same three to a caller that never sees a
+// terminal. Both were re-deriving them by splitting the rendered message on
+// colons, which a detail containing a colon breaks — and details routinely
+// contain one, because they name settings.
+//
+// It renders EXACTLY as the formatted string did, because that text is what
+// an operator reads at a prompt and reflowing it would churn every test that
+// asserts on a message.
+type Fault struct {
+	// Path is the AUTHORED path — providers.llm.default.model — never a Go
+	// field name the operator has never seen. Empty at the document root.
+	Path string
+	// Kind is one of the ErrMissing / ErrShape / … sentinels, kept as the
+	// error itself so errors.Is still answers.
+	Kind error
+	// Detail says what to do about it.
+	Detail string
+}
+
+func (f *Fault) Error() string {
+	if f.Path == "" {
+		return f.Kind.Error() + ": " + f.Detail
 	}
-	return fmt.Errorf("%s: %w: %s", path, kind, detail)
+	return f.Path + ": " + f.Kind.Error() + ": " + f.Detail
+}
+
+// Unwrap exposes the sentinel, so errors.Is(err, ErrMissing) keeps working.
+func (f *Fault) Unwrap() error { return f.Kind }
+
+// Faults flattens a validation error into its parts, in the order they were
+// reported.
+//
+// An error that is NOT a fault — a file that could not be read, a YAML
+// document that would not parse — comes back as one Fault with an empty path
+// and [ErrShape], because a caller rendering machine-readable output needs
+// every failure in one shape or it has to grow a second branch for the ones
+// that arrive differently.
+func Faults(err error) []Fault {
+	if err == nil {
+		return nil
+	}
+	var out []Fault
+	var walk func(error)
+	walk = func(e error) {
+		if e == nil {
+			return
+		}
+		// JOINED ERRORS FIRST, because a *Fault never wraps a join and a
+		// join is how every validator reports more than one problem.
+		if joined, ok := e.(interface{ Unwrap() []error }); ok {
+			for _, inner := range joined.Unwrap() {
+				walk(inner)
+			}
+			return
+		}
+		var f *Fault
+		if errors.As(e, &f) {
+			out = append(out, *f)
+			return
+		}
+		out = append(out, Fault{Kind: ErrShape, Detail: e.Error()})
+	}
+	walk(err)
+	return out
+}
+
+// KindName is the machine-readable name of a fault's kind.
+//
+// A CLOSED SET with a fallback, because the name travels in JSON that a fix
+// loop branches on: a kind this build does not know renders as "invalid"
+// rather than as an empty string, which would look like a field the consumer
+// forgot to read.
+func (f Fault) KindName() string {
+	switch {
+	case errors.Is(f.Kind, ErrMissing):
+		return "missing"
+	case errors.Is(f.Kind, ErrOutOfRange):
+		return "out_of_range"
+	case errors.Is(f.Kind, ErrConflict):
+		return "conflict"
+	case errors.Is(f.Kind, ErrShape):
+		return "shape"
+	case errors.Is(f.Kind, ErrUnknownField):
+		return "unknown_field"
+	case errors.Is(f.Kind, ErrUnknownValue):
+		return "unknown_value"
+	default:
+		return "invalid"
+	}
 }
 
 // at joins a parent path with a child field. The empty parent is the

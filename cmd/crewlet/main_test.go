@@ -559,3 +559,252 @@ func dispatchedCommands(t *testing.T) []string {
 	}
 	return commands
 }
+
+// --- validate: the positional form, -tier and -json --------------------- //
+
+// writeYAML drops one document in a temp dir and returns its path.
+func writeYAML(t *testing.T, name, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// THE WORST BUG THIS COMMAND HAD. Go's flag package stops at the first
+// non-flag token, so `crewlet validate company.yaml -json` parsed ZERO flags,
+// discarded both tokens, and validated ./crewlet.yaml and ./company.yaml
+// instead — printing a success line about files it never opened. A fix loop
+// reading that converges on nothing.
+func TestValidateReadsTheFileItWasGiven(t *testing.T) {
+	t.Parallel()
+	bad := writeYAML(t, "company.yaml", "name: Acme\nnonsense: true\n")
+	var out, errOut bytes.Buffer
+	err := run([]string{"validate", bad}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("a broken document validated: %s", out.String())
+	}
+	if !strings.Contains(err.Error(), "nonsense") {
+		t.Errorf("the error does not name the field in the file given: %v", err)
+	}
+}
+
+// AND A LEFTOVER IS REFUSED rather than ignored, which is the only way an
+// operator finds out they typed something the command cannot honour.
+func TestValidateRefusesMoreThanOneDocument(t *testing.T) {
+	t.Parallel()
+	var out, errOut bytes.Buffer
+	err := run([]string{"validate", "one.yaml", "two.yaml"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("two positional documents were accepted")
+	}
+	if !strings.Contains(err.Error(), "at most one") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+// THE TIER IS DETECTED FROM THE KEYS, not from the filename — the one thing
+// this has to get right is the case where the operator named the file
+// something else.
+func TestValidateDetectsWhichTierADocumentIs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"a company under any name", companyYAML, "company"},
+		{"a bootstrap under any name",
+			"store:\n  path: " + filepath.Join(dir, "c.db") + "\n" +
+				"stream:\n  store_dir: " + filepath.Join(dir, "s") + "\n", "bootstrap"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeYAML(t, "some-other-name.yaml", tc.body)
+			var out, errOut bytes.Buffer
+			if err := run([]string{"validate", path, "-json"}, &out, &errOut); err != nil {
+				t.Fatalf("validate: %v (%s)", err, out.String())
+			}
+			var got map[string]any
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("the -json output is not JSON: %v\n%s", err, out.String())
+			}
+			if got["tier"] != tc.want {
+				t.Errorf("tier = %v, want %s", got["tier"], tc.want)
+			}
+			if got["valid"] != true {
+				t.Errorf("valid = %v: %s", got["valid"], out.String())
+			}
+		})
+	}
+}
+
+// A DOCUMENT THAT IS NEITHER IS AN ERROR NAMING THE FLAG, never a guess.
+// Guessing wrong reports every field of the file as invalid, and an operator
+// reading that cannot tell it from a genuinely broken document.
+func TestValidateRefusesADocumentItCannotClassify(t *testing.T) {
+	t.Parallel()
+	path := writeYAML(t, "mystery.yaml", "colour: blue\n")
+	var out, errOut bytes.Buffer
+	err := run([]string{"validate", path}, &out, &errOut)
+	if err == nil {
+		t.Fatal("an unclassifiable document validated")
+	}
+	if !strings.Contains(err.Error(), "-tier") {
+		t.Errorf("the error does not name the remedy: %v", err)
+	}
+}
+
+// -tier OVERRIDES THE DETECTION, which is what makes the refusal above
+// actionable rather than a dead end.
+func TestTheTierFlagOverridesDetection(t *testing.T) {
+	t.Parallel()
+	// A document that is VALID as a company, so the flag is the only thing
+	// that can make it fail: detection would pick company and pass.
+	path := writeYAML(t, "c.yaml", companyYAML)
+	var out, errOut bytes.Buffer
+	if err := run([]string{"validate", path}, &out, &errOut); err != nil {
+		t.Fatalf("the document is not valid as a company: %v (%s)", err, out.String())
+	}
+	out.Reset()
+	if err := run([]string{"validate", path, "-tier", "bootstrap"}, &out, &errOut); err == nil {
+		t.Fatalf("a company document validated as a bootstrap: %s", out.String())
+	}
+}
+
+// AN UNKNOWN TIER IS REFUSED NAMING THE SET.
+func TestValidateRefusesAnUnknownTier(t *testing.T) {
+	t.Parallel()
+	var out, errOut bytes.Buffer
+	err := run([]string{"validate", "x.yaml", "-tier", "middle"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("an unknown tier ran")
+	}
+	if !strings.Contains(err.Error(), "auto, company, bootstrap") {
+		t.Errorf("the error does not name the set: %v", err)
+	}
+}
+
+// THE -json PAYLOAD CARRIES A PATH PER PROBLEM, which is the whole reason an
+// authoring loop uses it: prose it would have to parse converges on whatever
+// the prose happened to say.
+func TestTheJSONOutputCarriesAPathPerProblem(t *testing.T) {
+	t.Parallel()
+	bad := writeYAML(t, "company.yaml",
+		strings.Replace(companyYAML, "llm: primary\n", "llm: nonexistent\n", 1))
+	var out, errOut bytes.Buffer
+	err := run([]string{"validate", bad, "-json"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("a broken document reported success")
+	}
+	var got struct {
+		Valid  bool `json:"valid"`
+		Errors []struct {
+			Path    string `json:"path"`
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("the -json output is not JSON: %v\n%s", err, out.String())
+	}
+	if got.Valid {
+		t.Errorf("valid = true on a broken document")
+	}
+	if len(got.Errors) == 0 {
+		t.Fatalf("no errors reported: %s", out.String())
+	}
+	var found, pathed bool
+	for _, e := range got.Errors {
+		if e.Message == "" || e.Type == "" {
+			t.Errorf("an error carries no message or type: %+v", e)
+		}
+		if e.Path != "" {
+			pathed = true
+		}
+		if strings.Contains(e.Message, "nonexistent") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the provider problem is not in the payload: %s", out.String())
+	}
+	// THE PATH IS THE POINT. A loop that gets only a message has to parse
+	// prose to find the field, which is exactly what -json exists to avoid.
+	if !pathed {
+		t.Errorf("no error carries a path: %s", out.String())
+	}
+	// AND NOTHING IS ECHOED ON STDERR: a second copy of what the payload
+	// already carries is what makes a machine consumer's log unreadable.
+	if strings.Contains(errOut.String(), "nonexistent") {
+		t.Errorf("the problem was printed twice: %s", errOut.String())
+	}
+}
+
+// A FAILED -json VALIDATION EXITS NON-ZERO, or every CI gate built on
+// `crewlet validate x.yaml -json || exit 1` passes unconditionally.
+func TestAFailedJSONValidationStillFails(t *testing.T) {
+	t.Parallel()
+	bad := writeYAML(t, "company.yaml", "name: Acme\nnonsense: true\n")
+	var out, errOut bytes.Buffer
+	if err := run([]string{"validate", bad, "-json"}, &out, &errOut); err == nil {
+		t.Fatalf("a broken document exited zero: %s", out.String())
+	}
+}
+
+// --- run: the positional Tier A path ------------------------------------ //
+
+// `crewlet run /etc/crewlet.yaml -debug` used to parse no flags at all,
+// discard the path, and boot from ./crewlet.yaml — or from nothing — without
+// ever mentioning the file the operator named.
+func TestRunReadsTheConfigItWasGiven(t *testing.T) {
+	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "not-here.yaml")
+	var out, errOut bytes.Buffer
+	err := run([]string{"run", missing}, &out, &errOut)
+	if err == nil {
+		t.Fatal("a missing config booted")
+	}
+	if !strings.Contains(err.Error(), "not-here.yaml") {
+		t.Errorf("the error does not name the file given: %v", err)
+	}
+}
+
+// NAMING IT TWICE IS REFUSED. They would have to agree and nothing checks
+// that they do, so the second one silently winning is the worst answer.
+func TestRunRefusesTheConfigNamedTwice(t *testing.T) {
+	t.Parallel()
+	var out, errOut bytes.Buffer
+	err := run([]string{"run", "a.yaml", "-config", "b.yaml"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("two config paths were accepted")
+	}
+	if !strings.Contains(err.Error(), "named twice") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+// THE COMMONEST FIRST-RUN FAILURE: this repo's own quickstart and example
+// call the Tier A document config.yaml, while the binary's default is
+// crewlet.yaml. Naming the neighbour costs one stat and saves the diagnosis.
+func TestAMissingDefaultNamesTheFileSittingBesideIt(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	beside := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(beside, []byte("store:\n  path: x.db\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	err := run([]string{"validate",
+		"-config", filepath.Join(dir, "crewlet.yaml"),
+		"-company", filepath.Join(dir, "company.yaml")}, &out, &errOut)
+	if err == nil {
+		t.Fatal("a missing config validated")
+	}
+	if !strings.Contains(err.Error(), "config.yaml is there") {
+		t.Errorf("the neighbour was not named: %v", err)
+	}
+}

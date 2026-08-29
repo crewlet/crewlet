@@ -9,9 +9,9 @@ subcommand below is served by it.
 
 | Command | Description |
 |---------|-------------|
-| `crewlet run [config]` | Read Tier A bootstrap (default `./config.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
-| `crewlet validate <config.yaml>` | Validate a Tier A or Tier B YAML and print a summary (`--json` for machine-readable errors) |
-| `crewlet migrate [config]` | Apply pending schema migrations (Tier A file, default `./config.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
+| `crewlet run [config.yaml]` | Read Tier A bootstrap (positional, or `-config`; default `./crewlet.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
+| `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for machine-readable errors); with no positional it checks both tiers via `-config` and `-company` |
+| `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
 | `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node — the counter is the fleet's, not this file's |
 | `crewlet budgets reset [config]` | Zero token usage on a running node — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
@@ -19,11 +19,11 @@ subcommand below is served by it.
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
 | `crewlet config show` | One-line summary of the active revision |
 | `crewlet config revisions [--limit N]` | List recent revisions (newest first) |
-| `crewlet config diff <UUID> [-against <UUID\|active>]` | Line diff of two revisions, always redacted on both sides |
+| `crewlet config diff <UUID> [-against <UUID\|active>]` | Structural diff of two revisions — paths and values, always redacted on both sides |
 | `crewlet config activate <UUID>` | Re-point the fleet at a revision; re-activating the current one mints a new epoch, which is how a rotated secret takes effect |
 | `crewlet config seal` | Encrypt the active revision as one document under the Tier A keyring (one-time migration off plaintext-at-rest) — see [Secrets](../concepts/configuration.md#secrets) |
 | `crewlet config rekey [--dry-run]` | Re-encrypt the active revision's config document under the active key (master-key rotation) |
-| `crewlet secrets keygen [-key-id ID]` | Generate a fresh encryption-keyring key + the `config.yaml` snippet to install it |
+| `crewlet secrets keygen [-key-id ID]` | Generate a fresh encryption-keyring key + the `crewlet.yaml` snippet to install it |
 | `crewlet secrets set <NAME>` | Store an encrypted secret in the [secret store](../concepts/secret-store.md); the engine resolves `${NAME}` from it ahead of the environment |
 | `crewlet secrets list` | List stored secret names + metadata (never values) |
 | `crewlet secrets unset <NAME>` | Remove a stored secret |
@@ -50,21 +50,35 @@ subcommand below is served by it.
 
 ---
 
-> **Every command that reads the Tier B company document takes `-config`** (default `./config.yaml`), and resolves its `${VAR}` references the way the engine does: **this node's secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the vendor. With no bootstrap at that path, or one declaring no `secrets.keys`, the run resolves from the environment alone and says so on its first line. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
+> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **this node's secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the vendor. With no bootstrap at that path, or one declaring no `secrets.keys`, the run resolves from the environment alone and says so on its first line. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
 
 ## `crewlet run`
 
 ```
-crewlet run [-config PATH] [-company PATH] [-debug]
+crewlet run [<config.yaml>] [-company PATH] [-debug]
             [-log-level LEVEL] [-log-format FORMAT]
             [-roles ROLE[,ROLE...]] [-api-host HOST] [-api-port PORT]
 ```
 
-Reads Tier A bootstrap (`./config.yaml` by default) and starts the agent engine. Tier B is read from the `company_config` table in the store — if no active revision exists, the engine boots in the **unconfigured** state with the API still serving so an operator can bootstrap via `crewlet config import` or `PUT /config`. See [Configuration concept doc](../concepts/configuration.md).
+Reads Tier A bootstrap and starts the agent engine. The path comes from the
+**positional argument**, or from `-config`, defaulting to `./crewlet.yaml`.
+Naming it both ways is refused: the two would have to agree and nothing checks
+that they do. A leftover positional is refused too, rather than ignored —
+Go's flag parser stops at the first non-flag token, so a command that took the
+path and kept going would silently boot from the default without ever
+mentioning the file the operator named.
+
+If the default is missing and a `config.yaml` sits beside it, the error says
+so. This repository's own quickstart, its example file and much of its
+documentation have called the Tier A document `config.yaml` while the binary's
+default is `crewlet.yaml`, and an operator who followed the guide otherwise
+gets "no such file" about a name they never typed. It is a **hint, not a
+fallback**: silently loading a file nobody asked for is how a node boots from
+the wrong document on a machine that has both. Tier B is read from the `company_config` table in the store — if no active revision exists, the engine boots in the **unconfigured** state with the API still serving so an operator can bootstrap via `crewlet config import` or `PUT /config`. See [Configuration concept doc](../concepts/configuration.md).
 
 | Flag | Description |
 |------|-------------|
-| `-config PATH` | Tier A: this node's broker, store and API (default `./config.yaml`) |
+| `-config PATH` | Tier A: this node's broker, store and API (default `./crewlet.yaml`) |
 | `-company PATH` | Tier B **seed**: imported into the store when the store does not already hold it. A running node serves the store, not this file. |
 | `-log-level LEVEL` | `debug`, `info` (default), `warn` or `error`. A typo resolves to `info` — a bad log level must never be why a company will not boot. |
 | `-log-format FORMAT` | `text` (default) or `json` |
@@ -92,7 +106,7 @@ When piping output, prefer `tee -i` — Ctrl+C reaches the whole pipeline, and a
 
 ## `crewlet config`
 
-Manage the Tier B company configuration in the store. Every subcommand opens the store named by the Tier A bootstrap (`-config`, default `./config.yaml`), and decrypts what it holds with that file's keyring.
+Manage the Tier B company configuration in the store. Every subcommand opens the store named by the Tier A bootstrap (`-config`, default `./crewlet.yaml`), and decrypts what it holds with that file's keyring.
 
 **Revisions are immutable and the activation pointer is append-only.** Nothing here edits a revision: importing writes a new one, activating appends to the pointer. That is what makes re-activating an *unchanged* revision meaningful — it mints a new epoch every node is watching, which is how a [rotated secret](../concepts/secret-store.md) reaches a running fleet without a restart.
 
@@ -135,7 +149,29 @@ Lists recent revisions. The active revision is marked with `*`.
 crewlet config diff <UUID> [-against <UUID|active>] [-config PATH]
 ```
 
-Prints a line diff of two revisions rendered as YAML, with the unchanged bulk elided — a config is a long document and one line usually moved. `-against active` (default) compares against the currently-active revision.
+Prints a **structural** diff of two revisions — one line per path that moved,
+with the value on each side. `-against active` (default) compares against the
+currently-active revision, and the direction reads as "what `-against` became",
+so `crewlet config diff <UUID>` answers "what would reverting to this change".
+
+```
+--- active
++++ 35ecd5ab-96ff-4d6d-b101-9de41d644832
+~ providers.llm.main.model: "claude-opus-5" -> "claude-sonnet-5"
++ agents.roles[3].handle = "qa"
+- integrations.github.enabled (was true)
+```
+
+**Paths and values, not lines.** The stored form is JSON produced by
+marshalling a struct, so re-ordering a map or adding a field with a default
+rewrites lines that mean nothing to a reader. The question an operator asks is
+"what changed about the company", and paths answer it — this is the same
+differ [`GET /config/revisions/{id}/diff`](api-endpoints.md) serves, and the
+shape [d-505](design-decisions.md) records. A string value is quoted and other
+values are not, because `"true"` and `true` are different settings and a
+renderer that printed both bare would show a type change as no change at all.
+A diff longer than the cap reports its own truncation rather than stopping
+silently.
 
 **Both sides are always redacted, and there is no flag to turn that off.** A diff is what an operator pastes into a ticket or a chat thread to ask a colleague whether a change looks right, which is the single most likely way a credential leaves the machine. `crewlet config export -revision <UUID>` is there for the rare case that needs the real values, and it takes a deliberate act.
 
@@ -155,7 +191,7 @@ Re-points the fleet at a revision. Every node applies it on its next reconcile.
 crewlet config seal [--bootstrap PATH] [--dsn DSN] [--summary TEXT]
 ```
 
-Encrypts the active revision under the Tier A keyring and writes a new active revision holding the whole config as one opaque `{"__encrypted__": "enc:v1:…"}` document — the one-time migration off plaintext-at-rest. Reads the active revision and encrypts the entire payload (AES-256-GCM); `${VAR}` references inside are kept verbatim and resolve at construction time. A no-op when the active revision is already a document under the active key. Requires a keyring in `config.yaml` (`crewlet secrets keygen`).
+Encrypts the active revision under the Tier A keyring and writes a new active revision holding the whole config as one opaque `{"__encrypted__": "enc:v1:…"}` document — the one-time migration off plaintext-at-rest. Reads the active revision and encrypts the entire payload (AES-256-GCM); `${VAR}` references inside are kept verbatim and resolve at construction time. A no-op when the active revision is already a document under the active key. Requires a keyring in `crewlet.yaml` (`crewlet secrets keygen`).
 
 ### `crewlet config rekey`
 
@@ -163,7 +199,7 @@ Encrypts the active revision under the Tier A keyring and writes a new active re
 crewlet config rekey [--bootstrap PATH] [--dsn DSN] [--summary TEXT] [--dry-run]
 ```
 
-Rotates the master key: re-encrypts the active revision's config document under the current `secrets.active_key_id`, writing a new revision. The document is decrypted with whatever key sealed it (that key **must still be in** `secrets.keys`) and re-encrypted under the active key. Workflow: `crewlet secrets keygen --key-id <new>` → add the new key to `secrets.keys` and set `active_key_id: <new>` while keeping the old key → `crewlet config rekey` → once it succeeds, drop the old key from `config.yaml`. `--dry-run` reports whether it would re-encrypt without writing. Idempotent (a document already under the active key is skipped); a no-op when nothing needs rotating. Fails clearly if the document is sealed under a key no longer in the keyring.
+Rotates the master key: re-encrypts the active revision's config document under the current `secrets.active_key_id`, writing a new revision. The document is decrypted with whatever key sealed it (that key **must still be in** `secrets.keys`) and re-encrypted under the active key. Workflow: `crewlet secrets keygen --key-id <new>` → add the new key to `secrets.keys` and set `active_key_id: <new>` while keeping the old key → `crewlet config rekey` → once it succeeds, drop the old key from `crewlet.yaml`. `--dry-run` reports whether it would re-encrypt without writing. Idempotent (a document already under the active key is skipped); a no-op when nothing needs rotating. Fails clearly if the document is sealed under a key no longer in the keyring.
 
 ---
 
@@ -175,9 +211,9 @@ Rotates the master key: re-encrypts the active revision's config document under 
 crewlet secrets keygen [-key-id ID]
 ```
 
-Prints a fresh base64 32-byte encryption key plus a copy-pasteable `config.yaml` `secrets:` snippet that references it via an environment variable (keeping the raw key out of the file). `--key-id` (default `key-1`) names the key; the id is stamped into every envelope the key seals, so keep it stable across restarts and pick a new id only when rotating. Key generation is always explicit — Crewlet never auto-generates a key, because a silently-generated key that isn't captured makes every backup unrecoverable. See [Secrets](../concepts/configuration.md#secrets).
+Prints a fresh base64 32-byte encryption key plus a copy-pasteable `crewlet.yaml` `secrets:` snippet that references it via an environment variable (keeping the raw key out of the file). `--key-id` (default `key-1`) names the key; the id is stamped into every envelope the key seals, so keep it stable across restarts and pick a new id only when rotating. Key generation is always explicit — Crewlet never auto-generates a key, because a silently-generated key that isn't captured makes every backup unrecoverable. See [Secrets](../concepts/configuration.md#secrets).
 
-The remaining subcommands operate on the [secret store](../concepts/secret-store.md) — the encrypted `secret_values` table the engine consults **ahead of** the process environment when resolving `${VAR}`. All of them open the store named by the Tier A bootstrap (`--config`, default `./config.yaml`), and all of them need a Tier A keyring: the store has no plaintext mode, so a config declaring no `secrets.keys` is refused with a pointer at `keygen` rather than silently storing plaintext.
+The remaining subcommands operate on the [secret store](../concepts/secret-store.md) — the encrypted `secret_values` table the engine consults **ahead of** the process environment when resolving `${VAR}`. All of them open the store named by the Tier A bootstrap (`--config`, default `./crewlet.yaml`), and all of them need a Tier A keyring: the store has no plaintext mode, so a config declaring no `secrets.keys` is refused with a pointer at `keygen` rather than silently storing plaintext.
 
 ### `crewlet secrets set`
 
@@ -228,10 +264,24 @@ Re-encrypts every stored secret not already sealed under `secrets.active_key_id`
 ## `crewlet validate`
 
 ```
-crewlet validate <config> [--tier auto|company|bootstrap] [--json]
+crewlet validate [<file.yaml>] [-tier auto|company|bootstrap] [-json]
+crewlet validate [-config <tier-a.yaml>] [-company <tier-b.yaml>] [-json]
 ```
 
-Validates a config file and prints a summary. Useful for catching errors before running.
+Validates a config and prints a summary, reaching nothing: no broker, no
+store, no provider is dialled.
+
+**Two forms, because it has two jobs.** Name **one file** and it validates
+that document. Name **neither** and it validates both tiers together, from
+`-config` and `-company` — which is what a CI step wants, and which reports
+*both* tiers' problems rather than stopping at the first: an operator fixing a
+broker URL only to be told about their org chart on the next boot has been
+made to pay twice for one edit.
+
+A **leftover positional is refused**, not ignored. Go's flag package stops at
+the first non-flag token, so a command that took the file and kept going would
+silently validate the defaults instead and print a success line about files it
+never opened.
 
 Validation is **deep** — it builds the `Organization`, so unknown unit
 leads, bad cron expressions, invalid timezones, human seats missing a
@@ -242,22 +292,37 @@ exists.
 
 | Flag | Description |
 |------|-------------|
-| `--tier` | Which tier the file is. `auto` (default) reads a top-level `name` key as Tier B and anything else as Tier A — exact, not a heuristic, since `name` is required in Tier B and forbidden in Tier A. |
-| `--json` | Emit a machine-readable result on stdout instead of prose. |
+| `-tier` | Which tier a positional file is. `auto` (default) reads the document's **keys**, not its filename — the two tiers share no top-level key, so `name`/`agents`/`providers` mean Tier B and `node`/`stream`/`store`/`coordination` mean Tier A. A document that carries neither, or an equal count of both, is **refused naming this flag** rather than guessed at: guessing wrong reports every field of the file as invalid, and an operator reading that cannot tell it from a genuinely broken document. |
+| `-json` | Emit a machine-readable result on stdout instead of prose. |
+| `-config` / `-company` | The two-tier form. Ignored when a positional file is given. |
 
-With `--json`, the payload is `{"valid": bool, "tier": str, "errors": [{"path", "message", "type"}], "summary": {...}}` — one record per offending field, with its exact path, so an editor, CI job, or [AI authoring loop](../getting-started/ai-authoring.md) can fix everything in one pass:
+With `-json`, the payload is `{"valid": bool, "tier": str, "file": str,
+"errors": [{"path", "type", "message"}], "summary": {...}}` — one record per
+offending field, with its exact path, so an editor, CI job, or [AI authoring
+loop](../getting-started/ai-authoring.md) can fix everything in one pass:
 
 ```json
 {
   "valid": false,
   "tier": "company",
+  "file": "company.yaml",
   "errors": [
-    { "path": "roles.0.backstroy", "message": "Extra inputs are not permitted", "type": "extra_forbidden" }
+    { "path": "agents.roles[0].llm", "type": "unknown_value",
+      "message": "no provider named \"nonexistent\" is configured" }
   ]
 }
 ```
 
-Exit code is `0` when valid, `1` otherwise (in both output modes).
+`type` is one of `missing`, `out_of_range`, `conflict`, `shape`,
+`unknown_field`, `unknown_value`, or `invalid` for anything this build does
+not classify — a closed set with a fallback, because a consumer branching on
+it must never receive an empty string and read it as a field somebody forgot.
+
+Exit code is `0` when valid and `1` otherwise, **in both output modes**: a
+`-json` run that printed `{"valid": false}` and exited zero would pass every
+CI gate built on `crewlet validate x.yaml -json || exit 1`. In `-json` mode
+nothing is echoed on stderr, because the payload already carries every problem
+and a second copy is what makes a machine consumer's log unreadable.
 
 ---
 
@@ -268,14 +333,14 @@ migrates it, so this is never *required* — what it is, is a way to do it
 without starting a node.
 
 ```bash
-crewlet migrate                          # uses ./config.yaml
-crewlet migrate /etc/crewlet/config.yaml
+crewlet migrate                          # uses ./crewlet.yaml
+crewlet migrate /etc/crewlet/crewlet.yaml
 crewlet migrate -check                   # report pending work, apply nothing
 ```
 
 | Flag | Description |
 |------|-------------|
-| `config` | Tier A YAML (positional, or `-config`; default `./config.yaml`) |
+| `config` | Tier A YAML (positional, or `-config`; default `./crewlet.yaml`) |
 | `-check` | List pending migrations and exit **1** if there are any; applies nothing. This is what a deploy gate calls, and a gate that reported pending work and exited 0 would stop nothing. |
 
 Rolling out N nodes at once means N processes opening the same database and

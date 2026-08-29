@@ -8,10 +8,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"strings"
+	"strconv"
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -286,13 +287,26 @@ func listRevisions(ctx context.Context, cs *configStore, limit int, stdout io.Wr
 // looks right, and that is the single most likely way a credential leaves
 // the machine. `export -revision ID` is there for the rare case that needs
 // the real values, and it takes a deliberate act.
+//
+// # Paths and values, not lines
+//
+// The same differ the API's /config/revisions/{id}/diff serves, and for the
+// reason d-505 records: the stored form is JSON produced by marshalling a
+// struct, so re-ordering a map or adding a field with a default rewrites
+// lines that mean nothing. What an operator asks is "what changed about the
+// company", and that is answered by paths and values.
+//
+// The CLI rendered a unified line diff over YAML instead — the shape the
+// project had recorded a decision against, while the same binary's HTTP
+// surface answered structurally. One product cannot ship both answers to one
+// question.
 func diffRevisions(ctx context.Context, cs *configStore, revisionID, against string,
 	stdout io.Writer,
 ) error {
 	if revisionID == "" {
 		return errors.New("config diff needs a revision to compare")
 	}
-	left, err := redactedYAML(ctx, cs, revisionID)
+	left, err := redactedCompany(ctx, cs, revisionID)
 	if err != nil {
 		return err
 	}
@@ -300,35 +314,84 @@ func diffRevisions(ctx context.Context, cs *configStore, revisionID, against str
 	if other == "active" {
 		other = ""
 	}
-	right, err := redactedYAML(ctx, cs, other)
+	right, err := redactedCompany(ctx, cs, other)
 	if err != nil {
 		return err
 	}
-	if left == right {
+	// OLDEST FIRST: the diff reads as "what `against` became", so a change
+	// rendered the other way round would name the new value as the old.
+	changes, err := configapi.Changes(right, left)
+	if err != nil {
+		return err
+	}
+	if len(changes) == 0 {
 		fmt.Fprintf(stdout, "%s and %s are identical\n", revisionID, against)
 		return nil
 	}
-	return writeUnifiedDiff(stdout, against, revisionID, right, left)
+	return writeChanges(stdout, against, revisionID, changes)
 }
 
-func redactedYAML(ctx context.Context, cs *configStore, revisionID string) (string, error) {
+// writeChanges renders a structural diff.
+//
+// ONE LINE PER PATH, with the marker in the first column so the shape is
+// scannable the way a line diff was — an operator reading this in a terminal
+// is looking for "what moved", and a block per change buries that under
+// formatting.
+func writeChanges(stdout io.Writer, from, to string, changes []configapi.Change) error {
+	fmt.Fprintf(stdout, "--- %s\n+++ %s\n", from, to)
+	for _, c := range changes {
+		if c.Path == "" {
+			// The truncation marker Changes appends when a diff exceeds
+			// its cap. Reported rather than silent: a diff that quietly
+			// stopped would be read as "that is all that changed".
+			fmt.Fprintf(stdout, "... %v\n", c.To)
+			continue
+		}
+		switch c.Kind {
+		case configapi.KindAdded:
+			fmt.Fprintf(stdout, "+ %s = %s\n", c.Path, renderValue(c.To))
+		case configapi.KindRemoved:
+			fmt.Fprintf(stdout, "- %s (was %s)\n", c.Path, renderValue(c.From))
+		default:
+			fmt.Fprintf(stdout, "~ %s: %s -> %s\n",
+				c.Path, renderValue(c.From), renderValue(c.To))
+		}
+	}
+	return nil
+}
+
+// renderValue prints a leaf as an operator reads it.
+//
+// A STRING IS QUOTED and everything else is not, which is the one distinction
+// that matters here: `"true"` and `true` are different settings, and a
+// renderer that printed both as `true` would show a type change as no change
+// at all.
+func renderValue(v any) string {
+	switch value := v.(type) {
+	case nil:
+		return "null"
+	case string:
+		return strconv.Quote(value)
+	default:
+		return fmt.Sprint(value)
+	}
+}
+
+// redactedCompany opens a revision and redacts it, for comparison.
+func redactedCompany(ctx context.Context, cs *configStore, revisionID string) (*config.Company, error) {
 	rev, err := revisionOrActive(ctx, cs, revisionID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	document, err := secrets.Open(cs.cipher, rev.Payload)
 	if err != nil {
-		return "", fmt.Errorf("open revision %s: %w", rev.ID, err)
+		return nil, err
 	}
-	company, err := config.DecodeCompany(document)
+	company, err := config.ParseCompanyDocument(document)
 	if err != nil {
-		return "", fmt.Errorf("parse revision %s: %w", rev.ID, err)
+		return nil, err
 	}
-	body, err := config.EncodeCompanyYAML(company.Redact())
-	if err != nil {
-		return "", err
-	}
-	return string(body), nil
+	return company.Redact(), nil
 }
 
 func activateRevision(ctx context.Context, cs *configStore, revisionID string, stdout io.Writer) error {
@@ -382,53 +445,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-// writeUnifiedDiff prints a line diff of two rendered revisions.
-//
-// A LINE DIFF, computed here rather than shelled out to `diff`: this has to
-// work identically on every platform the binary runs on, and the alternative
-// is a command that behaves differently — or is absent — depending on where
-// an operator happens to be standing.
-func writeUnifiedDiff(w io.Writer, leftName, rightName, left, right string) error {
-	fmt.Fprintf(w, "--- %s\n+++ %s\n", leftName, rightName)
-	for _, line := range diffLines(
-		strings.Split(strings.TrimRight(left, "\n"), "\n"),
-		strings.Split(strings.TrimRight(right, "\n"), "\n"),
-	) {
-		fmt.Fprintln(w, line)
-	}
-	return nil
-}
-
-// diffLines renders a diff of two line sequences.
-//
-// The common-prefix and common-suffix trim is what makes this readable on a
-// config: the overwhelmingly common change is a handful of lines in the
-// middle of a document that is otherwise identical, and printing the whole
-// thing with two markers in it is what an operator opened a diff to avoid.
-func diffLines(left, right []string) []string {
-	head := 0
-	for head < len(left) && head < len(right) && left[head] == right[head] {
-		head++
-	}
-	tail := 0
-	for tail < len(left)-head && tail < len(right)-head &&
-		left[len(left)-1-tail] == right[len(right)-1-tail] {
-		tail++
-	}
-	out := make([]string, 0, (len(left)-head-tail)+(len(right)-head-tail)+2)
-	if head > 0 {
-		out = append(out, fmt.Sprintf("@@ %d identical line(s) above @@", head))
-	}
-	for _, line := range left[head : len(left)-tail] {
-		out = append(out, "-"+line)
-	}
-	for _, line := range right[head : len(right)-tail] {
-		out = append(out, "+"+line)
-	}
-	if tail > 0 {
-		out = append(out, fmt.Sprintf("@@ %d identical line(s) below @@", tail))
-	}
-	return out
 }

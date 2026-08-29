@@ -2,7 +2,7 @@
 
 Crewlet companies are defined across **two tiers** — see the [Configuration concept page](../concepts/configuration.md) for the full design.
 
-- **Tier A** (`config.yaml`, restart-only): DB DSN, Pulsar URL, API host/port/auth, debug, knowledge backend.
+- **Tier A** (`crewlet.yaml`, restart-only): DB DSN, Pulsar URL, API host/port/auth, debug, knowledge backend.
 - **Tier B** (`company.yaml` imported into the store, live-editable): everything else — identity, providers, integrations, MCP servers, roles, units, turn engine, learning, budgets, extensions.
 
 This page documents the **Tier B** fields below.  For Tier A see [Configuration concept page §"Tier A example"](../concepts/configuration.md#tier-a-example-configyaml).
@@ -12,7 +12,7 @@ This page documents the **Tier B** fields below.  For Tier A see [Configuration 
 > themselves. Point your editor at it for autocomplete and typo
 > squiggles, or hand it to an AI assistant — see
 > [Authoring with an AI assistant](ai-authoring.md). Check your file with
-> `crewlet validate <file>` (add `--json` for machine-readable errors);
+> `crewlet validate <file>` (add `-json` for machine-readable errors);
 > it reads no environment, so it works before any secret is exported.
 >
 > **Unknown keys are rejected.** Every config model forbids extra
@@ -296,7 +296,7 @@ turn" and carries on with recency. Nothing here retries — the caller's
 degradation costs less than a retry spent inside a Plan-phase prefetch
 somebody is waiting on.
 
-Tier A (`config.yaml`, restart-only) says where this node's stream, store and
+Tier A (`crewlet.yaml`, restart-only) says where this node's stream, store and
 API are.  Example:
 
 ```yaml
