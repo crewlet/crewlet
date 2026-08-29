@@ -12,34 +12,61 @@ the vendor loops below; the engine itself needs no services.
 ```bash
 git clone https://github.com/crewlet/crewlet.git
 cd crewlet
-go build ./...
+make build        # or: go build ./...
 ```
 
-That is the whole setup. The engine embeds its own event stream (a NATS
-JetStream server) and its store is a local file it creates, so `crewlet run`
-in an empty directory is a working company — there is no broker to operate
-and nothing to point a DSN at.
+`make help` lists every target, and that is the whole setup — nothing to
+install beyond the prerequisites above. The engine embeds its own event
+stream (a NATS JetStream server) and its store is a local file it creates, so
+`crewlet run` in an empty directory is a working company — there is no broker
+to operate and nothing to point a DSN at.
 
 The Docker stack is for the **self-hostable integrations**: Mattermost and
 GitLab, each behind its own compose profile with a bootstrap script that
-stands it up and provisions the example company's seats. Jira and Confluence
+stands it up and provisions the example company's seats — `make mattermost-up`
+and `make gitlab-up` are the profile and its script in one step, and take
+`COMPANY=` to provision a config's seats in the same run. Jira and Confluence
 have no profile — Atlassian is not something a compose file can stand up. See
 [docs/integrations/](docs/integrations/).
 
 ## Running tests and lint
 
 ```bash
-go test ./...            # the full suite
+make check               # every gate CI runs on a pull request
+```
+
+That is one target because it is one question — *would CI accept this?* —
+and answering it in pieces is how a push goes red on the piece you skipped.
+`make help` lists the rest.
+
+Every target runs the command [`ci.yml`](.github/workflows/ci.yml) runs, with
+the same flags, and `internal/version/makefile_test.go` asserts the two have
+not drifted: a convenience target that quietly dropped `-race`, or certified
+the store on one driver, would report a pass CI does not honour, and nothing
+else would notice. `make check` is:
+
+```bash
 gofmt -l .               # formatting — prints the files that need it
 go vet ./...
 golangci-lint run        # what CI's lint job runs
+go build ./...
+go test ./... -race -count=1                                  # the full suite
+CREWLET_STORE_DRIVER=turso  go test ./internal/store/... -race -count=1
+CREWLET_STORE_DRIVER=sqlite go test ./internal/store/... -race -count=1
 ```
 
-CI runs those, plus the suite again **under the race detector**
-(`go test ./... -race`). That is not optional here: the engine's concurrency
-model is real parallelism, and every "atomic because it is single-threaded"
-assumption is a data race until proven otherwise. Run it locally before
-pushing anything that touches the seat host, the queue or the turn engine.
+The race detector is not optional here: the engine's concurrency model is
+real parallelism, and every "atomic because it is single-threaded" assumption
+is a data race until proven otherwise — so CI runs the *whole* suite under it
+and so does `make test`. `-count=1` is the other half: without it a cached
+PASS recorded before the change answers for the change. `make test-norace`
+skips the detector when you want the faster loop, and says so.
+
+Two things `make check` does not cover, because both need a service CI starts
+for itself — it prints them when it passes, rather than letting a green run
+imply more than it did: the [Pulsar conformance suite](#a-skip-is-not-a-pass)
+(`make pulsar-up test-pulsar`) and the [release pipeline](#releasing)
+(`make snapshot`).
 
 ### A skip is not a pass
 
@@ -52,7 +79,10 @@ without it** — a green run has simply not exercised them.
   driven from Go by `internal/api`. The dashboard has no Go code of its own,
   so without node a whole subsystem goes quiet. **CI fails rather than
   skipping** when node is missing: the job installs one if the runner image
-  does not ship it, and the test asserts the workflow asks for it.
+  does not ship it, and the test asserts the workflow asks for it. Locally,
+  every `make` target that runs a suite refuses to start without one, for the
+  same reason — a target cannot install node for you, but it can decline to
+  hand you a green run that tested none of the dashboard.
 
   **Which dashboard the suites test is a parameter.** They resolve it once,
   in `tests/dashboard/js/dashboardRoot.mjs`, from `CREWLET_DASHBOARD_ROOT` —
@@ -74,10 +104,15 @@ without it** — a green run has simply not exercised them.
   what a concurrent reader sees, so `internal/store/turso.go` prepares it
   under a lock and heals a cache entry that will not verify. If a test binary
   ever dies with `unable to load turso library`, that cache is the place to
-  look — `go test ./internal/store/ -run LibraryCache` covers it.
+  look — `go test ./internal/store/ -run LibraryCache -count=1` covers it
+  (the cache is not a test input, so without `-count=1` Go will happily serve
+  the PASS from before it went bad).
 
   ```bash
-  CREWLET_STORE_DRIVER=sqlite go test ./internal/store/...
+  make test-stores   # both drivers, as CI's matrix runs them
+  # or one leg on its own — with the flags CI passes, so a cached PASS from
+  # before the change cannot answer for it:
+  CREWLET_STORE_DRIVER=sqlite go test ./internal/store/... -race -count=1
   ```
 
 - **`CREWLET_TEST_PULSAR_URL`** and **`CREWLET_TEST_PULSAR_ADMIN_URL`** run
@@ -94,6 +129,17 @@ without it** — a green run has simply not exercised them.
   consumer holding its prefetch for the ack timeout. The memory twin models
   all three, and a twin agreeing with itself proves nothing.
 
+  The compose stack's `pulsar` profile carries that same configuration —
+  both reapers off, and forced namespace deletion on for the suite's own
+  per-queue cleanup — and the two make targets set the variables for you, so
+  the local run either certifies the backend or fails saying no broker is
+  listening. There is no spelling of it that quietly does nothing:
+
+  ```bash
+  make pulsar-up test-pulsar
+  make pulsar-down            # add -v yourself to discard the broker's data
+  ```
+
 Tests never call real LLM APIs — use the fakes in `internal/providers`. Test
 files sit beside what they cover, as Go expects.
 
@@ -105,7 +151,7 @@ replays the frames its socket produced through the dashboard's own
 there and nowhere else, so it needs node too:
 
 ```bash
-go test ./internal/e2e/... -race -v
+make test-e2e   # go test ./internal/e2e/... -race -count=1 -v
 ```
 
 ## Project conventions
@@ -240,9 +286,9 @@ Releases are cut by pushing a `v*` tag; GitHub Actions builds every target
 with [goreleaser](https://goreleaser.com), signs the checksums with keyless
 Sigstore, publishes the container image to GHCR and creates the GitHub
 Release. **The tag is the version** — nothing in the tree records one, so
-there is nothing for a tag to disagree with. The full process, including how
-to rehearse the whole pipeline locally without touching GitHub, is in
-[RELEASING.md](RELEASING.md).
+there is nothing for a tag to disagree with. The whole pipeline rehearses
+locally with `make snapshot`, without a tag and without touching GitHub; the
+full process is in [RELEASING.md](RELEASING.md).
 
 ## Documentation
 
@@ -346,7 +392,7 @@ what readers see in the generated release notes. See below.
 
 1. Fork and create a feature branch.
 2. Make your change, including tests and doc updates.
-3. Run the lint + test commands above.
+3. Run `make check`.
 4. Open a PR with a clear description of what changed and why. **The title
    matters more than anywhere else**: GitHub generates each release's notes from
    the titles of the pull requests merged since the previous tag, and those

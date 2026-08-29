@@ -117,15 +117,24 @@ The whole pipeline runs in **snapshot mode** without a tag and without
 touching GitHub:
 
 ```bash
-goreleaser release --snapshot --clean
+make snapshot   # goreleaser check
+                # goreleaser release --snapshot --clean --skip=sign
 ```
 
-That builds all six targets, the archives, the checksums *and the container
+That is the snapshot job's own pair of commands. `check` runs first so a
+config error is reported as a config error rather than as whatever the build
+does with a bad field, and **`--skip=sign` is not optional**: signing is not
+part of the publish phase `--snapshot` already skips, so without it a
+rehearsal runs `cosign sign-blob --yes` over the checksums and tries to mint a
+real Sigstore certificate from a machine with no OIDC token to mint it from.
+
+It builds all six targets, the archives, the checksums *and the container
 image*. The image is worth a note: buildx cannot assemble a multi-platform
 manifest without pushing it, so `dockers_v2` builds and pushes in one step and
 runs in goreleaser's **publish** phase. `--skip=publish` therefore skips the
-image build entirely and leaves the `Dockerfile` untested — which is why the
-CI job skips only signing. A snapshot pushes nothing regardless: it builds each
+image build entirely and leaves the `Dockerfile` untested — which is why both
+the CI job and `make snapshot` skip only signing. A snapshot pushes nothing
+regardless: it builds each
 architecture locally under its own suffixed tag
 (`ghcr.io/crewlet/crewlet:0.2.1-SNAPSHOT-amd64` and `-arm64`), so there is no
 `latest` and no manifest to find afterwards.

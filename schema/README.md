@@ -9,6 +9,9 @@ stale file nobody opens.
 To update after a config change:
 
 ```sh
+make schema   # both tiers, from the repository root
+
+# or one at a time:
 go run ./cmd/crewlet schema company   -o schema/company.schema.json
 go run ./cmd/crewlet schema bootstrap -o schema/bootstrap.schema.json
 ```

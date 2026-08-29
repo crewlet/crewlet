@@ -7,12 +7,17 @@ services:
   # It embeds its own JetStream server and creates its own store file, so a
   # company runs with no service here at all.
   #
-  # Bring this up with `docker compose --profile pulsar up -d` when working
-  # on the Pulsar backend itself, or to run the conformance suite locally:
+  # Bring this up with `make pulsar-up` (or `docker compose --profile pulsar
+  # up -d --wait`) when working on the Pulsar backend itself, and certify the
+  # backend against it with:
+  #
+  #   make test-pulsar
+  #
+  # which is the same run CI makes, flags included:
   #
   #   CREWLET_TEST_PULSAR_URL=pulsar://localhost:6650 \
   #   CREWLET_TEST_PULSAR_ADMIN_URL=http://localhost:8080 \
-  #     go test ./internal/queue/pulsar/...
+  #     go test ./internal/queue/pulsar/... -race -count=1 -timeout 25m
   #
   # That suite SKIPS without those variables, and skipping is not passing —
   # it is the only place the Pulsar backend is certified at all.

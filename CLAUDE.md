@@ -209,15 +209,19 @@ scripts/              # The three vendor dev-loop bootstraps (bash)
 | `version` | What the binary calls itself: the tag goreleaser stamps at link time, falling back to the module's own build info and then to `dev`, so a binary built outside the release path names itself honestly rather than claiming to be a release it is not. Its tests are ten times its code and assert the RELEASE SURFACE rather than the package — the ldflags stamp, the pure-Go build, the image's `${TARGETPLATFORM}` copy, the catch-all notes category, the pre-release flags, the single tag trigger and every Dependabot entry — because each of those fails silently and has no other symptom |
 
 ## Pre-commit Checks
-Before committing, ALWAYS run and fix any issues from:
+Before committing, ALWAYS run and fix any issues from **`make check`**, which is every gate CI runs on a pull request, in one target:
 - `gofmt -l .` — prints the files that need formatting; the output must be empty
 - `go vet ./...`
 - `golangci-lint run` — what CI's lint job runs
-- `go test ./...`
+- `go build ./...`
+- `go test ./... -race -count=1` — the full suite, under the detector, as CI runs it
+- the store suite again on each certified driver (`CREWLET_STORE_DRIVER=turso|sqlite`)
 
-These are the same checks CI runs. Anything touching concurrency — the seat host, the queue, the turn engine — also gets `go test ./... -race`, which CI runs on everything: the engine's concurrency model is real parallelism, so every "atomic because it is single-threaded" assumption is a data race until proven otherwise.
+The race detector is not a special case for concurrency work: CI runs the WHOLE suite under it, because the engine's concurrency model is real parallelism and every "atomic because it is single-threaded" assumption is a data race until proven otherwise. `-count=1` is the other half — without it a cached PASS from before the change answers for the change. `make test-norace` is the faster loop and is not a gate.
 
-**A skip is not a pass.** Three suites need something the machine may not have and skip silently without it: the dashboard's suites need `node`, `internal/store` runs twice over `CREWLET_STORE_DRIVER=turso|sqlite`, and the Pulsar conformance suite needs `CREWLET_TEST_PULSAR_URL`. A green local run has not necessarily exercised any of them. CI fails rather than skips where it can.
+**The Makefile is the same command CI runs, or it is a lie.** Every target mirrors `.github/workflows/ci.yml` flag for flag, and `internal/version` asserts it: a target that quietly dropped `-race`, certified the store on one driver, stopped setting a `CREWLET_*` variable a suite selects on, or started a compose profile `docker-compose.yml` does not define would report a pass CI never gave, and nothing else would notice. A new target ships with its `## ` help line — `make help` is to this file what `usage()` is to the CLI, and the same test asserts it.
+
+**A skip is not a pass.** Three suites need something the machine may not have and skip silently without it: the dashboard's suites need `node`, `internal/store` runs twice over `CREWLET_STORE_DRIVER=turso|sqlite`, and the Pulsar conformance suite needs `CREWLET_TEST_PULSAR_URL`. A green local run has not necessarily exercised any of them. CI fails rather than skips where it can, and so do the make targets: they refuse to run without node, and `make test-pulsar` fails on a broker that is not listening rather than skipping (`make pulsar-up` starts one). What `make check` does NOT cover, it prints when it passes — the Pulsar conformance suite and `make snapshot`.
 
 ## Dependency Updates
 Dependabot watches every dependency surface in the repo — `.github/workflows/*.yml` (`github-actions`), `go.mod` (`gomod`), `Dockerfile` (`docker`), and `docker-compose.yml` (`docker-compose`). The config is `.github/dependabot.yml`: one entry per surface on a weekly schedule, plus the commit prefix that surface's bumps carry, and nothing else; keep it that way unless a knob earns its place. `docker` and `docker-compose` are separate ecosystems reading separate manifests — a repository with both needs both entries.
