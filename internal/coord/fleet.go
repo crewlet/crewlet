@@ -8,7 +8,7 @@ import (
 
 // The FLEET-SHARED state, beyond ownership.
 //
-// A lease answers "who runs this seat". These six answer the other questions
+// A lease answers "who runs this seat". These seven answer the other questions
 // a fleet has to agree on, and they are here — beside [Backend], certified by
 // the same suite — for one reason: THEY WERE ON THE NODE'S OWN DATABASE, and
 // internal/store is documented "one file, one process". Every one of them was
@@ -30,6 +30,9 @@ import (
 //     that owns the answering seat — which is precisely the node that did not
 //     write it. A cross-node ask therefore woke its target and then dropped
 //     the reply, so A2A worked only when both seats happened to land together.
+//   - The scheduled-fire claim is what makes a cron dispatch at-most-once. The
+//     scheduler is a singleton DUTY, so it moves; the new holder read an empty
+//     ledger and its catchup pass re-fired what the old one had claimed.
 //
 // None of these is a lease: nothing here is owned, held or fenced. They are
 // counters, claims and records, and the coordination store is simply where a
@@ -79,6 +82,17 @@ const (
 	// lets that fire run twice, which is the one thing the ledger exists
 	// to prevent.
 	LedgerRetention = 7 * 24 * time.Hour
+
+	// FireRetention is how long a scheduled fire stays claimed.
+	//
+	// The SAME horizon as LedgerRetention and for the same reason — both
+	// have to outlast the scheduler's catchup ceiling, because a claim
+	// expiring inside the window a tick can still evaluate lets that fire
+	// run a second time. A separate constant rather than an alias: they are
+	// sized from one fact but they are not one number, and a future change
+	// to the redelivery horizon must not silently move the scheduler's
+	// floor with it.
+	FireRetention = 7 * 24 * time.Hour
 
 	// CooldownMax is the longest credential cooldown anything sets, and
 	// therefore the bucket's age. A cooldown carries its own end instant,
@@ -440,10 +454,37 @@ type Channels interface {
 	PurgeChannels(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
+// Fires is the fleet's at-most-once guard for scheduled work.
+//
+// One key per DISPATCH IDENTITY — scope, owner, schedule name, the local
+// wall-clock minute and the runner it was addressed to — so the guarantee the
+// scheduler docs make ("a restart, a slow tick, or a re-evaluated minute can
+// never fire the same run twice") holds across the fleet rather than within
+// one process. It was the node's own table, so the `scheduler` singleton duty
+// moving to a peer handed the new node an empty ledger and its catchup pass
+// re-fired what the previous holder had already claimed: every company got two
+// standups.
+//
+// The node's own scheduled_runs table STAYS, as this node's audit record of
+// what it dispatched — the same split migration 0011 made between the shared
+// token counter and the per-agent token_usage rows. What the fleet has to
+// agree on is "may I start", and nothing more.
+type Fires interface {
+	// ClaimFire records one fire identity and reports whether THIS caller
+	// wrote it.
+	//
+	// FAILS CLOSED, which is the opposite polarity to [Ledger] and
+	// deliberately so. That one asks "has this work been done", whose safe
+	// answer is to re-run; this one asks "may I start", whose safe answer
+	// is to wait for the next tick. An error yields (false, err) and the
+	// caller must NOT dispatch.
+	ClaimFire(ctx context.Context, key string, at time.Time) (bool, error)
+}
+
 // Fleet is a backend that serves all of the shared state, which is what the
 // contract suite certifies and what the engine wires from.
 //
-// One interface at the CONSTRUCTION seam and six at the call sites: the
+// One interface at the CONSTRUCTION seam and seven at the call sites: the
 // webhook edge takes a Claims and nothing else, the valve takes a Counter,
 // a turn's meter takes a Budgets. A consumer that could reach the whole store
 // would eventually use it.
@@ -455,6 +496,7 @@ type Fleet interface {
 	Budgets
 	Plane
 	Channels
+	Fires
 }
 
 // SortUsage puts the org counter first, then the seats by scope.

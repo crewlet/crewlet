@@ -46,6 +46,23 @@ The scheduler itself depends on `Claimer`, a one-method interface: it claims
 and nothing else, and a dispatcher that could also read history and delete
 rows is a dispatcher whose blast radius is not visible from its type.
 
+**The claim is the FLEET's, and only the history is the node's.** Both
+backends above live in the node's own exclusively-owned database, and this
+duty MOVES — a lease lapse, a drain, a rolling upgrade. Its successor read an
+empty ledger and its catchup pass re-fired everything the previous holder had
+claimed: two standups, from the one subsystem whose whole contract is that it
+cannot do that. So the identity is claimed against `coord.Fires` (a bucket
+whose age outlasts the catchup ceiling) and the local `scheduled_runs` row
+becomes this node's audit record, written only after the fleet grants the
+claim. `schedule.SharedClaimer` is that join, and it is what the engine wires;
+the local ledger is no longer a `Claimer` any caller reaches on its own.
+
+The identity has to become one KEY for a coordination store, which reintroduces
+the collision `FireKey`'s struct shape avoided by never joining — a unit
+`a|b` with a schedule `c` and a unit `a` with a schedule `b|c` join to the same
+string. `FireClaimKey` escapes each component (and escapes the escape, or the
+collision just moves one level down), so the mapping stays injective.
+
 `Purge` takes an INSTANT rather than an age. Python's `purge(older_than_seconds)`
 made "drop everything" a negative number that the twin then clamped to zero, so
 the two backends' boundary behaviour differed for the one call a test actually
@@ -153,7 +170,7 @@ shape:
 s, err := schedule.New(schedule.Options{
     Publisher:       q,                       // queue.EventQueue satisfies it
     Org:             func() *org.Organization { return node.Org() },
-    Ledger:          sqlledger.New(db.SQL()),
+    Ledger:          claimer,                  // SharedClaimer{fleet, sqlledger}
     DefaultTimezone: cfg.Scheduling.DefaultTimezone,
     Tick:            time.Duration(cfg.Scheduling.TickSeconds) * time.Second,
     Jitter:          time.Duration(cfg.Scheduling.JitterSeconds) * time.Second,
@@ -174,7 +191,8 @@ Two seams are declared here and satisfied elsewhere:
 - The retention sweep. `Ledger.Purge` exists and is certified;
   `Scheduler.RetentionFloor()` reports the shortest retention it may be swept
   with (the catchup ceiling). Something above has to actually call it —
-  `internal/maintenance` sweeps `scheduled_runs` on a horizon clear of that
+  `internal/maintenance` sweeps the node's own `scheduled_runs` history on a
+  horizon clear of that
   floor — because the Python failure mode this records is that nobody did:
   `purge` existed on both stores and on the protocol, and NOTHING called it, so
   the table grew for the life of the deployment.

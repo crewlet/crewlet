@@ -36,6 +36,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"budgets", budgetCases},
 		{"plane", planeCases},
 		{"channels", channelCases},
+		{"fires", fireCases},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {
@@ -1096,6 +1097,70 @@ var channelCases = []fleetCase{{
 		again, _ := h.channel("c1")
 		if again.Requester != "alice" || again.Messages != 0 {
 			h.t.Errorf("the store took a caller's mutation: %+v", again)
+		}
+	},
+}}
+
+// ---- the scheduled-fire claims ----------------------------------------- //
+
+func (h *fleetHarness) claimFire(key string, at time.Time) bool {
+	h.t.Helper()
+	won, err := h.f.ClaimFire(h.ctx, key, at)
+	if err != nil {
+		h.t.Fatalf("ClaimFire(%s): %v", key, err)
+	}
+	return won
+}
+
+var fireCases = []fleetCase{{
+	// The reason this moved off the node's own database. The scheduler is a
+	// singleton DUTY, so it MOVES — a lease lapse, a drain, a rolling
+	// upgrade. The new holder read an empty ledger and its catchup pass
+	// re-fired everything the previous holder had already claimed.
+	name: "a fire one node claimed is refused to the next holder of the duty",
+	fn: func(h *fleetHarness) {
+		key := "role|cto|standup|20260314T0900|cto"
+		if !h.claimFire(key, h.now()) {
+			h.t.Fatal("the first claim lost")
+		}
+		// A different node, a different tick, the same identity.
+		if h.claimFire(key, h.now().Add(time.Minute)) {
+			h.t.Error("the same fire was claimed twice — every company gets two standups")
+		}
+	},
+}, {
+	name: "a distinct identity is its own claim",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		// Every component of the identity is part of the key. An `each`
+		// fan-out mints one per member precisely so a slow member cannot
+		// suppress its siblings, and the minute stamp is what lets the
+		// next tick of the same schedule run at all.
+		for _, key := range []string{
+			"role|cto|standup|20260314T0900|cto",
+			"role|cto|standup|20260314T0900|cto-2",
+			"role|cto|standup|20260314T0901|cto",
+			"role|cto|retro|20260314T0900|cto",
+			"unit|platform|standup|20260314T0900|cto",
+		} {
+			if !h.claimFire(key, at) {
+				h.t.Errorf("ClaimFire(%s) was refused — a distinct fire was suppressed", key)
+			}
+		}
+	},
+}, {
+	// FAILS CLOSED is the caller's polarity, and it only works if a lost
+	// race and an unreachable store are distinguishable. An empty key is
+	// the one argument fault this can catch locally.
+	name: "an unnamed fire is an error, not a lost race",
+	fn: func(h *fleetHarness) {
+		won, err := h.f.ClaimFire(h.ctx, "", h.now())
+		if err == nil {
+			t := h.t
+			t.Error("ClaimFire accepted an empty identity")
+		}
+		if won {
+			h.t.Error("ClaimFire granted an empty identity")
 		}
 	},
 }}

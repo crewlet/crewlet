@@ -17,7 +17,7 @@ import (
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why EIGHT buckets and not one
+// # Why NINE buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -42,6 +42,9 @@ import (
 //	channels   none at all, for a third reason: a bucket age cannot tell an
 //	           OPEN channel from a closed one, so it would reap the
 //	           authorization record of an ask still waiting for its answer
+//	fires      the scheduler's catchup ceiling, days: a claim that expired
+//	           inside the window a tick can still evaluate lets that fire
+//	           run a second time
 //
 // Putting two of those in one bucket would give one of them the other's
 // retention, and every such mistake is silent — a cooldown that expired in a
@@ -64,6 +67,7 @@ const (
 	configSuffix    = "_config"
 	budgetSuffix    = "_budgets"
 	channelSuffix   = "_channels"
+	firesSuffix     = "_fires"
 	activationKey   = "activation"
 	fleetCASRetries = 16
 )
@@ -71,7 +75,7 @@ const (
 // FleetConfig is what a [FleetStore] needs at construction. Every duration is
 // a BUCKET's retention; see the file doc for why each is its own bucket.
 type FleetConfig struct {
-	// BucketPrefix names the eight buckets. Empty means "crewlet", matching
+	// BucketPrefix names the nine buckets. Empty means "crewlet", matching
 	// the lease store — two companies on one NATS account are separated by
 	// giving them different prefixes.
 	BucketPrefix string
@@ -87,6 +91,11 @@ type FleetConfig struct {
 	// LedgerRetention is how long a turn completion is remembered.
 	LedgerRetention time.Duration
 
+	// FireRetention is how long a scheduled fire stays claimed. Sized from
+	// the same fact as LedgerRetention — the scheduler's catchup ceiling —
+	// and kept a separate knob because they are not one number.
+	FireRetention time.Duration
+
 	// CooldownMax is the longest credential cooldown, and therefore the
 	// bucket's age: a cooldown is stored as its own end instant, so the
 	// bucket only has to outlive the longest one anybody sets.
@@ -95,7 +104,7 @@ type FleetConfig struct {
 	// StatusFreshness is how long a node's apply status counts as current.
 	StatusFreshness time.Duration
 
-	// Replicas is the JetStream replica count for all eight.
+	// Replicas is the JetStream replica count for all nine.
 	Replicas int
 }
 
@@ -120,7 +129,8 @@ func (c *FleetConfig) normalize() error {
 		value time.Duration
 	}{
 		{"RateWindow", c.RateWindow}, {"ClaimTTL", c.ClaimTTL},
-		{"LedgerRetention", c.LedgerRetention}, {"CooldownMax", c.CooldownMax},
+		{"LedgerRetention", c.LedgerRetention}, {"FireRetention", c.FireRetention},
+		{"CooldownMax", c.CooldownMax},
 		{"StatusFreshness", c.StatusFreshness},
 	}
 	for _, field := range required {
@@ -152,6 +162,7 @@ type FleetStore struct {
 	config    jetstream.KeyValue
 	budgets   jetstream.KeyValue
 	channels  jetstream.KeyValue
+	fires     jetstream.KeyValue
 
 	rateWindow time.Duration
 	freshness  time.Duration
@@ -159,7 +170,7 @@ type FleetStore struct {
 
 var _ coord.Fleet = (*FleetStore)(nil)
 
-// OpenFleet creates or adopts the eight buckets and returns the backend.
+// OpenFleet creates or adopts the nine buckets and returns the backend.
 //
 // Idempotent and safe to call from every node at once, like [Open]: creating
 // a bucket that already exists with the same shape is a no-op, and a changed
@@ -215,6 +226,9 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet token counters; NO TTL — a cap is a ceiling for the deployment's life", 0},
 		{&store.channels, channelSuffix,
 			"Crewlet agent-to-agent channels; NO TTL — an open ask must outlive any clock", 0},
+		{&store.fires, firesSuffix,
+			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
+			cfg.FireRetention},
 	} {
 		got, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {
@@ -1042,4 +1056,41 @@ func (f *FleetStore) PurgeChannels(ctx context.Context, cutoff time.Time) (int64
 		n++
 	}
 	return n, nil
+}
+
+// ---- the scheduled-fire claims ----------------------------------------- //
+
+// ClaimFire records one fire identity, reporting whether this call wrote it.
+//
+// Create, so the first writer wins and every later tick — this node's own
+// re-evaluated minute, or a peer that has just picked up the scheduler duty —
+// reads false and does not dispatch.
+func (f *FleetStore) ClaimFire(ctx context.Context, key string, at time.Time) (bool, error) {
+	if key == "" {
+		return false, errors.New("coord/kv: a fire claim needs a key")
+	}
+	raw, err := json.Marshal(fireRecord{At: at.UTC()})
+	if err != nil {
+		return false, fmt.Errorf("coord/kv: encode the fire claim: %w", err)
+	}
+	_, err = f.fires.Create(ctx, encodeKey(key), raw)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrKeyExists):
+		return false, nil
+	default:
+		// RAISED, never reported as "somebody else has it". The caller
+		// fails closed on an error and skips the tick; reporting a lost
+		// race instead would tell it the fire was handled, and the next
+		// tick would skip it too.
+		return false, unavailable("claim the fire", err)
+	}
+}
+
+// fireRecord is one claim on the wire. The instant is diagnostic — an operator
+// asking "when was the 09:00 standup claimed, and by a tick or a catchup pass"
+// reads it out of the bucket — and nothing branches on it.
+type fireRecord struct {
+	At time.Time `json:"at"`
 }

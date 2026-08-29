@@ -29,19 +29,34 @@ import (
 // schedulerRuns reports whether this company should have a tick loop.
 //
 // The three conditions the config block has always documented: the operator
-// has not switched it off, this node has a store to hold the claim ledger,
-// and the company actually declares a schedule. The last one is what keeps a
+// has not switched it off, this node can reach the FLEET's claim store, and
+// the company actually declares a schedule. The last one is what keeps a
 // company with no schedules from claiming a fleet duty every ten seconds
 // forever, and it is re-evaluated on every config apply so a founder's FIRST
 // schedule starts the loop without a restart.
+//
+// The claim is the fleet's, not this node's: the scheduler is a singleton duty
+// and therefore MOVES, so a node whose local database held the ledger handed
+// its successor an empty one. The node's own store is no longer a condition —
+// it carries the audit rows the dashboard reads, and a missing dashboard row
+// is not a reason to stop a company's crons.
 func (e *Engine) schedulerRuns(c *Company) bool {
 	if c == nil || !c.Config.Scheduling.Runs() {
 		return false
 	}
-	if e.backends == nil || e.backends.Store == nil || e.backends.Queue == nil {
+	if e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
 		return false
 	}
 	return schedule.HasSchedules(c.Org)
+}
+
+// scheduleClaimer joins the fleet's at-most-once claim to this node's ledger.
+func (e *Engine) scheduleClaimer() (schedule.Claimer, error) {
+	var history schedule.Ledger
+	if db := e.backends.Store; db != nil {
+		history = sqlledger.New(db.SQL())
+	}
+	return schedule.NewSharedClaimer(e.backends.Fleet, history)
 }
 
 // startScheduler arms the tick loop if this company wants one.
@@ -61,6 +76,12 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 	}
 	cfg := c.Config.Scheduling
 	tick := cfg.Tick()
+	claimer, err := e.scheduleClaimer()
+	if err != nil {
+		log.Error("scheduler_not_started", "error", err,
+			"detail", "role and unit schedules will not fire on this node")
+		return
+	}
 	s, err := schedule.New(schedule.Options{
 		Publisher: e.backends.Queue,
 		// A FUNCTION, not the value: the org is swapped wholesale on every
@@ -68,7 +89,7 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 		// company that existed when it was built and fire deleted seats'
 		// schedules for the life of the process.
 		Org:    func() *org.Organization { return e.Company().Org },
-		Ledger: sqlledger.New(e.backends.Store.SQL()),
+		Ledger: claimer,
 		// The node's own config posture. A node that cannot apply the
 		// current epoch must not fire the previous company's crons — and
 		// unlike a delivery there is no queued copy to fall back on, so a

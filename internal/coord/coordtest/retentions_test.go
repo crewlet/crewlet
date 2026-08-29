@@ -38,4 +38,13 @@ func TestTheRetentionsOutlastWhatTheyCover(t *testing.T) {
 			"evaluate (catchup ceiling %v), so a scheduled fire runs twice",
 			coord.LedgerRetention, schedule.DefaultCatchupMax)
 	}
+	// The fire CLAIM's floor is the same ceiling, and for a sharper reason:
+	// a completion that expired early makes a turn re-run, while a claim
+	// that expired early makes the catchup pass dispatch a fire the fleet
+	// already ran.
+	if coord.FireRetention <= schedule.DefaultCatchupMax {
+		t.Errorf("coord.FireRetention %v can expire a claim a catchup pass could still "+
+			"evaluate (catchup ceiling %v), so a scheduled fire runs twice",
+			coord.FireRetention, schedule.DefaultCatchupMax)
+	}
 }

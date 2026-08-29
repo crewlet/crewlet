@@ -35,6 +35,7 @@ type Fleet struct {
 	applies   map[string]coord.NodeApply
 	budgets   map[string]coord.Usage
 	channels  map[string]coord.Channel
+	fires     map[string]time.Time
 
 	epoch  int64
 	target coord.Activation
@@ -63,6 +64,7 @@ func NewFleet() *Fleet {
 		applies:   map[string]coord.NodeApply{},
 		budgets:   map[string]coord.Usage{},
 		channels:  map[string]coord.Channel{},
+		fires:     map[string]time.Time{},
 	}
 }
 
@@ -457,4 +459,20 @@ func normalizeChannel(ch coord.Channel) coord.Channel {
 		ch.ClosedAt = ch.ClosedAt.UTC()
 	}
 	return ch
+}
+
+// ---- the scheduled-fire claims ----------------------------------------- //
+
+// ClaimFire records one fire identity, reporting whether this call wrote it.
+func (f *Fleet) ClaimFire(_ context.Context, key string, at time.Time) (bool, error) {
+	if key == "" {
+		return false, errors.New("coord/memory: a fire claim needs a key")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, taken := f.fires[key]; taken {
+		return false, nil
+	}
+	f.fires[key] = at.UTC()
+	return true, nil
 }

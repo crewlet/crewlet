@@ -47,6 +47,7 @@ flowchart LR
         CD[("cooldowns<br/>credential 429s")]
         B[("budgets<br/>org · per-seat spend")]
         CH[("channels<br/>agent-to-agent asks")]
+        F[("fires<br/>scheduled dispatch claims")]
     end
     subgraph NODE["node — its own database"]
         DB[("events · episodes · diary<br/>conversations<br/>company payload · secrets")]
@@ -67,6 +68,7 @@ flowchart LR
 | `cooldowns` | Which provider credential is cooling after a 429. Per-process monotonic values are not even *comparable* across nodes | [Deployment](../guides/deployment.md) |
 | `budgets` | Org and per-seat token spend. Caps stay config-derived in memory; only *usage* is shared, because a counter per node makes an org cap of 500 000 into N × 500 000 | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
 | `channels` | Who is asking whom, and whether the ask is still open. The record authorizing an answer is read by the node that owns the *answering* seat — never the one that opened it | [Event System § Agent-to-agent](event-system.md) |
+| `fires` | Has this scheduled dispatch already been claimed. The scheduler is a singleton *duty*, so it moves — and a successor reading its own database found an empty ledger and gave every company two standups | [Scheduling § At-most-once](scheduling.md#at-most-once) |
 
 A fleet is not configured — it is **discovered** from these, which is why adding a node is starting a process and removing one is stopping it.
 
@@ -110,6 +112,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `status` | 4 reconcile intervals (~60 s) | A node that stops reporting must **vanish** from the fleet view rather than linger as a healthy row nobody is writing |
 | `config` | none | The pointer is the fencing sequence, and a fence that restarts is not a fence |
 | `budgets` | none | A cap is a ceiling for the life of a deployment. A counter that rolled itself over would silently re-arm a company somebody had stopped on purpose, on a horizon nobody chose — so clearing one is an operator action (`crewlet budgets reset`) |
+| `fires` | 7 days | Must outlast the scheduler's catchup ceiling, for a sharper reason than the ledger's: a completion that expired early makes a turn re-run, while a claim that expired early makes the catchup pass dispatch a fire the fleet already ran |
 | `channels` | none | A bucket's age cannot tell an **open** channel from a closed one, so a TTL would reap the authorization record of an ask still waiting for its answer. Closing an idle channel and deleting a closed one are decisions instead, taken by the [maintenance duty](seat-ownership.md#singleton-duties) |
 
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a cooldown that expired in a second, a fleet view showing a node that died last week.
@@ -126,7 +129,8 @@ The node's own database holds everything a *single* node is the only reader of. 
 - **Conversation history.** Replicating a long thread to the whole fleet buys nothing: the seat's owner is the only reader, and ownership already moves with the lease.
 - **The company payload.** Bulk that every node holds its own copy of. Only *which revision is current* is shared — see [Control Plane](control-plane.md).
 - **The secret store.** Each node resolves `${VAR}` through its own encrypted rows, sealed with the Tier A keyring it was deployed with.
-- **Scheduled-run claims, pending sandbox runs, thread follows.**
+- **`scheduled_runs`** — this node's dispatch *history*, for the dashboard and the retention sweep. Not the claim; that is the `fires` slot above.
+- **Pending sandbox runs, thread follows.**
 - **`token_usage`** — the per-agent audit *record* of what was spent. Not the counter anything enforces against; that is the `budgets` slot above.
 
 And two things stay **per-process** deliberately:

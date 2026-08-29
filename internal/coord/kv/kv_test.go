@@ -413,6 +413,7 @@ func TestFleetContract(t *testing.T) {
 			RateWindow:      time.Minute,
 			ClaimTTL:        10 * time.Minute,
 			LedgerRetention: 10 * time.Minute,
+			FireRetention:   10 * time.Minute,
 			CooldownMax:     time.Hour,
 			StatusFreshness: 10 * time.Minute,
 		})
