@@ -1,0 +1,91 @@
+name: dependabot-merge
+
+# Dependabot's own pull requests, approved and queued to merge with nobody in
+# the loop. Nothing else about them changes: ci.yml runs on a bump exactly as
+# it runs on anything else, and `--auto` holds the merge until every check
+# `main` requires has gone green. This shortens the WAIT, not the gate.
+#
+# Two repository settings are load-bearing and neither of them is in this
+# file:
+#
+#   - "Allow auto-merge" (Settings -> General) must be on, or `gh pr merge
+#     --auto` fails outright. That failure is loud — a red check on the bump —
+#     which is the right way for it to fail.
+#   - A branch protection rule on `main` must REQUIRE ci.yml's checks.
+#     `--auto` waits for the checks a rule names and for nothing else, so with
+#     no rule it merges the moment the pull request is mergeable and this
+#     workflow becomes an unreviewed push straight to `main`. The protection
+#     rule IS the gate; the workflow only queues behind it.
+#
+# The approval is real because branch protection asks for one, and a bump that
+# has nothing waiting on it but a signature waits on a person for the wrong
+# reason: the review this repository actually gives a dependency pull request
+# is CI, and CI has already run. See CONTRIBUTING.md, "Dependency updates".
+
+on:
+  pull_request:
+    # `synchronize` earns its place as much as `opened` does. Dependabot
+    # force-pushes a rebase whenever `main` moves under an open bump, and a
+    # protection rule that dismisses stale approvals throws the approval away
+    # with the old head — so without this the rebased pull request sits
+    # approved by nobody, forever, and the auto-merge it is queued for never
+    # fires.
+    types: [opened, reopened, synchronize]
+
+# A run triggered by Dependabot gets a READ-ONLY `GITHUB_TOKEN` whatever the
+# repository default is, and no access to the repository's Actions secrets
+# (`secrets.GITHUB_TOKEN` itself is still there — it is the scope that is
+# withheld, not the token). This block is what lifts that scope, and the job's
+# `if` below is the only thing keeping the lift off everything else.
+#
+# It sits at workflow level, which is the shape GitHub documents for Dependabot
+# runs; with one job the two placements have the same blast radius. A SECOND
+# job added to this file would silently inherit write on both, which is the
+# moment to move this block down onto the job.
+permissions:
+  contents: write # queueing the auto-merge
+  pull-requests: write # submitting the approval
+
+jobs:
+  approve-and-merge:
+    name: approve + queue merge
+    runs-on: ubuntu-latest
+
+    # BOTH halves are load-bearing and neither implies the other. The author
+    # check is what limits this to a bump. The ACTOR check is what stops it
+    # approving a commit a PERSON pushed onto a Dependabot branch — anyone
+    # with write access can push one, and without this condition the workflow
+    # hands that commit the approval branch protection is asking for, which is
+    # a way to have your own change approved by the repository itself.
+    #
+    # The cost is that a maintainer's own "Update branch" click leaves the pull
+    # request unapproved, because the run it triggers is skipped. `@dependabot
+    # rebase` re-pushes as Dependabot and recovers it.
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.actor == 'dependabot[bot]'
+
+    steps:
+      # There is no dependabot/fetch-metadata step, and its absence is
+      # deliberate rather than an omission. That action answers what KIND of
+      # update a bump is, and nothing here would branch on the answer: CI runs
+      # the same suites for a patch as for a major, so the update type is not
+      # what decides whether this lands. A step whose outputs nothing reads is
+      # a gate that is not there, and it reads like one that is.
+      - name: approve
+        run: gh pr review --approve "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # --squash, not --merge: a pull request lands as ONE commit whose subject
+      # is the pull request title (CONTRIBUTING.md), and that same title is the
+      # line the generated release notes carry.
+      #
+      # --auto is the whole safety property. Drop it and this merges on the
+      # spot, before a single check has reported.
+      - name: queue auto-merge
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

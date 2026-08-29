@@ -214,3 +214,50 @@ func TestOnlyOneWorkflowIsTriggeredByAVersionTag(t *testing.T) {
 			"two of them race to create one GitHub Release", triggered)
 	}
 }
+
+// --- the dependency auto-merge -------------------------------------------
+
+// A BUMP IS APPROVED ONLY WHILE BOTH HALVES OF THE GUARD HOLD.
+//
+// .github/workflows/dependabot-merge.yml approves a pull request and queues
+// it to merge with no person in the loop, so what it refuses to do that for
+// is the whole of its safety. Checking the AUTHOR is what limits it to a
+// bump. Checking the ACTOR is what stops it approving a commit a PERSON
+// pushed onto a Dependabot branch — anyone with write access can push one,
+// and dropping that half turns the workflow into a way to have your own
+// change approved by the repository itself. Neither omission has a symptom:
+// the workflow keeps running, and it runs on the wrong pull requests.
+func TestTheAutoMergeGuardChecksBothAuthorAndActor(t *testing.T) {
+	t.Parallel()
+	workflow := releaseFile(t, ".github/workflows/dependabot-merge.yml")
+	for _, want := range []string{
+		"github.event.pull_request.user.login == 'dependabot[bot]'",
+		"github.actor == 'dependabot[bot]'",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Errorf("dependabot-merge.yml does not gate on %s, so it would "+
+				"approve and merge a pull request Dependabot did not write",
+				want)
+		}
+	}
+}
+
+// THE UNATTENDED MERGE WAITS FOR CI, AND LANDS AS ONE COMMIT.
+//
+// `--auto` is what makes merging without a reviewer safe: it queues the pull
+// request behind the checks `main`'s protection rule requires rather than
+// merging it on the spot. Losing that one word is a silent change of meaning
+// — the step still succeeds and the bump still lands, only now before
+// anything has reported on it. `--squash` is the other half: a pull request
+// becomes ONE commit whose subject is its title, which is what CONTRIBUTING.md
+// asks a title to be written for and what the generated release notes carry.
+func TestTheAutoMergeQueuesBehindTheRequiredChecks(t *testing.T) {
+	t.Parallel()
+	workflow := releaseFile(t, ".github/workflows/dependabot-merge.yml")
+	if !strings.Contains(workflow, "gh pr merge --auto --squash") {
+		t.Error("dependabot-merge.yml does not run `gh pr merge --auto " +
+			"--squash`, so a bump would merge without waiting for CI, or " +
+			"would land as something other than the one commit its title " +
+			"describes")
+	}
+}

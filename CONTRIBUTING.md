@@ -163,8 +163,9 @@ pull request when any of them has a newer release:
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
 
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
-entry per surface on a weekly schedule, and nothing else. Each pull request is
-reviewed on its own merits, and CI runs on it. Three things are worth knowing:
+entry per surface on a weekly schedule, plus the commit prefix that surface's
+bumps carry. CI runs on each pull request, and — as below — CI is what decides
+whether it lands. Three things are worth knowing:
 
 - **Some Compose images are pinned on purpose**, with the reason in a comment
   beside each — `plane-db` holds postgres on its major to match Plane's own
@@ -189,6 +190,48 @@ Go module itself went the length of the rewrite that way.
 Security updates are separate: they come from published advisories rather than
 this file, are enabled in the repository's settings, and are held back by
 neither the weekly schedule nor Dependabot's default release cooldown.
+
+### A bump merges itself
+
+[`.github/workflows/dependabot-merge.yml`](.github/workflows/dependabot-merge.yml)
+approves a pull request Dependabot opened and queues it with `gh pr merge
+--auto --squash`, so a bump lands without waiting on a maintainer. It does not
+land without review: CI *is* the review a dependency change gets here, and
+`--auto` holds the merge until every check `main`'s protection rule requires
+has passed. A bump CI rejects sits there red until a person looks at it, which
+is exactly where it would have sat anyway.
+
+Two settings hold that property up and neither of them is in this repository's
+files. `main`'s protection rule must **require** the `ci` checks — `--auto`
+waits for the checks a rule names and for nothing else, so with no rule the
+queue is empty and the bump merges the instant it is mergeable. And **Allow
+auto-merge** must be on under Settings → General, or the step fails outright;
+that failure is loud, a red check on the bump, which is the right way for it to
+fail.
+
+The job runs only when Dependabot is both the pull request's author *and* the
+actor that triggered the run. That second condition is what stops the workflow
+approving a commit a person pushed onto a Dependabot branch — anyone with write
+access can push one. Its visible cost is that clicking **Update branch**
+yourself leaves the pull request unapproved, because the run your click
+triggered is skipped; `@dependabot rebase` re-pushes as Dependabot and recovers
+it.
+
+Because nothing retitles a bump before it becomes a permanent subject line, each
+entry in `.github/dependabot.yml` pins the prefix its commits carry, and every
+surface carries the same one: `build(deps)`. A bump moves a pinned version, which
+is a change to what the project builds against whichever file records it — so an
+action bump reads `build(deps)` rather than `ci(deps)`, matching the bumps
+already in `main`. Left unset, Dependabot infers the prefix from how recent
+commits are written, and an inference that changes its mind writes a bare
+`Bump x from 1 to 2` straight into `main` and into the release notes. Dependabot
+capitalises the `Bump` and offers no way not to, so a bump is the one subject
+here that does not start lowercase.
+
+`internal/version` asserts both halves of the author/actor guard and the
+`--auto --squash` flags, because every one of those fails silently: the
+workflow keeps running, it just runs on the wrong pull requests or merges
+before a check has reported.
 
 ## Releasing
 
@@ -240,8 +283,8 @@ Required, and drawn from this set:
 | `perf` | a change made for speed, memory, or token cost |
 | `test` | tests only |
 | `ci` | `.github/workflows/*`, `.github/dependabot.yml` |
-| `build` | `go.mod`, the `Dockerfile`, `.goreleaser.yaml`, the Compose stack |
-| `chore` | anything else with no user-visible effect (dependency bumps, tidying) |
+| `build` | `go.mod`, the `Dockerfile`, `.goreleaser.yaml`, the Compose stack — and any dependency bump, whichever file records it |
+| `chore` | anything else with no user-visible effect (tidying, repository maintenance) |
 | `revert` | reverting an earlier commit |
 
 ### Scope
@@ -286,7 +329,7 @@ perf(providers): cache the tool-definition prefix on Anthropic calls
 docs(secret-store): document that the keyring is required
 build: stamp the version into the binary at link time
 ci(docs-publish): rebuild the docs site when a release ships
-chore(deps): bump golangci-lint to 2.6
+build(deps): bump golangci-lint-action to v9
 ```
 
 Nothing enforces any of this — there is no commit-message hook and CI does not

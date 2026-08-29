@@ -12,6 +12,20 @@
 # Security updates are separate — they come from published advisories, are
 # switched on in the repository settings rather than here, and are not held
 # back by this schedule.
+#
+# Each entry pins its own `commit-message.prefix`, which is the one knob here
+# beyond the schedule. It earns its place because these pull requests
+# auto-merge (.github/workflows/dependabot-merge.yml): the title Dependabot
+# writes becomes the squashed commit's subject and a line in the generated
+# release notes, with no reviewer in between to correct it. Left unset,
+# Dependabot INFERS the prefix by looking at how recent commits on the default
+# branch are written — a heuristic that costs nothing while it holds and
+# silently starts producing bare `Bump x from 1 to 2` subjects when it stops.
+# The prefix is `build(deps)` on every surface, which is what the bumps already
+# in `main` carry: a bump moves a pinned version, and that is a change to what
+# the project builds against whichever file happens to record it. Dependabot
+# capitalises the "Bump" itself and offers no way not to, so a bump is the one
+# subject in this repository that does not start lowercase.
 
 version: 2
 
@@ -22,11 +36,15 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "build(deps)"
 
   - package-ecosystem: gomod
     directory: "/"
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "build(deps)"
 
   # The base image a release ships. Distinct from docker-compose below: that
   # entry reads compose files and this one reads Dockerfiles, and neither
@@ -35,8 +53,12 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "build(deps)"
 
   - package-ecosystem: docker-compose
     directory: "/"
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "build(deps)"
