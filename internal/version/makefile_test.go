@@ -120,15 +120,20 @@ func TestTheSuiteSelectingVariablesAreSetLocallyToo(t *testing.T) {
 // the suite targets actually depend on the guard.
 func TestTheSuiteTargetsRefuseToRunWithoutNode(t *testing.T) {
 	t.Parallel()
-	makefile := releaseFile(t, "Makefile")
-	guards := targetsCheckingForNode(makefile)
+	rules := makeRules(releaseFile(t, "Makefile"))
+	var guards []string
+	for name, rule := range rules {
+		if containsAny(rule.recipe, "command -v node") {
+			guards = append(guards, name)
+		}
+	}
 	if len(guards) == 0 {
 		t.Fatal("no Makefile target checks for node, so `make test` on a " +
 			"machine without one would go green having skipped every " +
 			"dashboard assertion")
 	}
 	for _, target := range []string{"test", "test-norace", "test-e2e"} {
-		prereqs := prerequisitesOf(makefile, target)
+		prereqs := rules[target].prereqs
 		if !anyOf(prereqs, guards) {
 			t.Errorf("`make %s` does not depend on the node guard (%v), so it "+
 				"would run green with the dashboard suites skipped",
@@ -381,40 +386,6 @@ func crewletVars(workflow string) []string {
 	return names
 }
 
-// targetsCheckingForNode names every target whose recipe looks for node.
-func targetsCheckingForNode(makefile string) []string {
-	const probe = "command -v node"
-	var found []string
-	current := ""
-	for _, line := range strings.Split(makefile, "\n") {
-		if match := makeRule.FindStringSubmatch(line); match != nil {
-			current = match[1]
-			continue
-		}
-		if strings.HasPrefix(line, "\t") && current != "" && strings.Contains(line, probe) {
-			found = append(found, current)
-			current = ""
-		}
-	}
-	return found
-}
-
-// makeRule matches a rule's head — `target: prereqs`, never a variable
-// assignment (`NAME := value`) and never a recipe line (which is indented).
-var makeRule = regexp.MustCompile(`^([a-z][a-z0-9-]*):([^=]*)$`)
-
-func prerequisitesOf(makefile string, target string) []string {
-	for _, line := range strings.Split(makefile, "\n") {
-		match := makeRule.FindStringSubmatch(line)
-		if match == nil || match[1] != target {
-			continue
-		}
-		prereqs, _, _ := strings.Cut(match[2], "##")
-		return strings.Fields(prereqs)
-	}
-	return nil
-}
-
 // phonyTargets reads the .PHONY list, backslash continuations included —
 // which is where most of the names are.
 func phonyTargets(makefile string) []string {
@@ -442,4 +413,288 @@ func anyOf(names []string, wanted []string) bool {
 		}
 	}
 	return false
+}
+
+// --- what `make check` actually reaches ------------------------------------
+
+// EVERY GATE CI RUNS IS ONE `make check` RUNS -- OR ONE IT NAMES.
+//
+// The other tests here prove a target exists with the right flags. None of
+// them proves `check` still reaches it, and that is one `sed` away: drop
+// `test-stores` from the prerequisite list and every assertion above stays
+// green while the command a contributor is told to run before pushing stops
+// certifying the second store driver. The pull request template makes this
+// worse rather than better -- it now asks people to tick `make check`, so a
+// weakened target is a gate every contributor passes in good faith.
+//
+// Two gates are deliberately outside `check` because both need a service CI
+// starts for itself. That is allowed, and it is allowed only out loud: the
+// recipe has to name the target that does cover them, which is what stops
+// "did not run" from reading as "passed".
+func TestMakeCheckRunsOrNamesEveryGate(t *testing.T) {
+	t.Parallel()
+	makefile := expandMakeVars(releaseFile(t, "Makefile"))
+	rules := makeRules(makefile)
+	reached := reachableFrom(rules, "check")
+	if len(reached) < 2 {
+		t.Fatalf("`check` reaches %v, so this test is checking nothing", reached)
+	}
+	var covered []string // every recipe line `make check` would run
+	for name := range reached {
+		covered = append(covered, rules[name].recipe...)
+	}
+	announced := strings.Join(rules["check"].recipe, "\n")
+
+	workflow := releaseFile(t, ".github/workflows/ci.yml")
+
+	// The gates that are not `go test`: a literal command, matched literally.
+	// Losing one of these is the same silent weakening and has no flags to
+	// compare, so the command itself is the assertion.
+	for _, command := range plainGates(workflow) {
+		if !containsAny(covered, command) {
+			t.Errorf("ci.yml runs %q and `make check` reaches no target that "+
+				"does — the local gate would pass on a check CI still makes",
+				command)
+		}
+	}
+
+	for _, want := range ciTestSteps(workflow) {
+		if coveredBy(covered, want) {
+			continue
+		}
+		runner := targetRunning(rules, want)
+		switch {
+		case runner == "":
+			t.Errorf("no make target runs `go test %s`%s at all",
+				want.packages, want.envNote())
+		case !namesTarget(announced, runner):
+			t.Errorf("`make check` does not run `go test %s`%s and does not "+
+				"name `make %s`, which does — a green check would imply a "+
+				"gate it never ran", want.packages, want.envNote(), runner)
+		}
+	}
+}
+
+// ciStep is one `go test` step of the workflow, with the CREWLET_* variables
+// its step sets: a run selected by an environment variable is not covered by
+// the plain `./...` run, however wide that pattern looks.
+type ciStep struct {
+	goTest
+	env []string
+}
+
+func (s ciStep) envNote() string {
+	if len(s.env) == 0 {
+		return ""
+	}
+	return " with " + strings.Join(s.env, ", ")
+}
+
+// ciTestSteps reads every `go test` step out of the workflow together with
+// the variables set beneath it, which is where a step's env lives in YAML.
+func ciTestSteps(workflow string) []ciStep {
+	lines := strings.Split(workflow, "\n")
+	variable := regexp.MustCompile(`^\s*(CREWLET_[A-Z0-9_]+):`)
+	var steps []ciStep
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		_, after, ok := strings.Cut(trimmed, "go test ")
+		if !ok {
+			continue
+		}
+		command, ok := parseGoTest(after)
+		if !ok {
+			continue
+		}
+		step := ciStep{goTest: command}
+		// The step's own env block, which ends at the next step.
+		for _, follower := range lines[i+1 : min(i+8, len(lines))] {
+			if strings.HasPrefix(strings.TrimSpace(follower), "- ") {
+				break
+			}
+			if match := variable.FindStringSubmatch(follower); match != nil {
+				step.env = append(step.env, match[1])
+			}
+		}
+		steps = append(steps, step)
+	}
+	return steps
+}
+
+// coveredBy reports whether some recipe line runs the step. `./...` covers a
+// narrower pattern -- the end-to-end gates are ordinary packages, so the full
+// suite runs them -- but only for a step no variable selects.
+func coveredBy(recipes []string, want ciStep) bool {
+	for _, line := range recipes {
+		trimmed := strings.TrimSpace(line)
+		_, after, ok := strings.Cut(trimmed, "go test ")
+		if !ok {
+			continue
+		}
+		got, ok := parseGoTest(after)
+		if !ok {
+			continue
+		}
+		// Written as what DOES cover rather than what does not: the
+		// negated conjunction this replaces read as a double negative at
+		// the one line where getting the direction wrong would pass a
+		// weakened target.
+		covers := got.packages == want.packages ||
+			(got.packages == "./..." && len(want.env) == 0)
+		if !covers {
+			continue
+		}
+		// -v is output, not a gate: a run that certifies the same packages
+		// under the same flags certifies them just as well quietly.
+		gate := ciStep{goTest: goTest{packages: want.packages}}
+		for _, flag := range want.flags {
+			if flag != "-v" {
+				gate.flags = append(gate.flags, flag)
+			}
+		}
+		if len(gate.flagsMissingFrom(got)) > 0 {
+			continue
+		}
+		missingEnv := false
+		for _, name := range want.env {
+			if !strings.Contains(line, name) {
+				missingEnv = true
+			}
+		}
+		if !missingEnv {
+			return true
+		}
+	}
+	return false
+}
+
+// targetRunning names a target whose own recipe runs the step, so a failure
+// can say which `make` command the reader wanted. Sorted, because a map walk
+// would name a different one of several runners each time it failed.
+func targetRunning(rules map[string]makeRule, want ciStep) string {
+	names := make([]string, 0, len(rules))
+	for name := range rules {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if coveredBy(rules[name].recipe, want) {
+			return name
+		}
+	}
+	return ""
+}
+
+// namesTarget looks for a target NAME, not a substring of one: `test` is
+// inside `test-pulsar`, so a plain Contains lets the notice about one gate
+// stand in as the announcement of another -- which is exactly the silence
+// this test exists to refuse.
+func namesTarget(notice, target string) bool {
+	bounded := regexp.MustCompile(`(^|[^a-z0-9-])` + regexp.QuoteMeta(target) + `([^a-z0-9-]|$)`)
+	return bounded.MatchString(notice)
+}
+
+// plainGates are the workflow's checks that are not `go test`: the build, vet,
+// the gofmt wrapper and the linter.
+func plainGates(workflow string) []string {
+	gates := map[string]string{
+		"go build ./...":   "go build ./...",
+		"go vet ./...":     "go vet ./...",
+		"gofmt -l .":       "gofmt -l .",
+		"golangci-lint":    "golangci-lint",
+		"golangci-lint-ac": "", // the action's own name is not a command
+	}
+	var found []string
+	for _, line := range strings.Split(workflow, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		for probe, command := range gates {
+			if command != "" && strings.Contains(trimmed, probe) &&
+				!containsAny(found, command) {
+				found = append(found, command)
+			}
+		}
+	}
+	sort.Strings(found)
+	return found
+}
+
+func containsAny(lines []string, probe string) bool {
+	for _, line := range lines {
+		if strings.Contains(line, probe) {
+			return true
+		}
+	}
+	return false
+}
+
+// makeRule is a target's prerequisites and its recipe.
+type makeRule struct {
+	prereqs []string
+	recipe  []string
+}
+
+// makeRules parses the file into targets. A recipe is the run of TAB-indented
+// lines under a rule head; comments and blank lines between them do not end
+// it, which is how make reads them too.
+func makeRules(makefile string) map[string]makeRule {
+	rules := map[string]makeRule{}
+	current := ""
+	for _, line := range strings.Split(makefile, "\n") {
+		if match := makeRuleHead.FindStringSubmatch(line); match != nil {
+			current = match[1]
+			prereqs, _, _ := strings.Cut(match[2], "##")
+			rules[current] = makeRule{prereqs: strings.Fields(prereqs)}
+			continue
+		}
+		if current == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "\t"):
+			rule := rules[current]
+			// A trailing backslash continues the LOGICAL line, and make hands
+			// the joined result to one shell — which is where a recipe's
+			// `VAR=value \` prefix lives, several physical lines above the
+			// command it applies to. Reading the lines separately loses it.
+			if n := len(rule.recipe); n > 0 && strings.HasSuffix(rule.recipe[n-1], "\\") {
+				rule.recipe[n-1] = strings.TrimSuffix(rule.recipe[n-1], "\\") +
+					" " + strings.TrimSpace(line)
+			} else {
+				rule.recipe = append(rule.recipe, strings.TrimRight(line, " "))
+			}
+			rules[current] = rule
+		case strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "#"):
+		default:
+			current = ""
+		}
+	}
+	return rules
+}
+
+var makeRuleHead = regexp.MustCompile(`^([a-z][a-z0-9-]*):([^=]*)$`)
+
+// reachableFrom walks the prerequisite graph, which is what `make check`
+// actually runs.
+func reachableFrom(rules map[string]makeRule, root string) map[string]bool {
+	seen := map[string]bool{}
+	var walk func(string)
+	walk = func(name string) {
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		for _, prereq := range rules[name].prereqs {
+			if _, ok := rules[prereq]; ok {
+				walk(prereq)
+			}
+		}
+	}
+	walk(root)
+	return seen
 }
