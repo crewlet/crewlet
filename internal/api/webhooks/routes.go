@@ -4,7 +4,7 @@ import (
 	"net/http"
 )
 
-// The seven endpoints. Each one is the same five steps in the same order —
+// The six endpoints. Each one is the same five steps in the same order —
 // read, answer readiness, AUTHENTICATE, parse, accept — and each differs only
 // in the credential it checks and how it names the event. They are written out
 // rather than driven from a table because what varies between them is the part

@@ -110,7 +110,7 @@ GITLAB_ADMIN_TOKEN="$GITLAB_ADMIN_TOKEN" crewlet gitlab provision company.yaml \
 |------|-------------|
 | `company.yaml` (positional) | Path to the Tier B company YAML |
 | `-admin-token` | Operator credential (see the permission matrix below). Empty reads `$GITLAB_ADMIN_TOKEN` |
-| `-public-url URL` | The engine's **public base address**, e.g. `https://engine.example.com` — *not* a webhook path. The engine owns its seven webhook routes and derives `/webhooks/gitlab` itself, so there is no path to mistype. **Omit to skip webhook registration** |
+| `-public-url URL` | The engine's **public base address**, e.g. `https://engine.example.com` — *not* a webhook path. The engine owns its six webhook routes and derives `/webhooks/gitlab` itself, so there is no path to mistype. **Omit to skip webhook registration** |
 | `-secret-store` | Write minted credentials into the encrypted [secret store](../concepts/secret-store.md) instead of an env file — the engine reads them back directly, so there is nothing to source, and against a running node every peer reads them too. Needs a Tier A keyring (`-config`) |
 | `-env-file PATH` | Env file to append/update minted tokens into. Ignored with `-secret-store` |
 | `-print` | Print `export VAR=token` lines to stdout and persist nothing |

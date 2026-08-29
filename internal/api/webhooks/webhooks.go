@@ -477,7 +477,7 @@ func headerOr(req *http.Request, name, fallback string) string {
 	return fallback
 }
 
-// statusOK is the answer six of the seven routes give.
+// statusOK is the answer five of the six routes give.
 var statusOK = map[string]string{"status": "ok"}
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

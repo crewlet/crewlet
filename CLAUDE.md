@@ -136,7 +136,7 @@ decisions/            # The design record. Why the engine is shaped the way
                       #   it is, and what the obvious alternative cost. Cited
                       #   from the code it governs. See decisions/README.md
 skills/               # FOUNDER-facing authoring skills for an AI assistant
-scripts/              # The three vendor dev-loop bootstraps (bash)
+scripts/              # The two vendor dev-loop bootstraps (bash)
 ```
 
 ### The packages, and the one thing each is for

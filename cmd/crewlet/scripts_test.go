@@ -23,7 +23,7 @@ import (
 // That is not hypothetical: both bootstrap loops shipped
 // `--webhook-url <full endpoint>`, which this CLI answers with "flag
 // provided but not defined". It takes `-public-url <base>` and derives the
-// path itself, because the engine owns its seven webhook routes and an
+// path itself, because the engine owns its six webhook routes and an
 // operator typing one can get it wrong.
 
 // scriptInvocation finds `crewlet <vendor> <sub>` and everything up to the
