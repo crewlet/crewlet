@@ -228,7 +228,18 @@ func parityCases() []parityCase {
 		// Valid documents. Every one of these must survive BOTH layers, or
 		// the schema is stricter than the engine.
 		{name: "minimal company", tier: TierCompany, yaml: "name: Acme\n"},
-		{name: "empty bootstrap", tier: TierBootstrap, yaml: "logging:\n  level: info\n"},
+		// Genuinely empty: every Tier A field has a default, so a
+		// document that sets nothing must survive both layers. It used to
+		// carry one throwaway key, which meant the case proved that key
+		// parsed rather than that the defaults stand on their own.
+		//
+		// `{}` rather than a zero-byte document because that decodes to
+		// YAML null, which the schema refuses at the root ("got null,
+		// want object") while the loader accepts it. That gap is real but
+		// it is not this case's subject, and an empty MAPPING is what an
+		// operator's "empty" crewlet.yaml actually looks like.
+		{name: "empty bootstrap", tier: TierBootstrap, yaml: "{}\n"},
+		{name: "bootstrap logging block", tier: TierBootstrap, yaml: "logging:\n  level: warn\n  format: json\n"},
 		{
 			name: "a full company",
 			tier: TierCompany,
