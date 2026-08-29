@@ -47,9 +47,17 @@ Usage:
   crewlet config diff ID [-against ID|active]
                                    Compare two revisions
   crewlet config activate ID       Re-point the fleet at a revision
+  crewlet config seal              Encrypt a plaintext active revision under the keyring
+  crewlet config rekey [-dry-run]  Re-seal the active revision under the active key
 
 Flags:
   -config PATH   Tier A config naming the store and its keyring (default %q)
+  -dry-run       Report what a rekey would do without writing
+
+A keyring rotation needs BOTH halves: "crewlet config rekey" moves the company
+document and "crewlet secrets rekey" moves the secret store. Run both before
+dropping a retired key from secrets.keys, or whatever is still sealed under it
+becomes unreadable.
 `
 
 func runConfig(args []string, stdout, stderr io.Writer) error {
@@ -71,6 +79,8 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	against := fs.String("against", "active", "what to compare with (diff)")
 	limit := fs.Int("limit", 20, "how many revisions to list")
 	redact := fs.Bool("redact", false, "mask secret-shaped values (export)")
+	dryRun := fs.Bool("dry-run", false,
+		"report what would be re-sealed without writing (rekey only)")
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -102,6 +112,10 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 		return diffRevisions(ctx, cs, subject, *against, stdout)
 	case "activate":
 		return activateRevision(ctx, cs, subject, stdout)
+	case "seal":
+		return sealConfig(ctx, cs, *bootstrapPath, stdout)
+	case "rekey":
+		return rekeyConfig(ctx, cs, *bootstrapPath, *dryRun, stdout)
 	default:
 		fmt.Fprintf(stderr, configUsage, defaultBootstrapPath)
 		return fmt.Errorf("unknown config command %q", sub)
@@ -115,6 +129,12 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 type configStore struct {
 	configs *store.Configs
 	cipher  secrets.Cipher
+
+	// activeKeyID is the key a fresh seal uses, carried from the same Tier
+	// A document the cipher was built from. Held rather than re-read: the
+	// two disagreeing is how a rekey comes to report moving a revision
+	// onto a key it did not use.
+	activeKeyID string
 }
 
 func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, func(), error) {
@@ -148,7 +168,10 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 				"which this offline path cannot do; or stop `crewlet run` on "+
 				"this node and re-run.")
 	}
-	return &configStore{configs: db.Configs(), cipher: cipher}, func() { _ = db.Close() }, nil
+	return &configStore{
+		configs: db.Configs(), cipher: cipher,
+		activeKeyID: boot.Secrets.ActiveKeyID,
+	}, func() { _ = db.Close() }, nil
 }
 
 // importConfig writes a company document as a new active revision.

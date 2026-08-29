@@ -22,7 +22,7 @@ subcommand below is served by it.
 | `crewlet config diff <UUID> [-against <UUID\|active>]` | Structural diff of two revisions — paths and values, always redacted on both sides |
 | `crewlet config activate <UUID>` | Re-point the fleet at a revision; re-activating the current one mints a new epoch, which is how a rotated secret takes effect |
 | `crewlet config seal` | Encrypt the active revision as one document under the Tier A keyring (one-time migration off plaintext-at-rest) — see [Secrets](../concepts/configuration.md#secrets) |
-| `crewlet config rekey [--dry-run]` | Re-encrypt the active revision's config document under the active key (master-key rotation) |
+| `crewlet config rekey [-dry-run]` | Re-encrypt the active revision's config document under the active key (master-key rotation) |
 | `crewlet secrets keygen [-key-id ID]` | Generate a fresh encryption-keyring key + the `crewlet.yaml` snippet to install it |
 | `crewlet secrets set <NAME>` | Store an encrypted secret in the [secret store](../concepts/secret-store.md); the engine resolves `${NAME}` from it ahead of the environment |
 | `crewlet secrets list` | List stored secret names + metadata (never values) |
@@ -202,18 +202,26 @@ Re-points the fleet at a revision. Every node applies it on its next reconcile.
 ### `crewlet config seal`
 
 ```
-crewlet config seal [--bootstrap PATH] [--dsn DSN] [--summary TEXT]
+crewlet config seal [-config PATH]
 ```
 
-Encrypts the active revision under the Tier A keyring and writes a new active revision holding the whole config as one opaque `{"__encrypted__": "enc:v1:…"}` document — the one-time migration off plaintext-at-rest. Reads the active revision and encrypts the entire payload (AES-256-GCM); `${VAR}` references inside are kept verbatim and resolve at construction time. A no-op when the active revision is already a document under the active key. Requires a keyring in `crewlet.yaml` (`crewlet secrets keygen`).
+Encrypts the active revision under the Tier A keyring and writes a new active revision holding the whole config as one opaque `{"__encrypted__": "enc:v1:…"}` document — the one-time migration off plaintext-at-rest. `${VAR}` references inside are kept verbatim and resolve at construction time. A no-op when the active revision is already sealed. Requires a keyring in `crewlet.yaml` (`crewlet secrets keygen`), and says so if there is none.
+
+Like `import`, this writes the revision to **this node's** store; the note it prints says what publishes it to a running fleet.
 
 ### `crewlet config rekey`
 
 ```
-crewlet config rekey [--bootstrap PATH] [--dsn DSN] [--summary TEXT] [--dry-run]
+crewlet config rekey [-dry-run] [-config PATH]
 ```
 
-Rotates the master key: re-encrypts the active revision's config document under the current `secrets.active_key_id`, writing a new revision. The document is decrypted with whatever key sealed it (that key **must still be in** `secrets.keys`) and re-encrypted under the active key. Workflow: `crewlet secrets keygen --key-id <new>` → add the new key to `secrets.keys` and set `active_key_id: <new>` while keeping the old key → `crewlet config rekey` → once it succeeds, drop the old key from `crewlet.yaml`. `--dry-run` reports whether it would re-encrypt without writing. Idempotent (a document already under the active key is skipped); a no-op when nothing needs rotating. Fails clearly if the document is sealed under a key no longer in the keyring.
+Rotates the master key: re-encrypts the active revision's config document under the current `secrets.active_key_id`, writing a new revision. The document is decrypted with whatever key sealed it (that key **must still be in** `secrets.keys`) and re-encrypted under the active key.
+
+**Run this and [`crewlet secrets rekey`](#crewlet-secrets-rekey) together.** They are the two halves of one rotation — the company document and the secret store are sealed with the same keyring — and doing only one, then dropping the retired key, makes whatever the other still holds unreadable.
+
+Workflow: `crewlet secrets keygen -key-id <new>` → add the new key to `secrets.keys` and set `active_key_id: <new>` while keeping the old key → `crewlet config rekey` **and** `crewlet secrets rekey` → once both succeed, drop the old key from `crewlet.yaml`.
+
+`-dry-run` reports what would move by reading the key id off the envelope, decrypting nothing. Idempotent: a document already under the active key is skipped and says so. A **plaintext** revision is refused rather than silently sealed — "rotate the key this is under" and "start encrypting this at all" are different decisions, and the refusal points at `config seal`. Fails clearly, naming the key, if the document is sealed under one no longer in the keyring.
 
 ---
 

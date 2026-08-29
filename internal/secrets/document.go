@@ -43,6 +43,29 @@ func Sealed(payload []byte) bool {
 	return json.Unmarshal(raw, &token) == nil && IsEnvelope(token)
 }
 
+// EnvelopeKeyIDOf reports which keyring key sealed a stored payload.
+//
+// FALSE FOR A PLAINTEXT DOCUMENT, which is the same question asked of a
+// payload rather than of a bare envelope string: a rotation sweep has to tell
+// "sealed under a stale key" from "not sealed at all", and the two need
+// opposite commands (`config rekey` and `config seal`). Reading the id
+// without decrypting is what makes a dry run safe to print.
+func EnvelopeKeyIDOf(payload []byte) (string, bool) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return "", false
+	}
+	raw, present := envelope[EnvelopeKey]
+	if len(envelope) != 1 || !present {
+		return "", false
+	}
+	var token string
+	if err := json.Unmarshal(raw, &token); err != nil {
+		return "", false
+	}
+	return EnvelopeKeyID(token)
+}
+
 // Seal wraps a document as a sealed envelope.
 //
 // A nil cipher stores the document as it is. That is the documented opt-out —
