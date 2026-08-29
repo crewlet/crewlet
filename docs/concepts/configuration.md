@@ -110,13 +110,15 @@ Everything that defines the company — see [examples/nimbus.company.yaml](https
 
 The engine boots in this order:
 
-1. Read `crewlet.yaml` (Tier A only — DSN, queue URL, api host/port/auth, debug)
-2. `configure_logging(level)`
+1. Read `crewlet.yaml` (Tier A only — the store path, the stream, coordination, api host/port/auth, secrets, debug)
+2. `logging.Configure(level, format, stderr)` — once, in `cmd/crewlet`, which is
+   the only thing that sets the destination; a later command changes how loud it
+   is with `SetVerbosity` and keeps the sink already installed
 3. Open the store file and start or dial the stream
 4. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
 5. Start the API process (or embedded API) bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
 6. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
-7. `SELECT payload FROM company_config WHERE is_active = TRUE`
+7. `SELECT payload FROM company_config WHERE is_active <> 0`
    - **Row present**: apply the payload, which spawns the full company
    - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`
 
@@ -148,7 +150,7 @@ curl -X PUT https://crewlet.example.com/config \
 
 ## Unconfigured State
 
-Until the first `is_active=TRUE` row exists, the engine holds an empty `Organization` (no name, no roles, no units), an empty provider map, no running MCP processes, no integration clients, and no notification transports.
+Until the first active row exists, the engine holds an empty `Organization` (no name, no roles, no units), an empty provider map, no running MCP processes, no integration clients, and no notification transports.
 
 **What stays running:**
 
@@ -226,21 +228,28 @@ A merged node (one that runs both `ingress` and `seats`) drives that refresh fro
 
 ```sql
 CREATE TABLE company_config (
-    revision_id        UUID         PRIMARY KEY,
-    parent_revision_id UUID         REFERENCES company_config(revision_id),
-    created_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    created_by         TEXT         NOT NULL,  -- token id, e.g. "founder"
-    source             TEXT         NOT NULL,  -- "api" | "cli" | "api.revert" | "api.entity"
-    summary            TEXT         NOT NULL,  -- short human-readable change note
-    payload            JSONB        NOT NULL,  -- full CompanyConfig snapshot
-    is_active          BOOLEAN      NOT NULL DEFAULT FALSE,
-    activated_at       TIMESTAMPTZ
+    revision_id        TEXT    NOT NULL PRIMARY KEY,
+    parent_revision_id TEXT    REFERENCES company_config(revision_id),
+    created_at         INTEGER NOT NULL,          -- unix seconds, UTC
+    created_by         TEXT    NOT NULL,          -- token id, e.g. "founder"
+    source             TEXT    NOT NULL,          -- "api" | "cli" | "api.revert" | "api.entity"
+    summary            TEXT    NOT NULL,          -- short human-readable change note
+    payload            TEXT    NOT NULL,          -- the whole document as JSON, or the
+                                                  -- sealed envelope when a keyring is set
+    is_active          INTEGER NOT NULL DEFAULT 0,
+    activated_at       INTEGER
 );
 
--- Exactly at most one active revision at any time:
-CREATE UNIQUE INDEX company_config_one_active
-    ON company_config (is_active) WHERE is_active;
+-- At most one active revision, enforced by the database rather than by the
+-- application remembering to.
+CREATE UNIQUE INDEX company_config_one_active_idx
+    ON company_config (is_active) WHERE is_active <> 0;
 ```
+
+One dialect, two certified drivers: every statement has to parse on both Turso
+and mainline SQLite, which is why the types here are the four SQLite has
+(`TEXT`, `INTEGER`, `REAL`, `BLOB`) rather than `UUID` / `TIMESTAMPTZ` /
+`JSONB`, and why a timestamp is unix seconds rather than a date type.
 
 A revert creates a *new* revision whose payload equals a prior one — the audit chain stays intact via `parent_revision_id`.
 

@@ -617,7 +617,8 @@ broadcast as a personal address is exactly what
 
 The thread key is `root_id`, which is immutable and equals the parent post's
 id — so the follow model maps 1:1 onto the one Slack uses. State is persisted
-in PostgreSQL (`chat_thread_follows`, rows keyed `backend = 'mattermost'`) and
+in the node's own store (`chat_thread_follows`, rows keyed
+`backend = 'mattermost'`) and
 survives engine restarts — including the 90-day inactivity sweep described in
 [the Slack analog](slack.md#thread-routing), which is backend-neutral because
 the table is.
@@ -820,8 +821,10 @@ with `agent-`, a prefix would produce `@agent-agent-pm`.
 Then, from the repo root:
 
 ```bash
-# 1. Postgres + Pulsar, then Mattermost
-docker compose up -d --wait
+# 1. Mattermost and its own database (every service is profile-gated,
+#    so a bare `docker compose up` starts nothing). The engine needs no
+#    companion service of its own: the store is a file and the stream is
+#    embedded.
 docker compose --profile mattermost up -d --wait
 
 # 2. Admin account, PAT, team, channels -> .env
