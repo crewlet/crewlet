@@ -2,7 +2,7 @@
 
 **Status:** decided
 Related: `406` (the store is authoritative; the file is a seed),
-`docs/concepts/secret-store.md`.
+`203` (there is no leader on the config path), `docs/concepts/secret-store.md`.
 
 ## The surface is guarded in full, reads included
 
@@ -74,6 +74,31 @@ calling a `config_entities` query nothing answered — every list came back
 `unknown_query` and the editor was dead from the first day. Both sides' tests
 passed. What links them now is a sweep that reads the rooms' own source for
 `query("…")` calls and fails on any name this build does not register.
+
+## Everything else is one PATCH, not one route per section
+
+The four collections earn routes because their members have identities. Every
+other section — the turn engine, learning, budgets, the notification knobs, the
+integration blocks, mission and vision — is a singleton object, and Python
+answered that with a route apiece: `identity`, `embeddings`, `turn-engine`,
+`learning`, `budgets`, `integrations/{kind}`. None were ported, and the
+decision here is that none will be.
+
+`PATCH /config` is the general narrower form. It is an RFC 7386 merge patch
+whose shape IS the shape of the document, so one route covers every section and
+a section added to the config needs nothing added here — where a list of
+per-section routes is a list that falls behind the models, silently, because
+nothing fails when a new section has no route.
+
+**The replace semantics are not what is lost with them.** A merge patch nulls
+individual keys and sets others in the same object, so "replace this section,
+dropping these keys" is one request, and `{"learning": null}` resets a whole
+section — an absent section gets the same defaults as an authored one, on both
+readers, which is what makes deleting it a real operation rather than a way to
+zero the company. What a merge patch genuinely cannot express is a *blind*
+replace: "make section X exactly this, without my having to know what is in
+it". That is the lost-update pattern the compare-and-set below exists to
+remove, scoped to one section. Not having it is the point.
 
 ## The masked document must be able to come back
 
@@ -171,12 +196,39 @@ It **opens** the target rather than copying its bytes. A revision sealed under a
 key no longer in the keyring cannot be reverted to, and finding that out now
 beats activating a document every node will fail to read.
 
-## If-Match
+## The activation is a compare-and-set, and `If-Match` is the early half
 
-Two operators editing one company through a full-document PUT is a
-last-writer-wins race that silently discards one of them. `If-Match` turns it
-into a 409 naming the revision to re-read. It is optional, because a first
-import has nothing to match and a script that owns the config outright has no
-race to lose — and an `If-Match` sent when there is no active revision is a 412
-rather than a silent success, because a client should not believe it won a race
-that was never run.
+There is no leader on this surface — any node's API may write, and the
+coordination KV is the shared truth (`d-203`). So two operators editing one
+company at the same moment is a real race, and it used to be a last-writer-wins
+race that silently discarded one of them: the pointer moved with a plain put,
+both callers got a 201, and the later write won. A lost edit with a success in
+the loser's hand and nothing anywhere to find it by.
+
+Every write here already reads the active revision, derives from it, and names
+it as the new revision's parent. That parent is now the **expectation the
+pointer flip compares against**, so a write that lost is refused with `409
+revision_advanced` naming what won — **whether or not the caller sent
+`If-Match`**, because the server knows what it read. The KV does the
+serializing; there is still no elected process, and none is needed.
+
+`If-Match` remains, optional, and still worth sending: it is checked when the
+request arrives, before a document is built, masks are resolved, validation
+runs and a revision is stored, so a caller editing a revision that has already
+moved is told so without the work. An `If-Match` sent when there is no active
+revision is a 412 rather than a silent success, because a client should not
+believe it won a race that was never run.
+
+**The loser's revision is kept.** By the time the pointer is compared it has
+already been stored — so it stays, valid and inert, named in the 409 as
+`stored_revision_id`, and the node that stored it adopts the winner at its next
+reconcile. Unwinding would mean a second write that can itself fail, on the
+path where something has already gone wrong.
+
+**An unset pointer is not a race.** The comparison is "if a pointer exists it
+must still name this"; with none there is no winner to have lost to. Refusing
+there looks defensible and breaks a state nodes reach constantly — one seeded
+from a file holds a locally-active revision before it has published anything,
+and every config write on it would 409 until it did. The boot publish is
+unconditional for the same reason: a node offering the revision it holds is
+asserting, not editing, and two nodes booting at once are both legitimate.
