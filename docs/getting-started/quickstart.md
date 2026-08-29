@@ -34,7 +34,11 @@ The compose file in a repo checkout is for the *integration* loops
 ## 1. Write the Tier A bootstrap (`crewlet.yaml`)
 
 ```yaml
-debug: true
+logging:
+  level: debug          # every subsystem's DEBUG lines, in colour when you
+                        #   are watching a terminal. Drop the block (or set
+                        #   `info`) once the company runs
+  format: console       # console (default), text, json
 
 stream:
   type: embedded          # a JetStream server inside this process: no

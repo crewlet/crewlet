@@ -56,13 +56,17 @@ subcommand below is served by it.
 > noise on a one-shot command whose stdout is meant to be piped, read or
 > diffed. That is a default, not a ceiling: export `CREWLET_LOG_LEVEL=debug`
 > (or `info` / `error`) to turn it up, which is exactly what a half-applied
-> migration or a failing deploy gate needs. It is an environment variable
-> rather than a flag on a dozen commands because it belongs to the
-> *invocation* — a CI step exports it once and everything it runs answers. A
-> value this build does not recognise resolves to `warn`: a bad log level must
-> never be why an operator cannot run a migration, and it must not quietly
-> change the default either. `crewlet run` has its own `-log-level` / `-debug`
-> flags and its own default of `info`.
+> migration or a failing deploy gate needs, and `CREWLET_LOG_FORMAT=json` to
+> change its shape for a collector. They are environment variables rather
+> than flags on a dozen commands because they belong to the *invocation* — a
+> CI step exports them once and everything it runs answers. A value this
+> build does not recognise resolves to the default (`warn`, `console`): a bad
+> log level must never be why an operator cannot run a migration, and it must
+> not quietly change the default either. `crewlet run` has its own
+> `-log-level` / `-log-format` / `-debug` flags, its own default of `info`,
+> and reads the `logging:` block from its Tier A file. Colour is
+> `CREWLET_LOG_COLOR` / `NO_COLOR` everywhere — see
+> [Environment Variables](environment-variables.md#logging).
 ## `crewlet run`
 
 ```
@@ -91,12 +95,14 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 |------|-------------|
 | `-config PATH` | Tier A: this node's broker, store and API (default `./crewlet.yaml`) |
 | `-company PATH` | Tier B **seed**: imported into the store when the store does not already hold it. A running node serves the store, not this file. |
-| `-log-level LEVEL` | `debug`, `info` (default), `warn` or `error`. A typo resolves to `info` — a bad log level must never be why a company will not boot. |
-| `-log-format FORMAT` | `text` (default) or `json` |
-| `-debug` | Shorthand for `-log-level debug`; wins if both are given |
+| `-log-level LEVEL` | `debug`, `info` (default), `warn` or `error`. Overrides `logging.level` in Tier A, and only when actually given. A typo resolves to `info` — a bad log level must never be why a company will not boot. |
+| `-log-format FORMAT` | `console` (default), `text` or `json`. Overrides `logging.format` in Tier A, and only when actually given. `console` is columns and colour for a person; `text` is slog's `key=value`; `json` is one object per line for a shipper. A typo resolves to `console`. |
+| `-debug` | Shorthand for `-log-level debug`; wins if both are given. It only ever *raises* — to quieten a file that sets `logging.level: debug`, pass `-log-level info`. |
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint, so every integration goes deaf. That is why leaving the flag off is not the same as passing `0`. |
 | `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. See [Running a Fleet](../guides/fleet.md). |
+
+The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival.
 
 The three overrides are the fields whose right value depends on *where the process is running* rather than on what the company is. Everything else in Tier A belongs in the file, where it can be reviewed.
 

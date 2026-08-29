@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -48,8 +50,67 @@ type Bootstrap struct {
 	// the root of trust and lives ONLY here — never in the store it opens.
 	Secrets Secrets `yaml:"secrets,omitempty" json:"secrets"`
 
-	// Debug turns on verbose logging.
-	Debug bool `yaml:"debug,omitempty" json:"debug"`
+	// Logging is how loud this node is, and in what shape.
+	Logging Logging `yaml:"logging,omitempty" json:"logging"`
+}
+
+// Logging is Tier A's logging surface: the level this node emits at and the
+// shape it writes.
+//
+// # Why the colour is NOT here
+//
+// It is $CREWLET_LOG_COLOR and $NO_COLOR instead, because colour is a
+// property of the TERMINAL SOMEONE IS LOOKING AT rather than of the
+// deployment. The same file is applied to a container with no terminal and
+// run on a laptop with one, and a field that had to be edited between those
+// two would be describing the reader rather than the node — the same reason
+// `-roles`, `-api-host` and $CREWLET_LOG_LEVEL are not file fields either.
+// The console format works this out from its sink; see internal/logging.
+type Logging struct {
+	// Level is how loud this node is. Empty is info.
+	//
+	// A VALUE THIS BUILD DOES NOT KNOW IS REFUSED, unlike the `-log-level`
+	// flag which resolves a typo to info. The two differ on purpose: a
+	// flag is typed once by a person who is watching the process start,
+	// and a file is written once and deployed for months. `debug: true`
+	// that did nothing is exactly how this subsystem was found broken.
+	Level logging.Level `yaml:"level,omitempty" json:"level,omitempty" js:"enum=debug|info|warn|error" desc:"debug, info (default), warn or error."`
+
+	// Format is the shape of a line. Empty is console.
+	Format logging.Format `yaml:"format,omitempty" json:"format,omitempty" js:"enum=console|text|json" desc:"console (default, columns and colour for a person), text (slog key=value) or json (for a log shipper)."`
+}
+
+func (l *Logging) validate(path string) error {
+	var p problems
+	if l.Level != "" && !l.Level.Valid() {
+		p.add(at(path, "level"), ErrUnknownValue, "%q (want %s)",
+			l.Level, names(logging.Levels))
+	}
+	if l.Format != "" && !l.Format.Valid() {
+		p.add(at(path, "format"), ErrUnknownValue, "%q (want %s)",
+			l.Format, names(logging.Formats))
+	}
+	return p.err()
+}
+
+// LogSettings is what this file asks the process to log at, and in what
+// shape, with every default applied.
+//
+// ONE WAY TO SAY IT. There was a `debug: true` boolean beside this block —
+// retired rather than wired up, because two keys setting one value is a
+// state where they disagree and something has to arbitrate. `logging.level`
+// says everything it said and three things it could not. The CLI's flags are
+// layered on top of this by `crewlet run`, and only when actually given.
+func (b *Bootstrap) LogSettings() (slog.Level, logging.Format) {
+	level := slog.LevelInfo
+	if b.Logging.Level != "" {
+		level = b.Logging.Level.Slog()
+	}
+	format := logging.FormatConsole
+	if b.Logging.Format != "" {
+		format = b.Logging.Format
+	}
+	return level, format
 }
 
 // DefaultBootstrap is a Tier A config with every default applied: one node
@@ -80,6 +141,7 @@ func (b *Bootstrap) Validate() error {
 	p.wrap(b.Coordination.validate("coordination"))
 	p.wrap(b.API.validate("api"))
 	p.wrap(b.Secrets.validate("secrets"))
+	p.wrap(b.Logging.validate("logging"))
 	p.wrap(b.validateTopology())
 	return p.err()
 }

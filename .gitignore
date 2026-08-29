@@ -40,6 +40,14 @@ pulsar-keys/
 # with real contact IDs) — see docs/integrations/gitlab.md.
 *.local.company.yaml
 
+# Git worktrees an AI coding assistant creates to isolate parallel work
+# (Claude Code's `isolation: worktree`). Each is a full nested checkout with
+# its own .git pointer — transient scaffolding for one task, and committing
+# one would put a checkout inside the repository it was taken from. The rest
+# of .claude/ is deliberately NOT ignored: settings.json and any skills there
+# are project configuration and belong in the tree.
+.claude/worktrees/
+
 .idea/
 .vscode/
 .DS_Store

@@ -51,8 +51,8 @@ func TestUnknownFieldIsRejected(t *testing.T) {
 func TestBootstrapRejectsUnknownAndTierBKeys(t *testing.T) {
 	t.Parallel()
 	for _, doc := range []string{
-		"debug: true\nstore:\n  paht: x.db\n",
-		"name: Acme\ndebug: true\n",
+		"logging:\n  level: debug\nstore:\n  paht: x.db\n",
+		"name: Acme\nlogging:\n  level: debug\n",
 		"roles:\n  - name: CEO\n",
 	} {
 		_, err := ParseBootstrap([]byte(doc), EnvOnly())

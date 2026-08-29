@@ -164,7 +164,15 @@ func TestParseLevelAndFormat(t *testing.T) {
 	}
 	for name, want := range map[string]logging.Format{
 		"text": logging.FormatText, "TEXT": logging.FormatText,
-		"json": logging.FormatJSON, "nonesuch": logging.FormatJSON,
+		"json": logging.FormatJSON, "JSON": logging.FormatJSON,
+		"console": logging.FormatConsole, " Console ": logging.FormatConsole,
+		// A TYPO IS THE DEFAULT, exactly as it is for the level above.
+		// It used to be JSON, which meant `-log-format tekst` silently
+		// handed an operator a format they had not asked for and could
+		// not read — a fallback that is only "safe" in one direction. A
+		// config file's logging.format is a closed set and is REFUSED
+		// on a typo; this is the flag path, where nothing may fail.
+		"nonesuch": logging.FormatConsole, "": logging.FormatConsole,
 	} {
 		if got := logging.ParseFormat(name); got != want {
 			t.Errorf("ParseFormat(%q) = %v, want %v", name, got, want)

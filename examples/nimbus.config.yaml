@@ -31,13 +31,16 @@
 #   - api         : host / port / bearer-auth tokens
 #   - secrets     : optional encryption keyring — encrypts the whole
 #                   Tier B company config at rest (see below)
-#   - debug       : verbose logging
+#   - logging     : how loud this node is (level) and in what shape (format)
 #
 # Everything else (roles, LLMs, MCP servers, integrations, policies,
 # budgets) lives in the Tier B company YAML — versioned in the store and
 # live-editable via the ``/config/*`` REST API.
 
-debug: false
+logging:
+  level: info       # debug, info (default), warn, error
+  format: console   # console (default: columns, and colour on a terminal),
+                    #   text (slog key=value), json (for a log shipper)
 
 # ── The durable event log ─────────────────────────────────────────────
 #

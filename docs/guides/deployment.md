@@ -248,7 +248,7 @@ They are one command, and they build the **same** application: every node learns
 
 Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies).
 
-Both communicate through Pulsar. Both accept `--debug` for verbose logging.
+Both communicate through Pulsar. Both accept `-debug` for verbose logging.
 
 ### Replica count
 
@@ -500,30 +500,82 @@ ORDER BY event_time ASC;
 
 The dashboard API also provides `GET /events/trace/{trace_id}` which returns all events in a trace ordered by timestamp.
 
-### Debug Mode
+### Logging
 
-Set `debug: true` in the Tier A bootstrap file to raise the log level to
-DEBUG, or pass it on the command line:
+How loud a node is, and in what shape, is Tier A:
 
 ```yaml
-# config.yaml (Tier A)
-debug: true
+# crewlet.yaml (Tier A)
+logging:
+  level: info       # debug, info (default), warn, error
+  format: console   # console (default), text, json
 ```
 
+That block is the only way the file says it. A `debug: true` boolean used to
+sit beside it; it was retired rather than wired up, because two keys setting
+one value is a state where they can disagree and something has to arbitrate.
+A file that still carries it is refused with the line that replaces it, not
+with a spelling check.
+
+The same settings, on the command line, for one run:
+
 ```bash
-crewlet run -debug                       # the same thing
-crewlet run -log-level debug             # what -debug is shorthand for
+crewlet run -debug                             # shorthand for -log-level debug
+crewlet run -log-level debug                   # what -debug is shorthand for
 crewlet run -log-level info -log-format json   # for a log shipper
 ```
 
-Every line is structured and carries a `component` attribute naming the
-subsystem that emitted it (`agent.turn`, `mcp.client`, `seat.host`), so a
-debug run stays filterable rather than becoming a wall.
+**A flag overrides the file only when it is actually given.** A flag carries
+its default whether or not anyone typed it, so `crewlet run` distinguishes
+"the operator asked for `info`" from "nobody said anything" — otherwise
+`logging.level: warn` in a file would be dead on arrival behind the flag's own
+default. `-debug` only ever *raises*: to quieten a node whose file says
+`logging.level: debug`, pass `-log-level info`.
+
+**The first lines of a run come out in the flag's shape, not the file's.**
+The `${VAR}` warnings a Tier A document produces are emitted while it is being
+read, so a node configured `format: json` writes those few lines as `console`
+before switching. That is the best a process can do about a file it has not
+opened yet, and it is the right way round: `-debug` is turned on most often to
+watch the config load itself fail, so the flags have to take effect first.
+
+A value the build does not recognise is treated differently in the two
+places, on purpose. In a **flag** it resolves to the default — a bad log level
+must never be why a company will not boot. In the **file** it is refused, with
+the field path, by `crewlet validate` and at boot: a flag is typed by someone
+watching the process start, and a file is written once and deployed for
+months, so a misspelled level there would run quietly at `info` for as long as
+nobody looked. Either way the fallback is never *silent*: an unrecognised
+`-log-level` / `-log-format`, or `$CREWLET_LOG_LEVEL` / `$CREWLET_LOG_FORMAT`,
+logs a `log_level_unrecognised` / `log_format_unrecognised` warning naming what
+was written, what the build used instead, and what it accepts.
+
+#### The three formats
+
+| Format | For | Shape |
+|---|---|---|
+| `console` (default) | A person watching a terminal | Fixed columns — time, level, component, event — with attributes dimmed, and ANSI colour when the stream is a live terminal |
+| `text` | Grepping without a parser | slog's `key=value`: `time=… level=INFO msg=seat_claimed component=seat.host seat=eng.alice` |
+| `json` | A log shipper | One JSON object per line |
+
+`console` adapts to its sink. Colour appears only on a live terminal, so a
+redirected stream carries no escape codes it cannot render — and because a
+redirected stream is read *later*, its lines carry the full date where a
+terminal's carry the wall-clock time alone. `CREWLET_LOG_COLOR=always|never`
+overrides the detection (for a CI viewer that renders ANSI without being a
+terminal), and `NO_COLOR` suppresses it the way it does for every other tool.
+
+Every line is structured whichever format is installed, and carries a
+`component` attribute naming the subsystem that emitted it (`agent.turn`,
+`mcp.client`, `seat.host`) — the field `console` promotes into its own column
+— so a debug run stays filterable rather than becoming a wall.
 
 The operator commands are quiet by default: they open a store, which logs a
 line per migration, and that is noise on a one-shot command whose output is
-meant to be piped or diffed. Only `crewlet run` takes its level from these
-flags; nothing silences a warning.
+meant to be piped or diffed. They take no logging flags — only `crewlet run`
+does — so `CREWLET_LOG_LEVEL` and `CREWLET_LOG_FORMAT` are their levers. See
+[Environment Variables](../reference/environment-variables.md#logging).
+Nothing silences a warning.
 
 ### Per-Agent Token Tracking
 

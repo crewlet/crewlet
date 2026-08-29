@@ -8,7 +8,7 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 
 | Tier | Storage | Owner | Update model | Contents |
 |------|---------|-------|--------------|----------|
-| **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, debug |
+| **A** | `crewlet.yaml` on disk | Ops / SRE | Restart-only | The store file, the stream and coordination slots, this node's identity and roles, API host/port and auth, the secret keyring, logging |
 | **B** | The store (`company_config`, versioned) | Founder | Live, API-editable, validated, versioned | Everything else: name, mission, vision, policies, providers (LLM + embeddings), turn engine, learning, MCP servers, notification transports, integrations (Jira / Confluence / Slack / GitHub / GitLab / Forge), org roles & units, token budgets |
 
 **Tier A** controls *how the engine boots*. **Tier B** is *what the company is*.
@@ -16,7 +16,9 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 ### Tier A example (`crewlet.yaml`)
 
 ```yaml
-debug: false
+logging:
+  level: info           # debug, info (default), warn, error
+  format: console       # console (default), text, json
 
 node:
   id: "node-0"          # optional; see below
@@ -110,10 +112,15 @@ Everything that defines the company — see [examples/nimbus.company.yaml](https
 
 The engine boots in this order:
 
-1. Read `crewlet.yaml` (Tier A only — the store path, the stream, coordination, api host/port/auth, secrets, debug)
+1. Read `crewlet.yaml` (Tier A only — the store path, the stream, coordination, api host/port/auth, secrets, logging)
 2. `logging.Configure(level, format, stderr)` — once, in `cmd/crewlet`, which is
    the only thing that sets the destination; a later command changes how loud it
-   is with `SetVerbosity` and keeps the sink already installed
+   is with `SetVerbosity` and keeps the sink already installed. The level and
+   format come from the file's `logging:` block with any `-log-level` /
+   `-log-format` / `-debug` flag layered on top, and only where the flag was
+   actually given. Lines emitted *before* this — the file's own `${VAR}`
+   warnings, a refused field — come out under the flags alone, which is the
+   best a process can do about a file it has not opened yet
 3. Open the store file and start or dial the stream
 4. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
 5. Start the API process (or embedded API) bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes

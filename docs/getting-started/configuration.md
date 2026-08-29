@@ -2,7 +2,7 @@
 
 Crewlet companies are defined across **two tiers** — see the [Configuration concept page](../concepts/configuration.md) for the full design.
 
-- **Tier A** (`crewlet.yaml`, restart-only): DB DSN, Pulsar URL, API host/port/auth, debug, knowledge backend.
+- **Tier A** (`crewlet.yaml`, restart-only): DB DSN, Pulsar URL, API host/port/auth, logging, knowledge backend.
 - **Tier B** (`company.yaml` imported into the store, live-editable): everything else — identity, providers, integrations, MCP servers, roles, units, turn engine, learning, budgets, scheduling.
 
 This page documents the **Tier B** fields below.  For Tier A see [Configuration concept page §"Tier A example"](../concepts/configuration.md#tier-a-example-crewletyaml).
@@ -373,7 +373,11 @@ api:
     tokens:
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
-debug: false
+
+logging:
+  level: info       # debug, info (default), warn, error
+  format: console   # console (default: columns and colour for a person),
+                    #   text (slog key=value), json (for a log shipper)
 ```
 
 The event store (LLM observability) is a table in that same file, created by
