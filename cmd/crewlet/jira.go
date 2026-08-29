@@ -115,7 +115,7 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 			"-dry-run: reading the instance; no webhook will be registered.")
 	} else {
 		opts.WebhookBase = *publicURL
-		sink, closeSink, openErr := sinks.open(ctx, stdout)
+		sink, closeSink, openErr := sinks.open(ctx, stdout, stderr)
 		if openErr != nil {
 			return openErr
 		}

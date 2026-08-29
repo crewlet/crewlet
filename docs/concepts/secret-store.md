@@ -140,7 +140,18 @@ for that than an encrypted table the engine reads back itself.
 
 **The store is the node's own**, like the database it lives in, and a fleet is where that shows. `crewlet secrets set` writes the rows of the one node whose `crewlet.yaml` it was pointed at; nothing propagates them. On more than one node a rotated credential has to be set on **every** node — run the command once per node's Tier A file, or supply the value through the process environment, which every node's resolver falls back to. The activation epoch propagates; the value it re-resolves does not.
 
-So `crewlet secrets set` on a live engine takes effect at the next config activation or restart — the CLI says so after each write. Re-activating the *current* revision is a valid way to ask a running engine to pick up a rotated credential; the refresh happens before the no-op check precisely so that gesture works, and the activation log is append-only precisely so a re-activation still moves the pointer every node is watching (see [Control Plane](control-plane.md)).
+> ⚠️ **Stop the node's engine before running `crewlet secrets`.** The store is
+> **one file, one process** — the driver does not support a second opener, and
+> it does not reliably refuse one either, so a rotation run against a live
+> `crewlet run` on the same path can corrupt the database rather than fail.
+> The CLI warns on every subcommand and cannot check for you: nothing here
+> knows whether the engine is up. On a fleet this is per node and the nodes are
+> independent, so the rotation is a rolling one — stop a node, set the value,
+> start it, move on. Where downtime is not acceptable, supply the value through
+> the process environment instead (the resolver falls back to it) and restart
+> nodes on your own schedule.
+
+So `crewlet secrets set` takes effect at the next config activation or restart — the CLI says so after each write. Re-activating the *current* revision is a valid way to ask a running engine to pick up a rotated credential; the refresh happens before the no-op check precisely so that gesture works, and the activation log is append-only precisely so a re-activation still moves the pointer every node is watching (see [Control Plane](control-plane.md)).
 
 **What "picks up" means.** A rotated value is not useful until the things that *captured* it are rebuilt — an MCP child baked the resolved value into its spawn environment, an LLM provider holds it inside a constructed client, a transport holds it in a header. So re-activating an unchanged revision has to rebuild them, even though its payload is byte-identical.
 

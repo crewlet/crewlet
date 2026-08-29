@@ -147,7 +147,7 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "Logged %s out and removed its credentials.\n", key)
 		return nil
 	case "export":
-		return exportLLM(ctx, providers, key, *secretStore, *bootstrapPath, stdout)
+		return exportLLM(ctx, providers, key, *secretStore, *bootstrapPath, stdout, stderr)
 	case "import":
 		return importLLM(providers, key, os.Stdin, stdout)
 	default:
@@ -380,7 +380,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 					"Reference it as ${%s}.\n", tokenVar)
 			return nil
 		}
-		if err := storeLLMSecret(ctx, req.bootstrapPath, tokenVar, token); err != nil {
+		if err := storeLLMSecret(ctx, req.bootstrapPath, tokenVar, token, stderr); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout,
@@ -419,7 +419,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 	}
 }
 
-func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout io.Writer) error {
+func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout, stderr io.Writer) error {
 	p, err := oneProvider(providers, key)
 	if err != nil {
 		return err
@@ -439,21 +439,26 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 		return nil
 	}
 	name := cliagent.BundleVarName(key)
-	if err := storeLLMSecret(ctx, bootstrapPath, name, bundle); err != nil {
+	if err := storeLLMSecret(ctx, bootstrapPath, name, bundle, stderr); err != nil {
 		return err
 	}
+	// NOT "any engine sharing that database". The store is one file, one
+	// process — a second engine pointed at this path is corruption, not a
+	// warm standby — so what actually restores a bundle on another node is
+	// running this command there too.
 	fmt.Fprintf(stdout,
-		"Stored the credential bundle as %s in the encrypted secret store.\n"+
-			"Any engine sharing that database restores it at boot when its own\n"+
-			"credentials directory is empty. Reference it as:\n\n"+
+		"Stored the credential bundle as %s in THIS NODE's encrypted secret\n"+
+			"store. This engine restores it at boot when its own credentials\n"+
+			"directory is empty; on a fleet, run this once per node.\n"+
+			"Reference it as:\n\n"+
 			"  providers:\n    llm:\n      %s:\n        cli:\n          auth:\n"+
 			"            credential_bundle: \"${%s}\"\n", name, key, name)
 	return nil
 }
 
 // storeLLMSecret writes one value into the encrypted secret store.
-func storeLLMSecret(ctx context.Context, bootstrapPath, name, value string) error {
-	sv, closeStore, err := openSecretStore(ctx, bootstrapPath)
+func storeLLMSecret(ctx context.Context, bootstrapPath, name, value string, stderr io.Writer) error {
+	sv, closeStore, err := openSecretStore(ctx, bootstrapPath, stderr)
 	if err != nil {
 		return fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
 	}

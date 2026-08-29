@@ -379,3 +379,38 @@ func TestTheProvenanceOfAWriteIsRecorded(t *testing.T) {
 		t.Fatalf("listing = %q, want the operator and the source", list)
 	}
 }
+
+// THE ONE-PROCESS HAZARD IS SAID, EVERY TIME, ON EVERY SUBCOMMAND.
+//
+// The store is one file, one process: the driver does not support a second
+// opener, and it does not reliably refuse one either — so an operator
+// rotating a secret against a running engine corrupts the file with nothing
+// telling them. This command cannot check whether the engine is up, which is
+// exactly why it has to say so rather than imply safety by silence.
+func TestEverySecretsSubcommandWarnsAboutTheRunningEngine(t *testing.T) {
+	cfg := bootstrapWithKeyring(t, "k1")
+	if _, _, err := secretsCmd(t, cfg, "set", "TOKEN", "-value", "sk-not-real"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	for _, args := range [][]string{
+		{"set", "OTHER", "-value", "x"},
+		{"get", "TOKEN", "-reveal"},
+		{"list"},
+		{"unset", "TOKEN"},
+	} {
+		out, errs, err := secretsCmd(t, cfg, args...)
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if !strings.Contains(errs, "one process") {
+			t.Errorf("%v: stderr does not warn about the single-process store: %q",
+				args, errs)
+		}
+		// ON STDERR, so `secrets get -reveal | …` still pipes only the
+		// value. A warning mixed into stdout would land in whatever the
+		// operator piped the secret into.
+		if strings.Contains(out, "one process") {
+			t.Errorf("%v: the warning reached stdout, where a pipe consumes it", args)
+		}
+	}
+}

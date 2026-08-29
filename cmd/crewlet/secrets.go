@@ -96,7 +96,7 @@ func runSecrets(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	sv, closeStore, err := openSecretStore(ctx, *bootstrapPath)
+	sv, closeStore, err := openSecretStore(ctx, *bootstrapPath, stderr)
 	if err != nil {
 		return err
 	}
@@ -154,11 +154,12 @@ func isFlagSet(fs *flag.FlagSet, name string) bool {
 // process environment, which every resolver falls back to. Said in the CLI's
 // own output after each write, because the failure otherwise is a credential
 // that works on the node an operator tested and nowhere else.
-func openSecretStore(ctx context.Context, bootstrapPath string) (*store.SecretValues, func(), error) {
+func openSecretStore(ctx context.Context, bootstrapPath string, stderr io.Writer) (*store.SecretValues, func(), error) {
 	boot, err := loadBootstrapForStore(bootstrapPath)
 	if err != nil {
 		return nil, nil, err
 	}
+	warnEngineMayBeRunning(stderr, boot.Store.Path)
 	if len(boot.Secrets.Keys) == 0 {
 		return nil, nil, fmt.Errorf(
 			"%s declares no secrets.keys, so there is no keyring to open the "+
@@ -166,6 +167,28 @@ func openSecretStore(ctx context.Context, bootstrapPath string) (*store.SecretVa
 			bootstrapPath)
 	}
 	return openSecretValues(ctx, boot)
+}
+
+// warnEngineMayBeRunning says what this command cannot check for itself.
+//
+// The store is ONE FILE, ONE PROCESS (see internal/store): the driver does not
+// support multi-process access, so this command and a running `crewlet run`
+// pointed at the same path is not a degraded configuration — it is corruption
+// waiting for two schedules to collide. Nothing here can tell whether the
+// engine is up: there is no lock file to consult, and the driver does not
+// reliably refuse the second opener, which is exactly why the hazard is
+// silent and why saying so is the least this command owes an operator.
+//
+// TO STDERR, so a `crewlet secrets get -reveal … | …` pipeline still carries
+// only the value.
+func warnEngineMayBeRunning(stderr io.Writer, path string) {
+	if stderr == nil {
+		return
+	}
+	fmt.Fprintf(stderr,
+		"warning: %s is the engine's own database and the driver allows only "+
+			"one process to open it. Stop `crewlet run` on this node before "+
+			"running this, or the two writers may corrupt the file.\n", path)
 }
 
 // loadBootstrapForStore reads the Tier A document that names the store.
