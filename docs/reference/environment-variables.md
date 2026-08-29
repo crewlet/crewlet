@@ -153,14 +153,21 @@ migrations — there is no separate observability database to configure.
 
 ---
 
-## Pulsar (Optional Auth)
+## The external broker
 
-Only needed when the broker runs with token authentication (see [Deployment § Authentication](../guides/deployment.md)). Both are `${VAR}` conventions — the first in the Tier A YAML, the second in the compose `.env`.
+Every Tier A field below takes a `${VAR}`, so these are **conventions** rather than variables the engine looks up by name — the name is whatever your `crewlet.yaml` writes. They are listed because a deployment that invents its own names ends up with the same value spelled three ways.
 
-| Variable | Description | Where to get it |
-|----------|-------------|-----------------|
-| `CREWLET_PULSAR_TOKEN` | This engine's broker token (`providers.queue.auth_token`) | `bin/pulsar tokens create --subject <engine-role>` |
-| `PULSAR_ADMIN_TOKEN` | Operator/superuser token used by the compose broker config, its healthcheck, and `pulsar-admin` | `bin/pulsar tokens create --subject admin` |
+The whole block lives under `stream:`, which is where an external NATS estate and a Pulsar estate are both configured. (There is no `providers.queue` — Tier A refuses unknown keys, so a config written against that path fails to load.)
+
+| Variable | Tier A field | Where to get it |
+|----------|--------------|-----------------|
+| `CREWLET_PULSAR_URL` | `stream.url` — the broker address. Required for `type: nats` and `type: pulsar`, and **refused** for `embedded` | Your broker's service address (`pulsar://…`, `nats://…`) |
+| `CREWLET_PULSAR_TOKEN` | `stream.token` — this engine's bearer token, for a broker running with token authentication (see [Deployment § Authentication](../guides/deployment.md)) | `bin/pulsar tokens create --subject <engine-role>` |
+| `PULSAR_ADMIN_TOKEN` | None — read by the compose broker config, its healthcheck and `pulsar-admin`, never by the engine | `bin/pulsar tokens create --subject admin` |
+
+Two more `stream:` fields carry no `${VAR}` convention because they are paths and names rather than credentials: `stream.credentials` is a NATS credentials file on disk (the usual way to authenticate to an external NATS estate, instead of `stream.token`), and `stream.tenant` / `stream.namespace` scope this company's topics inside a Pulsar estate.
+
+A Pulsar stream keeps its **leases** on a NATS estate rather than on Pulsar — Pulsar has no compare-and-set — so `coordination.nats.url` / `.token` / `.credentials` are configured alongside, with the same shapes. See [Coordination](../concepts/coordination.md#backends).
 
 ---
 

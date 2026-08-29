@@ -142,7 +142,11 @@ Everything else is YAML config, in-memory state, or an external tool.
 
 ```
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
-                          #   budgets, secrets, config, and the vendor CLIs
+                          #   budgets, secrets, config, llm, and the seven
+                          #   vendor CLIs — gitlab/github/jira/slack
+                          #   `provision`, plane `provision|import|resync`,
+                          #   confluence `import|resync`, mattermost
+                          #   `provision|doctor`
 internal/
 ├── engine/               # The wiring: which concrete thing satisfies which seam
 ├── config/               # The two config tiers → typed structs → JSON Schema
@@ -162,15 +166,26 @@ internal/
 ├── events/               # The envelope and the typed-payload registry
 ├── a2a/                  # Agent-to-agent channels (one ask, one answer)
 ├── schedule/             # Role/unit cron-style recurring work
-├── task/ · learning/     # Task tracking; what a seat remembers
+├── learning/             # What a seat remembers (there is no task package:
+│                         #   task state lives in the PM tool, and the engine
+│                         #   mirrors none of it)
 ├── knowledge/            # The backend-neutral knowledge-search seam
 ├── providers/            # llm/ (+ chain, credential rotation), embeddings/
 ├── sandbox/              # Code work as a suspended Execute phase
 ├── mcp/                  # MCP client and child-process supervision
 ├── tools/                # The registry, and the per-phase tool surfaces
 ├── notify/               # The backend-neutral notification spine
-├── mattermost/ plane/ gitlab/   # The three vendors: client, parser,
-│                         #   transport, prompt, provisioning reconcile
+├── mattermost/ slack/    # The seven vendors: client, parser, transport,
+│   plane/ jira/          #   prompt, provisioning reconcile — each
+│   confluence/           #   contributing only what is genuinely its own,
+│   gitlab/ github/       #   which is why Jira has no transport
+├── configplane/          # The activation pointer's cadence and postures
+├── node/                 # The node's own identity, presence and drain
+├── provision/            # The shared provisioning grammar and its sinks
+├── maintenance/          # The retention sweep, behind one singleton duty
+├── tokens/               # Token accounting shared by the meter and the API
+├── hostbox/ procgroup/   # The local sandbox host, and process-tree teardown
+├── whsec/                # Webhook signing secrets: minting and verification
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, auth/
 ├── observe/              # The observability edge (store row + live push)

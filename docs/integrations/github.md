@@ -153,14 +153,26 @@ payload alone, need no reads, and survive a lapsed credential:
 | Event | Reaches | Reason stamped |
 |---|---|---|
 | `pull_request` `review_requested` | The requested reviewer | `pull_request.review_requested` |
+| `pull_request` `opened` | Every reviewer the pull request already requests, every assignee, and anyone the body `@`-mentions — each under its own reason, so an opener who assigned and mentioned one person wakes them once | `pull_request.review_requested` / `.assigned` / `.mention` |
 | `pull_request` / `issues` `assigned` | The named assignee | `pull_request.assigned` / `issue.assigned` |
 | `pull_request_review` `submitted`, changes requested | The pull request's author | `pull_request.changes_requested` |
 | `pull_request_review` `submitted`, approved | The author | `pull_request.approved` |
 | `pull_request` `closed` with `merged: true` | The author and assignees | `pull_request.merged` |
 | `pull_request` `closed` without it | The author and assignees | `pull_request.close` |
+| `pull_request` `reopened` | The author and assignees | `pull_request.reopened` |
+| `pull_request` `ready_for_review` | The author and assignees | `pull_request.ready_for_review` |
+| `pull_request` `converted_to_draft` | The author and assignees | `pull_request.converted_to_draft` |
 | `issues` `closed` | The assignees | `issue.close` |
 | A `@login` in any body | Whoever was named | `…mention` |
 | `workflow_run` `completed`, conclusion `failure` | **The run's own actor** | `workflow_run.failed` |
+
+The four state changes — `closed`, `reopened`, `ready_for_review`,
+`converted_to_draft` — take the **author first**. A pull request's outcome is
+news to whoever opened it before it is news to anyone else, and GitHub gives
+the login rather than an opaque id, so it needs no lookup and works with no
+credential at all. `closed` splits on `merged` because to the author those are
+opposite outcomes: one means the work landed and the other means somebody
+decided it would not.
 
 **Thread activity** — a comment, a close, a merge — concerns everyone taking
 part, which GitHub does not put in the payload. It costs one read per issue

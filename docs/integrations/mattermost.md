@@ -282,9 +282,15 @@ joined, then nothing minted), and a loopback [Site URL](#the-site-url) on a
 server reached at a real address, which would leave every browser without
 live updates. Membership is **verified**, never inferred from a status code:
 Mattermost answers an add for an existing member with success, so a 4xx
-there is a real failure, and a configured channel that does not exist fails
-its seat rather than passing as a note — a bot hears nothing from a channel
-it is not in.
+there is a real failure.
+
+A configured channel that **does not exist** is the one case that is a note
+rather than a failure. Half a fleet of bots joined and the run stopped is a
+worse state than every bot joined to the channels that do exist and a line
+naming the one that did not — especially since the usual cause is a typo an
+operator fixes in seconds. **Read the notes**: a bot hears nothing from a
+channel it is not in, so a missing channel is silent at run time and visible
+only here.
 
 "Already provisioned" is checked against the server as well as the env file.
 "Already provisioned" is **proven by using the credential**, not inferred.

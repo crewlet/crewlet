@@ -8,128 +8,21 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// eventCategory maps an event type onto the category the dashboard's filters
-// group by.
-//
-// It is also the ADMISSION LIST for the event log: a type absent here is not
-// written. That is deliberate for two types and a hazard for every other one —
-// the sandbox panel once drew rows that vanished on reload and 404'd when
-// clicked, because its events reached the live stream and never the store.
-// Every event type the engine publishes belongs here.
-//
-// The three deliberate absences:
-//
-//   - agent_turn_progress fires once per LLM round as a live-only signal;
-//     the matching agent_phase_completed is its durable record.
-//   - budget_reported is a snapshot of LIVE, in-memory meters whose values
-//     mean nothing outside the run that produced them. Persisting it would
-//     let a dashboard hydrate a dead process's counters and render them as
-//     the current ones — a number that is not merely stale but describes a
-//     different run.
-//   - raw_webhook is the API's inbound edge waking a transport. The edge has
-//     ALREADY written the delivery's row itself, carrying the provider's exact
-//     bytes under category "webhook" — so admitting the queue envelope too
-//     would store every inbound delivery twice, once as what arrived and once
-//     as what was forwarded.
-var eventCategory = map[string]string{
-	"org_started":      "lifecycle",
-	"org_stopped":      "lifecycle",
-	"agent_spawned":    "lifecycle",
-	"agent_terminated": "lifecycle",
-	"agent_reassigned": "lifecycle",
-	"role_updated":     "lifecycle",
-
-	"task_created":   "task",
-	"task_assigned":  "task",
-	"task_started":   "task",
-	"task_completed": "task",
-	"task_failed":    "task",
-	"task_delegated": "task",
-
-	"message_sent": "communication",
-
-	"a2a_channel_opened":    "a2a",
-	"a2a_message_sent":      "a2a",
-	"a2a_message_delivered": "a2a",
-	"a2a_channel_closed":    "a2a",
-
-	// DACI is behavioural guidance carried on the org's own chat surfaces,
-	// not an engine subsystem — nothing in Crewlet publishes these four.
-	// They stay mapped as the seam an extension that DOES model decisions
-	// writes through, and they are why the dashboard has a decision
-	// category to filter on.
-	"decision_requested":     "decision",
-	"decision_resolved":      "decision",
-	"contribution_requested": "decision",
-	"contribution_received":  "decision",
-
-	"document_created": "knowledge",
-	"document_updated": "knowledge",
-
-	"external_notification": "notification",
-	"notification_skipped":  "notification",
-	// N same-conversation events merged into one digest trigger. The event
-	// exists FOR the store and the dashboard — operators watch when and how
-	// hard batching kicks in.
-	"notifications_coalesced": "notification",
-	// A redelivered trigger the completion ledger short-circuited. The
-	// whole point of emitting it is that a skipped trigger should not be
-	// invisible.
-	"turn_trigger_skipped": "notification",
-
-	"budget_exhausted":             "system",
-	"llm_unavailable":              "system",
-	"agent_turn_completed":         "system",
-	"agent_phase_started":          "system",
-	"agent_phase_completed":        "system",
-	"execute.missing_tool":         "system",
-	"phase.tool_activated":         "system",
-	"prompt.size":                  "system",
-	"turn.guard_breach":            "system",
-	"provider_fallback":            "system",
-	"phase.tool_skill_blocked":     "system",
-	"skill_telemetry_write_failed": "system",
-	"subagent_batched":             "system",
-
-	// The learning subsystem, all under one category so a dashboard filter
-	// can include or exclude reflection traffic with one toggle.
-	"turn_completed":               "learning",
-	"episode_written":              "learning",
-	"persist_decider_completed":    "learning",
-	"counterparty_profile_updated": "learning",
-	"skill_synthesized":            "learning",
-	"skill_refined":                "learning",
-	"skill_promoted":               "learning",
-	"reflection_completed":         "learning",
-	"plan_prefetch_summary":        "learning",
-	"relevant_knowledge_refetched": "learning",
-	"skill_used":                   "learning",
-	"skill_staled":                 "learning",
-	"skill_archived":               "learning",
-	"skill_revived":                "learning",
-	"compaction_requested":         "learning",
-	"compaction_completed":         "learning",
-
-	// Detached sandbox runs are the execution of a task.
-	"sandbox_run_started":             "task",
-	"sandbox_clarification_requested": "task",
-	"sandbox_run_completed":           "task",
-	// A schedule firing creates work; same category as the assignment it
-	// produces.
-	"scheduled_task_fired": "task",
-
-	// Configuration changes are org lifecycle, and the class of event an
-	// operator is most likely to go looking for after the fact.
-	"config_revision_activated": "lifecycle",
-	"config_revision_applied":   "lifecycle",
-}
-
 // Category reports the dashboard category an event type is filed under, and
-// whether the type is stored at all. See eventCategory.
-func Category(eventType string) (string, bool) {
-	c, ok := eventCategory[eventType]
-	return c, ok
-}
+// whether the type is stored at all.
+//
+// THE TAXONOMY IS [events]'s, and delegating to it is the point: this was an
+// identical map here and another in internal/observe, with nothing asserting
+// they agreed — so a type placed in one and forgotten in the other would be
+// written and never shown, or shown and never written, and no test anywhere
+// could see it. internal/observe imports this package, so neither could import
+// the other; the one map lives in the package that owns the type registry.
+//
+// An absent type is NOT WRITTEN, and that is deliberate for three types and a
+// hazard for every other one: the sandbox panel once drew rows that vanished on
+// reload and 404'd when clicked, because its events reached the live stream and
+// never the store. See events.Exclusions for which three, and why.
+func Category(eventType string) (string, bool) { return events.Category(eventType) }
 
 // tagKeys are the flat JSON fields promoted out of an event into its tags.
 //
@@ -165,14 +58,14 @@ var tagKeys = map[string]string{
 }
 
 // RecordFor builds the stored form of an event, reporting false when the event
-// is not one this store keeps (see eventCategory).
+// is not one this store keeps (see [Category]).
 //
 // Pure: it touches no database, so the mapping is testable on its own.
 func RecordFor(ev *events.Event) (EventRecord, bool, error) {
 	if ev == nil {
 		return EventRecord{}, false, nil
 	}
-	category, tracked := eventCategory[ev.Type]
+	category, tracked := events.Category(ev.Type)
 	if !tracked {
 		return EventRecord{}, false, nil
 	}

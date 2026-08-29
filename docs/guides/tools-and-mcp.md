@@ -66,9 +66,13 @@ Two things MCP does not cover, and what to do instead:
   a parser, and that is an in-tree Go interface — the
   [notification spine](../concepts/event-system.md) is backend-neutral by
   design, but a vendor contributes a client, a parser and a transport as code.
-  That is a pull request, not a config entry. The three this build serves are
-  [Mattermost](../integrations/mattermost.md), [Plane](../integrations/plane.md)
-  and [GitLab](../integrations/gitlab.md).
+  That is a pull request, not a config entry. The seven this build serves are
+  [Mattermost](../integrations/mattermost.md), [Slack](../integrations/slack.md),
+  [Plane](../integrations/plane.md), [Jira](../integrations/jira.md),
+  [Confluence](../integrations/confluence.md),
+  [GitLab](../integrations/gitlab.md) and [GitHub](../integrations/github.md) —
+  every one of them routes end to end (see
+  [d-703](../reference/design-decisions.md)).
 - **Company-wide periodic work.** An MCP server is called by an agent; it does
   not get a tick of its own. Schedule it as [cron work](../concepts/scheduling.md)
   against a seat, which gives it an agent, a turn, and the engine's own
@@ -184,6 +188,15 @@ difference is a lifetime as much as a scope.
 | Who can call it | Every seat | Only the seat whose child it is |
 | Lifetime | The config **epoch** — started on apply, replaced on the next one | The seat's **lease** — spawned when this node claims the seat, killed when it releases it |
 | Use it for | A shared knowledge base, a read-only reference server | A tracker, a chat backend, a code host — anywhere the action must be attributable to *this* agent |
+
+**An `mcp_servers` edit takes effect on the next turn, not at the next
+restart.** Applying a revision reconciles the bridge server by server: an entry
+that did not change is left alone, and one that was added, removed or re-pointed
+starts, stops or restarts **only that child**. A seat mid-turn finishes on the
+tool surface it started with, and its next turn renders the new one — the same
+next-turn promise [tool skills](../concepts/tool-skills.md), embeddings and the
+org chart make. A per-role template is reconciled the same way, on the seats
+this node holds.
 
 **A per-role child belongs to a seat, not to a node.** In a fleet each node
 claims a slice of the company, and it spawns children only for the seats it

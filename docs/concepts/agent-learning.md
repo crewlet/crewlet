@@ -451,7 +451,7 @@ Every telemetry write — `mark_used`, `SkillUsed` publish, `PlanPrefetchSummary
 |---|---|
 | `internal/agent/turn` (TurnEngine) | Emits `turn_completed` carrying everything the reflection gates read: the plan summary and decision, the Plan and Execute tool sequences, the review outcome, the skills the prompt offered, and the inbound interactions with their senders resolved. |
 | `internal/agent/prompts` | Plan-phase prompt builders inject conditional guidance blocks gated on tool availability. |
-| `internal/knowledge` | The knowledge-search seam and its backend — the Plane searcher (fork page search) — backing the `## Relevant knowledge` prefetch; `accessibility` scopes it by space / project. See [Knowledge System](knowledge-system.md). |
+| `internal/knowledge` | The knowledge-search seam and its two backends — the Confluence searcher (CQL) and the Plane searcher (fork page search), one per company — backing the `## Relevant knowledge` prefetch; `accessibility` scopes it by space / project. See [Knowledge System](knowledge-system.md). |
 | `internal/tools` (registry) | Builtins: `query_episodes`, `reflect_and_persist`, `refresh_memory`, `refine_skill`, `use_skill`, `mark_onboarded`. |
 | `internal/events` | `turn_completed`, `episode_written`, `persist_decider_completed`, `counterparty_profile_updated`, `reflection_completed`, `skill_synthesized`, `skill_refined`, `skill_promoted`, `skill_used`, `skill_staled`, `skill_archived`, `skill_revived`, `skill_telemetry_write_failed`, `plan_prefetch_summary`, `relevant_knowledge_refetched`, `compaction_requested`, `compaction_completed`. |
 | `internal/store` | Holds `episodes`, `agent_diary` and the dashboard's event log, in the node's own file. |

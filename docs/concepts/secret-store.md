@@ -118,8 +118,11 @@ GITLAB_ADMIN_TOKEN="$GITLAB_ADMIN_TOKEN" crewlet gitlab provision company.yaml \
 
 Minted PATs and the generated webhook signing secret go straight into the encrypted table under the same `${VAR}` names the config already references. The three-step dance collapses to one command — no file to source, no shell to be in.
 
-`crewlet plane provision -secret-store` and
-`crewlet mattermost provision -secret-store` work identically.
+`crewlet plane provision -secret-store`, `crewlet slack provision -secret-store`
+and `crewlet mattermost provision -secret-store` work identically. Slack's own
+app-configuration token pair is the one credential that does **not** go here:
+it is the operator's, not the company's, and it lives in the
+[app ledger](../integrations/slack.md#the-app-ledger) beside the company file.
 
 Where it pays off most is a credential the vendor shows **once**. Plane
 generates a webhook's secret at creation and returns it exactly once, and every
@@ -182,7 +185,6 @@ Most `${VAR}` resolution funnels through one function, so the store covers it. A
 | Operator provisioning credentials (`GITLAB_ADMIN_TOKEN`, `PLANE_ADMIN_TOKEN`, `MATTERMOST_ADMIN_TOKEN`) | **Env only** | Human operator credentials, never persisted by Crewlet **and never read back from the store**: a GitLab admin PAT carries `api` scope over the whole group, and the store is replicated to every node holding the keyring. Reading one from it would imply it may be kept there |
 | OTLP endpoint / protocol / headers, `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | **Env only** | Deployment-environment settings that belong to the host, not the company; several are read before the store loads |
 | `CREWLET_TOOL_SKILLS_SPACE` / `_PROJECT` | **Env only** | Not secrets — flag defaults for the import/resync commands, read by nothing else |
-| `.env` loading (`load_dotenv`) | **Env only** | This is how the environment gets populated in the first place |
 | MCP stdio subprocess environment | **Env only, plus declared creds** | Servers read undeclared conventional variables (`PATH`, proxy vars, vendor SDK keys), so the host env is inherited. Store values are **not** poured in — each server gets exactly the credentials its `mcp_env` declares, already resolved. Injecting the whole store would hand every seat's token to every subprocess |
 
 Nothing writes a minted value back into the process environment. **The sink is the only durability path**, and a value minted this run is read back through the sink — which is why a run must name one before it touches the vendor, and why `-print` reports itself as holding nothing rather than pretending otherwise.

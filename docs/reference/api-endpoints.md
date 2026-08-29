@@ -466,7 +466,9 @@ and "I cannot answer" are different facts.
 
 `category` is a filter for the same reason paging exists at all —
 filtering a paged list client-side silently excludes, because a 100-row
-page holding 2 matches reads as "only 2 exist".
+page holding 2 matches reads as "only 2 exist". Its vocabulary is a closed
+set of ten values, and which event type lands under which is in
+[Deployment § What gets stored](../guides/deployment.md#what-gets-stored-and-under-which-category).
 
 ### The live token meter
 

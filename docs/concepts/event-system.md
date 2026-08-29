@@ -99,43 +99,84 @@ DACI decisions are conducted in **Slack threads** — the driver opens a thread 
 
 ## Event Types
 
+Grouped by the **category** each one is filed under — the same closed set the
+`GET /events?category=` filter and the dashboard's category chips use. The
+authoritative list, generated from the engine's own map, is
+[Deployment § What gets stored](../guides/deployment.md#what-gets-stored-and-under-which-category);
+this is the shape of it, with the notes that need a sentence.
+
 ```text
-# Lifecycle
+# lifecycle — the org and its seats coming and going, plus the config
+#             changes an operator goes looking for after the fact
 OrgStarted, OrgStopped
 AgentSpawned, AgentTerminated, AgentReassigned
-RoleUpdated              # role definition changed during config reload
+RoleUpdated                # role definition changed during a config apply
+ConfigRevisionActivated    # a new revision is the one to serve
+ConfigRevisionApplied      # one node's outcome, and how far it got
 
-# Task (routed to specific agent inboxes)
+# task — work created, assigned and done, including a detached coding run
+#        (the execution of a task) and a schedule firing (which creates one)
 TaskCreated, TaskAssigned, TaskStarted
 TaskCompleted, TaskFailed, TaskDelegated
+SandboxRunStarted, SandboxClarificationRequested, SandboxRunCompleted
+ScheduledTaskFired
 
-# Communication
-MessageSent              # agent sent a message to a channel
+# communication
+MessageSent                # agent sent a message to a channel
 
-# Knowledge
+# a2a — one ask, one answer, then closed
+A2AChannelOpened, A2AMessageSent, A2AMessageDelivered, A2AChannelClosed
+
+# knowledge
 DocumentCreated, DocumentUpdated
 
-# Notification
-ExternalNotification     # inbound from Jira, Slack, GitHub, email
-NotificationSkipped      # dropped notification with reason (traceability)
-NotificationsCoalesced   # N same-conversation inbox events merged into one
-                         # digest trigger (see Inbox Batching above)
+# decision — DACI is behavioural guidance on the org's own chat surfaces,
+#            so NOTHING in Crewlet publishes these four. They stay mapped as
+#            the seam an extension that does model decisions writes through,
+#            and they are why the category exists to filter on at all
+DecisionRequested, DecisionResolved
+ContributionRequested, ContributionReceived
 
-# System
-AgentTurnCompleted       # full LLM reasoning cycle with tokens/tools
-AgentTurnProgress        # incremental per-round updates (not persisted);
-                         # carries turn_id/phase/iteration so live
-                         # consumers can place in-flight rounds inside
-                         # the turn/phase grouping. Fires twice per
-                         # round -- when the model has spoken, then
-                         # when that round's tools have returned
+# notification — what arrived from outside, and what the engine decided
+ExternalNotification       # inbound from a vendor webhook or chat socket
+NotificationSkipped        # dropped notification with reason (traceability)
+NotificationsCoalesced     # N same-conversation inbox events merged into one
+                           # digest trigger (see Inbox Batching above)
+TurnTriggerSkipped         # a redelivery the completion ledger had already
+                           # worked -- emitted precisely so it is not invisible
+
+# learning — the reflection subsystem and the skill lifecycle, grouped so a
+#            dashboard can include or exclude all of it with one toggle
+TurnCompleted, EpisodeWritten, PersistDeciderCompleted
+CounterpartyProfileUpdated, ReflectionCompleted
+SkillSynthesized, SkillRefined, SkillPromoted, SkillUsed
+SkillStaled, SkillArchived, SkillRevived
+PlanPrefetchSummary, RelevantKnowledgeRefetched
+CompactionRequested, CompactionCompleted
+
+# system — the engine talking about itself
+AgentTurnCompleted         # full LLM reasoning cycle with tokens/tools
+AgentPhaseStarted, AgentPhaseCompleted
 BudgetExhausted
-TurnGuardBreach          # runtime invariant fired (stall / max_iter / depth_cap /
-                         # unhandled_exception / scheduled_timeout).
-                         # Drives the dashboard `afk` state.
-LLMUnavailable           # FallbackLLMProvider chain exhausted.
-                         # Drives the dashboard `afk` state.
+TurnGuardBreach            # runtime invariant fired (stall / max_iter /
+                           # depth_cap / unhandled_exception /
+                           # scheduled_timeout). Drives the dashboard `afk`
+                           # state
+LLMUnavailable             # the fallback chain is exhausted. Drives `afk` too
+ProviderFallback           # the chain moved to its next provider
+SubagentBatched, PromptSize, ExecuteMissingTool
+PhaseToolActivated, PhaseToolSkillBlocked, SkillTelemetryWriteFailed
+
+# webhook — no event type: the receiver writes the delivery's row itself,
+#           with the provider's exact bytes as the payload
 ```
+
+**Three types are published and deliberately never stored**, each for a stated
+reason — `AgentTurnProgress` (a live-only per-round signal whose durable record
+is `AgentPhaseCompleted`), `BudgetReported` (a snapshot of in-memory meters
+that mean nothing outside the run that produced them) and `RawWebhook` (the
+delivery is already a row). The first two still drive the live projection. See
+the exclusions table in the Deployment page above.
 
 ---
 
