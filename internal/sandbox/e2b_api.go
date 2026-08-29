@@ -218,10 +218,31 @@ func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec floa
 	return out, nil
 }
 
-// boxOf reads one sandbox, for a reconnect.
-func (a *e2bAPI) boxOf(ctx context.Context, sandboxID string) (e2bBox, error) {
+// connectBox reads one sandbox for a reconnect, resuming it if it was paused.
+//
+// ONE CALL FOR BOTH HALVES. E2B's /connect answers 200 when the box was
+// already running and 201 when it had to be woken, and returns the sandbox
+// either way — so the caller needs neither to know which happened nor to ask
+// first. The pair this replaced (GET the box, then POST /resume) was two round
+// trips on the completion path, raced a reaper between them, and had to map
+// the resume's 409 "already running" onto success by hand.
+//
+// /resume is DEPRECATED in E2B's own spec, which is the other half of the
+// reason: it is the endpoint that cannot express "already running" as anything
+// but an error.
+//
+// A FRESH TTL IS NOT OPTIONAL HERE — the field is required by the API. A
+// snapshot has no kill timer running, so a box woken without one would carry
+// whatever remained of the timer it was paused with, which for a run parked
+// overnight is nothing.
+func (a *e2bAPI) connectBox(ctx context.Context, sandboxID string, seconds float64) (e2bBox, error) {
+	type request struct {
+		Timeout int `json:"timeout"`
+	}
 	var out e2bBox
-	if err := a.do(ctx, http.MethodGet, "/sandboxes/"+sandboxID, nil, &out); err != nil {
+	err := a.do(ctx, http.MethodPost, "/sandboxes/"+sandboxID+"/connect",
+		request{Timeout: int(seconds)}, &out)
+	if err != nil {
 		return e2bBox{}, err
 	}
 	if out.SandboxID == "" {
@@ -257,22 +278,4 @@ func (a *e2bAPI) setBoxTimeout(ctx context.Context, sandboxID string, seconds fl
 // pauseBox snapshots a sandbox.
 func (a *e2bAPI) pauseBox(ctx context.Context, sandboxID string) error {
 	return a.do(ctx, http.MethodPost, "/sandboxes/"+sandboxID+"/pause", nil, nil)
-}
-
-// resumeBox wakes a paused snapshot, giving it a fresh TTL.
-//
-// A BOX THAT WAS NEVER PAUSED ANSWERS 409, and that is success here: connect
-// resumes unconditionally because it cannot know, and treating "already
-// running" as an error would fail every ordinary reconnect.
-func (a *e2bAPI) resumeBox(ctx context.Context, sandboxID string, seconds float64) error {
-	type request struct {
-		Timeout int `json:"timeout"`
-	}
-	err := a.do(ctx, http.MethodPost, "/sandboxes/"+sandboxID+"/resume",
-		request{Timeout: int(seconds)}, nil)
-	var apiErr *E2BError
-	if err != nil && errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict {
-		return nil
-	}
-	return err
 }

@@ -52,8 +52,8 @@ type e2bStub struct {
 	startStatus int
 	// killStatus overrides DELETE /sandboxes/{id} when non-zero.
 	killStatus int
-	// resumeStatus overrides the resume call when non-zero.
-	resumeStatus int
+	// connectStatus overrides the connect call when non-zero.
+	connectStatus int
 	// clientID is what create reports; empty exercises the short hostname.
 	clientID string
 	// trailingGarbage appends an unreadable frame after the real ones, so
@@ -116,16 +116,23 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.capture(r)
 		w.WriteHeader(http.StatusNoContent)
 
-	case strings.HasSuffix(r.URL.Path, "/resume"):
+	// /connect answers 200 when the box was already running and 201 when it
+	// had to be woken, and returns the sandbox either way — which is why the
+	// client needs no second call and no conflict to swallow.
+	case strings.HasSuffix(r.URL.Path, "/connect"):
 		s.capture(r)
-		if s.resumeStatus != 0 {
-			w.WriteHeader(s.resumeStatus)
+		if s.connectStatus >= 400 {
+			w.WriteHeader(s.connectStatus)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
-
-	case strings.HasPrefix(r.URL.Path, "/sandboxes/") && r.Method == http.MethodGet:
-		_, _ = w.Write([]byte(`{"sandboxID": "sbx1", "clientID": "` + s.clientID + `"}`))
+		// 201 still carries the sandbox — a woken box is returned just
+		// like an already-running one, which is the whole point of the
+		// endpoint.
+		if s.connectStatus != 0 {
+			w.WriteHeader(s.connectStatus)
+		}
+		_, _ = w.Write([]byte(`{"sandboxID": "sbx1", "clientID": "` + s.clientID +
+			`", "templateID": "claude", "envdVersion": "0.1.0"}`))
 
 	case strings.HasPrefix(r.URL.Path, "/sandboxes/") && r.Method == http.MethodDelete:
 		if s.killStatus != 0 {
@@ -756,17 +763,17 @@ func TestE2BKillingAGoneBoxSucceeds(t *testing.T) {
 	}
 }
 
-// CONNECT RESUMES UNCONDITIONALLY, and "already running" is not a failure.
+// CONNECT IS ONE CALL, and "already running" is a success status rather than
+// the conflict the deprecated /resume reported.
 //
-// It cannot know whether the box is paused, and reading the state first is
-// two round trips on the completion path to learn something the resume
-// handles anyway — and it races a reaper.
-func TestE2BConnectResumesAndToleratesARunningBox(t *testing.T) {
+// The pair this replaced — GET the box, then POST /resume — was two round
+// trips on the completion path and raced a reaper between them.
+func TestE2BConnectWakesABoxAndToleratesARunningOne(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
-	stub.resumeStatus = http.StatusConflict
 	provider, _ := newE2B(t, stub)
 
+	// 200: the box was already running.
 	box, err := provider.Connect(context.Background(), "sbx1")
 	if err != nil {
 		t.Fatalf("connecting to a running box failed: %v", err)
@@ -774,23 +781,35 @@ func TestE2BConnectResumesAndToleratesARunningBox(t *testing.T) {
 	if box.ID() != "sbx1" {
 		t.Fatalf("id = %q", box.ID())
 	}
-	if !stub.saw("POST /sandboxes/sbx1/resume") {
-		t.Errorf("connect never resumed: %v", stub.requests)
+	if !stub.saw("POST /sandboxes/sbx1/connect") {
+		t.Errorf("connect never called: %v", stub.requests)
 	}
-	// A FRESH TTL ON RESUME: a snapshot has no timer running, so a box
-	// woken without one carries whatever remained of the timer it was
-	// paused with — for a run parked overnight, nothing.
-	if got := stub.body("/sandboxes/sbx1/resume")["timeout"]; got == nil || got == float64(0) {
-		t.Errorf("resume gave the box no TTL: %v", got)
+	// THE DEPRECATED ENDPOINT IS NOT CALLED AT ALL — not as a fallback, not
+	// as a second leg. /resume cannot express "already running" as anything
+	// but an error, which is what made the old path need a 409 workaround.
+	if stub.saw("POST /sandboxes/sbx1/resume") {
+		t.Errorf("the deprecated resume endpoint was called: %v", stub.requests)
+	}
+	// A FRESH TTL: a snapshot has no kill timer running, so a box woken
+	// without one carries whatever remained of the timer it was paused with
+	// — for a run parked overnight, nothing. The API requires the field.
+	if got := stub.body("/sandboxes/sbx1/connect")["timeout"]; got == nil || got == float64(0) {
+		t.Errorf("connect gave the box no TTL: %v", got)
 	}
 
-	// AND A RESUME THAT REALLY FAILED IS NOT SWALLOWED. Handing back a
+	// 201: the box was paused and was woken. Both are success.
+	stub.connectStatus = http.StatusCreated
+	if _, err := provider.Connect(context.Background(), "sbx1"); err != nil {
+		t.Fatalf("a resumed box was reported as a failure: %v", err)
+	}
+
+	// AND A CONNECT THAT REALLY FAILED IS NOT SWALLOWED. Handing back a
 	// handle to a box that is still paused makes every command on it fail
 	// one layer further in, with envd's message rather than the control
 	// plane's.
-	stub.resumeStatus = http.StatusInternalServerError
+	stub.connectStatus = http.StatusInternalServerError
 	if _, err := provider.Connect(context.Background(), "sbx1"); err == nil {
-		t.Fatal("a failed resume handed back a handle to a paused box")
+		t.Fatal("a failed connect handed back a handle to a paused box")
 	}
 }
 

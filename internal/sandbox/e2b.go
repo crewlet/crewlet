@@ -150,32 +150,27 @@ func (p *E2BProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 
 // Connect implements [Provider].
 //
-// RESUMES UNCONDITIONALLY, because it cannot know whether the box is paused
-// and a resume on a running box is a no-op the API reports as a conflict. The
-// alternative — read the state, then decide — is two round trips on the
-// completion path to learn something the second call handles anyway, and it
-// races: a box can be reaped between the read and the decision.
+// ONE CALL, WHATEVER STATE THE BOX IS IN. [e2bAPI.connectBox] reads the box
+// and resumes it if it was paused, so this path neither has to know which
+// happened nor ask first — and cannot be raced by a reaper between a read and
+// a decision, which the GET-then-resume pair it replaced could be.
+//
+// A FAILURE IS RETURNED RATHER THAN SWALLOWED. "Already running" is a success
+// status on this endpoint, not the conflict the deprecated resume reported, so
+// anything left really failed — and handing back a handle to a box that is
+// still paused would make every command on it fail one layer further in, with
+// envd's message rather than the control plane's.
 func (p *E2BProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, error) {
-	box, err := p.api.boxOf(ctx, sandboxID)
+	// A FRESH TTL. A snapshot has no kill timer running, so a box woken
+	// without one would carry whatever remained of the timer it was paused
+	// with — which for a run parked overnight is nothing.
+	box, err := p.api.connectBox(ctx, sandboxID, defaultSandboxTTLSeconds)
 	if err != nil {
-		return nil, err
-	}
-	// A FRESH TTL ON RESUME. A snapshot has no kill timer running, so a box
-	// woken without one would carry whatever remained of the timer it was
-	// paused with — which for a run parked overnight is nothing.
-	//
-	// A FAILURE HERE IS RETURNED, and the one benign case is already gone
-	// by this point: [e2bAPI.resumeBox] maps "already running" onto
-	// success, because that is what the caller wanted. Swallowing whatever
-	// is left would hand back a handle to a box that is still paused, and
-	// every command on it would fail one layer further in — with envd's
-	// message rather than the control plane's.
-	if err := p.api.resumeBox(ctx, sandboxID, defaultSandboxTTLSeconds); err != nil {
 		var apiErr *E2BError
 		if errors.As(err, &apiErr) && apiErr.Gone() {
 			return nil, fmt.Errorf("e2b: sandbox %s is gone: %w", sandboxID, err)
 		}
-		return nil, fmt.Errorf("e2b: sandbox %s could not be resumed: %w", sandboxID, err)
+		return nil, fmt.Errorf("e2b: sandbox %s could not be connected to: %w", sandboxID, err)
 	}
 	e2bLog.Debug("e2b_sandbox_connected", "sandbox_id", sandboxID)
 	return p.box(box), nil
