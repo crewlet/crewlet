@@ -58,7 +58,7 @@ func main() {
 	// Not redundant with logging's own init default: this is the
 	// statement of intent, and an init that changed would otherwise
 	// change the CLI silently.
-	logging.Configure(slog.LevelInfo, logging.FormatText, os.Stderr)
+	logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr)
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return
@@ -107,7 +107,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		// parallel tests pointing the global at their own buffers — a
 		// data race, and one test's log lines landing in another's
 		// output. See [logging.Configure].
-		logging.SetVerbosity(operatorLogLevel(), logging.FormatText)
+		logging.SetVerbosity(operatorLogLevel(), operatorLogFormat())
 	}
 
 	switch cmd {
@@ -557,7 +557,8 @@ func runEngine(args []string, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	cfg := addConfigFlags(fs)
 	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
-	logFormat := fs.String("log-format", "text", "log format: text or json")
+	logFormat := fs.String("log-format", "console",
+		"log format: console (columns and colour for a person), text or json")
 	debug := fs.Bool("debug", false, "shorthand for -log-level debug")
 	roles := fs.String("roles", "",
 		"what this node runs, overriding node.roles: ingress, seats, workers")
@@ -591,22 +592,29 @@ func runEngine(args []string, stderr io.Writer) error {
 		*cfg.bootstrap = file
 	}
 
-	level := logging.ParseLevel(*logLevel)
-	if *debug {
-		// The SHORTHAND WINS, because writing both is an operator asking
-		// for debug in the loudest way available to them.
-		level = slog.LevelDebug
-	}
+	// THE FLAGS ALONE, FIRST, because the file has not been read yet and
+	// reading it is exactly what `-debug` is most often turned on to watch:
+	// an unresolved ${VAR}, a refused enum, a path that is not there. The
+	// second call below re-applies this on top of the file's own settings.
+	//
 	// The level and format this invocation asked for, on the process's own
 	// sink — see the note in [run] for why the writer is not this
 	// command's to install.
-	logging.SetVerbosity(level, logging.ParseFormat(*logFormat))
+	logging.SetVerbosity(flagLogLevel(*logLevel, *debug), logging.ParseFormat(*logFormat))
 	log := logging.Get("cli")
 
 	boot, company, err := cfg.load()
 	if err != nil {
 		return err
 	}
+	// AND NOW THE FILE, which is what makes `debug: true` in Tier A mean
+	// anything. It was a declared field nothing ever read: the quickstart
+	// tells an operator to write it and the deployment guide says it
+	// "raises the log level to DEBUG", and for the life of the field it
+	// did nothing at all. Lines emitted BEFORE this point came out under
+	// the flags alone, which is the best a process can do about a file it
+	// has not opened yet.
+	logging.SetVerbosity(logSettings(boot, fs, *logLevel, *logFormat, *debug))
 	// THE FLAGS OVERRIDE THE FILE, and are applied AFTER it loads so a
 	// validation failure names the file's own value rather than one the
 	// command line put there. Each is applied only when it was actually
@@ -1138,6 +1146,48 @@ func splitSubject(args []string) (string, []string) {
 	return "", args
 }
 
+// flagLogLevel is the level the command line alone asks for.
+//
+// The SHORTHAND WINS, because writing both is an operator asking for debug
+// in the loudest way available to them.
+func flagLogLevel(logLevel string, debug bool) slog.Level {
+	if debug {
+		return slog.LevelDebug
+	}
+	return logging.ParseLevel(logLevel)
+}
+
+// logSettings resolves how loud `crewlet run` is, and in what shape, from
+// the two places that get to say: the Tier A file and this command line.
+//
+// # The command line wins, but only where it actually spoke
+//
+// A flag carries its default whether or not anyone typed it, so applying
+// `*logLevel` unconditionally would pin every node at info and make
+// `logging.level: warn` in the file dead on arrival — the same class of bug
+// as the `debug:` field this function exists to give a meaning. isFlagSet is
+// what separates "the operator asked for info" from "nobody said anything",
+// and it is the same idiom [overrideNode] uses for the three node overrides.
+//
+// `-debug` only ever RAISES: it is the shorthand for asking for debug, not a
+// switch that turns the file's own setting off. An operator who wants a
+// `debug: true` file quieter for one run says so with `-log-level info`.
+func logSettings(boot *config.Bootstrap, fs *flag.FlagSet,
+	logLevel, logFormat string, debug bool,
+) (slog.Level, logging.Format) {
+	level, format := boot.LogSettings()
+	if isFlagSet(fs, "log-level") {
+		level = logging.ParseLevel(logLevel)
+	}
+	if isFlagSet(fs, "log-format") {
+		format = logging.ParseFormat(logFormat)
+	}
+	if isFlagSet(fs, "debug") && debug {
+		level = slog.LevelDebug
+	}
+	return level, format
+}
+
 // overrideNode applies the run flags that override Tier A.
 //
 // # Why these three and not a general mechanism
@@ -1213,4 +1263,21 @@ func operatorLogLevel() slog.Level {
 	default:
 		return slog.LevelWarn
 	}
+}
+
+// operatorLogFormat is the shape every non-`run` command logs in.
+//
+// Console, so a migration that fails on a laptop reads like one, unless
+// $CREWLET_LOG_FORMAT names another. It is the sibling of
+// $CREWLET_LOG_LEVEL and exists for the same reason: these commands take no
+// logging flags, and the CI step that ships a `crewlet migrate` run's output
+// to a collector needs `json` from it exactly as much as `crewlet run` does.
+// Without it the only lever over these commands' output was $NO_COLOR, which
+// says nothing about the shape.
+//
+// A name this build does not know resolves to console — logging.ParseFormat
+// applies the same never-fail rule to a format that operatorLogLevel applies
+// to a level.
+func operatorLogFormat() logging.Format {
+	return logging.ParseFormat(os.Getenv("CREWLET_LOG_FORMAT"))
 }

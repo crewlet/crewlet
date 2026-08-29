@@ -10,6 +10,8 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
+
+	"github.com/crewlet/crewlet/internal/logging"
 )
 
 func TestSchemaGenerates(t *testing.T) {
@@ -88,6 +90,46 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"GitHubProvisioning", "org_webhook", strs(ContainerWebhookModes)},
 	}
 	for _, tc := range cases {
+		def, ok := defs[tc.def].(map[string]any)
+		if !ok {
+			t.Fatalf("$defs has no %s", tc.def)
+		}
+		props, _ := def["properties"].(map[string]any)
+		field, ok := props[tc.field].(map[string]any)
+		if !ok {
+			t.Fatalf("%s has no %s", tc.def, tc.field)
+		}
+		raw, ok := field["enum"].([]any)
+		if !ok {
+			t.Fatalf("%s.%s carries no enum", tc.def, tc.field)
+		}
+		got := make([]string, len(raw))
+		for i, v := range raw {
+			got[i], _ = v.(string)
+		}
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Fatalf("%s.%s enum = %v, validators accept %v", tc.def, tc.field, got, tc.want)
+		}
+	}
+}
+
+// The Tier A enums, read from the SAME closed sets internal/logging exports
+// and internal/config validates against. A hand-written `js:"enum=..."` tag
+// is a second spelling of those slices: drift here is an editor offering
+// `logging.format: pretty`, an operator writing it, and the engine refusing
+// to boot on a value its own schema said was fine.
+func TestBootstrapSchemaEnumsMatchTheValidators(t *testing.T) {
+	t.Parallel()
+	defs, _ := schemaDoc(t, TierBootstrap)["$defs"].(map[string]any)
+
+	for _, tc := range []struct {
+		def, field string
+		want       []string
+	}{
+		{"Logging", "level", strs(logging.Levels)},
+		{"Logging", "format", strs(logging.Formats)},
+		{"Store", "driver", strs(StoreDrivers)},
+	} {
 		def, ok := defs[tc.def].(map[string]any)
 		if !ok {
 			t.Fatalf("$defs has no %s", tc.def)

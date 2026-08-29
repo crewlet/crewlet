@@ -120,6 +120,31 @@
       },
       "type": "object"
     },
+    "Logging": {
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "description": "console (default, columns and colour for a person), text (slog key=value) or json (for a log shipper).",
+          "enum": [
+            "console",
+            "text",
+            "json"
+          ],
+          "type": "string"
+        },
+        "level": {
+          "description": "debug, info (default), warn or error.",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "NATSTLS": {
       "additionalProperties": false,
       "properties": {
@@ -505,7 +530,11 @@
       "$ref": "#/$defs/Coordination"
     },
     "debug": {
+      "description": "Shorthand for logging.level: debug; wins if both are set.",
       "type": "boolean"
+    },
+    "logging": {
+      "$ref": "#/$defs/Logging"
     },
     "node": {
       "$ref": "#/$defs/Node"

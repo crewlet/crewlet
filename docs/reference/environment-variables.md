@@ -27,6 +27,26 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 
 ---
 
+## Logging
+
+Read directly by the engine and the CLI. All four describe the **invocation**
+rather than the company, which is why they are variables and not Tier A
+fields: the same `crewlet.yaml` is deployed to a container with no terminal
+and run on a laptop with one, and the level a CI step wants out of `crewlet
+migrate` has nothing to do with the node it is migrating.
+
+| Variable | Description | Where to get it |
+|----------|-------------|-----------------|
+| `CREWLET_LOG_LEVEL` | The level **every command except `crewlet run`** logs at — `debug`, `info`, `warn` (the default) or `error`. Those commands are quiet by design (a store open logs a line per migration, which is noise on a one-shot command whose stdout is piped or diffed), and this is the escape hatch when a half-applied migration or a failing deploy gate is what you are looking at. A value this build does not recognise resolves to `warn`, so a typo can never be why an operator cannot run a migration. `crewlet run` ignores it and takes its level from `logging.level` / `debug` in Tier A and its own `-log-level` / `-debug` flags | — |
+| `CREWLET_LOG_FORMAT` | The shape those same commands log in — `console` (the default), `text` or `json`. The sibling of `CREWLET_LOG_LEVEL`, and it exists for the same reason: these commands take no logging flags, so a CI step shipping a `crewlet migrate` run to a collector has no other way to ask for `json`. An unrecognised name resolves to `console` | — |
+| `CREWLET_LOG_COLOR` | Whether `console` output carries ANSI colour — `auto` (the default: colour only when the stream is a live terminal), `always` or `never`. `always` is for a CI log viewer that renders ANSI without being a terminal, which auto-detection cannot discover on its own. Applies to `crewlet run` and every other command | — |
+| `NO_COLOR` | Set to any non-empty value to suppress colour, following the [no-color.org](https://no-color.org) convention. It overrides `auto` — colour this program would have added on its own initiative — but **not** an explicit `CREWLET_LOG_COLOR=always`, which is an instruction about this program rather than initiative | — |
+
+`TERM=dumb` also disables colour: an editor's shell pane sets it precisely to
+say it cannot render escape sequences.
+
+---
+
 ## Slack
 
 | Variable | Description | Where to get it |
