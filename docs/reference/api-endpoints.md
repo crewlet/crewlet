@@ -101,7 +101,27 @@ each operator-gated for the same reason the prefix is.
 | Method | Path | Description |
 |--------|------|-------------|
 | `PUT` | `/config` | Replace the active revision. Body JSON or `Content-Type: application/yaml`. Requires a revision summary — an `X-Summary` header, **or** a top-level `_summary` key in the body. Optional `If-Match: <revision_id>` for optimistic concurrency (`If-Match: none` for the unconfigured case). |
+| `PATCH` | `/config` | Merge one or more sections into the active revision — see [below](#patch-config--the-narrower-write) |
 | `POST` | `/config/revisions/{id}/revert` | Create a new active revision whose payload equals revision `{id}` |
+
+#### `PATCH /config` — the narrower write
+
+A [JSON Merge Patch (RFC 7386)](https://www.rfc-editor.org/rfc/rfc7386): send only the sections you are changing, in the shape the document already has.
+
+```bash
+curl -X PATCH https://engine.example.com/config \
+  -H "Authorization: Bearer $TOKEN" -H "X-Summary: raise the plan round cap" \
+  -d '{"turn_engine": {"plan_max_tool_rounds": 24}}'
+```
+
+- **Deep merge.** `{"providers": {"llm": {"main": {"model": "claude-opus-5"}}}}` changes that model and leaves the provider's type, its keys and every other provider alone.
+- **`null` deletes.** `{"integrations": {"gitlab": null}}` removes the section — without it a config surface can only add.
+- **Arrays replace.** RFC 7386 cannot address a list element, so `roles: [...]` in a patch replaces the whole roster. Editing one seat is what [`PUT /config/roles/{handle}`](#per-entity-write) is for; inventing a list syntax here would give two answers to one question.
+- **Unknown keys are refused**, not ignored. A patch is the edit least visible in a diff, so a typo that silently changes nothing is the worst outcome available — the caller believes they changed something.
+- **Validated as the whole document it produces.** A section that is fine alone is still refused when it leaves the company invalid.
+- Same summary rule and same `If-Match` as `PUT /config`, and a **409** when nothing is active: a patch is defined against a document, and building a company out of one section is not what this route is for.
+
+**`If-Match` matters more here than on the full write.** A `PUT` carries the caller's whole intended document; a `PATCH` is merged against whatever is active at that instant. See [Concurrent writes](#concurrent-writes) for what the engine does and does not guarantee.
 
 **Per-entity write** — four collections, `PUT` only:
 
@@ -175,6 +195,16 @@ clear.
 `crewlet secrets` is the client for all of this — see
 [the secret store](../concepts/secret-store.md#which-store-the-cli-writes) for
 why the CLI goes through a running node rather than writing the KV itself.
+
+### Concurrent writes
+
+**There is no leader, and writes are not serialized.** Any node's API can write the config; the coordination KV is the shared truth. What that means concretely, because it is easy to assume otherwise:
+
+- `If-Match: <revision_id>` is checked against the revision that was active **when the request arrived**. It closes the window a human leaves between reading and writing, which is the one that matters in practice — but nothing holds a lock between the check and the write, so two requests that overlap inside that gap can both be accepted.
+- The activation pointer is written with a plain put, so on a tie the **later write wins** and both callers see `201`. The loser's revision still exists in the history of the node that stored it; it is simply not what the fleet runs.
+- A node whose write lost adopts the winning revision at its next reconcile, so the divergence does not persist.
+
+For an operator editing through the dashboard or a script, send `If-Match` and act on a `409`. For two automated writers changing the **same** section continuously, treat the config plane as last-write-wins and serialize upstream.
 
 ### Status codes
 

@@ -126,6 +126,9 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("GET /config", s.getActive)
 	mux.HandleFunc("PUT /config", s.put)
+	// THE NARROWER WRITE. See merge.go for why one patch route covers
+	// every section rather than one route per section.
+	mux.HandleFunc("PATCH /config", s.patch)
 	mux.HandleFunc("GET /config/revisions", s.listRevisions)
 	mux.HandleFunc("GET /config/revisions/{id}", s.getRevision)
 	mux.HandleFunc("GET /config/revisions/{id}/diff", s.diff)
@@ -323,6 +326,117 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	if err := incoming.Validate(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "validation_error", "detail": err.Error(),
+		})
+		return
+	}
+	s.store(w, r, incoming, active.ID, summary)
+}
+
+// errEmptyPatch is a patch body carrying nothing.
+var errEmptyPatch = errors.New("the patch is empty")
+
+// patch serves PATCH /config — a JSON Merge Patch over the active document.
+//
+// # It is a READ-MODIFY-WRITE, which is the one thing it is not free
+//
+// A full PUT carries the caller's whole intended document, so a lost update
+// costs whatever they did not know about. A patch is merged against whatever
+// is active AT THIS INSTANT, so two patches to different sections both apply
+// and two patches to the same section resolve by arrival order — with nothing
+// telling the loser. `If-Match` is what closes that, and it matters MORE here
+// than on the full write for exactly that reason: see [Service.checkPrecondition].
+//
+// # It refuses when nothing is active
+//
+// A patch is defined against a document. With no active revision there is
+// nothing to merge onto, and building a company out of one section is not
+// what this route is for — `PUT /config` shows the whole thing.
+func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
+	body, err := readBody(w, r)
+	if err != nil {
+		refuseBody(w, err)
+		return
+	}
+	summary, body, err := splitSummary(body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid_body", "detail": err.Error(),
+		})
+		return
+	}
+	if header := r.Header.Get("X-Summary"); header != "" {
+		summary = header
+	}
+	if summary == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "summary_required",
+			"hint": "PATCH /config needs an audit summary — the X-Summary " +
+				"header, or a top-level _summary key in the body. A patch is " +
+				"the change least visible in a diff, so the sentence saying " +
+				"what it was for matters most here",
+		})
+		return
+	}
+
+	active, found, err := s.configs.Active(r.Context())
+	if err != nil {
+		s.fail(w, "read the active revision", err)
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "no_active_revision",
+			"hint": "there is nothing to patch; import a company first, or " +
+				"use PUT /config to send a whole document",
+		})
+		return
+	}
+	if !s.checkPrecondition(w, r, active, found) {
+		return
+	}
+
+	prior, err := s.open(active)
+	if err != nil {
+		s.fail(w, "open the active revision", err)
+		return
+	}
+	// MERGED IN THE STORED SHAPE, not the authored one: the active
+	// revision is normalised JSON, and merging onto anything else would
+	// make the result depend on how the document was originally written.
+	document, err := json.Marshal(prior)
+	if err != nil {
+		s.fail(w, "encode the active revision", err)
+		return
+	}
+	merged, err := applyMergePatch(document, body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid_patch", "detail": err.Error(),
+		})
+		return
+	}
+	// PARSED STRICTLY, which is what makes a typo in a patch a 400 rather
+	// than a silently ignored section: the authored reader refuses an
+	// unknown field, and it accepts the normalised form the merge emits.
+	incoming, err := parseDocument(merged)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid_patch", "detail": err.Error(),
+			"hint": "the patched document was refused; an unknown key in a " +
+				"patch is refused here rather than ignored",
+		})
+		return
+	}
+	// The masks a caller was shown come back as the values they hide, the
+	// same as on the full write: a patch built from a redacted GET must
+	// not replace a credential with "__redacted__".
+	incoming.RestoreRedacted(prior)
+	if err := incoming.Validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "validation_error", "detail": err.Error(),
+			"hint": "a patch is validated as the WHOLE document it produces, " +
+				"so a section that is fine on its own is still refused when " +
+				"it leaves the company invalid",
 		})
 		return
 	}

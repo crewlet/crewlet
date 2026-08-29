@@ -166,7 +166,7 @@ Until the first `is_active=TRUE` row exists, the engine holds an empty `Organiza
 | `GET /config/revisions` | `200 []` |
 | `PUT /config` | Accepted — creates the first active revision. `If-Match` not required when nothing to match against; if supplied must equal `"none"` else `412 Precondition Failed` |
 | `POST /config/revisions/{id}/revert` | `404` — no revisions exist yet |
-| Per-entity routes (`POST /config/roles`, etc.) | `409 Conflict` — operator must initialise via `PUT /config` first |
+| Per-entity routes (`PUT /config/roles/{handle}`, etc.) and `PATCH /config` | `409 Conflict` — they edit a document, and there is none; initialise via `PUT /config` first |
 | `GET /agents`, `GET /tokens/breakdown` | `200` with empty lists / zero counters |
 | `POST /webhooks/...` | Signature check still runs (a forgery is rejected as a forgery); body logged at WARNING; returns `503 {"status": "unavailable", "reason": "unconfigured"}` with `Retry-After` so the sender **retries**. A 200 here would tell the sender the delivery was accepted while discarding it — silent, unrecoverable loss the moment one process of several has simply not caught up yet |
 
@@ -176,7 +176,9 @@ Transition out of unconfigured: the first activation moves the pointer → the r
 
 ## Live Propagation
 
-When a new revision is activated (via `PUT /config`, per-entity write, revert, or `crewlet config import`), the write appends an **activation epoch** in the same transaction. Every node polls that pointer and converges onto it; a broadcast `crewlet.config.revision_activated` event wakes the poll early but carries no work.
+When a new revision is activated (via `PUT /config`, `PATCH /config`, a per-entity write, a revert, or `crewlet config import`), the revision is stored and the fleet's **activation pointer** is then moved to it; the pointer's own KV sequence *is* the epoch, so the append and the flip cannot come apart. Every node polls that pointer and converges onto it; a broadcast `crewlet.config.revision_activated` event wakes the poll early but carries no work.
+
+The two steps are **not one transaction**, and they span two stores — the node's own database and the coordination KV. That ordering is deliberate: a crash between them leaves a revision nothing points at, which is inert and replaced by the next activation, where the other order would point the fleet at bytes no node had stored. It also means there is **no leader and no serialization** between concurrent writers — see [Concurrent writes](../reference/api-endpoints.md#concurrent-writes) for what `If-Match` does and does not guarantee.
 
 This replaced a pair of Pulsar **competing-consumer** subscriptions (`engine-config`, `api-config`) under which exactly one process applied any given revision and the rest ran the previous company indefinitely. The full mechanism — the epoch log, what a lagging node does about its own traffic, and the operator surface — is [Control Plane](control-plane.md); what follows is the apply itself.
 
