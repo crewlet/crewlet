@@ -6,9 +6,9 @@ import "strings"
 //
 // Backend-neutral by design: it points at the team's knowledge-base MCP
 // server by CAPABILITY ("a page-search / get-page tool"), never by product,
-// so the same words read correctly whether the company runs Confluence or
-// Plane. Naming a product here would make the header wrong for half the
-// installed base and right-looking for all of it.
+// so the same words read correctly whatever knowledge base the company runs.
+// Naming a product here would make the header wrong for anyone on another
+// one and right-looking for all of them.
 const OnboardingHeader = "\n## ONBOARDING phase" +
 	"\nThis is a one-time setup pass that runs before your normal work, " +
 	"with its **own** budget. Do ONLY this now — not the task you were " +

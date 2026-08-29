@@ -41,15 +41,16 @@ explicit lead and inherits the PM from the parent Product department.
 
 | Channel | What for |
 |---|---|
-| **Plane** | Work items *and* pages, one project per department (see below). Work items: all backlog items — epics, stories, tasks. Every piece of work has a work item. Pages: architecture decisions (ADRs), runbooks, meeting notes, competitive analysis, this onboarding content. |
-| **Mattermost** | Real-time coordination, manager handoffs via `@`-mention. One bot identity per agent, self-hosted alongside Plane and GitLab. |
+| **Jira** | Work items, one project per department (see below): all backlog items — epics, stories, tasks. Every piece of work has a work item. |
+| **Confluence** | Pages, one space per department, keyed the same as the Jira project: architecture decisions (ADRs), runbooks, meeting notes, competitive analysis, this onboarding content. |
+| **Mattermost** | Real-time coordination, manager handoffs via `@`-mention. One bot identity per agent, self-hosted alongside GitLab. |
 | **GitLab** | All code. Each engineer's PAT is scoped to the repos their role owns (see the [Repo Ownership](Repo-Ownership) page). |
 
-### Per-department Plane projects
+### Per-department projects and spaces
 
-| Department | Plane project | What lives there |
+| Department | Jira project / Confluence space | What lives there |
 |---|---|---|
-| Leadership | `LEAD` | Strategy notes, cross-cutting governance, this org-root onboarding, Repo Ownership, Executives team-specific onboarding. Every seat is a member of `LEAD` (the provisioner's membership step), so its pages surface in everyone's search. |
+| Leadership | `LEAD` | Strategy notes, cross-cutting governance, this org-root onboarding, Repo Ownership, Executives team-specific onboarding. Every seat can read the `LEAD` space, so its pages surface in everyone's search. |
 | Product (PM + DevRel) | `PROD` | Research, competitive analysis, FAQ Backlog, launch positioning, PM-driven epics, DevRel docs drafts, Product team-specific onboarding. |
 | Engineering | `ENG` | Architecture ADRs, runbooks, observability docs, implementation stories, framework design notes, Engineering team-specific onboarding. |
 
@@ -68,19 +69,20 @@ Repo Ownership, strategy notes) are reachable from any agent's
 The Leadership and Product backlogs are typically epic-heavy; the
 Engineering backlog is typically story- and task-heavy.
 
-**One Onboarding page per project.** Each project has exactly one page
-titled `Onboarding` — by convention, not by constraint: Plane does
-**not** enforce title uniqueness within a project, so keep it to one
-page yourself rather than creating a second. Each Onboarding page
-combines the org-level context (when relevant) with the unit-specific
-onboarding for the teams in that project.
+**One Onboarding page per space.** Each space has exactly one page
+titled `Onboarding`. Confluence enforces title uniqueness within a
+space, so a second one cannot be created by accident — but a page moved
+to another space can leave the space without one, so check before
+assuming. Each Onboarding page combines the org-level context (when
+relevant) with the unit-specific onboarding for the teams in that
+space.
 
 ## Kickoff convention
 
 The founder kicks off new product phases by messaging the **CEO** in Mattermost.
 The CEO drafts a strategy note, files a Phase-N kickoff epic, and
 briefs the PM and CTO in Mattermost or via a work-item mention. From there the
-cascade runs on its own through Plane webhooks (PM creates stories → CTO
+cascade runs on its own through Jira webhooks (PM creates stories → CTO
 assigns to engineers → engineers ship → DevRel writes docs).
 
 There is currently no autonomous "agents wake themselves up" behaviour —
@@ -116,15 +118,15 @@ matrix and cross-repo coordination rules.
 
 ## Working norms
 
-- **Write everything down.** Decisions live in Plane (work items and
-  pages), not in your head. Use `reflect_and_persist` only for
+- **Write everything down.** Decisions live in Jira work items and
+  Confluence pages, not in your head. Use `reflect_and_persist` only for
   *personal* delegation context, stakeholder preferences, ongoing
   operational state.
-- **Search before you create.** Use your Plane page-search tools before
+- **Search before you create.** Use your Confluence page-search tools before
   drafting a new doc; filter the backlog before creating a duplicate
   story.
 - **Own your repos.** If a story you receive belongs to a different
-  engineer, reassign it in Plane with a comment rather than crossing
+  engineer, reassign it in Jira with a comment rather than crossing
   boundaries.
 - **Hand off cleanly.** When you need help, reach out to the right
   colleague on the surface where the work lives (a work-item comment, a
@@ -156,8 +158,8 @@ department (Product) but reports up to the CEO.
 |---|---|---|
 | Product direction (what to build, when) | CEO | Strategy-note page; epic in `LEAD` |
 | Technical architecture (how to build it) | CTO | ADR page (`Architecture Decisions` parent page), linked from the epic |
-| Backlog prioritisation (within product direction) | PM | Backlog ordering in Plane |
-| Cross-team trade-off (budget, scope, partnerships) | CEO | Resolved in Mattermost or Plane after the CTO and PM lay out the trade-off |
+| Backlog prioritisation (within product direction) | PM | Backlog ordering in Jira |
+| Cross-team trade-off (budget, scope, partnerships) | CEO | Resolved in Mattermost or Jira after the CTO and PM lay out the trade-off |
 
 If a decision is taking longer than two days, it's an escalation, not a
 deliberation. Drive it to a conclusion in writing.
@@ -173,7 +175,7 @@ lives:
 - Time-critical sync → A2A (agent-to-agent) request
 
 You hold the same surface accountable. When an engineer pings the CTO
-via a Plane comment, respond on the work item. When the CTO pings the
+via a Jira comment, respond on the work item. When the CTO pings the
 CEO in Mattermost for a go/no-go, respond in the same thread.
 
 ### ADR / strategy-note conventions

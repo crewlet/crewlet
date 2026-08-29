@@ -15,14 +15,14 @@ also serves as code-review fallback for any of the three repos.
 
 Read the [Repo Ownership](Repo-Ownership) page (it lives in the LEAD
 project) in full. The short version: **stay in your repos.** If a story
-you receive belongs to a different engineer, reassign it in Plane with a
+you receive belongs to a different engineer, reassign it in Jira with a
 comment rather than crossing repo boundaries. Per-role GitLab PATs are
 scoped to the repos the role owns; if `git push` fails with a permission
 error, that is the control working.
 
 ## Coordination model
 
-Engineering stories live in the `ENG` Plane project. Most belong to one
+Engineering stories live in the `ENG` Jira project. Most belong to one
 engineer end-to-end; the exceptions are cross-repo features (Phase 2
 will have many) and cross-project links up to PM epics in `PROD`.
 

@@ -54,14 +54,13 @@ type Unit struct {
 	// do not set their own.
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
 
-	// JiraProject, ConfluenceSpace and PlaneProject are the unit's
-	// integration IDENTITY: inbound activity with no better recipient
-	// routes to the unit lead, and this is where the team files work and
-	// writes pages. None of them is an MCP credential, and none of them
-	// scopes what anyone can READ — read scope is org-wide.
+	// JiraProject and ConfluenceSpace are the unit's integration IDENTITY:
+	// inbound activity with no better recipient routes to the unit lead,
+	// and this is where the team files work and writes pages. Neither is an
+	// MCP credential, and neither scopes what anyone can READ — read scope
+	// is org-wide.
 	JiraProject     string `yaml:"jira_project,omitempty" json:"jira_project,omitempty"`
 	ConfluenceSpace string `yaml:"confluence_space,omitempty" json:"confluence_space,omitempty"`
-	PlaneProject    string `yaml:"plane_project,omitempty" json:"plane_project,omitempty"`
 
 	KnowledgeRefs []string `yaml:"knowledge_refs,omitempty" json:"knowledge_refs,omitempty"`
 

@@ -91,14 +91,6 @@ func TestSummariesNameWhoWhatAndWhere(t *testing.T) {
 			headers: func(b []byte) map[string]string { return atlassianDelivery(b, "conf-secret") },
 			want:    []string{"Confluence", "Ada", "page updated", "[OPS]", "Runbook"},
 		},
-		{
-			name: "a Plane work item",
-			path: "/webhooks/plane",
-			body: `{"event":"issue","action":"created","data":{"name":"Ship it"},
-			        "activity":{"actor":{"display_name":"Ash"}}}`,
-			headers: func(b []byte) map[string]string { return planeDelivery(b, "pl-secret") },
-			want:    []string{"Plane", "Ash", "issue", "created", "Ship it"},
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

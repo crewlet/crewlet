@@ -145,8 +145,7 @@ marker are private state, and an ask is a message to one colleague.
 ## Two tools that arrive with their subsystems
 
 `load_tool_skill` loads a knowledge-base-sourced prompt fragment out of the
-tool-skills subsystem — `agent/skills/` plus its Confluence and Plane sync
-workers — and `run_sandbox` starts a detached coding run in the sandbox. Each
+tool-skills subsystem — `agent/skills/` plus its Confluence sync worker — and `run_sandbox` starts a detached coding run in the sandbox. Each
 is registered only where the subsystem behind it is there to serve it, on the
 same rule as every other builtin: registering one against a store that is not
 there would mean a tool that always fails — the thing this design explicitly

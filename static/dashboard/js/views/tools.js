@@ -19,7 +19,6 @@ function sourceBadge(source) {
   if (s.includes("slack")) return "mcp-slack";
   if (s.includes("atlassian") || s.includes("jira") || s.includes("confluence"))
     return "mcp-atlassian";
-  if (s.includes("plane")) return "mcp-plane";
   return "mcp";
 }
 

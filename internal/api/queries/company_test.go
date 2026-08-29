@@ -208,7 +208,7 @@ func TestIntegrationsSaysHowEachSurfaceIsWired(t *testing.T) {
 			t.Errorf("%s is configured and absent from the answer", kind)
 		}
 	}
-	if _, present := byKind["plane"]; present {
+	if _, present := byKind["jira"]; present {
 		t.Error("an integration the company does not configure was reported")
 	}
 	// LISTED rather than counted: "which seats reach Mattermost" is the
@@ -826,14 +826,14 @@ name: Acme
 integrations:
   mattermost: {enabled: true, url: https://mm.example.com, team: acme}
   gitlab: {enabled: true, url: https://gitlab.example.com, signing_secret: "${GL}"}
-  plane: {enabled: true, url: https://plane.example.com, workspace: acme, webhook_secret: "${PL}"}
+  jira: {url: https://jira.example.com, token: t, webhook_secret: "${JR}"}
 `))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
-		// The engine resolved gitlab's secret and not plane's — which is
+		// The engine resolved gitlab's secret and not jira's — which is
 		// exactly what an unset ${VAR} on one of them looks like.
 		Verifiable: func() []string { return []string{"gitlab"} },
 	}, "integrations", nil))
@@ -847,12 +847,12 @@ integrations:
 	if got := byKind["gitlab"]["secret_usable"]; got != true {
 		t.Errorf("gitlab secret_usable = %v, want true", got)
 	}
-	if got := byKind["plane"]["secret_present"]; got != true {
-		t.Errorf("plane secret_present = %v — the fixture must configure one, "+
+	if got := byKind["jira"]["secret_present"]; got != true {
+		t.Errorf("jira secret_present = %v — the fixture must configure one, "+
 			"or the comparison below proves nothing", got)
 	}
-	if got := byKind["plane"]["secret_usable"]; got != false {
-		t.Errorf("plane secret_usable = %v, want false — its secret is written "+
+	if got := byKind["jira"]["secret_usable"]; got != false {
+		t.Errorf("jira secret_usable = %v, want false — its secret is written "+
 			"down and this process could not resolve it, which is a route "+
 			"refusing every delivery", got)
 	}
@@ -960,12 +960,12 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 		t.Skipf("the dashboard tree is not in this checkout: %v", err)
 	}
 
-	// EVERY vendor, because the per-vendor detail fields (url, workspace)
-	// only appear on the rows that have them — a fixture missing one reports
-	// its field as a mismatch that is really a gap in the fixture.
+	// EVERY vendor, because the per-vendor detail fields (url, seats) only
+	// appear on the rows that have them — a fixture missing one reports its
+	// field as a mismatch that is really a gap in the fixture.
 	cfg := company(t)
-	cfg.Integrations.Plane = &config.Plane{
-		Enabled: true, URL: "https://plane.example.com", Workspace: "acme",
+	cfg.Integrations.Jira = &config.Jira{
+		URL: "https://jira.example.com", Token: "t", WebhookSecret: "jr",
 	}
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
@@ -976,8 +976,8 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	if len(rows) == 0 {
 		t.Fatal("the answer carried no integrations, so this proves nothing")
 	}
-	// Across every row, not just the first: `url`, `workspace` and `seats`
-	// are per-vendor detail, so a field carried by ANY row is a field the
+	// Across every row, not just the first: `url` and `seats` are
+	// per-vendor detail, so a field carried by ANY row is a field the
 	// answer knows how to send.
 	sent := map[string]bool{}
 	for _, r := range rows {

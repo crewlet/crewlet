@@ -38,12 +38,10 @@ providers:
       api_keys:
         - "${OPENAI_API_KEY}"
 integrations:
-  plane:
-    enabled: true
-    url: "${PLANE_URL}"
-    workspace: acme
-    webhook_secret: "${PLANE_WEBHOOK_SECRET}"
-    token: "${PLANE_TOKEN}"
+  confluence:
+    url: "${CONFLUENCE_URL}"
+    webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"
+    token: "${CONFLUENCE_TOKEN}"
   mattermost:
     enabled: true
     url: https://mm.example.com
@@ -82,7 +80,8 @@ func TestCompanyRoundTripsThroughYAML(t *testing.T) {
 	// A resolved secret in an export is the leak that keeping references
 	// verbatim exists to prevent.
 	for _, ref := range []string{
-		"${ANTHROPIC_API_KEY}", "${PLANE_URL}", "${PLANE_WEBHOOK_SECRET}", "${PLANE_TOKEN}",
+		"${ANTHROPIC_API_KEY}", "${CONFLUENCE_URL}",
+		"${CONFLUENCE_WEBHOOK_SECRET}", "${CONFLUENCE_TOKEN}",
 	} {
 		if !strings.Contains(string(encoded), ref) {
 			t.Fatalf("the export lost %s:\n%s", ref, encoded)

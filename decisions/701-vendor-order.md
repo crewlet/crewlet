@@ -1,6 +1,9 @@
 # d-701 — Vendor order for v1
 
-**Status:** decided
+**Status:** decided; **partly superseded by [`d-705`](705-dropping-plane.md)**,
+which drops Plane. The order below is the record of how v1 was built and why;
+the vendor it was built around is no longer served. The reasoning stands
+unedited — what a decision cost is not something a later reversal unmakes.
 
 ## The question
 

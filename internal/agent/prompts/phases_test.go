@@ -8,15 +8,15 @@ import (
 // -- Onboarding ----------------------------------------------------------
 
 // The one-time pass points at the team's knowledge-base MCP server by
-// capability, not by product: the same header has to read correctly for a
-// company on Confluence and a company on Plane.
+// capability, not by product: the same header has to read correctly whatever
+// knowledge base a company runs.
 func TestOnboardingHeaderIsBackendNeutral(t *testing.T) {
 	t.Parallel()
 	contains(t, OnboardingHeader,
 		"knowledge-base search / read tools",
 		"a page-search / get-page tool on your team's knowledge-base server")
 	lowered := strings.ToLower(OnboardingHeader)
-	excludes(t, lowered, "confluence", "atlassian", "plane")
+	excludes(t, lowered, "confluence", "atlassian", "jira")
 }
 
 func TestOnboardingPromptRendersHintAndCatalogue(t *testing.T) {

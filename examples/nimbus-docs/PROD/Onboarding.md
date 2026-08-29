@@ -9,17 +9,17 @@
 | **PM** | `agent-pm` | Market research, backlog construction, competitive analysis, prioritisation across both product lines. Manages DevRel. |
 
 The PM bridges CEO direction and engineering execution. They do not
-write code; they write the Plane work items that engineers ship against.
+write code; they write the Jira work items that engineers ship against.
 
 ### Backlog hygiene
 
 | Practice | Rule |
 |---|---|
-| Hierarchy | Epic → Story → Task → Subtask (Plane work items with parent/child relations). Every story belongs to an epic-level work item; every task belongs to a story. |
+| Hierarchy | Epic → Story → Task → Subtask (Jira work items with parent/child relations). Every story belongs to an epic-level work item; every task belongs to a story. |
 | Acceptance criteria | Mandatory before a story moves to `To Do`. Engineers will refuse ambiguous stories — comment back asking for criteria. |
 | Labels | Use labels for product line (`phase-1-control-plane` / `phase-2-framework`), surface (`api`, `ui`, `runtime`, `docs`), and theme (`gpu`, `multi-cluster`, `serving`, etc.). |
 | Estimates | Story-point estimates on every story before sprint start. |
-| Assignment | Set the Plane assignee explicitly — never rely on implicit ownership. If you assign to yourself, do it so engineers can filter for unassigned work. |
+| Assignment | Set the Jira assignee explicitly — never rely on implicit ownership. If you assign to yourself, do it so engineers can filter for unassigned work. |
 | Duplicates | Search before creating. Merge or close duplicates immediately; do not let the backlog accumulate noise. |
 
 ### Research workflow
@@ -85,7 +85,7 @@ ordering.
 ### What stays out of Product Management
 
 - **Architecture decisions.** CTO and AI Systems Engineer own those.
-  You can ask for a decision via a Plane work item; you do not make it.
+  You can ask for a decision via a Jira work item; you do not make it.
 - **Implementation.** No engineering tickets for the PM (other than
   research stories).
 - **Code reviews.** Not your scope.
@@ -196,7 +196,7 @@ If an example breaks, the MR is blocked. That's how you stop bit-rot.
 When `nimbus-hq/<framework>` and `nimbus-hq/console` have public
 issues enabled, watch them. For each new issue:
 
-- **Bug or feature request** → file a Plane work item against the owning
+- **Bug or feature request** → file a Jira work item against the owning
   role (likely `ENG`), link the GitLab issue, comment on GitLab with
   the work-item link.
 - **Usage question** → answer if you can; add to the `FAQ Backlog`
@@ -207,7 +207,7 @@ issues enabled, watch them. For each new issue:
 ### What stays out of Developer Relations
 
 - **Code changes** beyond docstrings and example scripts. Propose
-  changes via a Plane work item to the owning engineer.
+  changes via a Jira work item to the owning engineer.
 - **Architecture decisions.** You report on them; you do not write
   them.
 - **Backlog ordering.** That's the PM's call.

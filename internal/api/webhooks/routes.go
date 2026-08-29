@@ -136,47 +136,6 @@ func (r *Receiver) gitlab(w http.ResponseWriter, req *http.Request) {
 	}, statusOK)
 }
 
-func (r *Receiver) plane(w http.ResponseWriter, req *http.Request) {
-	raw, ok := r.body(w, req)
-	if !ok {
-		return
-	}
-	if !r.serving(w, "plane", req.Header.Get("X-Plane-Event")) {
-		return
-	}
-	v, ok := r.authenticate(w, "plane", r.secrets().Plane,
-		req.Header.Get("X-Plane-Signature"), raw, verifyPlane)
-	if !ok {
-		return
-	}
-	body, ok := parseBody(w, raw)
-	if !ok {
-		return
-	}
-	event := headerOr(req, "X-Plane-Event", orElse(str(body, "event"), "unknown"))
-	// The action rides on the dashboard's event type so create, update and
-	// delete stay distinguishable in the feed's filter — Plane sends all
-	// three under one event name.
-	label := "webhook:" + event
-	if action := str(body, "action"); action != "" {
-		label += "." + action
-	}
-	r.accept(w, req, v, delivery{
-		source:  "plane",
-		label:   label,
-		summary: planeSummary(body),
-		body:    body,
-		raw:     raw,
-		// NO DELIVERY ID. Plane sends none — X-Plane-Delivery is
-		// per-ATTEMPT, so it is the opposite of a dedupe key — and the
-		// payload is what stays identical across a retry. See [bodyKey].
-		// Plane retries five times and then auto-disables a hook, so the
-		// redelivery volume this collapses is not hypothetical.
-		key:     bodyKey(raw),
-		headers: safeHeaders(req.Header),
-	}, statusOK)
-}
-
 func (r *Receiver) jira(w http.ResponseWriter, req *http.Request) {
 	raw, ok := r.body(w, req)
 	if !ok {

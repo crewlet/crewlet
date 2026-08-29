@@ -12,10 +12,17 @@ import (
 	"github.com/crewlet/crewlet/internal/whsec"
 )
 
-// The provider signature schemes. Four of them, over seven routes: GitHub's
-// prefixed hex, Atlassian's identically-shaped X-Hub-Signature (Jira and
-// Confluence are one scheme, so they are one function), Plane's bare hex,
-// Slack's v0 basestring, and GitLab's Standard-Webhooks base64.
+// The provider signature schemes. THREE schemes in four functions, over the
+// five routes that verify a shared secret: GitHub's prefixed hex, Atlassian's
+// identically-shaped X-Hub-Signature (the same scheme, so verifyAtlassian
+// delegates; Jira and Confluence then share that one function), Slack's v0
+// basestring, and GitLab's Standard-Webhooks base64.
+//
+// Counted as schemes rather than as functions on purpose — what a reader is
+// usually checking here is whether a provider's shape is handled, not how
+// many func literals it took. The sixth route, the Forge relay, is not one of
+// them: it verifies an invocation JWT against Atlassian's published keys
+// rather than an HMAC, and lives in forge.go.
 //
 // Every one of them decodes the presented signature and compares BYTES with
 // hmac.Equal. Comparing the hex or base64 TEXT instead would make the check
@@ -52,11 +59,6 @@ func verifyGitHub(body []byte, secret, signature string) bool {
 // silent, because each half stays self-consistent.
 func verifyAtlassian(body []byte, secret, signature string) bool {
 	return verifyGitHub(body, secret, signature)
-}
-
-// verifyPlane checks X-Plane-Signature: the bare hex digest of the raw body.
-func verifyPlane(body []byte, secret, signature string) bool {
-	return equalHex(signature, mac(secret, body))
 }
 
 // verifySlack checks Slack's v0 scheme over "v0:{timestamp}:{body}".

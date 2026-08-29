@@ -6,7 +6,7 @@ description: >
   schedules, integrations) and the Tier A config.yaml bootstrap. Use
   when someone wants to set up, design, extend, or restructure a Crewlet
   AI agent company, add or remove a seat or team, wire in an integration
-  (Plane, Jira, Confluence, Mattermost, Slack, GitLab, GitHub, the code
+  (Jira, Confluence, Mattermost, Slack, GitLab, GitHub, the code
   sandbox), or
   when they hand you a company.yaml to review, fix, or explain.
 ---
@@ -144,7 +144,8 @@ reinvent them:
 - [Quickstart](https://docs.crewlet.ai/getting-started/quickstart) — four seats,
   zero integrations, the minimal end-to-end config.
 - [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) —
-  a complete seven-seat company with Plane + GitLab + Mattermost + sandbox.
+  a complete seven-seat company with Jira + Confluence + GitLab + Mattermost
+  + sandbox.
 
 ## Invariants
 
@@ -164,15 +165,19 @@ supports `${ENV_VAR}`. Put the reference in the YAML and the value in
 even a draft, even one you expect to be deleted.
 
 **Seats you will provision need a *whole-value* `${VAR}`.**
-`crewlet plane provision` / `crewlet gitlab provision` mint per-agent
+`crewlet mattermost provision` / `crewlet gitlab provision` mint per-agent
 tokens *into the config's own references*, and that capture contract
-requires the value to be exactly one reference — `"${PLANE_TOKEN_CEO}"`,
-never `"tok-${SUFFIX}"` or a literal. One distinct variable per seat.
+requires the value to be exactly one reference —
+`"${MATTERMOST_TOKEN_CEO}"`, never `"tok-${SUFFIX}"` or a literal. One
+distinct variable per seat. Atlassian and GitHub mint nothing: create
+those accounts and tokens by hand, and their commands report which
+account each credential turned out to be.
 
-**The knowledge backend is single-homed.** Plane XOR Confluence — the
-config rejects both. Jira + Plane may coexist; Confluence + Plane may
-not. Pick one and put the org-wide read scope in `knowledge.plane_projects`
-or `knowledge.confluence_spaces`.
+**The knowledge backend is single-homed.** The engine wires exactly one
+`knowledge.Searcher`, and Confluence is the backend behind it. Put the
+org-wide read scope in `knowledge.confluence_spaces` — and note a scope
+naming a backend the config does not configure is refused, because it
+reads as a working narrowing and narrows nothing.
 
 **`integrations.*.project` / `.space` is identity, not read scope, and
 not a credential.** On a unit or root role it means "this team's home":
@@ -217,7 +222,7 @@ which needs `providers.sandbox` configured. See
 
 **The engine ships no tool-skill prose.** If they want agents to know
 *how* to use a tool, that is a knowledge-base page published with
-`crewlet plane import` / `crewlet confluence import`, not prompt text in
+`crewlet confluence import`, not prompt text in
 the config. See [Tool skills](https://docs.crewlet.ai/concepts/tool-skills).
 
 ## Writing style for the fields that become prompts

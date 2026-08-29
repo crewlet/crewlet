@@ -146,8 +146,8 @@ func tail(s string) string {
 
 // ── the recon path, end to end ──
 
-// wikiInstance is a fake Plane serving the two reads a knowledge search
-// makes: the project list the identifier cache walks, and the page search.
+// wikiInstance is a fake Confluence serving the one read a knowledge search
+// makes: the CQL content search.
 type wikiInstance struct {
 	url string
 
@@ -160,18 +160,19 @@ func fakeWiki(t *testing.T) *wikiInstance {
 	w := &wikiInstance{}
 	server := httptest.NewServer(http.HandlerFunc(
 		func(rw http.ResponseWriter, r *http.Request) {
-			switch {
-			case strings.HasSuffix(r.URL.Path, "/pages/search/"):
+			if strings.HasSuffix(r.URL.Path, "/content/search") {
+				// THE CQL, not the plain query: what this asserts is
+				// that the aux model's text reached the instance, and it
+				// arrives wrapped in the scope clause BuildCQL adds.
 				w.mu.Lock()
-				w.queries = append(w.queries, r.URL.Query().Get("query"))
+				w.queries = append(w.queries, r.URL.Query().Get("cql"))
 				w.mu.Unlock()
-				fmt.Fprint(rw, `{"results":[{"id":"page-1","name":"Staging runbook",`+
-					`"project":"proj-1","description_stripped":"how the proxy is wired"}]}`)
-			case strings.HasSuffix(r.URL.Path, "/projects/"):
-				fmt.Fprint(rw, `{"results":[{"id":"proj-1","identifier":"ENG"}]}`)
-			default:
-				fmt.Fprint(rw, `{"results":[]}`)
+				fmt.Fprint(rw, `{"results":[{"id":"page-1","title":"Staging runbook",`+
+					`"space":{"key":"ENG"},`+
+					`"body":{"storage":{"value":"how the proxy is wired"}}}]}`)
+				return
 			}
+			fmt.Fprint(rw, `{"results":[]}`)
 		}))
 	t.Cleanup(server.Close)
 	w.url = server.URL
@@ -184,23 +185,21 @@ func (w *wikiInstance) searched() []string {
 	return append([]string(nil), w.queries...)
 }
 
-// wikiCompany enables Plane WITH a read credential and a read SCOPE.
+// wikiCompany enables Confluence WITH a read credential and a read SCOPE.
 //
-// Both are needed: a seat searching on the shared engine credential may not
+// Both are needed: a seat searching on the shared org credential may not
 // search unscoped, because an unscoped search on a shared credential shows
 // one seat pages its own account could never read. The scope is what makes
 // the search permitted at all.
 func wikiCompany(url string) func(string) string {
 	return func(doc string) string {
 		return strings.Replace(doc, "roles:\n", `integrations:
-  plane:
-    enabled: true
+  confluence:
     url: `+url+`
-    workspace: nimbus
-    webhook_secret: ${CREWLET_TEST_PLANE_SECRET}
-    token: plane-engine-token
+    token: confluence-org-token
+    webhook_secret: ${CREWLET_TEST_CONFLUENCE_SECRET}
 knowledge:
-  plane_projects: [ENG]
+  confluence_spaces: [ENG]
 roles:
 `, 1)
 	}

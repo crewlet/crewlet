@@ -1,6 +1,9 @@
 # d-703 — An integration this build cannot serve is refused
 
 Status: **decided by the project owner, implemented, and now fully unwound.**
+One row has since been dropped rather than served — see
+[`d-705`](705-dropping-plane.md), which removes Plane and with it the
+Confluence-XOR-Plane single-homing rule this document records coming back.
 Every vendor it refused is served, so the mechanism it describes — the
 `unservedIntegrations` table, `refuseUnserved`, the `ErrUnimplemented`
 sentinel and the `js:"unimplemented"` schema directive — is **deleted**.

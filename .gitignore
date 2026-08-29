@@ -14,7 +14,8 @@
 
 .env
 # Minted-credential env files the provisioning CLIs write from the repo
-# root (.env.plane, .env.gitlab, any operator variant) — never committable.
+# root (.env.gitlab, .env.mattermost, any operator variant) — never
+# committable.
 .env.*
 # ...except the committed template.
 !.env.example

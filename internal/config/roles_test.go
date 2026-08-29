@@ -120,7 +120,7 @@ roles:
       labels: {zone: eu}
     integrations:
       mattermost: {bot_token: "${MM_SWE}", username: swe-bot, channel: eng}
-      plane: {project: ENGP}
+      jira: {project: ENGP}
     sandbox:
       enabled: true
       coding_agent: opencode
@@ -137,15 +137,15 @@ roles:
 		seat.Mattermost.Channel != "eng" {
 		t.Fatalf("mattermost = %+v", seat.Mattermost)
 	}
-	if seat.PlaneProject != "ENGP" {
-		t.Fatalf("plane project = %q", seat.PlaneProject)
+	if seat.JiraProject != "ENGP" {
+		t.Fatalf("jira project = %q", seat.JiraProject)
 	}
-	// The other two identities cannot be authored any more — jira and
-	// confluence are refused — and a config that cannot name one must not
-	// produce one from somewhere else.
-	if seat.JiraProject != "" || seat.ConfluenceSpace != "" {
-		t.Fatalf("a seat that named no Jira or Confluence identity got %q and %q",
-			seat.JiraProject, seat.ConfluenceSpace)
+	// The identity this seat did NOT author must stay empty: the two are
+	// read from separate blocks, and a seat that names one must not come
+	// out carrying the other from somewhere else.
+	if seat.ConfluenceSpace != "" {
+		t.Fatalf("a seat that named no Confluence identity got %q",
+			seat.ConfluenceSpace)
 	}
 	if seat.Placement.Node != "node-2" || seat.Placement.Labels["zone"] != "eu" {
 		t.Fatalf("placement = %+v", seat.Placement)

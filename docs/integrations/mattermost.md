@@ -684,8 +684,8 @@ roles:
 ## Local testing
 
 Mattermost ships in this repo's `docker-compose.yml` behind a profile, like
-GitLab and Plane — one compose file for everything, and `docker compose up`
-leaves it out:
+GitLab — one compose file for everything, and `docker compose up` leaves it
+out:
 
 ```bash
 docker compose --profile mattermost up -d --wait
@@ -731,10 +731,9 @@ COMPANY=my_company.yaml scripts/mattermost-dev-bootstrap.sh
 ### First run, end to end
 
 The example org in `examples/nimbus.company.yaml` is **not** the shortest way
-to try this. It sets `integrations.plane.enabled: true` and
-`integrations.gitlab.enabled: true`, so loading it needs the whole Plane
-stack and a GitLab — a lot of infrastructure to stand up before you can send
-one chat message. Adding Mattermost to Nimbus is a supported thing to do
+to try this. It configures Jira, Confluence and `integrations.gitlab.enabled:
+true`, so loading it needs an Atlassian site and a GitLab — a lot of
+infrastructure to stand up before you can send one chat message. Adding Mattermost to Nimbus is a supported thing to do
 (chat backends run alongside each other, and alongside Slack), but do it
 *after* you have seen the loop work.
 
@@ -901,9 +900,9 @@ If you point Crewlet at a Mattermost you host yourself, enable both under
 `crewlet mattermost provision` refuses to start without them rather than
 half-provisioning the fleet.
 
-Unlike the GitLab and Plane loops, **nothing has to reach the engine**. Those
-two POST webhooks into it, so they need `host.docker.internal` and a
-reachable address; Mattermost never calls the engine at all. The whole loop
+Unlike the GitLab loop, **nothing has to reach the engine**. GitLab POSTs
+webhooks into it, so it needs `host.docker.internal` and a reachable
+address; Mattermost never calls the engine at all. The whole loop
 works behind NAT with no tunnel.
 
 **On a remote host, set `MATTERMOST_PUBLIC_URL`** to the address browsers

@@ -867,11 +867,11 @@ func ensureHooks(ctx context.Context, opts Options, groupID int, projects []stri
 // behind, and the operator's fix — create the project, re-run — is what the
 // note tells them to do.
 //
-// It is the opposite call from the Plane importer, deliberately. There a
-// missing project aborts before a single page is written, because half an
-// import looks like a complete knowledge base with holes in it. Memberships
-// and hooks are additive and independent: the seats that could be added
-// were added, and re-running adds the rest.
+// It is the opposite call from a knowledge-base importer, deliberately.
+// There a missing container aborts before a single page is written, because
+// half an import looks like a complete knowledge base with holes in it.
+// Memberships and hooks are additive and independent: the seats that could
+// be added were added, and re-running adds the rest.
 func resolveProjects(ctx context.Context, c *Client, declared []string) ([]string, []string, error) {
 	kept := make([]string, 0, len(declared))
 	var missing []string

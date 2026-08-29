@@ -120,8 +120,8 @@ Mines recurring successful trajectories and drafts a new procedural skill.
   - **Distinct seats, not skills.** One seat that drafted four near-identical skills is a catalogue that needs curating, not a team convergence — counting rows rather than owners would promote it and present one agent's habit as the unit's practice.
   - **Direct members only.** A parent unit does not pool its children's catalogues: it would find the convergence the child already promoted and draft it again one level up, on a page naming a team that never converged on anything.
   - **The draft is hidden until a person publishes it.** The `## Relevant knowledge` search excludes the auto-drafted subtree (and, as a fail-closed backstop where a backend has no parent chain, the `[Auto-draft] ` title prefix), so an unvetted draft never reaches another agent. A lead adopts one by moving it out of that parent; once published it is an ordinary knowledge-base page reachable through the query-time search. Rejecting one is a delete — it is re-drafted only if the team converges again.
-  - **One backend, matched.** The pass writes through a small `PromotionWriter` seam implemented per backend: `ConfluencePromotionWriter` posts rendered storage-format XHTML under the unit's `integrations.confluence.space`, creating the `Auto-Drafted Skills` parent if the space has none — and **refusing the draft** rather than filing it at the space root if that parent cannot be created, because a page outside the subtree is one every agent can read. `PlanePromotionWriter` posts into the unit's `integrations.plane.project`. Which field a unit's container comes from follows the *wired* backend, never a preference order: a unit may carry both identities (Plane as its tracker, Confluence as its wiki), and handing a space key to the Plane writer would file into whatever project happened to share the name.
-  - **Cross-tick dedup is the writer's job**, per backend, because the pass re-clusters the same persisted rows every tick and would otherwise yield one draft a day forever. Confluence keys on the title, which is unique within a space; Plane keys on `external_id="draft:<name>"`, which survives a lead renaming the draft while reviewing it — a name-keyed check would create a second copy beside the one they are editing. Either way one converging cluster yields one page, and a tick that finds the existing draft stays quiet rather than re-announcing the promotion.
+  - **One backend, matched.** The pass writes through a small `PromotionWriter` seam: `ConfluencePromotionWriter` posts rendered storage-format XHTML under the unit's `integrations.confluence.space`, creating the `Auto-Drafted Skills` parent if the space has none — and **refusing the draft** rather than filing it at the space root if that parent cannot be created, because a page outside the subtree is one every agent can read. The container is the unit's **wiki space**, never its tracker project: a unit carries both identities, and filing a draft under the tracker's key would create a page in whatever space happened to share the name, or fail against nothing at all.
+  - **Cross-tick dedup is the writer's job**, because the pass re-clusters the same persisted rows every tick and would otherwise yield one draft a day forever. Confluence keys on the title, which is unique within a space. One converging cluster yields one page, and a tick that finds the existing draft stays quiet rather than re-announcing the promotion.
   - **A unit with no container is soft-skipped** with the field to set in the log; a company that configured knowledge for one team and not another is supported, and failing would stop the configured team's promotions too. A write failure announces nothing, and the next tick retries.
   - Success publishes `SkillPromoted` carrying the unit, the `container_key`, the `page_id` / `page_title`, and both `sibling_count` and `distinct_agents` — one agent repeating itself and five agents converging are different findings.
   - The engine carries no unit-scope skill rows of its own.
@@ -166,15 +166,15 @@ The dispatcher is a queue consumer, so it usually runs on a node that never saw 
 
 ## Prompt scaffolding
 
-Short, conditional guidance fragments are appended to the Plan-phase system prompt, injected **only when the matching tool is registered for the role**. This scaffolding is sourced from the [Tool Skills](tool-skills.md) registry — knowledge-base pages (Confluence or Plane) operators can edit at runtime — rather than being hardcoded in engine prose. The bundled `examples/tool-skills/` files ship ready-made versions:
+Short, conditional guidance fragments are appended to the Plan-phase system prompt, injected **only when the matching tool is registered for the role**. This scaffolding is sourced from the [Tool Skills](tool-skills.md) registry — knowledge-base pages (Confluence) operators can edit at runtime — rather than being hardcoded in engine prose. The bundled `examples/tool-skills/` files ship ready-made versions:
 
 | Bundled skill | Trigger | What it teaches |
 |---|---|---|
 | `examples/tool-skills/reflect-and-persist.md` | `tool: reflect_and_persist` | Persist *declarative facts, not instructions to yourself*. |
 | `examples/tool-skills/refine-skill.md` | `tool: refine_skill` | Patch a loaded skill when it goes stale; don't wait to be asked. |
-| `examples/tool-skills/retrieval-research.md` | `any_of` of `query_episodes` / the `plane` MCP server / `refresh_memory` | The consolidated retrieval re-search rule — see below. |
+| `examples/tool-skills/retrieval-research.md` | `any_of` of `query_episodes` / the `atlassian` MCP server / `refresh_memory` | The consolidated retrieval re-search rule — see below. |
 | `examples/tool-skills/observed-directives.md` | `tool: slack_conversations_add_message` | Share team-relevant directives via the agent's broadcast surface. |
-| `examples/tool-skills/getting-unstuck.md` | `any_of` of colleague-surface tools (Slack post / the `plane` MCP server / `a2a_ask`) | Manager-handoff conventions — when stuck, mention manager on the surface where the problem lives. |
+| `examples/tool-skills/getting-unstuck.md` | `any_of` of colleague-surface tools (chat post / the `atlassian` MCP server / `a2a_ask`) | Manager-handoff conventions — when stuck, mention manager on the surface where the problem lives. |
 | `examples/tool-skills/channel-discovery.md` | `any_of` of Slack discovery tools | How to find the right Slack channel via `channels_list`, and how to fall back when membership is missing. |
 
 The `retrieval-research` skill carries the **consolidated retrieval re-search block**. The three relevance prefetches — `## Similar prior work`, `## Relevant knowledge`, `## Personal memory` — are all derived from the *triggering message as it stood at turn start, before any recon*, so they share one rule: after recon has given the planner a richer query, re-query the corresponding tool — *even when the initial block already had entries*. Rather than repeat that rule in three near-identical blocks, the shared preamble states it once and one terse per-tool line (`query_episodes` / the knowledge backend's page-search tools / `refresh_memory`) is appended for each re-query tool the role actually has. On a thin trigger the turn-start message genuinely is a bare pointer (the [thin-trigger gate](#thin-trigger-gate) skips the prefetch entirely); on a substantive trigger it is the whole message but still pre-recon. Either way the guidance makes the assumption legible to the LLM so the re-query pattern does not rest on the model guessing.
@@ -227,21 +227,21 @@ The `refresh_memory(context_hint=…)` builtin fixes both. The `refresh_memory` 
 
 ## Relevant-knowledge prefetch
 
-The Plan-phase `## Relevant knowledge` block surfaces team-published documents — playbooks, runbooks, ADRs, conventions, design docs, anything in the agent's accessible knowledge-base containers — without forcing the planner to discover them by guessing names against `use_skill` or by remembering to call the knowledge-search tool first. It runs a live knowledge-base search once per turn through the [`knowledge.Searcher` seam](knowledge-system.md#the-knowledgesearcher-seam) (Confluence CQL or Plane page search — one backend per org); the [Personal memory prefetch](#personal-memory-prefetch--refresh) is the closest sibling in spirit, though that one reads the private diary via hybrid vector ∪ recency candidate selection filtered by an aux-LLM relevance pass.
+The Plan-phase `## Relevant knowledge` block surfaces team-published documents — playbooks, runbooks, ADRs, conventions, design docs, anything in the agent's accessible knowledge-base containers — without forcing the planner to discover them by guessing names against `use_skill` or by remembering to call the knowledge-search tool first. It runs a live knowledge-base search once per turn through the [`knowledge.Searcher` seam](knowledge-system.md#the-knowledgesearcher-seam) (Confluence CQL — one backend per org); the [Personal memory prefetch](#personal-memory-prefetch--refresh) is the closest sibling in spirit, though that one reads the private diary via hybrid vector ∪ recency candidate selection filtered by an aux-LLM relevance pass.
 
 ### Why "knowledge" and not "skills"
 
 An alternative design would carve out a special "team-skill" label so operators could mark certain pages as procedures meant for agents. That reintroduces an operator-curated/synthesized skill split — two parallel skill surfaces to maintain — which the project deliberately avoids.
 
-The shipped design takes the opposite stance: **a knowledge-base page is a knowledge-base page**. The search runs against the agent's accessible containers and the backend's own ranking decides which pages come back (Confluence: relevance; Plane: recency); there is no engine-side "skill" label or parallel surface to maintain.
+The shipped design takes the opposite stance: **a knowledge-base page is a knowledge-base page**. The search runs against the agent's accessible containers and the backend's own relevance ranking decides which pages come back; there is no engine-side "skill" label or parallel surface to maintain.
 
 ### Source: query-time knowledge-base search
 
 For each Plan turn:
 
 1. The searcher gate runs: `searcher.can_search(role, org)` — a cheap, no-I/O check that a search could return anything (the role has accessible containers, or its own backend credentials for an unscoped search). When it says no, the aux-LLM query-generation call is skipped entirely.
-2. The role's auxiliary model (`role.llm_auxiliary`) turns the task description into a short plain-text keyword query (the user prompt ends `Knowledge-base search query:`). Scope is **not** the aux model's job — the searcher derives it internally from the org-wide `knowledge.*` list via [`accessible_spaces` / `accessible_projects`](knowledge-system.md#accessible-containers). There is no per-unit/role union: a unit's `integrations.confluence.space` / `integrations.plane.project` is integration identity (webhook routing + write home), not read scope.
-3. The searcher runs the query as the agent's own backend user (per-agent token from `mcp_env.atlassian` / `mcp_env.plane`, falling back to the org-level token) — on Confluence as a CQL `text ~ "..."` clause narrowed by `space IN (...)`, on Plane sent verbatim to the fork's tokenised page search narrowed by resolved project UUIDs. The backend enforces page permissions natively, so restricted pages the agent cannot see never appear; unreviewed [auto-drafts](#5-skillsynthesizer--skill-induction) are excluded via the default `exclude_ancestors=["Auto-Drafted Skills"]`.
+2. The role's auxiliary model (`role.llm_auxiliary`) turns the task description into a short plain-text keyword query (the user prompt ends `Knowledge-base search query:`). Scope is **not** the aux model's job — the searcher derives it internally from the org-wide `knowledge.*` list via [accessible containers](knowledge-system.md#accessible-containers). There is no per-unit/role union: a unit's `integrations.confluence.space` is integration identity (webhook routing + write home), not read scope.
+3. The searcher runs the query as the agent's own backend user (per-agent token from `mcp_env.atlassian`, falling back to the org-level token) — as a CQL `text ~ "..."` clause narrowed by `space IN (...)`. The backend enforces page permissions natively, so restricted pages the agent cannot see never appear; unreviewed [auto-drafts](#5-skillsynthesizer--skill-induction) are excluded via the default `exclude_ancestors=["Auto-Drafted Skills"]`.
 
 ### Flow
 
@@ -250,14 +250,14 @@ flowchart TD
     A["Plan turn start"] --> B{"searcher.can_search(role, org)?"}
     B -->|no| SKIP["skip — no aux call"]
     B -->|yes| C["aux-LLM generates a keyword query (role.llm_auxiliary)<br/>in: task text · out: a short plain-text query,<br/>e.g. 'hotfix deploy rollback'"]
-    C --> D["searcher.search(query, role, org)<br/>scope derived internally: Confluence CQL / Plane page search,<br/>accessible_spaces/_projects(org), agent's own backend auth"]
+    C --> D["searcher.search(query, role, org)<br/>scope derived internally: Confluence CQL,<br/>accessible spaces from org, agent's own backend auth"]
     D --> E["render bullets: one per hit, title + snippet"]
     E --> F["bake into the Plan-prompt '## Relevant knowledge' block<br/>(frozen at turn start)"]
 ```
 
 ### Loading full bodies
 
-The bullets render title + snippet — enough for the planner to decide which pages to open. To pull a full body or run a fresh search, the planner uses the backend's MCP tools — on Confluence `confluence_get_page` / `confluence_search`, on Plane the `plane` server's page read/search tools. The block prose describes the capability, never a hardcoded tool name.
+The bullets render title + snippet — enough for the planner to decide which pages to open. To pull a full body or run a fresh search, the planner uses the backend's MCP tools — `confluence_get_page` / `confluence_search`. The block prose describes the capability, never a hardcoded tool name.
 
 ### Hardening
 
@@ -284,8 +284,8 @@ The post-Plan re-fetch emits its own `RelevantKnowledgeRefetched` event whenever
 
 A block stuck at 0% hit rate over a representative window is almost always one of:
 
-- No `knowledge.confluence_spaces` / `knowledge.plane_projects` configured **and** the agent has no per-agent backend credentials, so it can't search unscoped (a credential-less / fallback-token agent with no containers searches nothing — `can_search` gates the whole prefetch off).
-- Neither `confluence` nor an enabled `integrations.plane` configured, so no searcher is wired — or no pages in the accessible containers match. On Plane, also check **project membership**: the search is membership-scoped, so a seat that isn't a member of the scoped projects silently gets nothing (see [Plane § Knowledge scope](../integrations/plane.md#knowledge-scope)).
+- No `knowledge.confluence_spaces` configured **and** the agent has no per-agent backend credentials, so it can't search unscoped (a credential-less / fallback-token agent with no containers searches nothing — `can_search` gates the whole prefetch off).
+- No `confluence` configured, so no searcher is wired — or no pages in the accessible spaces match. Also check the seat's own **page permissions**: the search runs as that account, so a space it cannot read silently contributes nothing (see [Confluence § Knowledge search](../integrations/confluence.md)).
 - Aux LLM unavailable (`llm_auxiliary` not configured and the role's primary `llm` doesn't resolve as an aux provider), so query generation cannot run.
 
 ---
@@ -300,7 +300,7 @@ The gate skips the aux call when the trigger is a pointer. It is **pure logic �
 
 | Stage | Carries the signal |
 |---|---|
-| **Notification builder** | `notify.Prompt.RequiresRecon` — `True` when the builder emitted a "go fetch the real thing" directive. Jira / Confluence page / Plane work-item + page events (`## Get Full Context`), GitHub `review_requested` ("read the diff"), Slack thread replies (read-the-thread). The generic builder returns `False` — its body *is* the message. |
+| **Notification builder** | `notify.Prompt.RequiresRecon` — `True` when the builder emitted a "go fetch the real thing" directive. Jira and Confluence page events (`## Get Full Context`), GitHub `review_requested` ("read the diff"), Slack thread replies (read-the-thread). The generic builder returns `False` — its body *is* the message. |
 | **the notification service** | Carries the builder's answer onto the notification it publishes, so nothing downstream has to re-derive it. |
 | **The inbound interaction** | The flag is read off the trigger event into the interaction — the one normalized, platform-agnostic property workers *may* branch on (it is not an event-type check). A coalesced trigger yields one interaction per constituent message, all carrying the event-level merged flag, and the whole-trigger predicate is true when any of them is. A2A and internal `TaskAssigned` triggers carry their own context → always `False`. |
 | **Prefetch** | All three relevance prefetches read it: personal memory, relevant knowledge and episode recall. When set: skip the aux call (for personal memory the relevance filter, for relevant knowledge the query generation and live knowledge-base search, for episode recall the vector query). All three then render a **gate-path hint** so the block stays visible and self-explanatory rather than vanishing — `EmptyMemoryHint`, `EmptyKnowledgeHint` and `EmptyRecallHint` respectively — and the matching per-tool line in the [retrieval re-search guidance](#prompt-scaffolding) carries the same nudge. |
@@ -469,7 +469,7 @@ Every telemetry write — `mark_used`, `SkillUsed` publish, `PlanPrefetchSummary
 |---|---|
 | `internal/agent/turn` (TurnEngine) | Emits `turn_completed` carrying everything the reflection gates read: the plan summary and decision, the Plan and Execute tool sequences, the review outcome, the skills the prompt offered, and the inbound interactions with their senders resolved. |
 | `internal/agent/prompts` | Plan-phase prompt builders inject conditional guidance blocks gated on tool availability. |
-| `internal/knowledge` | The knowledge-search seam and its two backends — the Confluence searcher (CQL) and the Plane searcher (fork page search), one per company — backing the `## Relevant knowledge` prefetch; `accessibility` scopes it by space / project. See [Knowledge System](knowledge-system.md). |
+| `internal/knowledge` | The knowledge-search seam and its backend — the Confluence searcher (CQL), one per company — backing the `## Relevant knowledge` prefetch; accessible containers scope it by space. See [Knowledge System](knowledge-system.md). |
 | `internal/tools` (registry) | Builtins: `query_episodes`, `reflect_and_persist`, `refresh_memory`, `refine_skill`, `use_skill`, `mark_onboarded`. |
 | `internal/events` | `turn_completed`, `episode_written`, `persist_decider_completed`, `counterparty_profile_updated`, `reflection_completed`, `skill_synthesized`, `skill_refined`, `skill_promoted`, `skill_used`, `skill_staled`, `skill_archived`, `skill_revived`, `skill_telemetry_write_failed`, `plan_prefetch_summary`, `relevant_knowledge_refetched`, `compaction_requested`, `compaction_completed`. |
 | `internal/store` | Holds `episodes`, `agent_diary` and the dashboard's event log, in the node's own file. |
@@ -490,7 +490,7 @@ Every telemetry write — `mark_used`, `SkillUsed` publish, `PlanPrefetchSummary
 | `counterparty_profiles` | One row per `(observer, subject, platform)` | composite |
 | `agent_onboarding_markers` | `mark_onboarded` bookkeeping | `agent_id` (PK) |
 
-Shared knowledge has no table — the knowledge base (Confluence or Plane) is searched live (see [Knowledge System](knowledge-system.md)).
+Shared knowledge has no table — the knowledge base (Confluence) is searched live (see [Knowledge System](knowledge-system.md)).
 
 ---
 

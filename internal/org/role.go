@@ -44,7 +44,6 @@ const (
 	TransportConfluence Transport = "confluence"
 	TransportGitHub     Transport = "github"
 	TransportGitLab     Transport = "gitlab"
-	TransportPlane      Transport = "plane"
 )
 
 // handlePattern is the canonical handle shape. Slugify output always
@@ -98,11 +97,6 @@ type HumanContact struct {
 	// GitLabUsername is a GitLab username — assignment, review requests and
 	// sender attribution. Lowercased for the same reason as GitHubLogin.
 	GitLabUsername string `yaml:"gitlab_username,omitempty" json:"gitlab_username,omitempty"`
-
-	// PlaneUserID is a Plane workspace-member user UUID — assignment,
-	// subscriber and <mention-component> attribution. Lowercased: webhook
-	// payloads and GET /users/me both carry lowercase UUIDs.
-	PlaneUserID string `yaml:"plane_user_id,omitempty" json:"plane_user_id,omitempty"`
 }
 
 // contactField describes one identity field: what an operator writes, how
@@ -133,7 +127,6 @@ const (
 	fieldAtlassianAccountID
 	fieldGitHubLogin
 	fieldGitLabUsername
-	fieldPlaneUserID
 )
 
 // contactFields is every identity a contact can carry, in config order.
@@ -144,7 +137,6 @@ var contactFields = []contactField{
 	{key: "atlassian_account_id", value: func(c *HumanContact) *string { return &c.AtlassianAccountID }},
 	{key: "github_login", lowercase: true, value: func(c *HumanContact) *string { return &c.GitHubLogin }},
 	{key: "gitlab_username", lowercase: true, value: func(c *HumanContact) *string { return &c.GitLabUsername }},
-	{key: "plane_user_id", lowercase: true, value: func(c *HumanContact) *string { return &c.PlaneUserID }},
 }
 
 // contactTransports is THE transport-to-field table: which field carries a
@@ -163,7 +155,6 @@ var contactTransports = []struct {
 	{TransportConfluence, fieldAtlassianAccountID},
 	{TransportGitHub, fieldGitHubLogin},
 	{TransportGitLab, fieldGitLabUsername},
-	{TransportPlane, fieldPlaneUserID},
 }
 
 // Identity is one external account a human seat can be reached at.
@@ -486,16 +477,15 @@ type Role struct {
 	Slack      SlackIdentity      `yaml:"slack,omitempty" json:"slack,omitzero"`
 	Mattermost MattermostIdentity `yaml:"mattermost,omitempty" json:"mattermost,omitzero"`
 
-	// JiraProject, ConfluenceSpace and PlaneProject are this seat's
-	// integration IDENTITY: where inbound activity with no better recipient
-	// routes, and where the seat files its work. Meaningful for a root-level
-	// seat; for a unit-nested one the unit carries it.
+	// JiraProject and ConfluenceSpace are this seat's integration
+	// IDENTITY: where inbound activity with no better recipient routes, and
+	// where the seat files its work. Meaningful for a root-level seat; for
+	// a unit-nested one the unit carries it.
 	//
-	// None of them is an MCP credential, and none of them scopes what the
-	// seat can READ — read scope is org-wide, on the Organization.
+	// Neither is an MCP credential, and neither scopes what the seat can
+	// READ — read scope is org-wide, on the Organization.
 	JiraProject     string `yaml:"jira_project,omitempty" json:"jira_project,omitempty"`
 	ConfluenceSpace string `yaml:"confluence_space,omitempty" json:"confluence_space,omitempty"`
-	PlaneProject    string `yaml:"plane_project,omitempty" json:"plane_project,omitempty"`
 
 	// Schedules are this seat's own recurring work; each fires a task into
 	// this seat's inbox on its cron expression.
@@ -550,7 +540,6 @@ func (r *Role) humanForbidden() []string {
 		{"mattermost", !r.Mattermost.IsZero()},
 		{"integrations.jira", r.JiraProject != ""},
 		{"integrations.confluence", r.ConfluenceSpace != ""},
-		{"integrations.plane", r.PlaneProject != ""},
 		{"mcp_env", len(r.MCPEnv) > 0},
 		{"behavioral_guidelines", len(r.BehavioralGuidelines) > 0},
 	}

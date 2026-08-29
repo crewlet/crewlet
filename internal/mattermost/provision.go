@@ -18,7 +18,7 @@ import (
 //
 // # No manifest, no OAuth, no ledger
 //
-// This is the Plane and GitLab shape rather than Slack's. An admin token
+// This is the GitLab shape rather than Slack's. An admin token
 // mints a bot's access token directly, so there is no app to install, no
 // browser round trip to broker, and nothing to remember between runs — the
 // server IS the ledger, and a reconcile reads it.

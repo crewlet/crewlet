@@ -245,14 +245,14 @@ func TestMCPEnvWithDefaults(t *testing.T) {
 	}
 	seat := MCPEnv{
 		"atlassian": {"JIRA_API_TOKEN": "mine"},
-		"plane":     {"PLANE_API_KEY": "mine"},
+		"gitlab":    {"GITLAB_TOKEN": "mine"},
 	}
 	got := seat.WithDefaults(unit)
 
 	want := MCPEnv{
 		"atlassian": {"JIRA_URL": "https://acme.example.com", "JIRA_API_TOKEN": "mine"},
 		"github":    {"Authorization": "Bearer team"},
-		"plane":     {"PLANE_API_KEY": "mine"},
+		"gitlab":    {"GITLAB_TOKEN": "mine"},
 	}
 	if !mcpEnvEqual(got, want) {
 		t.Errorf("merged = %#v, want %#v", got, want)

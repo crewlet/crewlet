@@ -152,10 +152,9 @@ func printConfluenceResult(w io.Writer, res *confluence.PublishResult) {
 
 // `crewlet confluence resync` — the knowledge base's read-only diagnostic.
 //
-// The counterpart of `crewlet plane resync`, and it exists for the same
-// reason: the tool-skill registry is populated by a full walk of one space at
-// boot, and a skill that does not load is INVISIBLE — the only symptom is
-// guidance that never appears in a Plan prompt. This runs the engine's own
+// It exists because the tool-skill registry is populated by a full walk of
+// one space at boot, and a skill that does not load is INVISIBLE — the only
+// symptom is guidance that never appears in a Plan prompt. This runs the engine's own
 // walk against a THROWAWAY registry and prints what it found, so an operator
 // can see what the next boot will see without restarting anything.
 //

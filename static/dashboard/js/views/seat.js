@@ -1088,7 +1088,6 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
         github: "git",
         gitlab: "git",
         jira: "clipboard",
-        plane: "clipboard",
         confluence: "book",
       }[source] || "message"
     );

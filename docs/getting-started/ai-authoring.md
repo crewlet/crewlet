@@ -138,8 +138,8 @@ no-op. An assistant working from prose will occasionally invent one.
 
 **The expensive mistakes aren't type errors.** Choosing a handle you
 later rename, putting a secret in the config file, or confusing
-`integrations.plane.project` (routing identity) with
-`knowledge.plane_projects` (read scope) all produce a *valid* config
+`integrations.confluence.space` (routing identity) with
+`knowledge.confluence_spaces` (read scope) all produce a *valid* config
 that behaves wrong. Those are judgement calls, and they're what the
 skill front-loads.
 
@@ -164,8 +164,7 @@ types the engine parses with, a schema-only check catches:
 - wrong types, and bad enums (`kind: robot`, `type: openaii`)
 - malformed handles, and cron expressions with the wrong field count
 - a human seat with no `contact` identity
-- Confluence and Plane both enabled, and a `knowledge.*` scope list for
-  the backend that isn't active
+- a `knowledge.*` scope list naming a backend the config does not configure
 
 Three things still need the binary, and the skill tells the assistant to
 check them by reading:
@@ -228,8 +227,8 @@ and check an entire company offline.
 
 Validation is deep: it builds the `Organization`, so unknown unit leads,
 bad cron expressions, invalid timezones, human seats with no contact
-identity, and the Confluence-XOR-Plane rule all fail here rather than at
-run time.
+identity, and a knowledge scope with no backend behind it all fail here
+rather than at run time.
 
 `-tier auto` (the default) picks the tier from the document's **keys**, not
 its filename — the one thing this has to get right is the case where the file
@@ -322,14 +321,15 @@ checkout, fetch it from
 ### What it can't do
 
 It writes config; it doesn't provision. Standing up the Mattermost server
-(or the Slack workspace), the Plane workspace, the GitLab group, and the
+(or the Slack workspace), the Atlassian site, the GitLab group, and the
 API keys is still your job — [Choosing your stack](choosing-your-stack.md)
 lists what you must create by hand for each. Once those exist,
-[`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision),
-[`crewlet plane provision`](../reference/cli.md#crewlet-plane-provision)
+[`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision)
 and [`crewlet gitlab provision`](../reference/cli.md#crewlet-gitlab-provision)
 mint the per-seat accounts and tokens into the `${VAR}` references the
-config already declares.
+config already declares; Atlassian and GitHub issue no credential on a
+provisioner's behalf, so their commands report which account each
+hand-created credential turned out to be.
 
 ---
 

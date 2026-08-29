@@ -2,12 +2,9 @@ package engine
 
 import (
 	"context"
-	"fmt"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/plane"
 )
 
 // The tool-skill registry, wired.
@@ -66,18 +63,18 @@ func (e *Engine) auditSkills(c *Company) {
 	e.skills.Audit(snapshot.Names(), snapshot.MCPServers())
 }
 
-// SkillsProject is the knowledge container the sync worker walks, or "".
+// SkillsContainer is the knowledge container the sync worker walks, or "".
 //
 // Empty means no sync: a company with no knowledge backend, or one whose
-// backend is configured without a skills project. Both are ordinary, and
-// both mean the catalogue stays empty rather than the engine inventing one.
-func (e *Engine) SkillsProject(c *Company) string {
-	if plane := c.Config.Integrations.Plane; plane != nil && plane.Enabled {
-		return plane.SkillsProjectKey()
-	}
-	// THE KNOWLEDGE BACKEND IS SINGLE-HOMED (config enforces Confluence
-	// XOR Plane), so this is a lookup rather than a precedence: whichever
-	// backend the company runs is the one holding its skills.
+// backend is configured without a skills space. Both are ordinary, and both
+// mean the catalogue stays empty rather than the engine inventing one.
+//
+// CONTAINER rather than the backend's own word, because the walk it feeds is
+// backend-neutral: [Engine.SyncSkills] takes rendered pages, so the backend
+// that read them is the caller's business and not this signature's. It was
+// `SkillsProject` while Plane was served — a name that outlived its vendor
+// and then described a Confluence SPACE, which is the drift this rename ends.
+func (e *Engine) SkillsContainer(c *Company) string {
 	if cf := c.Config.Integrations.Confluence; cf != nil {
 		return cf.SkillsSpaceKey()
 	}
@@ -118,78 +115,17 @@ func (e *Engine) SyncSkills(pages []skills.Page) {
 // with agents that do not know its conventions, which looks from the outside
 // like models that stopped following instructions.
 func (e *Engine) syncSkillsFrom(ctx context.Context, c *Company, walk func(context.Context, string) ([]skills.Page, error)) {
-	project := e.SkillsProject(c)
-	if project == "" || walk == nil {
+	container := e.SkillsContainer(c)
+	if container == "" || walk == nil {
 		return
 	}
-	pages, err := walk(ctx, project)
+	pages, err := walk(ctx, container)
 	if err != nil {
-		log.Error("tool_skill_sync_failed", "project", project, "error", err.Error(),
+		log.Error("tool_skill_sync_failed", "container", container, "error", err.Error(),
 			"detail", "the registry keeps whatever it already held; agents run "+
 				"without this company's tool guidance until the next sync")
 		return
 	}
 	e.SyncSkills(pages)
 	e.auditSkills(c)
-}
-
-// startSkillSync walks the configured skills container once, in the
-// background.
-//
-// IN THE BACKGROUND, because it is a network walk on the boot path and a
-// company must not wait on its wiki to start taking work: seats come up with
-// an empty catalogue and gain it moments later, which is strictly better
-// than a boot that blocks on an instance that is down.
-//
-// The walk itself is ALL OR NOTHING — see [Engine.SyncSkills] — so a failure
-// leaves whatever the registry already held rather than emptying it.
-func (e *Engine) startSkillSync(ctx context.Context, c *Company) {
-	project := e.SkillsProject(c)
-	e.notify.mu.Lock()
-	client := e.notify.plane.pages
-	e.notify.mu.Unlock()
-	if project == "" || client == nil {
-		return
-	}
-	go e.syncSkillsFrom(ctx, c, func(ctx context.Context, project string) ([]skills.Page, error) {
-		return planePages(ctx, client, project)
-	})
-}
-
-// planePages resolves the container's identifier and reads its pages.
-func planePages(ctx context.Context, client *plane.Client, project string) ([]skills.Page, error) {
-	// The walk is PROJECT-SCOPED and the endpoint takes a UUID, so the
-	// operator's identifier has to be resolved first — and a project that
-	// does not resolve is a configuration problem rather than an empty
-	// container, which is why it is an error rather than no pages.
-	projects, err := client.Projects(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var id string
-	for _, p := range projects {
-		if strings.EqualFold(p.Identifier, project) {
-			id = p.ID
-			break
-		}
-	}
-	if id == "" {
-		return nil, fmt.Errorf("engine: no project %q in this workspace", project)
-	}
-
-	rows, err := client.ListPages(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]skills.Page, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, skills.Page{
-			ID: row.ID, Title: row.Name,
-			// The DECODED text, so this package stays the one place that
-			// decides what a skill is and the backend stays the one place
-			// that knows how its pages are shaped.
-			Text: plane.DecodeSkillPage(row.HTML),
-		})
-	}
-	return out, nil
 }

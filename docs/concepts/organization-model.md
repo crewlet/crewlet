@@ -23,10 +23,6 @@ Organization
     │                                       Confluence space: where its pages live and
     │                                       where page activity routes. Does NOT scope
     │                                       knowledge reads)
-    ├── plane_project: str                 (integrations.plane.project — the unit's Plane
-    │                                       project identity: webhook fallback routing +
-    │                                       the project the team files work under, NOT an
-    │                                       MCP credential, does NOT scope reads)
     ├── mcp_env: dict[server → env vars]  (per-agent tool creds, inherited by roles)
     ├── roles: Role[]                      (agents directly in this unit)
     ├── children: OrgUnit[]                (nested sub-units, recursive)
@@ -36,8 +32,9 @@ Organization
 Role (a SEAT — can live at root level OR inside an OrgUnit)
 ├── kind: agent | human                (who holds the seat; default agent)
 ├── name, responsibilities, behavioral_guidelines
-├── contact: {slack_user_id, atlassian_account_id, github_login, gitlab_username,
-│             plane_user_id}     (human seats — external identities)
+├── contact: {slack_user_id, mattermost_user_id, atlassian_account_id,
+│             github_login, gitlab_username}  (human seats — external
+│                                              identities)
 ├── availability: str (human seats — rendered into rosters)
 ├── backstory: str   (unique personality, background, expertise)
 ├── goal: str        (individual mission)
@@ -57,11 +54,6 @@ Role (a SEAT — can live at root level OR inside an OrgUnit)
 │                          the role's Confluence space. Does NOT scope
 │                          knowledge reads — that is the org-wide
 │                          knowledge.confluence_spaces only)
-├── plane_project: str (root-level roles — integrations.plane.project;
-│                       the role's Plane project identity: webhook fallback
-│                       routing + write home, NOT an MCP credential, does
-│                       NOT scope reads — read scope is the org-wide
-│                       knowledge.plane_projects only)
 ├── token_budget: int  (0 = unlimited)
 ├── llm: str           (provider key, default = "default")
 ├── llm_auxiliary: str (optional cheap-model key for reflection /
@@ -78,10 +70,10 @@ Role (a SEAT — can live at root level OR inside an OrgUnit)
 
 Roles can live in two places:
 
-- **Inside an OrgUnit** (`units[].roles`) — scoped to that unit for MCP env inheritance and lead auto-management. The unit's [`integrations.plane.project`](../integrations/plane.md#project-identity) gives the team its tracker "home" (webhook routing + write target), but does not scope what the role can *read*.
-- **At the root level** (`roles`) — org-wide agents that don't belong to any specific team. They participate in the `manages[]` hierarchy like any other role and are fully visible to task routing; a root-level role can carry its own `integrations.plane.project` identity. Knowledge **read** scope for every agent is the org-wide `org.Organization.PlaneProjects` only.
+- **Inside an OrgUnit** (`units[].roles`) — scoped to that unit for MCP env inheritance and lead auto-management. The unit's [`integrations.jira.project`](../integrations/jira.md) gives the team its tracker "home" (webhook routing + write target), but does not scope what the role can *read*.
+- **At the root level** (`roles`) — org-wide agents that don't belong to any specific team. They participate in the `manages[]` hierarchy like any other role and are fully visible to task routing; a root-level role can carry its own `integrations.jira.project` identity. Knowledge **read** scope for every agent is the org-wide `org.Organization.ConfluenceSpaces` only.
 
-> Every one of these identities is consulted. Each tracker routes an item that names nobody to the lead of the unit that owns the project, and Confluence does the same for a page change nobody was mentioned in. None of them narrows what an agent can READ: knowledge scope is the org-wide `knowledge.plane_projects` / `knowledge.confluence_spaces` only, because letting a unit's identity double as a read scope is how an agent ends up unable to read the page it was told to follow. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
+> Every one of these identities is consulted. Each tracker routes an item that names nobody to the lead of the unit that owns the project, and Confluence does the same for a page change nobody was mentioned in. Neither narrows what an agent can READ: knowledge scope is the org-wide `knowledge.confluence_spaces` only, because letting a unit's identity double as a read scope is how an agent ends up unable to read the page it was told to follow. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
 
 ---
 
@@ -398,7 +390,7 @@ units:
 
 ## Onboarding convention
 
-Each `OrgUnit` (and the organisation root) is expected to publish a page titled exactly **`Onboarding`** in its container of the knowledge base — its Confluence space or Plane project.  When an agent spawns into a role, the engine writes nothing into the prompt itself — instead the Plan-phase shows a short `## First-turn onboarding` block listing the unit chain (org → ancestor units → own unit).  The agent reads each `Onboarding` page using its knowledge backend's page-search / page-read MCP tools (`confluence_search` / `confluence_get_page` on Confluence, the `plane` server's page tools on Plane), captures the conventions that matter via `reflect_and_persist` (scope=agent), and calls `mark_onboarded` when done.  After that, the hint disappears from subsequent prompts.
+Each `OrgUnit` (and the organisation root) is expected to publish a page titled exactly **`Onboarding`** in its container of the knowledge base — its Confluence space.  When an agent spawns into a role, the engine writes nothing into the prompt itself — instead the Plan-phase shows a short `## First-turn onboarding` block listing the unit chain (org → ancestor units → own unit).  The agent reads each `Onboarding` page using its knowledge backend's page-search / page-read MCP tools (`confluence_search` / `confluence_get_page`), captures the conventions that matter via `reflect_and_persist` (scope=agent), and calls `mark_onboarded` when done.  After that, the hint disappears from subsequent prompts.
 
 Re-onboarding fires automatically when the org structure changes (the role moves between units, a new ancestor unit is inserted, the role is renamed) — the engine recomputes a chain hash and the prior marker no longer matches.  Source-page content drift is **not** automatic: the agent re-reads at its own discretion, or in response to a page-update notification routed through the existing notification pipeline.
 

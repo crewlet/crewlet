@@ -9,7 +9,7 @@ trigger:
 phases: [plan, execute]
 title: Choosing the right Mattermost channel / surface
 summary: |
-  Team channel for team-wide; DM individuals for direct asks; Plane
+  Team channel for team-wide; DM individuals for direct asks; Jira
   work items / pages for durable or cross-team work. Discover with
   `mattermost_list_my_channels`, and join public channels yourself.
 ---
@@ -20,7 +20,7 @@ summary: |
 |---|---|
 | Your own team — announcement, blocker, status | Your team's channel (in your identity prompt) |
 | A specific individual (peer or manager) | DM them — see **Sending a DM** below |
-| Work that already has a durable home (work item / page) | Comment on the Plane work item (or update the relevant page) — these outlive the conversation and don't require channel membership |
+| Work that already has a durable home (work item / page) | Comment on the Jira work item (or update the relevant Confluence page) — these outlive the conversation and don't require channel membership |
 | Tight-loop mechanical sync between agents | `a2a_ask` |
 
 # Finding the right channel
@@ -43,7 +43,7 @@ You can only post to channels you have joined, but on Mattermost you can fix tha
 **Private channels are different** — `join_channel` cannot join one, and a private channel you are not in does not appear in `list_public_channels` at all. If the conversation you need is private:
 
 1. **DM the channel's owner / team lead instead** (below).
-2. **Comment on the relevant Plane work item.** Work items have their own permission model and usually allow cross-team comments.
+2. **Comment on the relevant Jira work item.** Work items have their own permission model and usually allow cross-team comments.
 3. **Ask in your own team's channel for an introduction** — let a teammate who *is* in the target channel relay your question.
 
 Do **not** broadcast in your own channel hoping the other team will see it — they almost certainly won't, and you'll spam your own teammates.

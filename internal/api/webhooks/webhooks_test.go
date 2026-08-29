@@ -116,7 +116,7 @@ func newEdge(t *testing.T, opts ...func(*webhooks.Options)) *edge {
 	t.Cleanup(func() { _ = db.Close() })
 
 	secrets := &webhooks.Secrets{
-		GitHub: "gh-secret", GitLab: gitlabSecret, Plane: "pl-secret",
+		GitHub: "gh-secret", GitLab: gitlabSecret,
 		Jira: "jira-secret", Confluence: "conf-secret", ForgeAppID: "app-123",
 		Slack: map[string]string{"ceo": "slack-secret"},
 	}
@@ -207,13 +207,6 @@ func jiraDelivery(body []byte, secret string) map[string]string {
 	}
 }
 
-func planeDelivery(body []byte, secret string) map[string]string {
-	return map[string]string{
-		"X-Plane-Signature": hexMAC(secret, body),
-		"X-Plane-Event":     "issue",
-	}
-}
-
 func atlassianDelivery(body []byte, secret string) map[string]string {
 	return map[string]string{"X-Hub-Signature": "sha256=" + hexMAC(secret, body)}
 }
@@ -251,7 +244,6 @@ func TestAnUnverifiedDeliveryIsNeverParsed(t *testing.T) {
 	for _, route := range []struct{ name, path string }{
 		{"github", "/webhooks/github"},
 		{"gitlab", "/webhooks/gitlab"},
-		{"plane", "/webhooks/plane"},
 		{"jira", "/webhooks/jira"},
 		{"confluence", "/webhooks/confluence"},
 	} {
@@ -262,12 +254,10 @@ func TestAnUnverifiedDeliveryIsNeverParsed(t *testing.T) {
 			got := e.post(t, route.path, garbage, map[string]string{
 				"X-Hub-Signature-256": "sha256=" + hexMAC("wrong", garbage),
 				"X-Hub-Signature":     "sha256=" + hexMAC("wrong", garbage),
-				"X-Plane-Signature":   hexMAC("wrong", garbage),
 				"webhook-signature":   "v1,bm90LWEtc2lnbmF0dXJl",
 				"webhook-id":          "msg_1",
 				"webhook-timestamp":   strconv.FormatInt(pinned.Unix(), 10),
 				"X-GitHub-Event":      "issues",
-				"X-Plane-Event":       "issue",
 			}).Code
 			if got == http.StatusBadRequest {
 				t.Fatalf("%s answered 400, so it decoded an unverified body "+
@@ -290,7 +280,6 @@ func TestAnUnsignedDeliveryReachesNothing(t *testing.T) {
 	for _, route := range []struct{ path, header string }{
 		{"/webhooks/github", "X-Hub-Signature-256"},
 		{"/webhooks/gitlab", "webhook-signature"},
-		{"/webhooks/plane", "X-Plane-Signature"},
 		{"/webhooks/jira", "X-Hub-Signature"},
 		{"/webhooks/confluence", "X-Hub-Signature"},
 		{"/webhooks/slack/ceo", "X-Slack-Signature"},
@@ -334,7 +323,7 @@ func TestARouteWithNoSecretHoldsTheDelivery(t *testing.T) {
 	// missing is on this side. The delivery waits at the provider and flows
 	// the moment somebody sets the secret.
 	for _, route := range []string{
-		"/webhooks/github", "/webhooks/gitlab", "/webhooks/plane",
+		"/webhooks/github", "/webhooks/gitlab",
 		"/webhooks/jira", "/webhooks/confluence", "/webhooks/slack/ceo",
 		"/webhooks/forge",
 	} {
@@ -736,21 +725,6 @@ func TestSlackRetriesAreDedupedOnTheEventID(t *testing.T) {
 	}
 }
 
-func TestPlaneKeepsTheActionInTheEventType(t *testing.T) {
-	t.Parallel()
-	// Plane sends create, update and delete under one event name, so a
-	// dashboard filter on the type alone could not tell them apart.
-	e := newEdge(t)
-	body := []byte(`{"event":"issue","action":"created","data":{"name":"Ship it"}}`)
-	if got := e.post(t, "/webhooks/plane", body, planeDelivery(body, "pl-secret")).Code; got != http.StatusOK {
-		t.Fatalf("got %d", got)
-	}
-	rows := e.rows(t)
-	if len(rows) != 1 || rows[0].Type != "webhook:issue.created" {
-		t.Fatalf("row type = %v, want webhook:issue.created", rows)
-	}
-}
-
 func TestAStoreOutageDoesNotSwallowTheWake(t *testing.T) {
 	t.Parallel()
 	// The event log is observability. A delivery that reached the queue
@@ -870,45 +844,6 @@ func TestCredentialHeadersAreRedactedBeforeADeliveryIsStored(t *testing.T) {
 }
 
 // --- delivery deduplication, for the vendors that send no delivery id ------ //
-
-// PLANE'S ONLY DELIVERY HEADER IS PER-ATTEMPT, which is the opposite of a
-// dedupe key. What stays identical across a retry is the payload — and Plane
-// retries five times before auto-disabling a hook, so the volume this
-// collapses is not hypothetical.
-func TestPlaneRetriesAreDedupedOnThePayload(t *testing.T) {
-	t.Parallel()
-	e := newEdge(t)
-	body := []byte(`{"event":"issue","action":"created","data":{"id":"i-1","name":"Ship it"}}`)
-	for attempt := range 3 {
-		headers := planeDelivery(body, "pl-secret")
-		// The per-attempt id Plane does send, which must not defeat the
-		// claim — the whole point is that it changes and the body does not.
-		headers["X-Plane-Delivery"] = "attempt-" + strconv.Itoa(attempt)
-		if got := e.post(t, "/webhooks/plane", body, headers).Code; got != http.StatusOK {
-			t.Fatalf("attempt %d: %d", attempt, got)
-		}
-	}
-	if n := e.published.count(); n != 1 {
-		t.Errorf("%d events for one Plane delivery and two retries, want 1", n)
-	}
-}
-
-// A DIFFERENT EVENT IS A DIFFERENT DELIVERY. Collapsing two distinct events
-// is the failure with teeth — a message nobody ever answers — so the key has
-// to change with any difference at all.
-func TestTwoPlaneEventsAreBothDelivered(t *testing.T) {
-	t.Parallel()
-	e := newEdge(t)
-	for _, name := range []string{"Ship it", "Ship it too"} {
-		body := []byte(`{"event":"issue","action":"created","data":{"id":"i-1","name":"` + name + `"}}`)
-		if got := e.post(t, "/webhooks/plane", body, planeDelivery(body, "pl-secret")).Code; got != http.StatusOK {
-			t.Fatalf("%s: %d", name, got)
-		}
-	}
-	if n := e.published.count(); n != 2 {
-		t.Errorf("%d events for two distinct Plane events, want 2", n)
-	}
-}
 
 // CONFLUENCE DATA CENTER SENDS THE SAME HEADER ITS JIRA TWIN DOES, and the
 // route ignored it: the claim short-circuits on an empty key, so every

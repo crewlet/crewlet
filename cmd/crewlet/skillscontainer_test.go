@@ -3,7 +3,7 @@ package main
 import "testing"
 
 // THE PRECEDENCE IS THE CONTRACT: flag, then variable, then config. An
-// operator who passes -project expects it to win over a variable they exported
+// operator who passes -space expects it to win over a variable they exported
 // last week and forgot about.
 func TestTheSkillsContainerPrefersTheFlagThenTheVariable(t *testing.T) {
 	cases := []struct {
@@ -27,8 +27,8 @@ func TestTheSkillsContainerPrefersTheFlagThenTheVariable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// NOT PARALLEL: t.Setenv and parallel subtests are mutually
 			// exclusive, and the variable is the thing under test.
-			t.Setenv("CREWLET_TOOL_SKILLS_PROJECT", tc.env)
-			got := skillsContainer(tc.flag, "CREWLET_TOOL_SKILLS_PROJECT", tc.fromConfig)
+			t.Setenv("CREWLET_TOOL_SKILLS_SPACE", tc.env)
+			got := skillsContainer(tc.flag, "CREWLET_TOOL_SKILLS_SPACE", tc.fromConfig)
 			if got != tc.want {
 				t.Errorf("skillsContainer(%q, env=%q, %q) = %q, want %q",
 					tc.flag, tc.env, tc.fromConfig, got, tc.want)

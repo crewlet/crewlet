@@ -240,10 +240,6 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		add("gitlab", in.GitLab.Enabled, boolPtr(in.GitLab.SigningSecret != ""),
 			map[string]any{"url": in.GitLab.URL})
 	}
-	if in.Plane != nil {
-		add("plane", in.Plane.Enabled, boolPtr(in.Plane.WebhookSecret != ""),
-			map[string]any{"url": in.Plane.URL, "workspace": in.Plane.Workspace})
-	}
 	if in.Jira != nil {
 		add("jira", true, boolPtr(in.Jira.WebhookSecret != ""),
 			map[string]any{"url": in.Jira.BaseURL()})
@@ -424,8 +420,6 @@ func seatsFor(company *config.Company, kind string) []string {
 			carries = r.Integrations.Jira != nil
 		case "confluence":
 			carries = r.Integrations.Confluence != nil
-		case "plane":
-			carries = r.Integrations.Plane != nil
 		}
 		if carries {
 			out = append(out, r.Name)

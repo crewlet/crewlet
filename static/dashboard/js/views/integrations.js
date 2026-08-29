@@ -156,7 +156,6 @@ export function createIntegrationsView({ query, refresh }) {
                  ${secretRow(row)}
                  ${routingRow(row)}
                  ${row.url ? `<div class="int-kv"><span>Host</span><span class="mono">${esc(row.url)}</span></div>` : ""}
-                 ${row.workspace ? `<div class="int-kv"><span>Workspace</span><span class="mono">${esc(row.workspace)}</span></div>` : ""}
                  <div class="int-kv"><span>Seats</span><span>${
                    row.seats.length
                      ? row.seats

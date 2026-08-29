@@ -11,7 +11,7 @@ Two things are worth having anyway, for what runs *around* it:
 
 - **[uv](https://docs.astral.sh/uv/)** — many MCP servers are launched with
   `uvx`, so a company whose roles use one needs it on the engine's PATH.
-- **Docker** — only for the local integration loops (Plane, GitLab,
+- **Docker** — only for the local integration loops (GitLab,
   Mattermost) and for the container mode of the
   [code sandbox](../concepts/code-sandbox.md).
 
@@ -72,17 +72,17 @@ working company:
 every service in it is behind a profile, because none of them is the engine:
 
 ```bash
-docker compose --profile plane up -d              # self-hosted Plane fork (tracker + knowledge base)
 docker compose --profile gitlab up -d             # local GitLab (code host)
 docker compose --profile mattermost up -d --wait  # self-hosted Mattermost (chat)
 docker compose --profile pulsar up -d             # Pulsar + Dekaf, for the external-stream backend
 ```
 
-Each of the three integrations pairs with a bootstrap script under `scripts/`
-that seeds the instance and provisions the agent seats. See
-[Plane § Local testing](../integrations/plane.md#local-testing),
+Each of the two self-hostable integrations pairs with a bootstrap script under
+`scripts/` that seeds the instance and provisions the agent seats. See
 [GitLab § Local testing](../integrations/gitlab.md#local-testing) and
 [Mattermost § Local testing](../integrations/mattermost.md#local-testing).
+Jira and Confluence have no profile here — Atlassian is not something a
+compose file can stand up.
 
 The `pulsar` profile is for developing against the external stream backend,
 and for running its conformance suite locally — that suite skips without
@@ -90,16 +90,16 @@ and for running its conformance suite locally — that suite skips without
 Pulsar docs recommend, comes up with it on <http://localhost:8090>.
 
 Running any of these on a **remote host** rather than your own machine? Each
-one has to be told the address browsers reach it on — `MATTERMOST_PUBLIC_URL`
-and `PLANE_PUBLIC_URL` — before the stack comes up. For Mattermost that
+one has to be told the address browsers reach it on —
+`MATTERMOST_PUBLIC_URL`, and GitLab's external URL — before the stack comes
+up. For Mattermost that
 setting also gates live updates, so getting it wrong looks like a working
 install where messages only appear on refresh; the bootstrap script settles
 it for you, and [The Site
 URL](../integrations/mattermost.md#the-site-url) explains why.
 
 (`--wait` is safe for the Mattermost profile — every service there has a
-healthcheck. Do not add it to the Plane profile: its migrator is a one-shot
-job whose clean exit `--wait` treats as a failure.)
+healthcheck.)
 
 ## Verify Installation
 

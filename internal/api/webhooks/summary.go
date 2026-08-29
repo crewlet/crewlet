@@ -161,25 +161,6 @@ func gitlabSummary(event string, body map[string]any) string {
 	return join("GitLab", str(object(body, "user"), "username"), what, where)
 }
 
-func planeSummary(body map[string]any) string {
-	actor := object(object(body, "activity"), "actor")
-	who := str(actor, "display_name")
-	if who == "" {
-		who = str(actor, "first_name")
-	}
-	if who == "" {
-		who = str(actor, "id")
-	}
-	if who == "" {
-		// Plane sometimes states the actor as a bare id rather than an
-		// object, and a summary that only understood the object form
-		// would silently drop the one field a reader scans for.
-		who = str(object(body, "activity"), "actor")
-	}
-	return join("Plane", who, str(body, "event"), str(body, "action"),
-		quoted(str(object(body, "data"), "name"), 60))
-}
-
 func confluenceSummary(body map[string]any) string {
 	event := firstOf(body, "event", "webhookEvent", "eventType")
 	page := object(body, "page")

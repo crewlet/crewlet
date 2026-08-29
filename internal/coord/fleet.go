@@ -74,8 +74,8 @@ const (
 	// ClaimTTL is how long an inbound delivery stays claimed.
 	//
 	// Sized to cover queue redelivery and an operator's replay, NOT a
-	// vendor's own retry schedule — those back off for far longer (Plane
-	// starts at ~600 s) and only fire when the API layer failed to answer
+	// vendor's own retry schedule — those back off for far longer, in
+	// minutes to hours, and only fire when the API layer failed to answer
 	// 2xx, which is exactly when the delivery was never claimed at all.
 	// Too long is visible in one direction only: a deliberate replay ten
 	// minutes later vanishes into a claim nothing will clear.

@@ -16,11 +16,11 @@ import (
 // The scripts in scripts/ stand up the local vendor loops and then print,
 // and run, `crewlet <vendor> <sub>` commands. A flag one of them names that
 // this CLI does not define fails at the moment an operator runs it — after
-// a Mattermost, a Plane or a GitLab has already been provisioned, which is
-// minutes in — and the scripts are shell, so no compiler and no linter has
-// an opinion.
+// a Mattermost or a GitLab has already been provisioned, which is minutes
+// in — and the scripts are shell, so no compiler and no linter has an
+// opinion.
 //
-// That is not hypothetical: both the Plane and GitLab loops shipped
+// That is not hypothetical: both bootstrap loops shipped
 // `--webhook-url <full endpoint>`, which this CLI answers with "flag
 // provided but not defined". It takes `-public-url <base>` and derives the
 // path itself, because the engine owns its seven webhook routes and an
@@ -35,7 +35,7 @@ import (
 // hypothetical either — it made the first version of this test pass
 // vacuously on the two invocations it was written for.
 var scriptInvocation = regexp.MustCompile(
-	`crewlet (gitlab|plane|mattermost) (provision|import|resync|doctor)((?:\\\n|[^\n])*)`)
+	`crewlet (gitlab|mattermost) (provision|import|resync|doctor)((?:\\\n|[^\n])*)`)
 
 // envPrefixedInvocation is the same call with the `NAME=value` assignments a
 // script puts in front of it — which is how every one of them passes the
@@ -45,7 +45,7 @@ var scriptInvocation = regexp.MustCompile(
 // — a line continuation is written `\\`, and a pattern accepting only one
 // stops matching exactly where the operator-facing copy lives.
 var envPrefixedInvocation = regexp.MustCompile(
-	`((?:[A-Z][A-Z0-9_]*=(?:"[^"\n]*"|[^\s\\]*)[ \t]*(?:\\+\n\s*)?)+)crewlet (gitlab|plane|mattermost) (provision|import|resync|doctor)`)
+	`((?:[A-Z][A-Z0-9_]*=(?:"[^"\n]*"|[^\s\\]*)[ \t]*(?:\\+\n\s*)?)+)crewlet (gitlab|mattermost) (provision|import|resync|doctor)`)
 
 // envAssignmentName is one such assignment's variable.
 var envAssignmentName = regexp.MustCompile(`([A-Z][A-Z0-9_]*)=`)
@@ -75,8 +75,8 @@ func TestTheBootstrapScriptsNameOnlyFlagsThisCLIDefines(t *testing.T) {
 // THE SCRIPTS DO NOT HAND OVER A WEBHOOK PATH.
 //
 // A separate assertion from the one above because the failure is different
-// in kind: `-public-url https://host/webhooks/plane` parses perfectly and
-// registers a hook at `https://host/webhooks/plane/webhooks/plane`, which
+// in kind: `-public-url https://host/webhooks/gitlab` parses perfectly and
+// registers a hook at `https://host/webhooks/gitlab/webhooks/gitlab`, which
 // nothing serves and nothing reports. The vendor's own settings page then
 // shows a healthy webhook that delivers nowhere.
 func TestTheScriptsPassABaseURLNotAnEndpoint(t *testing.T) {
@@ -148,8 +148,8 @@ func expandOnce(arg string, vars map[string]string) string {
 // The command runs, finds nothing, and stops with "no administrator token",
 // which reads as a missing credential rather than a misspelt one.
 //
-// Both the Plane and GitLab loops shipped `*_PROVISION_TOKEN`, which no
-// command here reads.
+// Both bootstrap loops shipped `*_PROVISION_TOKEN`, which no command here
+// reads.
 func TestTheScriptsExportTheCredentialUnderTheNameTheCLIReads(t *testing.T) {
 	t.Parallel()
 	for _, name := range bootstrapScripts(t) {
@@ -286,11 +286,10 @@ func readRepoFile(t *testing.T, rel string) string {
 // needs `extra_hosts: host.docker.internal:host-gateway`, or the name
 // resolves to nothing and every delivery fails a lookup.
 //
-// plane-api and plane-worker carry it. `gitlab` did not, for the length of
-// the rewrite, while the compose file's own mattermost comment said "gitlab
-// and plane both need it" — the file asserted an invariant it broke. Nothing
-// noticed because the only guard was a Python test that named the plane
-// services and stopped there.
+// `gitlab` did not carry it for the length of the rewrite, while the compose
+// file's own mattermost comment said it needed it — the file asserted an
+// invariant it broke. Nothing noticed because the only guard was a Python
+// test that named a different vendor's services and stopped there.
 //
 // Mattermost is deliberately absent: it never calls the engine at all — the
 // engine opens an outbound websocket per seat, because Mattermost has no
@@ -301,7 +300,7 @@ func TestEveryInboundVendorCanResolveTheEngineHost(t *testing.T) {
 	compose := readRepoFile(t, "docker-compose.yml")
 	const mapping = "host.docker.internal:host-gateway"
 
-	for _, service := range []string{"gitlab", "plane-api", "plane-worker"} {
+	for _, service := range []string{"gitlab"} {
 		block := composeService(t, compose, service)
 		if !strings.Contains(block, mapping) {
 			t.Errorf("the %s service has no %q, so on a Linux host every "+

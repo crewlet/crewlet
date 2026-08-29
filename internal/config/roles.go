@@ -223,13 +223,12 @@ type RoleIntegrations struct {
 	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: one token covers everything."`
 	Jira       *ProjectRef     `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this seat owns."`
 	Confluence *SpaceRef       `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"The Confluence space this seat owns."`
-	Plane      *ProjectRef     `yaml:"plane,omitempty" json:"plane,omitempty" desc:"The Plane project this seat owns."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
 	return r.Slack == nil && r.Mattermost == nil && r.Jira == nil &&
-		r.Confluence == nil && r.Plane == nil
+		r.Confluence == nil
 }
 
 // ProjectRef is the tracker project a seat or unit owns. Integration
@@ -394,8 +393,8 @@ func (r *Role) Seat() *org.Role {
 			Channel:  m.Channel,
 		}
 	}
-	seat.JiraProject, seat.ConfluenceSpace, seat.PlaneProject = identities(
-		r.Integrations.Jira, r.Integrations.Confluence, r.Integrations.Plane)
+	seat.JiraProject, seat.ConfluenceSpace = identities(
+		r.Integrations.Jira, r.Integrations.Confluence)
 
 	if s := r.Sandbox; s != nil {
 		env := make(map[string]string, len(s.Env))
@@ -416,21 +415,18 @@ func (r *Role) Seat() *org.Role {
 	return seat
 }
 
-// identities extracts the tracker project, wiki space and second tracker
-// project a seat or unit owns. References are left VERBATIM and resolved at
-// use time, like every other Tier B value.
-func identities(jira *ProjectRef, confluence *SpaceRef, plane *ProjectRef) (string, string, string) {
-	var project, space, planeProject string
+// identities extracts the tracker project and wiki space a seat or unit
+// owns. References are left VERBATIM and resolved at use time, like every
+// other Tier B value.
+func identities(jira *ProjectRef, confluence *SpaceRef) (string, string) {
+	var project, space string
 	if jira != nil {
 		project = strings.TrimSpace(jira.Project)
 	}
 	if confluence != nil {
 		space = strings.TrimSpace(confluence.Space)
 	}
-	if plane != nil {
-		planeProject = strings.TrimSpace(plane.Project)
-	}
-	return project, space, planeProject
+	return project, space
 }
 
 // Unit is the AUTHORED shape of one `units:` entry, nesting to any depth.
@@ -486,12 +482,11 @@ type Unit struct {
 type UnitIntegrations struct {
 	Jira       *ProjectRef `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this unit owns."`
 	Confluence *SpaceRef   `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"The Confluence space this unit owns."`
-	Plane      *ProjectRef `yaml:"plane,omitempty" json:"plane,omitempty" desc:"The Plane project this unit owns."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (u UnitIntegrations) IsZero() bool {
-	return u.Jira == nil && u.Confluence == nil && u.Plane == nil
+	return u.Jira == nil && u.Confluence == nil
 }
 
 func (u *Unit) validate(path string) error {
@@ -527,8 +522,8 @@ func (u *Unit) Unit() *org.Unit {
 		MCPEnv:        u.MCPEnv.Clone(),
 		Schedules:     append([]org.Schedule(nil), u.Schedules...),
 	}
-	unit.JiraProject, unit.ConfluenceSpace, unit.PlaneProject = identities(
-		u.Integrations.Jira, u.Integrations.Confluence, u.Integrations.Plane)
+	unit.JiraProject, unit.ConfluenceSpace = identities(
+		u.Integrations.Jira, u.Integrations.Confluence)
 
 	for i := range u.Roles {
 		unit.Roles = append(unit.Roles, u.Roles[i].Seat())

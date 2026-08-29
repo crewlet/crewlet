@@ -47,12 +47,6 @@ type notifications struct {
 	// that enrich a Plan phase without taking a surface down.
 	confluence confluenceParts
 
-	// plane is the tracker's contribution: a parser and a knowledge
-	// searcher. No lifecycle, because Plane is inbound-only — there is no
-	// connection to lose, so an unreachable instance degrades the reads
-	// that enrich routing and never takes a surface down.
-	plane planeParts
-
 	// jira remembers which account each seat credential authenticates as.
 	// Outside the mutex above for the same reason the code host's is: it
 	// OUTLIVES an epoch, because identity is a function of the credential
@@ -298,25 +292,6 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 			e.startConfluenceSkillSync(ctx, c)
 		}
 	}
-	if p := c.Config.Integrations.Plane; p != nil && p.Enabled {
-		parts, err := e.startPlane(c, p)
-		if err != nil {
-			// Same posture as the chat surface: the company runs
-			// WITHOUT its tracker rather than not at all. Refusing to
-			// boot over a tracker misconfiguration would take down
-			// every seat's chat and scheduled work with it.
-			log.Error("plane_unavailable", "error", err.Error(),
-				"detail", "the company is running without its tracker")
-		}
-		if parts.parser != nil {
-			e.notify.mu.Lock()
-			e.notify.plane = parts
-			e.notify.mu.Unlock()
-			parsers = append(parsers, parts.parser)
-			prompts = append(prompts, planePrompt())
-			e.startSkillSync(ctx, c)
-		}
-	}
 
 	svc, err := notify.New(notify.Options{
 		Queue:    e.backends.Queue,
@@ -547,4 +522,17 @@ func (e *Engine) stopNotifications(ctx context.Context) {
 		// thinking until Slack expired it.
 		hosted.Stop(ctx)
 	}
+}
+
+// errorText renders a vendor reconcile failure for a log line, including the
+// "it built but produced nothing" case that carries no error of its own.
+//
+// SHARED by every vendor reconciler, because each of them has the same two
+// ways to fail and a per-vendor copy would drift the first time one of them
+// learned a third.
+func errorText(err error) string {
+	if err == nil {
+		return "the wiring produced no parser"
+	}
+	return err.Error()
 }

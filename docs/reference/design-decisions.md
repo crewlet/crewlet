@@ -78,7 +78,7 @@ Each Role defines a unique individual agent — not a pool of interchangeable in
 
 ## Team-Lead-Driven Assignment
 
-There are no algorithmic assignment strategies — no role-based, hierarchical, or claim-based auto-routing. Task assignment is a **team lead reasoning decision**: the lead agent assigns the work item in the external PM tool (Jira, Plane, …) through that tool's own MCP tools.
+There are no algorithmic assignment strategies — no role-based, hierarchical, or claim-based auto-routing. Task assignment is a **team lead reasoning decision**: the lead agent assigns the work item in the external PM tool (Jira, GitLab issues, …) through that tool's own MCP tools.
 
 The team lead's Plan-phase system prompt includes a compact team roster (names + handles), plus a per-member detail block (backstory, goal, responsibilities, Jira identity, skills) rendered directly from the in-memory `Organization` model so the lead has full context when reasoning about an assignment.
 
@@ -86,9 +86,32 @@ The team lead's Plan-phase system prompt includes a compact team roster (names +
 
 ## External PM Tool as Source of Truth
 
-Task lifecycle lives in the PM tool (Jira, Plane, GitHub/GitLab issues), not in the engine, which keeps no task state at all — no assignee map, no dependency graph, no reconciliation poller. A mirror of somebody else's task state is a cache with no invalidation story; keeping nothing means there is nothing to be stale. See [Task Engine](../concepts/task-engine.md).
+Task lifecycle lives in the PM tool (Jira, GitHub/GitLab issues), not in the engine, which keeps no task state at all — no assignee map, no dependency graph, no reconciliation poller. A mirror of somebody else's task state is a cache with no invalidation story; keeping nothing means there is nothing to be stale. See [Task Engine](../concepts/task-engine.md).
 
 This avoids duplicating task state and keeps the audit trail in the tool the team already uses.
+
+---
+
+## One Knowledge Backend, Behind a Seam That Keeps It Swappable
+
+The knowledge base is **single-homed**: the engine wires exactly one
+`knowledge.Searcher`, and every consumer — the Plan-phase `## Relevant
+knowledge` prefetch, the first-turn onboarding hint, the cross-agent
+skill-promotion pass — reads through it. Two searchers would make an agent's
+answer to "what do we already know about this" depend on which one was asked,
+and neither would be wrong.
+
+Confluence is the implementation. The seam stays an **interface** anyway, and
+that is the decision worth stating: it is declared by its consumers, so a
+second backend is a new implementation rather than a rewrite of everything
+that searches. The same shape keeps the tool-skill sync taking rendered pages
+rather than a backend client, and the promotion writer an interface — both
+subsystems stay ignorant of which product answered.
+
+What validation still refuses is a read scope naming a backend the config does
+not configure: `knowledge.confluence_spaces` with no `integrations.confluence`
+reads as a working narrowing and narrows nothing. See
+[Knowledge System](../concepts/knowledge-system.md).
 
 ---
 
@@ -115,21 +138,19 @@ not refused by a row nothing clears.
 Data Center both send are all repeated unchanged across the provider's own
 retries, which is exactly the identity this needs.
 
-**Where the provider sends none, the key is a hash of the raw body.** Plane
-sends only `X-Plane-Delivery`, which is per-*attempt* and therefore the
-opposite of a dedupe key; a Cloud event relayed through the Forge app carries
-no delivery header at all; and which Atlassian Data Center builds set the
-identifier has moved between versions. The payload is what stays identical
-across a retry.
+**Where the provider sends none, the key is a hash of the raw body.** A Cloud
+event relayed through the Forge app carries no delivery header at all, and
+which Atlassian Data Center builds set the identifier has moved between
+versions. The payload is what stays identical across a retry.
 
 Byte identity is preferred to derived coordinates deliberately. Coordinates —
 event, action, entity id, activity id — are the tempting shape and are strictly
 worse in the direction that matters: **every field left out of a coordinate set
 is a way for two different events to collapse into one**, and a collapsed event
-is a message nobody ever answers. Plane makes this concrete by firing one
-webhook per changed field with an identical `data` snapshot, so a bulk edit is
-N deliveries differing only in `activity`. A hash over the whole body cannot
-collapse them — any difference at all yields a different key — and its failure
+is a message nobody ever answers. A vendor that fires one webhook per changed
+field with an identical entity snapshot makes this concrete: a bulk edit is N
+deliveries differing only in the activity record. A hash over the whole body
+cannot collapse them — any difference at all yields a different key — and its failure
 mode is the safe one: a provider that re-serialized between attempts fails to
 collapse a redelivery, which is a duplicate rather than a silence. It also
 needs to know nothing about the vendor, which keeps three routes from each

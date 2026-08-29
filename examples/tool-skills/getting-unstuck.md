@@ -3,7 +3,7 @@ key: skill:getting_unstuck
 trigger:
   any_of:
     - tool: mattermost_post_message
-    - mcp_server: plane
+    - mcp_server: atlassian
     - tool: a2a_ask
 phases: [plan, review]
 required: false
@@ -31,9 +31,9 @@ Hand off on the surface where the problem already lives. The audit trail belongs
 
 | Where the problem lives | Where to hand off | How |
 |---|---|---|
-| Plane work item | Comment on the work item | Plane comment tool + @-mention your manager via the `platform_mentions` skill |
+| Jira work item | Comment on the work item | Jira comment tool + @-mention your manager via the `platform_mentions` skill |
 | Mattermost thread | Reply in the thread | `mattermost_post_message` with `root_id` set to the thread root + `@manager-username` |
-| Plane page review | Comment on the related work item | Plane comment tool + mention markup (Plane pages have no comments) |
+| Confluence page review | Comment on the page | Confluence footer-comment tool + mention markup |
 | Merge request | Comment on the MR / request review | Your code-host MCP comment tool + mention |
 | Cross-team coordination | Their team's channel | See `channel-discovery` skill |
 | Tight-loop mechanical sync | A2A | `a2a_ask` (only when the other side is also an agent and the question is short / mechanical) |
@@ -57,7 +57,7 @@ A handoff message must include all four:
 - ❌ Using A2A for a complex / strategic question — the conversation disappears from any human surface.
 - ❌ Reaching for a colleague because you don't want to think harder.  Re-plan first.
 
-# Worked example (Plane work-item comment)
+# Worked example (Jira work-item comment)
 
 ```
 @John I'm blocked on AUTH-1432 (rate-limit middleware refactor).

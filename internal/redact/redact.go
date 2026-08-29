@@ -53,8 +53,6 @@ var rules = []rule{
 	{regexp.MustCompile(`github_pat_[A-Za-z0-9_]{50,}`), Marker + "github-token]"},
 	{regexp.MustCompile(`glpat-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]"},
 	{regexp.MustCompile(`gl(?:rt|soat|ptt)-[A-Za-z0-9_-]{20,}`), Marker + "gitlab-token]"},
-	{regexp.MustCompile(`plane_api_[A-Za-z0-9_-]{20,}`), Marker + "plane-token]"},
-	{regexp.MustCompile(`plane_wh_[A-Za-z0-9_-]{20,}`), Marker + "plane-webhook-secret]"},
 	{
 		regexp.MustCompile(`-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----` +
 			`[\s\S]*?` +

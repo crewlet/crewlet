@@ -47,11 +47,11 @@ func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 // nothing.
 func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
-	if _, errs, err := secretsCmd(t, cfg, "set", "PLANE_TOKEN",
+	if _, errs, err := secretsCmd(t, cfg, "set", "CONFLUENCE_TOKEN",
 		"-value", "the-rotated-one"); err != nil {
 		t.Fatalf("seed the store: %v (%s)", err, errs)
 	}
-	t.Setenv("PLANE_TOKEN", "the-stale-export")
+	t.Setenv("CONFLUENCE_TOKEN", "the-stale-export")
 
 	env, closeEnv, err := companyResolver(t.Context(), cfg, &bytes.Buffer{})
 	if err != nil {
@@ -59,7 +59,7 @@ func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 	}
 	defer closeEnv()
 
-	if got := env.Lookup("PLANE_TOKEN"); got != "the-rotated-one" {
+	if got := env.Lookup("CONFLUENCE_TOKEN"); got != "the-rotated-one" {
 		t.Fatalf("a stale export shadowed the rotated secret: %q", got)
 	}
 }
@@ -161,9 +161,8 @@ func TestABrokenBootstrapRefusesRatherThanResolvingFromTheEnvironment(t *testing
 
 // THE PREVIOUS ENGINE'S OPERATOR-CREDENTIAL NAMES STILL WORK.
 //
-// `--provision-token` / $GITLAB_PROVISION_TOKEN and $PLANE_PROVISION_TOKEN
-// were renamed to `-admin-token` / $*_ADMIN_TOKEN with no alias and no
-// migration note. An operator whose CI exports the old name got "no
+// `--provision-token` / $GITLAB_PROVISION_TOKEN was renamed to
+// `-admin-token` / $*_ADMIN_TOKEN with no alias and no migration note. An operator whose CI exports the old name got "no
 // administrator token" from a pipeline that had worked the day before, and
 // the error named only the new spelling — so the message actively pointed
 // away from the cause.
@@ -198,12 +197,6 @@ func TestTheRenamedOperatorCredentialsStillRead(t *testing.T) {
 			},
 			names: []string{"GITLAB_ADMIN_TOKEN", "GITLAB_PROVISION_TOKEN"},
 			want:  "current",
-		},
-		{
-			name:  "plane, the previous engine's name",
-			set:   map[string]string{"PLANE_PROVISION_TOKEN": "legacy-plane"},
-			names: []string{"PLANE_ADMIN_TOKEN", "PLANE_PROVISION_TOKEN"},
-			want:  "legacy-plane",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

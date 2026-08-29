@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -281,7 +282,7 @@ func confluencePrompt() notify.Prompt { return confluence.Prompt{} }
 // an empty catalogue and gain it moments later, which is strictly better
 // than a boot that blocks on an instance that is down.
 func (e *Engine) startConfluenceSkillSync(ctx context.Context, c *Company) {
-	space := e.SkillsProject(c)
+	space := e.SkillsContainer(c)
 	e.notify.mu.Lock()
 	client := e.notify.confluence.pages
 	e.notify.mu.Unlock()
@@ -291,4 +292,27 @@ func (e *Engine) startConfluenceSkillSync(ctx context.Context, c *Company) {
 	go e.syncSkillsFrom(ctx, c, func(ctx context.Context, space string) ([]skills.Page, error) {
 		return confluence.SkillPages(ctx, client, space)
 	})
+}
+
+// Knowledge is the company's knowledge-base searcher, or nil.
+//
+// ONE BACKEND, and Confluence is it. The seam stays an interface anyway —
+// [knowledge.Searcher] is declared by its consumers, so a second backend is
+// a new implementation rather than a rewrite of everything that searches.
+//
+// Nil means no backend is wired, and every consumer treats that as "search
+// nothing" rather than as an error — a turn must not die because a company
+// has no wiki.
+func (e *Engine) Knowledge() knowledge.Searcher {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	if e.notify.confluence.searcher == nil {
+		// A NIL INTERFACE, not a typed nil wrapping a nil pointer: the
+		// consumers check `searcher == nil`, and a typed nil passes that
+		// check and then answers as though a search had run and found
+		// nothing — which is indistinguishable from a real empty result
+		// and hides the fact that nothing is configured.
+		return nil
+	}
+	return e.notify.confluence.searcher
 }
