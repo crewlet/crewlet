@@ -6,9 +6,15 @@ name: Publish docs
 # instead of within the hour.
 #
 # Both the target repository and the token are secrets, so this file names
-# neither. Secrets are not exposed to pull requests from forks, and neither
-# trigger below can be reached from one: a push to main is a real merge, and
-# Release only ever runs on a tag push or a manual dispatch.
+# neither, and no trigger below can hand them to a fork. A push to main is a
+# real merge. The workflow_run trigger IS reachable from a fork — the release
+# workflow also runs on pull requests that touch the release surface, and a
+# workflow_run job runs on the default branch WITH this repository's secrets
+# whatever triggered the run it watched. What holds is the job condition, not
+# the trigger: it fires only for a release run whose own event was a push,
+# which for that workflow means a v* tag. Nothing here checks out the
+# triggering ref either — the job only POSTs a dispatch — so there is no
+# fork-authored code in the run at all.
 
 on:
   push:
@@ -25,15 +31,21 @@ on:
   #   - `tags: ["v*"]` here would be ANDed with the `paths` filter above, and a
   #     tag pointing at a commit already on main changes no files at all — so
   #     the filter that makes this workflow cheap would also make it never fire.
-  #   - `release: [published]` never fires either. Release creates the release
-  #     with the built-in GITHUB_TOKEN, and GitHub deliberately does not start
-  #     workflow runs from events that token authored, to stop workflows
-  #     triggering each other in a loop.
+  #   - `release: [published]` never fires either. The release workflow creates
+  #     the release with the built-in GITHUB_TOKEN, and GitHub deliberately
+  #     does not start workflow runs from events that token authored, to stop
+  #     workflows triggering each other in a loop.
   #
-  # Watching the Release workflow itself sidesteps both. Without it a new
+  # Watching the release workflow itself sidesteps both. Without it a new
   # version waits for the docs site's hourly poll.
+  #
+  # The name must match `name:` in .github/workflows/release.yml EXACTLY —
+  # GitHub matches this list against that string and reports no error when
+  # nothing matches, so a mismatch just silently never fires and the site
+  # falls back to the hourly poll this trigger exists to pre-empt. Asserted
+  # by internal/version, because "silently never fires" has no other symptom.
   workflow_run:
-    workflows: [Release]
+    workflows: [release]
     types: [completed]
 
   workflow_dispatch:
@@ -48,9 +60,13 @@ concurrency:
 jobs:
   notify:
     runs-on: ubuntu-latest
-    # Only a Release run that actually released something is worth a rebuild: a
-    # failed one published no version, and a `workflow_dispatch` rehearsal only
-    # uploads to TestPyPI and creates no tag. Every other trigger passes through.
+    # Only a release run that actually released something is worth a rebuild:
+    # a failed one published no version, and every run that is not a push is a
+    # goreleaser snapshot — a manual rehearsal or a pull request touching the
+    # release surface — which builds every artifact locally and creates no
+    # tag. Since that workflow's only push trigger is `tags: ["v*"]`, an event
+    # of `push` is exactly "a version tag was published". Every other trigger
+    # of THIS workflow passes through.
     if: >-
       github.event_name != 'workflow_run' ||
       (github.event.workflow_run.conclusion == 'success' &&

@@ -22,12 +22,16 @@ on:
   pull_request:
     # Only when the release surface itself changes. A full six-target build
     # on every engine pull request would buy nothing: what breaks here is
-    # this config, the Dockerfile, or the module's own toolchain.
+    # this config, the Dockerfile, the module's own toolchain, or the
+    # variable the -X flag stamps — internal/version is release surface
+    # because moving or renaming `value` is what makes the stamp apply to
+    # nothing, and running the built binary is what proves it still lands.
     paths:
       - ".goreleaser.yaml"
       - "Dockerfile"
       - ".github/workflows/release.yml"
       - "go.mod"
+      - "internal/version/**"
 
 permissions:
   contents: read
@@ -81,14 +85,25 @@ jobs:
       - name: Prove the built binary reports the stamped version
         # The ldflags stamp is the one part of this pipeline with no other
         # symptom: a renamed variable or a moved package silently stops
-        # applying, and every release then reports "dev" from the build-info
-        # fallback. Nothing but running the binary catches it.
+        # applying, the link still succeeds, and the binary falls back to
+        # its module build info. Nothing but running the binary catches it.
+        #
+        # The comparison is EQUALITY against what goreleaser recorded it
+        # built, never a sentinel. Sniffing for "dev" is what this used to
+        # do, and it stopped working: since Go 1.24 an unstamped build in a
+        # repository reports a pseudo-version derived from the tags —
+        # v0.0.0-20260829195106-ce2beccb7330, which contains no "dev" — so a
+        # stamp that applied to nothing shipped green. `dev` is only ever
+        # reachable when debug.ReadBuildInfo fails outright.
         run: |
-          reported="$(./dist/crewlet_linux_amd64_v1/crewlet --version)"
-          echo "$reported"
-          case "$reported" in
-            *dev*|"") echo "::error::the version stamp did not land: $reported"; exit 1 ;;
-          esac
+          set -euo pipefail
+          built="$(jq -er .version dist/metadata.json)"
+          reported="$(./dist/crewlet_linux_amd64_v1/crewlet --version | awk '{print $2}')"
+          echo "goreleaser built ${built}; the binary reports ${reported}"
+          if [ "${reported}" != "${built}" ]; then
+            echo "::error::the version stamp did not land: the binary reports ${reported}, goreleaser built ${built}"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v7
         with:
@@ -155,12 +170,26 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prove the published binary reports the tag
-        # Same check as the snapshot job, and it matters more here: this is
-        # the artifact people download, and a "dev" version on it is
+        # Same equality check as the snapshot job, and it matters more here:
+        # this is the artifact people download, and a wrong version on it is
         # permanent.
+        #
+        # One assertion more than the snapshot makes, because here there is a
+        # tag to be wrong about: goreleaser's recorded tag must be the ref
+        # this run was triggered by. Comparing the raw tags rather than
+        # stripping a "v" off .Version keeps the check on what was actually
+        # pushed.
         run: |
-          reported="$(./dist/crewlet_linux_amd64_v1/crewlet --version)"
-          echo "$reported"
-          case "$reported" in
-            *dev*|"") echo "::error::the version stamp did not land: $reported"; exit 1 ;;
-          esac
+          set -euo pipefail
+          built="$(jq -er .version dist/metadata.json)"
+          tag="$(jq -er .tag dist/metadata.json)"
+          reported="$(./dist/crewlet_linux_amd64_v1/crewlet --version | awk '{print $2}')"
+          echo "tag ${tag}; goreleaser built ${built}; the binary reports ${reported}"
+          if [ "${tag}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::goreleaser built ${tag}, but this run was triggered by ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          if [ "${reported}" != "${built}" ]; then
+            echo "::error::the version stamp did not land: the binary reports ${reported}, goreleaser built ${built}"
+            exit 1
+          fi
