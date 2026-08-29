@@ -3,17 +3,21 @@ package config
 import (
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
-// `debug: true` MEANS SOMETHING. It was a declared Tier A field that nothing
-// in the tree ever read: the quickstart tells an operator to write it and the
-// deployment guide says it "raises the log level to DEBUG", and for the life
-// of the field it changed nothing. A boolean nobody consults looks identical
-// to a boolean that is working, which is why this is asserted rather than
-// left to the CLI wiring that consumes it.
+// THE FILE'S LOGGING SETTINGS REACH THE PROCESS.
+//
+// There was a `debug: true` boolean here that nothing in the tree ever read:
+// the quickstart told an operator to write it and the deployment guide said
+// it "raises the log level to DEBUG", and for the life of the field it
+// changed nothing. A boolean nobody consults looks identical to a boolean
+// that works, which is why this is asserted rather than left to the CLI
+// wiring that consumes it. The boolean is now gone — `logging.level` says
+// everything it said — but the assertion it was missing is not.
 func TestLogSettingsPrecedence(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -27,7 +31,7 @@ func TestLogSettingsPrecedence(t *testing.T) {
 			slog.LevelInfo, logging.FormatConsole,
 		},
 		{
-			"the debug shorthand", "debug: true\n",
+			"debug", "logging:\n  level: debug\n",
 			slog.LevelDebug, logging.FormatConsole,
 		},
 		{
@@ -41,20 +45,6 @@ func TestLogSettingsPrecedence(t *testing.T) {
 		{
 			"both", "logging:\n  level: error\n  format: text\n",
 			slog.LevelError, logging.FormatText,
-		},
-		// THE SHORTHAND WINS, exactly as `-debug` wins over `-log-level`:
-		// writing both is an operator asking for debug in the loudest way
-		// the file offers. It only ever raises — `debug: false` beside
-		// `level: warn` leaves warn alone.
-		{
-			"the shorthand beside a quieter level",
-			"debug: true\nlogging:\n  level: warn\n",
-			slog.LevelDebug, logging.FormatConsole,
-		},
-		{
-			"a false shorthand does not lower a level",
-			"debug: false\nlogging:\n  level: warn\n",
-			slog.LevelWarn, logging.FormatConsole,
 		},
 	}
 	for _, tc := range cases {
@@ -127,6 +117,29 @@ func TestEveryDeclaredLevelAndFormatIsUsable(t *testing.T) {
 		}
 		if _, got := boot.LogSettings(); got != format {
 			t.Errorf("format %q resolved to %v", format, got)
+		}
+	}
+}
+
+// THE RETIRED `debug:` KEY EXPLAINS ITSELF. The loader refuses anything it
+// does not define, which is right — a misspelled setting that decoded to
+// nothing is how a company boots with half its config silently absent. But
+// this project's own quickstart and example told operators to write `debug:`,
+// so reporting it as a spelling mistake sends them looking for a typo that
+// is not there. It names the line that replaces it instead.
+func TestTheRetiredDebugKeyNamesItsReplacement(t *testing.T) {
+	t.Parallel()
+	for _, doc := range []string{"debug: true\n", "debug: false\n"} {
+		err := rejectsBootstrap(t, doc, "logging:")
+		if !errors.Is(err, ErrUnknownField) {
+			t.Errorf("%q: want %v, got %v", doc, ErrUnknownField, err)
+		}
+		// The generic message would send them hunting for a typo.
+		if strings.Contains(err.Error(), "check the spelling") {
+			t.Errorf("%q was reported as a misspelling: %v", doc, err)
+		}
+		if !strings.Contains(err.Error(), "level: debug") {
+			t.Errorf("%q: the error does not say what to write: %v", doc, err)
 		}
 	}
 }

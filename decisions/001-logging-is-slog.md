@@ -137,12 +137,29 @@ there would filter the wrong lines, and only the *suppressed* ones would show it
 ## What this replaced
 
 `debug: true` in Tier A was a declared field that **nothing in the tree ever read**.
-The quickstart tells an operator to write it and the deployment guide said it "raises
+The quickstart told an operator to write it and the deployment guide said it "raises
 the log level to DEBUG"; it changed nothing, and a boolean nobody consults looks
 exactly like a boolean that is working. Tier A now carries a real `logging:` block
-(`level`, `format`) with `debug:` as its documented shorthand — the same pairing
-`-debug` and `-log-level` already had on the command line, with the same rule that the
-shorthand wins.
+(`level`, `format`).
+
+### The `debug:` boolean was retired, not wired up
+
+Making it work was the first move, and keeping it would have mirrored the command
+line, where `-debug` is the shorthand for `-log-level debug`. It is gone instead,
+and the difference between the two cases is what settles it: a **flag** is typed
+for one invocation by someone watching the process, so a shorthand saves them
+characters and cannot drift. A **file** is written once and read by everyone
+afterwards, so two keys setting one value is a state where they disagree — and
+then something has to arbitrate, and that arbitration is a rule every reader of
+the file has to know before they can predict what it does. `logging.level` says
+everything `debug:` said and three things it could not.
+
+The key is not simply dropped: it is in `config.retiredFields`, so a file still
+carrying it is refused with the line that replaces it rather than with "check the
+spelling". This project's own quickstart and example told people to write it, and
+reporting that as a typo sends them hunting for one that is not there. Entries
+there are permanent — a file written against any past release stays diagnosable,
+and the cost is one map entry.
 
 The two layers disagree on purpose about a value the build does not recognise. A
 **flag** resolves a typo to the default, because a bad log level must never be why a

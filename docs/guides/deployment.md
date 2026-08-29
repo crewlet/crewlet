@@ -509,11 +509,15 @@ How loud a node is, and in what shape, is Tier A:
 logging:
   level: info       # debug, info (default), warn, error
   format: console   # console (default), text, json
-
-debug: true         # shorthand for logging.level: debug — wins if both are set
 ```
 
-The same three, on the command line, for one run:
+That block is the only way the file says it. A `debug: true` boolean used to
+sit beside it; it was retired rather than wired up, because two keys setting
+one value is a state where they can disagree and something has to arbitrate.
+A file that still carries it is refused with the line that replaces it, not
+with a spelling check.
+
+The same settings, on the command line, for one run:
 
 ```bash
 crewlet run -debug                             # shorthand for -log-level debug
@@ -526,7 +530,7 @@ its default whether or not anyone typed it, so `crewlet run` distinguishes
 "the operator asked for `info`" from "nobody said anything" — otherwise
 `logging.level: warn` in a file would be dead on arrival behind the flag's own
 default. `-debug` only ever *raises*: to quieten a node whose file says
-`debug: true`, pass `-log-level info`.
+`logging.level: debug`, pass `-log-level info`.
 
 **The first lines of a run come out in the flag's shape, not the file's.**
 The `${VAR}` warnings a Tier A document produces are emitted while it is being

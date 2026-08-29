@@ -378,7 +378,6 @@ logging:
   level: info       # debug, info (default), warn, error
   format: console   # console (default: columns and colour for a person),
                     #   text (slog key=value), json (for a log shipper)
-# debug: true       # shorthand for logging.level: debug; wins if both are set
 ```
 
 The event store (LLM observability) is a table in that same file, created by

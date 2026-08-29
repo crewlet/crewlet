@@ -64,7 +64,7 @@ subcommand below is served by it.
 > log level must never be why an operator cannot run a migration, and it must
 > not quietly change the default either. `crewlet run` has its own
 > `-log-level` / `-log-format` / `-debug` flags, its own default of `info`,
-> and reads `logging:` and `debug:` from its Tier A file. Colour is
+> and reads the `logging:` block from its Tier A file. Colour is
 > `CREWLET_LOG_COLOR` / `NO_COLOR` everywhere — see
 > [Environment Variables](environment-variables.md#logging).
 ## `crewlet run`
@@ -97,7 +97,7 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | `-company PATH` | Tier B **seed**: imported into the store when the store does not already hold it. A running node serves the store, not this file. |
 | `-log-level LEVEL` | `debug`, `info` (default), `warn` or `error`. Overrides `logging.level` in Tier A, and only when actually given. A typo resolves to `info` — a bad log level must never be why a company will not boot. |
 | `-log-format FORMAT` | `console` (default), `text` or `json`. Overrides `logging.format` in Tier A, and only when actually given. `console` is columns and colour for a person; `text` is slog's `key=value`; `json` is one object per line for a shipper. A typo resolves to `console`. |
-| `-debug` | Shorthand for `-log-level debug`; wins if both are given. It only ever *raises* — to quieten a file that sets `debug: true`, pass `-log-level info`. |
+| `-debug` | Shorthand for `-log-level debug`; wins if both are given. It only ever *raises* — to quieten a file that sets `logging.level: debug`, pass `-log-level info`. |
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint, so every integration goes deaf. That is why leaving the flag off is not the same as passing `0`. |
 | `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all three — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. See [Running a Fleet](../guides/fleet.md). |

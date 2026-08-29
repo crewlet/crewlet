@@ -185,7 +185,8 @@ func TestBootstrapExampleLoads(t *testing.T) {
 func TestBootstrapExampleShapeLoads(t *testing.T) {
 	t.Parallel()
 	cfg, err := ParseBootstrap([]byte(`
-debug: false
+logging:
+  level: info
 
 node:
   id: "${CREWLET_NODE_ID}"

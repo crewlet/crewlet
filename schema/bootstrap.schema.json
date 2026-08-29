@@ -529,10 +529,6 @@
     "coordination": {
       "$ref": "#/$defs/Coordination"
     },
-    "debug": {
-      "description": "Shorthand for logging.level: debug; wins if both are set.",
-      "type": "boolean"
-    },
     "logging": {
       "$ref": "#/$defs/Logging"
     },

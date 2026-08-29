@@ -50,10 +50,10 @@ func TestLogSettingsFlagsOverrideTheFileOnlyWhenGiven(t *testing.T) {
 			"neither says anything", "", nil,
 			slog.LevelInfo, logging.FormatConsole,
 		},
-		// The regression. Nothing on the command line, `debug: true` in
-		// the file: the file has to be what decides.
+		// The regression. Nothing on the command line, the level in the
+		// file: the file has to be what decides.
 		{
-			"the file alone asks for debug", "debug: true\n", nil,
+			"the file alone asks for debug", "logging:\n  level: debug\n", nil,
 			slog.LevelDebug, logging.FormatConsole,
 		},
 		{
@@ -70,7 +70,7 @@ func TestLogSettingsFlagsOverrideTheFileOnlyWhenGiven(t *testing.T) {
 		// for happens to equal the flag's own default.
 		{
 			"an explicit level beats the file",
-			"debug: true\n", []string{"-log-level", "info"},
+			"logging:\n  level: debug\n", []string{"-log-level", "info"},
 			slog.LevelInfo, logging.FormatConsole,
 		},
 		{
@@ -92,7 +92,7 @@ func TestLogSettingsFlagsOverrideTheFileOnlyWhenGiven(t *testing.T) {
 		},
 		{
 			"a false debug flag does not silence the file",
-			"debug: true\n", []string{"-debug=false"},
+			"logging:\n  level: debug\n", []string{"-debug=false"},
 			slog.LevelDebug, logging.FormatConsole,
 		},
 		// The file's two ways of saying it, together, through the flags.

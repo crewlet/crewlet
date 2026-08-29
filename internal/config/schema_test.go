@@ -228,7 +228,7 @@ func parityCases() []parityCase {
 		// Valid documents. Every one of these must survive BOTH layers, or
 		// the schema is stricter than the engine.
 		{name: "minimal company", tier: TierCompany, yaml: "name: Acme\n"},
-		{name: "empty bootstrap", tier: TierBootstrap, yaml: "debug: false\n"},
+		{name: "empty bootstrap", tier: TierBootstrap, yaml: "logging:\n  level: info\n"},
 		{
 			name: "a full company",
 			tier: TierCompany,

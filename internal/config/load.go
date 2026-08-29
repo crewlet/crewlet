@@ -240,6 +240,28 @@ func decodeKnown(node *yaml.Node, out any) error {
 // file for.
 var unknownFieldRE = regexp.MustCompile(`^line (\d+): field (\S+) not found in type \S+$`)
 
+// retiredFields are keys this build no longer accepts, mapped to what an
+// operator should write instead.
+//
+// # A removed key is not a typo, and must not be reported as one
+//
+// The loader refuses anything it does not define, which is right — a
+// misspelled setting that decoded to nothing is how a company boots with
+// half its configuration silently absent. But the same refusal turns a
+// key this project ITSELF told people to write into "check the spelling",
+// and there is no spelling of `debug` that works any more. Every entry here
+// is a name that shipped in a release, an example or the quickstart; nothing
+// belongs in this table that operators were never given.
+//
+// Entries are permanent. A file written against any past release stays
+// diagnosable, and the cost is one map entry.
+var retiredFields = map[string]string{
+	"debug": "`debug` is no longer a setting — it was a second way to say " +
+		"the log level and it is gone. Write `logging:` with `level: debug` " +
+		"under it (and `level: info` is the default, so a `debug: false` " +
+		"can simply be deleted)",
+}
+
 // decodeError translates yaml's decode failures into this package's
 // sentinels, so a caller can tell a typo from a wrong shape.
 func decodeError(err error) error {
@@ -260,6 +282,14 @@ func decodeError(err error) error {
 	var out problems
 	for _, line := range typeErr.Errors {
 		if m := unknownFieldRE.FindStringSubmatch(line); m != nil {
+			// A key that was REMOVED needs its own message. "debug is not
+			// a setting" is true and useless to someone reading a file the
+			// quickstart told them to write: they need the line that
+			// replaced it, not a spelling check.
+			if replacement, retired := retiredFields[strings.Trim(m[2], `"`)]; retired {
+				out.add("line "+m[1], ErrUnknownField, "%s", replacement)
+				continue
+			}
 			out.add("line "+m[1], ErrUnknownField,
 				"%q is not a setting — check the spelling, or the block it belongs under", m[2])
 			continue

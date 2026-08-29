@@ -19,7 +19,6 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 logging:
   level: info           # debug, info (default), warn, error
   format: console       # console (default), text, json
-# debug: true           #   shorthand for logging.level: debug
 
 node:
   id: "node-0"          # optional; see below

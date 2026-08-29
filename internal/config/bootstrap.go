@@ -52,12 +52,6 @@ type Bootstrap struct {
 
 	// Logging is how loud this node is, and in what shape.
 	Logging Logging `yaml:"logging,omitempty" json:"logging"`
-
-	// Debug is the shorthand for logging.level: debug, exactly as the
-	// `-debug` flag is the shorthand for `-log-level debug`. It wins over
-	// Logging.Level for the same reason the flag wins: writing both is an
-	// operator asking for debug in the loudest way the file offers.
-	Debug bool `yaml:"debug,omitempty" json:"debug" desc:"Shorthand for logging.level: debug; wins if both are set."`
 }
 
 // Logging is Tier A's logging surface: the level this node emits at and the
@@ -102,16 +96,15 @@ func (l *Logging) validate(path string) error {
 // LogSettings is what this file asks the process to log at, and in what
 // shape, with every default applied.
 //
-// The Debug SHORTHAND WINS over Logging.Level — see [Bootstrap.Debug]. The
-// CLI's flags are layered on top of this by `crewlet run`, and only when
-// they were actually given.
+// ONE WAY TO SAY IT. There was a `debug: true` boolean beside this block —
+// retired rather than wired up, because two keys setting one value is a
+// state where they disagree and something has to arbitrate. `logging.level`
+// says everything it said and three things it could not. The CLI's flags are
+// layered on top of this by `crewlet run`, and only when actually given.
 func (b *Bootstrap) LogSettings() (slog.Level, logging.Format) {
 	level := slog.LevelInfo
 	if b.Logging.Level != "" {
 		level = b.Logging.Level.Slog()
-	}
-	if b.Debug {
-		level = slog.LevelDebug
 	}
 	format := logging.FormatConsole
 	if b.Logging.Format != "" {
