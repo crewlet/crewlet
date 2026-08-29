@@ -210,7 +210,7 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 		logSignal("kill", pid, procgroup.Kill(pid))
 		return "", localErrorf("local sandbox %s could not record its job's pid: %v", b.layout.id, err)
 	}
-	log.Info("local_sandbox_job_started", "sandbox_id", b.layout.id, "pid", pid)
+	localLog.Info("local_sandbox_job_started", "sandbox_id", b.layout.id, "pid", pid)
 	return strconv.Itoa(pid), nil
 }
 
@@ -312,7 +312,7 @@ func (b *directBox) Pause(ctx context.Context) error {
 		return nil
 	}
 	logSignal("stop", pid, procgroup.Stop(pid))
-	log.Debug("local_sandbox_paused", "sandbox_id", b.layout.id, "pid", pid)
+	localLog.Debug("local_sandbox_paused", "sandbox_id", b.layout.id, "pid", pid)
 	return nil
 }
 
@@ -342,7 +342,7 @@ func (b *directBox) Close(ctx context.Context) error {
 	}
 	collectCredentials(b.layout, b.credentials)
 	removeBox(b.layout)
-	log.Debug("local_sandbox_closed", "sandbox_id", b.layout.id)
+	localLog.Debug("local_sandbox_closed", "sandbox_id", b.layout.id)
 	return nil
 }
 
@@ -432,7 +432,7 @@ func (b *containerBox) envArgs(extra map[string]string) ([]string, error) {
 	for _, assignment := range flattenEnv(merged) {
 		key, value, _ := strings.Cut(assignment, "=")
 		if strings.ContainsAny(value, "\n\r") {
-			log.Warn("local_sandbox_env_var_unrepresentable", "sandbox_id", b.layout.id, "var", key)
+			localLog.Warn("local_sandbox_env_var_unrepresentable", "sandbox_id", b.layout.id, "var", key)
 			continue
 		}
 		lines = append(lines, assignment)
@@ -501,7 +501,7 @@ func (b *containerBox) StartBackground(ctx context.Context, cmd string, opts Exe
 		return "", localErrorf("container sandbox %s could not start a background job: %s",
 			b.layout.id, truncate(detail, 400))
 	}
-	log.Info("local_sandbox_job_started",
+	localLog.Info("local_sandbox_job_started",
 		"sandbox_id", b.layout.id, "pid", pid, "container", b.container)
 	return pid, nil
 }
@@ -564,7 +564,7 @@ func (b *containerBox) Pause(ctx context.Context) error {
 		if err != nil {
 			detail = err.Error()
 		}
-		log.Warn("local_sandbox_pause_failed", "sandbox_id", b.layout.id, "error", truncate(detail, 200))
+		localLog.Warn("local_sandbox_pause_failed", "sandbox_id", b.layout.id, "error", truncate(detail, 200))
 	}
 	return nil
 }
@@ -583,13 +583,13 @@ func (b *containerBox) Close(ctx context.Context) error {
 	if res, err := runHost(ctx, hostCommand{
 		argv: []string{b.runtime, "rm", "-f", b.container},
 	}); err != nil || res.ExitCode != 0 {
-		log.Warn("local_sandbox_container_not_removed", "sandbox_id", b.layout.id,
+		localLog.Warn("local_sandbox_container_not_removed", "sandbox_id", b.layout.id,
 			"container", b.container, "exit", res.ExitCode,
 			"stderr", strings.TrimSpace(res.Stderr))
 	}
 	collectCredentials(b.layout, b.credentials)
 	removeBox(b.layout)
-	log.Debug("local_sandbox_closed", "sandbox_id", b.layout.id)
+	localLog.Debug("local_sandbox_closed", "sandbox_id", b.layout.id)
 	return nil
 }
 

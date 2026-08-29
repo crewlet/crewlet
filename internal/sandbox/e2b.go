@@ -7,7 +7,14 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/logging"
 )
+
+// e2bLog names the REMOTE backend. Without it these events logged through the
+// package var that local.go bound to "sandbox.local", so every remote-box line
+// claimed to come from the local backend.
+var e2bLog = logging.Get("sandbox.e2b")
 
 // The remote backend: a real VM per coding run, on E2B cloud or a
 // self-hosted cluster.
@@ -135,7 +142,7 @@ func (p *E2BProvider) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Info("e2b_sandbox_created", "sandbox_id", box.SandboxID,
+	e2bLog.Info("e2b_sandbox_created", "sandbox_id", box.SandboxID,
 		"template", template, "domain", p.api.domain,
 		"envd_version", box.EnvdVersion)
 	return p.box(box), nil
@@ -170,7 +177,7 @@ func (p *E2BProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, e
 		}
 		return nil, fmt.Errorf("e2b: sandbox %s could not be resumed: %w", sandboxID, err)
 	}
-	log.Debug("e2b_sandbox_connected", "sandbox_id", sandboxID)
+	e2bLog.Debug("e2b_sandbox_connected", "sandbox_id", sandboxID)
 	return p.box(box), nil
 }
 
@@ -187,7 +194,7 @@ func (p *E2BProvider) Kill(ctx context.Context, sandboxID string) error {
 	if err := p.api.killBox(ctx, sandboxID); err != nil {
 		return err
 	}
-	log.Debug("e2b_sandbox_killed", "sandbox_id", sandboxID)
+	e2bLog.Debug("e2b_sandbox_killed", "sandbox_id", sandboxID)
 	return nil
 }
 

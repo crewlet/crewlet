@@ -18,7 +18,10 @@ import (
 	"github.com/crewlet/crewlet/internal/procgroup"
 )
 
-var log = logging.Get("sandbox.local")
+// localLog names the LOCAL backend. The package-neutral logger is in
+// protocol.go; binding one var for the whole package stamped the remote
+// backend and the shared runtime as "sandbox.local" too.
+var localLog = logging.Get("sandbox.local")
 
 // Containment selects how a local box is isolated.
 type Containment string
@@ -156,12 +159,12 @@ func seedCredentials(l boxLayout, files map[string]string) {
 	for relative, source := range files {
 		dst, err := hostbox.SafeJoin(l.root, relative)
 		if err != nil {
-			log.Warn("local_sandbox_credential_path_refused",
+			localLog.Warn("local_sandbox_credential_path_refused",
 				"sandbox_id", l.id, "path", relative, "error", err.Error())
 			continue
 		}
 		if _, err := hostbox.CopyFileAtomic(source, dst); err != nil {
-			log.Warn("local_sandbox_credential_seed_failed",
+			localLog.Warn("local_sandbox_credential_seed_failed",
 				"sandbox_id", l.id, "path", relative, "error", err.Error())
 		}
 	}
@@ -195,10 +198,10 @@ func collectCredentials(l boxLayout, files map[string]string) {
 			continue
 		}
 		if ran, err := hostbox.CopyFileAtomic(src, source); err != nil {
-			log.Warn("local_sandbox_credential_writeback_failed",
+			localLog.Warn("local_sandbox_credential_writeback_failed",
 				"sandbox_id", l.id, "file", relative, "error", err.Error())
 		} else if ran {
-			log.Info("local_sandbox_credential_refreshed", "sandbox_id", l.id, "file", relative)
+			localLog.Info("local_sandbox_credential_refreshed", "sandbox_id", l.id, "file", relative)
 		}
 	}
 }
@@ -244,7 +247,7 @@ func readCredentialMap(l boxLayout) map[string]string {
 // touchAlive refreshes the box's keepalive stamp. Never fatal.
 func touchAlive(l boxLayout) {
 	if err := os.MkdirAll(l.meta(), hostbox.DirMode); err != nil {
-		log.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
+		localLog.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
 		return
 	}
 	now := time.Now()
@@ -253,13 +256,13 @@ func touchAlive(l boxLayout) {
 	}
 	f, err := os.OpenFile(l.aliveFile(), os.O_CREATE|os.O_WRONLY, hostbox.FileMode)
 	if err != nil {
-		log.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
+		localLog.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
 		return
 	}
 	if err := f.Close(); err != nil {
 		// A keepalive that did not land is a box the reaper will treat as
 		// an orphan, so the failure is worth the same line as the open.
-		log.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
+		localLog.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
 	}
 }
 
@@ -413,12 +416,12 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		// The map names paths, not secrets, but losing it means a
 		// refreshed login is never written back to the shared directory
 		// — worth saying out loud, and not worth failing the box for.
-		log.Warn("local_sandbox_credential_map_unwritable", "sandbox_id", layout.id, "error", err.Error())
+		localLog.Warn("local_sandbox_credential_map_unwritable", "sandbox_id", layout.id, "error", err.Error())
 	}
 	touchAlive(layout)
 
 	if l.opts.Containment == Direct {
-		log.Info("local_sandbox_created", "sandbox_id", id, "containment", "direct", "home", layout.root)
+		localLog.Info("local_sandbox_created", "sandbox_id", id, "containment", "direct", "home", layout.root)
 		return &directBox{layout: layout, env: spec.Env, credentials: spec.CredentialFiles}, nil
 	}
 
@@ -452,7 +455,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		_ = os.RemoveAll(layout.root)
 		return nil, err
 	}
-	log.Info("local_sandbox_created",
+	localLog.Info("local_sandbox_created",
 		"sandbox_id", id, "containment", "container", "image", l.opts.Image, "container", name)
 	return box, nil
 }
@@ -530,7 +533,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 	if err != nil {
 		// Nothing to reclaim, and refusing is what stops the join below
 		// resolving to the directory that holds every box.
-		log.Warn("local_sandbox_kill_refused", "sandbox_id", sandboxID, "error", err.Error())
+		localLog.Warn("local_sandbox_kill_refused", "sandbox_id", sandboxID, "error", err.Error())
 		return nil
 	}
 	if l.opts.Containment == Container {
@@ -560,7 +563,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 	// must not do.
 	collectCredentials(layout, readCredentialMap(layout))
 	removeBox(layout)
-	log.Debug("local_sandbox_killed", "sandbox_id", sandboxID)
+	localLog.Debug("local_sandbox_killed", "sandbox_id", sandboxID)
 	return nil
 }
 
@@ -572,7 +575,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 // so the operator learns of it now instead of finding the directory later.
 func removeBox(l boxLayout) {
 	if err := os.RemoveAll(l.root); err != nil {
-		log.Warn("local_sandbox_not_removed", "sandbox_id", l.id,
+		localLog.Warn("local_sandbox_not_removed", "sandbox_id", l.id,
 			"path", l.root, "error", err.Error())
 	}
 }
@@ -670,7 +673,7 @@ func (l *Local) reapOrphans(ctx context.Context, olderThan time.Duration) {
 		}
 		collectCredentials(layout, readCredentialMap(layout))
 		removeBox(layout)
-		log.Info("local_sandbox_orphan_reaped", "sandbox_id", layout.id)
+		localLog.Info("local_sandbox_orphan_reaped", "sandbox_id", layout.id)
 	}
 }
 
@@ -718,7 +721,7 @@ func (l *Local) liveContainers(ctx context.Context) (map[string]bool, error) {
 		if err != nil {
 			detail = err.Error()
 		}
-		log.Warn("local_sandbox_reap_listing_failed", "error", truncate(detail, 200))
+		localLog.Warn("local_sandbox_reap_listing_failed", "error", truncate(detail, 200))
 		return nil, errors.New("container listing failed")
 	}
 	names := map[string]bool{}
@@ -748,5 +751,5 @@ func logSignal(what string, pid int, err error) {
 	if err == nil {
 		return
 	}
-	log.Warn("local_sandbox_signal_failed", "signal", what, "pgid", pid, "error", err.Error())
+	localLog.Warn("local_sandbox_signal_failed", "signal", what, "pgid", pid, "error", err.Error())
 }

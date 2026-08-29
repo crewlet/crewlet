@@ -105,7 +105,7 @@ func runtimeIsRootless(ctx context.Context, runtime string) bool {
 		// only evidence of one being a container that came up with
 		// --user against a rootless runtime. Stderr too, because a
 		// runtime that refuses says why there and nowhere else.
-		log.Debug("local_sandbox_rootless_probe_unanswered",
+		localLog.Debug("local_sandbox_rootless_probe_unanswered",
 			"runtime", runtime, "exit", result.ExitCode,
 			"error", err, "stderr", strings.TrimSpace(result.Stderr))
 		return false

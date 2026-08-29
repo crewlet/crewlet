@@ -13,7 +13,23 @@
 // See docs/concepts/code-sandbox.md.
 package sandbox
 
-import "context"
+import (
+	"context"
+
+	"github.com/crewlet/crewlet/internal/logging"
+)
+
+// log is the package's own component, bound for the backend-NEUTRAL runtime:
+// the coordinator, the waiter, the manager, launch, setup, mcprender and otel.
+//
+// Each backend binds its own (localLog, e2bLog) so a line names the box it
+// came from. This var used to live in local.go bound to "sandbox.local", which
+// stamped every backend-neutral event — and every remote-box event — as the
+// local backend, so filtering logs by component hid remote runs exactly where
+// an operator would look for them. A file added here logs as plain "sandbox"
+// unless it is backend-specific, which is the safe default: an over-general
+// component is findable, a wrong one is not.
+var log = logging.Get("sandbox")
 
 // DefaultHome is where a box that says nothing else keeps its artefacts.
 //
