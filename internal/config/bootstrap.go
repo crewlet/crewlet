@@ -121,7 +121,7 @@ func (b *Bootstrap) LogSettings() (slog.Level, logging.Format) {
 // loader decodes INTO this value: a key absent from the file leaves the
 // default in place, and a key present with no value under it (`api:`) reads
 // as unset for the same reason. That is the shape a hand-written YAML uses
-// for "empty", and it is what POST /config can produce.
+// for "empty", and it is what PUT /config can produce.
 func DefaultBootstrap() Bootstrap {
 	return Bootstrap{
 		Node:         Node{},

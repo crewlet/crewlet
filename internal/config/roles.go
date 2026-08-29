@@ -50,7 +50,7 @@ type Role struct {
 
 	// Unit is a home-unit reference for a ROOT-level seat, resolved into
 	// that unit's members before anything else runs. It is what
-	// POST /config/roles writes; a hand-authored config normally nests the
+	// PUT /config/roles/{handle} writes; a hand-authored config normally nests the
 	// seat under its unit directly.
 	Unit string `yaml:"unit,omitempty" json:"unit,omitempty" desc:"Home unit for a root-level seat; the seat is moved into it."`
 

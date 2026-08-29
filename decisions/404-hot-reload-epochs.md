@@ -87,11 +87,28 @@ The exception is the restart-required subsystems, which is the whole content of
 ## What re-activating an unchanged revision must still do
 
 Re-activating the same revision is the documented credential-rotation gesture,
-so the no-op check cannot be a payload comparison: the payload is identical and
-the point is that its `${VAR}` references now resolve differently. The apply
-path compares the payload AND the resolution fingerprint (`config_resolution`),
-and a change in either is a real apply. Preserved verbatim from the Python
-engine, which learned it the hard way.
+so a no-op check could never be a payload comparison: the payload is identical
+and the point is that its `${VAR}` references now resolve differently. The
+Python engine reached for a second comparison — a keyed digest over what those
+references resolved to — because it HAD a payload short-circuit to defeat.
+
+This engine has no short-circuit to defeat, so it carries no digest either.
+`Apply` is straight-line: the reconciler skips on the EPOCH it has applied,
+never on content, and the pointer's own KV sequence IS the epoch, which the
+store advances on every write. A byte-identical re-activation therefore mints a
+new epoch, and always reaches an apply that re-reads the secret store first
+(`internal/engine/epoch.go`).
+
+One comparison survives, one layer down and over resolved values rather than a
+digest of them: `mcp.Bridge.Reconcile` compares each shared child's spec against
+the one it is already running, because a child is a PROCESS and restarting every
+one on every apply would tear down working servers to arrive back where they
+started. That is safe for a rotation only because the spec's `env`, `headers`
+and `url` are resolved at the edge before the comparison — comparing the stored
+entry, where `${VAR}` stays verbatim, would silently stop rotation reaching MCP
+children at all. Nothing persists a digest of a live credential across applies,
+which is the property the Python fingerprint was reaching for and the one that
+would have turned the fix into a leak the moment it reached a log line.
 
 ## Lag is not divergence
 

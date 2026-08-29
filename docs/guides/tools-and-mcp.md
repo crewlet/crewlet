@@ -71,7 +71,7 @@ Two things MCP does not cover, and what to do instead:
   [Jira](../integrations/jira.md), [Confluence](../integrations/confluence.md),
   [GitLab](../integrations/gitlab.md) and [GitHub](../integrations/github.md) —
   every one of them routes end to end (see
-  [d-703](../reference/design-decisions.md)).
+  [Design Decisions](../reference/design-decisions.md#every-vendor-is-served)).
 - **Company-wide periodic work.** An MCP server is called by an agent; it does
   not get a tick of its own. Schedule it as [cron work](../concepts/scheduling.md)
   against a seat, which gives it an agent, a turn, and the engine's own

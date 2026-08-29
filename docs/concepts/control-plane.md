@@ -69,8 +69,8 @@ It is also deliberately thin. The event carries the revision id and its summary 
 | Status | Meaning |
 |---|---|
 | `ok` | Applied cleanly. |
-| `error` | Failed and rolled back. The node still serves the prior epoch — a legitimate degraded-but-correct state, and one work can safely route to. |
-| `degraded` | Failed **after** a restart-required subsystem was mutated. Rollback restores and restarts transports, but it cannot respawn the per-role MCP children the failed revision already started. So this node's declared epoch is not the whole truth — it reports the prior config while its tool surface may be amputated. Never counted as converged, and never counted as somewhere work can go. |
+| `error` | Refused. Nothing was rolled back because nothing was mutated: the build comes first and touches nothing, so a revision that cannot be built leaves the previous epoch current and still correct — a legitimate degraded-but-correct state, and one work can safely route to. |
+| `degraded` | Failed **after** a subsystem that cannot be un-applied was mutated, so this node's declared epoch would not be the whole truth — it would report the prior config while its tool surface was amputated. Never counted as converged, and never counted as somewhere work can go. **Not reachable in this build**, and the status is documented rather than quietly dropped because the ordering that keeps it unreachable is a live constraint: everything an apply cannot undo has to stay behind the epoch swap. See [`Engine.Apply`](configuration.md#the-engine-half). |
 
 Each node **re-stamps its key every tick**, not only when it converges, and the posture decision only counts reports written in the last four intervals (~60 s). Both halves are needed together. The bucket is keyed by node rather than by event, so a node that is scaled in, redeployed or crashed would otherwise leave its last `ok` behind forever, and a surviving node that cannot apply the current epoch would read that ghost as "there is a healthy peer to shed to" and step out of rotation to hand work to a process that no longer exists. Bounding on freshness fixes that, but only if a live node keeps writing: a converged node that reported once and went quiet would age out of its own fleet's view, and a lagging peer would read `peers_ok = 0` off a perfectly healthy fleet. One idempotent write per node per tick is what makes a key mean *"alive, at this epoch"* rather than *"was alive, once"*.
 
@@ -147,33 +147,41 @@ The **scheduler** is gated too, and differently: a tick on a shedding node is sk
 
 ## Rotation
 
-A config revision and the *values* its `${VAR}` references resolve to are two different things, and the apply used to compare only the first.
+A config revision and the *values* its `${VAR}` references resolve to are two different things, and re-activating an unchanged revision is the documented gesture for picking up a rotated credential. The payload is byte-identical, so an apply that compared payloads would rebuild nothing on exactly the operation an operator performs to make it rebuild: the LLM providers would keep the revoked key, the trackers their old token, and every shared MCP child the credential it captured at spawn.
 
-That gap was the whole of secret rotation. Re-activating an unchanged revision produces a byte-identical payload, so the no-op early-out fired and nothing rebuilt: MCP children kept the credential they captured at spawn, LLM providers kept the revoked key, transports kept the old token.
+**Nothing compares the payload.** No step between the operator's gesture and the rebuild looks at a revision's bytes, so there is nothing for a rotation to slip through. The property falls out of the control plane's shape instead:
 
-The engine now compares a **resolution fingerprint** alongside the payload — a process-local *keyed* digest (`blake2b`, per-process random key) over what every `${VAR}` the payload references currently resolves to. Equal payload **and** equal fingerprint is a true no-op; equal payload with a moved fingerprint is a rotation, and the credential-bearing subsystems rebuild.
+- The pointer's **KV sequence is the epoch**, and the store assigns a new one on every write. Re-activating a revision therefore mints a new epoch even though the value written is byte-identical.
+- A node's reconciler skips on the **epoch it has already applied**, never on payload content — so a re-activation always reaches `Apply`.
+- `Apply` **re-reads the secret store first**, before it builds anything, and `${VAR}` references stay verbatim in the stored revision and are resolved where a provider is *constructed*. So the rebuild that follows is against freshly resolved values, without anything having compared them.
 
-The key is per-process and never persisted or logged. A bare hash of a short credential in a log line or a database row is offline-brute-forceable, which would turn the fix into a leak. A fingerprint is meaningful only as "has this changed since the last apply *in this process*" — which is exactly, and only, what it is asked.
+**What that rebuild reaches, and what it does not.** A rotation is only useful where something that *captured* the old value is replaced, and an apply does not reach everything that holds one:
 
-> One surface this cannot reach: a **running code sandbox** received its credentials in the box's environment at launch, and no engine-side refresh reaches a live box. There the bound is the run's duration plus any clarification pause, not seconds. Tear the run down if a rotation is a revocation.
+| Holder | Rotated by a re-activation? |
+|---|---|
+| LLM providers | **Yes** — the epoch's providers are constructed from the fresh resolver. |
+| Jira / Confluence / GitLab / GitHub | **Yes** — each tracker is reconciled against the new epoch and re-resolves the engine credential. |
+| Shared MCP children | **Yes, selectively** — see below. |
+| Per-role MCP children | **No.** They belong to a seat's *lease*, not to the epoch: spawned when a seat is claimed and torn down when it is released, so a rotated `mcp_env` value reaches one only when its seat next changes hands. |
+| Mattermost / Slack transports | **No.** They are built once, at boot. A rotated chat bot token needs a process restart. |
+
+The shared MCP children are the one place a comparison does happen, and it is deliberate: a child is a *process*, and restarting every one on every apply would tear down working servers to arrive back where they started. So `Bridge.Reconcile` compares the spec it is handed against the one the child is already running and leaves an unchanged server alone. What makes that safe for a rotation is *what* it compares — the spec's `env`, `headers` and `url` are resolved at the edge before the comparison, so a moved credential reads as a changed spec and restarts that one child. Comparing the stored config entry, where `${VAR}` stays verbatim, would silently stop rotation from reaching MCP children at all; two tests hold that line by re-applying the same document and asserting which children survive it.
+
+That is the whole of the comparison, and it is over resolved values rather than a digest of them. Nothing keeps a digest of live credentials across applies, which is what a broader selective rebuild would need and what would turn a rotation into a leak the moment such a digest reached a log line or a row.
+
+> One more surface, and it is out of the engine's hands entirely rather than merely off the apply path: a **running code sandbox** received its credentials in the box's environment at launch, and no engine-side refresh reaches a live box. There the bound is the run's duration plus any clarification pause, not seconds. Tear the run down if a rotation is a revocation.
 
 ---
 
 ## What a running turn sees
 
-A live apply mutates engine state **in place** so in-flight work keeps working: the LLM provider map is `clear()` + `update()`d (identity preserved on purpose), `_role_mcp_tools` is rewritten per role, an `AgentDefinition` is reassigned on the running instance, and the turn-engine settings cell hands out a new model in one shot.
+**Nothing moves under a running turn, because nothing is mutated in place.** An epoch is published rather than edited, so the question is only ever *which* epoch a turn is reading — and a turn answers that once. `runTurn` pins the company in a local at the top and builds everything from that one value: the runner, the round caps, the prefetch, the telemetry. Two reads could straddle a publish, and a turn that built its runner from one revision and took its round caps from the next would be running a company that never existed. That is the failure publishing-instead-of-mutating exists to remove ([d-404](https://github.com/crewlet/crewlet/blob/main/decisions/404-hot-reload-epochs.md)), and the pin is what collects the benefit.
 
-In-place is right — the alternative is a turn holding a reference to a dict nobody updates any more. But *keeps working* is not *stays coherent*, and each of those is read repeatedly within one turn: the ~18 turn-engine settings accessors re-read the cell on **every access**, `_role_mcp_tools` is read twice from two different places, and the agent's definition is read from roughly twenty. A turn could plan against one company and execute against another — one round cap for Plan and a different one for Execute, or a sub-agent budget sized from a fraction its parent never saw.
+The prompt is frozen harder still: it is **rendered to strings before the runner is built**, so the runner has nowhere to re-fetch from and a `self_iterate` loop cannot move the system prompt underneath the planner between rounds.
 
-Two mechanisms, and the split between them is the point.
+**What a pin cannot hold is a capability.** It holds a *catalogue* — the tool objects the epoch's registry names — and an MCP tool object holds the client it dispatches to. If the apply restarted that server, the client behind a pinned tool is closed, and the call comes back as a tool error the model can read (`MCP tool error (server/tool): …`) rather than as a name that vanished mid-turn or a panic. A model that sees a failed tool result can say so; one whose tool disappeared cannot.
 
-**The pin.** A turn captures those four things once, at the top, and reads through the capture for the rest of it. The capture rides the turn's own `context.Context`, so it reaches every goroutine the turn spawns — a sub-agent inherits the turn that spawned it — without threading a parameter through every phase signature. It is keyed by owner and seat, so a concurrent turn for a different seat, or a second engine in the same process, reads live state.
-
-**The drain.** A pin holds a *catalogue*, not a *capability*: pinning an MCP tool wrapper does not keep the client it dispatches to alive, so a pinned turn whose server was respawned fails as a dead tool rather than as a name that vanished. So before the apply mutates a seat — swapping its definition, respawning its per-role MCP children, decommissioning it — it waits for that seat's in-flight turns, capped at 10 s.
-
-The cap is on the tail of an LLM round: that is the unit of work a turn cannot be interrupted inside, and the reason a mid-turn rewire is visible at all. Past it the apply proceeds and logs `seat_drain_timed_out` — an apply that blocks indefinitely on one busy seat is strictly worse than one turn seeing a mid-flight rewire, which is what every turn saw before the drain existed.
-
-The drain counts turns, deliberately, rather than reading `AgentState`. A seat parked on a detached sandbox run stays `AWAITING_SANDBOX` for the whole run plus any clarification pause, so draining on the state would let one agent's pending question block a config apply — and through it the whole node. A suspended turn releases its count and its resume takes a fresh one.
+That is the whole exposure, and it is small enough that **the apply does not wait for in-flight turns at all** — there is no drain, and no seat is quiesced before an epoch is published. It stays small because of what the apply restarts: only a *shared* server whose resolved spec actually moved, and per-role children are not on the apply path at all, so the common config change restarts nothing a turn is holding.
 
 ---
 
