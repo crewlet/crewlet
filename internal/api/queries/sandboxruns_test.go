@@ -6,16 +6,18 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 var runBase = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 
-// seedRuns puts rows in a memory store, which is the twin the contract suite
-// holds to the same behaviour as the SQL one.
-func seedRuns(t *testing.T, runs ...sandbox.PendingRun) *sandbox.MemoryStore {
+// seedRuns puts records in the fleet store the engine itself uses, over the
+// in-process coordination twin — the same implementation, held to the same
+// contract suite, rather than a stand-in for it.
+func seedRuns(t *testing.T, runs ...sandbox.PendingRun) *sandbox.CoordStore {
 	t.Helper()
-	store := sandbox.NewMemoryStore()
+	store := sandbox.NewCoordStore(memory.NewFleet())
 	for _, run := range runs {
 		if err := store.Create(context.Background(), run); err != nil {
 			t.Fatalf("Create: %v", err)

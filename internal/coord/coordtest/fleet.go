@@ -37,6 +37,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"plane", planeCases},
 		{"channels", channelCases},
 		{"fires", fireCases},
+		{"sandbox_runs", runCases},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {
@@ -1161,6 +1162,195 @@ var fireCases = []fleetCase{{
 		}
 		if won {
 			h.t.Error("ClaimFire granted an empty identity")
+		}
+	},
+}}
+
+// ---- the detached sandbox runs ----------------------------------------- //
+
+func (h *fleetHarness) createRun(turnID, value string) bool {
+	h.t.Helper()
+	created, err := h.f.CreateSandboxRun(h.ctx, turnID, []byte(value))
+	if err != nil {
+		h.t.Fatalf("CreateSandboxRun(%s): %v", turnID, err)
+	}
+	return created
+}
+
+func (h *fleetHarness) run(turnID string) (coord.Record, bool) {
+	h.t.Helper()
+	record, found, err := h.f.SandboxRun(h.ctx, turnID)
+	if err != nil {
+		h.t.Fatalf("SandboxRun(%s): %v", turnID, err)
+	}
+	return record, found
+}
+
+func (h *fleetHarness) updateRun(turnID, value string, version uint64) bool {
+	h.t.Helper()
+	ok, err := h.f.UpdateSandboxRun(h.ctx, turnID, []byte(value), version)
+	if err != nil {
+		h.t.Fatalf("UpdateSandboxRun(%s): %v", turnID, err)
+	}
+	return ok
+}
+
+var runCases = []fleetCase{{
+	// The reason this moved off the node's own database. A detached run
+	// outlives its turn, its process and sometimes its node — and the node
+	// that owns the seat AFTERWARDS is the one whose recovery pass has to
+	// see it. Per-node, that pass found nothing: the suspended Execute
+	// conversation became unreachable and a billed box was neither resumed
+	// nor reaped.
+	name: "a run one node launched is readable by the seat's next owner",
+	fn: func(h *fleetHarness) {
+		if !h.createRun("turn-1", `{"status":"running"}`) {
+			h.t.Fatal("the first create lost")
+		}
+		record, found := h.run("turn-1")
+		if !found {
+			h.t.Fatal("the run a peer launched is invisible — its box leaks")
+		}
+		if string(record.Value) != `{"status":"running"}` {
+			h.t.Errorf("value = %q", record.Value)
+		}
+		if record.Key != "turn-1" {
+			h.t.Errorf("key = %q, want the turn id", record.Key)
+		}
+		if record.Version == 0 {
+			h.t.Error("version = 0 — a caller cannot condition a write on it")
+		}
+	},
+}, {
+	// The kick-off turn's id IS the key, so a second create is a retried
+	// launch and not a second run. Overwriting would replace the box
+	// reference of a job that is already executing.
+	name: "a duplicate launch is a retry, not a second run",
+	fn: func(h *fleetHarness) {
+		h.createRun("turn-1", `{"status":"running","box":"sbx-1"}`)
+		if h.createRun("turn-1", `{"status":"running","box":"sbx-2"}`) {
+			h.t.Error("a second create reported itself as new")
+		}
+		record, _ := h.run("turn-1")
+		if string(record.Value) != `{"status":"running","box":"sbx-1"}` {
+			h.t.Errorf("value = %q — the retry overwrote a live run", record.Value)
+		}
+	},
+}, {
+	// The whole concurrency story. Every mutation on a run is a conditional
+	// flip whose condition is one of the run's OWN fields — the at-most-once
+	// tail claim above all — so a writer that read a version and lost it
+	// must be told, not silently allowed through.
+	name: "a stale version loses, and a fresh one wins",
+	fn: func(h *fleetHarness) {
+		h.createRun("turn-1", `{"status":"running"}`)
+		first, _ := h.run("turn-1")
+
+		if !h.updateRun("turn-1", `{"status":"resumed"}`, first.Version) {
+			h.t.Fatal("an update at the version just read was refused")
+		}
+		// The claim the other node was about to make. It read the same
+		// version and must lose.
+		if h.updateRun("turn-1", `{"status":"resumed-twice"}`, first.Version) {
+			h.t.Error("two writers both won the same version — the tail ran twice")
+		}
+		second, _ := h.run("turn-1")
+		if string(second.Value) != `{"status":"resumed"}` {
+			h.t.Errorf("value = %q, want the first writer's", second.Value)
+		}
+		if second.Version == first.Version {
+			h.t.Error("the version did not move, so the next write cannot be conditioned")
+		}
+		if !h.updateRun("turn-1", `{"status":"done"}`, second.Version) {
+			h.t.Error("an update at the version just read was refused")
+		}
+	},
+}, {
+	name: "an update to a run that is gone is a lost race, not an error",
+	fn: func(h *fleetHarness) {
+		if h.updateRun("missing", `{}`, 1) {
+			h.t.Error("an update invented a run")
+		}
+		if _, found := h.run("missing"); found {
+			h.t.Error("SandboxRun invented a run")
+		}
+	},
+}, {
+	name: "a delete is conditional too",
+	fn: func(h *fleetHarness) {
+		h.createRun("turn-1", `{"status":"done"}`)
+		record, _ := h.run("turn-1")
+
+		// A terminal delete raced by a write that reopened the run must
+		// not take the reopened row with it.
+		gone, err := h.f.DeleteSandboxRun(h.ctx, "turn-1", record.Version+1)
+		if err != nil {
+			h.t.Fatalf("DeleteSandboxRun: %v", err)
+		}
+		if gone {
+			h.t.Error("a delete at a version that never existed reported success")
+		}
+		gone, err = h.f.DeleteSandboxRun(h.ctx, "turn-1", record.Version)
+		if err != nil {
+			h.t.Fatalf("DeleteSandboxRun: %v", err)
+		}
+		if !gone {
+			h.t.Error("a delete at the version just read was refused")
+		}
+		if _, found := h.run("turn-1"); found {
+			h.t.Error("the run survived its delete")
+		}
+	},
+}, {
+	// Every listing this serves filters on fields coordination cannot see —
+	// the seat, the status, the conversation key, the pause instant — so
+	// there is one read and the caller decodes. Ordering by turn id is part
+	// of the contract so two backends answer a recovery pass the same way.
+	name: "every run is listed, by turn id",
+	fn: func(h *fleetHarness) {
+		h.createRun("turn-b", `{"seat":"cto"}`)
+		h.createRun("turn-a", `{"seat":"ceo"}`)
+		h.createRun("turn-c", `{"seat":"cto"}`)
+
+		records, err := h.f.SandboxRuns(h.ctx)
+		if err != nil {
+			h.t.Fatalf("SandboxRuns: %v", err)
+		}
+		var keys []string
+		for _, r := range records {
+			keys = append(keys, r.Key)
+		}
+		if !slices.Equal(keys, []string{"turn-a", "turn-b", "turn-c"}) {
+			h.t.Errorf("runs = %v, want every one of them in turn-id order", keys)
+		}
+		for _, r := range records {
+			if r.Version == 0 || len(r.Value) == 0 {
+				h.t.Errorf("listed run %s came back without its value or version: %+v", r.Key, r)
+			}
+		}
+	},
+}, {
+	name: "a caller mutating a listed value cannot reach the store",
+	fn: func(h *fleetHarness) {
+		h.createRun("turn-1", `{"status":"running"}`)
+		record, _ := h.run("turn-1")
+		for i := range record.Value {
+			record.Value[i] = 'x'
+		}
+		again, _ := h.run("turn-1")
+		if string(again.Value) != `{"status":"running"}` {
+			h.t.Errorf("the store took a caller's mutation: %q", again.Value)
+		}
+	},
+}, {
+	name: "an unnamed run is an error, not a lost race",
+	fn: func(h *fleetHarness) {
+		created, err := h.f.CreateSandboxRun(h.ctx, "", []byte(`{}`))
+		if err == nil {
+			h.t.Error("CreateSandboxRun accepted a run with no turn id")
+		}
+		if created {
+			h.t.Error("CreateSandboxRun created a run with no turn id")
 		}
 	},
 }}

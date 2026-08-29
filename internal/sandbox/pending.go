@@ -47,6 +47,15 @@ var Claimable = []string{StatusRunning, StatusAwaiting, StatusReseed}
 // by conversation.
 var Awaiting = []string{StatusAwaiting, StatusReseed}
 
+// allStatuses is the closed set [PendingStore.SetStatus] accepts.
+//
+// Asserted rather than assumed: a status nothing recovers from is a status
+// that leaks a box, so a typo has to be refused at the write instead of
+// becoming a row no recovery pass matches.
+var allStatuses = []string{
+	StatusRunning, StatusAwaiting, StatusResumed, StatusDone, StatusFailed, StatusReseed,
+}
+
 // Active are the statuses that still own engine-side state — a seat, a box, or
 // a pending tail — and so must survive a restart.
 //
@@ -56,16 +65,22 @@ var Awaiting = []string{StatusAwaiting, StatusReseed}
 var Active = []string{StatusRunning, StatusAwaiting, StatusReseed, StatusResumed}
 
 // PendingRun is one detached job's durable state, keyed by its kick-off turn.
+//
+// The json tags are a WIRE FORMAT, not decoration: the record lives in the
+// fleet's coordination store, where a node running a different build reads
+// what this one wrote. Renaming a field renames a key, and a key the reader
+// does not know decodes to a zero value — an emptied box reference is a
+// leaked sandbox. Add fields; never rename or repurpose one.
 type PendingRun struct {
-	TurnID      string
-	AgentHandle string
-	AgentID     string
-	Role        string
+	TurnID      string `json:"turn_id"`
+	AgentHandle string `json:"agent_handle"`
+	AgentID     string `json:"agent_id"`
+	Role        string `json:"role"`
 
-	SandboxID   string
-	CodingAgent string
-	CommandID   string
-	Status      string
+	SandboxID   string `json:"sandbox_id"`
+	CodingAgent string `json:"coding_agent"`
+	CommandID   string `json:"command_id"`
+	Status      string `json:"status"`
 
 	// Owner is the process INCARNATION that owns this run's seat, and
 	// OwnerEpoch the seat lease's epoch at the moment of the claim.
@@ -75,36 +90,36 @@ type PendingRun struct {
 	// noticed yet. The ownership check is an optimisation; the fence is the
 	// guarantee. Empty owner means unclaimed — what an in-flight run looks
 	// like the instant before its seat's new owner recovers it.
-	Owner      string
-	OwnerEpoch int64
+	Owner      string `json:"owner"`
+	OwnerEpoch int64  `json:"owner_epoch"`
 
-	Plan            map[string]any
-	TaskDescription string
-	SuccessCriteria []string
+	Plan            map[string]any `json:"plan"`
+	TaskDescription string         `json:"task_description"`
+	SuccessCriteria []string       `json:"success_criteria"`
 
 	// ConversationKey is where to report back AND what matches a person's
 	// answer to this run. NotificationMetadata carries the trigger's channel
 	// and thread, so the reply lands in the conversation that asked.
-	ConversationKey      string
-	NotificationMetadata map[string]any
+	ConversationKey      string         `json:"conversation_key"`
+	NotificationMetadata map[string]any `json:"notification_metadata"`
 
 	// Branch is the pushed WIP branch: the durable half of the work, and
 	// what a re-seeded run starts from when its snapshot is gone.
-	Branch    string
-	SessionID string
+	Branch    string `json:"branch"`
+	SessionID string `json:"session_id"`
 
-	Question string
-	Audience string
+	Question string `json:"question"`
+	Audience string `json:"audience"`
 
 	// TraceID and SpanID are the trace the run started under, so the
 	// follow-up turn nests beneath it rather than appearing as unrelated
 	// work minutes later.
-	TraceID string
-	SpanID  string
+	TraceID string `json:"trace_id"`
+	SpanID  string `json:"span_id"`
 
-	BudgetRemaining int
-	DelegationDepth int
-	DelegationChain []string
+	BudgetRemaining int      `json:"budget_remaining"`
+	DelegationDepth int      `json:"delegation_depth"`
+	DelegationChain []string `json:"delegation_chain"`
 
 	// ExecuteState is the SUSPENDED Execute conversation: the serialized
 	// messages, including the assistant turn with the dangling tool call,
@@ -112,24 +127,25 @@ type PendingRun struct {
 	// stopped. Empty only when a crash landed between launch and the
 	// suspend persist — the coordinator then fails the run rather than
 	// resuming into nothing.
-	ExecuteState map[string]any
+	ExecuteState map[string]any `json:"execute_state"`
 
-	PauseTTLSeconds float64
+	PauseTTLSeconds float64 `json:"pause_ttl_seconds"`
 
 	// PausedAt is when this run's box was paused, zero when it is not.
 	// Together with SandboxID it is the engine's record of the box, and
 	// what lets the reaper reclaim a snapshot nothing else would ever free.
-	PausedAt time.Time
+	PausedAt time.Time `json:"paused_at"`
 
-	// ClaimedFrom is TRANSIENT and never persisted: the status the row held
-	// immediately BEFORE a claim flipped it to resumed. A failed resume
+	// ClaimedFrom is TRANSIENT and never persisted — hence `json:"-"` —
+	// the status the row held immediately BEFORE a claim flipped it to
+	// resumed. A failed resume
 	// dispatch reverts to exactly this, so a NAK'd trigger can re-claim on
 	// redelivery. Inferring it from the other fields is unsound — a reused
 	// run keeps its old question.
-	ClaimedFrom string
+	ClaimedFrom string `json:"-"`
 
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Paused reports whether this run's box is currently snapshotted.

@@ -17,7 +17,7 @@ import (
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why NINE buckets and not one
+// # Why TEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -45,6 +45,9 @@ import (
 //	fires      the scheduler's catchup ceiling, days: a claim that expired
 //	           inside the window a tick can still evaluate lets that fire
 //	           run a second time
+//	runs       none at all, a sharper version of the channels case: a run
+//	           parked on a person's answer waits DAYS, and its record is
+//	           the only thing that knows a billed box exists
 //
 // Putting two of those in one bucket would give one of them the other's
 // retention, and every such mistake is silent — a cooldown that expired in a
@@ -68,6 +71,7 @@ const (
 	budgetSuffix    = "_budgets"
 	channelSuffix   = "_channels"
 	firesSuffix     = "_fires"
+	runsSuffix      = "_sandbox_runs"
 	activationKey   = "activation"
 	fleetCASRetries = 16
 )
@@ -75,7 +79,7 @@ const (
 // FleetConfig is what a [FleetStore] needs at construction. Every duration is
 // a BUCKET's retention; see the file doc for why each is its own bucket.
 type FleetConfig struct {
-	// BucketPrefix names the nine buckets. Empty means "crewlet", matching
+	// BucketPrefix names the ten buckets. Empty means "crewlet", matching
 	// the lease store — two companies on one NATS account are separated by
 	// giving them different prefixes.
 	BucketPrefix string
@@ -104,7 +108,7 @@ type FleetConfig struct {
 	// StatusFreshness is how long a node's apply status counts as current.
 	StatusFreshness time.Duration
 
-	// Replicas is the JetStream replica count for all nine.
+	// Replicas is the JetStream replica count for all ten.
 	Replicas int
 }
 
@@ -163,6 +167,7 @@ type FleetStore struct {
 	budgets   jetstream.KeyValue
 	channels  jetstream.KeyValue
 	fires     jetstream.KeyValue
+	runs      jetstream.KeyValue
 
 	rateWindow time.Duration
 	freshness  time.Duration
@@ -170,7 +175,7 @@ type FleetStore struct {
 
 var _ coord.Fleet = (*FleetStore)(nil)
 
-// OpenFleet creates or adopts the nine buckets and returns the backend.
+// OpenFleet creates or adopts the ten buckets and returns the backend.
 //
 // Idempotent and safe to call from every node at once, like [Open]: creating
 // a bucket that already exists with the same shape is a no-op, and a changed
@@ -229,6 +234,8 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		{&store.fires, firesSuffix,
 			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
 			cfg.FireRetention},
+		{&store.runs, runsSuffix,
+			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0},
 	} {
 		got, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {
@@ -1093,4 +1100,99 @@ func (f *FleetStore) ClaimFire(ctx context.Context, key string, at time.Time) (b
 // reads it out of the bucket — and nothing branches on it.
 type fireRecord struct {
 	At time.Time `json:"at"`
+}
+
+// ---- the detached sandbox runs ----------------------------------------- //
+
+// SandboxRun reads one run's record.
+func (f *FleetStore) SandboxRun(ctx context.Context, turnID string) (coord.Record, bool, error) {
+	entry, err := f.runs.Get(ctx, encodeKey(turnID))
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return coord.Record{}, false, nil
+	}
+	if err != nil {
+		return coord.Record{}, false, unavailable("read the sandbox run", err)
+	}
+	return coord.Record{Key: turnID, Value: entry.Value(), Version: entry.Revision()}, true, nil
+}
+
+// SandboxRuns returns every record, by turn id.
+func (f *FleetStore) SandboxRuns(ctx context.Context) ([]coord.Record, error) {
+	keys, err := f.runs.ListKeys(ctx)
+	if err != nil {
+		return nil, unavailable("list the sandbox runs", err)
+	}
+	var out []coord.Record
+	for key := range keys.Keys() {
+		turnID, ok := decodeKey(key)
+		if !ok {
+			continue
+		}
+		entry, err := f.runs.Get(ctx, key)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			// RAISED, not skipped. A listing that quietly dropped a run
+			// tells the seat's new owner there is nothing to recover,
+			// which abandons a billed box — the exact failure this
+			// bucket exists to end.
+			return nil, unavailable("read a sandbox run", err)
+		}
+		out = append(out, coord.Record{
+			Key: turnID, Value: entry.Value(), Version: entry.Revision(),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out, nil
+}
+
+// CreateSandboxRun writes a new record, ignoring a turn id that already
+// exists.
+func (f *FleetStore) CreateSandboxRun(ctx context.Context, turnID string, value []byte) (bool, error) {
+	if turnID == "" {
+		return false, errors.New("coord/kv: a sandbox run needs a turn id")
+	}
+	_, err := f.runs.Create(ctx, encodeKey(turnID), value)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrKeyExists):
+		return false, nil
+	default:
+		return false, unavailable("create the sandbox run", err)
+	}
+}
+
+// UpdateSandboxRun writes at a version, reporting whether that version held.
+func (f *FleetStore) UpdateSandboxRun(ctx context.Context, turnID string, value []byte, version uint64) (bool, error) {
+	_, err := f.runs.Update(ctx, encodeKey(turnID), value, version)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyNotFound):
+		// A LOST RACE, not a fault: the caller re-reads and re-decides,
+		// because the condition it evaluated may no longer hold. A
+		// deleted key lands here too — the run finished under it.
+		return false, nil
+	default:
+		return false, unavailable("update the sandbox run", err)
+	}
+}
+
+// DeleteSandboxRun removes a record at a version.
+//
+// Purge rather than Delete, so the key's history goes with it: a Delete leaves
+// a tombstone revision, and a bucket with no TTL keeps every one of them for
+// the life of the deployment.
+func (f *FleetStore) DeleteSandboxRun(ctx context.Context, turnID string, version uint64) (bool, error) {
+	err := f.runs.Purge(ctx, encodeKey(turnID), jetstream.LastRevision(version))
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyNotFound):
+		return false, nil
+	default:
+		return false, unavailable("delete the sandbox run", err)
+	}
 }

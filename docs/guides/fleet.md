@@ -25,7 +25,11 @@ node.
 **Shared coordination.** Seat leases live in the `coordination` slot.
 `coordination.type: local` holds them in this process, so every node
 believes it owns the whole company; the engine logs
-`seat_placement_is_process_local` at boot. A fleet needs
+`seat_placement_is_process_local` at boot. It is *only* the leases: the
+fleet's shared records — the token counter, the completion ledger, the
+delivery dedupe, agent-to-agent channels, scheduled-fire claims, detached
+sandbox runs — are on the KV whatever this setting says, because each of
+them has to outlive the process rather than merely be visible to a peer. A fleet needs
 `coordination.type: embedded-kv` — and Tier A refuses `local` beside a
 clustered or external stream by name, because this is the one
 misconfiguration that would otherwise silently give two processes the

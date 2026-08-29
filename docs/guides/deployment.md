@@ -279,7 +279,9 @@ draining, and rolling upgrades. The two things that bite hardest:
 > Seat leases live in the coordination slot. `coordination.type: local` is a
 > per-process store, so every node then believes it owns the whole company —
 > the engine logs `seat_placement_is_process_local` at boot. A fleet needs a
-> shared one; see [Running a Fleet](fleet.md).
+> shared one; see [Running a Fleet](fleet.md). The slot governs the *leases*
+> only — the fleet's shared records are on the KV regardless, because they have
+> to survive a restart as much as a peer.
 >
 > On Pulsar, its two reapers must also be turned off, because an unowned seat's
 > subscription has no connected consumer and both reapers delete exactly that:
@@ -363,7 +365,6 @@ The load-bearing tables:
 - **`crewlet_events`** — the observability event store.
 - **`conversation_sessions`** — the [conversation ledger](../concepts/conversation-sessions.md): what this seat already said in one thread, rendered back into that conversation's next turn.
 - **`chat_thread_follows`** — per-agent chat thread-follow state, keyed by backend.
-- **`pending_sandbox_run`** — the suspended Execute conversation of a detached [coding run](../concepts/code-sandbox.md), and the box record it resumes into.
 - **`company_config`** — the revision payloads. Which one is *current* is the fleet's business, and lives in coordination; see the [control plane](../concepts/control-plane.md).
 - **`secret_values`** — the [secret store](../concepts/secret-store.md), one encrypted row per env-var name, consulted ahead of the process environment when a `${VAR}` is resolved.
 

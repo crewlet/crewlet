@@ -51,7 +51,7 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `GET` | `/tokens/breakdown` | Per-stage / model / worker / agent / turn token-spend rollup |
 | `GET` | `/schedules` | Configured role/unit schedules + next-run + recent dispatch ledger |
 | `GET` | `/fleet` | Every live node, its roles and labels, seat ownership, singleton duties, and per-node config epoch |
-| `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable `pending_sandbox_run` row (see [below](#get-sandbox-runs)) |
+| `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and which scopes are being refused (see [below](#get-budgets)) |
 | `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
 | `GET` | `/conversations` | What a seat already said in each thread / issue / pull request it works — the same [conversation-session](../concepts/conversation-sessions.md) rows the engine renders into that conversation's next turn. `?handle=` lists them; `?handle=&key=` returns one conversation's entries. `available: false` means this node cannot see the ledger, never that the seat has said nothing |
@@ -711,7 +711,7 @@ failing.
 
 Every detached [coding run](../concepts/code-sandbox.md) the engine still
 holds, oldest first — `running`, `awaiting_clarification`, `reseed`, and
-`resumed` rows of the `pending_sandbox_run` table.
+`resumed` run records.
 
 Read from the durable row rather than from the live projection, which is
 the wrong source for this question twice over: it is in-memory, so it

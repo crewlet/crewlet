@@ -560,16 +560,20 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 	if manager == nil {
 		return nil
 	}
-	if e.backends == nil || e.backends.Store == nil {
-		// A detached run's row is what survives the turn that starts it, so
-		// a node with no store cannot offer code work at all. Refused
-		// loudly rather than degraded: a sandbox whose runs vanish on
-		// restart is worse than no sandbox, because the box keeps running
-		// and billing with nobody to collect it.
-		return fmt.Errorf("providers.sandbox needs a database: a detached run's " +
-			"state is a row, and without one a restart orphans every box")
+	if e.backends == nil || e.backends.Fleet == nil {
+		// A detached run's RECORD is what survives the turn that starts
+		// it, so a node with no coordination store cannot offer code work
+		// at all. Refused loudly rather than degraded: a sandbox whose
+		// runs vanish is worse than no sandbox, because the box keeps
+		// running and billing with nobody to collect it.
+		//
+		// The FLEET's store, not this node's: a run is recovered by
+		// whichever node owns its seat next, and that node is not
+		// reliably the one that launched it.
+		return fmt.Errorf("providers.sandbox needs a coordination store: a detached " +
+			"run's state is a fleet record, and without one a seat handoff orphans every box")
 	}
-	e.sandboxPending = sandbox.NewSQLStore(e.backends.Store)
+	e.sandboxPending = sandbox.NewCoordStore(e.backends.Fleet)
 
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Queue: e.backends.Queue, Pending: e.sandboxPending, Manager: manager,

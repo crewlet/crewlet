@@ -201,7 +201,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 			// The DURABLE record, which is what the board must read: a
 			// run parked on a question waits days, and the live
 			// projection sweeps long before that.
-			Sandbox: sandbox.NewSQLStore(e.Backends().Store),
+			Sandbox: sandbox.NewCoordStore(e.Backends().Fleet),
 		},
 		HealthInterval: tickInterval,
 	})
@@ -373,7 +373,7 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 
 func (n *codingNode) activeRuns(t *testing.T) []sandbox.PendingRun {
 	t.Helper()
-	runs, err := sandbox.NewSQLStore(n.engine.Backends().Store).ListActive(t.Context())
+	runs, err := sandbox.NewCoordStore(n.engine.Backends().Fleet).ListActive(t.Context())
 	if err != nil {
 		t.Fatalf("ListActive: %v", err)
 	}

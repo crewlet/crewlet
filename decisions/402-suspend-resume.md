@@ -14,9 +14,11 @@ that, and only one survives the requirement:
   process. A node restart or a seat handoff loses every parked turn, and the
   sandbox completion arrives to nobody.
 - **Serialize the state and re-enter.** The suspended Execute conversation is
-  written to `pending_sandbox_run.execute_state`, and a completion re-enters the
-  loop with it. Survives restarts and handoffs because the state is a row, not a
-  stack.
+  written to the run record's `execute_state`, and a completion re-enters the
+  loop with it. Survives restarts and handoffs because the state is a record,
+  not a stack — and because that record is the FLEET's rather than the node's,
+  which is what makes "possibly on another node" above true rather than
+  aspirational (see d-601 and migration 0013).
 
 **Serialize and re-enter. Never a parked goroutine.** This is not a preference;
 a parked goroutine cannot satisfy "the run must survive the node that started

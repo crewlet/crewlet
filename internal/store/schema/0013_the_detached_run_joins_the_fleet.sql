@@ -1,0 +1,36 @@
+-- The detached coding run's record moved to the fleet's coordination store.
+--
+-- A run OUTLIVES its turn, its process and sometimes its NODE — that is the
+-- whole point of detaching it, and the release path says so: "a detached run
+-- belongs to its row, not to this process, and the seat's next owner recovers
+-- it through RecoverSeat. Reaping the box here would destroy work the
+-- successor is about to resume." That contract only ever held for a row the
+-- successor could read, and this one lived in the node's own exclusively-owned
+-- database. When the seat moved — a lease lapse, a drain, a rolling upgrade —
+-- the new owner's recovery pass listed nothing, so the suspended Execute
+-- conversation was unreachable and the sandbox was neither resumed nor reaped:
+-- a billed box, running to its own TTL, handing its result to nobody. The
+-- owner/owner_epoch fencing columns were real, and could only ever be
+-- contended within one process.
+--
+-- It now lives in internal/coord, in a bucket with NO retention — the sharpest
+-- version of the agent-to-agent channel's reason from 0012. A run parked on a
+-- person's answer waits DAYS (StatusAwaiting exists for exactly that), and its
+-- record is the only thing that knows a billed box exists. A bucket age would
+-- reap it and leak the box for ever. The run's own pause reaper and its
+-- terminal delete are what end it.
+--
+-- Coordination holds the record as OPAQUE BYTES, which is a departure from
+-- every other slot and a deliberate one: twenty-five fields, of which
+-- coordination understands none. Every decision taken on them — the
+-- at-most-once tail claim, the epoch fence, the conditional pause expiry — is
+-- the sandbox's, lives in internal/sandbox beside its contract suite, and is
+-- expressed as compare-and-swap on the record's version. What was a mutex in
+-- one process is now a read-decide-write across a fleet.
+--
+-- DROPPED rather than left in place, for the same reason as 0010, 0011 and
+-- 0012: a table nothing reads is a table the next reader assumes is
+-- authoritative, and a row naming a live sandbox is exactly the shape somebody
+-- would wire an operator query to.
+
+DROP TABLE IF EXISTS pending_sandbox_run;

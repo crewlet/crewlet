@@ -829,7 +829,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// wait days, and the live projection sweeps long before
 			// that — so the states that most need somebody were the
 			// ones least likely to be on screen.
-			Sandbox: sandbox.NewSQLStore(e.Backends().Store),
+			//
+			// The FLEET's record, so the screen shows every node's
+			// runs rather than this one's. A run is recovered by
+			// whichever node owns its seat, which is exactly why a
+			// per-node read drew a dashboard that disagreed with
+			// itself depending on which node answered.
+			Sandbox: sandbox.NewCoordStore(e.Backends().Fleet),
 			NodeID:  nodeID,
 		},
 		// The inbound edge. It republishes onto THIS node's queue and

@@ -15,9 +15,16 @@ started it**, and every design choice below is downstream of that.
 
 Three consequences, and they are not independent:
 
-1. **The run's state is a row, not a stack.** `pending_sandbox_run` is what
+1. **The run's state is a record, not a stack.** The run record is what
    survives; the box, the conversation, and the seat's busy flag are all
-   recovered from it.
+   recovered from it. It lives in the FLEET's coordination store rather than
+   the node's own database, and that is not an implementation detail: "the run
+   outlives the process that started it" is only half the requirement, because
+   the seat moves too. It was a `pending_sandbox_run` row in the node's file,
+   so when the seat handed over — a lease lapse, a drain, a rolling upgrade —
+   the successor's recovery pass listed nothing, the suspended conversation was
+   unreachable, and a billed box ran to its own TTL with nobody to collect it.
+   See migration 0013.
 2. **The turn suspends rather than blocks.** The Execute loop stops with the
    `run_sandbox` call unanswered, its conversation is serialized, and a
    completion re-enters it. See d-402.

@@ -98,7 +98,7 @@ That also gives the right answer during a database blip. The lease row is untouc
 
 ## Fencing: what it protects, and what it cannot
 
-The epoch is threaded into the **sandbox run state** — every mutation on a live `pending_sandbox_run` row carries `WHERE owner_epoch = $epoch` — and checked in the turn loop before every round and before every write-capable tool. A zombie's late write to a run it no longer owns bounces; a zombie's turn stops within a round.
+The epoch is threaded into the **sandbox run state** — every mutation on a live run record is refused when the record's `owner_epoch` outranks the writer's — and checked in the turn loop before every round and before every write-capable tool. A zombie's late write to a run it no longer owns bounces; a zombie's turn stops within a round.
 
 It is **not** on every seat-scoped write, and the honest inventory is narrower than "the learning tables are unfenced". What a duplicate write actually does, per table:
 
@@ -114,7 +114,7 @@ The last two are deliberate. Nothing can key a *differently worded* diary entry 
 
 ## Keying a write on the work
 
-The instinct is to fence these the way `pending_sandbox_run` is fenced, with `WHERE owner_epoch = $epoch`. That works for a mutation of an existing row and fails here twice over: an insert has no prior row to hang the condition on, and a fence **loses data in the case where nothing went wrong** — a node that completes a turn, acks the delivery and only then lapses would have its episode refused. The turn happened; the memory of it is gone.
+The instinct is to fence these the way a sandbox run is fenced, on `owner_epoch`. That works for a mutation of an existing row and fails here twice over: an insert has no prior row to hang the condition on, and a fence **loses data in the case where nothing went wrong** — a node that completes a turn, acks the delivery and only then lapses would have its episode refused. The turn happened; the memory of it is gone.
 
 So the write is keyed on the work rather than fenced on the writer. Every turn dispatched from a ledgerable trigger carries a `work_key` derived from its constituent event ids — the same identity the completion ledger uses, and the one thing that is stable across a re-run (two nodes mint two `turn_id`s, so anything keyed on those records the duplicate instead of collapsing it).
 
@@ -195,7 +195,7 @@ A detached coding run outlives the node that started it, so its completion has t
 
 It cannot ride the inbox itself: while a seat is `AWAITING_SANDBOX` the inbox is paused, and a completion riding it would queue behind the very pause it exists to lift.
 
-`pending_sandbox_run` carries `owner` and `owner_epoch`, so a run is recovered by the node that owns the seat, under that node's epoch, as a step inside `on_acquire`.
+The run record carries `owner` and `owner_epoch`, so a run is recovered by the node that owns the seat, under that node's epoch, as a step inside `on_acquire`. The record lives in the [coordination store](coordination.md), which is what makes that possible at all: on the node's own database the successor's recovery pass listed nothing, and the run's box was neither resumed nor reaped.
 
 ## Routing is org-derived, never instance-derived
 

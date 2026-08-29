@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -54,7 +55,7 @@ func (r *recorder) count() int {
 type waiterRig struct {
 	t        *testing.T
 	queue    *recorder
-	pending  *MemoryStore
+	pending  *CoordStore
 	provider *FakeProvider
 	runner   *FakeRunner
 	manager  *Manager
@@ -67,7 +68,7 @@ func newWaiterRig(t *testing.T) *waiterRig {
 	rig := &waiterRig{
 		t:        t,
 		queue:    &recorder{},
-		pending:  NewMemoryStore(),
+		pending:  NewCoordStore(memory.NewFleet()),
 		provider: NewFakeProvider(),
 		runner:   NewFakeRunner("claude-code"),
 		now:      time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),

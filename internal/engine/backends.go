@@ -252,12 +252,6 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	}
 	out := &Backends{Queue: q, stopServer: server.Shutdown}
 
-	if b.Coordination.Type != config.CoordinationEmbeddedKV {
-		out.Coord = coordmem.New()
-		out.Fleet = coordmem.NewFleet()
-		return out, nil
-	}
-
 	// The coordination store rides the STREAM'S OWN connection. A second
 	// dial would work and would be worse: two connections to one broker
 	// fail independently, so a node could hold live leases over a
@@ -268,24 +262,46 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		out.Close(ctx)
 		return nil, fmt.Errorf("engine: coordination connection: %w", err)
 	}
-	leases, err := kv.Open(ctx, conn, kv.Config{
-		TTL:      leaseTTL(b),
-		Replicas: b.Stream.Replicas,
-	})
-	if err != nil {
-		conn.Close()
-		out.Close(ctx)
-		return nil, fmt.Errorf("engine: coordination: %w", err)
-	}
+	// THE FLEET STORE IS ALWAYS THE KV, whatever the coordination slot
+	// says, and only the LEASE store follows it.
+	//
+	// The two answer different questions and only one of them is about
+	// peers. A lease answers "who runs this seat": one node has nobody to
+	// fence against and re-claims everything at boot, so an in-process
+	// table is the honest implementation there. The fleet store holds
+	// RECORDS — the token counter, an open agent-to-agent ask, a claimed
+	// scheduled fire, a detached coding run — and every one of those has to
+	// outlive the PROCESS, on one node as much as on four.
+	//
+	// It did not, and the consequences were silent: a company's token spend
+	// reset to zero on every restart although its bucket is documented as
+	// having no retention at all ("a cap is a ceiling for the life of a
+	// deployment"), a redelivered trigger after a restart was worked twice,
+	// and a detached sandbox run — a BILLED box — was forgotten by the
+	// process that launched it. What persistence the records get is now the
+	// same choice as the event log's: stream.store_dir.
 	shared, err := openFleet(ctx, conn, b.Stream.Replicas)
 	if err != nil {
 		conn.Close()
 		out.Close(ctx)
 		return nil, fmt.Errorf("engine: coordination: %w", err)
 	}
-	out.Coord = leases
 	out.Fleet = shared
 	out.conn = conn
+
+	if b.Coordination.Type != config.CoordinationEmbeddedKV {
+		out.Coord = coordmem.New()
+		return out, nil
+	}
+	leases, err := kv.Open(ctx, conn, kv.Config{
+		TTL:      leaseTTL(b),
+		Replicas: b.Stream.Replicas,
+	})
+	if err != nil {
+		out.Close(ctx)
+		return nil, fmt.Errorf("engine: coordination: %w", err)
+	}
+	out.Coord = leases
 	return out, nil
 }
 

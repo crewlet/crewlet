@@ -36,6 +36,7 @@ type Fleet struct {
 	budgets   map[string]coord.Usage
 	channels  map[string]coord.Channel
 	fires     map[string]time.Time
+	runs      map[string]coord.Record
 
 	epoch  int64
 	target coord.Activation
@@ -65,6 +66,7 @@ func NewFleet() *Fleet {
 		budgets:   map[string]coord.Usage{},
 		channels:  map[string]coord.Channel{},
 		fires:     map[string]time.Time{},
+		runs:      map[string]coord.Record{},
 	}
 }
 
@@ -475,4 +477,79 @@ func (f *Fleet) ClaimFire(_ context.Context, key string, at time.Time) (bool, er
 	}
 	f.fires[key] = at.UTC()
 	return true, nil
+}
+
+// ---- the detached sandbox runs ----------------------------------------- //
+
+// SandboxRun reads one run's record.
+func (f *Fleet) SandboxRun(_ context.Context, turnID string) (coord.Record, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	record, ok := f.runs[turnID]
+	if !ok {
+		return coord.Record{}, false, nil
+	}
+	return copyRecord(record), true, nil
+}
+
+// SandboxRuns returns every record, by turn id.
+func (f *Fleet) SandboxRuns(context.Context) ([]coord.Record, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]coord.Record, 0, len(f.runs))
+	for _, key := range slices.Sorted(maps.Keys(f.runs)) {
+		out = append(out, copyRecord(f.runs[key]))
+	}
+	return out, nil
+}
+
+// CreateSandboxRun writes a new record, ignoring a turn id that already
+// exists.
+func (f *Fleet) CreateSandboxRun(_ context.Context, turnID string, value []byte) (bool, error) {
+	if turnID == "" {
+		return false, errors.New("coord/memory: a sandbox run needs a turn id")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, exists := f.runs[turnID]; exists {
+		return false, nil
+	}
+	// Versions start at 1 so a zero version is always a lost race, which
+	// is what a caller that forgot to read one deserves.
+	f.runs[turnID] = coord.Record{Key: turnID, Value: slices.Clone(value), Version: 1}
+	return true, nil
+}
+
+// UpdateSandboxRun writes at a version, reporting whether that version held.
+func (f *Fleet) UpdateSandboxRun(_ context.Context, turnID string, value []byte, version uint64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	record, ok := f.runs[turnID]
+	if !ok || record.Version != version {
+		return false, nil
+	}
+	f.runs[turnID] = coord.Record{Key: turnID, Value: slices.Clone(value), Version: version + 1}
+	return true, nil
+}
+
+// DeleteSandboxRun removes a record at a version.
+func (f *Fleet) DeleteSandboxRun(_ context.Context, turnID string, version uint64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	record, ok := f.runs[turnID]
+	if !ok || record.Version != version {
+		return false, nil
+	}
+	delete(f.runs, turnID)
+	return true, nil
+}
+
+// copyRecord hands back a value whose bytes the caller cannot write through.
+//
+// A map of slices shares its backing arrays, so without this a caller that
+// decoded a record, mutated the buffer and lost the CAS would have rewritten
+// the store's own copy anyway — a write that never happened, visible.
+func copyRecord(r coord.Record) coord.Record {
+	r.Value = slices.Clone(r.Value)
+	return r
 }

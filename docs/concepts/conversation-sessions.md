@@ -19,7 +19,7 @@ and it deliberately follows the same doctrine one scope wider.
 ## What it is not
 
 **Not a transcript replay.** The engine can already round-trip a whole LLM
-conversation — `pending_sandbox_run.execute_state` persists the full message
+conversation — the detached run's `execute_state` persists the full message
 list, signed thinking blocks included, and splices it back into a running
 loop. That is right for a turn *parked* on a question whose dangling tool call
 is waiting for one answer. It is wrong here: a conversation's next turn

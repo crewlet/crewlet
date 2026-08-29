@@ -48,6 +48,7 @@ flowchart LR
         B[("budgets<br/>org · per-seat spend")]
         CH[("channels<br/>agent-to-agent asks")]
         F[("fires<br/>scheduled dispatch claims")]
+        SR[("sandbox runs<br/>detached coding jobs")]
     end
     subgraph NODE["node — its own database"]
         DB[("events · episodes · diary<br/>conversations<br/>company payload · secrets")]
@@ -69,6 +70,7 @@ flowchart LR
 | `budgets` | Org and per-seat token spend. Caps stay config-derived in memory; only *usage* is shared, because a counter per node makes an org cap of 500 000 into N × 500 000 | [Deployment § Token budgets](../guides/deployment.md#token-budgets) |
 | `channels` | Who is asking whom, and whether the ask is still open. The record authorizing an answer is read by the node that owns the *answering* seat — never the one that opened it | [Event System § Agent-to-agent](event-system.md) |
 | `fires` | Has this scheduled dispatch already been claimed. The scheduler is a singleton *duty*, so it moves — and a successor reading its own database found an empty ledger and gave every company two standups | [Scheduling § At-most-once](scheduling.md#at-most-once) |
+| `sandbox runs` | Every detached coding run: its box, its suspended conversation, its owner and fencing epoch. A run outlives its turn, its process and sometimes its node, and is recovered by whichever node owns the seat *next* | [Code Sandbox](code-sandbox.md) |
 
 A fleet is not configured — it is **discovered** from these, which is why adding a node is starting a process and removing one is stopping it.
 
@@ -99,7 +101,7 @@ A single node shares nothing, because there is no peer to tell. Cooldowns stay i
 
 ## Retention is a bucket's age
 
-Every slot above except `leases`, `config`, `budgets` and `channels` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write.
+Every slot above except `leases`, `config`, `budgets`, `channels` and `sandbox runs` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write.
 
 That is a constraint rather than a preference. On the default embedded backend a per-key TTL is *create-only*: an update clears it, leaving the key immortal. A rate window that is incremented four times would therefore never expire — the one key in the system guaranteed to be written more than once. So each retention is fixed when its bucket is created, which is why they are **separate buckets** rather than prefixes in one:
 
@@ -113,6 +115,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `config` | none | The pointer is the fencing sequence, and a fence that restarts is not a fence |
 | `budgets` | none | A cap is a ceiling for the life of a deployment. A counter that rolled itself over would silently re-arm a company somebody had stopped on purpose, on a horizon nobody chose — so clearing one is an operator action (`crewlet budgets reset`) |
 | `fires` | 7 days | Must outlast the scheduler's catchup ceiling, for a sharper reason than the ledger's: a completion that expired early makes a turn re-run, while a claim that expired early makes the catchup pass dispatch a fire the fleet already ran |
+| `sandbox runs` | none | The sharpest version of the channel case: a run parked on a person's answer waits **days**, and its record is the only thing that knows a billed box exists. Its own pause reaper and terminal delete are what end it |
 | `channels` | none | A bucket's age cannot tell an **open** channel from a closed one, so a TTL would reap the authorization record of an ask still waiting for its answer. Closing an idle channel and deleting a closed one are decisions instead, taken by the [maintenance duty](seat-ownership.md#singleton-duties) |
 
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a cooldown that expired in a second, a fleet view showing a node that died last week.
@@ -130,7 +133,7 @@ The node's own database holds everything a *single* node is the only reader of. 
 - **The company payload.** Bulk that every node holds its own copy of. Only *which revision is current* is shared — see [Control Plane](control-plane.md).
 - **The secret store.** Each node resolves `${VAR}` through its own encrypted rows, sealed with the Tier A keyring it was deployed with.
 - **`scheduled_runs`** — this node's dispatch *history*, for the dashboard and the retention sweep. Not the claim; that is the `fires` slot above.
-- **Pending sandbox runs, thread follows.**
+- **Thread follows.**
 - **`token_usage`** — the per-agent audit *record* of what was spent. Not the counter anything enforces against; that is the `budgets` slot above.
 
 And two things stay **per-process** deliberately:
@@ -147,9 +150,17 @@ And two things stay **per-process** deliberately:
 | Embedded (default) | The engine's own in-process NATS JetStream KV | One node, or a small fleet pointed at one another |
 | External NATS | A JetStream cluster's KV | A fleet that wants coordination to outlive any single engine |
 | Pulsar | A NATS estate alongside the Pulsar broker | Pulsar carries the events; coordination still needs a KV |
-| Memory | An in-process twin | Tests, and a single node with nothing to coordinate with |
+| Memory | An in-process twin | Tests |
 
 The twin is not a lesser implementation: it is held to the **same certified suite** as the real backends (`internal/coord/coordtest`), because a twin that agrees only with itself proves nothing.
+
+### The leases follow `coordination.type`. The shared state does not.
+
+`coordination.type: local` is about **leases**, and only about leases. A single node has no peer to fence against and re-claims every seat at boot, so an in-process lease table is the honest implementation there — which is exactly what that setting selects.
+
+Everything else above is a **record**, and a record has to outlive the *process*, on one node as much as on four. So the shared slots always live in the KV, whatever the coordination slot says, and what persistence they get is the same choice as the event log's: `stream.store_dir`.
+
+That distinction was not always drawn, and each consequence was silent. The token counter — whose bucket has *no* retention, because "a cap is a ceiling for the life of a deployment" — went back to zero on every restart of a default single-node engine. A turn completion no longer suppressed the redelivery it exists to suppress. A detached sandbox run, which is a **billed box**, was forgotten by the engine that launched it. Leaving `stream.store_dir` empty still selects an in-memory server and has all of those effects, but it says so on the tin: it is the same switch that makes the event log itself disposable.
 
 > **On the embedded backend the coordination store lives inside the running engine.** It exists while the engine runs. That is the correct trade for a single node — nothing else to install — but it has two visible consequences.
 >

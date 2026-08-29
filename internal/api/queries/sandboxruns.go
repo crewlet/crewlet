@@ -17,9 +17,12 @@ import (
 // its box reclaimed, its work safe on a pushed branch) had no surface at all.
 // It looked exactly like work that had finished.
 //
-// pending_sandbox_run is the durable record, and this reads it.
+// The fleet's run record is the durable one, and this reads it — every node's
+// runs, not this node's, because a run is recovered by whichever node owns its
+// seat and a per-node read drew a board that disagreed with itself depending on
+// which node answered.
 //
-// What it deliberately does NOT return is execute_state, the serialised
+// What it deliberately does NOT return is the execute state, the serialised
 // Execute conversation. It is by far the largest column in the row, and every
 // prompt in it is already reachable through the event store — shipping it to a
 // board that renders one line per run would be a page-weight problem in

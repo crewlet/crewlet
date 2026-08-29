@@ -864,3 +864,65 @@ func TestAnUnopenableCoordinationEstateIsReportedAndLeavesNothingBehind(t *testi
 			failedOpenAttempts, leaked)
 	}
 }
+
+// THE FLEET STORE IS ALWAYS THE KV, and the default single-node topology is
+// exactly the case that proves it: `coordination.type` is `local` there, and
+// while the fleet store followed that slot it was an in-process map.
+//
+// Everything in it then reset with the process. The token counter's bucket is
+// documented as having NO retention — "a cap is a ceiling for the life of a
+// deployment" — and a restart put a company's spend back to zero. A detached
+// sandbox run, which is a BILLED box, was forgotten by the engine that
+// launched it. A turn completion no longer suppressed the redelivery it exists
+// to suppress.
+//
+// A lease is the one thing that legitimately follows the slot: a single node
+// has no peer to fence against and re-claims at boot.
+func TestTheFleetStoreSurvivesARestartOnLocalCoordination(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "stream")
+	mk := func() *engine.Backends {
+		t.Helper()
+		b := bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.StoreDir = dir
+			// The default, stated rather than assumed: this test is
+			// about the topology an operator gets without asking.
+			b.Coordination.Type = config.CoordinationLocal
+		})
+		back, err := openBackends(t, b)
+		if err != nil {
+			t.Fatalf("OpenBackends: %v", err)
+		}
+		return back
+	}
+
+	first := mk()
+	if _, err := first.Fleet.Charge(t.Context(), coord.AgentScope("a-1"), 900, 0, 0); err != nil {
+		t.Fatalf("Charge: %v", err)
+	}
+	if err := first.Fleet.OpenChannel(t.Context(), coord.Channel{
+		ID: "c1", Requester: "alice", Target: "bob",
+		OpenedAt: time.Now().UTC(), LastAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("OpenChannel: %v", err)
+	}
+	if _, err := first.Fleet.CreateSandboxRun(t.Context(), "turn-1", []byte(`{"status":"running"}`)); err != nil {
+		t.Fatalf("CreateSandboxRun: %v", err)
+	}
+	first.Close(t.Context())
+
+	second := mk()
+	t.Cleanup(func() { second.Close(t.Context()) })
+	if used, err := second.Fleet.Used(t.Context(), coord.OrgScope); err != nil || used != 900 {
+		t.Errorf("org spend after a restart = %d (err %v), want 900 — the cap is a "+
+			"ceiling for the deployment's life, not for one process", used, err)
+	}
+	if _, found, err := second.Fleet.Channel(t.Context(), "c1"); err != nil || !found {
+		t.Errorf("the open ask did not survive the restart (found=%v err=%v) — "+
+			"its answer would be refused as an unknown channel", found, err)
+	}
+	if _, found, err := second.Fleet.SandboxRun(t.Context(), "turn-1"); err != nil || !found {
+		t.Errorf("the detached run did not survive the restart (found=%v err=%v) — "+
+			"its box is billing with nobody to collect it", found, err)
+	}
+}

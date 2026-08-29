@@ -101,6 +101,8 @@ which is why they move to a KV without redesign:
 | Config activations | append-only stream; **epoch = stream sequence** |
 | Per-node apply status | one key per node, re-put every tick, TTL-fresh — and the LIVE view only: the same outcome also goes into each node's event log as `config_revision_applied`, because a bucket whose age makes a dead node vanish in a minute is the wrong place to look for the node that died |
 | A2A channel record | one key per channel; create-only open, CAS read-modify-write for the close and the message count |
+| Scheduled-fire claim | create-only key per dispatch identity; first writer wins |
+| Detached sandbox run | one key per kick-off turn, value OPAQUE; every conditional flip is a CAS on the record's revision |
 
 Two need care. **Budget spend** charges agent and org together and Postgres did
 it in one transaction so a seat-refused turn never charges the org. A KV has no
@@ -125,6 +127,26 @@ with NO age, and for a reason neither of the other two has: an age cannot tell
 an open channel from a closed one, so a TTL would reap the record of an ask
 still waiting. Closing an idle channel and deleting a closed one stay decisions
 taken by the `maintenance` singleton duty.
+
+**Detached sandbox runs** are the one slot whose VALUE coordination does not
+understand, and the departure is deliberate. The record has twenty-five fields
+and every decision taken on them — the at-most-once tail claim, the epoch
+fence, the conditional pause expiry — belongs to internal/sandbox, beside the
+contract suite that certifies it. So the KV holds bytes and a revision, and
+what was a mutex inside one process becomes a read-decide-write across a fleet:
+a writer that loses the revision RE-READS and RE-DECIDES rather than replaying
+what it computed, because the condition it evaluated is a field the winner may
+have changed.
+
+**The fleet store is always the KV.** Only the LEASE store follows
+`coordination.type`. The two answer different questions and only one is about
+peers: a lease asks "who runs this seat", and a single node has nobody to fence
+against and re-claims at boot — but the fleet store holds RECORDS that must
+outlive the PROCESS, on one node as much as on four. While it followed the
+lease slot, the default single-node topology kept the token counter in memory
+(so a company's spend reset on every restart, against a bucket documented as
+having no retention at all), lost turn completions across a restart, and
+forgot detached sandbox runs — billed boxes — entirely.
 
 **Config activation** must append the epoch atomically with the revision flip,
 or a crash leaves the fleet converged on a revision nobody asked for — on JetStream the append IS the

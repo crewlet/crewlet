@@ -8,7 +8,7 @@ import (
 
 // The FLEET-SHARED state, beyond ownership.
 //
-// A lease answers "who runs this seat". These seven answer the other questions
+// A lease answers "who runs this seat". These eight answer the other questions
 // a fleet has to agree on, and they are here — beside [Backend], certified by
 // the same suite — for one reason: THEY WERE ON THE NODE'S OWN DATABASE, and
 // internal/store is documented "one file, one process". Every one of them was
@@ -33,6 +33,10 @@ import (
 //   - The scheduled-fire claim is what makes a cron dispatch at-most-once. The
 //     scheduler is a singleton DUTY, so it moves; the new holder read an empty
 //     ledger and its catchup pass re-fired what the old one had claimed.
+//   - A detached coding run outlives its turn, its process and sometimes its
+//     node, and is recovered by whichever node owns the seat NEXT. That node
+//     read its own database, found nothing, and left a billed sandbox running
+//     with a suspended conversation nothing could re-enter.
 //
 // None of these is a lease: nothing here is owned, held or fenced. They are
 // counters, claims and records, and the coordination store is simply where a
@@ -105,6 +109,13 @@ const (
 	// over would silently re-arm a company somebody had stopped on
 	// purpose, on a horizon nobody chose. Clearing one is an operator
 	// action — see [Budgets.Reset].
+
+	// SandboxRunRetention is absent for the same reason as the channel
+	// bucket's, one step sharper: a detached coding run can sit parked on
+	// a person's answer for DAYS (see sandbox.StatusAwaiting), and its
+	// record is the only thing that knows a billed box exists. A bucket
+	// age would reap it and leak the box for ever. The run's own reaper
+	// and its terminal delete are what end it.
 
 	// ChannelRetention is deliberately absent too, and for a third
 	// reason: a channel's bucket can have NO age at all because an OPEN
@@ -481,10 +492,75 @@ type Fires interface {
 	ClaimFire(ctx context.Context, key string, at time.Time) (bool, error)
 }
 
+// Record is one stored value with the version it was read at.
+//
+// The version is an OPAQUE token: pass back exactly what a read handed you.
+// It is what makes a read-modify-write safe without a transaction — the write
+// lands only if nothing has changed since — and it is the whole of the
+// concurrency story [SandboxRuns] offers, because a detached run's mutations
+// are conditional flips whose conditions are the run's OWN fields.
+type Record struct {
+	Key     string
+	Value   []byte
+	Version uint64
+}
+
+// SandboxRuns is the fleet's record of detached coding runs.
+//
+// THE ONE CONTRACT HERE WHOSE VALUE IS OPAQUE, and the reason is that its
+// record has twenty-five fields of which coordination understands none: the
+// suspended Execute conversation, the box and command ids, the plan, the
+// question a person is being asked. Every decision taken on those fields —
+// the at-most-once tail claim, the epoch fence, the conditional pause expiry —
+// is sandbox's, lives in internal/sandbox where its suite is, and would be
+// nothing but duplication here. So this holds bytes and a version, and the
+// conditions are expressed as compare-and-swap by the package that owns them.
+//
+// It is shared because a run is DETACHED and its seat MOVES. The run outlives
+// its turn, its process and sometimes its node; the node that owns the seat
+// afterwards is the one that recovers it. On the node's own database that
+// successor's recovery pass found nothing, so a suspended Execute
+// conversation became unreachable and a billed box was neither resumed nor
+// reaped — the very case internal/sandbox's release path documents as safe
+// ("a detached run belongs to its row, not to this process"), which only
+// holds if the row is visible to the successor.
+//
+// RAISES rather than answering empty, on every read: "there is no run" starts
+// the work again and abandons a box, and a store that could not be read must
+// never be able to say that.
+type SandboxRuns interface {
+	// SandboxRun reads one run's record.
+	SandboxRun(ctx context.Context, turnID string) (Record, bool, error)
+
+	// SandboxRuns returns every record, by turn id.
+	//
+	// Every listing this serves — the seat's busy check, the boot recovery
+	// pass, the pause reaper, the clarification match — filters on fields
+	// coordination cannot see, so there is one read and the caller decodes.
+	// The set is bounded by the number of seats that can be mid-run at
+	// once, which is what makes that affordable.
+	SandboxRuns(ctx context.Context) ([]Record, error)
+
+	// CreateSandboxRun writes a new record, reporting whether it was new.
+	// A turn id that already exists is left alone: the id is the kick-off
+	// turn's, so a second create is a retried launch, not a second run.
+	CreateSandboxRun(ctx context.Context, turnID string, value []byte) (bool, error)
+
+	// UpdateSandboxRun writes at a version, reporting whether that version
+	// still held. False is a LOST RACE, not a failure — the caller re-reads
+	// and re-decides, because the condition it evaluated may no longer be
+	// true.
+	UpdateSandboxRun(ctx context.Context, turnID string, value []byte, version uint64) (bool, error)
+
+	// DeleteSandboxRun removes a record at a version, reporting whether
+	// that version still held.
+	DeleteSandboxRun(ctx context.Context, turnID string, version uint64) (bool, error)
+}
+
 // Fleet is a backend that serves all of the shared state, which is what the
 // contract suite certifies and what the engine wires from.
 //
-// One interface at the CONSTRUCTION seam and seven at the call sites: the
+// One interface at the CONSTRUCTION seam and eight at the call sites: the
 // webhook edge takes a Claims and nothing else, the valve takes a Counter,
 // a turn's meter takes a Budgets. A consumer that could reach the whole store
 // would eventually use it.
@@ -497,6 +573,7 @@ type Fleet interface {
 	Plane
 	Channels
 	Fires
+	SandboxRuns
 }
 
 // SortUsage puts the org counter first, then the seats by scope.
