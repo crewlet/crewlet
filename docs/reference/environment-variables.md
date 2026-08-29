@@ -34,7 +34,7 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 |----------|-------------|-----------------|
 | `SLACK_BOT_TOKEN_<ROLE>` | Bot User OAuth Token (`xoxb-...`) | Written by `crewlet slack provision`, or Slack app > OAuth & Permissions |
 | `SLACK_SIGNING_SECRET_<ROLE>` | Signing Secret | Written by `crewlet slack provision`, or Slack app > Basic Information |
-| `SLACK_CONFIG_REFRESH_TOKEN` | **Bootstrap only.** The app-configuration *refresh* token (`xoxe-1-...`) that seeds an empty [app ledger](../integrations/slack.md#the-app-ledger); `crewlet slack provision` exchanges it for a 12-hour access token and stores **both** halves of the rotated pair in the ledger. Once the ledger holds a pair, this variable is ignored — see the precedence note below. | [api.slack.com/apps](https://api.slack.com/apps) > Your App Configuration Tokens (once) |
+| `SLACK_CONFIG_REFRESH_TOKEN` | **Bootstrap only.** The app-configuration *refresh* token (`xoxe-1-...`) that seeds an empty [app ledger](../integrations/slack.md#the-ledger-slack-appsjson); `crewlet slack provision` exchanges it for a 12-hour access token and stores **both** halves of the rotated pair in the ledger. Once the ledger holds a pair, this variable is ignored — see the precedence note below. | [api.slack.com/apps](https://api.slack.com/apps) > Your App Configuration Tokens (once) |
 
 Replace `<ROLE>` with the role name in uppercase (e.g., `SLACK_BOT_TOKEN_ENGINEER`). The per-role names are conventions — any `${VAR}` name referenced from `role.integrations.slack` works, and `crewlet slack provision` writes whatever names the YAML uses.
 

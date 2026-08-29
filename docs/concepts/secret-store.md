@@ -143,7 +143,7 @@ one it writes the local table, which the engine migrates at its next start.
 and `crewlet mattermost provision -secret-store` work identically. Slack's own
 app-configuration token pair is the one credential that does **not** go here:
 it is the operator's, not the company's, and it lives in the
-[app ledger](../integrations/slack.md#the-app-ledger) beside the company file.
+[app ledger](../integrations/slack.md#the-ledger-slack-appsjson) beside the company file.
 
 Where it pays off most is a credential the vendor shows **once**. Plane
 generates a webhook's secret at creation and returns it exactly once, and every

@@ -5,7 +5,7 @@ Crewlet companies are defined across **two tiers** — see the [Configuration co
 - **Tier A** (`crewlet.yaml`, restart-only): DB DSN, Pulsar URL, API host/port/auth, debug, knowledge backend.
 - **Tier B** (`company.yaml` imported into the store, live-editable): everything else — identity, providers, integrations, MCP servers, roles, units, turn engine, learning, budgets, scheduling.
 
-This page documents the **Tier B** fields below.  For Tier A see [Configuration concept page §"Tier A example"](../concepts/configuration.md#tier-a-example-configyaml).
+This page documents the **Tier B** fields below.  For Tier A see [Configuration concept page §"Tier A example"](../concepts/configuration.md#tier-a-example-crewletyaml).
 
 > **Machine-readable version.** `crewlet schema company` emits the JSON
 > Schema for everything on this page, generated from the models

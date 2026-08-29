@@ -297,7 +297,7 @@ opens — before a single turn has run:
 A seat carries `state: "idle"` when **this node** is serving it. A seat it
 does not hold carries no state at all and the dashboard reads that as
 `offline` — which is right for a seat nothing has claimed, and is this node
-declining to claim knowledge of a seat a peer may be running. [Fleet](#fleet)
+declining to claim knowledge of a seat a peer may be running. [Fleet](#fleet-sandbox-runs--schedules)
 answers "who holds what" from the lease table, which is the one place that
 knows.
 
@@ -1107,7 +1107,7 @@ Notes:
 
 ### `/webhooks/jira`
 
-Receives **Data Center** Jira webhook payloads (issue created, updated, commented, assigned). Verifies HMAC-SHA256 over the raw body against `X-Hub-Signature`, keyed on `integrations.jira.webhook_secret`; a route with no resolved secret answers 503 rather than accepting the delivery. Deduped on `X-Atlassian-Webhook-Identifier`, which is stable across Jira's own retries. **Jira Cloud does not use this route** — a Cloud webhook belongs to an app, so those events arrive through [`/webhooks/forge`](#webhooksforge) with their own JWT, and `webhook_secret` is unused there. Publishes to `crewlet.notifications.inbound`. See [Jira Integration — Webhooks](../integrations/jira.md#webhooks).
+Receives **Data Center** Jira webhook payloads (issue created, updated, commented, assigned). Verifies HMAC-SHA256 over the raw body against `X-Hub-Signature`, keyed on `integrations.jira.webhook_secret`; a route with no resolved secret answers 503 rather than accepting the delivery. Deduped on `X-Atlassian-Webhook-Identifier`, which is stable across Jira's own retries. **Jira Cloud does not use this route** — a Cloud webhook belongs to an app, so those events arrive through [`/webhooks/forge`](#webhooksforge) with their own JWT, and `webhook_secret` is unused there. Publishes to `crewlet.notifications.inbound`. See [Jira Integration — Webhooks](../integrations/jira.md#webhooks-jira-pushes-to-agents).
 
 ### `/webhooks/slack/{handle}`
 
