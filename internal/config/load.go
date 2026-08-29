@@ -229,7 +229,23 @@ func decodeKnown(node *yaml.Node, out any) error {
 	dec := yaml.NewDecoder(&buf)
 	dec.KnownFields(true)
 	if err := dec.Decode(out); err != nil && !errors.Is(err, io.EOF) {
-		return decodeError(err)
+		return decodeError(err, retiredFor(out))
+	}
+	return nil
+}
+
+// retiredFor is the retired-key table that applies to the type being
+// decoded, and nil for every type that has retired nothing.
+//
+// A KEY IS RETIRED FROM A TIER, NOT FROM THE PACKAGE. `debug` was Tier A's,
+// and decodeError is the one translation both tiers and every nested
+// sub-document go through — so an ungated table answers a `debug:` in a
+// COMPANY document with advice about a `logging:` block that does not exist
+// there, sending its author to edit a file they are not in. An unknown key
+// somewhere that never had one is an ordinary typo and has to read like one.
+func retiredFor(out any) map[string]string {
+	if _, isBootstrap := out.(*Bootstrap); isBootstrap {
+		return retiredBootstrapFields
 	}
 	return nil
 }
@@ -240,8 +256,8 @@ func decodeKnown(node *yaml.Node, out any) error {
 // file for.
 var unknownFieldRE = regexp.MustCompile(`^line (\d+): field (\S+) not found in type \S+$`)
 
-// retiredFields are keys this build no longer accepts, mapped to what an
-// operator should write instead.
+// retiredBootstrapFields are TIER A keys this build no longer accepts,
+// mapped to what an operator should write instead.
 //
 // # A removed key is not a typo, and must not be reported as one
 //
@@ -255,7 +271,7 @@ var unknownFieldRE = regexp.MustCompile(`^line (\d+): field (\S+) not found in t
 //
 // Entries are permanent. A file written against any past release stays
 // diagnosable, and the cost is one map entry.
-var retiredFields = map[string]string{
+var retiredBootstrapFields = map[string]string{
 	"debug": "`debug` is no longer a setting — it was a second way to say " +
 		"the log level and it is gone. Write `logging:` with `level: debug` " +
 		"under it (and `level: info` is the default, so a `debug: false` " +
@@ -264,7 +280,7 @@ var retiredFields = map[string]string{
 
 // decodeError translates yaml's decode failures into this package's
 // sentinels, so a caller can tell a typo from a wrong shape.
-func decodeError(err error) error {
+func decodeError(err error, retired map[string]string) error {
 	// An error from a custom unmarshaler has already been translated —
 	// including by a nested decodeKnown, which is how a typo inside the
 	// per-phase llm mapping or a tool-annotation block gets here. Wrapping
@@ -286,7 +302,7 @@ func decodeError(err error) error {
 			// a setting" is true and useless to someone reading a file the
 			// quickstart told them to write: they need the line that
 			// replaced it, not a spelling check.
-			if replacement, retired := retiredFields[strings.Trim(m[2], `"`)]; retired {
+			if replacement, gone := retired[strings.Trim(m[2], `"`)]; gone {
 				out.add("line "+m[1], ErrUnknownField, "%s", replacement)
 				continue
 			}

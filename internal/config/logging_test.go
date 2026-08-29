@@ -143,3 +143,22 @@ func TestTheRetiredDebugKeyNamesItsReplacement(t *testing.T) {
 		}
 	}
 }
+
+// AND THE HINT DOES NOT LEAK INTO THE OTHER TIER. `debug` was retired from
+// Tier A; a company document never had one. Both tiers and every nested
+// sub-document share one decode-error translation, so an ungated table would
+// answer a `debug:` in company.yaml with advice about a `logging:` block that
+// does not exist there — sending its author to edit a file they are not in.
+func TestTheRetiredKeyHintIsScopedToItsTier(t *testing.T) {
+	t.Parallel()
+	err := rejects(t, "name: Acme\ndebug: true\n", "line 2")
+	if !errors.Is(err, ErrUnknownField) {
+		t.Fatalf("want %v, got %v", ErrUnknownField, err)
+	}
+	if strings.Contains(err.Error(), "logging:") {
+		t.Errorf("a company document was given Tier A's advice: %v", err)
+	}
+	if !strings.Contains(err.Error(), "check the spelling") {
+		t.Errorf("an ordinary unknown key must read as one: %v", err)
+	}
+}
