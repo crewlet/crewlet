@@ -1,11 +1,12 @@
 # d-203 — Secrets follow the config path
 
-**Status:** decided; implementation outstanding. This file previously argued
-the opposite and was wrong — see *The argument that did not hold* below, kept
-because a decision record that quietly reverses itself teaches nobody why.
+**Status:** decided and implemented. This file previously argued the opposite
+and was wrong — see *The argument that did not hold* below, kept because a
+decision record that quietly reverses itself teaches nobody why.
 
-**Applies to:** `internal/store/secretvalues.go`, `internal/coord/fleet.go`,
-`internal/api/configapi`, `cmd/crewlet/secrets.go`.
+**Applies to:** `internal/fleetsecrets`, `internal/coord/fleet.go`,
+`internal/api/secretsapi`, `internal/store/secretvalues.go`,
+`cmd/crewlet/secrets.go`.
 
 ## The question
 
@@ -60,21 +61,53 @@ lock (`internal/store/lock.go`) makes "engine up" a refusal with a name on it,
 so the CLI can try the API and fall back to the file exactly when the engine
 is not holding it.
 
-## Shape
+## Shape, as built
 
-- `coord.Secrets` beside the other buckets — get, set, delete, list over an
+- **`coord.Secrets`** beside the other buckets — get, set, delete, list over an
   opaque sealed value, so coordination never sees plaintext and the KV is
-  storage rather than a party to the encryption.
-- A `_secrets` bucket with **no age**: unlike the dedupe and the valve, a
+  storage rather than a party to the encryption. Certified by the same
+  `coordtest` suite as every other bucket, on both backends.
+- **A `_secrets` bucket with no age.** Unlike the dedupe and the valve, a
   credential is not short-horizon state and a bucket TTL would expire a
-  company's authentication.
-- An authenticated route on `configapi`, which already holds the cipher and
-  already seals a body onto the KV.
-- `crewlet secrets` becomes a client of it, with the local-store path kept for
-  a stopped engine.
-- The env fallback is untouched. It is the bootstrap path — a node with no
+  company's authentication. A delete is a `Purge` rather than a delete, so a
+  removed secret leaves no tombstone carrying its envelope.
+- **`internal/fleetsecrets`** owns the KEY; coordination owns the BYTES. It is
+  where a value is sealed on the way in and opened on the way out, with the
+  name bound in as associated data — the same binding `store.SecretValues`
+  uses, which is what lets either read a row the other wrote during the
+  migration.
+- **`internal/api/secretsapi`** serves `/secrets`, added to `auth`'s
+  always-guarded prefixes beside `/config`. It went there rather than onto
+  `configapi` because the honest URL is `/secrets`, and the guard change is
+  one list entry with a test that walks it.
+- **`crewlet secrets` is a client of it**, and the routing is a fact rather
+  than a probe: the store's file lock means "the engine is up, write through
+  its API" with a pid attached, and an unlocked store means it is stopped and
+  the local table is the only place a value can go. `-secret-store` on every
+  provisioner follows the same path, and both take `-api URL`.
+- **The local table is the bootstrap path and clears itself.** The engine
+  migrates its rows onto the fleet at boot and removes them: copy before
+  delete, never overwrite a name the fleet already holds (the fleet's copy is
+  the newer write), never delete what did not copy. Without the delete a stale
+  local row would undo a later `unset` at every boot, forever.
+- **One record type.** `store.SecretRecord` and a second on `coord` would have
+  made the CLI, the API and the provisioning sinks each pick a side, so both
+  stores answer in `secrets.Record` and the sentinels moved to
+  `secrets.ErrNoKeyring` / `secrets.ErrNotFound` with them.
+- **The env fallback is untouched.** It is the bootstrap path — a node with no
   keyring resolves from the environment and runs normally — and it stays the
   answer for operators who want credentials to come from their platform.
+
+## One thing that changed on the way
+
+`fleetsecrets.All` **fails closed**, like the local store's, rather than
+skipping a record this node's keyring cannot open. The first draft skipped,
+reasoning that a fleet mid-rotation legitimately holds mixed keys. It does not:
+the config plane seals its payload with the same keyring, so a node that cannot
+open a secret cannot apply a config either. A skipped record resolves from the
+environment instead — the stale-`.env` shadowing the store exists to prevent,
+arriving silently. `Rekey` aborts for the same reason: a pass that moved 12 of
+13 rows is the state an operator retires the old key on the strength of.
 
 ## Transport
 

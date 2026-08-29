@@ -51,7 +51,7 @@ subcommand below is served by it.
 
 ---
 
-> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **this node's secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the vendor. With no bootstrap at that path, or one declaring no `secrets.keys`, the run resolves from the environment alone and says so on its first line. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
+> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **the secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the vendor. With no bootstrap at that path, or one declaring no `secrets.keys`, the run resolves from the environment alone and says so on its first line. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
 
 
 > **Every command except `crewlet run` logs at `warn`.** They open a store,
@@ -227,51 +227,57 @@ crewlet secrets keygen [-key-id ID]
 
 Prints a fresh base64 32-byte encryption key plus a copy-pasteable `crewlet.yaml` `secrets:` snippet that references it via an environment variable (keeping the raw key out of the file). `--key-id` (default `key-1`) names the key; the id is stamped into every envelope the key seals, so keep it stable across restarts and pick a new id only when rotating. Key generation is always explicit — Crewlet never auto-generates a key, because a silently-generated key that isn't captured makes every backup unrecoverable. See [Secrets](../concepts/configuration.md#secrets).
 
-The remaining subcommands operate on the [secret store](../concepts/secret-store.md) — the encrypted `secret_values` table the engine consults **ahead of** the process environment when resolving `${VAR}`. All of them open the store named by the Tier A bootstrap (`--config`, default `./crewlet.yaml`), and all of them need a Tier A keyring: the store has no plaintext mode, so a config declaring no `secrets.keys` is refused with a pointer at `keygen` rather than silently storing plaintext.
+The remaining subcommands operate on the [secret store](../concepts/secret-store.md) — the company's encrypted credentials, one sealed value per `${VAR}` name, which the engine consults **ahead of** the process environment. All of them read the Tier A bootstrap (`-config`, default `./crewlet.yaml`) for the keyring, and all of them need one: the store has no plaintext mode, so a config declaring no `secrets.keys` is refused with a pointer at `keygen` rather than silently storing plaintext.
+
+**Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start. The engine's exclusive database lock is what tells the two apart, with a pid attached.
+
+`-api URL` names the node to write through, for running the command from a machine that is not the node. The bearer token comes from `CREWLET_API_TOKEN` when set, and otherwise from the first `api.auth.tokens` entry in the Tier A config; the token's id is recorded as the author of the write.
 
 ### `crewlet secrets set`
 
 ```
-crewlet secrets set <NAME> [-value V] [-source STR] [-config PATH]
+crewlet secrets set <NAME> [-value V] [-source STR] [-config PATH] [-api URL]
 ```
 
 Stores one encrypted secret under `NAME`, which must be a valid environment-variable name — a name outside the `${VAR}` grammar could never be read back, so it is rejected. Existing names are replaced.
 
-The value comes from **stdin** by default (`echo "$TOKEN" | crewlet secrets set GITLAB_TOKEN_SWE`), or from an interactive prompt on a terminal. `--value` exists for scripted use, but an argv value is visible in `ps` and lands in shell history, so prefer stdin. `--source` records provenance (default `cli`); the provisioning CLIs stamp their own.
+The value comes from **stdin** by default (`echo "$TOKEN" | crewlet secrets set GITLAB_TOKEN_SWE`), or from an interactive prompt on a terminal. `-value` exists for scripted use, but an argv value is visible in `ps` and lands in shell history, so prefer stdin. `-source` records provenance (default `cli`); the provisioning CLIs stamp their own. The **author** is the Tier A token's id when the write goes through a running node, and `$CREWLET_OPERATOR`/`$USER` when it goes to the local table.
 
-A running engine picks the new value up at its next config activation or restart, not immediately — the command says so after each write.
+A running engine picks the new value up at its next config activation or restart, not immediately — the command says so after each write, along with which of the two stores it wrote.
 
 ### `crewlet secrets list`
 
 ```
-crewlet secrets list [-config PATH]
+crewlet secrets list [-config PATH] [-api URL]
 ```
 
-Prints one row per stored secret: name, sealing `key_id`, last-updated timestamp, and source. **Never** prints a value — the record type has no value field, so it cannot. Works without a keyring, so an operator locked out of the key can still take inventory.
+Prints one row per stored secret: name, sealing `key_id`, last-updated timestamp, who wrote it, and source. It names the store it read first, because a stopped node's own empty table and a fleet with nothing in it look identical otherwise. **Never** prints a value — the listing drops the envelope on the way out and the route behind it has no value field at all. Works without a keyring on the fleet's store, so an operator locked out of the key can still take inventory.
 
 ### `crewlet secrets unset`
 
 ```
-crewlet secrets unset <NAME> [-config PATH]
+crewlet secrets unset <NAME> [-config PATH] [-api URL]
 ```
 
-Removes the row. Exits 1 if the name was not stored. Afterwards `${NAME}` falls back to the environment.
+Removes the record and says whether one was there — "was not set" is the outcome a cleanup script wanted on its second run, not a failure. Afterwards `${NAME}` falls back to the environment.
 
 ### `crewlet secrets get`
 
 ```
-crewlet secrets get <NAME> -reveal [-config PATH]
+crewlet secrets get <NAME> -reveal [-config PATH] [-api URL]
 ```
 
-Prints one decrypted value to stdout. `--reveal` is **required** — without it the command refuses and reads nothing. This is the only read-back path in the entire system; there is deliberately no HTTP route that returns a secret value. Access is logged by name. Intended as break-glass for recovering a credential the upstream API will never show again, not as a scripting interface.
+Prints one decrypted value to stdout, with no trailing newline so it can be piped. `-reveal` is **required** — without it the command refuses and reads nothing. The route behind it (`GET /secrets/{name}`) is gated the same way, by an explicit `?reveal=true` no crawl reaches by accident, answers `Cache-Control: no-store`, and logs the access against the operator its guard authenticated. Intended as break-glass for recovering a credential the upstream API will never show again, not as a scripting interface.
 
 ### `crewlet secrets rekey`
 
 ```
-crewlet secrets rekey [-dry-run] [-config PATH]
+crewlet secrets rekey [-dry-run] [-config PATH] [-api URL]
 ```
 
-Re-encrypts every stored secret not already sealed under `secrets.active_key_id`. The per-row counterpart of [`crewlet config rekey`](#crewlet-config-rekey) — run **both** before dropping a retired key from `secrets.keys`, or rows still sealed under it become unreadable. Each row's envelope names its sealing key, so mixed-key states decrypt correctly throughout. `--dry-run` lists what would re-encrypt without writing.
+Re-encrypts every stored secret not already sealed under `secrets.active_key_id`, and prints the names it moved. The per-record counterpart of [`crewlet config rekey`](#crewlet-config-rekey) — run **both** before dropping a retired key from `secrets.keys`, or records still sealed under it become unreadable. Each envelope names its sealing key, so mixed-key states decrypt correctly throughout. `-dry-run` lists what would re-encrypt without decrypting anything, reading the denormalised `key_id` instead.
+
+The store is shared, so this is run **once for the fleet**, not once per node. A run through a node's API sends the key id it expects and is **refused with a 409** if that node seals under a different `active_key_id` — a silent success there would report a rotation the fleet did not make. It aborts rather than half-completing if any record cannot be opened with the keyring in hand, because retiring the old key on the strength of a partial pass is what makes a secret unreadable for ever.
 
 ---
 
@@ -501,7 +507,7 @@ catches a plan whose quota is exhausted.
 | `-token-stdin` / `-username U -password-stdin` | Store a credential you already hold, where the CLI genuinely has one |
 
 **`export`** packs a login into one portable blob so another host can come up
-already authenticated. `-secret-store` writes it to this node's [secret
+already authenticated. `-secret-store` writes it to the [secret
 store](../concepts/secret-store.md) instead of stdout; without it the blob goes
 to stdout in the clear, which is what you want when piping into your own
 secret manager and never what you want in a shell history.

@@ -307,6 +307,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return fail(err)
 	}
 	e.cipher = cipher
+	// MIGRATED BEFORE THE SNAPSHOT, so a value set on this node while the
+	// engine was stopped is on the fleet before anything resolves it —
+	// and, once it is, so are this node's peers. See [Engine.migrateSecrets].
+	e.migrateSecrets(ctx)
 	e.refreshSecrets(ctx)
 
 	company, err := NewCompanyWith(opts.Company, e.resolver())

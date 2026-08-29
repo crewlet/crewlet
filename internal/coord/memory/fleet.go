@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"sort"
@@ -37,6 +38,7 @@ type Fleet struct {
 	channels  map[string]coord.Channel
 	fires     map[string]time.Time
 	runs      map[string]coord.Record
+	secrets   map[string]coord.SecretRecord
 
 	epoch   int64
 	target  coord.Activation
@@ -68,6 +70,7 @@ func NewFleet() *Fleet {
 		channels:  map[string]coord.Channel{},
 		fires:     map[string]time.Time{},
 		runs:      map[string]coord.Record{},
+		secrets:   map[string]coord.SecretRecord{},
 	}
 }
 
@@ -568,4 +571,63 @@ func (f *Fleet) DeleteSandboxRun(_ context.Context, turnID string, version uint6
 func copyRecord(r coord.Record) coord.Record {
 	r.Value = slices.Clone(r.Value)
 	return r
+}
+
+// ---- the sealed credentials -------------------------------------------- //
+//
+// The twin stores what it is given, exactly as the KV does: the value is an
+// envelope the Tier A keyring produced before it arrived, and neither backend
+// can open one. A twin that "helpfully" held plaintext would certify a
+// contract the real store does not implement.
+
+// Secret reads one sealed value.
+func (f *Fleet) Secret(_ context.Context, name string) (coord.SecretRecord, bool, error) {
+	if name == "" {
+		return coord.SecretRecord{}, false, errors.New("coord/memory: a secret needs a name")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rec, ok := f.secrets[name]
+	return rec, ok, nil
+}
+
+// SecretValues returns every sealed value, by name.
+func (f *Fleet) SecretValues(_ context.Context) ([]coord.SecretRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]coord.SecretRecord, 0, len(f.secrets))
+	for _, rec := range f.secrets {
+		out = append(out, rec)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// PutSecret writes a sealed value, replacing any prior one.
+func (f *Fleet) PutSecret(_ context.Context, rec coord.SecretRecord) error {
+	switch {
+	case rec.Name == "":
+		return errors.New("coord/memory: a secret needs a name")
+	case rec.Value == "":
+		return fmt.Errorf("coord/memory: secret %q has no sealed value", rec.Name)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rec.UpdatedAt = rec.UpdatedAt.UTC()
+	f.secrets[rec.Name] = rec
+	return nil
+}
+
+// DeleteSecret removes a value, reporting whether it was there.
+func (f *Fleet) DeleteSecret(_ context.Context, name string) (bool, error) {
+	if name == "" {
+		return false, errors.New("coord/memory: a secret needs a name")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.secrets[name]; !ok {
+		return false, nil
+	}
+	delete(f.secrets, name)
+	return true, nil
 }

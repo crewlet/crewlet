@@ -367,7 +367,7 @@ The load-bearing tables:
 - **`conversation_sessions`** — the [conversation ledger](../concepts/conversation-sessions.md): what this seat already said in one thread, rendered back into that conversation's next turn.
 - **`chat_thread_follows`** — per-agent chat thread-follow state, keyed by backend.
 - **`company_config`** — the revision payloads. Which one is *current* is the fleet's business, and lives in coordination; see the [control plane](../concepts/control-plane.md).
-- **`secret_values`** — the [secret store](../concepts/secret-store.md), one encrypted row per env-var name, consulted ahead of the process environment when a `${VAR}` is resolved.
+- **`secret_values`** — the bootstrap half of the [secret store](../concepts/secret-store.md). The company's credentials live on the coordination KV; rows written here while the engine was stopped are migrated there at its next start.
 
 Migrations are **forward-only**: each file in `internal/store/schema/` is applied once and recorded by filename, and there are no downgrade scripts. Downgrading the binary below the schema it already migrated is not supported; restore a backup instead. There is no migration lock and no advisory-lock protocol, because one process owns the file — the whole idiom disappears.
 

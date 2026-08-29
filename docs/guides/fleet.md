@@ -35,16 +35,18 @@ clustered or external stream by name, because this is the one
 misconfiguration that would otherwise silently give two processes the
 same agents.
 
-**Credentials in the environment, not in each node's secret store.** The
-[secret store](../concepts/secret-store.md#how-a-node-gets-its-secrets-in-the-first-place)
-is the node's own database, so `crewlet secrets set` reaches exactly the node
-whose Tier A file you pointed it at. Put credentials where your platform
-already puts secrets — a Kubernetes `Secret` projected as env, systemd's
-`EnvironmentFile=`, Compose's `env_file:` — and every node resolves the same
-values, including one that scales up hours later. The same goes for
-provisioner-minted credentials: use `-env-file` or `-print` rather than
-`-secret-store`, which otherwise leaves one node able to authenticate and the
-rest not, with nothing failing until a seat lands on the wrong one.
+**Credentials go through a node that is running.** The
+[secret store](../concepts/secret-store.md#which-store-the-cli-writes) is on
+the KV like everything else the fleet shares, so `crewlet secrets set` against
+a live node reaches all of them — but it gets there through that node's
+authenticated API, because the coordination broker is inside the engine's own
+process and listens on no socket. Against a **stopped** node the same command
+writes that node's own table instead, which is the bootstrap path: the value
+is on one node until it starts and migrates the row. Fine for a first
+provisioning run, wrong for a rotation on a live fleet. `-secret-store` on a
+provisioner follows the same rule, and both take `-api URL` to name the node
+to write through. The process environment remains the fallback every node
+resolves from, so a platform secret projected as env still works unchanged.
 
 **One node or three, never two.** Two embedded-KV members have no quorum
 without each other, so the fleet stops serving the moment either

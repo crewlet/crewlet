@@ -458,7 +458,7 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 
 // storeLLMSecret writes one value into the encrypted secret store.
 func storeLLMSecret(ctx context.Context, bootstrapPath, name, value string) error {
-	sv, closeStore, err := openSecretStore(ctx, bootstrapPath)
+	sv, closeStore, err := openSecretStore(ctx, bootstrapPath, "")
 	if err != nil {
 		return fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
 	}
@@ -476,8 +476,8 @@ func storeLLMSecret(ctx context.Context, bootstrapPath, name, value string) erro
 // `crewlet llm export KEY` writes a blob to stdout and, without this, nothing
 // read it back: the documented way to "move a login onto another host" ended
 // at a string in a terminal. The `-secret-store` half reaches a second host
-// only where the two share a database, which a fleet does and two laptops do
-// not.
+// wherever the two are nodes of one company — the store is the fleet's — and
+// not where they are two unrelated laptops.
 //
 // FROM STDIN, never from a path argument: a credential bundle on argv is
 // visible in `ps` and lands in shell history, and the natural spelling —

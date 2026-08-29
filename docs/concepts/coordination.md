@@ -71,6 +71,7 @@ flowchart LR
 | `channels` | Who is asking whom, and whether the ask is still open. The record authorizing an answer is read by the node that owns the *answering* seat — never the one that opened it | [Event System § Agent-to-agent](event-system.md) |
 | `fires` | Has this scheduled dispatch already been claimed. The scheduler is a singleton *duty*, so it moves — and a successor reading its own database found an empty ledger and gave every company two standups | [Scheduling § At-most-once](scheduling.md#at-most-once) |
 | `sandbox runs` | Every detached coding run: its box, its suspended conversation, its owner and fencing epoch. A run outlives its turn, its process and sometimes its node, and is recovered by whichever node owns the seat *next* | [Code Sandbox](code-sandbox.md) |
+| `secrets` | The company's credentials, one sealed envelope per `${VAR}` name. Coordination holds bytes it has no key for; the Tier A keyring opens them at the edge. It was the last kind of company-wide state living in a node's own database, so `crewlet secrets set` reached one node and a rotation half-landed | [Secret Store](secret-store.md) |
 
 A fleet is not configured — it is **discovered** from these, which is why adding a node is starting a process and removing one is stopping it.
 
@@ -117,6 +118,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `fires` | 7 days | Must outlast the scheduler's catchup ceiling, for a sharper reason than the ledger's: a completion that expired early makes a turn re-run, while a claim that expired early makes the catchup pass dispatch a fire the fleet already ran |
 | `sandbox runs` | none | The sharpest version of the channel case: a run parked on a person's answer waits **days**, and its record is the only thing that knows a billed box exists. Its own pause reaper and terminal delete are what end it |
 | `channels` | none | A bucket's age cannot tell an **open** channel from a closed one, so a TTL would reap the authorization record of an ask still waiting for its answer. Closing an idle channel and deleting a closed one are decisions instead, taken by the [maintenance duty](seat-ownership.md#singleton-duties) |
+| `secrets` | none | A credential is not short-horizon state, and **an expiring secret is an outage on a timer** — one that arrives at the moment a vendor rejects a token every node believes it still has. A secret leaves when an operator unsets it |
 
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a cooldown that expired in a second, a fleet view showing a node that died last week.
 

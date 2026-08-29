@@ -423,3 +423,51 @@ func TestFleetContract(t *testing.T) {
 		return store
 	})
 }
+
+// A CORRUPT CREDENTIAL RECORD RAISES RATHER THAN VANISHING.
+//
+// The contract suite cannot plant one — PutSecret validates on the way in —
+// but the decode path is where a bad record would be swallowed, and swallowing
+// is the failure that matters here. SecretValues IS the engine's boot
+// snapshot: a name silently dropped from it resolves as an empty ${VAR} on
+// every node at once, which reaches a provider as an empty credential and
+// comes back as an auth failure blamed on the vendor. "I could not read it"
+// has to be louder than "there is none".
+func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
+	nc := embeddedNATS(t)
+	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
+	store, err := OpenFleet(context.Background(), nc, FleetConfig{
+		RateWindow: time.Minute, ClaimTTL: time.Minute,
+		LedgerRetention: time.Minute, FireRetention: time.Minute,
+		CooldownMax: time.Minute, StatusFreshness: time.Minute,
+		BucketPrefix: prefix,
+	})
+	if err != nil {
+		t.Fatalf("OpenFleet: %v", err)
+	}
+	ctx := t.Context()
+	if err := store.PutSecret(ctx, coord.SecretRecord{
+		Name: "GOOD", Value: "v1:sealed", KeyID: "key-1", UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("PutSecret: %v", err)
+	}
+	// Straight into the bucket, past the contract's validation — an
+	// operator's stray write, a half-finished migration, a truncated value.
+	if _, err := store.secrets.Put(ctx, encodeKey("BROKEN"), []byte("{not json")); err != nil {
+		t.Fatalf("planting the corrupt record: %v", err)
+	}
+
+	if _, _, err := store.Secret(ctx, "BROKEN"); err == nil {
+		t.Error("a corrupt record read back as a credential")
+	}
+	rows, err := store.SecretValues(ctx)
+	if err == nil {
+		t.Fatalf("the boot snapshot skipped the corrupt record and returned %d "+
+			"rows — every ${VAR} it should have carried is now empty", len(rows))
+	}
+	// And the healthy one is still readable, so the failure is the record's
+	// rather than the bucket's.
+	if _, found, err := store.Secret(ctx, "GOOD"); err != nil || !found {
+		t.Fatalf("GOOD: found=%v err=%v", found, err)
+	}
+}

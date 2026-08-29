@@ -48,6 +48,10 @@ import (
 //	runs       none at all, a sharper version of the channels case: a run
 //	           parked on a person's answer waits DAYS, and its record is
 //	           the only thing that knows a billed box exists
+//	secrets    none at all, and this is the one where an age would be
+//	           actively dangerous: a credential is not short-horizon state,
+//	           and a bucket that expired one would de-authenticate a
+//	           company on a timer nobody set
 //
 // Putting two of those in one bucket would give one of them the other's
 // retention, and every such mistake is silent — a cooldown that expired in a
@@ -72,6 +76,7 @@ const (
 	channelSuffix  = "_channels"
 	firesSuffix    = "_fires"
 	runsSuffix     = "_sandbox_runs"
+	secretsSuffix  = "_secrets"
 	activationKey  = "activation"
 	// payloadKey holds the CURRENT revision's sealed body, in the same
 	// bucket as the pointer and for the same reason: neither may expire,
@@ -171,6 +176,7 @@ type FleetStore struct {
 	config    jetstream.KeyValue
 	budgets   jetstream.KeyValue
 	channels  jetstream.KeyValue
+	secrets   jetstream.KeyValue
 	fires     jetstream.KeyValue
 	runs      jetstream.KeyValue
 
@@ -241,6 +247,8 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			cfg.FireRetention},
 		{&store.runs, runsSuffix,
 			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0},
+		{&store.secrets, secretsSuffix,
+			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0},
 	} {
 		got, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {
@@ -896,6 +904,139 @@ func (f *FleetStore) Fleet(ctx context.Context) ([]coord.NodeApply, error) {
 		return out[i].NodeID < out[j].NodeID
 	})
 	return out, nil
+}
+
+// ---- the sealed credentials -------------------------------------------- //
+
+// secretRecord is one credential's wire form in the bucket.
+//
+// The VALUE IS ALREADY AN ENVELOPE when it arrives — sealed by the Tier A
+// keyring, which lives on each node's disk and never reaches this store — so
+// nothing here can open it and the key id beside it is the only thing a
+// rotation sweep needs to read.
+type secretRecord struct {
+	Name      string    `json:"name"`
+	Value     string    `json:"value"`
+	KeyID     string    `json:"key_id"`
+	UpdatedAt time.Time `json:"updated_at"`
+	UpdatedBy string    `json:"updated_by,omitempty"`
+	Source    string    `json:"source,omitempty"`
+}
+
+// Secret reads one sealed value.
+func (f *FleetStore) Secret(ctx context.Context, name string) (coord.SecretRecord, bool, error) {
+	if name == "" {
+		return coord.SecretRecord{}, false, errors.New("coord/kv: a secret needs a name")
+	}
+	entry, err := f.secrets.Get(ctx, encodeKey(name))
+	switch {
+	case errors.Is(err, jetstream.ErrKeyNotFound):
+		return coord.SecretRecord{}, false, nil
+	case err != nil:
+		// RAISED. "No such credential" renders downstream as an unset
+		// ${VAR}, which is an empty string handed to a provider, which is
+		// an auth failure blamed on the vendor. An unreadable store must
+		// never be able to say it.
+		return coord.SecretRecord{}, false, unavailable("read the secret", err)
+	}
+	rec, ok := decodeSecret(entry.Value())
+	if !ok {
+		return coord.SecretRecord{}, false, fmt.Errorf(
+			"coord/kv: the stored secret %q is not decodable", name)
+	}
+	return rec, true, nil
+}
+
+// SecretValues returns every sealed value.
+func (f *FleetStore) SecretValues(ctx context.Context) ([]coord.SecretRecord, error) {
+	keys, err := f.secrets.ListKeys(ctx)
+	if err != nil {
+		return nil, unavailable("list the secrets", err)
+	}
+	var out []coord.SecretRecord
+	for key := range keys.Keys() {
+		if _, ok := decodeKey(key); !ok {
+			continue
+		}
+		entry, err := f.secrets.Get(ctx, key)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			// RAISED for the same reason Secret raises, and more sharply:
+			// this listing IS the engine's boot snapshot, so a value
+			// silently dropped here becomes an empty ${VAR} everywhere at
+			// once.
+			return nil, unavailable("read a secret", err)
+		}
+		rec, ok := decodeSecret(entry.Value())
+		if !ok {
+			return nil, fmt.Errorf("coord/kv: a stored secret is not decodable")
+		}
+		out = append(out, rec)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// PutSecret writes a sealed value, replacing any prior one.
+//
+// A PLAIN PUT, not a compare-and-swap: see [coord.Secrets] for why rotation
+// wants last-write-wins rather than a lost race one operator has to retry.
+func (f *FleetStore) PutSecret(ctx context.Context, rec coord.SecretRecord) error {
+	switch {
+	case rec.Name == "":
+		return errors.New("coord/kv: a secret needs a name")
+	case rec.Value == "":
+		// An empty envelope is not an empty secret — it is a caller that
+		// forgot to seal. Storing it would resolve as an empty ${VAR} on
+		// every node, which is the failure this bucket exists to prevent.
+		return fmt.Errorf("coord/kv: secret %q has no sealed value", rec.Name)
+	}
+	raw, err := json.Marshal(secretRecord{
+		Name: rec.Name, Value: rec.Value, KeyID: rec.KeyID,
+		UpdatedAt: rec.UpdatedAt.UTC(), UpdatedBy: rec.UpdatedBy, Source: rec.Source,
+	})
+	if err != nil {
+		return fmt.Errorf("coord/kv: encode the secret: %w", err)
+	}
+	if _, err := f.secrets.Put(ctx, encodeKey(rec.Name), raw); err != nil {
+		return unavailable("write the secret", err)
+	}
+	return nil
+}
+
+// DeleteSecret removes a value, reporting whether it was there.
+//
+// PURGED rather than deleted, like every other record here that must not come
+// back: a KV delete leaves a tombstone the history keeps, and for a credential
+// the history is the thing you least want kept.
+func (f *FleetStore) DeleteSecret(ctx context.Context, name string) (bool, error) {
+	if name == "" {
+		return false, errors.New("coord/kv: a secret needs a name")
+	}
+	key := encodeKey(name)
+	if _, err := f.secrets.Get(ctx, key); errors.Is(err, jetstream.ErrKeyNotFound) {
+		return false, nil
+	} else if err != nil {
+		return false, unavailable("read the secret before deleting it", err)
+	}
+	if err := f.secrets.Purge(ctx, key); err != nil {
+		return false, unavailable("delete the secret", err)
+	}
+	return true, nil
+}
+
+// decodeSecret reads one stored record.
+func decodeSecret(raw []byte) (coord.SecretRecord, bool) {
+	var rec secretRecord
+	if err := json.Unmarshal(raw, &rec); err != nil || rec.Name == "" {
+		return coord.SecretRecord{}, false
+	}
+	return coord.SecretRecord{
+		Name: rec.Name, Value: rec.Value, KeyID: rec.KeyID,
+		UpdatedAt: rec.UpdatedAt, UpdatedBy: rec.UpdatedBy, Source: rec.Source,
+	}, true
 }
 
 // ---- the agent-to-agent channels --------------------------------------- //

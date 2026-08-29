@@ -31,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -803,6 +804,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// milliseconds rather than at the next reconcile poll.
 		Queue: e.Backends().Queue,
 	})
+	// The fleet's secret store, sealed with the SAME keyring — a value
+	// written here is one this node and every peer opens with the key
+	// their Tier A names, and a second cipher would make a rotation
+	// readable only on the node that served the request.
+	secretSurface := secretsapi.New(secretsapi.Options{
+		Fleet: e.Backends().Fleet, Cipher: cipher,
+		ActiveKeyID: boot.Secrets.ActiveKeyID,
+	})
 
 	app := api.New(api.Options{
 		Bootstrap: boot,
@@ -859,6 +868,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// only a CLI subcommand.
 		Budgets: e.Backends().Fleet,
 		Config:  configSurface,
+		Secrets: secretSurface,
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return companySecrets(e) },
 			Publisher: e.Backends().Queue,

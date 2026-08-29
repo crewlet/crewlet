@@ -16,8 +16,8 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 
 | Method | Path | Description |
 |--------|------|-------------|
-> **Auth.** Writes and every `/config` route require
-> `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside `/config`)
+> **Auth.** Writes and every `/config` and `/secrets` route require
+> `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside those two)
 > serve without one unless `api.auth.allow_anonymous_read: false` is set, at
 > which point they need the same token — `/ws/stream` included, and it accepts
 > `?token=…` too since browsers cannot set headers on a WebSocket. Never
@@ -28,8 +28,8 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 > **The guard is always mounted**, whether or not Tier A is present. An API
 > built without `api.auth` configuration has no token, and a route that needs
 > one is therefore refused rather than served: reads work, every write and the
-> whole `/config` surface answers `401`. There is no way to start a process
-> that serves `/config` writes without a guard in front of them.
+> whole of `/config` and `/secrets` answers `401`. There is no way to start a
+> process that serves those writes without a guard in front of them.
 >
 > **Every `/webhooks/*` route fails closed.** They are exempt from the bearer
 > token because each verifies its provider's signature instead — so a route
@@ -68,6 +68,8 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `POST` | `/webhooks/confluence` | Receive Confluence Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
+
+Plus the two always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated) and [`/secrets/*`](#secrets--the-companys-credentials-auth-gated).
 
 Read-side handlers live in the `internal/api` package (one module
 per domain — `agents`, `events`, `tokens`, `org`, `fleet`,
@@ -138,6 +140,41 @@ Three rules follow from that:
 - **The same summary and `If-Match` rules apply**, and a node with no
   active revision answers `409 no_active_revision` — there is nothing to splice
   into, and building a company out of one seat is not what this route is for.
+
+### `/secrets/*` — the company's credentials (auth-gated)
+
+All `/secrets/*` routes require `Authorization: Bearer <token>`, reads
+included, for the same reason `/config` does: the listing alone says which
+credentials a company holds and when each last changed. They are served only
+by a process that can reach the [coordination store](../concepts/coordination.md)
+— a standalone API with none `404`s rather than answering `503` to everything.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` and `source`. **Never a value** |
+| `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
+| `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator |
+| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB. `?source=` records provenance (default `api`) |
+| `DELETE` | `/secrets/{name}` | Remove one value. `200` either way, with `{"removed": true\|false}` |
+| `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id`, answering the names it moved. `?key_id=` is refused with `409` when it names a different key |
+
+**The body is the value, not a JSON wrapper.** A credential is arbitrary bytes
+— a PEM key has newlines, a token can hold anything — and an encoding step
+between the operator and the sequence the vendor compares is a `401` nobody
+can explain.
+
+**Reveal is opt-in on the wire**, not merely in the CLI. Without `?reveal=true`
+the route answers what a listing answers for one name, so a browser, a crawl or
+a link preview cannot pull a credential out by accident.
+
+**A node with no `secrets.keys` answers `503 no_keyring`** on every route that
+seals or opens, pointing at `crewlet secrets keygen`. The store has no
+plaintext mode; refusing is the only alternative to holding credentials in the
+clear.
+
+`crewlet secrets` is the client for all of this — see
+[the secret store](../concepts/secret-store.md#which-store-the-cli-writes) for
+why the CLI goes through a running node rather than writing the KV itself.
 
 ### Status codes
 

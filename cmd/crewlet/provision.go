@@ -34,6 +34,7 @@ type sinkFlags struct {
 	envFile     *string
 	print       *bool
 	bootstrap   *string
+	api         *string
 }
 
 func addSinkFlags(fs *flag.FlagSet) sinkFlags {
@@ -45,6 +46,13 @@ func addSinkFlags(fs *flag.FlagSet) sinkFlags {
 		print: fs.Bool("print", false,
 			"print minted credentials to stdout and persist nothing"),
 		bootstrap: bootstrapFlag(fs),
+		// THE SAME FLAG `crewlet secrets` takes, and for the same
+		// reason: a running engine holds its database, so -secret-store
+		// writes through its API — which is also what puts a minted
+		// credential on every node rather than on this one.
+		api: fs.String("api", "",
+			"the running node to record credentials through; default is the "+
+				"api.host:port in -config"),
 	}
 }
 
@@ -95,7 +103,7 @@ func (s sinkFlags) open(ctx context.Context, stdout io.Writer) (provision.TokenS
 		return sink, func() {}, err
 	}
 
-	sv, closeStore, err := openSecretStore(ctx, *s.bootstrap)
+	sv, closeStore, err := openSecretStore(ctx, *s.bootstrap, *s.api)
 	if err != nil {
 		return nil, nil, err
 	}

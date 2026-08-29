@@ -181,7 +181,7 @@ The keyring lives in Tier A (`crewlet.yaml`) and is the sole root of trust — t
 
 A keyring lets you retire the per-secret env vars on this page (`LLM_API_KEY`, `<ROLE>_JIRA_TOKEN`, `SLACK_BOT_TOKEN_<ROLE>`, `*_WEBHOOK_SECRET`, …) two different ways:
 
-- **[Secret store](../concepts/secret-store.md)** *(recommended)* — keep the `${VAR}` references in the config and store the values in the encrypted `secret_values` table (`crewlet secrets set`, or `-secret-store` on a provisioning CLI). The engine consults that table **ahead of** the process environment, so a name it answers no longer needs to be exported at all. Rotation is an update of one row.
+- **[Secret store](../concepts/secret-store.md)** *(recommended)* — keep the `${VAR}` references in the config and store the values in the encrypted store (`crewlet secrets set`, or `-secret-store` on a provisioning CLI). The engine consults it **ahead of** the process environment, so a name it answers no longer needs to be exported at all. Rotation is a write of one record, and it reaches every node.
 - **Literal values in the encrypted config** — set them via `PUT /config` or import a `company.yaml` with literals. Simpler, but every rotation writes a new immutable revision that archives the superseded secret, and one credential referenced from two places (a Slack bot token is both `role.integrations.slack.bot_token` and `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`) becomes two literals that must change together.
 
 Either way, `${VAR}` references that remain unanswered by the store still resolve from the environment.

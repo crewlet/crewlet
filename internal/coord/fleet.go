@@ -591,6 +591,74 @@ type SandboxRuns interface {
 	DeleteSandboxRun(ctx context.Context, turnID string, version uint64) (bool, error)
 }
 
+// SecretRecord is one stored credential, as coordination holds it.
+//
+// SEALED BEFORE IT ARRIVES. Value is the envelope the Tier A keyring produced
+// — coordination stores bytes and never holds a key, which is what lets the
+// fleet's shared store carry credentials at all. KeyID rides denormalised
+// beside it so a rotation sweep can find rows sealed under a retired key
+// without opening any of them.
+type SecretRecord struct {
+	Name      string
+	Value     string
+	KeyID     string
+	UpdatedAt time.Time
+	UpdatedBy string
+	Source    string
+}
+
+// Secrets is the fleet's encrypted credential store.
+//
+// # Why it is here and not in the node's database
+//
+// It was the last piece of company-wide state that was not (d-203). The
+// company CONFIG already travels this way — [Plane.Activate] writes a payload
+// sealed with the very same keyring into the very same bucket family, and a
+// company document may itself carry credentials inline — so the secret store
+// being per node was an asymmetry rather than a safeguard. A rotation reached
+// the one node an operator pointed the CLI at, and every other node kept what
+// it booted with until somebody noticed a seat failing to authenticate.
+//
+// # Coordination never sees plaintext
+//
+// Every value is an envelope produced by the Tier A cipher before it gets
+// here, and Tier A lives on each node's disk and is never written to the
+// store it opens. So the KV holds ciphertext whose key it does not have, and
+// a peer that could read the bucket learns which names exist and when they
+// changed — not what they are.
+//
+// # RAISES rather than answering empty
+//
+// A read that failed must never resolve as "this company has no such
+// credential": that renders as an unset ${VAR}, which downstream is an empty
+// string handed to a provider, which is an auth failure attributed to the
+// vendor. The three-valued answer is the whole point — held, definitively
+// absent, or unknown.
+type Secrets interface {
+	// Secret reads one sealed value.
+	Secret(ctx context.Context, name string) (SecretRecord, bool, error)
+
+	// SecretValues returns every sealed value, by name.
+	//
+	// ONE READ, because the engine takes a SNAPSHOT: ${VAR} expansion
+	// happens per role, per provider, per MCP server, and a round trip
+	// there would put the fleet's store on the path of every config read.
+	SecretValues(ctx context.Context) ([]SecretRecord, error)
+
+	// PutSecret writes a sealed value, replacing any prior one.
+	//
+	// LAST WRITE WINS, deliberately and unlike the sandbox runs beside it:
+	// rotation is the common path, and a compare-and-swap would make two
+	// operators rotating at once produce a failure for one of them rather
+	// than a store holding the newer credential. Neither ordering loses a
+	// secret — both values were valid when written — and the one that
+	// lands is the one whose write arrived second.
+	PutSecret(ctx context.Context, rec SecretRecord) error
+
+	// DeleteSecret removes a value, reporting whether it was there.
+	DeleteSecret(ctx context.Context, name string) (bool, error)
+}
+
 // Fleet is a backend that serves all of the shared state, which is what the
 // contract suite certifies and what the engine wires from.
 //
@@ -608,6 +676,7 @@ type Fleet interface {
 	Channels
 	Fires
 	SandboxRuns
+	Secrets
 }
 
 // SortUsage puts the org counter first, then the seats by scope.

@@ -128,7 +128,7 @@ One local file, opened through one of two certified pure-Go drivers (Turso by de
 - **`counterparty_profiles`** — per-(observer, subject) profiles built up from observed interactions.
 - **`agent_onboarding_markers`** — `mark_onboarded` bookkeeping (one row per agent, UPSERT-keyed).
 - **`conversation_sessions`** — the [conversation ledger](conversation-sessions.md): one row per completed turn, keyed on the seat and the conversation it served, rendered back into that conversation's next turn. Deduped on the work key, trimmed on write, swept on a retention horizon.
-- **`secret_values`** — the [secret store](secret-store.md): one encrypted row per env-var name, consulted ahead of the process environment when the config layer resolves a `${VAR}` reference. Sealed with the Tier A keyring; no plaintext mode.
+- **`secret_values`** — the local half of the [secret store](secret-store.md), and now only its bootstrap path: the company's credentials live on the coordination KV where every node reads them, and rows written here while the engine was stopped are migrated there at its next start. Sealed with the Tier A keyring either way; no plaintext mode.
 
 Alongside them sit the durable runtime tables a turn leaves behind — `crewlet_events`, `scheduled_runs`, `chat_thread_follows`, `token_usage` — and the config plane's `company_config` payloads. The full migration list is in `internal/store/schema/`.
 

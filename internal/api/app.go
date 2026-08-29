@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
@@ -87,6 +88,11 @@ type Options struct {
 	// Config serves /config. Nil serves none, which is what a process with
 	// no store genuinely has.
 	Config *configapi.Service
+
+	// Secrets serves /secrets — the fleet's credential store. Nil serves
+	// none, which is what a process that cannot reach the coordination
+	// store genuinely has; the routes then 404 rather than 500.
+	Secrets *secretsapi.Service
 
 	// OtelReceiver serves the sandbox telemetry edge. Nil serves none, and
 	// the route is then ABSENT rather than refusing — an endpoint that
@@ -219,10 +225,15 @@ func New(opts Options) *App {
 	// whole company. Its per-run token is in the path instead.
 	a.mountOTLP(mux, opts.OtelReceiver)
 	// The config surface. GUARDED in full, reads included: the auth
-	// package makes /config the one prefix never eligible for
+	// package makes /config one of the two prefixes never eligible for
 	// allow_anonymous_read, because reading it exposes the whole company
 	// document and writing it changes the company.
 	opts.Config.Routes(mux)
+	// The other one. /secrets is how a rotation reaches a fleet at all —
+	// the coordination broker is inside the engine's process on the
+	// default topology, so no second process can write the store — and its
+	// listing alone says which credentials a company holds.
+	opts.Secrets.Routes(mux)
 	a.handler = a.guard.Middleware(mux)
 	return a
 }

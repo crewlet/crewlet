@@ -138,7 +138,15 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 			boot.Store.BusyTimeoutSeconds * float64(time.Second)),
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("open store: %w", err)
+		// A LOCKED STORE HAS A ROUTE AROUND IT, and naming it here is the
+		// difference between "you are blocked" and "do this instead": the
+		// API writes the same revision and activates it on every node,
+		// which is what an operator wanted from `config import` anyway.
+		return nil, nil, engineHoldsTheStore(fmt.Errorf("open store: %w", err),
+			bootstrapPath, "Use the API against the running node instead — "+
+				"PUT /config stores the revision AND activates it fleet-wide, "+
+				"which this offline path cannot do; or stop `crewlet run` on "+
+				"this node and re-run.")
 	}
 	return &configStore{configs: db.Configs(), cipher: cipher}, func() { _ = db.Close() }, nil
 }

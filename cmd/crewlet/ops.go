@@ -99,7 +99,12 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	// can disagree with it about what "applied" means.
 	db, err := store.Open(ctx, boot.Store.Path, opts)
 	if err != nil {
-		return err
+		// NO ROUTE AROUND THIS ONE, and that is correct: migrating the
+		// schema under a live engine is what the lock exists to prevent,
+		// not an inconvenience it imposes. The remedy is the only one.
+		return engineHoldsTheStore(err, bootstrapPath,
+			"Stop `crewlet run` on this node and re-run — a schema change "+
+				"under a live engine is exactly what the lock prevents.")
 	}
 	defer func() { _ = db.Close() }()
 

@@ -13,10 +13,23 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/envfile"
-	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // ---- the secret store ------------------------------------------------- //
+
+// SecretStore is the encrypted store a minted credential is recorded in.
+//
+// AN INTERFACE, because there are two: the fleet's, on the coordination KV,
+// which every node reads; and this node's own table, which is what a
+// provisioning run can reach while the engine is stopped. Naming either
+// concretely here would have made a provisioner that works on a stopped node
+// and a provisioner that works on a running fleet two different sinks.
+type SecretStore interface {
+	Set(ctx context.Context, name, value, by, source string, now time.Time) error
+	Get(ctx context.Context, name string) (string, error)
+	Unset(ctx context.Context, name string) (bool, error)
+}
 
 // SecretStoreSink writes minted credentials into the encrypted secret store.
 //
@@ -25,7 +38,7 @@ import (
 // sync — which also means a rotation takes effect on the next config
 // activation rather than on the next deploy of a file.
 type SecretStoreSink struct {
-	values *store.SecretValues
+	values SecretStore
 	by     string
 
 	mu      sync.Mutex
@@ -33,7 +46,7 @@ type SecretStoreSink struct {
 }
 
 // NewSecretStoreSink builds the sink.
-func NewSecretStoreSink(values *store.SecretValues, by string) *SecretStoreSink {
+func NewSecretStoreSink(values SecretStore, by string) *SecretStoreSink {
 	return &SecretStoreSink{values: values, by: by}
 }
 
@@ -56,7 +69,7 @@ func (s *SecretStoreSink) Record(ctx context.Context, name, value string) error 
 func (s *SecretStoreSink) Value(ctx context.Context, name string) (string, bool, error) {
 	value, err := s.values.Get(ctx, name)
 	switch {
-	case errors.Is(err, store.ErrSecretNotFound):
+	case errors.Is(err, secrets.ErrNotFound):
 		return "", false, nil
 	case err != nil:
 		// UNREADABLE IS NOT ABSENT. A store that cannot be read would

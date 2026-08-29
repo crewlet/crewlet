@@ -11,20 +11,22 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// SecretValues is the encrypted secret store, keyed by the ${VAR} name a
-// config value references.
+// SecretValues is this node's own encrypted secret rows, keyed by the ${VAR}
+// name a config value references.
 //
-// # It is this NODE's, and that is the anomaly rather than the design
+// # It is the BOOTSTRAP and MIGRATION store, not the fleet's
 //
-// Six other kinds of shared state moved onto the coordination KV (d-201)
-// precisely because a node's own database is invisible to its peers, and the
-// company config — which may itself carry credentials — travels that path
-// too, sealed with the very cipher this table uses. A rotation here reaches
-// one node; every other node keeps what it booted with.
+// The company's secrets live on the coordination KV, where every node reads
+// them — see [github.com/crewlet/crewlet/internal/fleetsecrets] and
+// decisions/203. This table is what a node can write when the KV is out of
+// reach, which on the default embedded topology is any moment the engine is
+// not running: the broker is in the engine's own process, so `crewlet secrets
+// set` on a stopped node has nowhere else to put a value.
 //
-// decisions/203 records that secrets should follow config onto the KV and
-// what that takes. Until they do, a rotation is per node and the environment
-// fallback is the fleet-wide path — see docs/concepts/secret-store.md.
+// The engine MIGRATES these rows onto the fleet at its next start and removes
+// them here, which is what stops a stale local row shadowing a rotation
+// forever. Until that start they are this node's alone, and no peer can see
+// them.
 //
 // # It is the companion to company_config, not a duplicate of it
 //
@@ -63,41 +65,6 @@ func (d *DB) SecretValues(cipher secrets.Cipher) *SecretValues {
 	return &SecretValues{db: d, cipher: cipher}
 }
 
-// ErrNoSecretKeyring reports a store asked to work without a keyring.
-var ErrNoSecretKeyring = errors.New(
-	"store: the secret store needs a keyring; set bootstrap secrets.keys")
-
-// ErrSecretNotFound reports a name with no row.
-//
-// Its own error because the caller's answer differs: a missing secret is an
-// operator's unset variable, while a decrypt failure is a keyring that no
-// longer opens what it wrote. Collapsing them would have a rotation that
-// dropped a key look exactly like a name nobody set.
-var ErrSecretNotFound = errors.New("store: no such secret")
-
-// SecretRecord is one stored secret's metadata, without its value.
-//
-// The value is DELIBERATELY absent: this is what a listing renders, and a
-// listing that carried plaintext would put every credential a company has on
-// one screen, in one response body, in one log line if anything printed it.
-type SecretRecord struct {
-	Name string
-
-	// KeyID is the keyring key this row is sealed under, denormalised out
-	// of the envelope so a rotation sweep can find stale rows without
-	// decrypting any of them.
-	KeyID string
-
-	UpdatedAt time.Time
-
-	// UpdatedBy and Source are provenance: who wrote it and through what —
-	// an operator at the CLI, a provisioning run that minted a token.
-	// Answering "where did this credential come from" months later is the
-	// whole reason they are columns rather than a log line.
-	UpdatedBy string
-	Source    string
-}
-
 const secretUpsertSQL = `
 INSERT INTO secret_values (name, value, key_id, updated_at, updated_by, source)
 VALUES (?, ?, ?, ?, ?, ?)
@@ -113,7 +80,7 @@ ON CONFLICT (name) DO UPDATE SET
 // neither of their values.
 func (s *SecretValues) Set(ctx context.Context, name, value, by, source string, now time.Time) error {
 	if s.cipher == nil {
-		return ErrNoSecretKeyring
+		return secrets.ErrNoKeyring
 	}
 	if name == "" {
 		return errors.New("store: a secret needs a name")
@@ -140,18 +107,18 @@ func (s *SecretValues) Set(ctx context.Context, name, value, by, source string, 
 
 // Get unseals one secret.
 //
-// The error says WHICH failure it was — see [ErrSecretNotFound] — and never
+// The error says WHICH failure it was — see [secrets.ErrNotFound] — and never
 // carries the value or the ciphertext: a decrypt error that echoed its input
 // would put an envelope into a log that a keyring might later open.
 func (s *SecretValues) Get(ctx context.Context, name string) (string, error) {
 	if s.cipher == nil {
-		return "", ErrNoSecretKeyring
+		return "", secrets.ErrNoKeyring
 	}
 	var sealed string
 	err := s.db.sql.QueryRowContext(ctx,
 		`SELECT value FROM secret_values WHERE name = ?`, name).Scan(&sealed)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("%w: %s", ErrSecretNotFound, name)
+		return "", fmt.Errorf("%w: %s", secrets.ErrNotFound, name)
 	}
 	if err != nil {
 		return "", fmt.Errorf("store: read secret %s: %w", name, err)
@@ -168,7 +135,11 @@ func (s *SecretValues) Get(ctx context.Context, name string) (string, error) {
 // NAME-ORDERED rather than by recency, because this is what an operator
 // reads to answer "is X set", and a list that moves every time something is
 // rotated is one they have to search rather than scan.
-func (s *SecretValues) List(ctx context.Context) ([]SecretRecord, error) {
+//
+// NO VALUES: [secrets.Record.Value] is left blank, and the column is not even
+// selected. A listing is printed, and a listing that carried envelopes would
+// put every credential a company has into one scrollback buffer.
+func (s *SecretValues) List(ctx context.Context) ([]secrets.Record, error) {
 	rows, err := s.db.sql.QueryContext(ctx,
 		`SELECT name, key_id, updated_at, updated_by, source
 		 FROM secret_values ORDER BY name`)
@@ -176,9 +147,9 @@ func (s *SecretValues) List(ctx context.Context) ([]SecretRecord, error) {
 		return nil, fmt.Errorf("store: list secrets: %w", err)
 	}
 	defer rows.Close()
-	var out []SecretRecord
+	var out []secrets.Record
 	for rows.Next() {
-		var r SecretRecord
+		var r secrets.Record
 		var micros int64
 		if err := rows.Scan(&r.Name, &r.KeyID, &micros, &r.UpdatedBy, &r.Source); err != nil {
 			return nil, fmt.Errorf("store: scan secret: %w", err)
@@ -217,7 +188,7 @@ func (s *SecretValues) Unset(ctx context.Context, name string) (bool, error) {
 // the store exists to prevent.
 func (s *SecretValues) All(ctx context.Context) (map[string]string, error) {
 	if s.cipher == nil {
-		return nil, ErrNoSecretKeyring
+		return nil, secrets.ErrNoKeyring
 	}
 	rows, err := s.db.sql.QueryContext(ctx,
 		`SELECT name, value FROM secret_values ORDER BY name`)
@@ -252,7 +223,7 @@ func (s *SecretValues) All(ctx context.Context) (map[string]string, error) {
 // to retire it.
 func (s *SecretValues) Rekey(ctx context.Context, activeKeyID, by string, now time.Time) ([]string, error) {
 	if s.cipher == nil {
-		return nil, ErrNoSecretKeyring
+		return nil, secrets.ErrNoKeyring
 	}
 	var moved []string
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {

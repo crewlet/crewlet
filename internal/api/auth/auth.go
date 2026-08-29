@@ -7,8 +7,8 @@
 // operator id to the request context or answers 401.
 //
 // WHAT IT GUARDS IS A POLICY DECISION, NOT A FIXED PREFIX. Writes and the whole
-// /config surface always need a token. Reads follow allow_anonymous_read, which
-// defaults to open — [Guard.Requires] is the one place that rule is written
+// of /config and /secrets always need a token. Reads follow
+// allow_anonymous_read, which defaults to open — [Guard.Requires] is the one place that rule is written
 // down, and both the HTTP middleware and the WebSocket handshake consult it, so
 // the two cannot end up guarded in one place and open in the other.
 //
@@ -18,7 +18,7 @@
 // deciding one security property, coinciding only because every real caller
 // happened to supply both. Tier A supplies the POSTURE, never the existence of
 // a check: with no tokens at all, no candidate can match, so reads serve and
-// every write and all of /config is refused.
+// every write and all of /config and /secrets is refused.
 package auth
 
 import (
@@ -33,10 +33,31 @@ import (
 
 var log = logging.Get("api.auth")
 
-// GuardedPrefix is the config surface. Always guarded, and never eligible for
-// allow_anonymous_read — reading it exposes the whole company document, and
-// writing it changes the company.
-const GuardedPrefix = "/config"
+// GuardedPrefixes are the surfaces that always need a token, reads included,
+// and are never eligible for allow_anonymous_read.
+//
+//   - /config: reading it exposes the whole company document — its org chart,
+//     its integrations, the shape of every credential it holds — and writing
+//     it changes the company.
+//   - /secrets: the fleet's credential store. Even the listing, which carries
+//     no values, says which credentials a company holds and when each last
+//     changed, and one route returns a value outright.
+//
+// A LIST rather than one constant, because the alternative was a second
+// const somewhere else and a second `HasPrefix` beside it — and the two would
+// have drifted the day a third surface was added, each staying
+// self-consistent while one of them stopped being consulted.
+var GuardedPrefixes = []string{"/config", "/secrets"}
+
+// AlwaysGuarded reports whether a path is on one of those surfaces.
+func AlwaysGuarded(path string) bool {
+	for _, prefix := range GuardedPrefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 // AnonymousOperator is the attribution recorded when auth is disabled.
 //
@@ -236,7 +257,7 @@ func (g *Guard) Requires(path, method string) bool {
 	if Unguarded(path) {
 		return false
 	}
-	if strings.HasPrefix(path, GuardedPrefix) {
+	if AlwaysGuarded(path) {
 		return true
 	}
 	if g.anonymousRead {

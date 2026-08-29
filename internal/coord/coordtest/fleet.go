@@ -39,6 +39,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"channels", channelCases},
 		{"fires", fireCases},
 		{"sandbox_runs", runCases},
+		{"secrets", secretCases},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {
@@ -1432,6 +1433,209 @@ var payloadCases = []fleetCase{{
 		again, _, _ := h.f.Payload(h.ctx, "rev-1")
 		if string(again) != `{"v":1}` {
 			h.t.Errorf("the store took a caller's mutation: %q", again)
+		}
+	},
+}}
+
+// ---- the sealed credentials -------------------------------------------- //
+
+func (h *fleetHarness) putSecret(name, sealed, keyID string) {
+	h.t.Helper()
+	err := h.f.PutSecret(h.ctx, coord.SecretRecord{
+		Name: name, Value: sealed, KeyID: keyID,
+		UpdatedAt: h.now(), UpdatedBy: "operator", Source: "cli",
+	})
+	if err != nil {
+		h.t.Fatalf("PutSecret(%s): %v", name, err)
+	}
+}
+
+func (h *fleetHarness) secret(name string) (coord.SecretRecord, bool) {
+	h.t.Helper()
+	rec, found, err := h.f.Secret(h.ctx, name)
+	if err != nil {
+		h.t.Fatalf("Secret(%s): %v", name, err)
+	}
+	return rec, found
+}
+
+func (h *fleetHarness) secretNames() []string {
+	h.t.Helper()
+	rows, err := h.f.SecretValues(h.ctx)
+	if err != nil {
+		h.t.Fatalf("SecretValues: %v", err)
+	}
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		names = append(names, row.Name)
+	}
+	return names
+}
+
+var secretCases = []fleetCase{{
+	// THE REASON THIS MOVED. A rotation reached the one node whose Tier A
+	// file the CLI was pointed at; every other node kept what it booted
+	// with, and nothing failed until a seat landed on one of them and the
+	// vendor rejected a credential the operator believed they had replaced.
+	name: "a credential one node stored is readable by every other",
+	fn: func(h *fleetHarness) {
+		h.putSecret("SLACK_BOT_TOKEN", "v1:sealed-envelope", "key-1")
+		rec, found := h.secret("SLACK_BOT_TOKEN")
+		if !found {
+			h.t.Fatal("a peer cannot see the credential — the rotation half-landed")
+		}
+		if rec.Value != "v1:sealed-envelope" {
+			h.t.Errorf("value = %q, want the envelope exactly as stored", rec.Value)
+		}
+		if rec.KeyID != "key-1" {
+			h.t.Errorf("KeyID = %q — a rotation sweep cannot find stale rows without it", rec.KeyID)
+		}
+		if rec.UpdatedBy != "operator" || rec.Source != "cli" {
+			h.t.Errorf("provenance lost: by=%q source=%q", rec.UpdatedBy, rec.Source)
+		}
+	},
+}, {
+	// The store holds an ENVELOPE and has no key. Anything that mangled
+	// the bytes would produce a value that decrypts to nothing on the far
+	// side — an auth failure attributed to the vendor rather than to the
+	// store that corrupted it.
+	name: "the sealed bytes come back byte-identical",
+	fn: func(h *fleetHarness) {
+		const envelope = `{"k":"key-1","n":"YWJj","c":"ZGVmZ2hpamts+/=="}`
+		h.putSecret("WEBHOOK_SECRET", envelope, "key-1")
+		rec, found := h.secret("WEBHOOK_SECRET")
+		if !found {
+			h.t.Fatal("stored and then absent")
+		}
+		if rec.Value != envelope {
+			h.t.Fatalf("value = %q, want %q — the envelope was altered in transit",
+				rec.Value, envelope)
+		}
+	},
+}, {
+	// ROTATION IS THE COMMON PATH and it is last-write-wins by contract:
+	// two operators rotating at once must leave the store holding one of
+	// their values, never a failure one of them has to notice and retry.
+	name: "a rotation replaces the prior value",
+	fn: func(h *fleetHarness) {
+		h.putSecret("GITLAB_TOKEN", "v1:old", "key-1")
+		h.putSecret("GITLAB_TOKEN", "v2:new", "key-2")
+		rec, found := h.secret("GITLAB_TOKEN")
+		if !found {
+			h.t.Fatal("the rotation removed the credential")
+		}
+		if rec.Value != "v2:new" || rec.KeyID != "key-2" {
+			h.t.Fatalf("value = %q key = %q, want the second write", rec.Value, rec.KeyID)
+		}
+		if names := h.secretNames(); len(names) != 1 {
+			h.t.Fatalf("names = %v — a rotation added a row instead of replacing one", names)
+		}
+	},
+}, {
+	// The engine takes ONE snapshot at boot and on every apply, because
+	// ${VAR} expansion happens per role, per provider, per MCP server. A
+	// listing that missed a name resolves it to an empty string on every
+	// node at once.
+	name: "the listing is every credential, by name",
+	fn: func(h *fleetHarness) {
+		for _, name := range []string{"ZULU", "ALPHA", "MIKE"} {
+			h.putSecret(name, "v1:"+name, "key-1")
+		}
+		got := h.secretNames()
+		want := []string{"ALPHA", "MIKE", "ZULU"}
+		if len(got) != len(want) {
+			h.t.Fatalf("names = %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				h.t.Fatalf("names = %v, want %v — the order differs between "+
+					"backends, so a diff of two captures is unreadable", got, want)
+			}
+		}
+	},
+}, {
+	// An absent credential is a THREE-VALUED answer's middle case, and it
+	// has to be distinguishable from a read that failed: the first is an
+	// operator who has not set it yet, the second is a store outage that
+	// must never render as one.
+	name: "an unset credential is absent rather than empty",
+	fn: func(h *fleetHarness) {
+		rec, found := h.secret("NEVER_SET")
+		if found {
+			h.t.Fatalf("an unset name answered with %+v", rec)
+		}
+	},
+}, {
+	name: "deleting reports whether it was there, and it stays gone",
+	fn: func(h *fleetHarness) {
+		h.putSecret("RETIRED", "v1:sealed", "key-1")
+		removed, err := h.f.DeleteSecret(h.ctx, "RETIRED")
+		if err != nil {
+			h.t.Fatalf("DeleteSecret: %v", err)
+		}
+		if !removed {
+			h.t.Fatal("deleting a stored credential reported it absent")
+		}
+		if _, found := h.secret("RETIRED"); found {
+			h.t.Fatal("the credential survived its delete")
+		}
+		// AGAIN. An operator re-running the command, or two of them, must
+		// get "there was nothing" rather than an error.
+		again, err := h.f.DeleteSecret(h.ctx, "RETIRED")
+		if err != nil {
+			h.t.Fatalf("second DeleteSecret: %v", err)
+		}
+		if again {
+			h.t.Error("a second delete claimed to have removed something")
+		}
+	},
+}, {
+	// A name is an environment-variable name and those are not restricted
+	// to what a KV key permits. A backend that stored one and could not
+	// list it back would drop the credential from the boot snapshot while
+	// answering a direct read — the worst shape, because it works in a
+	// test that looks it up by name.
+	name: "an awkward name survives storage and listing",
+	fn: func(h *fleetHarness) {
+		const name = "acme.co/token-v2_PROD"
+		h.putSecret(name, "v1:sealed", "key-1")
+		if _, found := h.secret(name); !found {
+			h.t.Fatal("a direct read cannot find it")
+		}
+		names := h.secretNames()
+		if len(names) != 1 || names[0] != name {
+			h.t.Fatalf("names = %v, want [%s] — the boot snapshot would miss it",
+				names, name)
+		}
+	},
+}, {
+	// An unsealed value is a caller that forgot to encrypt, not a secret
+	// whose value is empty. Storing it resolves as an empty ${VAR} on
+	// every node — which is the failure this bucket exists to prevent, so
+	// it is refused at the door rather than replicated.
+	name: "an unsealed value is refused rather than replicated",
+	fn: func(h *fleetHarness) {
+		err := h.f.PutSecret(h.ctx, coord.SecretRecord{
+			Name: "EMPTY", UpdatedAt: h.now(),
+		})
+		if err == nil {
+			h.t.Fatal("a credential with no sealed value was accepted")
+		}
+		if _, found := h.secret("EMPTY"); found {
+			h.t.Fatal("the refused write landed anyway")
+		}
+	},
+}, {
+	name: "a nameless credential is refused",
+	fn: func(h *fleetHarness) {
+		if err := h.f.PutSecret(h.ctx, coord.SecretRecord{Value: "v1:x"}); err == nil {
+			h.t.Fatal("a credential with no name was accepted")
+		}
+		if _, _, err := h.f.Secret(h.ctx, ""); err == nil {
+			h.t.Fatal("reading an empty name was accepted")
+		}
+		if _, err := h.f.DeleteSecret(h.ctx, ""); err == nil {
+			h.t.Fatal("deleting an empty name was accepted")
 		}
 	},
 }}

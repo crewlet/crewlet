@@ -121,8 +121,8 @@ func TestAMissingSecretIsItsOwnError(t *testing.T) {
 	t.Parallel()
 	s, _, _ := secretStore(t, ring(t, "k1"))
 	_, err := s.Get(context.Background(), "NEVER_SET")
-	if !errors.Is(err, store.ErrSecretNotFound) {
-		t.Fatalf("err = %v, want ErrSecretNotFound", err)
+	if !errors.Is(err, secrets.ErrNotFound) {
+		t.Fatalf("err = %v, want secrets.ErrNotFound", err)
 	}
 }
 
@@ -145,7 +145,7 @@ func TestAWrongKeyringRaisesRatherThanReturningNothing(t *testing.T) {
 	if err == nil {
 		t.Fatalf("an unreadable secret came back as %q", got)
 	}
-	if errors.Is(err, store.ErrSecretNotFound) {
+	if errors.Is(err, secrets.ErrNotFound) {
 		t.Fatal("an unreadable secret was reported as a missing one")
 	}
 	if _, err := stranger.All(context.Background()); err == nil {
@@ -158,14 +158,14 @@ func TestAWrongKeyringRaisesRatherThanReturningNothing(t *testing.T) {
 func TestWithoutAKeyringTheStoreRefusesEverything(t *testing.T) {
 	t.Parallel()
 	s, _, _ := secretStore(t, secrets.Keyring{})
-	if err := s.Set(context.Background(), "TOKEN", "v", "op", "cli", secretClock); !errors.Is(err, store.ErrNoSecretKeyring) {
-		t.Errorf("Set err = %v, want ErrNoSecretKeyring", err)
+	if err := s.Set(context.Background(), "TOKEN", "v", "op", "cli", secretClock); !errors.Is(err, secrets.ErrNoKeyring) {
+		t.Errorf("Set err = %v, want secrets.ErrNoKeyring", err)
 	}
-	if _, err := s.Get(context.Background(), "TOKEN"); !errors.Is(err, store.ErrNoSecretKeyring) {
-		t.Errorf("Get err = %v, want ErrNoSecretKeyring", err)
+	if _, err := s.Get(context.Background(), "TOKEN"); !errors.Is(err, secrets.ErrNoKeyring) {
+		t.Errorf("Get err = %v, want secrets.ErrNoKeyring", err)
 	}
-	if _, err := s.All(context.Background()); !errors.Is(err, store.ErrNoSecretKeyring) {
-		t.Errorf("All err = %v, want ErrNoSecretKeyring", err)
+	if _, err := s.All(context.Background()); !errors.Is(err, secrets.ErrNoKeyring) {
+		t.Errorf("All err = %v, want secrets.ErrNoKeyring", err)
 	}
 }
 
