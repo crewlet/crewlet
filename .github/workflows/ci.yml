@@ -124,6 +124,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      # `latest` is the one floating version in this repository, and it is
+      # deliberate. Dependabot bumps the ACTION ref above, never a `with:`
+      # input, so a pinned linter would be a version nothing watches — the
+      # exact shape the pinning rule exists to avoid — and it would hold new
+      # checks out of CI until somebody remembered. The cost is that a lint
+      # result is not reproducible across time: the linter must also be built
+      # with a Go at least as new as go.mod's `go` line, or it refuses the
+      # module outright, so an older local build reports nothing rather than
+      # disagreeing. Run the gate through `make lint` and match CI by taking
+      # the newest release.
       - uses: golangci/golangci-lint-action@v9
         with:
           version: latest

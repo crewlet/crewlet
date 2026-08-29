@@ -211,6 +211,15 @@ pull request when any of them has a newer release:
 | `Dockerfile` | `docker` | the base image a release ships |
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
 
+Dependabot keeps a version moving once it is in the tree; **choosing one in
+the first place goes the same direction — take the newest release, and pin it
+exactly.** Establish what the newest is from the registry or index rather than
+from memory, and write it as a literal version (`4.2.4`), never a floating tag:
+`latest` and `@main` leave Dependabot nothing to bump, and a floating tag turns
+a green conformance run into a claim about a build nobody can name afterwards.
+Holding a version back is still fine where there is a reason — put the reason in
+a comment at the pin, as the Compose images that do it already have.
+
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
 bumps carry. CI runs on each pull request, and — as below — CI is what decides
