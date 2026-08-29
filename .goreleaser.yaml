@@ -31,18 +31,29 @@ builds:
       # cross-toolchain estate. That is what CGO_ENABLED=0 buys here, and it
       # is ALL it buys — see the two notes below, both measured.
       #
-      # NOT A STATIC BINARY, on linux. The store driver reaches its database
-      # engine through purego, which declares its dlopen/dlsym imports with
-      # //go:cgo_import_dynamic — so the linker emits a DYNAMIC executable
-      # even with cgo off. Measured on the linux/amd64 artifact: interpreter
-      # /lib64/ld-linux-x86-64.so.2, NEEDED libdl.so.2, libpthread.so.0,
-      # libc.so.6. (A hello-world at CGO_ENABLED=0 is statically linked, so
-      # this is the dependency and not the toolchain.) The linux binaries
-      # therefore require GLIBC; on a musl system they fail at execve, before
-      # any Go code runs, and `-tags musl` does NOT change that — the tag
-      # only selects which .so the driver embeds, not this binary's own
-      # interpreter. Publishing a musl archive means producing and testing
-      # one on a musl toolchain, which nothing here does.
+      # NOT A STATIC BINARY, on linux, and DO NOT TRY TO MAKE IT ONE. The
+      # store driver reaches its database engine through purego, which
+      # declares its dlopen/dlsym imports with //go:cgo_import_dynamic — so
+      # the linker emits a DYNAMIC executable even with cgo off. Measured on
+      # the linux/amd64 artifact: interpreter /lib64/ld-linux-x86-64.so.2,
+      # NEEDED libdl.so.2, libpthread.so.0, libc.so.6. (A hello-world at
+      # CGO_ENABLED=0 is statically linked, so this is the dependency and
+      # not the toolchain.)
+      #
+      # Adding `-linkmode external -extldflags -static` DOES produce a
+      # binary file(1) calls "statically linked", and that binary SIGSEGVs on
+      # its first query — on the machine that built it. A static program has
+      # no dynamic loader, so it cannot dlopen anything; glibc's linker even
+      # warns about it. decisions/901 records the run. ci.yml's `cross` job
+      # asserts the artifact is still dynamic so this cannot be re-discovered
+      # by a release.
+      #
+      # The linux binaries therefore require GLIBC; on a musl system they
+      # fail at execve, before any Go code runs, and `-tags musl` does NOT
+      # change that — the tag only selects which .so the driver embeds, not
+      # this binary's own interpreter. Publishing a musl archive means
+      # producing and testing one on a musl toolchain, which nothing here
+      # does.
       #
       # "Pure Go" is not "self-contained" either: the database engine is a
       # native library embedded in the driver module and extracted at run

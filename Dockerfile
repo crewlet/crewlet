@@ -17,6 +17,10 @@
 # which declares its imports with //go:cgo_import_dynamic. So `scratch` and a
 # musl base do not fail slowly or partially; the process never starts.
 #
+# Nor is "just build it static" the way out: a static program has no dynamic
+# loader and cannot dlopen at all, so that build segfaults at its first query
+# rather than running on scratch (decisions/901 has the measurement).
+#
 # SECOND, and true even if that changed: the engine SPAWNS things.
 #
 #   - The local sandbox backend (`providers.sandbox: {type: local}`) runs a

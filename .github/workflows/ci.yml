@@ -138,15 +138,21 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
 
-      # THE LINUX ARTIFACT IS NOT STATIC, and this is where that stops being
-      # a surprise. purego declares its dlopen imports with
-      # //go:cgo_import_dynamic, so the linker emits a dynamic executable
-      # even at CGO_ENABLED=0 — which is why the image is debian and not
-      # scratch, and why there is no musl archive. Nothing else in the tree
-      # can notice if that changes in either direction: a dependency that
-      # made the binary static again would quietly invalidate the docs, and
-      # one that added a NEEDED entry would quietly narrow the hosts it runs
-      # on.
+      # THE LINUX ARTIFACT MUST STAY DYNAMIC, which is the opposite of what
+      # a Go project usually wants and is the whole point of this step.
+      #
+      # The store's database engine is loaded with dlopen, and dlopen does
+      # not work in a statically linked program: glibc's own linker warns
+      # that it "requires at runtime the shared libraries from the glibc
+      # version used for linking", and measured here it is worse than that —
+      # a `CGO_ENABLED=1 -linkmode external -extldflags -static` build
+      # SIGSEGVs inside the first call into the library, on the machine that
+      # built it. So a static binary is not a portability win to celebrate,
+      # it is an artifact that crashes at its first query.
+      #
+      # Nothing else in the tree would notice it happening. This step is what
+      # turns "somebody added -extldflags -static because a static Go binary
+      # is obviously better" into a red build instead of a release.
       - name: assert the linux artifact's linkage
         if: matrix.goos == 'linux'
         run: |
@@ -154,14 +160,13 @@ jobs:
           file /tmp/crewlet
           readelf -d /tmp/crewlet | grep NEEDED || true
           if ! readelf -l /tmp/crewlet | grep -q INTERP; then
-            echo "::error::the linux binary is statically linked again."
-            echo "That is GOOD NEWS and it invalidates several published"
-            echo "statements: docs/getting-started/installation.md, the"
-            echo "Dockerfile and .goreleaser.yaml all say this binary needs"
-            echo "glibc and cannot run on musl or scratch, which is why there"
-            echo "is no musl archive and why the image is debian. Re-check"
-            echo "those, and consider whether a musl or scratch target is now"
-            echo "possible."
+            echo "::error::the linux binary is statically linked."
+            echo "That is NOT an improvement: the store's database engine is"
+            echo "loaded with dlopen, which a static binary cannot do — this"
+            echo "artifact will segfault at its first query. Whatever added"
+            echo "-static (or an external link mode) has to come back out."
+            echo "See decisions/901-release-tooling.md, which records the"
+            echo "measurement."
             exit 1
           fi
         env:

@@ -110,6 +110,37 @@ else. The compiler would happily produce a binary for any GOOS; that binary
 would fail at its first query. `internal/store/platform.go` makes it fail at
 build time instead, with a sentence.
 
+**A static binary is not the answer, and this is the measurement.** It is the
+first thing anyone will reach for on reading the paragraph above, so:
+
+```
+CGO_ENABLED=1 go build -ldflags '-linkmode external -extldflags "-static"'
+  -> /usr/bin/ld: warning: Using 'dlopen' in statically linked applications
+     requires at runtime the shared libraries from the glibc version used
+     for linking
+  -> file(1): "statically linked"
+  -> ./crewlet migrate: SIGSEGV, signal arrived during cgo execution,
+     inside purego.RegisterFunc -> the first call into the Turso library
+```
+
+On the machine that built it, against the glibc it linked against, with a
+clean library cache. The identical run on the ordinary dynamic build applies
+13 migrations. The reason is not a flag that needs tuning: the driver reaches
+its engine with `dlopen`, and a statically linked program has no dynamic
+loader to do that with. Static linking and a runtime-loaded shared object are
+mutually exclusive, so a "static build" here is an artifact that looks more
+portable and crashes at its first query. `ci.yml`'s `cross` job asserts the
+binary is still dynamic for exactly this reason — the assertion is guarding
+against an improvement that isn't one.
+
+The version that WOULD work is upstream's to make: `turso-go-platform-libs`
+ships `libturso_sync_sdk_kit.a` beside the `.so` for both musl targets, and a
+driver that linked the archive through cgo would need no loader at all. But
+`tursogo` has no such path — every entry point goes through
+`InitLibrary` -> `LoadTursoLibrary` -> `dlopen`, and there is no build tag,
+no `#cgo LDFLAGS` and no `import "C"` anywhere in it. Using those archives
+means a fork or an upstream change, not a flag here.
+
 **There is no musl archive, and `-tags musl` is not what would produce one.**
 This was nearly shipped and the measurement stopped it. The tag selects which
 shared object the driver embeds; it does not change the binary's own linkage,
@@ -120,11 +151,13 @@ with and without the tag. A `_musl` archive built that way fails at `execve`
 on Alpine, which is worse than no archive: it is a signed artifact promising a
 platform it cannot run on, the same defect as the windows/arm64 binary below.
 
-A real musl artifact needs a musl toolchain to build on and a musl host to
-test on. Until there is one, the honest position is the one the docs now take:
-the linux binaries require glibc. The `cross` CI job asserts the linkage every
-run, so the day a dependency makes the binary static again is a build failure
-that says to re-check this.
+A real musl artifact needs a musl toolchain to build on (`zig cc -target
+x86_64-linux-musl`, or Alpine's own gcc) and a musl host to test on. That is a
+genuine option and it is not this change: it trades the plain GOOS/GOARCH loop
+for a cross-toolchain on one target, which is the property this section exists
+to protect, so it deserves its own decision rather than being smuggled in.
+Until then the honest position is the one the docs take: the linux binaries
+require glibc.
 
 **Windows was dropped, and it is worth being exact about why.** Not "Turso has
 no Windows build" — it has one, for amd64. The release published windows/amd64

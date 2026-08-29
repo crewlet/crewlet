@@ -118,15 +118,20 @@ without it** — a green run has simply not exercised them.
   for anything else into a compile error that says why rather than a binary
   that fails at its first query.
 
-  **The linux binary is not static, and that surprises people.** purego
+  **The linux binary is not static, and must not be made static.** purego
   declares its `dlopen` imports with `//go:cgo_import_dynamic`, so
   `CGO_ENABLED=0 go build` still emits a dynamic executable — `interpreter
   /lib64/ld-linux-x86-64.so.2`, `NEEDED libc.so.6`. It needs glibc and does not
   run on musl, and `-tags musl` does NOT change that: the tag picks which
   shared object the driver embeds, not this binary's own linkage. That is why
-  there is no musl archive. The `cross` CI job asserts the linkage on every
-  run, so if a dependency ever makes the binary static again, CI says so and
-  points at the statements that would need re-checking.
+  there is no musl archive.
+
+  `-linkmode external -extldflags -static` does produce a binary `file(1)`
+  calls static, and it SIGSEGVs on its first query on the machine that built
+  it: a static program has no dynamic loader, so it cannot `dlopen` the
+  database engine at all. `decisions/901` records the run. The `cross` CI job
+  asserts the artifact is still dynamic, so this is a red build rather than a
+  release.
 
   ```bash
   # What CI cross-compiles on every pull request.
