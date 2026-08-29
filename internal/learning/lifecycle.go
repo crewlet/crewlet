@@ -23,11 +23,18 @@ import (
 //
 // A seat that keeps working accumulates one raw row per turn forever, and
 // nothing else in the system removes one. Recall is what pays for that, and it
-// pays LINEARLY: it is a brute-force scan (no ANN index reaches the Go driver,
-// decisions/002), it runs in the Plan phase of every turn, and it
-// decodes every embedded row the seat owns. Measured on this store at 1536
-// dimensions: 6 ms at 100 rows, 32 ms at 500, 63 ms at 1000, 122 ms at 2000 —
-// ~62 µs per row with no ceiling. The pass is what puts the ceiling there.
+// pays LINEARLY: there is still no ANN index reachable from the Go driver
+// (decisions/002, re-measured at the pin), so recall visits every embedded row
+// the seat owns, in the Plan phase of every turn.
+//
+// The constant shrank when the distance arithmetic moved into the database
+// (decisions/003) — the rows no longer cross the driver boundary to be decoded
+// in Go, which at 5 000 rows of 1 536 dimensions was 30.7 MB and 81 ms against
+// 26 ms for the same ranking. The SHAPE did not: it is still linear in the
+// seat's row count, still with no ceiling, and this pass is still the only
+// thing that puts one there. The original measurement, before the move — 6 ms
+// at 100 rows, 32 ms at 500, 63 ms at 1000, 122 ms at 2000, ~62 µs per row —
+// is what the pass was sized against.
 //
 // Four actions, cheapest first, so an expensive one never runs over rows the
 // cheap ones were about to delete:

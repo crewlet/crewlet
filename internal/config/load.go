@@ -253,11 +253,30 @@ func retiredFor(out any) map[string]string {
 // unknownFieldRE matches yaml.v3's own phrasing for a key the struct does
 // not define. The Go type name in it is meaningless to an operator, so the
 // message is rewritten around the KEY, which is what they can search their
-// file for.
-var unknownFieldRE = regexp.MustCompile(`^line (\d+): field (\S+) not found in type \S+$`)
+// file for — but the type is captured all the same, because it is what
+// distinguishes one block's retired key from another's. See retiredKey.
+var unknownFieldRE = regexp.MustCompile(`^line (\d+): field (\S+) not found in type (\S+)$`)
 
-// retiredBootstrapFields are TIER A keys this build no longer accepts,
-// mapped to what an operator should write instead.
+// retiredKey is how a retired-field table is addressed: the block the key
+// belonged to, then the key. yaml.v3 names the Go type it was decoding
+// ("config.Store"), and the package qualifier is dropped so the table reads
+// as the document does.
+//
+// KEYED ON THE BLOCK, not on the bare name, because the same word means
+// different things in different blocks. `driver` under `store:` was the
+// storage engine and is retired; a `driver:` typed under `stream:` never
+// existed there and has to read as the ordinary typo it is — the same
+// distinction decisions/001 drew between the two TIERS, one level down.
+func retiredKey(goType, field string) string {
+	if dot := strings.LastIndex(goType, "."); dot >= 0 {
+		goType = goType[dot+1:]
+	}
+	return goType + "." + strings.Trim(field, `"`)
+}
+
+// retiredBootstrapFields are TIER A keys this build no longer accepts, keyed
+// by the block they belonged to (see retiredKey) and mapped to what an
+// operator should write instead.
 //
 // # A removed key is not a typo, and must not be reported as one
 //
@@ -272,10 +291,16 @@ var unknownFieldRE = regexp.MustCompile(`^line (\d+): field (\S+) not found in t
 // Entries are permanent. A file written against any past release stays
 // diagnosable, and the cost is one map entry.
 var retiredBootstrapFields = map[string]string{
-	"debug": "`debug` is no longer a setting — it was a second way to say " +
+	"Bootstrap.debug": "`debug` is no longer a setting — it was a second way to say " +
 		"the log level and it is gone. Write `logging:` with `level: debug` " +
 		"under it (and `level: info` is the default, so a `debug: false` " +
 		"can simply be deleted)",
+	"Store.driver": "`store.driver` is no longer a setting — it chose between " +
+		"two store implementations and there is one. Turso is the database; " +
+		"the mainline-SQLite fallback and the CREWLET_STORE_DRIVER variable " +
+		"that selected it are both gone. Delete the line; the file it names " +
+		"opens unchanged either way, because both drivers wrote the same " +
+		"SQLite file format",
 }
 
 // decodeError translates yaml's decode failures into this package's
@@ -302,7 +327,7 @@ func decodeError(err error, retired map[string]string) error {
 			// a setting" is true and useless to someone reading a file the
 			// quickstart told them to write: they need the line that
 			// replaced it, not a spelling check.
-			if replacement, gone := retired[strings.Trim(m[2], `"`)]; gone {
+			if replacement, gone := retired[retiredKey(m[3], m[2])]; gone {
 				out.add("line "+m[1], ErrUnknownField, "%s", replacement)
 				continue
 			}

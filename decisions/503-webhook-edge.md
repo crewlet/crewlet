@@ -204,8 +204,10 @@ slip through, and the `WHERE` on the `DO UPDATE` is what keeps the claim from
 being *permanent*: without it an operator replaying a webhook ten minutes later
 watches it vanish into a row nothing will ever clear.
 
-Reported through `RowsAffected` rather than `RETURNING`, which is a newer SQLite
-feature and outside the dialect intersection the two certified drivers share
+Reported through `RowsAffected` rather than `RETURNING`. That began as a
+dialect-intersection rule for the two drivers this engine used to certify
+(d-002, retired by d-003); it stays because `RowsAffected` is what this
+statement needs and is what `database/sql` answers whatever the driver does
 (d-002). The conditional upsert is exercised against **both** drivers by the
 `storetest` contract suite, because that is precisely the kind of statement one
 driver accepts and the other does not.

@@ -16,7 +16,7 @@ The framework models the same structures found in real companies:
 - **Communication** — channels, direct messages, and external tools (Slack or self-hosted [Mattermost](../integrations/mattermost.md), the work-item tracker, the code host)
 - **Task management** — integrated with external PM tools (Jira, GitHub/GitLab issues)
 - **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code through the [code sandbox](code-sandbox.md)
-- **Knowledge** — query-time knowledge-base search for shared docs + per-agent private diary (vector-indexed — hybrid vector ∪ recency candidate selection)
+- **Knowledge** — query-time knowledge-base search for shared docs + per-agent private diary (vector similarity computed by the database — hybrid vector ∪ recency candidate selection)
 - **Decision-making** — structured DACI framework with clear authority
 
 ---
@@ -83,10 +83,10 @@ flowchart TD
 | Component | Technology | Rationale |
 |---|---|---|
 | Language | Go 1.27+ | One static binary, real parallelism, a standard library that covers most of this table |
-| Distribution | A single `CGO_ENABLED=0` binary | Nothing to install alongside it; the cross-compile matrix is a plain `GOOS`/`GOARCH` loop |
+| Distribution | A single `CGO_ENABLED=0` binary | Nothing to install alongside it. The matrix is linux and macOS on amd64 and arm64, plus a musl linux build — bounded by the platforms the store driver embeds its database engine for, not by the compiler |
 | Event stream | Embedded NATS JetStream | Persistent pub/sub *inside the process* — a company runs with no broker to operate. An external NATS or Apache Pulsar takes the same slot for a fleet |
-| Store | Turso, or mainline SQLite | One local file this process owns exclusively; both drivers are pure Go and certified by the same suite |
-| Vector search | The store's own vector index | The per-agent diary and the episodic store, in the same file as everything else |
+| Store | Turso | One local file this process owns exclusively; pure Go, SQLite file format, and the vector functions the learning subsystem's recall is written against |
+| Vector search | The store's vector distance functions | The per-agent diary and the episodic store, in the same file as everything else. The *arithmetic* is the database's; there is no ANN index reachable from the Go driver yet, so recall is a scan behind the per-agent index |
 | Event store | A table in that file | LLM-invocation observability and the event dashboards, written inline by a publish listener |
 | Coordination | TTL leases with a fencing epoch | Seat ownership and the fleet's shared counters, in a KV slot separate from the store file |
 | Config | YAML → typed structs → generated JSON Schema | One definition drives validation, the schema editors read, and the docs |
@@ -119,7 +119,7 @@ The `EmbeddingProvider` protocol defines `embed()` (batch text → vectors) and 
 
 ### Database
 
-One local file, opened through one of two certified pure-Go drivers (Turso by default, mainline SQLite as the escape hatch), built from a forward-only migration sequence. **The engine owns that file exclusively** — a second process pointed at the same path is corruption waiting for a schedule to collide, which is why everything genuinely shared between nodes lives in the coordination KV instead. The load-bearing tables:
+One local file, opened by Turso — a pure-Go driver over the SQLite file format — and built from a forward-only migration sequence. There was a second certified driver (mainline SQLite) as an escape hatch, and it is retired: it could not serve a database with rows in it, because it has no vector functions and recall degraded to nothing without saying so. **The engine owns that file exclusively** — a second process pointed at the same path is corruption waiting for a schedule to collide, which is why everything genuinely shared between nodes lives in the coordination KV instead. The load-bearing tables:
 
 - **`token_usage`** — per-agent cumulative token consumption, upserted by the turn engine's shared tool loop after each LLM completion that passes the budget check. Durable audit record; not used to hydrate the in-memory the shared token counter on startup.
 - **`agent_diary`** (vector-indexed) — each agent's private observation log; the read-side counterpart of `reflect_and_persist`. Rows are embedded on write; the read path is hybrid candidate selection (vector top-K ∪ recency top-K, deduped, capped at 100) handed to an aux-LLM relevance filter. Shared knowledge is **not** in the database — the knowledge base is searched live (see [knowledge system](knowledge-system.md)).

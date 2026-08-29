@@ -40,10 +40,12 @@ BIN := crewlet
 # hatch, and says what it costs.
 GOTEST := $(GO) test -race -count=1
 
-# Both certified store drivers. Every statement in internal/store must parse
-# on both, Turso is currently the narrower dialect, and a suite run on one
-# certifies nothing about the other — ci.yml runs them as a matrix.
-STORE_DRIVERS := turso sqlite
+# The release targets, cross-compiled. Nothing else builds for anything but
+# the machine you are on, so a build tag or a platform-gated file that only
+# breaks darwin reaches the tag — and a broken tag is a release to re-cut.
+# ci.yml runs these as a matrix; the pairs are .goreleaser.yaml's, and
+# internal/version asserts all three lists agree.
+CROSS_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
 # Where `make pulsar-up` puts the broker, and therefore where the conformance
 # suite looks. Overridable for a broker somewhere else:
@@ -66,7 +68,7 @@ COMPANY ?=
 .DEFAULT_GOAL := help
 
 .PHONY: help build crewlet install fmt tidy schema \
-        check fmt-check vet lint test test-norace test-stores test-e2e \
+        check fmt-check vet lint test test-norace test-cross test-e2e \
         test-pulsar pulsar-up pulsar-down \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
@@ -106,7 +108,7 @@ clean: ## remove the build output (./crewlet and dist/)
 
 ##@ Gates — `make check` is all of them
 
-check: fmt-check vet lint build test test-stores ## every gate CI runs on a PR
+check: fmt-check vet lint build test test-cross ## every gate CI runs on a PR
 	@echo
 	@echo "All local gates passed. Two things this did NOT cover, because both"
 	@echo "need a service CI starts for itself:"
@@ -150,19 +152,29 @@ test: require-node ## the full suite under the race detector (ci: test (race))
 test-norace: require-node ## the full suite without -race (faster; not a gate)
 	$(GO) test -count=1 ./...
 
-# Both drivers report in one run, rather than stopping at the first failure —
+# Every target reports in one run rather than stopping at the first failure —
 # ci.yml sets `fail-fast: false` on this matrix for the same reason: when a
-# statement parses on one dialect and not the other, you want to see which.
+# build constraint breaks one platform you want to see which, not the first.
 #
-# The turso leg repeats what `make test` already ran on the default driver,
-# and CI repeats it too. A target that ran only the non-default driver would
-# save a minute at the cost of meaning something different depending on what
-# ran before it — and it would stop being the matrix it is named after.
-test-stores: ## certify the store on both drivers (ci: stores (dual driver))
+# Compiling is the whole test. A darwin binary cannot be run here, and what
+# breaks a cross-target is almost always a build tag rather than behaviour —
+# internal/store/platform.go, for one, is a compile error by construction.
+#
+# This replaced `test-stores`, which certified the store on two drivers. There
+# is one now (decisions/003), and the slot it left is worth more here: the
+# release matrix was the thing nothing checked, and windows/arm64 shipped
+# broken for exactly that reason.
+test-cross: ## cross-compile every release target (ci: cross-compile the release targets)
 	@status=0; \
-	for driver in $(STORE_DRIVERS); do \
-	  echo "==> internal/store on $$driver"; \
-	  CREWLET_STORE_DRIVER=$$driver $(GOTEST) ./internal/store/... || status=1; \
+	for target in $(CROSS_TARGETS); do \
+	  echo "==> build $$target"; \
+	  CGO_ENABLED=0 GOOS=$${target%/*} GOARCH=$${target#*/} \
+	    $(GO) build ./... || status=1; \
+	  case $$target in linux/*) \
+	    echo "==> build $$target (musl)"; \
+	    CGO_ENABLED=0 GOOS=linux GOARCH=$${target#*/} \
+	      $(GO) build -tags musl ./... || status=1;; \
+	  esac; \
 	done; \
 	exit $$status
 

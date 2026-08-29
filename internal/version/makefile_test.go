@@ -74,20 +74,23 @@ func TestEveryTestCommandCIRunsHasAMakeTarget(t *testing.T) {
 	}
 }
 
-// BOTH CERTIFIED DRIVERS RUN LOCALLY, because a suite run on one of them
-// certifies nothing about the other: every statement in internal/store must
-// parse on both, and Turso is currently the narrower dialect. ci.yml runs
-// them as a matrix; a Makefile that hard-codes one leg is a local run that
-// agrees with itself.
-func TestTheStoreDriverMatrixIsTheOneTheMakefileLoops(t *testing.T) {
+// EVERY RELEASE TARGET CI CROSS-COMPILES, THE MAKEFILE CROSS-COMPILES TOO.
+//
+// This was the store-driver matrix — two drivers, one dialect, and a suite run
+// on one certifying nothing about the other. There is one driver now
+// (decisions/003) and the slot went to the thing that actually had no local
+// gate: the release matrix. `go build ./...` compiles for the machine you are
+// on, so a build tag or a platform-gated file that only breaks darwin reaches
+// the tag, and a broken tag is a release to re-cut. windows/arm64 shipped
+// broken for want of exactly this.
+func TestTheCrossMatrixIsTheOneTheMakefileLoops(t *testing.T) {
 	t.Parallel()
 	makefile := expandMakeVars(releaseFile(t, "Makefile"))
-	drivers := ciMatrixDrivers(t, releaseFile(t, ".github/workflows/ci.yml"))
-	for _, driver := range drivers {
-		if !strings.Contains(makefile, driver) {
-			t.Errorf("ci.yml certifies the store on %q and the Makefile never "+
-				"names it, so `make test-stores` leaves that dialect uncertified",
-				driver)
+	for _, pair := range ciMatrixPairs(t, releaseFile(t, ".github/workflows/ci.yml")) {
+		if !strings.Contains(makefile, pair) {
+			t.Errorf("ci.yml cross-compiles %q and the Makefile never names "+
+				"it, so `make test-cross` leaves that platform unbuilt — and "+
+				"nothing else builds for it before the tag", pair)
 		}
 	}
 }
@@ -369,20 +372,30 @@ func expandMakeVars(makefile string) string {
 }
 
 // ciMatrixDrivers reads the store job's driver matrix out of ci.yml.
-func ciMatrixDrivers(t *testing.T, workflow string) []string {
+func ciMatrixPairs(t *testing.T, workflow string) []string {
 	t.Helper()
-	match := regexp.MustCompile(`driver:\s*\[([^]]*)]`).FindStringSubmatch(workflow)
-	if match == nil {
-		t.Fatal("ci.yml has no `driver: [...]` matrix — either the dual-driver " +
-			"job is gone, or this test is reading the wrong shape")
+	read := func(key string) []string {
+		match := regexp.MustCompile(key + `:\s*\[([^]]*)]`).FindStringSubmatch(workflow)
+		if match == nil {
+			t.Fatalf("ci.yml has no `%s: [...]` matrix — either the "+
+				"cross-compile job is gone, or this test is reading the "+
+				"wrong shape", key)
+		}
+		var out []string
+		for _, raw := range strings.Split(match[1], ",") {
+			if name := strings.TrimSpace(raw); name != "" {
+				out = append(out, name)
+			}
+		}
+		return out
 	}
-	var drivers []string
-	for _, raw := range strings.Split(match[1], ",") {
-		if name := strings.TrimSpace(raw); name != "" {
-			drivers = append(drivers, name)
+	var pairs []string
+	for _, os := range read("goos") {
+		for _, arch := range read("goarch") {
+			pairs = append(pairs, os+"/"+arch)
 		}
 	}
-	return drivers
+	return pairs
 }
 
 // crewletVars collects the CREWLET_* variables a workflow sets, in either
@@ -445,9 +458,9 @@ func anyOf(names []string, wanted []string) bool {
 //
 // The other tests here prove a target exists with the right flags. None of
 // them proves `check` still reaches it, and that is one `sed` away: drop
-// `test-stores` from the prerequisite list and every assertion above stays
+// `test-cross` from the prerequisite list and every assertion above stays
 // green while the command a contributor is told to run before pushing stops
-// certifying the second store driver. The pull request template makes this
+// building for three of the four platforms it ships. The pull request template makes this
 // worse rather than better -- it now asks people to tick `make check`, so a
 // weakened target is a gate every contributor passes in good faith.
 //

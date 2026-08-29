@@ -1,6 +1,14 @@
 # d-002 — The Turso SQL dialect we may actually use
 
-Status: **decided**
+Status: **decided**, amended by [d-003](003-turso-is-the-only-driver.md)
+
+> **What d-003 changed.** §1 (write in the intersection of two dialects) and §3's
+> Go-side fallback are retired: `modernc.org/sqlite` is gone, Turso is the only
+> driver, and recall's distance arithmetic runs in the database. §2 (NULL for
+> "unconstrained" rather than a partial-index `ON CONFLICT` target), §4 (FTS is
+> not a dependency) and §5 (pin and re-probe) are unchanged and still
+> load-bearing — the measurements below re-run identically at the pinned
+> version, which is why the capability probe survived the drop.
 
 ## What the spike found
 
@@ -26,10 +34,11 @@ present and the rest is announced surface not yet reachable from Go.
 
 ## Decisions
 
-1. **Write in the intersection dialect.** All SQL must parse on Turso *and* on
-   mainline SQLite (`modernc.org/sqlite`, the certified fallback driver).
-   The dual-driver CI job is what enforces this, and it just became the load-bearing
-   guard rather than a formality: Turso is the narrower dialect today.
+1. ~~**Write in the intersection dialect.**~~ *Retired by d-003.* All SQL had to
+   parse on Turso *and* on mainline SQLite (`modernc.org/sqlite`, the certified
+   fallback driver), enforced by the dual-driver CI job. There is one driver
+   now, the job is gone with it, and the intersection turned out to cost 124 SQL
+   functions the engine is on Turso for — see d-003 for the accounting.
 
 2. **No `ON CONFLICT` against a partial index — use NULL for "unconstrained".**
    The Python design used `UNIQUE(agent_handle, work_key) WHERE work_key <> ''`
@@ -46,6 +55,14 @@ present and the rest is announced surface not yet reachable from Go.
    thousands of rows, always filtered by agent first. A capability probe at boot
    records which path is live; when Turso's ANN index reaches the Go driver, only
    that one function changes.
+
+   *Amended by d-003.* The intent held and the outcome did not: the Go loop ran on
+   BOTH drivers unconditionally, because it had to exist for the driver without the
+   functions and nothing ever called the other path. The probe reported the
+   capability and no code read it. With one driver the SQL path is the only path —
+   `vector_distance_cos` in an `ORDER BY`, still a scan behind the per-agent index
+   because there is still no ANN index. The sentence that mattered is the one about
+   the workload, and it is unchanged.
 
 4. **FTS is not a v1 dependency.** v1 knowledge search is the external backend
    (Confluence CQL) behind `KnowledgeSearcher`, exactly as today.
@@ -67,3 +84,9 @@ is the *justification*: Turso is chosen for the trajectory, the file-format
 compatibility, and MVCC — not for vector/FTS features that are not yet reachable.
 Every one of those features is behind a single function, so arrival is an upgrade,
 not a migration.
+
+> *d-003:* the middle clause did not survive contact. The fallback driver was real
+> and turned out not to be valuable — it could not serve a database with rows in it,
+> because it has no vector functions and recall degraded to nothing without saying
+> so. The rest of this paragraph stands, and the last sentence is now the whole
+> strategy rather than half of it.

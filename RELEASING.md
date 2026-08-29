@@ -210,7 +210,7 @@ drivers, the end-to-end gates and the linter on every pull request, and
 
 | | Contents |
 |---|---|
-| **archives** (`crewlet_X.Y.Z_<os>_<arch>.tar.gz`, `.zip` on Windows) | one static `crewlet` binary, `LICENSE`, `README.md` — six of them: linux, darwin and windows × amd64 and arm64 |
+| **archives** (`crewlet_X.Y.Z_<os>_<arch>.tar.gz`, plus `..._linux_<arch>_musl.tar.gz`) | one static `crewlet` binary, `LICENSE`, `README.md` — six of them: linux and darwin × amd64 and arm64, plus the two musl linux builds. **No Windows**: the store driver embeds its database engine for windows/amd64 and not for windows/arm64, so that half of the old matrix shipped a binary that could not open a store (see [`decisions/003`](decisions/003-turso-is-the-only-driver.md)) |
 | **`checksums.txt`** | SHA-256 over every archive |
 | **`checksums.txt.sig` + `checksums.txt.pem`** | the keyless cosign signature and its certificate |
 | **`ghcr.io/crewlet/crewlet:X.Y.Z`** | a multi-arch image (linux/amd64, linux/arm64) — also `:latest` on a stable tag |

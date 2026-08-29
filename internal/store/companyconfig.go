@@ -127,10 +127,12 @@ func (c *Configs) Activate(ctx context.Context, revisionID string, at time.Time)
 		if err != nil {
 			return err
 		}
-		// Checked through RowsAffected rather than RETURNING, which is
-		// outside the dialect intersection the two certified drivers
-		// share. Without the check the transaction commits having
-		// deactivated everything, which is a company with no config.
+		// Checked through RowsAffected rather than RETURNING. That was
+		// once about the dialect intersection two drivers shared
+		// (d-002); with one driver it is simply the narrower thing that
+		// works, and it is what the statement needs — without the check
+		// the transaction commits having deactivated everything, which
+		// is a company with no config.
 		n, err := res.RowsAffected()
 		if err != nil {
 			return err

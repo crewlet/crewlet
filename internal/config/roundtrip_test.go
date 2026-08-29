@@ -179,7 +179,7 @@ node:
   id: node-eu-1
   roles: [seats, workers]
   labels: {zone: eu}
-store: {path: /var/lib/crewlet/crewlet.db, driver: sqlite}
+store: {path: /var/lib/crewlet/crewlet.db, max_open_conns: 6}
 stream: {type: embedded, store_dir: /var/lib/crewlet/stream}
 api: {host: 127.0.0.1, port: 8000, auth: {tokens: [{id: founder, token: tok}]}}
 `), EnvOnly())
@@ -194,7 +194,9 @@ api: {host: 127.0.0.1, port: 8000, auth: {tokens: [{id: founder, token: tok}]}}
 	if err != nil {
 		t.Fatalf("an exported bootstrap no longer loads:\n%v\n\n%s", err, encoded)
 	}
-	if reloaded.Node.ID != "node-eu-1" || reloaded.Store.Driver != StoreDriverSQLite {
+	if reloaded.Node.ID != "node-eu-1" ||
+		reloaded.Store.Path != "/var/lib/crewlet/crewlet.db" ||
+		reloaded.Store.MaxOpenConns != 6 {
 		t.Fatalf("identity changed: %+v", reloaded)
 	}
 	roles, err := reloaded.Node.RoleSet()

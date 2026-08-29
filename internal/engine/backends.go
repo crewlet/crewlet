@@ -204,7 +204,6 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 // openStore opens this node's local database.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
 	opts := store.Options{
-		Driver:       store.Driver(b.Store.Driver),
 		MaxOpenConns: b.Store.MaxOpenConns,
 		BusyTimeout:  time.Duration(b.Store.BusyTimeoutSeconds * float64(time.Second)),
 	}

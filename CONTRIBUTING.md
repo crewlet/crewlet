@@ -92,29 +92,35 @@ without it** — a green run has simply not exercised them.
   in a suite instead and it becomes a fact that can only ever be corrected in
   most of the places it appears.
 
-- **`CREWLET_STORE_DRIVER`** selects the store implementation. Two are
-  certified — `turso` (the default) and `sqlite` (mainline SQLite, pure Go) —
-  and **every statement in `internal/store` must parse on both**. CI runs the
-  store suites twice, once per driver, because Turso's dialect is currently
-  the narrower of the two and nothing else catches a statement that only one
-  of them accepts.
+- **`TURSO_GO_CACHE_DIR`** is where the store driver's native library lives,
+  and it is the one environment variable a store test can be defeated by.
 
-  Turso also carries a native library — pure Go to *build* (no cgo), but its
-  engine is a ~20 MB binary embedded in the driver and extracted at runtime
-  into `$TURSO_GO_CACHE_DIR` (default `~/.cache/turso-go`), shared by every
-  process on the machine. Upstream writes it without a rename and panics on
-  what a concurrent reader sees, so `internal/store/turso.go` prepares it
-  under a lock and heals a cache entry that will not verify. If a test binary
-  ever dies with `unable to load turso library`, that cache is the place to
-  look — `go test ./internal/store/ -run LibraryCache -count=1` covers it
-  (the cache is not a test input, so without `-count=1` Go will happily serve
-  the PASS from before it went bad).
+  Turso is the only store driver — `CREWLET_STORE_DRIVER` and the Tier A
+  `store.driver` field are both retired (see
+  [`decisions/003`](decisions/003-turso-is-the-only-driver.md)), so there is
+  no dialect intersection to keep statements inside any more and no second
+  suite run. Write `internal/store` against Turso.
+
+  It is pure Go to *build* (no cgo), but its engine is a ~20 MB binary
+  embedded in the driver and extracted at runtime into `$TURSO_GO_CACHE_DIR`
+  (default `~/.cache/turso-go`), shared by every process on the machine.
+  Upstream writes it without a rename and panics on what a concurrent reader
+  sees, so `internal/store/turso.go` prepares it under a lock and heals a
+  cache entry that will not verify. If a test binary ever dies with `unable to
+  load turso library`, that cache is the place to look — `go test
+  ./internal/store/ -run LibraryCache -count=1` covers it (the cache is not a
+  test input, so without `-count=1` Go will happily serve the PASS from before
+  it went bad).
+
+  The library also decides what this project can be built for: upstream
+  embeds it for linux and darwin on amd64 and arm64 and for windows/amd64,
+  and for nothing else. Windows is not a release target;
+  `internal/store/platform.go` turns a build for anything outside the shipped
+  matrix into a compile error that says why.
 
   ```bash
-  make test-stores   # both drivers, as CI's matrix runs them
-  # or one leg on its own — with the flags CI passes, so a cached PASS from
-  # before the change cannot answer for it:
-  CREWLET_STORE_DRIVER=sqlite go test ./internal/store/... -race -count=1
+  # What CI cross-compiles on every pull request.
+  make test-cross
   ```
 
 - **`CREWLET_TEST_PULSAR_URL`** and **`CREWLET_TEST_PULSAR_ADMIN_URL`** run

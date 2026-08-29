@@ -328,10 +328,12 @@ CREATE UNIQUE INDEX company_config_one_active_idx
     ON company_config (is_active) WHERE is_active <> 0;
 ```
 
-One dialect, two certified drivers: every statement has to parse on both Turso
-and mainline SQLite, which is why the types here are the four SQLite has
-(`TEXT`, `INTEGER`, `REAL`, `BLOB`) rather than `UUID` / `TIMESTAMPTZ` /
-`JSONB`, and why a timestamp is unix seconds rather than a date type.
+The types here are the four SQLite has (`TEXT`, `INTEGER`, `REAL`, `BLOB`)
+rather than `UUID` / `TIMESTAMPTZ` / `JSONB`, and a timestamp is unix seconds
+rather than a date type — Turso is SQLite-compatible in both its query language
+and its file format, so that is simply what a column can be. It was also, until
+recently, the intersection of two drivers' dialects; the second driver is
+retired and the types are unchanged, because they were never the narrow part.
 
 A revert creates a *new* revision whose payload equals a prior one — the audit chain stays intact via `parent_revision_id`.
 

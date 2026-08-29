@@ -320,10 +320,12 @@ and where the constants come from — see
 
 ## The store
 
-One local file per node, opened through one of two certified pure-Go drivers —
-`turso` by default and `sqlite` (mainline SQLite) as the escape hatch, selected
-with `CREWLET_STORE_DRIVER`. Every statement in the engine parses on both, and
-CI runs the store suites twice to keep that true.
+One local file per node, opened by **Turso** — the only driver. There was a
+second, mainline SQLite behind `store.driver` / `CREWLET_STORE_DRIVER`, and
+both the field and the variable are retired: a config that still sets the field
+is refused with a message saying so, and the variable is read by nothing. The
+file format did not change, so an existing store opens untouched and any
+SQLite-compatible client still reads it.
 
 **Turso keeps a native library cache, and the engine prepares it before the
 first query.** The driver is pure Go in the sense that matters — no cgo, no C
@@ -339,9 +341,17 @@ re-extracts a cache entry that will not verify. Two consequences worth knowing:
   container. A read-only or per-restart cache costs a 20 MB extraction on every
   start; a cache root that cannot be created at all fails the store open with an
   error naming the directory.
-- **A cache that cannot be repaired names the way out.** Clear that directory,
-  or run with `CREWLET_STORE_DRIVER=sqlite` — the certified fallback needs no
-  native library at all, which is exactly what makes it the escape hatch.
+- **A cache that cannot be repaired names the way out**, and there is no
+  second driver to fall back to any more: delete that directory by hand, or
+  point `TURSO_GO_CACHE_DIR` at a writable directory of its own.
+- **Alpine and other musl systems need the musl archive.** The native library
+  is linked against a C library, and each release publishes both — a
+  `crewlet_<version>_linux_<arch>.tar.gz` for glibc and a
+  `..._linux_<arch>_musl.tar.gz` for musl. Run the glibc binary on musl and
+  the library extracts, verifies, and then will not load; the engine says so
+  and names the archive to use instead. The published container image is
+  `debian:trixie-slim`, so it is the glibc one — an image re-based on Alpine
+  needs the musl binary.
 
 **The engine owns the file exclusively.** A second process pointed at the same
 path is not a degraded configuration, it is corruption waiting for a schedule

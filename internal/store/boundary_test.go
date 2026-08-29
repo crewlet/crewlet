@@ -80,7 +80,7 @@ func TestNullBoundary(t *testing.T) {
 func TestVectorEncoding(t *testing.T) {
 	t.Parallel()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "v.db"),
-		store.Options{Driver: store.DriverSQLite, EmbeddingDim: 4})
+		store.Options{EmbeddingDim: 4})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestVectorEncoding(t *testing.T) {
 func TestVectorDimensionUnconfigured(t *testing.T) {
 	t.Parallel()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "v0.db"),
-		store.Options{Driver: store.DriverSQLite})
+		store.Options{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

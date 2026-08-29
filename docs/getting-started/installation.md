@@ -21,9 +21,18 @@ Two things are worth having anyway, for what runs *around* it:
 go install github.com/crewlet/crewlet/cmd/crewlet@latest
 ```
 
-Or take a signed release binary — every tag publishes archives for linux,
-macOS and Windows on amd64 and arm64, plus a `checksums.txt` with a keyless
-[Sigstore](https://www.sigstore.dev/) signature beside it:
+Or take a signed release binary — every tag publishes archives for linux and
+macOS on amd64 and arm64, plus a musl linux build for each architecture, and a
+`checksums.txt` with a keyless [Sigstore](https://www.sigstore.dev/) signature
+beside it. **Take the `_musl` archive on Alpine** and the plain one everywhere
+else; the difference is the C library the embedded database engine is linked
+against, and the wrong one fails at the first query with a message saying so.
+
+> **There is no Windows build.** The store driver ships its database engine as
+> a native library that upstream embeds for windows/amd64 and not for
+> windows/arm64, so half of the Windows matrix could never open a store. macOS
+> and linux, or the container image, or WSL.
+
 
 ```bash
 # from https://github.com/crewlet/crewlet/releases

@@ -8,32 +8,51 @@ import (
 // Capabilities records what the live driver can actually do, measured at Open
 // rather than assumed from a version number.
 //
-// The three answers here are the ones decisions/002 found the docs and
-// the code disagreeing about: Turso ships the vector column type and the
-// distance functions, but its ANN index and its full-text index are announced
-// surface not yet reachable from Go. Each feature sits behind exactly one
-// query function, so when a driver upgrade lands one the change is that
-// function and nothing else — and the probe is what tells the change it may
-// happen. See capability_test.go, which turns each answer into a test that
-// passes, skips, or fails deliberately.
+// The three answers here are the ones decisions/002 found the docs and the
+// code disagreeing about: Turso ships the vector column type and the distance
+// functions, but its ANN index and its full-text index are announced surface
+// not yet reachable from Go. That is still true at the pinned version, and it
+// is the reason this type survived the drop of the second driver
+// (decisions/003): with one driver these are no longer a comparison between
+// two implementations, they are a TRIPWIRE on one. A pin bump that lands a
+// feature turns a skipping test into a passing one, and a pin bump that loses
+// one fails the build — see capability_test.go, which turns each answer into a
+// test that passes, skips, or fails deliberately.
+//
+// A probe never fails Open, including VectorFunctions. Recall degrades to
+// empty rather than taking a company down with it (internal/learning is best
+// effort throughout), so a driver regression here should read as a capability
+// that vanished in the log line and in the test — not as an engine that will
+// not start.
 type Capabilities struct {
 	// VectorFunctions is vector32() and vector_distance_cos(): similarity
-	// computed by the database. When false, recall runs a cosine loop in
-	// Go over the same rows. Both are correct at the real workload — a
-	// per-agent diary and compacted episodes, thousands of rows, always
-	// filtered by agent first — so this decides where the arithmetic
-	// happens, not whether recall works.
+	// computed by the database. It is what recall's ORDER BY is written
+	// against — the distance arithmetic runs in the database and only the
+	// rows that survive the limit cross the driver boundary.
+	//
+	// TRUE on the pinned driver. It was a branch when there were two
+	// drivers and one of them had no vector functions at all; it is a
+	// requirement now, and the honest reading of a false here is "this
+	// build's recall returns nothing", not "recall takes the other path".
 	VectorFunctions bool
 
 	// VectorIndex is an approximate-nearest-neighbour index over a vector
-	// column. False means recall is a brute-force scan behind the
-	// per-agent index, which is what it is today on both drivers.
+	// column. FALSE on the pinned driver, so recall is a SCAN behind the
+	// per-agent index rather than an index lookup — the arithmetic is the
+	// database's, the row set it runs over is still every embedded row for
+	// one agent. That is correct at the real workload (a per-agent diary
+	// and compacted episodes, thousands of rows, always filtered by agent
+	// first) and it is not the same claim as "native vector search".
 	VectorIndex bool
 
-	// FullTextSearch is a queryable full-text index — an fts5 virtual
-	// table on mainline SQLite, or Turso's own fts() index expression.
-	// Nothing in v1 depends on it: knowledge search is the external
-	// backends behind KnowledgeSearcher, exactly as in the Python engine.
+	// FullTextSearch is a queryable full-text index — Turso's own fts()
+	// index expression, or an fts5 virtual table. FALSE on the pinned
+	// driver: fts5 is not a registered module and fts() is a parse error
+	// in CREATE INDEX (measured).
+	//
+	// Nothing depends on it. Knowledge search is the external backends
+	// behind knowledge.Searcher, and this is here so that the day Turso's
+	// index reaches Go is a day this project notices.
 	FullTextSearch bool
 }
 
@@ -42,12 +61,11 @@ type Capabilities struct {
 // Every probe runs inside its own transaction and rolls it back, so a probe
 // that half-succeeds leaves nothing behind and a probe that fails cannot
 // poison the next one — a failed statement does not abort a SQLite
-// transaction, but continuing to use one after an error is a rule neither
-// driver documents, and one transaction per question costs microseconds.
+// transaction, but continuing to use one after an error is a rule the driver
+// does not document, and one transaction per question costs microseconds.
 //
 // A probe never fails Open. An unavailable capability is an answer, not an
-// error: the whole point is that the engine runs on a driver that has none of
-// them.
+// error — see the type doc for what each false actually costs.
 func probe(ctx context.Context, db *sql.DB) Capabilities {
 	return Capabilities{
 		VectorFunctions: probeVectorFunctions(ctx, db),
@@ -79,8 +97,10 @@ func probeVectorIndex(ctx context.Context, db *sql.DB) bool {
 
 // probeFullText accepts either mechanism, because the capability the engine
 // would eventually use is "a full-text index exists", not "this exact syntax
-// parses". A true answer still leaves the query layer to branch on which one
-// answered — which is why Phase 8 is design-gated rather than a port.
+// parses". The fts5 arm is not dead code for a single driver: it is the shape
+// Turso would most plausibly land, and a probe that only asked for the
+// syntax this driver rejects today could report a capability it has as
+// missing.
 func probeFullText(ctx context.Context, db *sql.DB) bool {
 	if probeInRollback(ctx, db, []string{
 		`CREATE VIRTUAL TABLE crewlet_probe_fts USING fts5(body)`,

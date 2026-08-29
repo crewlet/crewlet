@@ -129,11 +129,48 @@ func loadOrHealTursoLibrary(dir string) error {
 	clearTursoCache(dir)
 	if err := loadTursoLibrary(); err != nil {
 		return fmt.Errorf("store: the Turso native library could not be prepared. Its cache "+
-			"at %s was cleared and re-extracted and still does not verify — clear that "+
-			"directory by hand, or select the certified fallback driver with %s=%s: %w",
-			dir, DriverEnv, DriverSQLite, err)
+			"at %s was cleared and re-extracted and still does not verify or will not "+
+			"load — delete that directory by hand, or point %s at a writable directory "+
+			"of its own and start again. There is no second driver to fall back to.%s: %w",
+			dir, tursoCacheEnv, libcAdvice(), err)
 	}
 	return nil
+}
+
+// libcAdvice names the C library mismatch, when there is evidence of one.
+//
+// # Why this sentence exists
+//
+// The engine is a static pure-Go binary, so an operator reasonably assumes it
+// runs anywhere linux runs — and it does, right up until the store opens. The
+// database engine is a native shared object, and the driver embeds a GLIBC
+// build and a MUSL build behind a build tag. Extract the glibc one on Alpine
+// and every step before the last one SUCCEEDS: the file is written, its
+// sha256 matches, and then dlopen fails because the loader is not there.
+//
+// The message that failure lands in is about a cache that will not verify —
+// which is exactly the wrong thing to tell someone whose cache is perfect. It
+// sends them to delete a directory, watch it be rebuilt identically, and
+// delete it again. The archive they need is `_musl` (or `_linux` if they built
+// with the tag and deployed on glibc), and nothing anywhere would have said so.
+//
+// Appended rather than substituted, and phrased as "looks like": the evidence
+// is one glob (see runningOnMusl), a host can carry both C libraries, and the
+// underlying error is still the thing to read. A hint that is occasionally
+// unnecessary is much cheaper than the absence of the only hint that helps.
+func libcAdvice() string {
+	if runningOnMusl() == builtForMusl {
+		return ""
+	}
+	if builtForMusl {
+		return "\n\nThis binary was built with -tags musl, for a musl C library, and this " +
+			"host does not look like a musl system. Use the plain linux archive " +
+			"(crewlet_<version>_linux_<arch>.tar.gz) instead."
+	}
+	return "\n\nThis host looks like a musl system (Alpine and friends) and this binary " +
+		"carries the glibc build of the database engine, which will not load there. " +
+		"Use the musl archive (crewlet_<version>_linux_<arch>_musl.tar.gz), or run " +
+		"the published container image, which is glibc."
 }
 
 // loadTursoLibrary extracts-if-absent, verifies and loads.

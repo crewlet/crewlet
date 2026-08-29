@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The capability matrix, re-measured against whatever driver versions this
+// The capability matrix, re-measured against whatever driver version this
 // build pins.
 //
 // It exists because decisions/002 found the documentation and the code
@@ -16,6 +16,11 @@ import (
 // yet reachable from Go. Pinning a driver and asserting a matrix in prose is
 // how that goes stale silently; asserting it in a test is how a pin bump
 // reports what it changed.
+//
+// ONE DRIVER, AND THE MATRIX IS WHY IT SURVIVED. Dropping mainline SQLite
+// (decisions/003) took away the comparison this table used to draw, and it
+// would have been easy to delete the whole file with it. What is left is the
+// more useful half: a tripwire on the one driver the engine ships.
 //
 // Each entry has three outcomes, and the middle one is the point:
 //
@@ -26,52 +31,42 @@ import (
 //   - anything else            -> FAIL. A capability that vanished is a
 //     regression; one that appeared without the matrix knowing is a matrix
 //     that has stopped describing the build.
-var capabilityMatrix = map[store.Driver]struct {
+//
+// turso.tech/database/tursogo v0.8.0-pre.7: the vector functions ship;
+// libsql_vector_idx() in CREATE INDEX and the fts() index expression are both
+// parse errors, and fts5 is not a registered module.
+var capabilityMatrix = struct {
 	vectorFunctions bool
 	vectorIndex     bool
 	fullTextSearch  bool
-}{
-	// turso.tech/database/tursogo v0.8.0-pre.7: the vector functions ship;
-	// libsql_vector_idx() in CREATE INDEX and the fts() index expression
-	// are both parse errors, and fts5 is not a registered module.
-	store.DriverTurso: {vectorFunctions: true, vectorIndex: false, fullTextSearch: false},
-	// modernc.org/sqlite: mainline SQLite, so no vector extension at all —
-	// recall runs a cosine loop in Go — but fts5 is compiled in, which is
-	// the inversion worth recording: neither driver is a superset of the
-	// other, and the dialect this package writes in is their intersection.
-	store.DriverSQLite: {vectorFunctions: false, vectorIndex: false, fullTextSearch: true},
-}
+}{vectorFunctions: true, vectorIndex: false, fullTextSearch: false}
 
 func TestCapabilityMatrix(t *testing.T) {
-	for drv, want := range capabilityMatrix {
-		t.Run(string(drv), func(t *testing.T) {
-			t.Parallel()
-			requireDriver(t, drv)
-			db, err := store.Open(t.Context(),
-				filepath.Join(t.TempDir(), "caps.db"), store.Options{Driver: drv})
-			if err != nil {
-				t.Fatalf("open: %v", err)
-			}
-			defer func() { _ = db.Close() }()
-			caps := db.Caps()
-
-			t.Run("VectorFunctions", func(t *testing.T) {
-				gate(t, caps.VectorFunctions, want.vectorFunctions,
-					"vector32()/vector_distance_cos() reach the Go driver")
-				exerciseVectorFunctions(t, db)
-			})
-			t.Run("VectorIndex", func(t *testing.T) {
-				gate(t, caps.VectorIndex, want.vectorIndex,
-					"an ANN vector index reaches the Go driver")
-				exerciseVectorIndex(t, db)
-			})
-			t.Run("FullTextSearch", func(t *testing.T) {
-				gate(t, caps.FullTextSearch, want.fullTextSearch,
-					"a queryable full-text index reaches the Go driver")
-				exerciseFullText(t, db)
-			})
-		})
+	t.Parallel()
+	want := capabilityMatrix
+	db, err := store.Open(t.Context(),
+		filepath.Join(t.TempDir(), "caps.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
 	}
+	defer func() { _ = db.Close() }()
+	caps := db.Caps()
+
+	t.Run("VectorFunctions", func(t *testing.T) {
+		gate(t, caps.VectorFunctions, want.vectorFunctions,
+			"vector32()/vector_distance_cos() reach the Go driver")
+		exerciseVectorFunctions(t, db)
+	})
+	t.Run("VectorIndex", func(t *testing.T) {
+		gate(t, caps.VectorIndex, want.vectorIndex,
+			"an ANN vector index reaches the Go driver")
+		exerciseVectorIndex(t, db)
+	})
+	t.Run("FullTextSearch", func(t *testing.T) {
+		gate(t, caps.FullTextSearch, want.fullTextSearch,
+			"a queryable full-text index reaches the Go driver")
+		exerciseFullText(t, db)
+	})
 }
 
 // gate compares the probe against the recorded matrix and decides whether the
@@ -175,41 +170,36 @@ func exerciseFullText(t *testing.T, db *store.DB) {
 // case makes a PLAIN unique index correct, and a plain index needs no predicate
 // at the call site at all.
 func TestPartialIndexConflictTarget(t *testing.T) {
-	for _, drv := range certified {
-		t.Run(string(drv), func(t *testing.T) {
-			t.Parallel()
-			requireDriver(t, drv)
-			db, err := store.Open(t.Context(),
-				filepath.Join(t.TempDir(), "arb.db"), store.Options{Driver: drv})
-			if err != nil {
-				t.Fatalf("open: %v", err)
-			}
-			defer func() { _ = db.Close() }()
-			ctx := t.Context()
+	t.Parallel()
+	db, err := store.Open(t.Context(),
+		filepath.Join(t.TempDir(), "arb.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	ctx := t.Context()
 
-			for _, stmt := range []string{
-				`CREATE TABLE arb (h TEXT NOT NULL, k TEXT NOT NULL DEFAULT '')`,
-				`CREATE UNIQUE INDEX arb_partial ON arb (h, k) WHERE k <> ''`,
-				`INSERT INTO arb (h, k) VALUES ('a', 'x')`,
-			} {
-				if _, err := db.SQL().ExecContext(ctx, stmt); err != nil {
-					t.Fatalf("%s: %v", stmt, err)
-				}
-			}
+	for _, stmt := range []string{
+		`CREATE TABLE arb (h TEXT NOT NULL, k TEXT NOT NULL DEFAULT '')`,
+		`CREATE UNIQUE INDEX arb_partial ON arb (h, k) WHERE k <> ''`,
+		`INSERT INTO arb (h, k) VALUES ('a', 'x')`,
+	} {
+		if _, err := db.SQL().ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
 
-			if _, err := db.SQL().ExecContext(ctx,
-				`INSERT INTO arb (h, k) VALUES ('a','x') ON CONFLICT (h, k) DO NOTHING`,
-			); err == nil {
-				t.Fatal("a bare ON CONFLICT now resolves against a partial index — " +
-					"re-read decisions/002 §2 before relying on it")
-			}
+	if _, err := db.SQL().ExecContext(ctx,
+		`INSERT INTO arb (h, k) VALUES ('a','x') ON CONFLICT (h, k) DO NOTHING`,
+	); err == nil {
+		t.Fatal("a bare ON CONFLICT now resolves against a partial index — " +
+			"re-read decisions/002 §2 before relying on it")
+	}
 
-			if _, err := db.SQL().ExecContext(ctx,
-				`INSERT INTO arb (h, k) VALUES ('a','x')
+	if _, err := db.SQL().ExecContext(ctx,
+		`INSERT INTO arb (h, k) VALUES ('a','x')
 				 ON CONFLICT (h, k) WHERE k <> '' DO NOTHING`,
-			); err != nil {
-				t.Fatalf("repeating the predicate should parse: %v", err)
-			}
-		})
+	); err != nil {
+		t.Fatalf("repeating the predicate should parse: %v", err)
 	}
 }

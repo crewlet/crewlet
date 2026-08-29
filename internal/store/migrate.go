@@ -174,25 +174,34 @@ func SchemaVersions() []string {
 // deployment looks like rather than an error: reporting a missing table
 // would send an operator to investigate the state every new install starts
 // in.
+//
+// # It takes the lock, and gives it back
+//
+// Reading is still a second process on a file this engine owns exclusively,
+// and the answer to that is [ErrLocked] naming the holder — not an opaque
+// driver error, and not a silent read of a file somebody is writing. It held
+// no lock at all until this was fixed, so `crewlet migrate` reported the
+// schema of a live engine's database and only refused at the point it tried
+// to change it: the check that runs first was the one with no guard.
+//
+// The lock is released before returning, because a caller that goes on to
+// migrate calls [Open] next and must be able to take it. Inside one process
+// that is free — the claim is refcounted — so the two calls never contend
+// with each other, only with another process.
 func Pending(ctx context.Context, path string, opts Options) (applied, pending []string, err error) {
-	drv, err := resolveDriver(opts.Driver)
+	lock, err := lockStore(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	busy := opts.BusyTimeout
-	if busy <= 0 {
-		busy = defaultBusyTimeout
-	}
-	pool, err := openPool(string(drv), path, busy, opts.WrapDriver)
+	defer lock.release()
+
+	pool, err := openPrepared(ctx, path, opts)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer func() { _ = pool.Close() }()
-	if err = pool.PingContext(ctx); err != nil {
-		return nil, nil, fmt.Errorf("store: open %s (%s): %w", path, drv, err)
-	}
 
-	db := &DB{sql: pool, drv: drv, path: path}
+	db := &DB{sql: pool, path: path}
 	if applied, err = db.appliedVersions(ctx); err != nil {
 		// A database that has never been migrated has no
 		// schema_migrations table, and that is the ordinary state of a

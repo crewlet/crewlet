@@ -92,26 +92,45 @@ applied to nothing produced a green release. A check whose failure mode is
 silence has to compare against something the tree computes, not against a
 constant somebody remembered to write down.
 
-## Six targets
+## Six archives, four platforms
 
-`linux`, `darwin` and `windows` × `amd64` and `arm64`. All six cross-compile
-from one machine with `CGO_ENABLED=0`, because everything underneath is pure
-Go — both certified store drivers (`turso.tech/database/tursogo`,
-`modernc.org/sqlite`) and the embedded NATS server. That is what keeps this a
-plain GOOS/GOARCH loop instead of a cross-toolchain estate, and it is worth
-protecting: a dependency that needs cgo turns this section into a zig
+`linux` and `darwin` × `amd64` and `arm64`, plus a second `linux` build tagged
+`musl` for each architecture. All of them cross-compile from one machine with
+`CGO_ENABLED=0`, because everything underneath is pure Go — the store driver
+(`turso.tech/database/tursogo`) and the embedded NATS server. That is what
+keeps this a plain GOOS/GOARCH loop instead of a cross-toolchain estate, and it
+is worth protecting: a dependency that needs cgo turns this section into a zig
 toolchain and a build container.
 
-**Windows ships with a caveat, deliberately.** The local sandbox backend is
-POSIX-only and says so at construction
-(`internal/sandbox/process_other.go`): every containment property it
-offers — process groups and `killpg` to reach a coding agent's whole tree,
-`SIGSTOP`/`SIGCONT` for the clarification pause, `/proc` start times for the
-pid-reuse guard — is a POSIX primitive with no equivalent. So a Windows
-operator gets an engine that runs a company and refuses `type: local` code
-work, naming the reason, rather than no binary at all. The alternative
-readings — ship a partial port, or ship nothing — are worse in both
-directions.
+**"Pure Go" is not "self-contained", and that is what bounds the list.** The
+driver's database engine is a native shared object embedded in its module and
+extracted at run time. Upstream embeds it for linux/amd64, linux/arm64 (each
+glibc and musl), darwin/amd64, darwin/arm64 and windows/amd64 — and for nothing
+else. The compiler would happily produce a binary for any GOOS; that binary
+would fail at its first query. `internal/store/platform.go` makes it fail at
+build time instead, with a sentence.
+
+**musl is a second BUILD, not a runtime switch**, because which C library the
+library is linked against is fixed when the archive is built. Without it, an
+operator re-basing the shipped image on Alpine gets the glibc object: it
+extracts, its sha256 matches, and `dlopen` fails — arriving as "the cache will
+not verify", about a cache that is perfect. `internal/store/turso.go` now adds
+a sentence naming the right archive, and this build is what gives that sentence
+something to point at.
+
+**Windows was dropped, and it is worth being exact about why.** Not "Turso has
+no Windows build" — it has one, for amd64. The release published windows/amd64
+AND windows/arm64, and the second had no embedded library at all: it started
+fine and failed at its first query unless the operator knew to set
+`CREWLET_STORE_DRIVER=sqlite`, the fallback driver that d-003 has since
+removed. Shipping one architecture of an operating system and silently breaking
+the other is worse than shipping neither. A Windows build was in any case the
+one that refused `providers.sandbox: {type: local}`: the local sandbox backend
+is POSIX-only and says so at construction (`internal/sandbox/process_other.go`),
+because every containment property it offers — process groups and `killpg` to
+reach a coding agent's whole tree, `SIGSTOP`/`SIGCONT` for the clarification
+pause, `/proc` start times for the pid-reuse guard — is a POSIX primitive with
+no equivalent.
 
 ## One image, with a userland
 

@@ -1072,49 +1072,47 @@ func TestPinnedIsStoredAsTheIntegerTheCuratorFiltersOn(t *testing.T) {
 	// The candidate query filters `pinned = 0`, which is a comparison against
 	// whatever the driver stored for a Go bool. A driver that encoded one as
 	// anything else would not raise — it would quietly hand every pinned
-	// skill to the curator — so the stored encoding is asserted directly, on
-	// both certified drivers, rather than inferred from behaviour.
-	for _, drv := range []store.Driver{store.DriverTurso, store.DriverSQLite} {
-		t.Run(string(drv), func(t *testing.T) {
-			t.Parallel()
-			s, db := skillStore(t, func(o *store.Options) { o.Driver = drv })
-			ctx := context.Background()
-			sk := mustInsert(t, s, newSkill("alice", "triage", base))
+	// skill to the curator — so the stored encoding is asserted directly
+	// rather than inferred from behaviour. It used to run on both certified
+	// drivers; there is one now (decisions/003), and the encoding is exactly
+	// as worth pinning against a driver upgrade as it was against a second
+	// driver.
+	s, db := skillStore(t)
+	ctx := context.Background()
+	sk := mustInsert(t, s, newSkill("alice", "triage", base))
 
-			raw := func() int {
-				t.Helper()
-				var v int
-				if err := db.SQL().QueryRowContext(ctx,
-					`SELECT pinned FROM synthesized_skills WHERE id = ?`, sk.ID,
-				).Scan(&v); err != nil {
-					t.Fatalf("read pinned: %v", err)
-				}
-				return v
-			}
-			if got := raw(); got != 0 {
-				t.Errorf("unpinned stored as %d, want 0", got)
-			}
-			if _, err := s.SetPinned(ctx, sk.ID, true); err != nil {
-				t.Fatalf("SetPinned: %v", err)
-			}
-			if got := raw(); got != 1 {
-				t.Errorf("pinned stored as %d, want 1", got)
-			}
-			cands, err := s.CuratorCandidates(ctx, "alice")
-			if err != nil || len(cands) != 0 {
-				t.Errorf("candidates = %v (%v), want the pinned row filtered out",
-					skillNames(cands), err)
-			}
-			if _, err := s.SetPinned(ctx, sk.ID, false); err != nil {
-				t.Fatalf("SetPinned: %v", err)
-			}
-			if got := raw(); got != 0 {
-				t.Errorf("unpinned stored as %d, want 0", got)
-			}
-			if cands, _ := s.CuratorCandidates(ctx, "alice"); len(cands) != 1 {
-				t.Errorf("candidates = %v, want the unpinned row back", skillNames(cands))
-			}
-		})
+	raw := func() int {
+		t.Helper()
+		var v int
+		if err := db.SQL().QueryRowContext(ctx,
+			`SELECT pinned FROM synthesized_skills WHERE id = ?`, sk.ID,
+		).Scan(&v); err != nil {
+			t.Fatalf("read pinned: %v", err)
+		}
+		return v
+	}
+	if got := raw(); got != 0 {
+		t.Errorf("unpinned stored as %d, want 0", got)
+	}
+	if _, err := s.SetPinned(ctx, sk.ID, true); err != nil {
+		t.Fatalf("SetPinned: %v", err)
+	}
+	if got := raw(); got != 1 {
+		t.Errorf("pinned stored as %d, want 1", got)
+	}
+	cands, err := s.CuratorCandidates(ctx, "alice")
+	if err != nil || len(cands) != 0 {
+		t.Errorf("candidates = %v (%v), want the pinned row filtered out",
+			skillNames(cands), err)
+	}
+	if _, err := s.SetPinned(ctx, sk.ID, false); err != nil {
+		t.Fatalf("SetPinned: %v", err)
+	}
+	if got := raw(); got != 0 {
+		t.Errorf("unpinned stored as %d, want 0", got)
+	}
+	if cands, _ := s.CuratorCandidates(ctx, "alice"); len(cands) != 1 {
+		t.Errorf("candidates = %v, want the unpinned row back", skillNames(cands))
 	}
 }
 

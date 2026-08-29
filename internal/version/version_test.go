@@ -88,8 +88,18 @@ func TestTheReleaseConfigStampsThisVariable(t *testing.T) {
 	}
 }
 
-// stampTarget pulls the one `-X <importpath>.<name>=<value>` ldflag out of the
+// stampTarget pulls the `-X <importpath>.<name>=<value>` ldflag out of the
 // release config and splits it where the linker does.
+//
+// EVERY BUILD STAMPS, AND THEY ALL STAMP THE SAME THING. There is more than
+// one build now — the glibc linux/darwin matrix and the musl linux one — and
+// a second build id is exactly the shape that ships an UNSTAMPED binary: the
+// ldflags block is per-build, so a copied entry that lost the -X line links
+// fine and reports its module build info instead of the tag. Nothing else
+// would notice, because the artifact that went out is the one nobody checked.
+//
+// So the count is compared against the number of builds rather than against
+// 1, and the targets have to agree with each other.
 //
 // The split is on the first dot AFTER the last slash: an import path is full
 // of dots (github.com), and only the final path element can carry the one that
@@ -103,9 +113,18 @@ func stampTarget(t *testing.T, config string) (importPath, varName string) {
 			flags = append(flags, strings.TrimSpace(rest))
 		}
 	}
-	if len(flags) != 1 {
-		t.Fatalf("-X ldflags in .goreleaser.yaml = %v, want exactly one: the "+
-			"release stamps one version variable", flags)
+	if builds := countBuilds(t, config); len(flags) != builds {
+		t.Fatalf("-X ldflags in .goreleaser.yaml = %v (%d), but there are %d "+
+			"builds: every build must stamp the version, or the one that "+
+			"does not ships a binary reporting its module build info "+
+			"instead of the tag", flags, len(flags), builds)
+	}
+	for _, flag := range flags[1:] {
+		if flag != flags[0] {
+			t.Fatalf("the builds stamp different targets (%q and %q); one "+
+				"of them is writing to a variable the other does not have",
+				flags[0], flag)
+		}
 	}
 	target, _, ok := strings.Cut(flags[0], "=")
 	if !ok {
@@ -120,6 +139,35 @@ func stampTarget(t *testing.T, config string) (importPath, varName string) {
 		t.Fatalf("the -X target %q names no variable", target)
 	}
 	return target[:slash+1] + pkg, name
+}
+
+// countBuilds reports how many entries the release config's `builds:` block
+// has, by counting the `- id:` lines between it and the next top-level key.
+//
+// Line-scanned rather than YAML-parsed, like everything else in this file: the
+// point of these guards is that they read the same bytes goreleaser does with
+// no dependency of their own, so a malformed config fails here rather than
+// somewhere a test had already normalised it.
+func countBuilds(t *testing.T, config string) int {
+	t.Helper()
+	inBuilds, n := false, 0
+	for _, line := range strings.Split(config, "\n") {
+		switch {
+		case line == "builds:":
+			inBuilds = true
+		case !inBuilds:
+			continue
+		case strings.HasPrefix(line, "  - id:"):
+			n++
+		case line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "#"):
+			// A new top-level key ends the block.
+			inBuilds = false
+		}
+	}
+	if n == 0 {
+		t.Fatal(".goreleaser.yaml declares no builds")
+	}
+	return n
 }
 
 // thisPackagesImportPath is what the linker would have to be given to reach

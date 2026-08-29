@@ -68,9 +68,11 @@ ON CONFLICT (scope_type, scope_id, schedule_name, fire_label, target_handle) DO 
 // constraint on this table, and swallowing an unexpected violation is how a
 // row silently stops being written.
 //
-// Reporting rests on RowsAffected rather than on RETURNING: both certified
-// drivers implement it, where RETURNING is a newer SQLite feature and this
-// statement must stay inside the dialect intersection (d-002).
+// Reporting rests on RowsAffected rather than on RETURNING. That began as a
+// dialect-intersection rule for two drivers (d-002, retired by d-003); it
+// stays because RowsAffected is what this statement needs and is the answer
+// database/sql gives whatever the driver does, so the ledger's tri-state does
+// not depend on a newer SQLite feature reaching the one that is pinned.
 func (l *Ledger) Claim(ctx context.Context, run schedule.Run) (bool, error) {
 	if l == nil || l.db == nil {
 		return false, ErrNoDB

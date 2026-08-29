@@ -237,14 +237,6 @@
           "minimum": 0,
           "type": "number"
         },
-        "driver": {
-          "description": "turso (default) or sqlite.",
-          "enum": [
-            "turso",
-            "sqlite"
-          ],
-          "type": "string"
-        },
         "max_open_conns": {
           "description": "Connection pool bound; 0 takes the store default.",
           "minimum": 0,

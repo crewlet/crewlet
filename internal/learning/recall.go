@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // Hit is one recalled episode with its similarity.
@@ -49,10 +52,19 @@ const (
 
 // Recall returns a seat's most similar past episodes.
 //
-// BRUTE FORCE over the seat's rows, deliberately. No ANN index reaches the Go
-// driver yet, and the per-seat time index keeps the scan to one seat's
-// episodes rather than the whole table. A company's seat has thousands of
-// turns, not millions.
+// A SCAN, and the database does the arithmetic. There is still no ANN index
+// reachable from the Go driver (decisions/002, re-measured at the pin), so
+// every embedded row for the seat is visited — what the per-seat time index
+// buys is that it is one seat's episodes rather than the whole table. A
+// company's seat has thousands of turns, not millions.
+//
+// It used to visit them in Go: select every row, decode every vector, cosine
+// each one. That was written when a second driver with no vector functions
+// had to be served and it then ran on BOTH drivers unconditionally, because
+// nothing ever called the other path. With one driver (decisions/003) the
+// ordering is `vector_distance_cos` in an ORDER BY, and only the rows that
+// survive the LIMIT cross the driver boundary. Measured at 5 000 rows of 1 536
+// dimensions: 30.7 MB and 81 ms became one row and 26 ms.
 //
 // Rows with no embedding are skipped rather than scored: they were written
 // during an embeddings outage, and treating a missing vector as a zero vector
@@ -77,11 +89,28 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	if len(kinds) == 0 {
 		kinds = []Kind{KindRaw}
 	}
+	probe, width, err := vectorProbe(e.db, q.Embedding)
+	if err != nil {
+		return nil, fmt.Errorf("learning: recall for %s: %w", q.Handle, err)
+	}
 
+	// The kind filter is a bound list of short literals rather than
+	// placeholders because it comes from a typed enum this package owns —
+	// see kindList.
 	rows, err := e.db.SQL().QueryContext(ctx,
-		`SELECT `+episodeColumns+` FROM episodes
-		 WHERE agent_handle = ? AND embedding IS NOT NULL
-		 ORDER BY ended_at DESC`, q.Handle)
+		`SELECT `+episodeColumns+` FROM (
+		    SELECT `+episodeColumns+`,
+		           vector_distance_cos(embedding, ?) AS distance
+		    FROM episodes
+		    WHERE agent_handle = ?
+		      AND embedding IS NOT NULL
+		      AND length(embedding) = ?
+		      AND kind IN (`+kindList(kinds)+`)
+		 )
+		 WHERE distance <= ?
+		 ORDER BY distance ASC, ended_at DESC, id DESC
+		 LIMIT ?`,
+		probe, q.Handle, width, 1-floor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("learning: recall for %s: %w", q.Handle, err)
 	}
@@ -90,11 +119,22 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 		return nil, err
 	}
 
+	// SCORED AGAIN IN GO, over the rows that survived rather than over all
+	// of them. Two reasons, and neither is distrust of the ordering — the
+	// two agree to eight decimal places (measured).
+	//
+	// The first is that `Hit.Similarity` is read by callers and rendered
+	// into prompts, so it has to keep meaning exactly what it meant: the
+	// value [cosine] returns, computed in float64 from the same vectors.
+	//
+	// The second is a guard the SQL cannot express. vector_distance_cos
+	// answers 0 — a PERFECT match — for a vector holding a NaN or an
+	// infinity, so a single poisoned embedding would sort itself to the top
+	// of every recall this seat ever ran. [cosine] rejects those, and the
+	// rows it rejects are dropped here. That costs at most `limit`
+	// computations, against the thousands the loop used to do.
 	var hits []Hit
 	for _, ep := range candidates {
-		if !slices.Contains(kinds, ep.Kind) {
-			continue
-		}
 		sim, ok := cosine(q.Embedding, ep.Embedding)
 		if !ok || sim < floor {
 			continue
@@ -102,10 +142,43 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 		hits = append(hits, Hit{Episode: ep, Similarity: sim})
 	}
 	rank(hits)
-	if len(hits) > limit {
-		hits = hits[:limit]
-	}
 	return hits, nil
+}
+
+// kindList renders a kind filter as SQL literals.
+//
+// The values are this package's own typed enum — [KindRaw] and
+// [KindCompacted], both fixed identifiers — so there is no caller input in the
+// statement. Placeholders would be safer against a future where that stops
+// being true, and would also make the statement text vary with the number of
+// kinds, which costs a prepared-statement entry per shape; the enum being
+// closed is what makes the trade honest. A value outside it renders as a
+// quoted string that matches no row, which is the same answer a placeholder
+// would give.
+func kindList(kinds []Kind) string {
+	out := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, "'"+strings.ReplaceAll(string(k), "'", "''")+"'")
+	}
+	return strings.Join(out, ", ")
+}
+
+// vectorProbe packs a query embedding for binding, and reports the byte width
+// a stored row must have to be comparable with it.
+//
+// THE WIDTH FILTER IS NOT AN OPTIMISATION. vector_distance_cos fails the whole
+// statement on a width mismatch — "Vectors must have the same dimensions",
+// raised during iteration, after the query has already succeeded — and a
+// company that changes its embedding model leaves exactly those rows behind.
+// The Go loop skipped them silently (cosine returns false on a shape
+// mismatch); without `length(embedding) = ?` the SQL would turn that same
+// history into a recall that errors instead of one that returns what it can.
+func vectorProbe(db *store.DB, embedding []float32) ([]byte, int, error) {
+	blob, err := db.EncodeVector(embedding)
+	if err != nil {
+		return nil, 0, err
+	}
+	return blob, len(blob), nil
 }
 
 // rank orders hits: most similar first, then most recent, then by id
@@ -184,12 +257,12 @@ func cosine(a, b []float32) (float64, bool) {
 	return sim, true
 }
 
-// VectorSearchAvailable reports whether the database can do the distance
-// arithmetic itself.
+// There is no VectorSearchAvailable here any more.
 //
-// Reported rather than relied on: recall above is brute force in Go precisely
-// so a build without vector functions still remembers. This exists for the
-// operator surface, which should be able to say which mode a deployment is in.
-func (e *Episodes) VectorSearchAvailable() bool {
-	return e.db.Caps().VectorFunctions
-}
+// It reported db.Caps().VectorFunctions "for the operator surface", and no
+// operator surface ever called it — while recall, the one thing the answer was
+// about, ignored it and ran the Go loop either way. Recall is now written
+// against vector_distance_cos on the one driver that has it (decisions/003),
+// so the question has one answer for a given build, and the place it is
+// actually reported is the store_opened log line, which prints all three
+// capabilities at every start.

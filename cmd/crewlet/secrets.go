@@ -328,7 +328,6 @@ func openSecretValues(ctx context.Context, boot *config.Bootstrap) (*store.Secre
 	// columns are only sized when a migration actually runs — which a
 	// running node has already done.
 	db, err := store.Open(ctx, boot.Store.Path, store.Options{
-		Driver:       store.Driver(boot.Store.Driver),
 		MaxOpenConns: boot.Store.MaxOpenConns,
 		BusyTimeout: time.Duration(
 			boot.Store.BusyTimeoutSeconds * float64(time.Second)),

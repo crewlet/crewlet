@@ -196,7 +196,6 @@ node:
 
 store:
   path: /var/lib/crewlet/crewlet.db
-  driver: turso
 
 stream:
   type: embedded

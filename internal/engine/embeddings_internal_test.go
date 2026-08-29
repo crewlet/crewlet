@@ -97,7 +97,7 @@ func TestAConfiguredEmbedderIsBuiltAtItsDeclaredWidth(t *testing.T) {
 func engineOverStore(t *testing.T, width int) *Engine {
 	t.Helper()
 	db, err := store.Open(t.Context(), t.TempDir()+"/index.db",
-		store.Options{Driver: store.DriverSQLite, EmbeddingDim: width})
+		store.Options{EmbeddingDim: width})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

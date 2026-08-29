@@ -93,27 +93,61 @@ jobs:
           echo "node $(node --version)"
       - run: go test ./internal/e2e/... -race -count=1 -v
 
-  stores:
-    name: stores (dual driver)
+  # THERE IS NO SEPARATE "stores" JOB ANY MORE. One existed, running the store
+  # contract suites twice over CREWLET_STORE_DRIVER=turso|sqlite, because
+  # mainline SQLite was a certified fallback driver and the matrix was what
+  # kept every statement inside the two dialects' intersection. There is one
+  # driver now (decisions/003), the variable is gone, and the suites run in
+  # the `test` job with everything else — under -race, which the old job also
+  # gave them and which the general job gives them too.
+  #
+  # What the second driver actually caught is not lost: internal/store's
+  # capability_test.go re-measures Turso's vector and full-text surface at
+  # every run and fails when it MOVES in either direction, and
+  # TestTursoIsTheOnlyDriverInTheBinary fails if modernc.org/sqlite is ever
+  # linked back in.
+
+  cross:
+    name: cross-compile the release targets
     runs-on: ubuntu-latest
-    # Turso is the chosen embedded database and mainline SQLite is the
-    # certified fallback driver. Running the store contract suites
-    # against BOTH is what keeps the escape hatch real rather than
-    # theoretical, and what stops Turso-only SQL reaching the schema —
-    # Turso is currently the NARROWER dialect (see decisions/002).
+    # The release matrix is not exercised by any other job: `go build ./...`
+    # above compiles for the runner and nothing else, so a change that only
+    # breaks darwin — a build tag, a syscall, a platform-gated file — reaches
+    # the tag before anyone sees it, and a broken tag is a release that has to
+    # be re-cut. goreleaser is the thing that would catch it and it runs only
+    # on a `v*` push.
+    #
+    # The pairs mirror .goreleaser.yaml, and internal/version asserts that
+    # they still do. Compiling is the whole test: these binaries are not run,
+    # because a darwin binary cannot be, and what breaks a cross-target is
+    # almost always a build constraint rather than behaviour.
     strategy:
       fail-fast: false
       matrix:
-        driver: [turso, sqlite]
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - run: go test ./internal/store/... -race -count=1
+      - run: go build ./...
         env:
-          CREWLET_STORE_DRIVER: ${{ matrix.driver }}
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+
+      # The musl linux archive the release publishes. Same source, different
+      # embedded shared object — the tag is what selects it in
+      # turso-go-platform-libs — so compiling it is a separate build.
+      - name: the musl build
+        if: matrix.goos == 'linux'
+        run: go build -tags musl ./...
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
 
   lint:
     name: golangci-lint
@@ -146,10 +180,11 @@ jobs:
   # again, at the cost of a second full race-detector run on every pull
   # request, reported under a name that implied coverage it did not have.
   #
-  # The suites that genuinely need a service each have their own job and
-  # their own gate: `stores` over both certified drivers, and `pulsar`
-  # against a real broker. Embedded NATS runs in-process, so the JetStream
-  # conformance and fleet suites need no container at all.
+  # The suite that genuinely needs a service has its own job and its own
+  # gate: `pulsar`, against a real broker. Embedded NATS runs in-process, so
+  # the JetStream conformance and fleet suites need no container at all, and
+  # the store's suites run under `test` now that there is one driver to run
+  # them on.
 
   pulsar:
     name: pulsar conformance

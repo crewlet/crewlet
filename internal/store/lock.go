@@ -15,20 +15,22 @@ import (
 //
 // # Why a lock exists at all
 //
-// The package doc states the rule; this is what makes it true. Neither
-// certified driver supports multi-process access to a database file, and —
-// the part that turns a rule into an incident — they disagree about whether
-// to say so. Measured, one process holding the file and a second opening it:
+// The package doc states the rule; this is what makes it true. The driver
+// does not support multi-process access to a database file, and — the part
+// that turns a rule into an incident — it says so only sometimes. Measured,
+// one process holding the file and a second opening it:
 //
 //	turso   refuses, as "Locking error: File is locked by another process"
 //	        wrapped in a connect failure that names no holder — and only
 //	        while the first process has live connections
-//	sqlite  succeeds. Two writers, no error, corruption on the first
-//	        collision
 //
-// So on the fallback driver there is no defence at all, and on the default
-// one the defence is a message an operator cannot act on. This lock is the
-// same answer on both, taken before any driver work, naming the holder.
+// So the defence, where there is one, is a message an operator cannot act on,
+// and in the window between the engine's connections there is none at all.
+// This lock is taken before any driver work, on every path, and names the
+// holder. (The retired fallback driver, mainline SQLite, did not refuse the
+// second opener at all — two writers, no error, corruption on the first
+// collision. That is what the measurement above was originally a comparison
+// against, and it is why the answer is a lock rather than a better error.)
 //
 // That is not a theoretical shape. `crewlet secrets`, `crewlet llm export
 // -secret-store` and every provisioner's secret-store sink all open the
@@ -142,8 +144,8 @@ func lockStore(dbPath string) (*fileLock, error) {
 		holder := readHolder(file)
 		_ = file.Close()
 		return nil, fmt.Errorf("%w: %s is held by %s. Stop it before running "+
-			"this — neither certified driver supports two processes on one "+
-			"file, and the fallback driver does not refuse the second one",
+			"this — the driver does not support two processes on one file, "+
+			"and does not reliably refuse the second one either",
 			ErrLocked, dbPath, holder)
 	}
 	stamp(file)
