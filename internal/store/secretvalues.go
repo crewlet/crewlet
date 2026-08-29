@@ -14,6 +14,16 @@ import (
 // SecretValues is the encrypted secret store, keyed by the ${VAR} name a
 // config value references.
 //
+// # It is this NODE's, and that is a decision rather than an oversight
+//
+// Six other kinds of shared state moved onto the coordination KV (d-201)
+// precisely because a node's own database is invisible to its peers, so a
+// reader comparing the lists will ask why a rotated credential did not go
+// with them. It could — but only by making the CLI ask the ENGINE to write,
+// over a route whose body is a plaintext credential, because on the default
+// embedded topology a second process cannot reach the KV at all. That trade
+// is written up in decisions/203; a rotation here is a rolling one.
+//
 // # It is the companion to company_config, not a duplicate of it
 //
 // Rotation is an UPDATE of one row here. Writing the literal into the config
