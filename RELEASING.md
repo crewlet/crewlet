@@ -137,8 +137,9 @@ leg fails inside `apt-get` with an exit code and no explanation. Add
 
 CI runs the same thing for you: the snapshot job fires on demand
 (**Actions → release → Run workflow**) and on any pull request touching
-`.goreleaser.yaml`, `Dockerfile`, `go.mod` or the workflow. That is what stops
-the release pipeline running for the first time on the tag that publishes.
+`.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**` or the
+workflow. That is what stops the release pipeline running for the first time
+on the tag that publishes.
 
 ---
 
@@ -149,11 +150,23 @@ Most failure modes are asserted rather than remembered.
 drivers, the end-to-end gates and the linter on every pull request, and
 `internal/version` asserts the release surface itself:
 
-- **the ldflags stamp still names the version variable** — rename it, move the
-  package or change the module path and the `-X` flag silently applies to
-  nothing: the link succeeds and every release reports `dev`. Both release jobs
-  also *run the built binary* and fail on a `dev` version, because that is the
-  only symptom this has.
+- **the ldflags stamp still resolves** — rename the variable, move the package
+  or change the module path and the `-X` flag silently applies to nothing: the
+  link succeeds and every release reports the build-info fallback. The test
+  takes the flag apart and checks both halves against the tree — the import
+  path against the one this package actually has, the variable against a
+  package-level string var really declared here — rather than against a copy
+  of the string, which would stay green through the renames it exists to
+  catch. Both release jobs also *run the built binary* and compare what it
+  reports against the version goreleaser recorded in `dist/metadata.json`,
+  because that is the only symptom this has. The comparison is equality, never
+  a sentinel: sniffing the output for `dev` is what this used to do, and since
+  Go 1.24 an unstamped build in a repository reports a tag-derived
+  pseudo-version instead, so a stamp that applied to nothing shipped green.
+- **the docs site learns a release happened** — `docs-publish.yml` watches the
+  release workflow by its `name:`, and GitHub reports nothing when that string
+  matches no workflow, so a rename on either side just means the trigger never
+  fires again and the site silently falls back to its hourly poll.
 - **the build is pure Go** (`CGO_ENABLED=0`) — a dependency needing cgo does
   not fail at compile time, it fails on whichever cross target the release
   machine cannot build, at tag time.
@@ -162,7 +175,8 @@ drivers, the end-to-end gates and the linter on every pull request, and
   nothing, and it fails inside the release after every binary is built.
 - **exactly one workflow is triggered by a `v*` tag** — two of them race to
   create one Release for one tag, and the loser fails after its artifacts are
-  already built.
+  already built. Both `.yml` and `.yaml` are read, because GitHub runs both and
+  a check that globs one suffix is blind to the other.
 - **GitHub writes the notes** (`changelog.use: github-native`) — goreleaser's
   default builds them from commit *subjects*; ours must come from pull request
   *titles*, and flipping the mode would quietly make `.github/release.yml` a
@@ -174,7 +188,12 @@ drivers, the end-to-end gates and the linter on every pull request, and
   and the `latest` image tag is guarded on the release being stable.
 - **every dependency surface has a Dependabot entry** — a manifest nobody told
   Dependabot about produces no pull requests, which looks exactly like a
-  manifest with nothing to update.
+  manifest with nothing to update. The required set is read off the tree, not
+  listed in the test: a written-down list asserts the entries that already
+  exist and passes on the day a new manifest lands without one, which is the
+  whole failure. Ecosystem names are matched whole, too — as substrings,
+  `docker` is satisfied by the `docker-compose` entry, so deleting the
+  `Dockerfile`'s left the check green.
 
 ---
 

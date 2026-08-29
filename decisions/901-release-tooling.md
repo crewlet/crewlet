@@ -74,8 +74,23 @@ rather than claiming to be a release it is not. That fallback lives in
 
 The stamp is the one part of this pipeline with no other symptom: rename the
 variable or move the package and it silently stops applying, with every
-release reporting `dev`. So the workflow runs the built binary and fails on
-that string, and a test asserts the config names the current import path.
+release reporting the build-info fallback. So both release jobs run the built
+binary and compare what it reports against the version goreleaser recorded in
+`dist/metadata.json`, and a test in `internal/version` splits the `-X` target
+into its import path and its variable and checks both against the tree.
+
+Both of those are equality against something derived, and deliberately so.
+The first spelling of each was a sentinel and a literal — the workflow
+searched the binary's output for `dev`, and the test searched the config for
+the import path written out longhand — and both went quiet without failing.
+The literal is a second copy of the thing this section exists to keep from
+having two copies of, so it stayed green through exactly the renames it was
+watching for. The sentinel stopped matching when the language moved
+underneath it: since Go 1.24 an unstamped build inside a repository reports a
+pseudo-version derived from the tags rather than `dev`, so a stamp that
+applied to nothing produced a green release. A check whose failure mode is
+silence has to compare against something the tree computes, not against a
+constant somebody remembered to write down.
 
 ## Six targets
 
