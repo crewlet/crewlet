@@ -190,7 +190,7 @@ needs real values, and it takes a deliberate act.
 Two further properties of that surface are worth stating because they are
 easy to assume the other way round:
 
-- **`/config` is guarded in full, reads included.** Every other read follows `allow_anonymous_read`; this one never does. Reading it exposes the whole company document — the org chart, which integrations are wired, and the shape of every credential.
+- **`/config` is guarded in full, reads included.** It is one of exactly two prefixes — `/secrets` is the other — that a read can never reach through `allow_anonymous_read`, held in one list so a third surface cannot be added to half of the rule. Reading it exposes the whole company document: the org chart, which integrations are wired, and the shape of every credential.
 - **A write does not apply anything.** `PUT /config` stores a revision and moves the activation pointer; it does not touch the running epoch, *not even on the node that served the request*. Every node applies on its own reconcile tick — which is exactly what makes a write on one node reach the whole fleet.
 
 ---
@@ -202,9 +202,8 @@ theory that a config naming a vendor the build could not serve should fail
 loudly rather than be silently ignored. That mechanism is **gone**, because the
 premise stopped being true: all six vendors — Mattermost, Slack, GitLab,
 GitHub, Jira and Confluence — route end to end, so there is nothing left to
-refuse. The seventh row the table once held was not served but **dropped** —
-Plane is gone entirely, which settles the row the same way as far as this
-mechanism is concerned.
+refuse. The table it kept held four rows, and each was struck as that vendor
+shipped its parser.
 
 What outlives it is the rule it was built to enforce: **a config block the
 engine cannot honour must fail, not be ignored.** A silently dropped
