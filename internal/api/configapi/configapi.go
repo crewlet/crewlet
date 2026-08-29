@@ -510,9 +510,14 @@ func (s *Service) store(w http.ResponseWriter, r *http.Request, company *config.
 	operator, _ := auth.OperatorFrom(r.Context())
 	at := s.now()
 	// STORED FIRST, then pointed at. A crash between the two leaves a
-	// revision nothing points at — inert, and re-activatable through the
-	// activate route — while the other order would point the fleet at a
-	// revision no node can read.
+	// revision nothing points at — inert, and recoverable with `crewlet
+	// config activate <id>` — while the other order would point the fleet
+	// at a revision no node can read.
+	//
+	// A COMMAND rather than a route: this surface serves no activate, and
+	// the nearest thing it does serve, POST /config/revisions/{id}/revert,
+	// stores a NEW revision carrying the old payload rather than pointing
+	// back at the orphan.
 	id, err := s.configs.InsertActive(r.Context(), store.Revision{
 		ParentID: parent, Source: "api", CreatedBy: operator,
 		Summary: summary, Payload: payload, CreatedAt: at,

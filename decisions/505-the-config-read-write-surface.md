@@ -68,6 +68,23 @@ there is far more often a typo than an intent to add a seat, and adding
 through this route would grow the company without the caller ever seeing the
 document they changed.
 
+**It never renames**, and that one is load-bearing in a way the shape of the
+route hides. A body whose own identity disagrees with the path is a 400. The
+id here is not a label: a seat's durable id is a UUIDv5 over (company name,
+handle), so a handle that changes under an operator re-derives the agent id
+and strands that seat's diary, its onboarding marker and its counterparty
+profiles behind an id nothing derives any more — its inbox subject with them.
+A unit's or an MCP server's name is referenced by every `manages:`, `lead:`,
+`unit:` and per-seat credential block naming it. None of that travels with a
+splice, and the URL is left addressing something that is gone.
+
+For a role the comparison is on the DERIVED handle, not the declared one,
+because a body that omits `handle` derives it from `name` — which made
+editing a seat's display name a rename nobody asked for, and it shipped that
+way. Refused rather than coerced back to the path's id: keeping the old
+identity silently would land every other edit in the body and leave the caller
+believing the rename took, which is the same surprise one revision later.
+
 Four collections rather than a general grammar, because these are the four the
 dashboard's Config room edits. The room was written against them and shipped
 calling a `config_entities` query nothing answered — every list came back
