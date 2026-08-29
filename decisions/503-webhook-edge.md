@@ -101,18 +101,46 @@ refused. The body must be read before the signature can be checked — the
 signature is over the body — so without a bound an unauthenticated caller picks
 this process's allocation size. Over the cap is `413`.
 
-**3. Slack is deduped at the edge.** Python claimed deliveries for GitHub and
-GitLab only and left Slack to a per-process ring inside the transport, which
-answers correctly for one node and wrongly for two: the same delivery retried to
-a different node is a fresh delivery *to that node*, so the agent wakes twice
-and answers twice. Slack's envelope carries an `event_id` that is stable across
-its retries, which is exactly the identity this needs.
+**3. Every route is deduped at the edge.** Python claimed deliveries for GitHub
+and GitLab only and left the rest to per-process rings inside the transports,
+which answer correctly for one node and wrongly for two: the same delivery
+retried to a different node is a fresh delivery *to that node*, so the agent
+wakes twice and answers twice. Four routes carry an identifier the provider
+keeps stable across its own retries and the edge claims on it — GitHub's
+`X-GitHub-Delivery`, GitLab's `X-Gitlab-Event-UUID`, Slack's envelope
+`event_id`, and the `X-Atlassian-Webhook-Identifier` both Jira and Confluence
+Data Center send.
 
-Plane, Jira, Confluence and Forge are still **not** deduped at the edge, and
-that is a decision rather than an omission: they send no delivery id, so "the
-same delivery" is payload coordinates the transport derives with the routing
-context that makes them correct. Re-deriving that here would be a second
-definition of identity with less information.
+Plane and the Forge relay send none, and Confluence Data Center's header has
+moved between Atlassian versions. **They are deduped on a hash of the raw
+body.** This reverses an earlier decision recorded here, which said the edge
+would leave those three to "payload coordinates the transport derives with the
+routing context that makes them correct" — that derivation was never written,
+in either implementation. What the record described as a division of labour was
+a gap: `Receiver.claim` short-circuits on an empty key, so every redelivery on
+those routes was handled again, and three documentation pages promised a
+deduplication that existed nowhere.
+
+Byte identity is the right identity here, and not merely the available one.
+Coordinates are the tempting shape — event, action, entity id, activity id —
+and they are strictly worse in the direction that matters: every field left out
+of a coordinate set is a way for two DIFFERENT events to collapse into one, and
+a collapsed event is a message nobody ever answers. A hash over the whole body
+cannot do that, because any difference at all yields a different key. Its
+failure mode is the opposite and the safe one — a provider that re-serialized
+between attempts would fail to collapse a redelivery, which is exactly the
+behaviour this replaces. It also needs to know nothing about the vendor, which
+is what keeps three routes from each growing their own half-right field list.
+
+The one input that must not produce a key is an empty body: it is identical for
+every delivery, so claiming on it would refuse every later delivery from that
+vendor for the whole TTL. `bodyKey` answers `""` there, and an empty key
+short-circuits the claim.
+
+Plane is the case that motivated it: `X-Plane-Delivery` is per-ATTEMPT, which
+is the opposite of a dedupe key, and Plane retries five times before
+auto-disabling a hook — so the redelivery volume is real and already documented
+on the integration page.
 
 **4. A republish that fails releases the claim.** The claim is taken *before* the
 republish, because two concurrent retries must not both wake the seat. Python

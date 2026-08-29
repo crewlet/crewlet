@@ -152,7 +152,9 @@ The paved road is [`crewlet plane provision -public-url https://engine.example.c
 
 The `X-Plane-Signature` header carries the HMAC-SHA256 **hexdigest of the raw body** keyed with `webhook_secret` (Plane CE's only scheme), compared constant-time. Invalid or missing signature → **401**; no secret configured → **503** with `Retry-After` (the request is fine; what is missing is on this side, so the delivery is held for retry rather than discarded as a 4xx would tell the sender to do); malformed JSON → **400**; engine unconfigured → **200** `{"status": "dropped"}` — verified *first*, so forgeries never earn a 200.
 
-CE payloads carry no stable delivery id (`X-Plane-Delivery` is per-attempt), so the transport deduplicates on the event coordinates *plus* the activity discriminator (Plane fires one webhook per changed field with an identical `data` snapshot — a bulk edit is N deliveries differing only in `activity`), with a 5-minute TTL covering queue redelivery and operator replay.
+CE payloads carry no stable delivery id — `X-Plane-Delivery` is per-**attempt**, which is the opposite of a dedupe key — so the webhook edge claims each delivery fleet-wide on a **hash of the raw body**, with a five-minute TTL covering queue redelivery and operator replay. The payload is what stays identical across Plane's own retry, and Plane retries five times before [auto-disabling the hook](#webhooks), so the volume this collapses is not hypothetical.
+
+Byte identity is deliberately preferred to derived coordinates. Plane fires one webhook per changed field with an identical `data` snapshot — a bulk edit is N deliveries differing only in `activity` — and any coordinate set that forgot that field would collapse the N into one, which is a message nobody ever answers. A hash over the whole body cannot: any difference at all yields a different key. Its failure mode is the safe one, failing to collapse a redelivery whose bytes changed. See [Webhook deliveries are deduplicated at the edge](../reference/design-decisions.md#webhook-deliveries-are-deduplicated-at-the-edge).
 
 ### Event routing
 

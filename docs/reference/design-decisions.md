@@ -100,6 +100,51 @@ Engine-detected failures (stall, max-iter exhaustion, depth cap, unhandled excep
 
 ---
 
+## Webhook Deliveries Are Deduplicated at the Edge
+
+Every inbound webhook is **claimed fleet-wide before it is published**, so a
+provider's retry — or an operator's replay — is answered `200
+{"status":"duplicate"}` and wakes nobody. The claim lasts five minutes and is
+taken *before* the republish, because two concurrent retries must not both wake
+the seat; a republish that then fails releases it, so the provider's retry is
+not refused by a row nothing clears.
+
+**A stable identifier is used where the provider sends one.** GitHub's
+`X-GitHub-Delivery`, GitLab's `X-Gitlab-Event-UUID`, Slack's envelope
+`event_id`, and the `X-Atlassian-Webhook-Identifier` that Jira and Confluence
+Data Center both send are all repeated unchanged across the provider's own
+retries, which is exactly the identity this needs.
+
+**Where the provider sends none, the key is a hash of the raw body.** Plane
+sends only `X-Plane-Delivery`, which is per-*attempt* and therefore the
+opposite of a dedupe key; a Cloud event relayed through the Forge app carries
+no delivery header at all; and which Atlassian Data Center builds set the
+identifier has moved between versions. The payload is what stays identical
+across a retry.
+
+Byte identity is preferred to derived coordinates deliberately. Coordinates —
+event, action, entity id, activity id — are the tempting shape and are strictly
+worse in the direction that matters: **every field left out of a coordinate set
+is a way for two different events to collapse into one**, and a collapsed event
+is a message nobody ever answers. Plane makes this concrete by firing one
+webhook per changed field with an identical `data` snapshot, so a bulk edit is
+N deliveries differing only in `activity`. A hash over the whole body cannot
+collapse them — any difference at all yields a different key — and its failure
+mode is the safe one: a provider that re-serialized between attempts fails to
+collapse a redelivery, which is a duplicate rather than a silence. It also
+needs to know nothing about the vendor, which keeps three routes from each
+growing their own half-right field list.
+
+The one input that must not produce a key is an **empty body**: it is identical
+for every delivery, so claiming on it would refuse every later delivery from
+that vendor for the whole window.
+
+**The whole mechanism fails open.** No claim store, no key, or a store that
+cannot be reached all mean "handle it": a duplicate is recoverable noise, while
+a delivery dropped because the store blinked is a message nobody ever answers.
+
+---
+
 ## Provider Abstraction via Protocols
 
 All external dependencies (LLM, embeddings, storage) are behind interfaces **defined by the package that calls them**, kept to what that caller needs — there is no `interfaces.go`, and a provider package exports a concrete type. No vendor SDK lock-in. This enables:

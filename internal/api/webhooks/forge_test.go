@@ -1,6 +1,7 @@
 package webhooks_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -663,4 +664,39 @@ func TestBothSurfacesShowWhatTheProviderSentNotWhatWasRouted(t *testing.T) {
 func modulusOf(t *testing.T) string {
 	t.Helper()
 	return base64.RawURLEncoding.EncodeToString(forgeKey.PublicKey.N.Bytes())
+}
+
+// A RELAYED CLOUD EVENT CARRIES NO DELIVERY HEADER. forgeID is the Atlassian
+// ACCOUNT behind the event — the actor, not the delivery — so it cannot
+// identify one, and the relay's retries resend the same bytes.
+func TestForgeRetriesAreDedupedOnThePayload(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	for range 2 {
+		token := forgeToken(t, validForgeClaims(), jwt.SigningMethodRS256, forgeKID, forgeKey)
+		if got := e.post(t, "/webhooks/forge", forgePageEvent, forgeHeaders(token)).Code; got != http.StatusOK {
+			t.Fatalf("got %d", got)
+		}
+	}
+	if n := e.published.count(); n != 1 {
+		t.Errorf("%d events for one relayed delivery and its retry, want 1", n)
+	}
+}
+
+// TWO RELAYED EVENTS ARE BOTH DELIVERED.
+func TestTwoForgeEventsAreBothDelivered(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	for _, title := range []string{"Runbook", "Handbook"} {
+		body := bytes.Replace(forgePageEvent, []byte(`"title"`), []byte(`"title"`), 1)
+		body = append([]byte(nil), body...)
+		body = bytes.Replace(body, []byte("}}"), []byte(`},"marker":"`+title+`"}`), 1)
+		token := forgeToken(t, validForgeClaims(), jwt.SigningMethodRS256, forgeKID, forgeKey)
+		if got := e.post(t, "/webhooks/forge", body, forgeHeaders(token)).Code; got != http.StatusOK {
+			t.Fatalf("%s: %d", title, got)
+		}
+	}
+	if n := e.published.count(); n != 2 {
+		t.Errorf("%d events for two distinct relayed events, want 2", n)
+	}
 }

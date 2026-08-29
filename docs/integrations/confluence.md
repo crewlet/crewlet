@@ -141,7 +141,7 @@ Inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature
 
 ### Delivery deduplication
 
-Data Center deliveries are claimed fleet-wide on the `X-Atlassian-Webhook-Identifier` the instance sends, which is stable across its own retries — so a redelivery is answered `200 {"status":"duplicate"}` and wakes nobody. The claim lasts five minutes. Cloud events relayed through Forge are deduplicated by the Forge route's own rules instead.
+Data Center deliveries are claimed fleet-wide on the `X-Atlassian-Webhook-Identifier` the instance sends, which is stable across its own retries — so a redelivery is answered `200 {"status":"duplicate"}` and wakes nobody. The claim lasts five minutes. A route whose provider sends no such header — the Forge relay always, and a Data Center build that does not set one — is claimed on a **hash of the raw body** instead. The payload is what stays identical across a provider's own retry, and byte identity is deliberately preferred to derived coordinates: every field left out of a coordinate set is a way for two *different* events to collapse into one, and a collapsed event is a message nobody ever answers. A hash cannot do that — any difference at all yields a different key. See [Webhook deliveries are deduplicated at the edge](../reference/design-decisions.md#webhook-deliveries-are-deduplicated-at-the-edge).
 
 ---
 

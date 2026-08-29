@@ -167,9 +167,12 @@ func (r *Receiver) plane(w http.ResponseWriter, req *http.Request) {
 		summary: planeSummary(body),
 		body:    body,
 		raw:     raw,
-		// No delivery id: Plane sends none, and what counts as "the same
-		// delivery" here is payload coordinates the transport derives
-		// with the routing context that makes them correct.
+		// NO DELIVERY ID. Plane sends none — X-Plane-Delivery is
+		// per-ATTEMPT, so it is the opposite of a dedupe key — and the
+		// payload is what stays identical across a retry. See [bodyKey].
+		// Plane retries five times and then auto-disables a hook, so the
+		// redelivery volume this collapses is not hypothetical.
+		key:     bodyKey(raw),
 		headers: safeHeaders(req.Header),
 	}, statusOK)
 }
@@ -203,7 +206,7 @@ func (r *Receiver) jira(w http.ResponseWriter, req *http.Request) {
 		// is what makes it a dedupe key rather than a request id. A
 		// Cloud event relayed through Forge carries none, and that route
 		// answers for its own deliveries.
-		key:     req.Header.Get("X-Atlassian-Webhook-Identifier"),
+		key:     orElse(req.Header.Get("X-Atlassian-Webhook-Identifier"), bodyKey(raw)),
 		headers: safeHeaders(req.Header),
 	}, statusOK)
 }
@@ -234,6 +237,11 @@ func (r *Receiver) confluence(w http.ResponseWriter, req *http.Request) {
 		summary: confluenceSummary(body),
 		body:    body,
 		raw:     raw,
+		// THE SAME HEADER ITS JIRA TWIN USES. Data Center sends a stable
+		// per-delivery identifier that does not change across its own
+		// retries; an instance that sends none falls back to the payload,
+		// which is what stays identical across a retry either way.
+		key:     orElse(req.Header.Get("X-Atlassian-Webhook-Identifier"), bodyKey(raw)),
 		headers: safeHeaders(req.Header),
 	}, statusOK)
 }

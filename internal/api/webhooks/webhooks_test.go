@@ -868,3 +868,110 @@ func TestCredentialHeadersAreRedactedBeforeADeliveryIsStored(t *testing.T) {
 			"tell an unsigned delivery from a wrongly-signed one")
 	}
 }
+
+// --- delivery deduplication, for the vendors that send no delivery id ------ //
+
+// PLANE'S ONLY DELIVERY HEADER IS PER-ATTEMPT, which is the opposite of a
+// dedupe key. What stays identical across a retry is the payload — and Plane
+// retries five times before auto-disabling a hook, so the volume this
+// collapses is not hypothetical.
+func TestPlaneRetriesAreDedupedOnThePayload(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	body := []byte(`{"event":"issue","action":"created","data":{"id":"i-1","name":"Ship it"}}`)
+	for attempt := range 3 {
+		headers := planeDelivery(body, "pl-secret")
+		// The per-attempt id Plane does send, which must not defeat the
+		// claim — the whole point is that it changes and the body does not.
+		headers["X-Plane-Delivery"] = "attempt-" + strconv.Itoa(attempt)
+		if got := e.post(t, "/webhooks/plane", body, headers).Code; got != http.StatusOK {
+			t.Fatalf("attempt %d: %d", attempt, got)
+		}
+	}
+	if n := e.published.count(); n != 1 {
+		t.Errorf("%d events for one Plane delivery and two retries, want 1", n)
+	}
+}
+
+// A DIFFERENT EVENT IS A DIFFERENT DELIVERY. Collapsing two distinct events
+// is the failure with teeth — a message nobody ever answers — so the key has
+// to change with any difference at all.
+func TestTwoPlaneEventsAreBothDelivered(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	for _, name := range []string{"Ship it", "Ship it too"} {
+		body := []byte(`{"event":"issue","action":"created","data":{"id":"i-1","name":"` + name + `"}}`)
+		if got := e.post(t, "/webhooks/plane", body, planeDelivery(body, "pl-secret")).Code; got != http.StatusOK {
+			t.Fatalf("%s: %d", name, got)
+		}
+	}
+	if n := e.published.count(); n != 2 {
+		t.Errorf("%d events for two distinct Plane events, want 2", n)
+	}
+}
+
+// CONFLUENCE DATA CENTER SENDS THE SAME HEADER ITS JIRA TWIN DOES, and the
+// route ignored it: the claim short-circuits on an empty key, so every
+// Confluence redelivery was handled again.
+func TestConfluenceRetriesAreDedupedOnTheDeliveryHeader(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	body := []byte(`{"event":"page_updated","page":{"id":"7","title":"Runbook"}}`)
+	for attempt := range 2 {
+		headers := atlassianDelivery(body, "conf-secret")
+		headers["X-Atlassian-Webhook-Identifier"] = "conf-delivery-1"
+		if got := e.post(t, "/webhooks/confluence", body, headers).Code; got != http.StatusOK {
+			t.Fatalf("attempt %d: %d", attempt, got)
+		}
+	}
+	if n := e.published.count(); n != 1 {
+		t.Errorf("%d events for one Confluence delivery and its retry, want 1", n)
+	}
+}
+
+// AN INSTANCE THAT SENDS NO HEADER STILL DEDUPES. Which Atlassian builds
+// carry the identifier has moved between versions, and a fallback that
+// answered "no key" would leave those deployments exactly as they were.
+func TestAConfluenceInstanceWithNoDeliveryHeaderStillDedupes(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	body := []byte(`{"event":"page_updated","page":{"id":"7","title":"Runbook"}}`)
+	for range 2 {
+		if got := e.post(t, "/webhooks/confluence", body,
+			atlassianDelivery(body, "conf-secret")).Code; got != http.StatusOK {
+			t.Fatalf("got %d", got)
+		}
+	}
+	if n := e.published.count(); n != 1 {
+		t.Errorf("%d events for one headerless delivery and its retry, want 1", n)
+	}
+}
+
+// TWO CONFLUENCE EVENTS THAT SHARE NO IDENTIFIER ARE BOTH DELIVERED.
+func TestTwoConfluenceEventsAreBothDelivered(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	for _, title := range []string{"Runbook", "Handbook"} {
+		body := []byte(`{"event":"page_updated","page":{"id":"7","title":"` + title + `"}}`)
+		if got := e.post(t, "/webhooks/confluence", body,
+			atlassianDelivery(body, "conf-secret")).Code; got != http.StatusOK {
+			t.Fatalf("%s: %d", title, got)
+		}
+	}
+	if n := e.published.count(); n != 2 {
+		t.Errorf("%d events for two distinct Confluence events, want 2", n)
+	}
+}
+
+// AN EMPTY BODY IS NOT A KEY. It is the same for every delivery, so keying on
+// it would claim the first and refuse every other delivery from that vendor
+// for the whole TTL.
+func TestAnEmptyBodyIsNotADeliveryKey(t *testing.T) {
+	t.Parallel()
+	if got := webhooks.BodyKeyForTest(nil); got != "" {
+		t.Errorf("an empty body keyed as %q", got)
+	}
+	if webhooks.BodyKeyForTest([]byte("{}")) == "" {
+		t.Error("a real body produced no key")
+	}
+}

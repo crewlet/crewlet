@@ -119,6 +119,11 @@ func (r *Receiver) forgeWebhook(w http.ResponseWriter, req *http.Request) {
 		body:    body,
 		routed:  transformed,
 		raw:     raw,
+		// A RELAYED EVENT CARRIES NO DELIVERY HEADER. forgeID is the
+		// Atlassian ACCOUNT behind the event — the actor, not the
+		// delivery — so it cannot identify one, and the relay's own
+		// retries resend the same bytes. See [bodyKey].
+		key:     bodyKey(raw),
 		forgeID: atlassianID,
 		headers: safeHeaders(req.Header),
 	}, statusOK)

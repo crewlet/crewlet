@@ -22,6 +22,8 @@ package webhooks
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -508,4 +510,40 @@ func noSecret(w http.ResponseWriter, source string) {
 			"against, so it cannot accept deliveries; answering 503 so the sender "+
 			"retries rather than discards them. Set the integration's secret to clear it")
 	unavailable(w, "no_webhook_secret", NoSecretRetryAfter)
+}
+
+// bodyKey is the delivery identity of a vendor that sends none.
+//
+// # Byte identity IS delivery identity here
+//
+// Three routes have no per-delivery header: Plane sends only a per-ATTEMPT
+// id, and a Cloud event relayed through Forge carries none at all. What they
+// do send is a payload that is byte-identical across the provider's own
+// retries and different for any two distinct events — every one of these
+// vendors stamps its payloads with entity ids and timestamps, so two events
+// cannot serialize the same.
+//
+// # Why a hash of the whole body rather than derived coordinates
+//
+// Coordinates are the tempting shape — event, action, entity id, activity id
+// — and they are strictly worse in the direction that matters. Every field
+// left out of a coordinate set is a way for two DIFFERENT events to collapse
+// into one, and a collapsed event is a message nobody ever answers. A hash
+// over the whole body cannot do that: any difference at all yields a
+// different key. Its failure mode is the opposite and the safe one — a
+// vendor that re-serialized between attempts would fail to collapse a
+// redelivery, which is exactly today's behaviour and no worse.
+//
+// It is also the only derivation that needs to know nothing about the
+// vendor, which is what keeps three routes from each growing their own
+// half-right field list.
+func bodyKey(raw []byte) string {
+	if len(raw) == 0 {
+		// NOT a key. An empty body is the same for every delivery, and
+		// keying on it would claim the first one and refuse every other
+		// delivery from that vendor for the whole TTL.
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return "body:" + hex.EncodeToString(sum[:])
 }
