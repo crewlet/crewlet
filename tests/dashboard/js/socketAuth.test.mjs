@@ -7,9 +7,17 @@
 // every dial while the browser showed "Not connected to the engine —
 // retrying", a sentence describing a wait that was never going to end.
 //
-// A browser exposes no status code for a failed WebSocket upgrade. The
-// close code is the entire signal, which is why every test here is
-// really about telling 1008 from 1006.
+// A browser exposes no status code for a failed WebSocket upgrade, and
+// no close code either: a rejected handshake never opened, so there is
+// no close frame to carry one. Every refusal arrives as 1006 — exactly
+// what a stopped engine looks like.
+//
+// This suite used to drive `onclose({code: 1008})` and assert the client
+// reacted. No browser does that, so the tests passed against a client
+// that could not detect a real refusal at all. The distinction is drawn
+// by a plain GET of the same path, which answers 401 for a refused
+// credential and 426 for an accepted one, so the fake below has to model
+// BOTH halves: the close, and the probe that follows it.
 
 import assert from "node:assert";
 import { installDom } from "./dom.mjs";
@@ -45,7 +53,18 @@ class FakeWebSocket {
     this.readyState = FakeWebSocket.OPEN;
     if (this.onopen) this.onopen();
   }
+  // A refused handshake, as a browser actually reports one: the
+  // connection never opened, so the close carries 1006 and nothing else.
+  // What tells this apart from an outage is the probe the client makes
+  // afterwards, which `serverRefuses` below arms.
   reject() {
+    this.readyState = FakeWebSocket.CLOSED;
+    if (this.onclose) this.onclose({ code: 1006 });
+  }
+  // A refusal delivered late, on an OPEN socket, as a close frame. The
+  // engine does not do this today; the client honours it, so it is
+  // covered.
+  revoke() {
     this.readyState = FakeWebSocket.CLOSED;
     if (this.onclose) this.onclose({ code: 1008 });
   }
@@ -65,10 +84,34 @@ globalThis.localStorage = {
 let prompts = 0;
 let answer = null;
 
-// The degraded poll fires from every close; it is not the subject here.
-globalThis.fetch = async () => {
+// Whether the engine is refusing this browser's credential. The client
+// cannot learn that from the close code, so it asks over HTTP — and this
+// is the half of the fake that answers.
+let refusing = false;
+
+globalThis.fetch = async (url) => {
+  const path = String(url);
+  if (path.startsWith("/ws/stream")) {
+    // 426 Upgrade Required is the HEALTHY answer to a plain GET of the
+    // socket path: the guard let it through and only the missing Upgrade
+    // header stopped it. 401 is the refusal.
+    return { status: refusing ? 401 : 426, ok: false };
+  }
+  // The degraded poll fires from every close; it is not the subject here.
   throw new Error("offline");
 };
+
+// The probe is a fetch, so a close does not resolve into a prompt within
+// the same tick. Every test that drives a refusal has to let the
+// microtask queue drain first.
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+/** Drive a refused handshake and wait for the client to work it out. */
+async function refuse(sock) {
+  refusing = true;
+  sock.reject();
+  await settle();
+}
 
 const { Store } = await import(
   new URL("store.js", JS_URL)
@@ -89,6 +132,7 @@ const built = [];
 function dial({ token = "" } = {}) {
   sockets.length = 0;
   prompts = 0;
+  refusing = false;
   stored.clear();
   if (token) stored.set("crewlet_api_token", token);
   const store = new Store();
@@ -152,10 +196,10 @@ test("an ordinary drop is not treated as a refusal", () => {
   assert.strictEqual(prompts, 0);
 });
 
-test("a refused handshake prompts, and re-dials with the new token", () => {
+test("a refused handshake prompts, and re-dials with the new token", async () => {
   const { store, last } = dial();
   answer = "fresh-token";
-  last().reject();
+  await refuse(last());
   assert.strictEqual(prompts, 1);
   // The re-dial is immediate rather than waiting out the backoff: the
   // reader just supplied the missing thing and is looking at the page.
@@ -164,10 +208,11 @@ test("a refused handshake prompts, and re-dials with the new token", () => {
   assert.strictEqual(store.state.authRejected, false);
 });
 
-test("a successful open clears a previous rejection", () => {
+test("a successful open clears a previous rejection", async () => {
   const { store, last } = dial();
   answer = "fresh-token";
-  last().reject();
+  await refuse(last());
+  refusing = false;
   last().open();
   assert.strictEqual(store.state.authRejected, false);
   assert.strictEqual(store.state.connected, true);
@@ -196,34 +241,34 @@ test("stopping the client stops the degraded poll too", async () => {
   }
 });
 
-test("a dismissed prompt is not reopened by the reconnect backoff", () => {
+test("a dismissed prompt is not reopened by the reconnect backoff", async () => {
   const { last } = dial();
   answer = null;
-  last().reject();
+  await refuse(last());
   assert.strictEqual(prompts, 1);
-  last().reject();
-  last().reject();
+  await refuse(last());
+  await refuse(last());
   assert.strictEqual(prompts, 1, "the backoff reopened the dialog");
 });
 
-test("a token the engine also refuses gets asked about again", () => {
+test("a token the engine also refuses gets asked about again", async () => {
   // The ask-once latch exists for the backoff above, not to make a
   // second refusal silent: a reader who mistyped the token would never
   // be asked again and would sit on a page that never says why.
   const { last } = dial();
   answer = "wrong-token";
-  last().reject();
+  await refuse(last());
   assert.strictEqual(prompts, 1);
   answer = "right-token";
-  last().reject();
+  await refuse(last());
   assert.strictEqual(prompts, 2);
   assert.ok(last().url.includes("token=right-token"), last().url);
 });
 
-test("a dismissed prompt leaves the banner saying why, not 'retrying'", () => {
+test("a dismissed prompt leaves the banner saying why, not 'retrying'", async () => {
   const { store, last } = dial();
   answer = null;
-  last().reject();
+  await refuse(last());
 
   assert.strictEqual(store.state.authRejected, true);
   const text = bannerFor(store.state.health, store.state.connected, [], true);
@@ -235,6 +280,93 @@ test("a dismissed prompt leaves the banner saying why, not 'retrying'", () => {
   // Amber, not red: nothing failed. The engine is healthy and is doing
   // exactly what it was configured to do.
   assert.strictEqual(bannerTone(store.state.health, false, true), "warn");
+});
+
+// ---- the bug this suite was blind to ----
+
+test("a stale token on an open-read engine still reaches the reader", async () => {
+  // THE REPORTED FAILURE, end to end. `allow_anonymous_read: true`, so
+  // the dashboard would have connected with no credential at all — but
+  // a token left in localStorage by an earlier deployment is sent, the
+  // engine refuses a credential that is present and wrong, and the
+  // handshake 401s.
+  //
+  // Every piece of the repair already existed: the banner, the dialog,
+  // "forget this token" in the health popover and the command palette.
+  // None of it ran, because the trigger was a close code no browser
+  // sends for a refused handshake. The reader saw "retrying" for ever
+  // with the one broken thing unmentioned and uncorrectable.
+  const { store, last } = dial({ token: "stale-from-last-deployment" });
+  answer = null;
+  await refuse(last());
+  assert.strictEqual(prompts, 1, "the reader was never told the token was wrong");
+  assert.strictEqual(store.state.authRejected, true);
+});
+
+test("an outage is not reported as a refused token", async () => {
+  // The other half, and the reason this cannot simply prompt on every
+  // failed dial: a stopped engine closes exactly the same way. What
+  // separates them is the probe, which does not answer 401 here.
+  const { store, last } = dial({ token: "s3cret" });
+  refusing = false;
+  last().reject();
+  await settle();
+  assert.strictEqual(prompts, 0, "an outage raised a token dialog");
+  assert.strictEqual(store.state.authRejected, false);
+});
+
+test("a probe that cannot be made raises no dialog", async () => {
+  // Offline, or a proxy refusing the request. Neither is something the
+  // reader fixes by typing a token, and a dialog here would fire on
+  // every backoff of a genuinely disconnected page.
+  const { store, last } = dial({ token: "s3cret" });
+  const answering = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("offline");
+  };
+  try {
+    last().reject();
+    await settle();
+    assert.strictEqual(prompts, 0);
+    assert.strictEqual(store.state.authRejected, false);
+  } finally {
+    globalThis.fetch = answering;
+  }
+});
+
+test("the probe sends the credential in a header, not the query string", async () => {
+  // The handshake has no choice — a WebSocket constructor cannot set
+  // headers — but a fetch does, and a token in a URL is a token in every
+  // proxy's access log between the browser and the engine.
+  const { last } = dial({ token: "s3cret" });
+  let seen = null;
+  const answering = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    seen = { url: String(url), init };
+    return { status: 401, ok: false };
+  };
+  try {
+    last().reject();
+    await settle();
+  } finally {
+    globalThis.fetch = answering;
+  }
+  assert.ok(seen, "no probe was made");
+  assert.ok(!seen.url.includes("token="), seen.url);
+  assert.strictEqual(seen.init.headers.Authorization, "Bearer s3cret");
+});
+
+test("a refusal delivered on an open socket is still honoured", async () => {
+  // close(1008) after the upgrade. The engine does not do this today —
+  // it refuses the handshake — but a socket whose credential is revoked
+  // mid-session would, and the client should not need changing then.
+  const { store, last } = dial({ token: "s3cret" });
+  answer = null;
+  last().open();
+  last().revoke();
+  await settle();
+  assert.strictEqual(prompts, 1);
+  assert.strictEqual(store.state.authRejected, true);
 });
 
 await run();

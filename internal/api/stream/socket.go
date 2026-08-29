@@ -69,12 +69,23 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		operatorID, ok := authenticate(guard, r)
 		if !ok {
-			// REFUSED BEFORE THE UPGRADE. Accepting and then closing
-			// makes the browser see a connection that opened and died,
-			// which a page cannot tell from an engine that fell over.
-			// Refusing the handshake itself is what lets the dashboard
-			// show its token gate instead — it is the Go spelling of
-			// close(1008) before accept.
+			// REFUSED BEFORE THE UPGRADE. Accepting a credential this
+			// node rejects, purely to close it politely a moment later,
+			// would let anyone open a socket here.
+			//
+			// It is NOT "close(1008) before accept", which is what this
+			// comment used to claim and what the dashboard was written
+			// against. A close code rides a close FRAME, so a handshake
+			// that never completed cannot carry one: the browser reports
+			// 1006 — indistinguishable from a stopped engine — and hides
+			// the status, so a page cannot port-scan with a socket.
+			//
+			// The client therefore cannot learn this from the socket at
+			// all. It re-asks over plain HTTP, where the status is
+			// visible, and this route answers a GET without an Upgrade
+			// header 401 (refused) or 426 (accepted, wrong protocol).
+			// That pairing is load-bearing for the dashboard's token
+			// gate — see `_probeRefusal` in static/dashboard/js/socket.js.
 			http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
 			return
 		}

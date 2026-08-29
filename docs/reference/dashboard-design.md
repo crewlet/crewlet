@@ -188,6 +188,18 @@ palette offer the matching action. Clearing it reaches three places — storage,
 the socket's own copy, and the live connection — because the handshake carries
 the credential, so an already-open socket stays authenticated until it re-dials.
 
+**And the page has to notice it was refused, which it cannot learn from the
+socket.** A rejected handshake reaches a browser with no status and no close
+code — a connection that never opened sends no close frame — so it is
+reported as 1006, exactly like a stopped engine. This client was written
+believing the engine could answer `close(1008)`, and it cannot: every affordance
+above hung off a code that never arrived, so a stale token produced a page that
+said "retrying" for ever and never mentioned the one thing that was wrong. On a
+close that never opened, the client now re-asks over plain HTTP — `GET
+/ws/stream`, which answers `401` refused and `426` accepted — and only then
+raises the banner. A throw is the network and raises nothing, or a genuinely
+disconnected page would beg for a token on every backoff.
+
 **A chrome preference is a command, not a topbar button.** The topbar is the
 most valuable strip on every screen and a preference is set once and then
 never again. Density spent a permanent, icon-only slot there next to the theme

@@ -133,6 +133,65 @@ func TestABadTokenFailsTheHandshakeRatherThanOpeningAndDying(t *testing.T) {
 	}
 }
 
+// TestAPlainGETSeparatesARefusedCredentialFromAnAcceptedOne pins the pairing
+// the dashboard's token gate is built on.
+//
+// A browser cannot learn WHY a handshake failed. A close code needs a close
+// frame, and a handshake that never completed has none, so a refusal arrives
+// as 1006 — the same code a stopped engine produces — with the status
+// deliberately withheld. The dashboard therefore re-asks over plain HTTP,
+// where fetch reports the status, and reads exactly these two answers:
+//
+//	401 → the credential was refused; prompt, and offer to forget it
+//	426 → the credential was fine and only the missing Upgrade header stopped it
+//
+// Anything else it treats as the network. So a change that made this route
+// answer an unauthenticated GET 400, or 500, or that let a bad token through
+// to the upgrade attempt, would not fail any socket test — it would silently
+// strand every reader holding a stale token on a page that says "retrying"
+// for ever. That is the bug this asserts against; see _probeRefusal in
+// static/dashboard/js/socket.js.
+func TestAPlainGETSeparatesARefusedCredentialFromAnAcceptedOne(t *testing.T) {
+	t.Parallel()
+	f := newSocket(t, func(a *config.APIAuth) {
+		a.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	}, nil)
+
+	get := func(t *testing.T, token string) int {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(),
+			http.MethodGet, f.server.URL+"/ws/stream", nil)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		res, err := f.server.Client().Do(req)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		defer res.Body.Close()
+		return res.StatusCode
+	}
+
+	// The reported failure: anonymous reads are open, so this browser
+	// would have connected with no credential at all — but it holds a
+	// stale one, and a credential that is PRESENT and wrong is refused.
+	if got := get(t, "stale-from-last-deployment"); got != http.StatusUnauthorized {
+		t.Errorf("a refused credential = %d, want 401 — the dashboard "+
+			"cannot tell the reader their token is wrong", got)
+	}
+	// And the two that must NOT read as a refusal, or every reader gets a
+	// token dialog for an engine that is merely restarting.
+	if got := get(t, "secret"); got != http.StatusUpgradeRequired {
+		t.Errorf("an accepted credential = %d, want 426", got)
+	}
+	if got := get(t, ""); got != http.StatusUpgradeRequired {
+		t.Errorf("no credential under anonymous reads = %d, want 426", got)
+	}
+}
+
 func TestAClosedPostureRefusesAnUnauthenticatedSocket(t *testing.T) {
 	t.Parallel()
 	// The socket carries full LLM transcripts, so it is guarded exactly as

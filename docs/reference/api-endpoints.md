@@ -25,6 +25,21 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 > dashboard shell (`/`, `/dashboard`, `/static/*`). See
 > [Configuration § Auth](../concepts/configuration.md#auth).
 >
+> **A token that is present and wrong is refused even where reads are open.**
+> Sending a credential says you meant to be somebody, so `/ws/stream` answers
+> `401` rather than quietly serving you as anonymous — which is how a revoked
+> token goes on appearing to work. The practical consequence is that a stale
+> token in a browser breaks a dashboard that would have connected with none at
+> all; the dashboard detects that and offers to forget it (see below).
+>
+> **`GET /ws/stream` without an `Upgrade` header** answers `401` for a refused
+> credential and `426 Upgrade Required` for an accepted one. That pairing is a
+> contract, not an accident: a browser is told nothing about why a WebSocket
+> handshake failed — no status, and no close code, because a connection that
+> never opened sends no close frame — so the dashboard re-asks over plain HTTP
+> to tell "your token is wrong" from "the engine is down". Without it a reader
+> holding a stale token sees "retrying" for ever.
+>
 > **The guard is always mounted**, whether or not Tier A is present. An API
 > built without `api.auth` configuration has no token, and a route that needs
 > one is therefore refused rather than served: reads work, every write and the

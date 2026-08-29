@@ -16,13 +16,12 @@ import { api } from "./api.js";
 import { apiToken } from "./authToken.js";
 
 const PATH = "/ws/stream";
-// The close code the server sends when it refuses the handshake
-// (``policy violation``). It is the ONLY way this client can tell "your
-// token is wrong" from "the engine is down": a browser exposes no status
-// code for a failed WebSocket upgrade, and every other failure arrives as
-// 1006. Without the distinction a guarded engine looks exactly like a
-// stopped one, and the reader is told to wait for something that is never
-// coming back on its own.
+// `policy violation` — a refusal delivered as a close FRAME, which is
+// only reachable once a connection has opened. The engine does not
+// currently refuse anyone that late (it answers 401 to the handshake
+// instead, see `_probeRefusal`), so nothing here fires today; it is
+// honoured because a close code that means "your credential stopped
+// being good" is the one a long-lived socket would use.
 const CLOSE_UNAUTHORIZED = 1008;
 // Reconnect backoff ceiling. Long enough that a dashboard left open
 // against a stopped engine is not hammering it, short enough that
@@ -170,9 +169,15 @@ export class LiveSocket {
       return;
     }
     this.sock = sock;
+    // Per-dial, unlike `this.opened`, which latches for the life of the
+    // page. The question on a close is whether THIS handshake completed:
+    // a socket that opened and later dropped is an outage, and one that
+    // never opened may be a refusal.
+    let handshakeCompleted = false;
 
     sock.onopen = () => {
       this.opened = true;
+      handshakeCompleted = true;
       this.attempt = 0;
       this.store.setAuthRejected(false);
       this.store.setConnected(true);
@@ -204,12 +209,58 @@ export class LiveSocket {
       // teardown above would have that re-dial race the cleanup still
       // finishing around it.
       if (e && e.code === CLOSE_UNAUTHORIZED) this._authRejected();
+      else if (!handshakeCompleted) this._probeRefusal();
     };
     sock.onerror = () => {
       // `onclose` runs next and owns the recovery; just surface the
       // disconnected state so the header stops claiming to be live.
       this.store.setConnected(false);
     };
+  }
+
+  /**
+   * Ask, over plain HTTP, whether that dial was refused or merely failed.
+   *
+   * A handshake the engine answers 401 NEVER reaches this page as
+   * close(1008). A close code travels in a close frame, and a connection
+   * that never opened has no frames — so the browser reports 1006, the
+   * same code it gives for an engine that is simply down, and withholds
+   * the status deliberately (a page that could read it could use a
+   * socket to scan ports it cannot otherwise reach).
+   *
+   * This client believed otherwise, and the whole repair path below —
+   * the banner, the dialog, "forget this token" — hung off a code that
+   * never arrived. A wrong token in `localStorage` therefore produced a
+   * dashboard that reconnected for ever, said "retrying", and offered no
+   * way to correct the one thing that was wrong.
+   *
+   * So the status is fetched where a browser will hand it over. A plain
+   * GET of the same path runs the same guard and stops one line short of
+   * the upgrade: 401 is a refused credential, 426 (Upgrade Required)
+   * means it was accepted and only the missing header stopped it. A
+   * throw is the network, which is not an auth problem and must not
+   * raise a dialog.
+   *
+   * The credential goes in the HEADER here, not the query string the
+   * handshake is forced to use: a fetch can set one, and a token in a
+   * URL is a token in every proxy's access log.
+   */
+  async _probeRefusal() {
+    if (this.closed) return;
+    const token = this.token || apiToken();
+    try {
+      const res = await fetch(PATH, {
+        headers: token ? { Authorization: "Bearer " + token } : {},
+        cache: "no-store",
+      });
+      // Not `!res.ok`: 426 is the healthy answer here, and every other
+      // failure is the network or a proxy, neither of which the reader
+      // fixes by typing a token.
+      if (res.status === 401) this._authRejected();
+    } catch {
+      // Offline, or a proxy that refuses the request outright. The
+      // reconnect loop already covers it.
+    }
   }
 
   /**
