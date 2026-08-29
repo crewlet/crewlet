@@ -25,13 +25,72 @@ import (
 type Format string
 
 const (
+	// FormatConsole emits fixed columns — time, level, component, event —
+	// with the rest dimmed, and colours them when the sink is a terminal.
+	// The default, because the default reader of a `crewlet run` is a
+	// person watching it.
+	FormatConsole Format = "console"
 	// FormatJSON emits one JSON object per line — the machine-readable
-	// default for anything shipping logs somewhere.
+	// choice for anything shipping logs somewhere.
 	FormatJSON Format = "json"
-	// FormatText emits slog's key=value text, which is easier to read
-	// while developing.
+	// FormatText emits slog's key=value text: every field self-describing
+	// on one line, which is what makes it greppable with no parser.
 	FormatText Format = "text"
 )
+
+// Formats is the closed set, shared by the config validator and the
+// generated JSON Schema so an editor cannot offer a format the engine
+// refuses.
+var Formats = []Format{FormatConsole, FormatText, FormatJSON}
+
+// Valid reports whether f is a format this build can install.
+func (f Format) Valid() bool {
+	for _, known := range Formats {
+		if f == known {
+			return true
+		}
+	}
+	return false
+}
+
+// Level is a log level as an OPERATOR writes it — the spelling that appears
+// in a config file, a flag or an environment variable.
+//
+// It exists beside [slog.Level] because that type decodes from text through
+// encoding.TextUnmarshaler, which yaml.v3 does not consult: a config field
+// typed as slog.Level would silently decode to zero (info) for every value
+// including "debug", which is the exact bug this package is being changed to
+// fix.
+type Level string
+
+// The four levels the engine emits at.
+const (
+	LevelDebug Level = "debug"
+	LevelInfo  Level = "info"
+	LevelWarn  Level = "warn"
+	LevelError Level = "error"
+)
+
+// Levels is the closed set, shared by the config validator and the schema.
+var Levels = []Level{LevelDebug, LevelInfo, LevelWarn, LevelError}
+
+// Valid reports whether l is a level this build understands. "warning" is
+// deliberately NOT valid here even though [ParseLevel] accepts it: this is
+// the set a config file is checked against and a schema offers, and two
+// spellings of one level in an editor's completion list is a choice nobody
+// benefits from making.
+func (l Level) Valid() bool {
+	for _, known := range Levels {
+		if l == known {
+			return true
+		}
+	}
+	return false
+}
+
+// Slog maps the operator's spelling onto the level the handler compares
+// against, via [ParseLevel] — so an unset value is info.
+func (l Level) Slog() slog.Level { return ParseLevel(string(l)) }
 
 // root holds the process-wide base handler. It is swapped atomically by
 // Configure so a late reconfiguration (CLI flags parsed after some package
@@ -43,7 +102,7 @@ var root atomic.Pointer[slog.Logger]
 var sink atomic.Pointer[io.Writer]
 
 func init() {
-	Configure(slog.LevelInfo, FormatText, os.Stderr)
+	Configure(slog.LevelInfo, FormatConsole, os.Stderr)
 }
 
 // Configure installs the process-wide logging settings, DESTINATION INCLUDED.
@@ -94,8 +153,14 @@ func install(level slog.Level, format Format, w io.Writer) {
 	switch format {
 	case FormatJSON:
 		h = slog.NewJSONHandler(w, opts)
-	default:
+	case FormatText:
 		h = slog.NewTextHandler(w, opts)
+	default:
+		// CONSOLE IS THE FALLBACK as well as the default: an unset format
+		// reaches here from this package's own init, and a person is the
+		// likeliest reader of a stream nobody has said anything about.
+		// Whether it colours is decided from w — see [newConsoleHandler].
+		h = newConsoleHandler(w, level, colorFromEnv())
 	}
 	l := slog.New(h)
 	root.Store(l)
@@ -118,13 +183,22 @@ func ParseLevel(name string) slog.Level {
 	}
 }
 
-// ParseFormat maps an operator-supplied format name onto a Format,
-// defaulting to JSON for anything unrecognised.
+// ParseFormat maps an operator-supplied format name onto a Format.
+//
+// AN UNRECOGNISED NAME IS CONSOLE, the default — the same never-fail rule
+// [ParseLevel] follows, and for the same reason: this is the flag and
+// environment-variable path, where a typo must never be why a company will
+// not boot. It resolves to the default rather than to JSON because falling
+// back to a format the operator did NOT ask for and cannot read is how a
+// typo goes unnoticed; a config file's `logging.format` is checked against
+// [Formats] and refused outright, which is where a typo should surface.
 func ParseFormat(name string) Format {
-	if strings.EqualFold(strings.TrimSpace(name), string(FormatText)) {
-		return FormatText
+	switch f := Format(strings.ToLower(strings.TrimSpace(name))); {
+	case f.Valid():
+		return f
+	default:
+		return FormatConsole
 	}
-	return FormatJSON
 }
 
 // Get returns a logger bound to component. The name is a dotted subsystem
@@ -172,8 +246,10 @@ func (l lazy) resolve() slog.Handler {
 // debug call in a loop pays it whether or not anything is emitted — and the
 // replay would allocate a handler per call to answer a question that does
 // not depend on attributes. Configure only ever builds slog's own text and
-// JSON handlers, whose Enabled reads the level from their options and
-// nothing else.
+// JSON handlers and this package's [consoleHandler], all three of which
+// answer Enabled from their level and nothing else. A HANDLER WHOSE Enabled
+// CONSULTED ITS ATTRIBUTES WOULD BREAK THIS, silently and only for the
+// lines it was supposed to filter.
 func (l lazy) Enabled(ctx context.Context, level slog.Level) bool {
 	return root.Load().Handler().Enabled(ctx, level)
 }
