@@ -108,30 +108,6 @@ When in doubt, ask: "If I stopped right now, would a reader of this diff conside
 - **Concurrency**: a goroutine's lifetime belongs to whoever started it, and every one has a way to stop. Prefer channels for handoff and a mutex for state; `sync.OnceValue` over a `sync.Once` plus a variable. Anything shared runs under `-race` in CI
 - **Comments explain WHY**, and especially why the obvious alternative is wrong. The diff shows what the code does. A package's rationale goes in its package doc, where `go doc` will find it
 
-## Logging
-All logging goes through `internal/logging`, which builds a `*slog.Logger` bound to its component. Never the bare `slog` default, and never `fmt.Sprintf` into a message.
-
-```go
-import "github.com/crewlet/crewlet/internal/logging"
-
-log := logging.Get("task.engine")
-
-log.Info("task_created", "task_id", task.ID, "creator", creator)
-log.Debug("resolving_hierarchy", "agent_id", agent.ID, "role", role)
-log.Warn("budget_exhausted", "agent_id", id, "used", used, "limit", limit)
-log.Error("mcp_server_failed", "server", name, "error", err)
-```
-
-Rules:
-- Get loggers via `logging.Get("component.name")` — this binds `component=` automatically
-- Event names are short, machine-parsable snake_case strings (not sentences)
-- All dynamic data goes in key/value pairs, never in the message
-- Never `slog.Info(...)` on the package-level default, and never `log.Printf`
-- **Three formats, one reader each**, and the closed set lives in `logging.Formats`: `console` (the DEFAULT — fixed columns, `component` hoisted out of the attributes into its own, ANSI colour when the sink is a live terminal and the full date when it is not), `text` (slog's own `key=value`, for grepping without a parser) and `json` (for a shipper). Colour is `$CREWLET_LOG_COLOR` / `$NO_COLOR` and never a config field: it describes the terminal someone is looking at, not the node
-- **`Enabled` must read the level and NOTHING else.** `lazy.Enabled` answers from the root handler without replaying the `WithAttrs`/`WithGroup` ops — it is consulted for every suppressed line — so a handler that consulted its attributes would filter the wrong lines and only the suppressed ones would show it
-- Tier A's `logging.level` / `logging.format` are what the file asks for, and are the ONLY way the file says it — a `debug:` boolean beside them was retired rather than wired up, because two keys setting one value is a state where they disagree. `crewlet run`'s flags override the file ONLY where `isFlagSet` says the operator actually typed one. A flag typo resolves to the default and WARNS, a FILE typo is refused with its field path — `debug: true` that nothing read is what that asymmetry exists to prevent. A key removed from Tier A goes in `config.retiredFields` so it names its replacement instead of reading as a misspelling. See `decisions/001`
-- The process configures itself once via `logging.Configure(level, format, w)` in `cmd/crewlet` — and `Configure` is the ONLY way to set the destination. A command changes how loud it is with `logging.SetVerbosity(level, format)`, which keeps the sink already installed. Installing a writer a function was HANDED makes the global depend on its caller: `run` takes `stderr` so it can be tested, and installing that argument gave 29 parallel tests a global pointing at whichever buffer was configured last — a data race, and one test's log lines in another's output
-
 ## Package Layout
 
 ```
