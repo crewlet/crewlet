@@ -263,7 +263,7 @@ func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 	buf = append(buf, ' ')
 
 	buf = h.paint(buf, ansiCyan, func(b []byte) []byte {
-		return appendPadded(b, h.component, componentWidth)
+		return appendComponent(b, h.component, componentWidth)
 	})
 	buf = append(buf, ' ')
 
@@ -375,10 +375,43 @@ func isErrorKey(key string) bool {
 //
 // A name LONGER than the column is written in full rather than truncated:
 // the column is there to make the common case scannable, and a truncated
-// component name is a fact destroyed to keep a margin straight.
+// name is a fact destroyed to keep a margin straight.
+//
+// It does NOT escape s, so it is only for strings this process generates —
+// today just the level, whose text slog derives from an integer. Anything
+// that could carry a caller's bytes goes through [appendComponent] or
+// [appendValue].
 func appendPadded(buf []byte, s string, width int) []byte {
 	buf = append(buf, s...)
 	for i := len(s); i < width; i++ {
+		buf = append(buf, ' ')
+	}
+	return buf
+}
+
+// appendComponent writes the component column, ESCAPED and then padded to
+// what it actually rendered as.
+//
+// # A column is not a reason to skip escaping
+//
+// The message and every attribute value go through [appendValue], which
+// quotes anything holding a control byte. The component used to be written
+// raw because every logging.Get in the tree passes a string literal — but
+// the column is reached by any `.With("component", x)`, x is one refactor
+// away from being an MCP server name or a role handle out of the company
+// config, and a component holding a newline forges an entire log line while
+// one holding an ESC repaints an operator's terminal. The defence the rest
+// of the line already has should not depend on which column a string
+// lands in.
+//
+// An EMPTY component renders as blank padding rather than as `""` — see the
+// type's doc comment for why the empty case is intentional.
+func appendComponent(buf []byte, component string, width int) []byte {
+	start := len(buf)
+	if component != "" {
+		buf = appendValue(buf, component)
+	}
+	for i := len(buf) - start; i < width; i++ {
 		buf = append(buf, ' ')
 	}
 	return buf

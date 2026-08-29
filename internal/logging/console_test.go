@@ -370,3 +370,56 @@ func TestEveryDeclaredFormatInstallsItsOwnHandler(t *testing.T) {
 		t.Errorf("the console format installed %T", root.Load().Handler())
 	}
 }
+
+// NOTHING A CALLER SUPPLIES REACHES THE TERMINAL RAW.
+//
+// Log content is not all first-party: an MCP server's stderr, a webhook
+// payload, an LLM error string and a vendor API message all end up as values
+// on these lines. A control byte that survived would let that content repaint
+// an operator's terminal, and a newline would let it forge a whole log line —
+// a fake ERROR, or a fake "seat_released", written by whatever the engine was
+// talking to.
+//
+// The component column is in here because it was the one that DIDN'T escape.
+// Every logging.Get in the tree passes a literal today, so it was not
+// reachable — but the column is reached by any `.With("component", x)`, and x
+// is one refactor away from being a server name out of the company config.
+func TestNothingReachesTheTerminalRaw(t *testing.T) {
+	for _, tc := range []struct{ name, component, message, value string }{
+		{"escape in the component", "seat\x1b[31m.host", "an_event", "ok"},
+		{"newline in the component", "seat\n20:00:00.000 ERROR fake", "an_event", "ok"},
+		{"escape in the event name", "seat.host", "an_event\x1b[31m", "ok"},
+		{"newline in the event name", "seat.host", "an\nevent", "ok"},
+		{"escape in a value", "seat.host", "an_event", "\x1b[2J"},
+		{"newline in a value", "seat.host", "an_event", "line1\nline2"},
+		{"escape in a key", "seat.host", "an_event", "ok"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			slog.New(console(&buf, ColorNever)).
+				With("component", tc.component).
+				Info(tc.message, "k\x1b[0m", tc.value)
+
+			got := buf.Bytes()
+			if bytes.ContainsRune(got, 0x1b) {
+				t.Errorf("an escape byte reached the sink: %q", got)
+			}
+			if n := bytes.Count(got, []byte{'\n'}); n != 1 {
+				t.Errorf("one record produced %d lines, so content forged one: %q", n, got)
+			}
+		})
+	}
+}
+
+// AND THE COLUMN STILL LINES UP once a component has been escaped: the
+// padding counts what was RENDERED, not what was handed in, or a quoted name
+// pushes its own line's event two columns right.
+func TestTheComponentColumnPadsWhatItRendered(t *testing.T) {
+	var buf bytes.Buffer
+	slog.New(console(&buf, ColorNever)).With("component", "a b").Info("an_event")
+	// `a b` renders as `"a b"` — 5 columns — so it is padded out to
+	// componentWidth, and then the usual single separator space follows.
+	if !strings.Contains(buf.String(), `"a b"`+strings.Repeat(" ", componentWidth-5)+" an_event") {
+		t.Fatalf("the escaped component did not pad to its rendered width: %q", buf.String())
+	}
+}
