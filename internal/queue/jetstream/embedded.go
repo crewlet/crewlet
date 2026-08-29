@@ -276,6 +276,25 @@ func joinURLs(urls []string) string {
 func Dial(cfg Config) (*nats.Conn, error) { return dial(cfg) }
 
 func dial(cfg Config) (*nats.Conn, error) {
+	opts, err := dialOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	nc, err := nats.Connect(cfg.URL, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: %w", cfg.URL, err)
+	}
+	return nc, nil
+}
+
+// dialOptions is the option list, separated from the dial so a test can
+// assert what a config produces without a broker to connect to.
+//
+// The alternative was asserting on the connection, which needs a real TLS
+// server with `verify: true` and a generated certificate chain — and would
+// then be testing that NATS honours its own documented option rather than
+// that this package passes it.
+func dialOptions(cfg Config) ([]nats.Option, error) {
 	opts := []nats.Option{
 		nats.Name("crewlet"),
 		// Reconnect forever. A broker blip must not become a node
@@ -292,11 +311,29 @@ func dial(cfg Config) (*nats.Conn, error) {
 	if cfg.Token != "" {
 		opts = append(opts, nats.Token(cfg.Token))
 	}
-	nc, err := nats.Connect(cfg.URL, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("dial %s: %w", cfg.URL, err)
+	// THE FILES ARE CHECKED HERE rather than left for nats.Connect. Its
+	// own failure for an unreadable certificate arrives as a dial error,
+	// which reads as "the broker is unreachable" — so an operator goes
+	// looking at the network for a path that is simply not there. The
+	// caller names which estate this was (engine: stream / engine:
+	// coordination), so this only has to name the file and the field.
+	if cfg.TLS.CA != "" {
+		if _, err := os.Stat(cfg.TLS.CA); err != nil {
+			return nil, fmt.Errorf("tls.ca %s: %w", cfg.TLS.CA, err)
+		}
+		opts = append(opts, nats.RootCAs(cfg.TLS.CA))
 	}
-	return nc, nil
+	if cfg.TLS.Cert != "" {
+		for field, path := range map[string]string{
+			"tls.cert": cfg.TLS.Cert, "tls.key": cfg.TLS.Key,
+		} {
+			if _, err := os.Stat(path); err != nil {
+				return nil, fmt.Errorf("%s %s: %w", field, path, err)
+			}
+		}
+		opts = append(opts, nats.ClientCert(cfg.TLS.Cert, cfg.TLS.Key))
+	}
+	return opts, nil
 }
 
 // SubscribeStream creates an ephemeral per-caller broadcast subscription.

@@ -34,6 +34,37 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 
 		{"unknown coordination type", "coordination:\n  type: zookeeper\n", "coordination.type", ErrUnknownValue},
 
+		// HALF A KEYPAIR dials and is refused by the broker with an
+		// error naming neither file — which is the one shape of TLS
+		// misconfiguration a config can catch on a laptop.
+		{
+			"stream client cert with no key",
+			"stream:\n  type: nats\n  url: nats://x:4222\n  tls:\n    cert: /etc/c.pem\n" +
+				"coordination:\n  type: embedded-kv\n",
+			"stream.tls.key", ErrMissing,
+		},
+		{
+			"stream client key with no cert",
+			"stream:\n  type: nats\n  url: nats://x:4222\n  tls:\n    key: /etc/k.pem\n" +
+				"coordination:\n  type: embedded-kv\n",
+			"stream.tls.cert", ErrMissing,
+		},
+		{
+			"coordination client cert with no key",
+			"coordination:\n  type: embedded-kv\n  nats:\n    url: nats://x:4222\n" +
+				"    tls:\n      cert: /etc/c.pem\n",
+			"coordination.nats.tls.key", ErrMissing,
+		},
+		// A PULSAR STREAM READS tls_trust_certs, never this block, so
+		// material set here would be silently unused — an operator would
+		// watch a handshake fail while trusting a file no process opened.
+		{
+			"nats tls on a pulsar stream",
+			"stream:\n  type: pulsar\n  url: pulsar://x:6650\n  tls:\n    ca: /etc/ca.pem\n" +
+				"coordination:\n  type: embedded-kv\n  nats:\n    url: nats://x:4222\n",
+			"stream.tls", ErrConflict,
+		},
+
 		{"port out of range", "api:\n  port: 70000\n", "api.port", ErrOutOfRange},
 		{"token with no id", "api:\n  auth:\n    tokens:\n      - id: \"\"\n        token: abc\n", "api.auth.tokens[0].id", ErrMissing},
 		{"token with no value", "api:\n  auth:\n    tokens:\n      - id: founder\n        token: \"\"\n", "api.auth.tokens[0].token", ErrMissing},

@@ -224,7 +224,13 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 }
 
 // openNATS builds a JetStream stream, embedded or external, and the
-// coordination store that may ride its connection.
+// coordination store that rides its connection.
+//
+// TWO BRANCHES FOR THE STREAM, ONE TAIL FOR COORDINATION. The branches differ
+// only in who owns the broker and therefore who owns the connection; what is
+// built on top of it is identical, and writing that twice is how one copy
+// ends up without a fleet store — which is not a startup error but a panic
+// hours later in whichever subsystem reached for it first.
 func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 	cfg := jetstream.Config{
 		URL:         b.Stream.URL,
@@ -236,73 +242,121 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		Replicas:    b.Stream.Replicas,
 		Credentials: b.Stream.Credentials,
 		Token:       b.Stream.Token,
+		TLS:         streamTLS(b.Stream.TLS),
 	}
 	if b.Stream.EventRetentionHours > 0 {
 		cfg.EventRetention = time.Duration(b.Stream.EventRetentionHours * float64(time.Hour))
 	}
+	out, conn, err := openStream(ctx, b, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err = attachCoordination(ctx, b, out, conn); err != nil {
+		out.Close(ctx)
+		return nil, err
+	}
+	return out, nil
+}
+
+// openStream dials or starts the broker, and answers the connection
+// coordination should ride.
+//
+// THE COORDINATION STORE RIDES THE STREAM'S CONNECTION either way. A second
+// dial would work and would be worse: two connections to one broker fail
+// independently, so a node could hold live leases over a connection that
+// still works while the one carrying its inbox has dropped — alive to its
+// peers, deaf to its work.
+func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) (*Backends, *nats.Conn, error) {
+	// A URL IS A BROKER SOMEBODY ELSE RUNS, and this branch is what makes
+	// `stream.type: nats` mean anything. Without it every path here
+	// started an in-process member and connected to THAT: an operator who
+	// pointed a fleet at an external cluster got one private broker per
+	// node instead, so no node shared a stream or a coordination bucket
+	// with any other, and nothing anywhere said so. Every symptom that
+	// followed was a fleet-shared-state break wearing a different mask —
+	// a seat claimed by everyone, a trigger worked twice, a token counter
+	// per node.
+	if b.Stream.URL != "" {
+		q, err := jetstream.Open(ctx, cfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("engine: stream: %w", err)
+		}
+		// NO stopServer: this node dialled a broker its peers are using
+		// and must never take it down. And no `conn` either — the QUEUE
+		// owns this connection, so Close must not close it a second time
+		// underneath the client that is still shutting down.
+		return &Backends{Queue: q}, q.Conn(), nil
+	}
 
 	server, err := jetstream.StartServer(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("engine: stream: %w", err)
+		return nil, nil, fmt.Errorf("engine: stream: %w", err)
 	}
 	q, err := server.Client(ctx)
 	if err != nil {
 		server.Shutdown()
-		return nil, fmt.Errorf("engine: stream client: %w", err)
+		return nil, nil, fmt.Errorf("engine: stream client: %w", err)
 	}
 	out := &Backends{Queue: q, stopServer: server.Shutdown}
-
-	// The coordination store rides the STREAM'S OWN connection. A second
-	// dial would work and would be worse: two connections to one broker
-	// fail independently, so a node could hold live leases over a
-	// connection that still works while the one carrying its inbox has
-	// dropped — alive to its peers, deaf to its work.
 	conn, err := server.Conn()
 	if err != nil {
 		out.Close(ctx)
-		return nil, fmt.Errorf("engine: coordination connection: %w", err)
+		return nil, nil, fmt.Errorf("engine: coordination connection: %w", err)
 	}
-	// THE FLEET STORE IS ALWAYS THE KV, whatever the coordination slot
-	// says, and only the LEASE store follows it.
-	//
-	// The two answer different questions and only one of them is about
-	// peers. A lease answers "who runs this seat": one node has nobody to
-	// fence against and re-claims everything at boot, so an in-process
-	// table is the honest implementation there. The fleet store holds
-	// RECORDS — the token counter, an open agent-to-agent ask, a claimed
-	// scheduled fire, a detached coding run — and every one of those has to
-	// outlive the PROCESS, on one node as much as on four.
-	//
-	// It did not, and the consequences were silent: a company's token spend
-	// reset to zero on every restart although its bucket is documented as
-	// having no retention at all ("a cap is a ceiling for the life of a
-	// deployment"), a redelivered trigger after a restart was worked twice,
-	// and a detached sandbox run — a BILLED box — was forgotten by the
-	// process that launched it. What persistence the records get is now the
-	// same choice as the event log's: stream.store_dir.
+	// OWNED HERE, because this is a SECOND connection to the node's own
+	// in-process server — the queue holds its own. The external branch
+	// shares the queue's instead, which is why it leaves this nil.
+	out.conn = conn
+	return out, conn, nil
+}
+
+// attachCoordination builds the fleet store and the lease slot on one
+// connection.
+//
+// ONE FUNCTION FOR BOTH BRANCHES, and that is the point rather than tidiness:
+// an external broker and an embedded one differ in who owns the connection
+// and nothing else, so two copies of this would be two chances to forget the
+// fleet store on one of them — and a nil Fleet is not a startup error, it is
+// a panic hours later in whichever subsystem reached for it first.
+//
+// # THE FLEET STORE IS ALWAYS THE KV, whatever the coordination slot says
+//
+// Only the LEASE store follows that setting. The two answer different
+// questions and only one of them is about peers. A lease answers "who runs
+// this seat": one node has nobody to fence against and re-claims everything
+// at boot, so an in-process table is the honest implementation there. The
+// fleet store holds RECORDS — the token counter, an open agent-to-agent ask,
+// a claimed scheduled fire, a detached coding run, the company's secrets —
+// and every one of those has to outlive the PROCESS, on one node as much as
+// on four.
+//
+// It did not, and the consequences were silent: a company's token spend reset
+// to zero on every restart although its bucket is documented as having no
+// retention at all ("a cap is a ceiling for the life of a deployment"), a
+// redelivered trigger after a restart was worked twice, and a detached
+// sandbox run — a BILLED box — was forgotten by the process that launched it.
+// What persistence the records get is the same choice as the event log's:
+// stream.store_dir.
+func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, conn *nats.Conn) error {
 	shared, err := openFleet(ctx, conn, b.Stream.Replicas)
 	if err != nil {
-		conn.Close()
-		out.Close(ctx)
-		return nil, fmt.Errorf("engine: coordination: %w", err)
+		return fmt.Errorf("engine: coordination: %w", err)
 	}
 	out.Fleet = shared
-	out.conn = conn
 
 	if b.Coordination.Type != config.CoordinationEmbeddedKV {
 		out.Coord = coordmem.New()
-		return out, nil
+		return nil
 	}
 	leases, err := kv.Open(ctx, conn, kv.Config{
 		TTL:      leaseTTL(b),
 		Replicas: b.Stream.Replicas,
 	})
 	if err != nil {
-		out.Close(ctx)
-		return nil, fmt.Errorf("engine: coordination: %w", err)
+		return fmt.Errorf("engine: coordination: %w", err)
 	}
 	out.Coord = leases
-	return out, nil
+	return nil
 }
 
 // openPulsar builds a Pulsar stream and the NATS estate its leases live on.
@@ -384,6 +438,7 @@ func openCoordinationEstate(ctx context.Context, b *config.Bootstrap, out *Backe
 			ServerName:  b.Node.ID,
 			Credentials: estate.Credentials,
 			Token:       estate.Token,
+			TLS:         streamTLS(estate.TLS),
 		})
 		if serr != nil {
 			return fmt.Errorf("engine: coordination estate: %w", serr)
@@ -410,6 +465,7 @@ func openCoordinationEstate(ctx context.Context, b *config.Bootstrap, out *Backe
 			URL:         estate.URL,
 			Credentials: estate.Credentials,
 			Token:       estate.Token,
+			TLS:         streamTLS(estate.TLS),
 		})
 	}
 	if err != nil {
@@ -457,6 +513,17 @@ func openFleet(ctx context.Context, conn *nats.Conn, replicas int) (coord.Fleet,
 		StatusFreshness: coord.StatusFreshness,
 		Replicas:        replicas,
 	})
+}
+
+// streamTLS carries a Tier A tls block to the queue package's own.
+//
+// A TRANSLATION rather than a shared type, because the two packages are on
+// opposite sides of the config seam: `queue/jetstream` takes what it needs to
+// dial and knows nothing about YAML, and `config` describes a document and
+// knows nothing about NATS. One struct shared between them would make either
+// change the other's.
+func streamTLS(t config.NATSTLS) jetstream.TLS {
+	return jetstream.TLS{CA: t.CA, Cert: t.Cert, Key: t.Key}
 }
 
 // leaseTTL is the lease TTL both slots must agree on.

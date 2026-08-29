@@ -106,12 +106,33 @@
           "description": "Embedded lease persistence directory. Empty = in-memory (a restart sheds this node's seats).",
           "type": "string"
         },
+        "tls": {
+          "$ref": "#/$defs/NATSTLS"
+        },
         "token": {
           "description": "Bearer token for an external server; ${VAR} supported.",
           "type": "string"
         },
         "url": {
           "description": "External NATS URL for leases; empty embeds a member instead.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "NATSTLS": {
+      "additionalProperties": false,
+      "properties": {
+        "ca": {
+          "description": "PEM CA bundle for the server certificate; empty uses the host roots.",
+          "type": "string"
+        },
+        "cert": {
+          "description": "Client certificate PEM, for a server requiring mutual TLS. Needs key.",
+          "type": "string"
+        },
+        "key": {
+          "description": "Client private key PEM. Needs cert.",
           "type": "string"
         }
       },
@@ -248,6 +269,9 @@
           "description": "Pulsar tenant holding this company's topics.",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
           "type": "string"
+        },
+        "tls": {
+          "$ref": "#/$defs/NATSTLS"
         },
         "tls_trust_certs": {
           "description": "CA bundle path for a pulsar+ssl broker.",

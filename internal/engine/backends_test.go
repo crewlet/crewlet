@@ -926,3 +926,60 @@ func TestTheFleetStoreSurvivesARestartOnLocalCoordination(t *testing.T) {
 			"its box is billing with nobody to collect it", found, err)
 	}
 }
+
+// AN EXTERNAL URL IS DIALLED, not quietly replaced with a private broker.
+//
+// `stream.type: nats` with a URL means "the cluster somebody else runs".
+// Every path here used to start an in-process member and connect to THAT,
+// ignoring the URL: an operator who pointed a fleet at an external cluster
+// got one private broker per node, so no node shared a stream or a
+// coordination bucket with any other — and nothing said so. Every symptom
+// that followed was a fleet-shared-state break wearing a different mask.
+//
+// Asserted as a REFUSAL against an address nothing answers on, which is the
+// one shape that needs no broker: a node that starts cleanly here is a node
+// that never tried to reach the URL it was given.
+func TestAnExternalStreamURLIsActuallyDialled(t *testing.T) {
+	t.Parallel()
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.Type = config.StreamNATS
+		// Port 1 on loopback: reserved, and nothing binds it.
+		b.Stream.URL = "nats://127.0.0.1:1"
+		b.Coordination.Type = config.CoordinationEmbeddedKV
+	})
+	back, err := openBackends(t, b)
+	if err == nil {
+		back.Close(t.Context())
+		t.Fatal("a node started cleanly against a broker that does not " +
+			"exist, so it is running a private in-process one and shares " +
+			"nothing with its peers")
+	}
+	if !strings.Contains(err.Error(), "127.0.0.1:1") {
+		t.Errorf("err = %v, want it to name the address it could not reach", err)
+	}
+}
+
+// AND ITS TLS MATERIAL TRAVELS WITH IT.
+//
+// The field is read by config, validated, and then has to reach the dial. A
+// block that is set, accepted by `crewlet validate`, and never applied leaves
+// a broker rejecting every connection for a reason no log line connects to
+// the omission.
+func TestAnExternalStreamsTLSMaterialReachesTheDial(t *testing.T) {
+	t.Parallel()
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.Type = config.StreamNATS
+		b.Stream.URL = "nats://127.0.0.1:1"
+		b.Stream.TLS = config.NATSTLS{CA: "/nope/ca.pem"}
+		b.Coordination.Type = config.CoordinationEmbeddedKV
+	})
+	back, err := openBackends(t, b)
+	if err == nil {
+		back.Close(t.Context())
+		t.Fatal("a node started with a CA bundle that does not exist")
+	}
+	if !strings.Contains(err.Error(), "/nope/ca.pem") {
+		t.Errorf("err = %v, want the configured tls.ca to have reached the "+
+			"dial and been refused by name", err)
+	}
+}

@@ -2,10 +2,20 @@ package jetstream
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -294,4 +304,134 @@ func TestAClusteredServerMustBeNamed(t *testing.T) {
 		t.Fatalf("a solo server needs no name: %v", err)
 	}
 	srv.Shutdown()
+}
+
+// A TLS PATH THAT IS NOT THERE IS NAMED AS A CONFIG PROBLEM.
+//
+// nats.Connect's failure for an unreadable certificate arrives as a dial
+// error, which reads as "the broker is unreachable" — so an operator goes
+// looking at the network for a path that is simply not there.
+func TestAnUnreadableTLSPathIsNamedBeforeDialling(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		tls  TLS
+		want []string
+	}{
+		{"missing ca", TLS{CA: "/nope/ca.pem"}, []string{"tls.ca", "/nope/ca.pem"}},
+		{
+			"missing client key",
+			TLS{Cert: "/nope/c.pem", Key: "/nope/k.pem"},
+			[]string{"/nope/"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// A URL nothing listens on: the point is that the TLS
+			// material is refused BEFORE anything is dialled, so the
+			// error must not be a connection failure.
+			_, err := Dial(Config{URL: "nats://127.0.0.1:1", TLS: tc.tls})
+			if err == nil {
+				t.Fatal("an unreadable TLS path dialled anyway")
+			}
+			if strings.Contains(err.Error(), "dial nats://") {
+				t.Errorf("reported as a connection failure: %v", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("err = %v, want it to name %s", err, want)
+				}
+			}
+		})
+	}
+}
+
+// THE MATERIAL ACTUALLY REACHES THE CONNECTION.
+//
+// Asserted on the option list rather than on a live handshake: a real proof
+// needs a TLS broker with `verify: true`, and would then be testing that NATS
+// honours its own documented option rather than that this package passes it.
+// What CAN silently go wrong here is a field that is read, validated, and
+// then never appended — a config an operator sets, a `crewlet validate` that
+// accepts it, and a broker that rejects every connection for a reason no log
+// line connects to the omission.
+func TestTheConfiguredTLSMaterialReachesTheDialOptions(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	certPEM, keyPEM := selfSignedPEM(t)
+	write := func(name string, body []byte) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	ca := write("ca.pem", certPEM)
+	cert := write("c.pem", certPEM)
+	key := write("k.pem", keyPEM)
+
+	opts, err := dialOptions(Config{TLS: TLS{CA: ca, Cert: cert, Key: key}})
+	if err != nil {
+		t.Fatalf("dialOptions: %v", err)
+	}
+	// Applied the way nats.Connect applies them, then inspected.
+	applied := nats.GetDefaultOptions()
+	for _, opt := range opts {
+		if oerr := opt(&applied); oerr != nil {
+			t.Fatalf("applying an option: %v", oerr)
+		}
+	}
+	// Both options install a CALLBACK and flip Secure, rather than
+	// writing into TLSConfig directly — so the assertion invokes them.
+	if applied.RootCAsCB == nil {
+		t.Fatal("the configured tls.ca never became a dial option, so a " +
+			"private CA is read from the config and never trusted")
+	}
+	pool, err := applied.RootCAsCB()
+	if err != nil || pool == nil {
+		t.Fatalf("the root CA callback answered %v (err %v)", pool, err)
+	}
+	if applied.TLSCertCB == nil {
+		t.Fatal("the configured tls.cert/tls.key never became a dial " +
+			"option, so a broker requiring mutual TLS refuses every connection")
+	}
+	if _, err = applied.TLSCertCB(); err != nil {
+		t.Fatalf("the client certificate callback failed: %v", err)
+	}
+	if !applied.Secure {
+		t.Error("TLS material was configured and the connection is not " +
+			"marked secure, so it would be attempted in the clear")
+	}
+}
+
+// selfSignedPEM mints one throwaway certificate and its key.
+//
+// Real material rather than a stub, because both options PARSE what they are
+// given — a placeholder makes them fail, and a test that asserted on those
+// failures would pass just as happily if the options were never applied.
+func selfSignedPEM(t *testing.T) (certPEM, keyPEM []byte) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	template := x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "crewlet-test"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM = pem.EncodeToMemory(&pem.Block{
+		Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+	return certPEM, keyPEM
 }

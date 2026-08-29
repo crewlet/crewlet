@@ -544,6 +544,14 @@ type Stream struct {
 	// to read it from the environment.
 	Token string `yaml:"token,omitempty" json:"token,omitempty" desc:"Bearer token for an external server; ${VAR} supported."`
 
+	// TLS is the transport for an external NATS server: a private CA to
+	// trust, and a client certificate to present. The Pulsar half of this
+	// block has TLSTrustCerts; without this the NATS half had nothing,
+	// so a broker configured the way a hardened NATS deployment is
+	// configured — `tls { verify: true }`, which REQUIRES a client
+	// certificate — was simply unreachable.
+	TLS NATSTLS `yaml:"tls,omitempty" json:"tls,omitzero"`
+
 	// Tenant and Namespace scope every subject on a PULSAR estate, which
 	// is how one cluster serves many companies. Neither is ever
 	// auto-created — a non-default tenant must exist before start.
@@ -627,6 +635,18 @@ func (s *Stream) validate(path string) error {
 				"%q must start alphanumeric and contain only letters, digits, "+
 					"'.', '_' or '-'", field.value)
 		}
+	}
+	p.wrap(s.TLS.validate(at(path, "tls")))
+	// SAID RATHER THAN IGNORED. A Pulsar estate has its own CA field
+	// (tls_trust_certs) and its client library never reads this block, so
+	// material set here would be silently unused — an operator would see
+	// a TLS handshake failure and go on trusting a file the process never
+	// opened.
+	if s.Type == StreamPulsar && !s.TLS.IsZero() {
+		p.add(at(path, "tls"), ErrConflict,
+			"tls configures a NATS connection; a %q stream uses tls_trust_certs "+
+				"instead, and its coordination estate has its own "+
+				"coordination.nats.tls", StreamPulsar)
 	}
 	return p.err()
 }
@@ -713,12 +733,71 @@ type CoordinationNATS struct {
 	// Token is a bearer token presented to an external server. Use ${VAR}
 	// to read it from the environment.
 	Token string `yaml:"token,omitempty" json:"token,omitempty" desc:"Bearer token for an external server; ${VAR} supported."`
+
+	// TLS is the transport for an external NATS estate — see
+	// [Stream.TLS]. Its own field rather than the stream's, because on a
+	// Pulsar topology these are two different estates reached over two
+	// different connections, and one of them may be mutually
+	// authenticated while the other is not.
+	TLS NATSTLS `yaml:"tls,omitempty" json:"tls,omitzero"`
+}
+
+// NATSTLS is the transport material for an external NATS server.
+//
+// # Why it exists beside `credentials` and `token`
+//
+// Those authenticate the CLIENT to the server at the NATS protocol layer.
+// This is the TCP layer underneath: which CA to trust for the server's own
+// certificate, and which certificate to present when the server demands one.
+// A NATS deployment configured with `tls { verify: true }` — the hardened
+// default every operator guide recommends — rejects a connection that
+// presents no client certificate, whatever credentials follow.
+//
+// # It cannot express "do not verify"
+//
+// Deliberately, and it is the one option a struct like this normally grows.
+// A skip-verify switch is set once during a bring-up and never unset, and the
+// connection it leaves behind carries every one of this company's events and
+// its coordination traffic to whoever answers on that address. A private CA
+// is one file and is the actual answer.
+type NATSTLS struct {
+	// CA is a PEM bundle to verify the server's certificate against.
+	// Empty uses the host's root pool, which is right for a public CA and
+	// wrong for the self-signed certificate most internal NATS estates
+	// use.
+	CA string `yaml:"ca,omitempty" json:"ca,omitempty" desc:"PEM CA bundle for the server certificate; empty uses the host roots."`
+
+	// Cert and Key are the CLIENT certificate, for a server that requires
+	// mutual TLS. Both or neither: half a keypair is a config that dials
+	// and is refused by the broker with an error naming neither file.
+	Cert string `yaml:"cert,omitempty" json:"cert,omitempty" desc:"Client certificate PEM, for a server requiring mutual TLS. Needs key."`
+	Key  string `yaml:"key,omitempty" json:"key,omitempty" desc:"Client private key PEM. Needs cert."`
+}
+
+// IsZero lets an unset TLS block drop out of a JSON round trip.
+func (t NATSTLS) IsZero() bool { return t.CA == "" && t.Cert == "" && t.Key == "" }
+
+// validate refuses half a keypair.
+func (t NATSTLS) validate(path string) error {
+	var p problems
+	switch {
+	case t.Cert != "" && t.Key == "":
+		p.add(at(path, "key"), ErrMissing,
+			"cert is set, so key must be too: a client certificate with no "+
+				"private key cannot be presented")
+	case t.Key != "" && t.Cert == "":
+		p.add(at(path, "cert"), ErrMissing,
+			"key is set, so cert must be too: a private key with no "+
+				"certificate cannot be presented")
+	}
+	return p.err()
 }
 
 // IsZero lets an unset coordination estate drop out of a JSON round trip.
 func (c CoordinationNATS) IsZero() bool {
 	return c.URL == "" && c.StoreDir == "" && c.Cluster.IsZero() &&
-		c.Replicas == 0 && c.Credentials == "" && c.Token == ""
+		c.Replicas == 0 && c.Credentials == "" && c.Token == "" &&
+		c.TLS.IsZero()
 }
 
 // Embedded reports whether this estate is one the nodes run themselves.
@@ -737,6 +816,7 @@ func (c *Coordination) validate(path string) error {
 		p.add(at(path, "lease_ttl_seconds"), ErrOutOfRange,
 			"must be 0 (the default) or positive, got %v", c.LeaseTTLSeconds)
 	}
+	p.wrap(c.NATS.TLS.validate(at(at(path, "nats"), "tls")))
 	return p.err()
 }
 

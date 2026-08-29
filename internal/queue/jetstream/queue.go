@@ -88,7 +88,36 @@ type Config struct {
 	// Credentials authenticates against an external server.
 	Credentials string
 	Token       string
+
+	// TLS is the transport underneath that authentication: which CA to
+	// trust for the server's certificate, and which certificate to
+	// present when the server requires one. See [TLS].
+	TLS TLS
 }
+
+// TLS is the transport material for an external NATS server.
+//
+// SEPARATE FROM Credentials AND Token, which authenticate the client at the
+// NATS protocol layer. This is the TCP layer underneath, and a server
+// configured with `tls { verify: true }` refuses a connection presenting no
+// client certificate whatever credentials would have followed.
+//
+// There is deliberately no way to skip verification. That switch is set once
+// during a bring-up and never unset, and the connection it leaves behind
+// carries every event this company publishes to whoever answers on that
+// address.
+type TLS struct {
+	// CA is a PEM bundle to verify the server against. Empty uses the
+	// host's root pool.
+	CA string
+
+	// Cert and Key are the client certificate. Both or neither.
+	Cert string
+	Key  string
+}
+
+// IsZero reports whether nothing was configured.
+func (t TLS) IsZero() bool { return t.CA == "" && t.Cert == "" && t.Key == "" }
 
 // Queue is the JetStream implementation of queue.EventQueue.
 type Queue struct {

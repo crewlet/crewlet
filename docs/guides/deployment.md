@@ -220,9 +220,18 @@ across engine restarts, or the two on separate hosts.
 **Two processes need a stream they can both reach**, which an embedded
 single-node one is not: each would have its own. Any of three works — a
 *clustered* embedded stream (`stream.cluster.peers`), an external NATS
-server, or Pulsar. They also need shared coordination: Tier A refuses
-`coordination.type: local` alongside any of them, by name, rather than
-letting two nodes each claim every seat.
+server (`stream.type: nats` plus `stream.url`), or Pulsar. They also need
+shared coordination: Tier A refuses `coordination.type: local` alongside any
+of them, by name, rather than letting two nodes each claim every seat.
+
+An external NATS server takes `credentials` (an NKey/JWT file) or `token` for
+authentication, and `stream.tls` for the transport underneath it: `ca` for a
+private CA, and `cert`/`key` for the client certificate a broker configured
+`tls { verify: true }` requires. Both halves of the keypair or neither —
+validation refuses half of one, because half a keypair dials and is rejected
+by the broker with an error naming neither file. A Pulsar stream uses
+`tls_trust_certs` instead, and its separate NATS lease estate has its own
+`coordination.nats.tls` with the same three fields.
 
 Both nodes read the same Tier A file, so give each its roles — and its own
 `-api-port`, since only the ingress node should bind one:

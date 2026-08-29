@@ -339,7 +339,14 @@ stream:
   # namespace: default              #   namespaces are never auto-created
   # token: "${CREWLET_PULSAR_TOKEN}"  # JWT for token auth; grant its role only
                                     #   this engine's namespace
-  # tls_trust_certs: ""             # CA bundle for pulsar+ssl:// URLs
+  # tls_trust_certs: ""             # CA bundle for pulsar+ssl:// URLs (Pulsar only)
+  # credentials: ""                 # path to a NATS credentials file (nats only)
+  # tls:                            # nats only — the transport under that auth.
+  #   ca: /etc/crewlet/ca.pem       #   a private CA to trust; empty = host roots
+  #   cert: /etc/crewlet/client.pem #   the CLIENT certificate, for a broker
+  #   key: /etc/crewlet/client.key  #   configured `tls { verify: true }`.
+                                    #   Both or neither — half a keypair is
+                                    #   refused at validation
 
 store:
   path: "./crewlet-data/company.db"   # ONE file, owned exclusively by this
@@ -349,6 +356,12 @@ store:
 coordination:
   type: local                       # one node holding its own seat leases;
                                     #   a fleet needs `embedded-kv`
+  # nats:                           # only for a PULSAR stream, which cannot
+  #   url: "nats://leases:4222"     #   hold leases: the estate that does
+  #   tls:                          #   takes the same three fields as the
+  #     ca: /etc/crewlet/ca.pem     #   stream's block above, because it is a
+  #     cert: /etc/crewlet/client.pem  #   separate connection to a separate
+  #     key: /etc/crewlet/client.key   #   broker
 
 api:
   host: "0.0.0.0"
