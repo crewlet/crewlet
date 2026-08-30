@@ -511,10 +511,12 @@ func TestARowCollidingOnAnUntargetedIndexIsSkippedNotRaised(t *testing.T) {
 	ctx := context.Background()
 	at := time.Now().UTC().Add(-time.Hour).UnixMicro()
 
-	// Two nodes, each holding its own version of the same work.
-	node := func(episodeID, skillID, body string) *store.DB {
+	// Two nodes, each holding its own version of the same work. The store
+	// is opened by the caller rather than in here: this closure's job is
+	// seeding, and opening a database inside it would start a second
+	// context chain beside the one it is already seeding through.
+	seed := func(db *store.DB, episodeID, skillID, body string) {
 		t.Helper()
-		db := openStore(t)
 		exec := func(statement string, args ...any) {
 			t.Helper()
 			if _, err := db.SQL().ExecContext(ctx, statement, args...); err != nil {
@@ -531,10 +533,10 @@ func TestARowCollidingOnAnUntargetedIndexIsSkippedNotRaised(t *testing.T) {
 			created_at, updated_at, state)
 			VALUES (?, ?, 'ship-it', 'how to ship', ?, '{}', '[]', '[]', 1, ?, ?,
 			'active')`, skillID, seat.Handle, body, at, at)
-		return db
 	}
-	first := node("e1", "s1", "body")
-	second := node("e2", "s2", "body-again")
+	first, second := openStore(t), openStore(t)
+	seed(first, "e1", "s1", "body")
+	seed(second, "e2", "s2", "body-again")
 
 	// A third node replays the seat and is handed both. carry fails the
 	// test on an import error, which is the assertion: this must not raise.
