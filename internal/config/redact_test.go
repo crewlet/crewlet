@@ -371,3 +371,213 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 	}
 	walk(reflect.TypeOf(Company{}), "", map[reflect.Type]bool{})
 }
+
+// rosterDoc is two seats and two MCP servers, each holding a credential of
+// its own — the shape that makes a mis-matched restore visible, because
+// every value says which member it belongs to.
+const rosterDoc = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["sk-literal-key"]
+mcp_servers:
+  - name: notion
+    command: notion-mcp
+    env: {TOKEN: notion-literal}
+  - name: tracker
+    command: tracker-mcp
+    env: {TOKEN: tracker-literal}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+    mcp_env:
+      tracker: {TOKEN: ceo-literal}
+  - name: CTO
+    handle: cto
+    llm: zulu
+    mcp_env:
+      tracker: {TOKEN: cto-literal}
+`
+
+func rosterCompany(t *testing.T) *Company {
+	t.Helper()
+	cfg, err := ParseCompany([]byte(rosterDoc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	return cfg
+}
+
+// A CREDENTIAL BELONGS TO THE SEAT, NOT TO THE SLOT.
+//
+// A caller who reordered the roster — the whole edit — used to have every
+// mask resolved against whichever seat now sat in that position, so the CEO
+// received the CTO's token and the CTO the CEO's. Silently: the lengths
+// matched so nothing was refused, and no mask was left standing for
+// [Company.UnresolvedMasks] to report. Each agent then authenticated to its
+// tools AS ITS COLLEAGUE, which is the one failure a per-seat credential
+// exists to make impossible.
+func TestAReorderedRosterKeepsEachSeatsOwnCredential(t *testing.T) {
+	t.Parallel()
+	original := rosterCompany(t)
+	edited := original.Redact()
+	edited.Roles[0], edited.Roles[1] = edited.Roles[1], edited.Roles[0]
+	edited.MCPServers[0], edited.MCPServers[1] = edited.MCPServers[1], edited.MCPServers[0]
+	edited.RestoreRedacted(original)
+
+	if err := edited.Validate(); err != nil {
+		t.Fatalf("a reordered roster no longer validates: %v", err)
+	}
+	for _, want := range []struct{ handle, token string }{
+		{"ceo", "ceo-literal"}, {"cto", "cto-literal"},
+	} {
+		var got string
+		for i := range edited.Roles {
+			if edited.Roles[i].IdentityKey() == want.handle {
+				got = edited.Roles[i].MCPEnv["tracker"]["TOKEN"]
+			}
+		}
+		if got != want.token {
+			t.Errorf("%s holds %q after a reorder, want %q — a reorder handed "+
+				"one seat another's credential", want.handle, got, want.token)
+		}
+	}
+	for _, want := range []struct{ name, token string }{
+		{"notion", "notion-literal"}, {"tracker", "tracker-literal"},
+	} {
+		var got string
+		for i := range edited.MCPServers {
+			if edited.MCPServers[i].Name == want.name {
+				got = edited.MCPServers[i].Env["TOKEN"]
+			}
+		}
+		if got != want.token {
+			t.Errorf("mcp server %s holds %q after a reorder, want %q",
+				want.name, got, want.token)
+		}
+	}
+}
+
+// AND ADDING A SEAT DOES NOT STRAND EVERY OTHER SEAT'S CREDENTIAL.
+//
+// Matching by position had to refuse the whole list when the lengths differed,
+// so appending one seat to a redacted document left every EXISTING seat still
+// holding the marker — and the caller had to re-supply credentials they had
+// never seen to add a colleague. Identity has no such coupling: the seats that
+// were there are matched, and only the new one is left to be filled in.
+func TestAnAddedSeatDoesNotStrandTheOtherSeatsCredentials(t *testing.T) {
+	t.Parallel()
+	original := rosterCompany(t)
+	edited := original.Redact()
+	edited.Roles = append(edited.Roles, Role{
+		Name: "CFO", Handle: "cfo",
+		LLM: PhaseLLM{Default: ProviderKeys{"zulu"}},
+	})
+	edited.RestoreRedacted(original)
+
+	for i := range edited.Roles {
+		handle := edited.Roles[i].IdentityKey()
+		if handle == "cfo" {
+			continue
+		}
+		if got := edited.Roles[i].MCPEnv["tracker"]["TOKEN"]; got == Redacted {
+			t.Errorf("%s still holds the marker after an unrelated seat was "+
+				"added — adding a colleague must not require re-supplying "+
+				"credentials the caller never saw", handle)
+		}
+	}
+	if err := edited.Validate(); err != nil {
+		t.Fatalf("adding a seat with no credentials of its own was refused: %v", err)
+	}
+}
+
+// A MEMBER THAT CANNOT NAME ITSELF IS NOT MATCHED BY NAME.
+//
+// The fallback matters as much as the matching: identity is only safe while
+// it is unique, so a document carrying the same handle twice must not have
+// one seat's credentials resolved against the other's.
+func TestADuplicateIdentityFallsBackRatherThanPickingOne(t *testing.T) {
+	t.Parallel()
+	original := rosterCompany(t)
+	original.Roles[1].Handle = "ceo" // two seats, one identity
+	edited := original.Redact()
+	edited.Roles[0], edited.Roles[1] = edited.Roles[1], edited.Roles[0]
+	edited.RestoreRedacted(original)
+
+	// Positional matching is what a non-identity earns, so the reorder is
+	// resolved against the wrong slot — but the ambiguity is the document's,
+	// and [Company.Validate] is what refuses a roster with two of one handle.
+	if got := edited.Roles[0].MCPEnv["tracker"]["TOKEN"]; got != "ceo-literal" {
+		t.Errorf("a duplicated identity was matched by name anyway: %q", got)
+	}
+}
+
+// EVERY COLLECTION WHOSE MEMBERS CARRY CREDENTIALS CAN NAME ITSELF.
+//
+// The guard the interface exists for, and the same shape as
+// [TestEveryCredentialFieldIsTagged]: a slice of structs that holds a
+// credential anywhere beneath it is a collection whose members must be
+// matchable by identity, because position will otherwise hand one member's
+// credential to another. Nothing fails when a new one forgets — it just
+// silently goes back to the old, wrong correspondence.
+func TestEveryCredentialCarryingCollectionCanNameItself(t *testing.T) {
+	t.Parallel()
+	seen := map[reflect.Type]bool{}
+	var walk func(typ reflect.Type, path string)
+	walk = func(typ reflect.Type, path string) {
+		if seen[typ] {
+			return
+		}
+		seen[typ] = true
+		switch typ.Kind() {
+		case reflect.Pointer, reflect.Map:
+			walk(typ.Elem(), path)
+		case reflect.Slice:
+			element := typ.Elem()
+			if element.Kind() == reflect.Struct && holdsCredential(element, map[reflect.Type]bool{}) &&
+				!element.Implements(reflect.TypeOf((*identified)(nil)).Elem()) {
+				t.Errorf("%s is a slice of %s, which carries a credential and "+
+					"has no IdentityKey — its masks will be restored by "+
+					"POSITION, so a reorder hands one member's credential to "+
+					"another", path, element.Name())
+			}
+			walk(element, path+"[]")
+		case reflect.Struct:
+			for i := range typ.NumField() {
+				field := typ.Field(i)
+				if field.IsExported() {
+					walk(field.Type, path+"."+field.Name)
+				}
+			}
+		}
+	}
+	walk(reflect.TypeOf(Company{}), "Company")
+}
+
+// holdsCredential reports whether a type carries a secret-tagged field
+// anywhere beneath it.
+func holdsCredential(t reflect.Type, seen map[reflect.Type]bool) bool {
+	if seen[t] {
+		return false
+	}
+	seen[t] = true
+	switch t.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice:
+		return holdsCredential(t.Elem(), seen)
+	case reflect.Struct:
+		for i := range t.NumField() {
+			field := t.Field(i)
+			if !field.IsExported() {
+				continue
+			}
+			if field.Tag.Get(secretTag) == "true" || holdsCredential(field.Type, seen) {
+				return true
+			}
+		}
+	}
+	return false
+}

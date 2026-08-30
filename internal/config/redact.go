@@ -138,11 +138,17 @@ func restore(target, prior reflect.Value, secret bool) {
 				secret || field.Tag.Get(secretTag) == "true")
 		}
 	case reflect.Slice:
-		// By POSITION, which is the only correspondence a list has. A
-		// caller who reordered a key list gets the masks resolved against
-		// the wrong slots — so the mask is refused rather than guessed
-		// when the lengths differ, and the validation that follows
-		// reports a literal "__redacted__" where a credential should be.
+		// BY IDENTITY where the members have one, exactly as the map
+		// branch below matches on its key: a seat's credentials belong to
+		// the seat, not to the slot it happened to occupy.
+		if restoreByIdentity(target, prior, secret) {
+			return
+		}
+		// By POSITION otherwise, which is the only correspondence a list
+		// of anonymous values has — a reordered `api_keys` is genuinely
+		// ambiguous, so the mask is refused rather than guessed when the
+		// lengths differ, and the validation that follows reports a
+		// literal "__redacted__" where a credential should be.
 		if target.Len() != prior.Len() {
 			return
 		}
@@ -161,6 +167,61 @@ func restore(target, prior reflect.Value, secret bool) {
 			target.SetMapIndex(key, element)
 		}
 	}
+}
+
+// identified is a collection member that knows WHO it is.
+//
+// Position is not an identity, and treating it as one is how a caller who
+// merely REORDERED the roster had every seat's credentials resolved against
+// its neighbour's — each agent then authenticating to its tools as somebody
+// else, with nothing left holding the marker for [Company.UnresolvedMasks] to
+// catch and no validation error to raise. The lengths matched, so the guard
+// below never fired; the masks are anonymous, so the wrong answer looked
+// exactly like the right one.
+//
+// A list of credentials genuinely has no identity — a reordered `api_keys`
+// cannot be matched to what it hid — and stays positional. What separates the
+// two is whether a member can name itself, so the member is what says.
+type identified interface{ IdentityKey() string }
+
+var identifiedType = reflect.TypeOf((*identified)(nil)).Elem()
+
+// restoreByIdentity matches members by who they are and reports whether it
+// could — false hands the slice back to positional matching.
+//
+// A target member whose identity the prior document does not carry is left
+// alone: it is new, or it was renamed, and either way there is no value of
+// ITS to restore. Its mask survives into [Company.Validate], which is the
+// outcome that names the field rather than inventing a credential for it.
+func restoreByIdentity(target, prior reflect.Value, secret bool) bool {
+	if !target.Type().Elem().Implements(identifiedType) {
+		return false
+	}
+	byKey := make(map[string]reflect.Value, prior.Len())
+	for i := range prior.Len() {
+		key := prior.Index(i).Interface().(identified).IdentityKey()
+		if key == "" {
+			// A member that cannot name itself makes the whole list
+			// ambiguous again, so nothing here is matched by identity.
+			return false
+		}
+		if _, duplicate := byKey[key]; duplicate {
+			// TWO MEMBERS, ONE IDENTITY. The document is invalid and
+			// will be refused, but not until after this runs — and an
+			// identity that is not unique is not an identity, so this
+			// falls back rather than picking one of them.
+			return false
+		}
+		byKey[key] = prior.Index(i)
+	}
+	for i := range target.Len() {
+		previous, found := byKey[target.Index(i).Interface().(identified).IdentityKey()]
+		if !found {
+			continue
+		}
+		restore(target.Index(i), previous, secret)
+	}
+	return true
 }
 
 // mask hides a literal credential and leaves a reference alone.
@@ -182,8 +243,9 @@ func mask(value string, secret bool) string {
 // marker, by JSON path.
 //
 // A document reaches this state when [Company.RestoreRedacted] could not
-// resolve a mask — the caller reshaped a list of keys, so position no longer
-// says which credential is which, and guessing would write one credential into
+// resolve a mask — a member that is new or renamed carries no prior value of
+// its own, and a list of BARE credentials that changed length no longer says
+// by position which one is which. Guessing would write one credential into
 // another's place. Refusing to guess is right; storing the result silently is
 // not. The literal "__redacted__" would be handed to a provider as an API key
 // and fail at the first call, hours later, with an authentication error that

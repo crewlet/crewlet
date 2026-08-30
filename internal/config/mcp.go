@@ -40,6 +40,10 @@ var MCPTransports = []MCPTransport{TransportStdio, TransportHTTP}
 // token, its own chat bot token, its own code-host authorization header. An
 // http server with shared: false is therefore how an identity-bound remote
 // server gets a per-agent token.
+// IdentityKey is the server's name — the key seats declare credentials under,
+// so its own `env` belongs to it rather than to its slot.
+func (m MCPServer) IdentityKey() string { return m.Name }
+
 type MCPServer struct {
 	// Name identifies the server everywhere: the client name, the tool
 	// prefix in prompts, and the key seats declare credentials under.

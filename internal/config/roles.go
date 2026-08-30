@@ -344,6 +344,14 @@ func (r *Role) validate(path string) error {
 // nothing (which the runtime reads as "fall back to the default chain").
 // Doing it at the boundary is what keeps every downstream reader from
 // having to know the mapping form existed.
+// IdentityKey is the seat's address inside its list — the derived handle, so
+// it is the same identity `PUT /config/roles/{handle}` addresses and the same
+// one the agent id is built from.
+//
+// A VALUE receiver, because the redaction walker holds the prior document by
+// value and cannot take an address inside it.
+func (r Role) IdentityKey() string { return r.Seat().Handle() }
+
 func (r *Role) Seat() *org.Role {
 	pick := func(flat, mapped ProviderKeys) ProviderKeys {
 		if len(flat) > 0 {
@@ -430,6 +438,10 @@ func identities(jira *ProjectRef, confluence *SpaceRef) (string, string) {
 }
 
 // Unit is the AUTHORED shape of one `units:` entry, nesting to any depth.
+// IdentityKey is the unit's name, which is what every `manages:`, `lead:` and
+// `unit:` reference addresses it by.
+func (u Unit) IdentityKey() string { return u.Name }
+
 type Unit struct {
 	Name string `yaml:"name" json:"name" js:"required" desc:"Unit name; also what a manages entry can reference."`
 
