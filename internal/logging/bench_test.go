@@ -86,8 +86,8 @@ func BenchmarkSuppressedThroughLazy(b *testing.B) {
 	}
 }
 
-// The traced path, so decisions/508's claim that correlation costs "one
-// allocation on traced lines only" is a number rather than an assertion.
+// The traced path, so the claim that correlation costs one allocation on
+// traced lines ONLY is a number rather than an assertion.
 //
 // Read it against BenchmarkEmittedThroughLazy above, which is the same line
 // with nothing bound: that gap is the whole cost of the injection, and it is

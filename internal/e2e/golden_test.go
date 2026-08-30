@@ -601,7 +601,7 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 // trace view has nothing to arrange.
 //
 // This is the gate for the whole tracing change, and it is here rather than in
-// internal/tracing for the reason d-506 gives: every component's own tests stop
+// internal/tracing for one reason: every component's own tests stop
 // at a seam and substitute the thing on the other side, so "does anything
 // actually connect these" is the one question none of them asks.
 func TestATurnsEventsJoinTheTriggersTrace(t *testing.T) {

@@ -13,9 +13,8 @@ import (
 
 // The process-wide log sink for this package's tests.
 //
-// TestMain owns it, which is the ONLY legitimate owner besides the CLI —
-// decisions/001 records what happened when `run` installed a writer it had been
-// handed instead: 29 parallel tests pointing the global at their own buffers,
+// TestMain owns it, which is the ONLY legitimate owner besides the CLI. What
+// happens when `run` installs a writer it was handed instead: 29 parallel tests pointing the global at their own buffers,
 // a data race, and one test's lines in another's output. Tests here DO run in
 // parallel, so the sink is installed exactly once, here, and the recorder below
 // is safe to write from many goroutines.

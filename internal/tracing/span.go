@@ -23,15 +23,18 @@ import (
 // file is the ONE place they are converted, in both directions, and no other
 // package builds a `TraceContext` by hand.
 //
-// # What decisions/401 required, and what had to change
+// # Why a span is allowed in context.Context at all
 //
-// d-401 said `context.Context` carries exactly two engine values. A span is
-// now the third, and it is admitted on the same test the other two passed:
-// immutable, its consumer is a leaf (the tracer), and absent it degrades to a
-// no-op span rather than to wrong behaviour. There is also no alternative —
-// OTel has no other carrier, and putting a live span on `TurnContext` would be
-// the "goroutine captures turn state and outlives the turn" bug that record
-// exists to forbid. d-401 and d-508 are amended together.
+// Almost nothing in this engine travels ambiently: a turn's inputs are
+// arguments, because a goroutine SHARES whatever context it captured, forever,
+// including after the turn that created it has finished. A live span is
+// admitted anyway, on the three tests anything ambient here has to pass — it
+// is IMMUTABLE, its consumer is a LEAF (the tracer), and when it is absent it
+// degrades to a no-op span rather than to wrong behaviour.
+//
+// There is also no alternative. OTel has no other carrier, and putting a live
+// span on `TurnContext` would be exactly the "a goroutine captures turn state
+// and outlives the turn" bug that the argument-passing rule exists to prevent.
 
 // parentKey carries the id of the span that is the CURRENT span's parent.
 //

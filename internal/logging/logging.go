@@ -299,7 +299,7 @@ func (l lazy) Enabled(ctx context.Context, level slog.Level) bool {
 // silently render as another.
 //
 // [lazy.Enabled] is deliberately NOT touched: it must answer from the level
-// alone (see its doc and decisions/001), and a level that varied by whether a
+// alone (see its doc), and a level that varied by whether a
 // trace happened to be bound would filter different lines depending on which
 // spelling the call site used.
 //

@@ -251,10 +251,9 @@ flowchart TD
 
 **The trace is passed, never captured.** An event's trace is an argument to its
 constructor (`events.New(payload, trace)`), and the caller derives that
-argument from the context with `tracing.TraceOf(ctx)`. This is deliberate and
-[decisions/405](https://github.com/crewlet/crewlet/blob/main/decisions/405-event-type-system.md)
-requires it: an event that read an *ambient* span at construction would be one
-whose trace depends on which frame happened to build it.
+argument from the context with `tracing.TraceOf(ctx)`. This is deliberate: an
+event that read an *ambient* span at construction would be one whose trace
+depends on which frame happened to build it.
 
 `TraceOf` never returns empty. Inside a span it reports that span's ids; with
 no span open it mints a fresh root, which is what every publisher in the engine

@@ -25,9 +25,11 @@ import (
 // parts of the company safe.
 //
 // Why not a patch format that addresses list members instead — RFC 6902, or a
-// merge key — is the question this shape invites, and decisions/505 records
-// the comparison rather than leaving it to be re-derived: a patch addresses by
-// structure, and a handle is deliberately not structural.
+// merge key — is the question this shape invites, and the answer is worth
+// stating rather than leaving to be re-derived: a patch addresses by
+// STRUCTURE, and a handle is deliberately not structural. A role's position in
+// a unit's list is not its identity, so a patch that named it by index would
+// rewrite a different seat the moment anything above it moved.
 //
 // # It is the same write underneath
 //
