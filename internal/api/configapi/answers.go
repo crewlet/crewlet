@@ -26,21 +26,29 @@ var ErrNoActiveRevision = errors.New("configapi: no active revision")
 
 // Document is the active company, redacted.
 func (s *Service) Document(ctx context.Context) (*config.Company, error) {
+	company, _, err := s.documentOf(ctx)
+	return company, err
+}
+
+// documentOf is [Service.Document] plus the revision it came from, which is
+// what an entity-tag needs: the document changes exactly when the active
+// revision does, so the revision id IS the validator.
+func (s *Service) documentOf(ctx context.Context) (*config.Company, store.Revision, error) {
 	if s == nil {
-		return nil, fmt.Errorf("configapi: no store on this node")
+		return nil, store.Revision{}, fmt.Errorf("configapi: no store on this node")
 	}
 	revision, found, err := s.configs.Active(ctx)
 	if err != nil {
-		return nil, err
+		return nil, store.Revision{}, err
 	}
 	if !found {
-		return nil, ErrNoActiveRevision
+		return nil, store.Revision{}, ErrNoActiveRevision
 	}
 	company, err := s.open(revision)
 	if err != nil {
-		return nil, err
+		return nil, store.Revision{}, err
 	}
-	return company.Redact(), nil
+	return company.Redact(), revision, nil
 }
 
 // Revisions is the history, newest first, metadata only.

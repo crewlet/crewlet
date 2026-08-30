@@ -116,15 +116,21 @@ document `GET /config` serves, sliced:
 # What the collection holds
 curl -s "$CREWLET_URL/query/config_entities?kind=roles" -H "$AUTH" | jq
 
-# One entity
-curl -s "$CREWLET_URL/query/config_entities?kind=roles&id=ceo" -H "$AUTH" | jq '.entity' > ceo.json
+# One entity. The response IS the entity, so it goes straight back.
+curl -s -D headers.txt "$CREWLET_URL/config/roles/ceo" -H "$AUTH" > ceo.json
 
-# Edit ceo.json, then send it back
+# Edit ceo.json, then send it back — quoting the ETag the read returned, so a
+# concurrent activation is refused rather than silently overwritten.
 curl -X PUT $CREWLET_URL/config/roles/ceo \
   -H "$AUTH" -H "Content-Type: application/json" \
+  -H "If-Match: $(awk -F'"' '/^[Ee][Tt]ag:/ {print $2}' headers.txt)" \
   -H "X-Summary: give the CEO a quarterly goal" \
   -d @ceo.json
 ```
+
+The `config_entities` query still lists a collection and still answers a
+`{kind, id, entity}` envelope — it is what the dashboard reads. For one entity
+prefer `GET /config/{kind}/{id}`, whose body is exactly what `PUT` takes.
 
 The response is `201 Created` with the new `revision_id` and `epoch`, exactly
 as a full PUT would be: the write changed one entity and created one revision.

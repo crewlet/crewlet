@@ -307,6 +307,50 @@ func (s *Service) Entity(ctx context.Context, kind, id string) (any, error) {
 	return entity, nil
 }
 
+// getEntity serves GET /config/{kind}/{id} — one entity, redacted.
+//
+// THE ENTITY ITSELF, not an envelope around it. The read has to be the thing
+// the write takes: a caller who fetches, edits one field and sends it back is
+// the loop this surface exists for, and a {kind, id, entity} wrapper puts a
+// `jq` step in the middle of it. The websocket query keeps its envelope —
+// there the kind and id are the answer to a question, not the resource.
+//
+// Redacted for the same reason [Service.Entity] is: a per-entity read that
+// skipped the masking would fetch every credential in the company one seat at
+// a time, past the masking the document read applies.
+func (s *Service) getEntity(kind string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		company, revision, err := s.documentOf(r.Context())
+		switch {
+		case errors.Is(err, ErrNoActiveRevision):
+			writeJSON(w, http.StatusNotFound, map[string]string{
+				"error": "no_active_revision",
+				"hint":  "this node has no active company revision to read",
+			})
+			return
+		case err != nil:
+			s.fail(w, "read the active revision", err)
+			return
+		}
+		entity, found := entityKinds[kind].find(company, id)
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]string{
+				"error": "no_such_entity",
+				"hint":  "no " + kind + " called " + id + " in the active revision",
+			})
+			return
+		}
+		// THE DOCUMENT'S TAG, because an entity is a slice of it: the
+		// entity changes when the revision does, and a caller who holds
+		// this tag can send it straight back as If-Match on the write.
+		if serveConditional(w, r, revision) {
+			return
+		}
+		writeJSON(w, http.StatusOK, entity)
+	}
+}
+
 // putEntity replaces one entity and stores the resulting document.
 func (s *Service) putEntity(kind string) http.HandlerFunc {
 	access := entityKinds[kind]

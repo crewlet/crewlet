@@ -244,7 +244,8 @@ func TestAnEntityWriteNeedsASummary(t *testing.T) {
 	}
 }
 
-// PUT IS THE ONLY VERB ON AN ENTITY PATH, and the refusal has to be legible.
+// GET AND PUT ARE THE VERBS ON AN ENTITY PATH, and the refusal of the rest has
+// to be legible.
 //
 // The previous engine served DELETE here, so an operator carrying those
 // scripts forward will send one. They get 405 with an Allow header naming PUT
@@ -256,29 +257,31 @@ func TestAnEntityWriteNeedsASummary(t *testing.T) {
 // deleting a provider silently repoints every role that named it. Both belong
 // in a document somebody looked at. docs/guides/configure-via-api.md states
 // this status code, which is why it is asserted rather than assumed.
-func TestAnEntityPathRefusesEveryVerbButPut(t *testing.T) {
+func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t, nil)
 	s.seed(t, companyDoc, nil)
 
 	for _, kind := range configapi.EntityKinds() {
-		// GET is in the list because an operator has every reason to try
-		// it: the entity paths look like resources, and reading one goes
-		// through /query/config_entities instead. A 405 naming PUT is the
-		// answer that sends them there.
 		for _, method := range []string{
-			http.MethodDelete, http.MethodPost, http.MethodPatch, http.MethodGet,
+			http.MethodDelete, http.MethodPost, http.MethodPatch,
 		} {
 			res := s.do(t, method, "/config/"+kind+"/ceo", "", nil)
 			if res.Code != http.StatusMethodNotAllowed {
 				t.Errorf("%s /config/%s/ceo = %d, want 405 — an entity path serves "+
-					"PUT alone, and any other answer leaves an operator guessing "+
-					"whether the write happened", method, kind, res.Code)
+					"GET and PUT, and any other answer leaves an operator "+
+					"guessing whether the write happened", method, kind, res.Code)
 				continue
 			}
-			if allow := res.Header().Get("Allow"); !strings.Contains(allow, http.MethodPut) {
-				t.Errorf("%s /config/%s/ceo: Allow = %q, which does not name PUT — "+
-					"the one verb this path has", method, kind, allow)
+			// RFC 9110 §15.5.6 makes the Allow header a MUST on a 405, and
+			// it is the whole value of answering 405 rather than 404: it
+			// names what would have worked.
+			allow := res.Header().Get("Allow")
+			for _, verb := range []string{http.MethodGet, http.MethodPut} {
+				if !strings.Contains(allow, verb) {
+					t.Errorf("%s /config/%s/ceo: Allow = %q, which does not name "+
+						"%s — a verb this path has", method, kind, allow, verb)
+				}
 			}
 		}
 	}
@@ -441,5 +444,86 @@ func TestAnEntityWriteAcceptsANameChangeThatKeepsTheHandle(t *testing.T) {
 	}
 	if got := entityOf(t, s, configapi.EntityRoles, "ceo")["name"]; got != "Chief Executive" {
 		t.Errorf("the name change did not land: name = %v", got)
+	}
+}
+
+// AN ENTITY PATH IS A RESOURCE, WHICH MEANS IT CAN BE READ.
+//
+// The four paths accepted a write and answered 405 to a GET, so the entity a
+// caller was expected to send back had to be fetched from a different URI
+// space — /query/config_entities — which answers a {kind, id, entity}
+// envelope that PUT does not accept. The documented loop therefore ran the
+// read through `jq '.entity'` to make one half fit the other.
+//
+// The read is now the entity itself, so GET | PUT round-trips.
+func TestAnEntityReadRoundTripsStraightBackIntoTheWrite(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, nestedDoc, nil)
+
+	// A seat two units deep, because the flat handle namespace is the whole
+	// point of these paths and the read must share it with the write.
+	res := s.do(t, http.MethodGet, "/config/roles/staff-eng", "", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET /config/roles/staff-eng = %d: %s", res.Code, res.Body.String())
+	}
+	var entity map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &entity); err != nil {
+		t.Fatalf("the read is not the entity: %v", err)
+	}
+	if entity["handle"] != "staff-eng" {
+		t.Fatalf("the read is wrapped in an envelope rather than being the "+
+			"entity PUT takes: %s", res.Body.String())
+	}
+	if tag := res.Header().Get("ETag"); tag == "" {
+		t.Error("an entity read carries no ETag, so a conditional write on it " +
+			"cannot be built from the read that produced it")
+	}
+
+	// STRAIGHT BACK, unmodified and unwrapped, guarded by the tag the read
+	// gave. Anything less than 201 means the two halves still disagree.
+	back := s.do(t, http.MethodPut, "/config/roles/staff-eng", res.Body.String(),
+		map[string]string{
+			"X-Summary": "round trip", "If-Match": res.Header().Get("ETag"),
+		})
+	if back.Code != http.StatusCreated {
+		t.Fatalf("the entity a GET returned was refused by its own PUT = %d: %s",
+			back.Code, back.Body.String())
+	}
+}
+
+// AND IT IS REDACTED, because it is a slice of a document that is. Otherwise
+// the new read is a way to fetch every credential in the company one entity
+// at a time, past the masking the document read applies.
+func TestAnEntityReadOverHTTPCarriesNoCredential(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc, nil)
+
+	res := s.do(t, http.MethodGet, "/config/llm-providers/zulu", "", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET /config/llm-providers/zulu = %d", res.Code)
+	}
+	if strings.Contains(res.Body.String(), "sk-literal") {
+		t.Fatalf("a literal credential came back over HTTP: %s", res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "${") {
+		t.Errorf("the ${VAR} reference was masked away, so an editor cannot see "+
+			"what it points at: %s", res.Body.String())
+	}
+}
+
+// AN ID NOBODY CARRIES IS A 404 ON THE READ TOO, not an empty entity.
+func TestReadingAnAbsentEntityIsNotFound(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc, nil)
+
+	res := s.do(t, http.MethodGet, "/config/roles/nobody", "", nil)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("GET an absent seat = %d, want 404: %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "no_such_entity") {
+		t.Errorf("the refusal does not name what was missing: %s", res.Body.String())
 	}
 }

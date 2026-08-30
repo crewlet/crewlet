@@ -173,6 +173,52 @@ originally gave: the entity routes provide identity addressing over a nested
 document, which no patch format provides at any price, and `PATCH /config`
 covers everything whose shape IS its address.
 
+## The surface answers to HTTP's own vocabulary
+
+Four gaps between what this surface did and what a caller who knows HTTP would
+expect, each closed against the specification rather than against taste.
+
+**An entity path serves GET.** The four paths took a write and answered 405 to
+a read, so the entity a caller was expected to send back had to be fetched from
+`/query/config_entities` — a different URI space, answering a `{kind, id,
+entity}` envelope that `PUT` does not accept. The published loop bridged the
+two with `jq '.entity'`. A URI that can be written and not read is not a
+resource, and the read half living somewhere else is what made the round trip
+need a translation step. `GET /config/{kind}/{id}` now answers the entity
+itself, redacted, so `GET | PUT` round-trips. The query keeps its envelope:
+there the kind and id are the answer to a question, not the resource.
+
+**Reads carry an entity-tag.** `If-Match` was accepted long before anything
+emitted a validator, so the only way to learn the token was to read a DIFFERENT
+resource — `/config/revisions`. A conditional request whose precondition cannot
+be discovered from the representation it guards is a feature nobody uses
+correctly. The tag is the revision id, quoted, and strong (RFC 9110 §8.8.3): a
+revision is immutable, so there is nothing weak about the correspondence.
+`If-None-Match` on a read is a 304.
+
+**The preconditions mean what RFC 9110 §13.1 says.** `If-Match: *` was compared
+to the revision id as a literal, so the wildcard could never equal it and the
+ordinary way to say "only if something is there" answered 409. `If-Match: none`
+is the mirror: this record's own documentation named it as the unconfigured
+case and nothing implemented it, so it fell into the no-revision branch and
+answered 412 on exactly the node it was meant to permit. `*` and the standard
+`If-None-Match: *` now behave as specified, and `none` is honoured as the
+pre-tag spelling because the documentation promised it.
+
+**A patch format this resource does not speak is refused as a format.** RFC
+5789 makes the patch document negotiable — 415 for one the server cannot read,
+`Accept-Patch` for what it can. An RFC 6902 document is a LIST of operations,
+and a merge patch that is not an object replaces the target outright, so one
+arriving here was refused as a MALFORMED MERGE PATCH: the caller was told their
+shape was wrong when their format was. `OPTIONS /config` advertises
+`application/merge-patch+json`, an unsupported type is 415 carrying the same
+header, and `application/json` and an absent type stay acceptable because every
+example this project has published sends one of those.
+
+The bare revision id is still accepted wherever an entity-tag is. Breaking
+every script that reads an id out of a write response, to add two quotes, would
+be a cost with nothing on the other side.
+
 ## The masked document must be able to come back
 
 Python's answer was to document that the read is not round-trippable and point
