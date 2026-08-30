@@ -224,7 +224,7 @@ export function renderHealthPopover(health, stream, events, connected, auth = {}
       ${socketRows}
       ${
         stream && stream.dropped
-          ? `<div class="hp-action" data-action="reconnect">Reconnect for a fresh snapshot</div>`
+          ? `<div class="hp-action" role="button" tabindex="0" data-action="reconnect">Reconnect for a fresh snapshot</div>`
           : ""
       }
 
@@ -236,7 +236,13 @@ export function renderHealthPopover(health, stream, events, connected, auth = {}
               `${fmtNum(trouble.fallbacks)} fallback${trouble.fallbacks === 1 ? "" : "s"}, ${fmtNum(trouble.unavailable)} exhausted`,
               `in the last ${fmtNum(trouble.retained)} retained events`,
               "caution-ink",
-            ) + `<div class="hp-action" data-action="view-events">Open Activity →</div>`
+            ) +
+            // `go` rather than a bespoke action: the shell's delegate
+            // handles it (closing this popover before navigating), while a
+            // popover-only action name would fall through to whatever view
+            // is mounted — most of which have no handler for it, leaving a
+            // link that does nothing on most screens.
+            `<div class="hp-action" role="button" tabindex="0" data-action="go" data-route="/activity">Open Activity →</div>`
           : row("LLM trouble", "none", `in the last ${fmtNum(trouble.retained)} retained events`)
       }
     </div>`;
