@@ -7,8 +7,7 @@
 // engine is concerned, and nothing above this package may branch on which
 // backend is running.
 //
-// The design rationale that a reader should not have to re-derive lives in
-// decisions/101-queue-contract.md. The short version:
+// The rationale a reader should not have to re-derive:
 //
 //   - A durable subscription IS a seat's mailbox. It exists without a
 //     consumer, retains what is published while nothing is attached, and
@@ -48,8 +47,8 @@ type Outcome int
 
 const (
 	// OutcomeAck acknowledges the delivery. It is the zero value, so a
-	// handler returning Result{} acknowledges — the same default a bare
-	// `return` gives in the Python engine.
+	// handler returning Result{} acknowledges: the quiet path is the safe
+	// one.
 	OutcomeAck Outcome = iota
 
 	// OutcomeNak negatively acknowledges: the handler failed and the
@@ -248,8 +247,8 @@ type EventQueue interface {
 	// survive into the next life, and the restarted queue reported itself
 	// running and was silently deaf.
 	//
-	// AFTER Stop the answer is not a capability at all — see Stop.
-	// The asymmetry is written up in decisions/105-the-queue-lifecycle-verbs.md.
+	// AFTER Stop the answer is not a capability at all — see Stop, which
+	// is where the asymmetry is written up.
 	//
 	// The DRAIN protocol is exempt along with Start and Stop, because it
 	// exists to run around a stop rather than in spite of one:
@@ -319,8 +318,9 @@ type EventQueue interface {
 //
 // The consume loop re-reads these at the start of every collection cycle, so
 // a hot config reload takes effect on the next batch with no
-// re-subscription. Unlike the Python mutable dataclass this is safe to write
-// from another goroutine while a loop is reading it.
+// re-subscription. Mutable and read concurrently is a data race unless it is
+// guarded, so it is: this is safe to write from another goroutine while a loop
+// is reading it.
 type BatchOptions struct {
 	mu            sync.RWMutex
 	lingerSeconds float64
@@ -447,7 +447,7 @@ func eventType(ev *events.Event) string {
 // makes a conversation read correctly regardless of how a broker interleaves
 // redeliveries with fresh arrivals — measured, JetStream returns a
 // redelivered message BEHIND never-delivered ones, where Pulsar replays it
-// from the head (see decisions/102-jetstream-redelivery.md). Relying
+// from the head. Relying
 // on the timestamps the engine already trusts, rather than on one broker's
 // replay semantics, removes a correctness dependency that would otherwise
 // have to be re-verified for every backend.

@@ -41,9 +41,8 @@ import (
 // Runes, not bytes. Slicing a Go string cuts mid-rune and yields invalid
 // UTF-8 — which a JSON encoder then replaces with U+FFFD, so a truncated
 // Japanese or emoji-bearing argument would reach the model as mojibake rather
-// than as a short version of itself. Python's str slicing is character-wise
-// and the budgets below were chosen against that; this keeps them meaning the
-// same thing.
+// than as a short version of itself. The budgets below are character counts,
+// and counting runes is what keeps them meaning that.
 //
 // A limit of 0 or less means unbounded, which is the contract Review's
 // single-iteration evidence log depends on: it stays verbatim.
@@ -99,8 +98,8 @@ func elideValue(value any, limit int) any {
 // payload bodies the long ones) and any remainder is reported as "+N more", so
 // a trimmed line never reads as complete.
 //
-// Unlike the Python this replaces, output key order is json.Marshal's — which
-// for a map is sorted. Deterministic rather than dependent on the order the
+// Output key order is json.Marshal's — which for a map is sorted.
+// Deterministic rather than dependent on the order the
 // model happened to emit its arguments in, so two identical calls render
 // identically and a diff of two ledger blocks is readable.
 func fitArguments(args map[string]any, blobLimit int) string {

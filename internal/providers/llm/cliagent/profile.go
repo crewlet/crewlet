@@ -82,9 +82,9 @@ type StdinLogin struct {
 // a SUCCESS.
 //
 // A spent plan is not an HTTP status here: the process exits 0 and the answer
-// is prose. Matching that prose by keyword is how the Python engine got this
-// wrong twice — "usage limit" appears in a model's own answer about rate
-// limits, and a vendor's wording changed under it. So a marker matches by
+// is prose. Matching that prose by keyword gets it wrong twice over: "usage
+// limit" appears in a model's own answer about rate limits, and a vendor's
+// wording changes under it. So a marker matches by
 // STRUCTURE: a literal sentinel the vendor emits verbatim, plus the field
 // that carries the reset instant. A marker that finds its sentinel but no
 // reset value still classifies; one that finds neither does not fire.

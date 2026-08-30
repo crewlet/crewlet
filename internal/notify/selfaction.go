@@ -3,13 +3,13 @@ package notify
 // The self-action rule: a seat is never woken by its own action.
 //
 // Without it a seat assigned to its own issue receives a webhook for every
-// comment IT posts, comments again, and loops — observed in the Python
-// engine as 28 identical comments on one ticket before anyone stopped it.
+// comment IT posts, comments again, and loops — observed as 28 identical
+// comments on one ticket before anyone stopped it.
 //
 // # One rule, three faces
 //
-// It shows up at three points, and the Python engine implemented it three
-// separate times, in three layers, from three different fields:
+// It shows up at three points, and implementing it three separate times, in
+// three layers, from three different fields, is the mistake to avoid:
 //
 //   - A chat backend ECHOES the bot's own message straight back. Caught at
 //     the transport, by app id.

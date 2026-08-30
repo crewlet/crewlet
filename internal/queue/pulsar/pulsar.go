@@ -30,10 +30,11 @@
 // **A graceful consumer close is the free way to hand work back.** Re-measured
 // on Pulsar 4.0.6 with this client: closing a consumer that holds an unacked
 // message takes 1.8 ms, and a fresh consumer receives it 8.6 ms later still
-// at redeliveryCount 0 — where an ack timeout costs one. (The Python engine's
+// at redeliveryCount 0 — where an ack timeout costs one. (An independent
 // harness measured the same free handoff on 4.2.4 with the C++ client: 9 ms,
-// redeliveryCount 0. See decisions/104-pulsar-redelivery-economics.md
-// for the full table, and 102 for the JetStream column it contrasts with.)
+// redeliveryCount 0.) JetStream is the contrast and is measured in that
+// backend's own package doc: there a handoff SPENDS a delivery, which is why
+// its budget is 25 and this one's is 10.
 //
 // So Defer here means what the contract says it means — leave it unacked,
 // stop consuming — and never a NAK. This is the property JetStream does NOT
@@ -42,13 +43,15 @@
 //
 // # What this client cannot do, and what changed because of it
 //
-// github.com/apache/pulsar-client-go is not the C++ client the Python engine
-// drove. Two absences are load-bearing and are handled at their definitions:
+// github.com/apache/pulsar-client-go is not the C++ client, and two absences
+// are load-bearing. Both are handled at their definitions:
 //
 //   - There is no consumer ack timeout (no ConsumerOptions.AckTimeout). The
-//     Python engine's 30-minute unacked-message window does not exist here,
-//     which deletes the batch dispatch budget outright — see
-//     dispatchBudgetIsNotPorted in batch.go.
+//     30-minute unacked-message window the C++ client offers does not exist
+//     here, which deletes the batch dispatch budget outright, and leaves a wedged
+//     consumer holding its prefetch until its connection dies rather than
+//     until a clock expires — see the batch dispatch budget note at the top
+//     of batch.go,.
 //   - There is no exported RedeliverUnacknowledgedMessages. Reclaiming a
 //     quiesced consumer's prefetch is done by RECYCLING the consumer —
 //     close, reopen — which on Pulsar is free. See attachment.reopen.
@@ -92,8 +95,7 @@ const (
 	// maxDeliveries is the delivery budget before a message is routed to
 	// the dead-letter topic.
 	//
-	// Ten, carried from the Python engine (_MAX_REDELIVER), because in a
-	// fleet the counter has two causes and only one of them is a bad
+	// Ten, because in a fleet the counter has two causes and only one of them is a bad
 	// message: a redelivery means "the handler failed" (poison) but it
 	// also means "a node died holding this" — measured, an ack-timeout
 	// redelivery increments the counter. Three was sized for a
@@ -101,7 +103,7 @@ const (
 	// node deaths per message.
 	//
 	// It does NOT have to cover handoffs, which is where JetStream had to
-	// re-derive it upward to 25 (d-102 decision 2). Here a handoff closes
+	// re-derive it upward to 25. Here a handoff closes
 	// its consumer and the message comes back at redeliveryCount 0.
 	//
 	// COUNTING CONVENTION, stated because this repo holds both: Pulsar's
@@ -115,8 +117,8 @@ const (
 	// nakRedeliveryDelay spaces out the redelivery of a FAILING message.
 	//
 	// Pulsar's own default is 60 s, which is far too slow for a handler
-	// that failed on a transient fault. One second is the Python value
-	// and the reasoning is unchanged: fast enough that a retry is not a
+	// that failed on a transient fault. One second: fast enough that a
+	// retry is not a
 	// stall, slow enough that a permanently failing handler is not a hot
 	// loop against whatever is broken.
 	nakRedeliveryDelay = time.Second
@@ -156,7 +158,6 @@ const (
 	// waiting, and a receive that times out leaves the message where it
 	// was. Short enough that a quiesce, a pause hold or a shutdown takes
 	// effect promptly; long enough that an idle seat is not spinning.
-	// Carried from the Python engine's _RECEIVE_TIMEOUT_MS.
 	receiveWait = time.Second
 
 	// drainWait is the receive window used when collecting the tail of a
@@ -178,9 +179,9 @@ const (
 	// JUDGEMENT CALL, not a measurement — flagged as such because the
 	// number trades broker load against how long a brand-new seat's first
 	// events are invisible on every dashboard. Pulsar's client default is
-	// 60 s, which the Python engine inherited and documented as a known
-	// lag ("a brand-new agent's first events may lag the stream by that
-	// interval"). A minute of a live feed showing nothing looks exactly
+	// 60 s, taken as-is that is a documented lag: a brand-new agent's
+	// first events may trail the stream by a whole interval. A minute of
+	// a live feed showing nothing looks exactly
 	// like a quiet company, which is the failure mode the dashboard's
 	// health chrome exists to prevent — so 60 s is too long.
 	//

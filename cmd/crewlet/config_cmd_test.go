@@ -173,8 +173,8 @@ func TestADiffIsRedactedAndNamesWhatMoved(t *testing.T) {
 	if !strings.Contains(out, "claude-opus-5") || !strings.Contains(out, "claude-sonnet-5") {
 		t.Fatalf("the diff does not show the change:\n%s", out)
 	}
-	// PATHS AND VALUES, not lines — the shape d-505 records and the shape
-	// the API's own diff route answers with. The path is what makes the
+	// PATHS AND VALUES, not lines — the shape the API's own diff route
+	// answers with. The path is what makes the
 	// change actionable: an operator reading `~ providers.llm.…` knows
 	// which setting moved without counting lines.
 	if !strings.Contains(out, "providers.llm.") || !strings.Contains(out, ".model:") {

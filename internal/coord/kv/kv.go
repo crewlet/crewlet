@@ -75,9 +75,8 @@
 // shrinks to the interval between our check and our claim, and its consequence
 // changes from silent mixed-protocol operation to a claim we immediately give
 // back. Combined with the gate's existing asymmetry — only newer nodes wait,
-// older ones were never gated — that is a faithful degradation and a recorded
-// difference, not an oversight (decisions/201-coordination-contract.md
-// §3).
+// older ones were never gated — that is a faithful degradation and a
+// deliberate difference, not an oversight.
 package kv
 
 import (
@@ -112,8 +111,7 @@ var (
 )
 
 const (
-	// defaultBucketPrefix yields crewlet_leases and crewlet_epochs, the
-	// names decisions/201 records.
+	// defaultBucketPrefix yields crewlet_leases and crewlet_epochs.
 	defaultBucketPrefix = "crewlet"
 
 	leasesSuffix = "_leases"

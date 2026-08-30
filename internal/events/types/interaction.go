@@ -13,8 +13,8 @@ package types
 // ChannelKind is the coarse category of the surface a message arrived on. Used
 // for prompt-context flavour only — nothing branches on it for behaviour.
 //
-// Note "unknown" is Python's default and "" is Go's zero value; a producer that
-// does not classify the channel should set ChannelUnknown explicitly.
+// Note the wire default is "unknown" while the Go zero value is ""; a producer
+// that does not classify the channel should set ChannelUnknown explicitly.
 type ChannelKind string
 
 // The surfaces an inbound message can arrive on. Coarse on purpose: a new

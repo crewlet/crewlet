@@ -5,14 +5,14 @@ import (
 	"log/slog"
 )
 
-// The trace-correlation carrier — the half of decisions/401 that was decided
-// and never built.
+// The trace-correlation carrier.
 //
 // # Why the carrier lives here and not in the tracing package
 //
-// d-401 admits exactly one thing into context.Context for this purpose: "log
-// fields", consumer `logging`. Reading the OTel span out of ctx directly in
-// the handler would be the idiomatic OTel route and is the wrong one here —
+// Exactly one thing is admitted into context.Context for this purpose: log
+// fields, whose consumer is this package. Reading the OTel span out of ctx
+// directly in the handler would be the idiomatic OTel route and is the wrong
+// one here —
 // `go list -deps ./internal/logging` returns only itself, and 78 packages
 // import it, so that one import would put go.opentelemetry.io/otel/trace into
 // every dependency graph in the tree to render two hex strings. The carrier
@@ -21,8 +21,8 @@ import (
 //
 // # Why it is two fixed fields and not a field bag
 //
-// d-401 says "log fields", which reads like an open map. An open map is a
-// path for arbitrary caller-supplied text to reach a terminal, and
+// "Log fields" reads like an open map. An open map is a path for arbitrary
+// caller-supplied text to reach a terminal, and
 // TestNothingReachesTheTerminalRaw guards the ATTRIBUTE path, not this one —
 // an ESC repaints a terminal and a newline forges a whole log line. Two
 // validated hex fields carry everything a correlation needs and close that

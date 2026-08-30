@@ -42,8 +42,8 @@ func offlineQueue(t *testing.T) *Queue {
 // claim work it will not perform. NAKing would spend dead-letter budget on a
 // message nothing is wrong with — and a busy seat changes hands often, so a
 // healthy event would eventually die having never failed. On Pulsar a
-// graceful close returns unacked messages at redeliveryCount 0 (measured;
-// d-104), so leaving it unacked is both correct and free.
+// graceful close returns unacked messages at redeliveryCount 0 (measured),
+// so leaving it unacked is both correct and free.
 func TestActionForKeepsADeferralFree(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -54,8 +54,7 @@ func TestActionForKeepsADeferralFree(t *testing.T) {
 		{"ack", queue.OutcomeAck, actionAck},
 		{"nak", queue.OutcomeNak, actionNak},
 		{"defer", queue.OutcomeDefer, actionLeave},
-		// The zero value is Ack, the same default a bare return gives in
-		// the Python engine.
+		// The zero value is Ack: the quiet path is the safe one.
 		{"the zero outcome", queue.Result{}.Outcome, actionAck},
 	} {
 		if got := actionFor(tc.outcome); got != tc.want {

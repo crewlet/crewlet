@@ -55,8 +55,7 @@ const providerName = "anthropic"
 // happens.
 const KeyEnv = "ANTHROPIC_API_KEY"
 
-// Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds;
-// the token numbers match the Python backend they replace.
+// Defaults. The timeout matches the config layer's defaultLLMTimeoutSeconds.
 const (
 	DefaultBaseURL         = "https://api.anthropic.com"
 	DefaultTimeout         = 120 * time.Second

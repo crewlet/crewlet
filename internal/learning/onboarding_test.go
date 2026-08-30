@@ -121,7 +121,7 @@ func TestJoiningTheChainWithASeparatorWouldCollide(t *testing.T) {
 	// The measurement behind hashChain's netstring encoding. These are two
 	// DIFFERENT org structures: a company whose name contains a newline
 	// holding a root seat, and a company holding a unit holding that seat.
-	// Python hashed strings.Join(parts, "\n"), which cannot tell them apart.
+	// Hashing strings.Join(parts, "\n") cannot tell them apart.
 	joined := func(parts ...string) string {
 		sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
 		return hex.EncodeToString(sum[:])

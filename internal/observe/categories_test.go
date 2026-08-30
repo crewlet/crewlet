@@ -219,7 +219,7 @@ func TestAnEventWithNoTimestampIsStillReadable(t *testing.T) {
 
 func TestTheEnvelopePayloadIsFlatForTheClient(t *testing.T) {
 	t.Parallel()
-	// d-502: the wire contract says a payload is one flat object of the
+	// The wire contract says a payload is one flat object of the
 	// envelope and the body together, and the projection's own accessors
 	// read `role`, `agent_id` and `turn_id` straight off it. A nested
 	// {"data": {...}} would make every one of them miss.

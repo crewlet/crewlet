@@ -4,9 +4,9 @@
 // routing primitive: the notification service publishes to it, the scheduler
 // fires into it, an A2A ask wakes a colleague through it, the sandbox
 // coordinator resumes a suspended turn on it, and the engine subscribes one
-// consumer per seat to it. In the Python engine nine call sites formatted
-// that string by hand — nine chances for a producer and a consumer to
-// disagree about a name that has to match exactly. A mismatch is not an
+// consumer per seat to it. Formatted by hand, that string has nine call sites
+// — nine chances for a producer and a consumer to disagree about a name that
+// has to match exactly. A mismatch is not an
 // error anywhere: it is a message published to a topic nobody reads.
 //
 // The grammar lives here so there is exactly one definition, and here rather

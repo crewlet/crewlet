@@ -114,7 +114,7 @@ type Config struct {
 
 	// Resume re-enters a suspended Execute phase. Non-nil makes this
 	// runner's turn a RESUME: Plan is skipped and Execute continues the
-	// saved conversation. See [Runner.Resume] and d-402.
+	// saved conversation. See [Runner.Resume].
 	Resume *Resume
 }
 
@@ -506,7 +506,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// The attributes are deliberately thin. Everything a reader wants about
 	// what a phase DID — prompts and response verbatim, every tool call's
 	// arguments and result, tokens, the decision — is already on
-	// agent_phase_completed (d-506), and duplicating it onto a span would
+	// agent_phase_completed, and duplicating it onto a span would
 	// send whole prompts to a collector that is not the event store. What
 	// no event records is DURATION, per phase and per round, and that is
 	// exactly what a span adds.

@@ -61,10 +61,9 @@ func claimUntilDefinite(h *harness, resource string, opts coord.AcquireOptions) 
 
 // concurrencyCases are the ones that matter most under -race.
 //
-// The Python engine's correctness here rested on there being a single event
-// loop: two coroutines could not be inside try_acquire at the same instant, so
-// a read-then-write over the store's records was atomic by accident. Every one
-// of those accidents is a real race now.
+// Correctness here cannot rest on a single-threaded scheduler: two callers can
+// be inside a claim at the same instant, so a read-then-write over the store's
+// records is never atomic by accident.
 var concurrencyCases = []testCase{
 	{"one_winner_under_a_claim_stampede", func(h *harness) {
 		// Every node in a fleet sweeps for unclaimed seats on the same

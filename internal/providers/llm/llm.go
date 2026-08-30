@@ -2,7 +2,7 @@
 // the vocabulary a turn speaks to one.
 //
 // It is deliberately small and deliberately dumb about failure. Two things it
-// does NOT do, each because the Python engine learned it the expensive way:
+// does NOT do, each learned the expensive way:
 //
 //   - It does not retry. Every backend sets its SDK's retry count to zero,
 //     because retrying inside a provider hides the one signal the layers above
@@ -108,8 +108,8 @@ type Completion struct {
 func (c Completion) TotalTokens() int { return c.InputTokens + c.OutputTokens }
 
 // Request is one call's inputs. A struct rather than a parameter list because
-// it grows: every provider feature added to the Python signature over time
-// became another positional argument at forty call sites.
+// it grows, and every provider feature added over time would otherwise become
+// another positional argument at forty call sites.
 //
 // Temperature and MaxTokens spell "unset" DIFFERENTLY, on purpose. Making them
 // symmetrical would be the worse contract, so the reason is at each field.
@@ -122,11 +122,10 @@ type Request struct {
 	// and a plain float64 cannot tell that apart from a caller who said
 	// nothing. Nil means "leave it to the provider's configured default".
 	//
-	// This is the case d-000 warns about: a Python keyword default becoming
-	// a Go struct zero inverts which mistake is safe. Python's providers
-	// defaulted to 0.7, so omission was safe there; a plain float here would
-	// have made omission mean 0.0 and run every phase in the engine
-	// deterministic without anyone choosing it. Read it through
+	// This is the rule the whole tree follows: a field whose zero value is
+	// a legitimate SETTING may not use the zero value to mean "unset". A
+	// plain float here would make omission mean 0.0 and run every phase in
+	// the engine deterministic without anyone choosing it. Read it through
 	// [Request.TemperatureOr], never by testing it against zero.
 	Temperature *float64
 

@@ -69,8 +69,8 @@ ON CONFLICT (scope_type, scope_id, schedule_name, fire_label, target_handle) DO 
 // row silently stops being written.
 //
 // Reporting rests on RowsAffected rather than on RETURNING. That began as a
-// dialect-intersection rule for two drivers (d-002, retired by d-003); it
-// stays because RowsAffected is what this statement needs and is the answer
+// dialect-intersection rule for two drivers, and the second driver is gone;
+// it stays because RowsAffected is what this statement needs and is the answer
 // database/sql gives whatever the driver does, so the ledger's tri-state does
 // not depend on a newer SQLite feature reaching the one that is pinned.
 func (l *Ledger) Claim(ctx context.Context, run schedule.Run) (bool, error) {
@@ -159,8 +159,8 @@ const purgeSQL = `DELETE FROM scheduled_runs WHERE fired_at < ?`
 // Purge drops rows fired strictly before the cutoff, returning how many went.
 //
 // Deleting the row deletes the claim, because in this backend they are the
-// same row — which is the property the twin has to reproduce by hand and the
-// Python twin got wrong.
+// same row — which is the property a twin has to reproduce by hand, and the
+// one a twin most easily gets wrong.
 func (l *Ledger) Purge(ctx context.Context, before time.Time) (int, error) {
 	if l == nil || l.db == nil {
 		return 0, ErrNoDB

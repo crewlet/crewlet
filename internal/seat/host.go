@@ -120,8 +120,7 @@ type Config struct {
 	// Nil publishes none, which is a real answer rather than a zero: a
 	// node whose engine is not co-located has no in-flight count to
 	// report, and a peer reading 0 for it would draw an idle row for a
-	// process that is simply not saying. See
-	// decisions/501-node-runtime.md.
+	// process that is simply not saying.
 	//
 	// It takes a context because answering may mean reading a store, and
 	// this runs on the path that renews presence: the beat bounds it to
@@ -172,8 +171,8 @@ type Host struct {
 	releaseLimit   int
 	acquireBackoff time.Duration
 
-	// sweepMu and beatMu serialise the two passes against themselves. The
-	// Python engine got this from having one event loop; here the loops are
+	// sweepMu and beatMu serialise the two passes against themselves. A
+	// single-threaded scheduler gives this for free; here the loops are
 	// goroutines and a caller may drive either pass directly, so two
 	// concurrent sweeps could each compute room from a snapshot the other
 	// is about to invalidate. Lock order is sweepMu|beatMu -> seat lock ->
@@ -859,8 +858,7 @@ func callHook(name, handle string, fn func() error) (err error) {
 // safely runs one loop tick, turning a panic into a log line.
 //
 // A tick that takes the process down with it trades one broken pass for
-// every seat on this node — the same isolation the Python loops got from
-// catching Exception per tick.
+// every seat on this node, so each tick is isolated from the next.
 func (h *Host) safely(event string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {

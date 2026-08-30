@@ -223,9 +223,8 @@ func (a *restAdmin) EnsureSubscription(ctx context.Context, subject, group strin
 	// "earliest", ALWAYS. A subscription created at the latest message
 	// exists and still discards everything published before its first
 	// consumer attached — which is the exact failure this call prevents,
-	// and which was measured on the first real run of the Python harness
-	// ("a NEW subscription starts at Latest, so a consumer attaching after
-	// the publish sees nothing at all").
+	// and which was measured: a NEW subscription starts at Latest, so a
+	// consumer attaching after the publish sees nothing at all.
 	status, body, err := a.do(ctx, http.MethodPut, a.subPath(subject, group), []byte(`"earliest"`))
 	if err != nil {
 		return false, err

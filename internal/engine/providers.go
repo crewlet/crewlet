@@ -3,9 +3,9 @@
 // between them.
 //
 // It is the ENTANGLEMENT POINT, and the reason it is a package of small files
-// rather than one large one. Python's equivalent was a
-// 7,500-line module whose two hardest passages — the inbox handler and the
-// config apply — could only be read by scrolling past everything else. Here
+// rather than one large one. Collected into a single module this is thousands
+// of lines whose two hardest passages — the inbox handler and the config
+// apply — can only be read by scrolling past everything else. Here
 // each of those is a package of its own (internal/agent/inbox, and the config
 // plane), and what remains here is the WIRING: which concrete thing satisfies
 // which seam.

@@ -235,9 +235,9 @@ func ParseFormatName(name string) (Format, bool) {
 }
 
 // Get returns a logger bound to component. The name is a dotted subsystem
-// path — "queue.memory", "seat.host", "agent.turn" — matching the
-// get_logger() names the Python engine uses, so operator runbooks and log
-// queries keep working across the rewrite.
+// path — "queue.memory", "seat.host", "agent.turn". The vocabulary is stable
+// on purpose: operator runbooks and log queries are written against these
+// names, so renaming one breaks a query nothing in this repo can see.
 //
 // # It resolves the root on every record, not once here
 //
@@ -299,7 +299,7 @@ func (l lazy) Enabled(ctx context.Context, level slog.Level) bool {
 // silently render as another.
 //
 // [lazy.Enabled] is deliberately NOT touched: it must answer from the level
-// alone (see its doc and decisions/001), and a level that varied by whether a
+// alone (see its doc), and a level that varied by whether a
 // trace happened to be bound would filter different lines depending on which
 // spelling the call site used.
 //

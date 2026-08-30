@@ -42,10 +42,10 @@ var ErrCron = errors.New("invalid cron expression")
 // fires of any valid 5-field expression is `0 0 29 2 *` across a century that
 // is not a leap year — 2096-02-29 to 2104-02-29 is 2921 days, because 2100 is
 // divisible by 100 and not by 400. Anything shorter reports "never" for a
-// legitimate quadrennial schedule, which is what the Python evaluator's
-// 400-day scan did in three years out of four (and in seven out of eight
-// across the century gap): the dashboard drew no next run, and the catchup
-// window silently fell back to its minimum clamp.
+// legitimate quadrennial schedule. A 400-day scan — the natural choice — does
+// exactly that in three years out of four, and in seven out of eight across
+// the century gap: the dashboard draws no next run, and the catchup window
+// silently falls back to its minimum clamp.
 //
 // The cost of the larger horizon falls only on an expression that never
 // matches at all (`0 0 30 2 *` — February 30th), because every reachable one
@@ -253,8 +253,7 @@ func (e Expr) Matches(local time.Time) bool {
 	}
 	domOK := e.doms&(1<<uint(local.Day())) != 0
 	// Go's time.Weekday is Sunday=0..Saturday=6, which is already cron's
-	// numbering — the Python evaluator had to rotate its Monday-based
-	// weekday() by hand.
+	// numbering, so nothing here rotates a Monday-based weekday by hand.
 	dowOK := e.dows&(1<<uint(local.Weekday())) != 0
 
 	switch {

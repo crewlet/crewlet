@@ -8,10 +8,9 @@
 // where is each node on the config pointer.
 //
 // They were all designed to be swept — every one of their migrations says
-// so, and each ships the index a range delete needs. In the Python engine
-// the sweep itself was never built: `purge` existed on the stores and on
-// their protocols, and NOTHING anywhere called it, so all of them grew for
-// the life of the deployment. The event log is the audit trail; these are
+// so, and each ships the index a range delete needs. The failure to avoid is
+// a `purge` that exists on every store and on the seam, with NOTHING anywhere
+// calling it — then all of them grow for the life of the deployment. The event log is the audit trail; these are
 // not, and a table nobody sweeps is one that eventually decides how long a
 // question takes to answer.
 //

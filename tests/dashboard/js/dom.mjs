@@ -5,7 +5,7 @@
 // which nodes survive a re-render, which is the whole reason the page
 // stopped rebuilding itself on every websocket envelope — so it needs
 // real tests. Vendoring the handful of DOM surfaces it touches keeps
-// that possible without introducing a JavaScript toolchain to a Python
+// that possible without introducing a JavaScript toolchain to a Go
 // project, and without a network install in CI.
 //
 // This models the algorithm's contract, not a browser: parsing is

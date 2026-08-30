@@ -131,8 +131,7 @@ const (
 	// auxTemperature keeps the classification reproducible. Not zero: the
 	// tier is a judgement, and greedy decoding on a judgement makes the
 	// model commit hard to a first token it would otherwise reconsider.
-	// Carried from the Python engine, which ran every learning classifier
-	// at this value.
+	// Every learning classifier runs at this value.
 	auxTemperature = 0.2
 )
 

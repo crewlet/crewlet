@@ -42,10 +42,10 @@ type Fallback struct {
 	From string
 
 	// To is the key the call moves to — EMPTY on the last member, where
-	// the fallback is to nothing. Python passed the literal string "next"
-	// at both call sites, so every ProviderFallback event ever published
-	// recorded to_provider_key="next": the one field that says which
-	// provider took over, naming no provider at all.
+	// the fallback is to nothing. A literal "next" at both call sites
+	// makes every ProviderFallback event record to_provider_key="next":
+	// the one field that says which provider took over, naming no
+	// provider at all.
 	To string
 
 	// Kind is the failure's classification.

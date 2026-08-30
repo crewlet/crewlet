@@ -1,11 +1,11 @@
 package schedule
 
 // Behavioural tests for the tick loop, ported from tests/test_schedule/
-// test_scheduler.py case for case, plus what Go's own shape makes reachable.
+// the scheduler's cases, including the ones only Go's shape makes reachable.
 //
 // Internal (package schedule) rather than black-box for exactly one reason:
-// the Python suite drives the loop by assigning `_last_tick_utc`, which is how
-// it separates "the first tick after a restart" from "an ordinary tick with a
+// the loop is driven by seeding its last-tick instant, which is how a case
+// separates "the first tick after a restart" from "an ordinary tick with a
 // window behind it". That distinction is the whole of the catchup design and
 // there is no honest way to reach it from outside — an exported seeder would
 // be test-only API in production code, and sleeping through a real window
@@ -780,7 +780,7 @@ func TestHotReloadPicksUpANewSchedule(t *testing.T) {
 
 func TestHotReloadDroppingAScheduleStopsIt(t *testing.T) {
 	t.Parallel()
-	// The other direction, which the Python suite never sent. A removed
+	// The other direction, and the easy one to leave untested. A removed
 	// schedule must stop firing on the next tick, not on the next restart.
 	h := build(t, roleOrg())
 	h.seed(tickAt(8, 59, 30))

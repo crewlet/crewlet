@@ -50,7 +50,7 @@ func (c *Company) Redact() *Company {
 // This is what makes GET-edit-PUT safe. Without it a reader who fetched the
 // config, changed one line and sent it back would replace every credential in
 // the company with the mask — silently, and only discovered when each
-// integration started failing to authenticate. Python's answer was to document
+// integration started failing to authenticate. The cheap answer is to document
 // that the read is not round-trippable; a document that cannot be sent back is
 // a document nobody can edit.
 //

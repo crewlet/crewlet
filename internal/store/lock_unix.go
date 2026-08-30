@@ -12,10 +12,9 @@ import (
 // tryLock takes an exclusive, non-blocking advisory lock.
 //
 // There is no Windows twin any more. There was one — LockFileEx, mandatory
-// rather than advisory — and it went with the Windows release target
-// (decisions/003): the Turso driver embeds no native library for
-// windows/arm64, so half that matrix shipped a binary that could not open a
-// store at all. See platform.go for the message an unsupported platform gets
+// rather than advisory — and it went with the Windows release target: the
+// Turso driver embeds no native library for windows/arm64, so half that
+// matrix shipped a binary that could not open a store at all. See platform.go for the message an unsupported platform gets
 // instead of a link error about this function.
 //
 // NON-BLOCKING deliberately. A blocking lock would make `crewlet secrets set`

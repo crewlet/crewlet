@@ -139,15 +139,20 @@ no connected consumer and both reapers delete exactly that. See
 
 ## Where the constants come from
 
-The seat-handover numbers are measured against **Apache Pulsar 4.2.4
-standalone** — the bundled `docker-compose.yml`'s own configuration — by
-`internal/queue/pulsar/conformance_test.go`, which fails the build if the broker
-stops behaving this way:
+The seat-handover numbers were measured against **Apache Pulsar standalone**
+with `apache/pulsar-client-go`, and each constant they set carries its own
+measurement at its definition in `internal/queue/pulsar`.
+`internal/queue/pulsar/conformance_test.go` is what holds them, and it is worth
+being exact about how: it asserts the **behaviour** each number describes — that
+a close returns everything unacked at `redeliveryCount` 0, that a subscription
+retains mail with nothing attached, that the prefetch hostage is bounded by
+`receiver_queue_size` — and it asserts no timing. A broker that got slower would
+not fail the build; a broker that stopped behaving this way would.
 
 | Measurement | Result |
 |---|---|
 | Redelivery after a **graceful close** | **9 ms**, all held messages recovered |
-| Redelivery from a **wedged** consumer that never closes | **12.0 s** against an 11 s ack timeout |
+| Redelivery from a **wedged** consumer that never closes | never — held until the connection dies (this client has no ack timeout) |
 | **Cursor continuity** on owner handoff | owner acked `[0,1,2]`, successor saw `[3,4,5]`, replayed `[]` |
 | **Attach latency** to an existing subscription | **4.9 ms** |
 | **Prefetch hostage** at `receiver_queue_size=64` | **64** of 256 held (the 1000 default would have held all 256) |
@@ -165,16 +170,19 @@ What each one decides:
 - **The claim-rate limit is not about attaching.** At 5 ms attach is free; the
   real cost of a takeover is spawning that seat's MCP children, which is what
   the limiter is sized against.
-- **A wedged-but-alive node holds its prefetch for the ack timeout.** 12.0 s
-  against an 11 s timeout scales to roughly **30 minutes** at the engine's real
-  inbox ack timeout, and nothing in the broker shortens it. That is precisely
-  why correctness against zombies comes from epoch fencing rather than from
-  waiting, and why the **64-message prefetch cap** matters: it is the difference
-  between a wedged node holding 64 of a seat's messages for half an hour and
-  holding a thousand. It is also why the
+- **A wedged-but-alive node holds its prefetch until its connection dies.**
+  Not for a timeout — for as long as the process lives. `apache/pulsar-client-go`
+  has no `ConsumerOptions.AckTimeout` and Pulsar has no broker-side equivalent
+  for a *connected* consumer, and the client answers keepalives from IO threads
+  a stalled duty never touches, so nothing releases that mail on its own. There
+  is no clock to wait out. That is precisely why correctness against zombies
+  comes from epoch fencing rather than from waiting, and why the **64-message
+  prefetch cap** matters: it bounds how much of a seat's mail one wedged node
+  can hold hostage indefinitely. Above all it is why the
   [event-loop watchdog](seat-ownership.md#the-wedged-node-and-why-it-leaves)
-  exits the process rather than trying to signal a loop that has stopped
-  turning — that collapses the 30 minutes to 9 ms.
+  **ends the process** rather than trying to signal a loop that has stopped
+  turning: killing the client is the only thing that ends the session, and it
+  collapses an unbounded hold to 9 ms.
 
 ---
 

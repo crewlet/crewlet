@@ -64,8 +64,8 @@ func TestRetryHint(t *testing.T) {
 		{"retry-after zero", header("Retry-After", "0"), 0, false},
 		{"retry-after garbage", header("Retry-After", "soon"), 0, false},
 
-		// OpenAI's reset family: a Go-style duration, which the Python
-		// engine's rstrip("s") could not read at all.
+		// OpenAI's reset family: a Go-style duration, which a naive
+		// trailing-"s" strip cannot read at all.
 		{"reset requests duration", header("x-ratelimit-reset-requests", "6m0s"), 6 * time.Minute, true},
 		{"reset requests fractional", header("x-ratelimit-reset-requests", "1.5s"), 1500 * time.Millisecond, true},
 		{"reset requests bare seconds", header("x-ratelimit-reset-requests", "20"), 20 * time.Second, true},

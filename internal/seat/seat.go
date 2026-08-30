@@ -71,7 +71,7 @@
 // client — running on goroutines the stall never touched — stays attached and
 // holds their mail. Nothing can be signalled out of that, because the code
 // that would handle the signal is the code that is stuck. [Watchdog] converts
-// it into "gone"; see decisions/301-watchdog.md.
+// it into "gone";
 package seat
 
 import (

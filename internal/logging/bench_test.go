@@ -7,7 +7,8 @@ import (
 	"testing"
 )
 
-// These exist so decisions/001's numbers are RUNNABLE rather than remembered.
+// These exist so the zap-versus-slog numbers are RUNNABLE rather than
+// remembered.
 // The question they settle is "should this be zap?", and the honest answer
 // depends on what the current design actually costs — which nobody could
 // check without them.
@@ -85,8 +86,8 @@ func BenchmarkSuppressedThroughLazy(b *testing.B) {
 	}
 }
 
-// The traced path, so decisions/508's claim that correlation costs "one
-// allocation on traced lines only" is a number rather than an assertion.
+// The traced path, so the claim that correlation costs one allocation on
+// traced lines ONLY is a number rather than an assertion.
 //
 // Read it against BenchmarkEmittedThroughLazy above, which is the same line
 // with nothing bound: that gap is the whole cost of the injection, and it is

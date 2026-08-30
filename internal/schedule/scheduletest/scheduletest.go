@@ -173,8 +173,8 @@ func newHarness(t *testing.T, newLedger func(t *testing.T) schedule.Ledger) *har
 // --- fixtures -------------------------------------------------------------
 
 // aKey is the identity every case starts from. A role-scoped smoke test at
-// 09:00 on a fixed Monday — the same shape the Python suite used, so a reader
-// comparing the two is comparing behaviour and not fixtures.
+// 09:00 on a fixed Monday, shared by every backend so a reader comparing two
+// backends is comparing behaviour and not fixtures.
 func aKey() schedule.FireKey {
 	return schedule.FireKey{
 		Scope:        types.ScheduleScopeRole,
@@ -799,9 +799,9 @@ var concurrencyCases = []testCase{
 	}},
 
 	{"claims_and_reads_interleave_without_tearing", func(h *harness) {
-		// -race is the point of this one. The Python twin's correctness
-		// rested on there being one event loop, and every one of those
-		// implicit serialisations is a real race here.
+		// -race is the point of this one. A twin whose correctness rests
+		// on a single-threaded scheduler turns every implicit
+		// serialisation into a real race here.
 		const rounds = 40
 		var wg sync.WaitGroup
 		wg.Add(3)

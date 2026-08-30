@@ -651,9 +651,9 @@ func TestTheStoreTakesItsPoolKnobsFromConfig(t *testing.T) {
 	// read burst landing on however many connections database/sql felt
 	// like opening.
 	//
-	// The driver used to be the third knob here and is gone with it
-	// (decisions/003): there is one driver, and TestTursoIsTheOnlyDriver-
-	// InTheBinary in internal/store is what asserts that now.
+	// The driver used to be the third knob here and is gone with it:
+	// there is one driver, and TestTursoIsTheOnlyDriverInTheBinary in
+	// internal/store is what asserts that now.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 		b.Store.BusyTimeoutSeconds = 11

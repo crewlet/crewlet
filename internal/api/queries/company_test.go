@@ -721,8 +721,7 @@ func TestASeatThatIsHeldIsNotReportedUnplaceable(t *testing.T) {
 
 // A NODE'S LIVE STATE REACHES ITS PEERS on the presence heartbeat, which is
 // what makes the fleet view answer "where is the work" from any node rather
-// than only from the one that served the request. See
-// decisions/501-node-runtime.md.
+// than only from the one that served the request.
 func TestFleetCarriesEachNodesOwnLiveStatus(t *testing.T) {
 	t.Parallel()
 	backend := coordmemory.New()

@@ -15,8 +15,8 @@ import (
 // does not survive the process — so a fleet or a restart-tolerant deployment
 // wires the SQL ledger instead.
 //
-// Correct under concurrent use, which is not a courtesy: the Python twin was
-// a plain set behind one event loop, and every one of those implicit
+// Correct under concurrent use, which is not a courtesy: a plain set is only
+// safe behind a single-threaded scheduler, and every one of those implicit
 // serialisations is a real race here. The mutex is what makes "exactly one
 // claimer wins" true when four goroutines claim the same identity at once.
 type MemoryLedger struct {
@@ -75,9 +75,9 @@ func (m *MemoryLedger) Purge(_ context.Context, before time.Time) (int, error) {
 	for key, run := range m.claim {
 		if run.FiredAt.Before(before) {
 			// Deleting the map entry drops the record AND the claim in one
-			// move, because here they are the same thing. The Python twin
-			// kept two structures and had to remember to sweep both; the
-			// one it forgot was the claim, which turned a purge into a
+			// move, because here they are the same thing. Two structures
+			// means remembering to sweep both, and the one that gets
+			// forgotten is the claim — which turns a purge into a
 			// permanent silent refusal.
 			delete(m.claim, key)
 			dropped++

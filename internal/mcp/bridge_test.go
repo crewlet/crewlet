@@ -153,9 +153,8 @@ func TestAddRefusesADuplicateRatherThanOrphaningTheChild(t *testing.T) {
 	if _, err := b.Add(t.Context(), spec); err != nil {
 		t.Fatalf("first Add: %v", err)
 	}
-	// Indexing a second client over the first is how the Python bridge left a
-	// subprocess running, unreachable and unstoppable, for the life of the
-	// engine. Replacing a server is Restart, which says so in its name.
+	// Indexing a second client over the first leaves a subprocess running,
+	// unreachable and unstoppable, for the life of the engine. Replacing a server is Restart, which says so in its name.
 	_, err := b.Add(t.Context(), spec)
 	if !errors.Is(err, ErrServerExists) {
 		t.Fatalf("second Add = %v, want ErrServerExists", err)

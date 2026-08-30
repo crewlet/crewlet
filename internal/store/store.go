@@ -23,7 +23,7 @@
 //
 // Everything that genuinely needs cross-process coordination — seat leases,
 // config activations, the completion ledger, dedupe and rate valves — lives in
-// the KV layer instead (decisions/201), and that separation is why nothing
+// the KV layer instead, and that separation is why nothing
 // here has to be safe against a peer.
 //
 // It also collapses a whole idiom. The Postgres migrator took an advisory lock
@@ -35,9 +35,9 @@
 //
 // Turso (turso.tech/database/tursogo) is the database, and it is the only
 // driver. There was a second — modernc.org/sqlite, kept as a certified
-// fallback so that every statement here had to parse on both — and dropping
-// it is decisions/003. The short version: the fallback never ran anything
-// but its own test job, the two drivers are not substitutable for a database
+// fallback so that every statement here had to parse on both — and it is
+// gone. The short version: the fallback never ran anything but its own test
+// job, the two drivers are not substitutable for a database
 // with rows in it (only Turso has the vector functions the learning
 // subsystem's recall needs), and writing in the intersection of two dialects
 // cost the engine every Turso-only feature it is on Turso for.
@@ -69,8 +69,10 @@ import (
 //
 // Unexported, and there is no longer a knob that selects it: a store.driver
 // config field and a CREWLET_STORE_DRIVER environment variable both chose
-// between two implementations, and there is one. See decisions/003, and
-// internal/config for the retired-key message a file that still sets it gets.
+// between two implementations, and there is one: only Turso has the vector
+// distance functions the agent-learning recall path reads through, so the
+// second driver kept every table and silently lost recall. See internal/config
+// for the retired-key message a file that still sets it gets.
 const driverName = "turso"
 
 // Defaults for Options. Both are anchored to the dashboard, which is the only

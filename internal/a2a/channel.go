@@ -69,8 +69,8 @@ func (c Channel) Duration(now time.Time) time.Duration {
 	return end.Sub(c.OpenedAt)
 }
 
-// Errors the service returns. Each was a silent drop in the Python this
-// replaces, and a reply that goes nowhere is the failure the requester
+// Errors the service returns. Each of these is a silent drop if it is not
+// reported, and a reply that goes nowhere is the failure the requester
 // experiences as "they never answered".
 var (
 	// ErrNoChannel — the channel id is unknown.

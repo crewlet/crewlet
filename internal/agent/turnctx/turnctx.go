@@ -1,15 +1,15 @@
 // Package turnctx carries what a turn IS, as an explicit argument.
 //
-// The Python engine threaded five separate ambient channels through a turn —
-// the work key, the config pin, the LLM scope, the phase recorder and the log
-// fields — each a contextvar, and each justified the same way: "the consumer is
-// a leaf and the intermediate frames have no business knowing". The justification
-// is sound for a leaf value and wrong for everything else, and in Go it is worse
-// than wrong: a contextvars.Context is COPIED into a task at creation, while a
-// goroutine shares whatever it captured. The same pattern that merely obscured
-// a dependency in Python is a live data race here.
+// A turn has five values that want to travel ambiently — the work key, the
+// config pin, the LLM scope, the phase recorder and the log fields — and each
+// makes the same case for itself: "the consumer is a leaf and the intermediate
+// frames have no business knowing". That case is sound for a leaf value and
+// wrong for everything else, and in Go it is worse than wrong: a goroutine
+// SHARES whatever it captured, for as long as it runs, including after the
+// turn that created it has finished. There is no copy-on-spawn to bound it, so
+// what would elsewhere merely obscure a dependency is a live data race.
 //
-// So (decisions/401) a turn's inputs are an argument. The type is named
+// So a turn's inputs are an argument. The type is named
 // TurnContext there; here it is [Turn], because turnctx.TurnContext stutters and
 // the package name already says what it is.
 //
@@ -22,7 +22,7 @@
 //
 // The config pin is deliberately NOT one of them: a turn reading config through
 // an ambient channel is how a mid-turn reload gets observed halfway, which is
-// the failure immutable epochs exist to remove (decisions/404).
+// the failure immutable epochs exist to remove.
 package turnctx
 
 import (

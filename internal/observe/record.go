@@ -89,7 +89,7 @@ func tagsFrom(body map[string]any) map[string]string {
 }
 
 // body is the event as one flat JSON object — the envelope and the payload
-// together, which is what the wire contract says a payload is (d-502) and what
+// together, which is what the wire contract says a payload is and what
 // the projection's own accessors read `role`, `agent_id` and `turn_id` off.
 //
 // Marshalled ONCE per event and threaded through, because this is on the

@@ -116,9 +116,11 @@ func isTerminal(w io.Writer) bool {
 //
 // # Why not a logging library
 //
-// See decisions/001. The short version: the engine's logger is `*slog.Logger`
-// because that is the interface the ecosystem passes around, and a console
-// encoder is the only thing zap or zerolog would have been adopted for.
+// The engine's logger is `*slog.Logger` because that is the interface the
+// ecosystem passes around, and a console encoder is the only thing zap or
+// zerolog would have been adopted for. Taking the dependency would put a
+// third-party type in every constructor signature in the tree to get one
+// handler that is a few hundred lines here.
 type consoleHandler struct {
 	level slog.Level
 	// color and dateInTime are decided once, at construction, from the

@@ -77,9 +77,9 @@ func (s *suite) runWire(t *testing.T) {
 		// caller writing Payload["replicas"].(int) reads correctly on the
 		// publishing node and panics on every consumer.
 		//
-		// This asserts the VALUE survives, never the Go type it lands as:
-		// d-103 explicitly leaves the encoding to the backend, so requiring
-		// float64 would forbid what a decision permits. Comparison is the
+		// This asserts the VALUE survives, never the Go type it lands as.
+		// The contract leaves the encoding to the backend, so requiring
+		// float64 would forbid what it permits. Comparison is the
 		// canonical JSON of the map, under which int 3 and float64 3 are
 		// the same value and []string{"a"} and []any{"a"} are the same
 		// list — which is exactly the equivalence a caller is entitled to

@@ -10,10 +10,10 @@
 // documentation: the epoch that must not reset on release, the release that
 // must not clear its successor's lease, the renew that must not report loss
 // because the store was unreachable for two seconds. The last one is not
-// hypothetical — in the Python engine an unreachable store answered exactly
-// as a peer holding the resource does, and a blip had a node logging "another
-// process holds this node id's presence lease" at an operator while it
-// quietly stopped refreshing its own presence.
+// hypothetical: an unreachable store that answers exactly as a peer holding
+// the resource does turns a blip into a node logging "another process holds
+// this node id's presence lease" at an operator while it quietly stops
+// refreshing its own presence.
 //
 // # Bringing up a new backend: if a case fails, suspect the case
 //
@@ -27,12 +27,13 @@
 //     honestly cannot say whether a peer won or a record lapsed underneath it.
 //     Unknown is the contract's third answer, available at any moment; the
 //     suite was demanding the twin's single-mutex behaviour from everyone.
-//   - It read an omitted Protocol as the OLDEST version, ported from a Python
-//     keyword default of 1. Go's struct zero inverts that risk, and the
+//   - It read an omitted Protocol as the OLDEST version, which is only safe
+//     where omission is a named default rather than a struct zero. The
 //     contract now says an omitted protocol claims at THIS build.
-//   - It asserted a gate-refused claim leaves the record pristine. d-201 §3
-//     permits a KV to touch it — check → claim → re-check → release means the
-//     claim was made and given back.
+//   - It asserted a gate-refused claim leaves the record pristine. A KV
+//     cannot express the protocol gate inside a compare-and-swap, so it does
+//     check → claim → re-check → release: the claim was made and given back,
+//     and the record is legitimately touched.
 //   - It asked for a TTL longer than LongTTL. A store sizes its retention to
 //     the suite's advertised maximum and is RIGHT to refuse a TTL it cannot
 //     honour rather than silently clamp it.
@@ -40,9 +41,11 @@
 //     is why no case could see that a value's Go type does not survive a real
 //     round trip.
 //
-// So before concluding a backend is at fault: grep decisions/ for the
-// operation. If the case turns out to encode what the twin happens to do, the
-// case is the defect. Two backends agreeing is not evidence when the suite is
+// So before concluding a backend is at fault, establish that the contract
+// actually requires what the case demands — coord.go's doc is where the
+// contract is stated, and a degradation documented at its definition is a
+// PERMITTED exception rather than a failure. If the case turns out to encode
+// what the twin happens to do, the case is the defect. Two backends agreeing is not evidence when the suite is
 // what made them agree.
 //
 // # Checks that do not depend on you being careful
@@ -144,15 +147,14 @@
 //
 // # Before adding a case that says a backend must NOT do something
 //
-// Grep decisions/ for the operation first. A recorded degradation is a
-// PERMITTED exception, and the corpus is where permission lives — d-201 §3
-// records that a KV cannot express the protocol gate inside a compare-and-swap
-// and so does check → claim → re-check → release, which means a gate-refused
-// claim may legitimately leave a touched record. A "must not" written without
-// that grep forbids what the contract allows, and the way that surfaces is a
+// Establish that the contract forbids it, rather than that no backend here
+// happens to do it. A documented degradation is a PERMITTED exception: a KV
+// cannot express the protocol gate inside a compare-and-swap and so does
+// check → claim → re-check → release, which means a gate-refused claim may
+// legitimately leave a touched record — and a "must not" written without
+// checking forbids what the contract allows. The way that surfaces is a
 // correct backend failing, its author investigating, and this suite changing.
-// It has already cost that twice in the sibling queue suite. The grep costs
-// about fifteen seconds.
+// It has already cost that twice in the sibling queue suite.
 //
 // And a gap in a suite comes in two kinds, which need different hunting:
 //

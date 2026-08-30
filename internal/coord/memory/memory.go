@@ -396,7 +396,7 @@ func validateTTL(resource, owner string, ttl time.Duration) error {
 // wireCopy puts meta through the encoding a real backend puts it through.
 //
 // The twin's job is to be the store, and this is the one field that crosses a
-// wire: d-201 §2 records the ownership key carrying meta AS JSON, and
+// wire: the ownership key carries meta AS JSON, and
 // placement.rolesFromMeta is written to accept "the []any a JSON round trip
 // through the lease store returns" — so JSON shapes are what a deployment
 // actually sees. An in-process store that skipped the encoding handed callers

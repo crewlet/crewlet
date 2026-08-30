@@ -403,7 +403,7 @@ func TestRotatesToTheNextKeyWithinOneCall(t *testing.T) {
 		t.Fatalf("wire keys %q then %q", seen[0].authorization, seen[1].authorization)
 	}
 	// The reset header shortened the bench from the hour-long policy TTL.
-	// Python's rstrip("s") could not read "6m0s" at all.
+	// A naive trailing-"s" strip cannot read "6m0s" at all.
 	// Slack for the real clock ticking between the bench and the read.
 	if got := p.Pool().Stats()[0].Cooling; got > 6*time.Minute || got < 6*time.Minute-time.Second {
 		t.Fatalf("bench = %v, want the header's six minutes (not the %v policy TTL)",
@@ -616,8 +616,8 @@ func TestReasoningChangesTheTokenCapAndDropsTemperature(t *testing.T) {
 	if body["reasoning_effort"] != "high" {
 		t.Fatalf("reasoning_effort = %v", body["reasoning_effort"])
 	}
-	// The o-series rejects max_tokens outright. Python sent it anyway,
-	// which 400s every reasoning call the moment a caller sets a cap.
+	// The o-series rejects max_tokens outright, so sending it anyway 400s
+	// every reasoning call the moment a caller sets a cap.
 	if _, present := body["max_tokens"]; present {
 		t.Fatalf("max_tokens sent to a reasoning model: %v", body)
 	}
@@ -878,9 +878,9 @@ func TestACustomToolCallIsSkippedRatherThanFaked(t *testing.T) {
 	}
 }
 
-// Python returned an empty completion with finish_reason "error" here, which
-// the tool loop reads as a clean finish: the phase produces nothing and
-// reports success.
+// Returning an empty completion with finish_reason "error" here is the
+// tempting shape, and the tool loop reads it as a clean finish: the phase
+// produces nothing and reports success.
 func TestNoChoicesIsAServerFailureNotAnEmptyAnswer(t *testing.T) {
 	t.Parallel()
 	_, url := serve(t, func(w http.ResponseWriter, _ int) {

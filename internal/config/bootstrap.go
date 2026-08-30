@@ -21,9 +21,9 @@ import (
 // Everything about the company lives in [Company], versioned in the store
 // and delivered to a running engine.
 //
-// The Python engine's Tier A named a Pulsar broker, a PostgreSQL DSN and a
-// pgvector knowledge store under one `providers:` block. None of those is
-// what this engine runs on: the stream is NATS JetStream (embedded by
+// A Tier A naming a broker, a database DSN and a vector store under one
+// `providers:` block is the obvious shape, and none of it is what this engine
+// runs on: the stream is NATS JetStream (embedded by
 // default, so a company needs no external service at all), the store is one
 // local file, and coordination is its own slot. Tier A therefore names the
 // two SLOTS and the store directly rather than a provider bag — see
@@ -461,10 +461,9 @@ func ResolveNodeID(b *Bootstrap, r *Resolver) (string, error) {
 // being the shared constant node-0, so would any two engines started
 // against one store.
 //
-// The Python engine cached this in a process global and needed a second
-// function to bypass the cache, because two engines in one process are two
-// holders and handing them one identity recreated exactly that hole. There
-// is no cache here: each holder calls this once and keeps what it got,
+// Caching this in a process global needs a second function to bypass the
+// cache, because two engines in one process are two holders and handing them
+// one identity recreates exactly that hole. There is no cache here: each holder calls this once and keeps what it got,
 // which is the property the cache was emulating. Minting a second one
 // mid-run fences an engine out of its own seats.
 func NewIncarnation(nodeID string) string {
@@ -488,9 +487,9 @@ const DefaultStorePath = "crewlet.db"
 //
 // # There is no driver field
 //
-// There was one — `driver: turso | sqlite` — and it is retired
-// (decisions/003). Turso is the database and the only driver, so the field
-// selected between two implementations of which one exists. A file that still
+// There was one — `driver: turso | sqlite` — and it is retired. Turso is the
+// database and the only driver, so the field selected between two
+// implementations of which one exists. A file that still
 // carries it is answered by name rather than as a misspelling; see
 // retiredBootstrapFields in load.go.
 type Store struct {
@@ -579,9 +578,8 @@ type Stream struct {
 	Replicas int `yaml:"replicas,omitempty" json:"replicas,omitempty" js:"min=0" desc:"Stream replica count: 1 solo, 3 in a fleet."`
 
 	// EventRetentionHours bounds the event stream. 0 takes the queue's own
-	// default. Unbounded is deliberately not expressible: the Python
-	// engine's event table grew for the life of the deployment because
-	// nothing ever swept it.
+	// default. Unbounded is deliberately not expressible: an event table
+	// nothing ever sweeps grows for the life of the deployment.
 	EventRetentionHours float64 `yaml:"event_retention_hours,omitempty" json:"event_retention_hours,omitempty" js:"min=0" desc:"Event stream retention; 0 takes the queue default."`
 
 	// Credentials is a path to a NATS credentials file.
@@ -891,9 +889,8 @@ type API struct {
 
 func (a *API) validate(path string) error {
 	var p problems
-	// Python never bounded this, so a port of 70000 passed validation and
-	// failed at bind, long after `crewlet validate` said the config was
-	// good.
+	// Unbounded, a port of 70000 passes validation and fails at bind,
+	// long after `crewlet validate` said the config was good.
 	if a.Port < 0 || a.Port > 65535 {
 		p.add(at(path, "port"), ErrOutOfRange,
 			"must be 0 (no HTTP surface) or a port 1..65535, got %d", a.Port)
@@ -988,9 +985,9 @@ func (a *APIAuth) validate(path string) error {
 	// cleanly, binds its port, and answers 401 to everything including
 	// its own dashboard.
 	//
-	// Checked HERE rather than at API startup, which is where the Python
-	// this replaces raised it, so `crewlet validate` catches it on a
-	// laptop rather than a deployment catching it at bind time.
+	// Checked HERE rather than at API startup, so `crewlet validate`
+	// catches it on a laptop rather than a deployment catching it at
+	// bind time.
 	if len(a.Tokens) == 0 && !a.AllowAnonymousRead {
 		p.add(at(path, "tokens"), ErrMissing,
 			"allow_anonymous_read is false and no tokens are configured, so "+

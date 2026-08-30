@@ -341,7 +341,7 @@ func (s *suite) runBatch(t *testing.T) {
 		// matter how the broker handed the events over. Measured, the two
 		// brokers disagree: JetStream returns a redelivered message
 		// BEHIND never-delivered ones, where Pulsar replays it from the
-		// head (decisions/102-jetstream-redelivery.md). So within-
+		// head. So within-
 		// conversation order comes from the timestamps the engine already
 		// trusts and already preserves across requeue — never from
 		// delivery order. This subtest is what certifies a backend

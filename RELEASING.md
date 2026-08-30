@@ -236,7 +236,7 @@ when you touch it:
 
 | | Contents |
 |---|---|
-| **archives** (`crewlet_X.Y.Z_<os>_<arch>.tar.gz`) | one `crewlet` binary, `LICENSE`, `README.md` — four of them: linux and darwin × amd64 and arm64. **No Windows**, and **no musl**; see below (and [`decisions/003`](decisions/003-turso-is-the-only-driver.md)) |
+| **archives** (`crewlet_X.Y.Z_<os>_<arch>.tar.gz`) | one `crewlet` binary, `LICENSE`, `README.md` — four of them: linux and darwin × amd64 and arm64. **No Windows**, and **no musl**; see below |
 | **`checksums.txt`** | SHA-256 over every archive |
 | **`checksums.txt.sig` + `checksums.txt.pem`** | the keyless cosign signature and its certificate |
 | **`ghcr.io/crewlet/crewlet:X.Y.Z`** | a multi-arch image (linux/amd64, linux/arm64) — also `:latest` on a stable tag |

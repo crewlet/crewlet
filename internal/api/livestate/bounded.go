@@ -5,9 +5,9 @@ package livestate
 // Used for the event-id dedupes and, with a value, for the finished-call guard.
 // One pruning implementation either way.
 //
-// It exists because the Python this replaces used a plain dict — which is
-// insertion-ordered there — seeded with thirty days of ids and never pruned. In
-// an API process that stays up for weeks that is a slow leak. The cap only ever
+// It exists because the obvious structure — a plain insertion-ordered map,
+// seeded with thirty days of ids and never pruned — is a slow leak in an API
+// process that stays up for weeks. The cap only ever
 // has to cover the hydration overlap plus any redelivery: a window of minutes,
 // not the process lifetime.
 type boundedSet[V any] struct {

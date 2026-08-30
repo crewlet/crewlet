@@ -42,13 +42,13 @@
 // author fixing one field at a time through a validate-edit loop pays a
 // round trip per mistake, and the mistakes here are usually made together.
 //
-// # What Go changes
+// # No validation framework
 //
-// The Python engine expressed all of this through Pydantic: field types
-// carried constraints, model validators raised, and `extra="forbid"` did the
-// unknown-key work. None of that machinery is reproduced. These are plain
-// structs with yaml/json tags; validation is ordinary Go code returning
-// ordinary errors joined with errors.Join; and the fields that accept a
+// A schema library would carry the constraints on the field types, raise from
+// model validators, and do the unknown-key work itself. None of that is used
+// here. These are plain structs with yaml/json tags; validation is ordinary Go
+// code returning ordinary errors joined with errors.Join; and the fields that
+// accept a
 // scalar OR a list get a named type with its own decoder rather than an
 // `any` every reader has to type-switch on.
 package config

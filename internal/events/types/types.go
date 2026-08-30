@@ -8,10 +8,10 @@
 // fields — it just sees no typed fields, which is exactly the position an older
 // node is in mid-upgrade.
 //
-// The catalogue is grouped by domain across several files. src/crewlet/events/
-// types.py is the specification for the wire shape, and JSON tags are its field
-// names verbatim: a Go node and a Python node read each other's events, so a
-// renamed tag is a dropped field.
+// The catalogue is grouped by domain across several files. THE JSON TAGS ARE
+// THE WIRE FORMAT, and a rolling upgrade puts two builds on one stream: a
+// renamed tag is a dropped field on whichever half has not been upgraded yet.
+// Rename nothing here; add instead.
 //
 // Payloads never resolve who the actor was. Each states the one fact it knows
 // — its role through Role, its agent id through AgentID, an outright override
@@ -37,11 +37,11 @@
 //
 // Four conventions the whole catalogue follows:
 //
-//   - Slices and maps carry omitempty, scalars do not. Pydantic emits every
-//     field, and a scalar's zero value is its Python default, so scalars match
-//     by writing themselves out. A nil slice or map would marshal as null,
-//     which Pydantic REJECTS for a list/dict field with a default factory;
-//     omitting the key instead lets that default factory answer.
+//   - Slices and maps carry omitempty, scalars do not. A scalar's zero value
+//     IS its wire default, so writing it out always is what keeps the two
+//     agreeing. A nil slice or map would marshal as null, which is a
+//     different value from an absent key and from an empty list — omitting
+//     the key lets the reader's own default answer.
 //   - A closed set of string values is a named string type with constants, not
 //     a bare string. The wire form is unchanged — these stay strings so an
 //     unrecognised value from a newer node round-trips rather than failing.
@@ -53,7 +53,7 @@
 //     timestamp, source, payload, trace_id, span_id, parent_span_id,
 //     delegation_depth, parent_turn_id, delegation_chain). The envelope owns
 //     those keys and silently drops a payload field that collides — see
-//     ConfigRevisionActivated, the one Python event that redeclares one.
+//     ConfigRevisionActivated, the one event that would redeclare one.
 package types
 
 import (
@@ -121,8 +121,8 @@ type IntegrationTrigger interface {
 // through to the full event when the trigger was persisted.
 //
 // The zero Trigger means there was no trigger at all (an engine-internal turn).
-// It marshals to {}, which the dashboard renders as "no source" — the same
-// empty-object contract the Python engine puts on the wire.
+// It marshals to {}, which the dashboard renders as "no source"; the
+// empty-object form is the wire contract, not null.
 type Trigger struct {
 	ID        string
 	Type      string
@@ -180,9 +180,8 @@ func (t Trigger) Map() map[string]any {
 	}
 	timestamp := ""
 	if !t.Timestamp.IsZero() {
-		// RFC3339Nano rather than Python's isoformat spelling: it is what the
-		// envelope's own timestamp serializes to, so a reader that parses one
-		// parses the other.
+		// RFC3339Nano, which is what the envelope's own timestamp
+		// serializes to — so a reader that parses one parses the other.
 		timestamp = t.Timestamp.Format(time.RFC3339Nano)
 	}
 	descriptor := map[string]any{

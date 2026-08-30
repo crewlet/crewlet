@@ -51,10 +51,9 @@ var log = logging.Get("providers.credential")
 // It is a sentinel rather than a distinct error type because the layer above
 // does not branch on it: the backend wraps it in an [llm.Error] carrying the
 // kind that did the cooling, and the fallback chain then treats it exactly
-// like any other retryable failure. Python needed a dedicated
-// AllCredentialsExhausted exception and a dedicated catch in the fallback
-// wrapper; here the classification IS the return value, so the chain needs no
-// special case at all. Callers that genuinely want to tell "no key left" from
+// like any other retryable failure. A dedicated error type would need a
+// dedicated catch in the fallback wrapper; here the classification IS the
+// return value, so the chain needs no special case at all. Callers that genuinely want to tell "no key left" from
 // "the key was refused" use errors.Is.
 var ErrExhausted = errors.New("credential: every key is cooling down")
 
@@ -108,8 +107,7 @@ func (p Policy) forKind(kind llm.ErrorKind) time.Duration {
 }
 
 // maxAuthDoublings caps the exponential auth backoff at 2^6 = 64x the policy
-// TTL. Ported from the Python pool (_MAX_AUTH_BACKOFF_DOUBLINGS), where it was
-// chosen so a permanently-bad key stops thrashing without being retired
+// TTL. Chosen so a permanently-bad key stops thrashing without being retired
 // outright — six doublings of the 5-minute default reaches five hours.
 const maxAuthDoublings = 6
 
@@ -565,10 +563,10 @@ type Identity struct {
 // classify must return a non-nil error; one that does not is treated as an
 // unclassified failure rather than allowed to panic mid-turn.
 //
-// Unlike the Python pool this makes no exception for a single-key bag. That
-// exemption existed so tests could patch the client attribute, and its side
-// effect was that a lone key was never benched at all: every call re-paid the
-// round trip to be told 429 again. One code path, whatever the pool size.
+// There is no exception for a single-key bag. Such an exemption exists to let
+// a test reach past the pool, and its side effect is that a lone key is never
+// benched at all: every call re-pays the round trip to be told 429 again. One
+// code path, whatever the pool size.
 func Rotate[T any](
 	ctx context.Context,
 	p *Pool,

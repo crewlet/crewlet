@@ -11,7 +11,7 @@ import (
 // The ordering this package rests on — verify BEFORE anything is persisted,
 // broadcast or republished — is held by the type system: accept takes a
 // [verified], and only a guard mints one. That is a compile error rather than
-// a convention, which is the whole improvement over the Python this replaces.
+// a convention, which is the whole point.
 //
 // What the compiler CANNOT hold is a new handler minting its own verified{}
 // out of nothing to get past the signature. It would build, it would pass every

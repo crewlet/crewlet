@@ -23,12 +23,12 @@ import (
 //
 // A seat that keeps working accumulates one raw row per turn forever, and
 // nothing else in the system removes one. Recall is what pays for that, and it
-// pays LINEARLY: there is still no ANN index reachable from the Go driver
-// (decisions/002, re-measured at the pin), so recall visits every embedded row
+// pays LINEARLY: there is still no ANN index reachable from the Go driver,
+// re-measured at the pin, so recall visits every embedded row
 // the seat owns, in the Plan phase of every turn.
 //
 // The constant shrank when the distance arithmetic moved into the database
-// (decisions/003) — the rows no longer cross the driver boundary to be decoded
+// — the rows no longer cross the driver boundary to be decoded
 // in Go, which at 5 000 rows of 1 536 dimensions was 144 ms and 35.8 MB
 // against 34 ms and 35.8 KB for the same ranking. The SHAPE did not: it is
 // still linear in the seat's row count, still with no ceiling, and this pass
@@ -119,10 +119,10 @@ type Summary struct {
 // ONE METHOD, and the whole reason this interface exists: everything else in
 // the pass — clustering, exemplar choice, the transaction, the recovery sweep
 // — is decidable arithmetic over rows, and a test that has to stand up an LLM
-// to reach any of it will not be written. The Python worker took a provider
-// map, an org and an agent pool in its constructor and resolved the model
-// three frames into the compaction routine, so its own tests needed a live
-// provider to exercise a clustering rule.
+// to reach any of it will not be written. A worker that takes a provider map,
+// an org and an agent pool in its constructor and resolves the model three
+// frames into the compaction routine needs a live provider to exercise a
+// clustering rule.
 type Summarizer interface {
 	Summarize(ctx context.Context, c Cluster) (Summary, error)
 }
@@ -313,10 +313,10 @@ func (l *Lifecycle) Options() Options { return l.opts }
 //
 // ONE definition used twice, in complementary directions: a compaction
 // candidate must be in it, and the mid-state sweep drops everything that is
-// not. Two hand-written lists is how the Python ended up with rows that were
-// neither — its sweep named 'self_iterate' explicitly while its candidate
-// query took only ('done','failed'), so a row carrying any other value was
-// undroppable AND uncompactable, and stayed in the seat's memory forever.
+// not. Two hand-written lists is how a row ends up being neither: a sweep
+// naming 'self_iterate' explicitly while the candidate query takes only
+// ('done','failed') leaves any other value undroppable AND uncompactable, and
+// it stays in the seat's memory forever.
 //
 // Spelled inline rather than bound: these are compile-time constants of this
 // package and never caller input, exactly like the state names in
@@ -403,8 +403,8 @@ func (l *Lifecycle) Pass(ctx context.Context, handle string, now time.Time) (Pas
 		return res, err
 	}
 
-	// BEFORE the fold, unlike the Python, which evicted last. A summary is
-	// dated by the WORK it covers, not by when it was written, so a cluster
+	// BEFORE the fold, not after it. A summary is dated by the WORK it
+	// covers, not by when it was written, so a cluster
 	// of rows older than this horizon is born already past it — and evicting
 	// after the fold deleted such a summary in the same pass that spent an
 	// LLM call producing it. Going first costs nothing and leaves every
@@ -799,8 +799,8 @@ func (l *Lifecycle) sweepOrphans(ctx context.Context, handle string, orphans []E
 // to disagree, and only one of them is survivable: deleting first and failing
 // loses the turns outright, while writing first and failing leaves a summary
 // counting rows that are still there — which every later pass then folds
-// again. (The Python did exactly that: insert_compacted, then a separate
-// delete_episodes_by_ids.)
+// again — which is exactly what an insert followed by a separate delete
+// does.
 //
 // THE SUMMARY'S WORK KEY NAMES THE FOLD, not a turn. It is derived from the
 // member ids, so re-folding the same set collides with the unique index on

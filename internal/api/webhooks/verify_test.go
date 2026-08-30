@@ -391,7 +391,7 @@ func vendorSignedDelivery(t *testing.T, body []byte, secret, id string, at time.
 // There was a fallback to the second, added on a measurement that a live
 // 19.3.0 instance sent no `webhook-signature`. The measurement was real and
 // the conclusion was wrong: the hook had been provisioned with `token`, so
-// GitLab was doing as asked. See decisions/702.
+// GitLab was doing as asked.
 func TestGitLabAcceptsASignedDelivery(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)

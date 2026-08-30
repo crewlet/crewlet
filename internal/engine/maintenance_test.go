@@ -11,9 +11,9 @@ import (
 )
 
 // THE assertion whose absence was the bug. Every one of these tables ships a
-// Purge and an index for it, every migration says the rows are swept, and in
-// the Python engine nothing ever called any of them — so all of them grew
-// for the life of the deployment. A store gaining a Purge with no entry here
+// Purge and an index for it, and every migration says the rows are swept —
+// and if nothing ever calls any of them, all of them grow for the life of the
+// deployment. A store gaining a Purge with no entry here
 // now fails this list rather than going quietly unswept.
 func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 	t.Parallel()
@@ -25,8 +25,8 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 	}
 	// STARTED, not merely constructed. A worker that was built and never
 	// run looks identical from every other vantage point to one quietly
-	// doing its job — which is exactly how the Python engine shipped a
-	// full set of Purge methods that nothing ever called.
+	// doing its job — which is exactly how a full set of Purge methods
+	// ships with nothing ever calling them.
 	if !w.Running() {
 		t.Fatal("the sweep was built but never started")
 	}

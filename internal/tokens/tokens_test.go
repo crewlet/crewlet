@@ -190,7 +190,7 @@ func TestAnEmptyRollupMarshalsToArraysNotNulls(t *testing.T) {
 
 func TestTheWireKeysAreTheOnesTheClientReads(t *testing.T) {
 	t.Parallel()
-	// The dashboard is the compatibility reference (decisions/502).
+	// The dashboard is the compatibility reference.
 	// These are the exact keys views/spend.js and store.js index by name —
 	// a renamed field here is a blank panel there, with no error anywhere.
 	raw, _ := json.Marshal(tokens.Aggregate([]tokens.Record{

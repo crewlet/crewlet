@@ -258,11 +258,10 @@ func TestNoTokensRefusesEveryWriteAndAllOfConfig(t *testing.T) {
 
 func TestNoBootstrapAtAllStillGuardsWrites(t *testing.T) {
 	t.Parallel()
-	// Tier A supplies the POSTURE, never the existence of a check. In the
-	// Python this replaces the middleware was mounted only when Tier A was
-	// present, while the /config write surface was gated on a store being
-	// configured — two independent conditions deciding one security
-	// property.
+	// Tier A supplies the POSTURE, never the existence of a check. The
+	// hole is a middleware mounted only when Tier A is present while the
+	// /config write surface is gated on a store being configured — two
+	// independent conditions deciding one security property.
 	g := auth.New(nil)
 	res, _ := serve(t, g, "POST", "/agents", "Bearer anything")
 	if res.StatusCode != http.StatusUnauthorized {
@@ -465,10 +464,9 @@ func TestAnEmptyConfiguredTokenIsNotABypass(t *testing.T) {
 
 func TestConfigRefusesTheShapesThatWouldLockEveryoneOut(t *testing.T) {
 	t.Parallel()
-	// Checked in config rather than at API startup — which is where the
-	// Python this replaces raised them — so `crewlet validate` catches
-	// them on a laptop rather than a deployment catching them at bind
-	// time.
+	// Checked in config rather than at API startup, so `crewlet validate`
+	// catches them on a laptop rather than a deployment catching them at
+	// bind time.
 	for _, tc := range []struct {
 		name string
 		auth config.APIAuth

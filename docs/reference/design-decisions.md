@@ -47,7 +47,7 @@ Everything concurrent is a goroutine whose lifetime belongs to whoever started i
 
 ## Event Schema Versioning
 
-Every persisted event can carry versioning. Schema changes must be **additive only** — new fields with defaults, existing fields never removed. Consumers ignore unknown fields. This allows old and new events to coexist in the same stream without migration.
+Every persisted event can carry versioning. Schema changes must be **additive only** — new fields with defaults, existing fields never removed. A consumer does not *ignore* what it does not recognise, it **preserves** it: an event type this build has no payload for still decodes into the envelope, keeps its unknown fields, and re-publishes them unchanged. That is the load-bearing half. Ignoring an unknown field is indistinguishable from dropping it, and during a rolling upgrade the older nodes are the ones holding the newer events — a node that dropped what it could not parse would silently strip the new fields off every event it forwarded, which turns each upgrade into an outage. Preserving instead means old and new nodes coexist on one stream with no migration and no ordering requirement between them.
 
 ---
 

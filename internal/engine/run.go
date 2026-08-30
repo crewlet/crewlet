@@ -37,8 +37,7 @@ import (
 // It owns exactly three things — the epoch, the backends, and the node — and
 // the wiring between them. Everything else it delegates: the guard order is
 // the inbox package's, the turn's rules are the turn package's, the seat math
-// is the placement package's. That is the whole reason this file is short and
-// the Python it replaces was seven and a half thousand lines.
+// is the placement package's. That is the whole reason this file is short.
 type Engine struct {
 	// epoch is the company this engine is running, replaced whole by an
 	// apply and never mutated. See epoch.go.
@@ -371,8 +370,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// heartbeat. Only the node running a seat knows its in-flight
 		// count and its drain state, and /health answers about whichever
 		// node served the request — so behind a load balancer a refresh
-		// tells a different story each time. See
-		// decisions/501-node-runtime.md.
+		// tells a different story each time.
 		Status: e.nodeStatus,
 		Turn:   e.Dispatch,
 		// Before the mailbox opens and after it closes — see node.Config.
@@ -626,7 +624,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// PINNED ONCE. Two reads of the epoch can straddle an apply, and a turn
 	// that built its runner from one revision and took its round caps from
 	// the next is running a company that never existed — the exact failure
-	// publishing-instead-of-mutating exists to remove (d-404).
+	// publishing-instead-of-mutating exists to remove.
 	company := e.Company()
 	// Assembled BEFORE the runner, because the runner needs it: every phase
 	// event carries the turn's identity, and a runner built without it

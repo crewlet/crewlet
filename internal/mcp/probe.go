@@ -52,8 +52,8 @@ func (h *hintTable) lookup(name string) (Annotations, bool) {
 // WritesToSharedSurface classifies as a write to a shared surface — so the
 // sub-agent guard would deny every under-annotated tool in the company, having
 // been told nothing at all. Hence the wire probe; hence this fallback trusts
-// only an explicit true and reports everything else Unknown, which fails the
-// same way the Python engine did rather than a new way.
+// only an explicit true and reports everything else Unknown, which degrades to
+// the documented tri-state rather than inventing a fourth answer.
 func annotationsFromSDK(a *sdk.ToolAnnotations) Annotations {
 	if a == nil {
 		return Annotations{}

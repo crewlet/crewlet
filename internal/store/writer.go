@@ -30,8 +30,8 @@ func Category(eventType string) (string, bool) { return events.Category(eventTyp
 // is what keeps this list independent of the event catalogue: an event type
 // this build has never heard of still arrives with its fields intact in the
 // envelope, so a newer node's events are indexed here exactly as a known one's
-// are. The Python writer used attribute lookups and therefore saw nothing at
-// all on an unknown type.
+// are. A writer that reaches through the decoded payload instead sees nothing
+// at all on an unknown type.
 //
 // The value is the tag name; the key is the JSON field it comes from. They
 // differ in one place — `role` on the event is `agent_role` in the tags,

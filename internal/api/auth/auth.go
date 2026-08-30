@@ -12,11 +12,10 @@
 // down, and both the HTTP middleware and the WebSocket handshake consult it, so
 // the two cannot end up guarded in one place and open in the other.
 //
-// The guard is mounted UNCONDITIONALLY. In the Python this replaces the
-// middleware was mounted only when Tier A was present, while the /config write
-// surface was gated on a store being configured — two independent conditions
-// deciding one security property, coinciding only because every real caller
-// happened to supply both. Tier A supplies the POSTURE, never the existence of
+// The guard is mounted UNCONDITIONALLY. Mounting it only when Tier A is
+// present, while gating the /config write surface on a store being configured,
+// is two independent conditions deciding one security property — coinciding
+// only because every real caller happens to supply both. Tier A supplies the POSTURE, never the existence of
 // a check: with no tokens at all, no candidate can match, so reads serve and
 // every write and all of /config and /secrets is refused.
 package auth

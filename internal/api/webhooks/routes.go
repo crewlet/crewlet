@@ -76,7 +76,7 @@ func (r *Receiver) gitlab(w http.ResponseWriter, req *http.Request) {
 			signature, now)
 	}
 	// ONE SCHEME. A delivery without a valid signature is refused —
-	// see decisions/702.
+	//
 	//
 	// There used to be a fallback to the plaintext X-Gitlab-Token, on the
 	// measured premise that gitlab-ee 19.3.0 sent no `webhook-signature`
@@ -244,10 +244,10 @@ func (r *Receiver) slack(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// PER SEAT, because Slack gives each agent its own app. An empty map is
-	// "cannot verify", not "nothing to verify" — the distinction the Python
-	// this replaces got wrong, where a deployment with no Slack secret
-	// skipped the check entirely and this route answered 200 to an unsigned
-	// POST addressed at any seat.
+	// "cannot verify", not "nothing to verify". Getting that distinction
+	// wrong means a deployment with no Slack secret skips the check
+	// entirely and this route answers 200 to an unsigned POST addressed at
+	// any seat.
 	secrets := r.secrets().Slack
 	if len(secrets) == 0 {
 		noSecret(w, "slack")

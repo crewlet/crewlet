@@ -11,7 +11,7 @@ import "time"
 // measured — the distinction matters more than the digits.
 const (
 	// DefaultStartupTimeout bounds connect + handshake, and separately bounds
-	// the first tools/list. REASONED, carried from the Python engine.
+	// the first tools/list. REASONED, not measured.
 	//
 	// Sized for the slow HEALTHY case rather than the fast one: a uvx / npx
 	// server whose package is not in the local cache downloads it on first
@@ -21,11 +21,11 @@ const (
 	// a boot that appears to have finished and quietly never did.
 	DefaultStartupTimeout = 120 * time.Second
 
-	// DefaultRequestTimeout bounds one tools/call. REASONED, carried.
+	// DefaultRequestTimeout bounds one tools/call. REASONED, not measured.
 	//
-	// In Python this number was chosen to match the MCP SDK's own SSE-friendly
-	// HTTP read default, so a tool behaved the same over stdio and over HTTP.
-	// The Go SDK imposes no such default — its streamable transport uses the
+	// The number was originally picked to match an MCP SDK's SSE-friendly HTTP
+	// read default, so a tool behaved the same over stdio and over HTTP. The Go
+	// SDK imposes no such default — its streamable transport uses the
 	// http.Client it is given — so the *matching* argument no longer holds
 	// mechanically. The number is kept anyway, for the half of the argument
 	// that still does: the same tool must not have two different ceilings
@@ -61,9 +61,9 @@ const (
 	// its parent, to let go by itself before the tree is signalled by process
 	// group.
 	//
-	// Python's equivalent was 5s and it was a GIVE-UP: nothing followed it,
-	// the reader thread was simply abandoned. This one has a kill behind it,
-	// so waiting longer buys nothing and costs shutdown latency on every
+	// A longer grace here would be a GIVE-UP with nothing behind it — the
+	// reader simply abandoned. This one has a kill behind it, so waiting
+	// longer buys nothing and costs shutdown latency on every
 	// server that has such a grandchild. Two seconds is orders of magnitude
 	// more than closing a descriptor takes; past it the holder is stuck or
 	// deliberate, and neither gets better with time. See stderrRelay.reap and
@@ -76,12 +76,12 @@ const (
 	// read end is closed under the pump, which ends it unconditionally.
 	stderrReapGrace = time.Second
 
-	// tailLines bounds the crash tail kept per server. REASONED, carried.
+	// tailLines bounds the crash tail kept per server. REASONED.
 	// Enough for a Python traceback plus a startup banner (a few KB), small
 	// enough to hold for every spawned server at once.
 	tailLines = 50
 
-	// maxToolPages bounds a tools/list pagination walk. REASONED, carried.
+	// maxToolPages bounds a tools/list pagination walk. REASONED.
 	//
 	// Real servers expose at most a few hundred tools and never split a
 	// listing this finely, so a walk this long means the server's pagination

@@ -341,8 +341,8 @@ func TestSummaryLeadsWithTheResolvedActor(t *testing.T) {
 		source:  "task_engine",
 		want:    "Dev completed task T-42",
 	}, {
-		// The event that has no role of its own: the creator is the publisher,
-		// and the summary names it exactly as the Python line does.
+		// The event that has no role of its own: the creator is the
+		// publisher, and the summary names it.
 		name:    "from the publisher",
 		payload: TaskCreated{Title: "Build API", TargetRole: "Engineer"},
 		source:  "PM",

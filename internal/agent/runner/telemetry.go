@@ -368,12 +368,12 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 // prints beside a failed phase.
 //
 // The classified kinds are the ones an operator can act on: rotate a key,
-// raise a cap, wait out a provider. Everything else is "error" — deliberately,
-// where the Python this replaces used the exception's type name. Go's answer
-// to that question is a lie: a wrapped error's type is *fmt.wrapError whatever
-// went wrong underneath, so the field would carry the same meaningless token
-// for every unclassified failure while looking specific. One honest generic
-// beats a specific-looking constant.
+// raise a cap, wait out a provider. Everything else is "error", deliberately.
+// The tempting alternative is to name the failure's own type, and in Go that
+// is a lie: a wrapped error's type is *fmt.wrapError whatever went wrong
+// underneath, so the field would carry the same meaningless token for every
+// unclassified failure while looking specific. One honest generic beats a
+// specific-looking constant.
 func classifyError(err error) string {
 	var provider *llm.Error
 	switch {

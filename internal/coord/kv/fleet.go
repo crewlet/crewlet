@@ -62,7 +62,7 @@ import (
 //
 // JetStream assigns each key write a monotonic revision. Publishing the
 // pointer therefore appends and flips in ONE write, which is the atomicity
-// d-201 asks for: there is no instant where a node can read an epoch whose
+// the contract asks for: there is no instant where a node can read an epoch whose
 // revision has not been published, and two nodes activating at once get two
 // different revisions rather than racing over a counter this engine keeps.
 

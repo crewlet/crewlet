@@ -605,10 +605,11 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 	}
 	h.mu.Unlock()
 	if draining {
-		// A drain started while this claim was in flight. The Python engine
-		// could not reach this state — one event loop meant BeginDrain and
-		// the heartbeat could not overlap — but here they are separate
-		// goroutines, and a row put back after the drain dropped it leaves
+		// A drain started while this claim was in flight. A
+		// single-threaded scheduler cannot reach this state, because
+		// BeginDrain and the heartbeat cannot overlap; here they are
+		// separate goroutines, and a row put back after the drain
+		// dropped it leaves
 		// peers reserving capacity for a node that will never claim again.
 		h.giveUpLease(ctx, *lease)
 	}

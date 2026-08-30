@@ -59,8 +59,7 @@ type Turn struct {
 	// Trace is the completed turn's trace context, carried so a worker
 	// publishing its own events links them to the turn that caused them.
 	// It lives on the envelope, never on the payload, so it has to be
-	// handed down explicitly — an ambient one is what the Go rewrite
-	// deleted (decisions/000).
+	// handed down explicitly, because nothing in a turn travels ambiently.
 	Trace events.TraceContext
 }
 
@@ -477,9 +476,9 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 		}
 		// Counted as RUN whether or not it failed, and whether or not it
 		// had anything to publish: it spent the turn's budget and the
-		// operator's wall clock. Python counted a worker that its own
-		// gate had just skipped, which made a pass that did nothing at
-		// all report workers_run=1.
+		// operator's wall clock. Counting a worker the gate has just
+		// skipped makes a pass that did nothing at all report
+		// workers_run=1.
 		out.Ran = append(out.Ran, w.Name())
 		for _, payload := range payloads {
 			if payload != nil {

@@ -41,7 +41,7 @@ func TestContract(t *testing.T) {
 //
 // It replaces TestDriverSelection, which covered a choice that no longer
 // exists: `store.driver` in the Tier A file and CREWLET_STORE_DRIVER both
-// picked between turso and mainline SQLite (decisions/003). Deleting a
+// picked between turso and mainline SQLite. Deleting a
 // selector is easy to do halfway — the field goes, the blank import stays,
 // and the binary quietly carries a second storage engine that nothing can
 // reach but that anything with a raw sql.Open can. So the assertion is about

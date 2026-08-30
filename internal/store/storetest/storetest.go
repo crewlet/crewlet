@@ -2,7 +2,7 @@
 //
 // It was written when there were two drivers and one dialect, to keep every
 // statement inside their intersection by running the same assertions against
-// both. There is one driver now (decisions/003) and the suite is still the
+// both. There is one driver now and the suite is still the
 // contract: what it pins is the BEHAVIOUR the packages above the store depend
 // on — keyset paging that does not skip a row, a read floor, an idempotent
 // append, a retention sweep that stops where it is told — none of which is a
@@ -613,10 +613,9 @@ func testRecordUntracked(t *testing.T, db *store.DB) {
 	}
 }
 
-// testWorkKeyNull proves the dialect decision from decisions/002 on
-// the live driver: a PLAIN unique index over a nullable column gives the
-// semantics the Postgres schema needed a partial index (and an advisory lock)
-// for, and a bare ON CONFLICT can target it.
+// testWorkKeyNull proves the nullable-work_key design on the live driver: a
+// PLAIN unique index over a nullable column gives the semantics a partial
+// index (and an advisory lock) would otherwise be needed for, and a bare ON CONFLICT can target it.
 func testWorkKeyNull(t *testing.T, db *store.DB) {
 	ctx := t.Context()
 	insert := func(id, handle, workKey string) error {

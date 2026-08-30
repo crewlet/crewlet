@@ -733,9 +733,9 @@ func TestMidStateRowsAreDroppedAndTerminalOnesAreNot(t *testing.T) {
 	iterating := rawEp("iterating", daysAgo(20), "slack_post")
 	iterating.ReviewOutcome = "self_iterate"
 	// An outcome outside the Review enum: written by another version, or by
-	// hand. The Python named 'self_iterate' in the sweep and allowed only
-	// ('done','failed') into compaction, so a row like this was neither
-	// droppable nor compactable and stayed forever.
+	// hand. Naming 'self_iterate' in the sweep while allowing only
+	// ('done','failed') into compaction leaves a row like this neither
+	// droppable nor compactable, and it stays forever.
 	unknown := rawEp("unknown", daysAgo(20), "slack_post")
 	unknown.ReviewOutcome = "cancelled"
 	fresh := rawEp("fresh", daysAgo(3), "slack_post")

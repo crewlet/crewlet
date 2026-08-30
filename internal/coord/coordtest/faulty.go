@@ -13,9 +13,9 @@ import (
 // The tri-state is the most incident-hardened rule in this contract, and a
 // healthy backend can only ever produce two of its three answers. Without a
 // way to make the store unreachable, "definitely not yours" and "cannot tell"
-// are tested by inspection — which is how the Python engine shipped a version
-// where an unreachable store returned the same value as a peer holding the
-// seat. A two-second blip then had a node logging "another process holds this
+// are tested by inspection, which is how an unreachable store ends up
+// returning the same value as a peer holding the seat. A two-second blip then
+// had a node logging "another process holds this
 // node id's presence lease", pointing an operator at a configuration problem
 // that did not exist, while it quietly stopped refreshing its own presence
 // during exactly the outage it is built to ride out.

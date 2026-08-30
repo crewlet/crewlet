@@ -89,9 +89,9 @@ func TestRecordForStampsFailure(t *testing.T) {
 	}
 }
 
-// TestRecordForReadsUnknownTypes is the improvement over the Python writer,
-// which read these dimensions by attribute lookup and therefore saw nothing at
-// all on a type it did not know. A rolling upgrade publishes types the older
+// TestRecordForReadsUnknownTypes is why these dimensions are read off the
+// envelope rather than off a decoded payload: a reader that needs the concrete
+// type sees nothing at all on a type it does not know. A rolling upgrade publishes types the older
 // half has never heard of; those events must still be indexed by the agent
 // they concern.
 func TestRecordForReadsUnknownTypes(t *testing.T) {

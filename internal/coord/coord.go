@@ -28,8 +28,8 @@
 // # The tri-state, and why Go gets it for free
 //
 // Every method that answers "do I hold this?" has three answers, and
-// conflating two of them is the single most incident-hardened lesson in the
-// Python engine. Go's (value, error) expresses it natively:
+// conflating two of them is the single most incident-hardened lesson carried
+// into this engine. (value, error) expresses it natively:
 //
 //	(lease, nil)  — held. Proceed.
 //	(nil, nil)    — definitively NOT held: lapsed, moved, or advanced.
@@ -76,8 +76,8 @@ import (
 // over a newer node's expired leases.
 //
 // Bump this when the MEANING of holding a lease changes, never when
-// something merely gains a field. History carried from the Python engine:
-// v2 = holding a seat means consulting the completion ledger; v3 = claiming
+// something merely gains a field. The history: v2 = holding a seat means
+// consulting the completion ledger; v3 = claiming
 // a seat means this node satisfies the role's placement. Both were silent
 // corruption in a mixed fleet, which is the bar.
 const ProtocolVersion = 3
@@ -178,9 +178,9 @@ type AcquireOptions struct {
 	//
 	// ZERO MEANS THIS BUILD (ProtocolVersion), not "oldest". The
 	// distinction is the difference between a safe omission and a
-	// fleet-wide stall, and Go moves it: Python's value was a keyword
-	// default of 1, so leaving it out was harmless, while Go's is a
-	// struct zero, so leaving it out is the DANGEROUS case. Read as
+	// fleet-wide stall. A named default of 1 makes leaving it out
+	// harmless; a struct zero makes leaving it out the DANGEROUS case.
+	// Read as
 	// "oldest", a single AcquireOptions{Owner, TTL} anywhere in the
 	// engine would hold a live lease below every newer node's floor and
 	// stall the fleet's claims — looking exactly like a rolling upgrade

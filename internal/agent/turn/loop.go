@@ -152,7 +152,7 @@ type Input struct {
 	History []ledger.Iteration
 
 	// Resume re-enters a suspended Execute phase rather than starting from
-	// Plan. The SAME turn id continues (d-402): the resumed conversation is
+	// Plan. The SAME turn id continues: the resumed conversation is
 	// the one the sandbox call left waiting, not a fresh turn that would
 	// re-plan and re-investigate from scratch.
 	Resume bool

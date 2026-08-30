@@ -7,19 +7,17 @@ import (
 	"unicode/utf8"
 )
 
-// approxTokens is the Python suite's measure, carried unchanged: characters
-// divided by four.
+// approxTokens is characters divided by four.
 //
 // It is an APPROXIMATION, not a tokenizer, and it is deliberately the same
-// approximation the Python budgets were set against. A real tokenizer would
-// give different numbers, which would make every budget below a value nobody
-// could trace to the failure that set it — and it would tie a pure text
-// package to a model vendor's vocabulary file.
+// approximation the budgets below were set against. A real tokenizer would give
+// different numbers, which would make every budget a value nobody could trace
+// to the failure that set it — and it would tie a pure text package to a model
+// vendor's vocabulary file.
 //
-// "Character" means one Unicode CODE POINT, because Python's len() counts
-// code points. These prompts are dense with em dashes and arrows; counting
-// bytes instead would inflate every measurement by roughly 4% and quietly
-// re-tighten every budget below.
+// "Character" means one Unicode CODE POINT. These prompts are dense with em
+// dashes and arrows; counting bytes instead would inflate every measurement by
+// roughly 4% and quietly re-tighten every budget below.
 func approxTokens(s string) int { return utf8.RuneCountInString(s) / 4 }
 
 // The measure is part of the contract: someone "simplifying" it to len(s)/4

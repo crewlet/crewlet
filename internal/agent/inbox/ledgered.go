@@ -29,11 +29,11 @@ var ledgeredTypes = map[string]bool{
 
 // Ledgered reports whether the completion ledger records this event type.
 //
-// Both A2A hops are covered. They were exempt in the Python this replaces
-// while the content rode a process-local queue that a turn drained
-// DESTRUCTIVELY: a re-run on any node found an empty channel and told the
-// agent nobody had sent anything, so neither branch of a
-// short-circuit-or-re-run choice could be honoured and the ledger stayed out
+// Both A2A hops are covered, and exempting them is the mistake to avoid. It is
+// tempting while the content rides a process-local queue that a turn drains
+// DESTRUCTIVELY: a re-run on any node then finds an empty channel and tells the
+// agent nobody sent anything, so neither branch of a
+// short-circuit-or-re-run choice can be honoured and the ledger stays out
 // of it. The content rides the durable wake event here, which makes an A2A
 // trigger re-runnable and therefore ledgerable like any other.
 func Ledgered(eventType string) bool { return ledgeredTypes[eventType] }

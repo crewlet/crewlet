@@ -61,7 +61,7 @@ const ContainerPrefix = "crewlet-sbx-"
 const controlTimeout = 120 * time.Second
 
 // termGrace is how long a direct box's process group gets between SIGTERM and
-// SIGKILL. Carried from the Python engine, where it is the same 5 seconds.
+// SIGKILL.
 const termGrace = 5 * time.Second
 
 // pidReuseGrace is the slack allowed when comparing a process's start time

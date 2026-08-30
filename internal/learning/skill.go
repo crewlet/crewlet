@@ -96,8 +96,7 @@ var (
 )
 
 const (
-	// defaultVersionsKept caps one skill's archived history. Carried from the
-	// Python engine's max_versions_kept, which is 10 at every call site.
+	// defaultVersionsKept caps one skill's archived history at 10.
 	//
 	// The table has no retention sweep of its own — unlike the five tables
 	// the maintenance worker walks — so this prune is the only bound on it. A
@@ -110,10 +109,10 @@ const (
 	// The transaction reads the live row and writes it in one shot, so a
 	// competing writer does not corrupt anything — it makes our write
 	// conflict with its snapshot, and SQLite answers that with an error
-	// rather than an interleave. Retrying re-reads and re-applies. Carried
-	// from Python's _UPDATE_MAX_ATTEMPTS: concurrent refines of the SAME
-	// skill need the refine_skill builtin to overlap the post-turn
-	// auto-refiner, which is rare, so a handful of attempts is headroom.
+	// rather than an interleave. Retrying re-reads and re-applies.
+	// Concurrent refines of the SAME skill need the refine_skill builtin
+	// to overlap the post-turn auto-refiner, which is rare, so a handful
+	// of attempts is headroom.
 	updateAttempts = 5
 
 	// useAttempts bounds the retry around a use-telemetry write.
@@ -126,13 +125,12 @@ const (
 	// archives a skill whose last-used stamp never refreshed.
 	useAttempts = 2
 
-	// The disuse schedule, carried from the Python curator's
-	// stale_after_days=30 / archive_after_days=90.
+	// The disuse schedule: stale at 30 days, archived at 90.
 	defaultStaleAfter   = 30 * 24 * time.Hour
 	defaultArchiveAfter = 90 * 24 * time.Hour
 
 	// defaultVersionListing is how many archived versions a listing returns
-	// when the caller does not say. Carried from Python's limit=20.
+	// when the caller does not say.
 	defaultVersionListing = 20
 )
 
@@ -268,7 +266,7 @@ type Refinement struct {
 
 // ListOptions narrows a skill listing by lifecycle state.
 //
-// Both fields are inverted relative to the Python flags they carry
+// Both fields are inverted relative to the natural spelling
 // (include_archived / include_stale), so the zero value is the answer the
 // engine wants everywhere: archived hidden, stale shown. A prefetch that
 // forgets to pass options offers exactly the skills the loader will accept.
@@ -484,8 +482,8 @@ func (s *Skills) ToolSequences(ctx context.Context, handle string, opts ListOpti
 // gives two ways to disagree: archive-then-fail leaves a history entry for a
 // body that is still live, and update-then-fail loses the superseded body
 // permanently — which is the one thing the history table exists to prevent.
-// (The Python store took the second shape: it updated the live row first and
-// inserted the version row afterwards.) A failed attempt here rolls back to
+// (The second shape is the tempting one: update the live row, then insert the
+// version row.) A failed attempt here rolls back to
 // both-unchanged, so the retry below cannot leave a stray version row either.
 //
 // Last writer wins on the body, deliberately: a competing refinement is not
@@ -754,8 +752,8 @@ func (s *Skills) MarkUsed(ctx context.Context, skillID string, at time.Time) Use
 		if attempt+1 < useAttempts {
 			log.WarnContext(ctx, "synthesized_skill_mark_used_retry",
 				"skill", skillID, "error", err)
-			// The Python engine waited 50-150ms here, sized for a round
-			// trip to a remote Postgres. See retryBeat.
+			// A backoff sized for a round trip to a remote database
+			// would be far too long here. See retryBeat.
 			sleep(ctx, retryBeat())
 		}
 	}
@@ -791,9 +789,9 @@ func sleep(ctx context.Context, d time.Duration) {
 // row's last-used stamp still reads as it did when the caller looked.
 //
 // On is a separate field because the ZERO TIME IS A REAL GUARD VALUE — a skill
-// that has never been used — so it cannot double as "no guard". Python needed
-// a module-level sentinel object to break the same ambiguity, since None was
-// likewise a real value.
+// that has never been used — so it cannot double as "no guard". A nullable
+// timestamp cannot express the difference either, since the null is likewise a
+// real value; hence the separate flag.
 type Guard struct {
 	On         bool
 	LastUsedAt time.Time
@@ -819,9 +817,8 @@ type Transition struct {
 // Reports whether a row moved. FALSE IS NOT AN ERROR and an error is not a
 // false: a guard that no longer holds — someone used the skill between the
 // curator's read and this write — is the mechanism working, while a store that
-// cannot be written is an outage. The Python store returned False for both,
-// which made a database outage render on the dashboard as the race guard doing
-// its job.
+// cannot be written is an outage. Returning false for both makes a database
+// outage render on the dashboard as the race guard doing its job.
 //
 // No version row is archived: a transition is out-of-band metadata, not a body
 // change, and the history table is reserved for bodies.

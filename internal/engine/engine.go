@@ -24,9 +24,9 @@ import (
 // Company is one immutable configuration epoch.
 //
 // EVERYTHING A TURN READS COMES FROM ONE OF THESE, taken by value at the top
-// of the turn. Python read each setting from a live cell on every access, so a
-// hot reload landing mid-turn could change the round cap between Plan and
-// Execute — and needed a context-local "pin" to paper over it. An epoch that
+// of the turn. Reading each setting from a live cell on every access lets a
+// hot reload landing mid-turn change the round cap between Plan and Execute —
+// and then needs a context-local "pin" to paper over it. An epoch that
 // is replaced rather than mutated makes that unrepresentable: an in-flight turn
 // holds the one it started under until it ends.
 type Company struct {

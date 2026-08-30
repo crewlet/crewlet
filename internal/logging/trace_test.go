@@ -108,8 +108,8 @@ func TestAMalformedIdNeverReachesALine(t *testing.T) {
 	}
 }
 
-// THE CONSTRAINT decisions/001 states, re-asserted against the new code:
-// Enabled reads the level and nothing else. A trace on the context must not
+// THE CONSTRAINT, re-asserted against the tracing code: Enabled reads the
+// level and nothing else. A trace on the context must not
 // make a suppressed line emit, nor an emitted line vanish.
 func TestABoundTraceDoesNotChangeWhatIsEnabled(t *testing.T) {
 	buf, log := jsonSink(t, slog.LevelInfo)
@@ -124,9 +124,9 @@ func TestABoundTraceDoesNotChangeWhatIsEnabled(t *testing.T) {
 	}
 }
 
-// All three formats carry the ids. d-001 gives each format one reader and one
-// SHAPE — not one field set — and a format that silently dropped a field the
-// others carry is the same class of bug as a config key nothing reads.
+// All three formats carry the ids. Each format owes one reader one SHAPE —
+// not one field set — and a format that silently dropped a field the others
+// carry is the same class of bug as a config key nothing reads.
 func TestEveryFormatCarriesTheTrace(t *testing.T) {
 	for _, format := range Formats {
 		t.Run(string(format), func(t *testing.T) {

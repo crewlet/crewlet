@@ -28,10 +28,9 @@
 // drains the backlogs it can reach before returning, so a test can publish and
 // assert. A real broker's handler runs later, elsewhere, possibly twice —
 // anything a test asserts immediately after Publish is a race in production,
-// and this backend cannot tell you that. Go expresses the same property
-// without Python's re-entrant recursion: a handler that publishes into the
-// subscription it is draining flags another pass instead of nesting one (see
-// dispatch.go).
+// and this backend cannot tell you that. It gets there without re-entrant
+// recursion: a handler that publishes into the subscription it is draining
+// flags another pass instead of nesting one (see dispatch.go).
 //
 // Redelivery matches the broker's shape: the budget counts redeliveries AFTER
 // the first delivery (so N+1 total attempts), and an exhausted message moves to
@@ -997,9 +996,8 @@ func (q *Queue) exitHandlerLocked()  { q.inFlight.End() }
 // These answer questions the EventQueue contract deliberately does not, and
 // that the properties seat ownership rests on cannot be asserted without:
 // what mail is a subscription holding, which subsystem is gating a seat, which
-// seats is this node serving. They are exported for the same reason the Python
-// twin exports them — a test must not have to read the backend's registry to
-// ask an operationally central question.
+// seats is this node serving. They are exported so that a test never has to
+// read the backend's own registry to ask an operationally central question.
 
 // Backlog reports the events a subscription retains and has not delivered.
 func (q *Queue) Backlog(topic, group string) []*events.Event {

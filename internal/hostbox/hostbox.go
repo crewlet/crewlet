@@ -89,8 +89,8 @@ var ErrEscape = errors.New("hostbox: path escapes its root")
 // a local sandbox that is not a sandboxed write: the box directory is a real
 // host directory, so an escape writes to the engine host itself.
 //
-// Resolution is NON-STRICT, matching Python's Path.resolve(): the target
-// usually does not exist yet (it is about to be created), so the check
+// Resolution is NON-STRICT, because the target usually does not exist yet
+// (it is about to be created), so the check
 // resolves the longest existing ancestor — which is where a symlink could
 // redirect the write — and appends the rest lexically. A strict resolve would
 // refuse every create, and a purely lexical Clean would miss a symlinked

@@ -21,12 +21,12 @@ func eventOf(d delivery) *events.Event { return d.ev }
 
 // THE BATCH DISPATCH BUDGET IS DELIBERATELY NOT PORTED.
 //
-// The Python engine capped how long one batch drain could keep dispatching
-// partition handlers (_BATCH_DISPATCH_BUDGET_MS = 60 s) and requeued the rest
-// by republishing them. The entire reason was the C++ client's ack timeout:
-// every drained message's 30-minute clock started at receive, so a long tail
-// of multi-minute turns would blow through it mid-drain and produce
-// redelivered duplicate turns.
+// The design this contract came from capped how long one batch drain could
+// keep dispatching partition handlers (60 s) and requeued the rest by
+// republishing them. The entire reason was the C++ client's ack timeout: every
+// drained message's 30-minute clock started at receive, so a long tail of
+// multi-minute turns would blow through it mid-drain and produce redelivered
+// duplicate turns.
 //
 // github.com/apache/pulsar-client-go has NO ack timeout — no
 // ConsumerOptions.AckTimeout, no client-side unacked tracker — and Pulsar has
@@ -36,10 +36,9 @@ func eventOf(d delivery) *events.Event { return d.ev }
 // previous engine believed Pulsar's ack clock started at receive; measured
 // against this client, it does not, and the budget is deleted.
 //
-// Deleting it also removes the requeue-by-republish path, which d-101 §1
-// forbids anyway ("Never substitute a republish: that sends the event to the
-// topic tail while its prefetched siblings replay from the head, reordering
-// the conversation").
+// Deleting it also removes the requeue-by-republish path, which the queue
+// contract forbids anyway: a republish sends the event to the topic tail while
+// its prefetched siblings replay from the head, reordering the conversation.
 //
 // What the absence costs, stated so nobody has to rediscover it: a batch of N
 // slow partitions holds N messages unacked for the sum of the turns. Pulsar's

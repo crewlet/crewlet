@@ -84,9 +84,9 @@ func TestSameProcessAndSameCatalogue(t *testing.T) {
 		t.Fatal("an identically-valued copy compared as different")
 	}
 
-	// The HTTP incident: the Python diff compared only the stdio fields, so a
-	// rotated remote token matched as "unchanged" and the stale connection
-	// went on serving with the credential the operator had just revoked.
+	// The HTTP incident: a diff that compares only the stdio fields matches
+	// a rotated remote token as "unchanged", and the stale connection goes
+	// on serving with the credential the operator has just revoked.
 	rotated := same
 	rotated.Headers = map[string]string{"Authorization": "Bearer b"}
 	if base.SameProcess(rotated) {

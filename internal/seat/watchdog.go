@@ -14,9 +14,8 @@ import (
 var watchLog = logging.Get("seat.watchdog")
 
 // The watchdog's own cadence. Both are CEILINGS, scaled down against the
-// threshold — see [Host.beatInterval] for the other half of the same
-// rule and decisions/301-watchdog.md for why the threshold is not a
-// knob.
+// threshold — see [Host.beatInterval] for the other half of the same rule,
+// and [Watchdog] for why the threshold itself is not a knob.
 const (
 	// WatchdogBeatInterval is the fastest a watched duty needs to prove it
 	// is turning. A stamp is a mutex and a clock read, so its cost is
@@ -68,9 +67,12 @@ type Stall struct {
 // correctly take the seats over — while its BROKER SESSION does not lapse,
 // because the client answers keepalives from goroutines the stall never
 // touched. The broker goes on treating it as a live consumer and holding its
-// prefetch of those seats' messages: measured at the full unacked-message
-// timeout, roughly 30 minutes at the engine's setting. The new owner cannot
-// see mail that is already reserved for a corpse.
+// prefetch of those seats' messages UNTIL THE CONNECTION DIES — there is no
+// clock to wait out. apache/pulsar-client-go has no ConsumerOptions.AckTimeout
+// and Pulsar has no broker-side equivalent for a connected consumer, so a
+// fetched message is that consumer's until it acks, naks, or closes.
+// The new owner cannot see mail that is already reserved for a corpse, and no
+// amount of waiting releases it.
 //
 // Nothing can be signalled out of that state, because the code that would
 // handle the signal is the code that is stuck. What the watchdog CAN do

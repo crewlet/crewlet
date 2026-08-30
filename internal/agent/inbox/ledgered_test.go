@@ -45,9 +45,9 @@ func TestTypesThatRunNoTurnAreNotLedgered(t *testing.T) {
 
 // TestNoLedgeredTypeIsANameNothingPublishes is the guard that earns its keep.
 //
-// The Python this replaces ledgered a fifth name, "notification", that no
-// class in it ever emitted — a defensive alias that had outlived whatever once
-// produced it. A dead name in this set is invisible: nothing refuses it,
+// A set like this collects defensive aliases: a fifth name, "notification",
+// that nothing in the engine ever emits, outliving whatever once produced it.
+// A dead name in this set is invisible: nothing refuses it,
 // nothing logs it, it simply never matches, and a reader comparing the set
 // against the system's behaviour finds a type that appears covered and is not.
 //

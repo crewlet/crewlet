@@ -30,9 +30,34 @@
 // parent/child link resolves on neither.
 //
 // A second reason, specific to this engine: Tier A is the root of trust and
-// resolves with EnvOnly, and d-001 retired `debug:` on the rule that two keys
+// resolves with EnvOnly, and `debug:` was retired on the rule that two keys
 // setting one value is a state where they disagree. A `tracing.endpoint:`
 // field beside OTEL_EXPORTER_OTLP_ENDPOINT would be exactly that.
+//
+// # What is deliberately NOT spanned
+//
+// THE REST API'S OWN ROUTES. `/events`, `/config`, `/secrets` and the dashboard
+// shell get no server span, and that is a decision rather than an omission.
+// They are an operator surface, not a link in the causal chain a trace exists
+// to show — the work they start reaches the trace through the events they
+// publish, which already carry one. The webhook edge IS that first link, so it
+// is spanned.
+//
+// There is a hazard on that path worth writing down, because the obvious
+// middleware placement walks straight into it: a tracing middleware sits
+// OUTSIDE [github.com/crewlet/crewlet/internal/api/auth.Guard], and
+// `/otlp/{token}/v1/{signal}` is exempt from the guard by prefix because THE
+// TOKEN IN ITS PATH IS THE CREDENTIAL. Any middleware recording `http.route` or
+// `http.target` as a span attribute would ship a live credential to the
+// telemetry backend. If server spans are ever added, that route has to be
+// excluded, or its path redacted before anything reads it.
+//
+// OUTBOUND HTTP. The LLM and embeddings clients share one builder and could
+// take an instrumented transport; the six vendor clients each build their own.
+// The round is already spanned one layer up (`llm.round`), which is where the
+// latency an operator can act on lives, and a vendor call is made by a tool
+// whose `tool.call` span covers it. Instrumenting the transports as well would
+// add a span per HTTP request underneath spans already reporting the same wait.
 package tracing
 
 import (
@@ -73,7 +98,7 @@ const (
 
 	// ProtocolVar selects the OTLP transport. The spec's default is
 	// http/protobuf. This was DOCUMENTED as read long before anything read
-	// it — see decisions/508.
+	// it.
 	ProtocolVar = "OTEL_EXPORTER_OTLP_PROTOCOL"
 
 	// ServiceNameVar overrides the reported service. Defaults to "crewlet";
@@ -248,7 +273,8 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
 		// NOT WarnContext: this handler is installed GLOBALLY and outlives
 		// Configure, so capturing its ctx would pin a request-scoped value
-		// into a process-lifetime closure — the shape d-401 exists to refuse.
+		// into a process-lifetime closure, which is the shape context
+		// threading exists to refuse.
 		log.Warn("otel_internal_error", "error", err)
 	}))
 

@@ -180,9 +180,9 @@ type Claims interface {
 type Ledger interface {
 	// Worked returns the subset of keys already recorded under scope.
 	//
-	// FAILS OPEN in BOTH directions, which is the property the Python
-	// engine paid for twice: not knowing whether work was done has one
-	// safe answer and it is the pre-ledger one — do the work. A read that
+	// FAILS OPEN in BOTH directions, a property paid for twice: not
+	// knowing whether work was done has one safe answer and it is the
+	// pre-ledger one — do the work. A read that
 	// failed closed would make a store blip look like a company that had
 	// already answered everything.
 	Worked(ctx context.Context, scope string, keys []string) (map[string]bool, error)
@@ -669,7 +669,7 @@ type SecretRecord struct {
 //
 // # Why it is here and not in the node's database
 //
-// It was the last piece of company-wide state that was not (d-203). The
+// It was the last piece of company-wide state that was not. The
 // company CONFIG already travels this way — [Plane.Activate] writes a payload
 // sealed with the very same keyring into the very same bucket family, and a
 // company document may itself carry credentials inline — so the secret store

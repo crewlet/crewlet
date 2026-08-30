@@ -9,8 +9,9 @@ import (
 
 // The thread-follow cases. Here rather than package-local because the upsert
 // is the same ON CONFLICT … DO UPDATE shape the rest of this suite pins — a
-// shape whose arbiter resolution the driver gets wrong in one specific way
-// (d-002 §2), which is why it is asserted rather than assumed.
+// shape whose arbiter resolution the driver gets wrong in one specific way —
+// a bare ON CONFLICT naming the columns does not resolve against a partial
+// index — which is why it is asserted rather than assumed.
 
 func testFollowRoundTrips(t *testing.T, db *store.DB) {
 	f := db.ThreadFollows()

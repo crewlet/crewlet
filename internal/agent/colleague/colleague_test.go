@@ -173,8 +173,9 @@ func TestAnASCIIQueryReachesANonASCIIRole(t *testing.T) {
 
 func TestNormalizeMatchesTheFoldingItPromises(t *testing.T) {
 	t.Parallel()
-	// Verified against Python's unicodedata + casefold on 38 samples;
-	// these are the ones whose failure would silently break a lookup.
+	// Verified against a reference NFKD-plus-casefold implementation on 38
+	// samples; these are the ones whose failure would silently break a
+	// lookup.
 	for _, c := range []struct{ in, want string }{
 		{"Agent CEO", "agent ceo"},
 		{"agent_ceo", "agent ceo"},

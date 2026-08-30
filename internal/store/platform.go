@@ -14,7 +14,7 @@ package store
 // all for windows/arm64, freebsd, or anything else.
 //
 // Windows is not in the shipped matrix, and that is a decision rather than an
-// absence (decisions/003). windows/amd64 has a library and windows/arm64 does
+// absence. windows/amd64 has a library and windows/arm64 does
 // not, so the release used to publish two Windows archives of which one could
 // never open a store: it failed at its first query unless the operator knew to
 // set CREWLET_STORE_DRIVER=sqlite, which was the fallback that has now been
@@ -45,4 +45,5 @@ type unsupportedPlatform struct{}
 
 var _ unsupportedPlatform = "crewlet builds for linux/amd64, linux/arm64, darwin/amd64 " +
 	"and darwin/arm64 only: the Turso database engine ships as a native library, and " +
-	"those are the platforms Crewlet ships for. See decisions/003-turso-is-the-only-driver.md."
+	"upstream embeds that library for those four platforms and no others. There is no " +
+	"second driver to fall back to. See internal/store's package doc."

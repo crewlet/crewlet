@@ -43,7 +43,7 @@ import (
 // key. Neither replaces the entity routes, and the reason is not about
 // formats: a patch addresses by STRUCTURE and a seat is addressed by
 // IDENTITY, which is why the same handle reaches a seat whether it sits at
-// the root or three units down. decisions/505 records the comparison.
+// the root or three units down.
 //
 // # `null` deletes
 //

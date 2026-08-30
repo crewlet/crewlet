@@ -139,7 +139,7 @@ func (e *Engine) migrateSecrets(ctx context.Context) {
 // secretSnapshot reads and unseals every stored secret, or reports why not.
 //
 // THE FLEET'S STORE IS THE ONE, and the node's own database is read only as
-// the migration path off it (d-203). A credential is company-wide state: it
+// the migration path off it. A credential is company-wide state: it
 // was the last kind living somewhere only one node could see, so a rotation
 // reached the node an operator pointed the CLI at and nowhere else.
 //

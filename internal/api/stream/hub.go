@@ -34,7 +34,7 @@ const QueueDepth = 512
 
 // The push kinds. Frozen — the dashboard ships unchanged and is the
 // compatibility reference, so a renamed kind is a broken client, not a
-// refactor. See decisions/502-dashboard-wire-protocol.md.
+// refactor.
 const (
 	KindSnapshot  = "snapshot"
 	KindEvent     = "event"

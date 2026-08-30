@@ -19,11 +19,11 @@
 //
 // # The English is the specification
 //
-// Every prose constant here is carried VERBATIM from the Python engine
-// (src/crewlet/agent/prompts.py). These strings were tuned against observed
-// model behaviour and most of them replaced a production failure: a reworded
-// instruction is a behaviour change that no test in this repository can
-// catch. Restructure the assembly around them freely; do not edit the words.
+// Every prose constant here is FROZEN TEXT. These strings were tuned against
+// observed model behaviour and most of them replaced a production failure: a
+// reworded instruction is a behaviour change that no test in this repository
+// can catch. Restructure the assembly around them freely; do not edit the
+// words.
 //
 // # Byte-stability across rounds
 //

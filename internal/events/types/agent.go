@@ -318,8 +318,8 @@ type AgentPhaseCompleted struct {
 	ToolCatalogue []string `json:"tool_catalogue,omitempty"`
 	// Backend is BackendSandbox only on an Execute phase that ran in one, so
 	// the dashboard renders the sandbox badge precisely where it applies. Note
-	// BackendNative is Python's default and NOT Go's zero value — publishers
-	// set it explicitly.
+	// BackendNative is the wire default and NOT the Go zero value —
+	// publishers set it explicitly.
 	Backend       ExecuteBackend `json:"backend"`
 	CodingAgent   string         `json:"coding_agent"`
 	SandboxID     string         `json:"sandbox_id"`

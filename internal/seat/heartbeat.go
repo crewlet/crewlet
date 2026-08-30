@@ -18,7 +18,7 @@ import (
 // is turning — a pass hung inside a hook or deadlocked on a lock freezes the
 // stamp, and past the lease TTL that means this node's seats have moved to a
 // peer while its queue client is still attached and still holding their
-// mail. See [Watchdog] and decisions/301-watchdog.md.
+// mail. See [Watchdog].
 func (h *Host) heartbeatLoop(ctx context.Context) {
 	beat := h.beatInterval()
 	ticksPerPass := int((h.heartbeat + beat - 1) / beat)

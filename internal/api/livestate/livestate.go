@@ -23,10 +23,11 @@
 // is therefore gated on the event timestamp: an older event can never clobber
 // newer state. The in-flight call is gated on round progression within a turn.
 //
-// CONCURRENCY. The Python this replaces relied on a single-threaded event loop
-// and took no lock, saying so explicitly. That reasoning does not survive the
-// port: here the stream feeds this from its own goroutine while HTTP handlers
-// and WebSocket sends read it, so every method takes the mutex. The lock is not
+// CONCURRENCY. A projection like this is often written lock-free on the
+// grounds that a single-threaded scheduler makes every mutation atomic. That
+// reasoning does not hold here: the stream feeds this from its own goroutine
+// while HTTP handlers and WebSocket sends read it, so every method takes the
+// mutex. The lock is not
 // a precaution, it is the thing that makes the projection safe to read at all.
 package livestate
 
@@ -302,7 +303,7 @@ func (s *LiveState) MergeAgents(static []map[string]any) []map[string]any {
 // phase, and the seat stayed idle on the dashboard from start to finish.
 //
 // The client is the compatibility reference and wins any disagreement about a
-// frame's shape (decisions/502). This is that rule applied.
+// frame's shape. This is that rule applied.
 //
 // A role with no live state is SKIPPED rather than sent as an empty overlay:
 // the client merges these onto its existing rows, so a blank one would erase

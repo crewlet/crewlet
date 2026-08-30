@@ -418,8 +418,8 @@ func (l *LLMProvider) validate(path string) error {
 			"must not be negative, got %d", l.ReasoningBudgetTokens)
 	}
 
-	// Python left this unbounded, so a timeout of 0 or a negative one
-	// passed validation and reached an HTTP client that reads it as
+	// Left unbounded, a timeout of 0 or a negative one passes validation
+	// and reaches an HTTP client that reads it as
 	// "expire immediately" — every call failing instantly, with nothing in
 	// the config looking wrong.
 	if l.TimeoutSeconds < 0 {
@@ -760,8 +760,8 @@ func (e *EmbeddingProvider) validate(path string) error {
 	if strings.TrimSpace(e.Model) == "" {
 		p.add(at(path, "model"), ErrMissing, "name the embedding model")
 	}
-	// Python left this unbounded. A negative or absurd width is not a
-	// tuning mistake — the store sizes its vector columns from it, so it
+	// Left unbounded, a negative or absurd width is not a tuning
+	// mistake — the store sizes its vector columns from it, so it
 	// decides whether a written embedding can ever be read back.
 	if e.Dimensions < 0 {
 		p.add(at(path, "dimensions"), ErrOutOfRange,
