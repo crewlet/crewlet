@@ -490,7 +490,6 @@ func DataAs[T Payload](e *Event) (T, bool) {
 // this directly ask TraceOf instead, so an event's trace comes from the span
 // it was published under whenever there is one. Do not add a second caller —
 // a root minted outside TraceOf is an event that has left its turn's trace.
-
 func NewTrace() TraceContext {
 	var buf [24]byte
 	_, _ = rand.Read(buf[:])

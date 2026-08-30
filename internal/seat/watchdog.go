@@ -14,9 +14,8 @@ import (
 var watchLog = logging.Get("seat.watchdog")
 
 // The watchdog's own cadence. Both are CEILINGS, scaled down against the
-// threshold — see [Host.beatInterval] for the other half of the same
-// rule.md for why the threshold is not a
-// knob.
+// threshold — see [Host.beatInterval] for the other half of the same rule,
+// and [Watchdog] for why the threshold itself is not a knob.
 const (
 	// WatchdogBeatInterval is the fastest a watched duty needs to prove it
 	// is turning. A stamp is a mutex and a clock read, so its cost is
