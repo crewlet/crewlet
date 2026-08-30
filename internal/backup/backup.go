@@ -272,7 +272,8 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	return manifest, nil
 }
 
-// emptyDir makes dir if it is absent and refuses it if it holds anything.
+// emptyDir makes dir if it is absent, refuses it if it holds anything, and
+// makes sure it is the caller's alone to read.
 func emptyDir(dir string) error {
 	// 0700 because of what lands in here: the store copy carries every
 	// sealed credential the secret store bootstrapped and every seat's
@@ -289,6 +290,20 @@ func emptyDir(dir string) error {
 		return fmt.Errorf("%w: %s holds %d entries — name a directory of its own, "+
 			"so one backup cannot be read as part of another",
 			ErrNotEmpty, dir, len(entries))
+	}
+	// AND 0700 EVEN IF IT WAS ALREADY THERE. MkdirAll's mode applies only
+	// to a directory it creates, so an operator's `mkdir -p` under the
+	// usual umask leaves a directory anyone can list — and every file
+	// written below is 0600, so what leaks is not the credentials
+	// themselves but the shape of the estate: that this company keeps a
+	// secrets bucket, how large it is, when it was last copied.
+	//
+	// Tightened rather than refused, because refusing would reject
+	// `mkdir -p /backups/today && crewlet backup -dir /backups/today`,
+	// which is how anyone would drive this. The directory is ours by then:
+	// it was required to be empty two lines above.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("backup: make %s private: %w", dir, err)
 	}
 	return nil
 }

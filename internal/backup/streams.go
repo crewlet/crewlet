@@ -249,10 +249,20 @@ func receiveSnapshot(ctx context.Context, sub *nats.Subscription, path, name str
 	if err != nil {
 		return 0, fmt.Errorf("backup: create %s: %w", path, err)
 	}
-	// Closed on every path, and the close error matters on the happy one:
-	// a snapshot whose last write failed to reach the disk is a truncated
-	// file that looks complete.
-	defer func() { _ = file.Close() }()
+	// Closed on every path, and the close error is CHECKED on the happy
+	// one: a snapshot whose last write failed to reach the disk is a
+	// truncated file that looks complete, and on a network filesystem
+	// close is where that surfaces. Discarding it here would make this
+	// comment a claim the code does not keep.
+	//
+	// closed guards the double close: the happy path closes explicitly so
+	// it can read the error, and this runs on every path that did not.
+	closed := false
+	defer func() {
+		if !closed {
+			_ = file.Close()
+		}
+	}()
 
 	var written int64
 	for {
@@ -290,6 +300,11 @@ func receiveSnapshot(ctx context.Context, sub *nats.Subscription, path, name str
 	if err := file.Sync(); err != nil {
 		_ = os.Remove(path)
 		return 0, fmt.Errorf("backup: flush %s: %w", path, err)
+	}
+	closed = true
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return 0, fmt.Errorf("backup: close %s: %w", path, err)
 	}
 	return written, nil
 }

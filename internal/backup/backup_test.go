@@ -356,3 +356,61 @@ func slicesContain(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+// A destination the operator created before running this must end up private.
+//
+// `mkdir -p /backups/today && crewlet backup -dir /backups/today` is how
+// anyone drives this, and under the usual umask that leaves a directory the
+// whole machine can list. Every file written inside is 0600, so what a loose
+// directory leaks is not the credentials but the shape of the estate: that
+// this company keeps a secrets bucket, how large it is, when it was last
+// copied. MkdirAll's mode applies only to a directory it CREATES, so nothing
+// but an explicit chmod closes this.
+func TestAPreExistingDestinationIsMadePrivate(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	seedBucket(t, nc, "crewlet_secrets", "anthropic", "sealed")
+	db := openStore(t)
+
+	dir := filepath.Join(t.TempDir(), "backup-preexisting")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("pre-create the destination: %v", err)
+	}
+	// Prove the starting state, so this cannot pass by never having been
+	// loose in the first place.
+	if info, err := os.Stat(dir); err != nil {
+		t.Fatalf("stat: %v", err)
+	} else if info.Mode().Perm() != 0o755 {
+		t.Fatalf("the destination starts at %#o, wanted a loose 0755", info.Mode().Perm())
+	}
+
+	if _, err := service(t, db, nc).Take(t.Context(), dir); err != nil {
+		t.Fatalf("take: %v", err)
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat after: %v", err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Errorf("the backup directory is %#o — group and other can list "+
+			"the estate's shape", info.Mode().Perm())
+	}
+	// And what is inside stays unreadable to anyone else regardless.
+	err = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		fi, statErr := d.Info()
+		if statErr != nil {
+			return statErr
+		}
+		if fi.Mode().Perm()&0o077 != 0 {
+			t.Errorf("%s is %#o", path, fi.Mode().Perm())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+}
