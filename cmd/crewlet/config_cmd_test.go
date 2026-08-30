@@ -251,7 +251,7 @@ func TestDiffingARevisionAgainstItselfSaysSo(t *testing.T) {
 // remedy (restart, or PUT /config) is guessable.
 //
 // That the pointer then MOVES on the next start is asserted where it happens:
-// TestAnOfflineActivationReachesTheFleetAtTheNextStart in reconcile_test.go.
+// TestANodeWithNoPointerPublishesItsActiveRevision in reconcile_test.go.
 func TestAnOfflineActivationSaysWhatItDidAndDidNot(t *testing.T) {
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
