@@ -53,7 +53,7 @@ type natsLogger struct{ log *slog.Logger }
 // built. `crewlet run` configures logging from its flags before it brings
 // the stream up, so the value is the operator's, not the package default.
 func newNATSLogger() (natsLogger, bool) {
-	log := logging.Get("queue.jetstream.server")
+	log := logging.Get("queue.nats.server")
 	return natsLogger{log: log}, log.Enabled(context.Background(), slog.LevelDebug)
 }
 

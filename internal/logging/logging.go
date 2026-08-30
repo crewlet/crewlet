@@ -287,7 +287,39 @@ func (l lazy) Enabled(ctx context.Context, level slog.Level) bool {
 	return root.Load().Handler().Enabled(ctx, level)
 }
 
+// Handle injects the trace correlation bound onto ctx, then forwards.
+//
+// # Why here and not inside install
+//
+// This is the one point every format passes through, so all three carry the
+// ids and none of them has to know about tracing. Wrapping the handlers
+// inside [install] instead would give console, text and json the same
+// concrete type, and TestEveryDeclaredFormatInstallsItsOwnHandler asserts
+// they do not — it keys on the handler's %T precisely so a format cannot
+// silently render as another.
+//
+// [lazy.Enabled] is deliberately NOT touched: it must answer from the level
+// alone (see its doc and decisions/001), and a level that varied by whether a
+// trace happened to be bound would filter different lines depending on which
+// spelling the call site used.
+//
+// The record is CLONED before attributes are added, which is what slog's
+// Record doc prescribes for a handler that adds any: "Copies of a Record share
+// state. Do not modify a Record after handing out a copy to it. Use
+// Record.Clone to create a copy with no shared state."
+//
+// Be honest about what that buys TODAY: nothing observable. This handler
+// forwards to exactly one resolved chain, and the caller (slog.Logger.log)
+// discards its record afterwards, so mutating in place cannot currently be
+// seen — removing the Clone breaks no test, which was checked rather than
+// assumed. It is kept because it is the documented contract for this exact
+// operation and it costs one allocation on traced lines only; it becomes
+// load-bearing the moment anything hands the record to more than one place.
 func (l lazy) Handle(ctx context.Context, r slog.Record) error {
+	if attrs := attrsFor(ctx); len(attrs) > 0 {
+		r = r.Clone()
+		r.AddAttrs(attrs...)
+	}
 	return l.resolve().Handle(ctx, r)
 }
 

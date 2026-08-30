@@ -30,7 +30,7 @@ encoder is a handler in this package.**
    `net/http`'s `Server.ErrorLog` bridge, the MCP SDK, and every library written
    after Go 1.21 accepts. Adopting zap does not remove slog from the tree; it adds a
    second logger and a `zapslog` bridge at every boundary that wants the standard
-   type. The engine has 57 component loggers and passes `*slog.Logger` across almost
+   type. The engine has 59 component loggers and passes `*slog.Logger` across almost
    every package seam.
 
 2. **Nothing here needs the performance.** zap's case is zero-allocation structured
