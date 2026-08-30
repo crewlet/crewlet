@@ -254,6 +254,30 @@ The docs claimed the opposite — that `trace_id` is "auto-populated from the
 active OTel span at creation time" — and that prose is now corrected rather
 than implemented.
 
+## What is deliberately NOT spanned
+
+**The REST API's own routes.** `/events`, `/config`, `/secrets` and the
+dashboard shell get no server span, and that is a decision rather than an
+omission. They are an operator surface, not a link in the causal chain a trace
+exists to show — the work they start reaches the trace through the events they
+publish, which already carry one. The webhook edge is spanned because it *is*
+that first link.
+
+There is also a hazard on that path worth writing down, because the obvious
+middleware placement walks straight into it: a tracing middleware sits outside
+`auth.Guard`, and `/otlp/{token}/v1/{signal}` is exempt from the guard by prefix
+because **the token in its path is the credential**. Any middleware that
+recorded `http.route` or `http.target` as a span attribute would ship a live
+credential to the telemetry backend. If server spans are ever added, that route
+has to be excluded or its path redacted before anything reads it.
+
+**Outbound HTTP.** The LLM and embeddings clients share one builder and could
+take an instrumented transport; the six vendor clients each build their own.
+The round is already spanned one layer up (`llm.round`), which is where the
+latency an operator can act on lives, and the vendor calls are made by tools
+whose `tool.call` span covers them. Instrumenting the transports as well would
+add a span per HTTP request under spans that already report the same wait.
+
 ## The gate
 
 `TestATurnsEventsJoinTheTriggersTrace` in `internal/e2e`: a real company, woken
