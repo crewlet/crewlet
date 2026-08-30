@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // The turn engine's telemetry: what a phase tells the rest of the company
@@ -222,7 +223,7 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int, sys
 		Iteration: iteration,
 		Phase:     types.Phase(ph),
 		Trigger:   e.turn.Trigger,
-	}, e.turn.Trace))
+	}, e.traceFor(ctx)))
 
 	e.publish(ctx, events.New(types.AgentTurnProgress{
 		Agent:     e.turn.AgentID,
@@ -237,7 +238,7 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int, sys
 			{Role: string(llm.RoleUser), Content: user},
 		},
 		RoundNum: openingRound,
-	}, e.turn.Trace))
+	}, e.traceFor(ctx)))
 }
 
 // openingRound is the RoundNum of the update published before a phase's first
@@ -268,7 +269,7 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		// from ever disagreeing about which round this is.
 		RoundNum:       res.RoundsUsed - 1,
 		ToolExecutions: toolExecutions(res.Executions),
-	}, e.turn.Trace))
+	}, e.traceFor(ctx)))
 }
 
 // phaseRecord is what a completed phase reports.
@@ -360,7 +361,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ev.Error = truncate(rec.Err.Error(), maxErrorLength)
 		ev.ErrorKind = classifyError(rec.Err)
 	}
-	e.publish(ctx, events.New(ev, e.turn.Trace))
+	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
 }
 
 // classifyError names a failure's CLASS, for the one-word reason a dashboard
@@ -396,7 +397,7 @@ func classifyError(err error) string {
 func (e emitter) publish(ctx context.Context, ev *events.Event) {
 	ev.Source = e.role
 	if err := e.pub.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-		log.Warn("phase_telemetry_publish_failed", "type", ev.Type,
+		log.WarnContext(ctx, "phase_telemetry_publish_failed", "type", ev.Type,
 			"role", e.role, "turn_id", e.turn.ID, "error", err)
 	}
 }
@@ -501,3 +502,21 @@ func truncate(s string, n int) string {
 // multi-byte rune in half produces invalid UTF-8, which JSON encoders replace
 // with U+FFFD — turning one over-long error into a garbled one.
 func utf8StartsRune(b byte) bool { return b&0xC0 != 0x80 }
+
+// traceFor is the trace an event this emitter publishes belongs to.
+//
+// The ACTIVE span when there is one — which inside runPhase is the phase's own
+// span, so each phase becomes its own node in the trace tree rather than every
+// event in a turn sharing one id and collapsing onto it.
+//
+// The TURN's trace otherwise, and that fallback is the whole reason this is a
+// function. tracing.TraceOf mints a fresh root when no span is open, which is
+// correct for a publisher that would otherwise have no trace at all and wrong
+// here: an event published from a detached goroutine would leave its turn's
+// trace and start a second one nobody looks at.
+func (e emitter) traceFor(ctx context.Context) events.TraceContext {
+	if tracing.Active(ctx) {
+		return tracing.TraceOf(ctx)
+	}
+	return e.turn.Trace
+}

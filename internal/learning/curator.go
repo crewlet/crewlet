@@ -202,13 +202,13 @@ func (b *Background) clusterPass(ctx context.Context) {
 			// or a handle the org no longer carries. Skipped rather than
 			// run with no role, which would charge its auxiliary call to
 			// whichever chain answered.
-			log.Debug("skill_clustering_skipped", "reason", "unknown_seat",
+			log.DebugContext(ctx, "skill_clustering_skipped", "reason", "unknown_seat",
 				"agent_handle", handle)
 			continue
 		}
 		payloads, err := b.cluster.ClusterPass(ctx, role, handle)
 		if err != nil {
-			log.Warn("skill_clustering_failed", "seat", handle, "error", err.Error())
+			log.WarnContext(ctx, "skill_clustering_failed", "seat", handle, "error", err.Error())
 		}
 		for _, payload := range payloads {
 			if b.publish != nil {
@@ -258,7 +258,7 @@ func (b *Background) holdsDuty(ctx context.Context, name string) bool {
 	}
 	holds, err := b.claimDuty(ctx)
 	if err != nil {
-		log.Warn("background_duty_unknown", "pass", name, "error", err.Error(),
+		log.WarnContext(ctx, "background_duty_unknown", "pass", name, "error", err.Error(),
 			"detail", "the pass is skipped this tick rather than risking a "+
 				"second node running it")
 		return false
@@ -278,7 +278,7 @@ func (b *Background) compactPass(ctx context.Context) {
 	for _, handle := range b.handles() {
 		due, ok, err := b.lifecycle.RawCount(ctx, handle)
 		if err != nil {
-			log.Warn("episode_lifecycle_count_failed", "seat", handle, "error", err.Error())
+			log.WarnContext(ctx, "episode_lifecycle_count_failed", "seat", handle, "error", err.Error())
 			continue
 		}
 		if !ok {
@@ -303,7 +303,7 @@ func (b *Background) compactPass(ctx context.Context) {
 			// The partial result is still published: the deletes that
 			// committed are real, and reporting nothing would claim a
 			// pass removed nothing when it removed thousands of rows.
-			log.Warn("episode_lifecycle_pass_failed", "seat", handle,
+			log.WarnContext(ctx, "episode_lifecycle_pass_failed", "seat", handle,
 				"raw_episodes", due, "error", err.Error())
 		}
 		b.announce(ctx, handle, res)
@@ -322,7 +322,7 @@ func (b *Background) compactPass(ctx context.Context) {
 func (b *Background) curatePass(ctx context.Context) {
 	res, err := b.skills.Curate(ctx, b.policy, "", b.now())
 	if err != nil {
-		log.Warn("skill_curator_pass_failed", "error", err.Error(),
+		log.WarnContext(ctx, "skill_curator_pass_failed", "error", err.Error(),
 			"applied", len(res.Applied), "scanned", res.Scanned)
 	}
 	if res.Raced > 0 {
@@ -330,7 +330,7 @@ func (b *Background) curatePass(ctx context.Context) {
 		// mid-turn from being archived out from under the agent holding
 		// it. Logged because a persistently high count means the pass is
 		// racing the traffic it is meant to run behind.
-		log.Debug("skill_curator_transitions_raced", "count", res.Raced)
+		log.DebugContext(ctx, "skill_curator_transitions_raced", "count", res.Raced)
 	}
 	for _, change := range res.Applied {
 		b.announceChange(ctx, change)

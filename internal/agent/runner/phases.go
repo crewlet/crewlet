@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -21,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 var log = logging.Get("agent.runner")
@@ -224,7 +227,7 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 		ConversationHistory: r.cfg.Conversation,
 	})
 
-	res, err := r.runPhase(ctx, phaseRun{
+	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Plan, surface: surface, system: system, user: user,
 		rounds: r.cfg.Caps.PlanRounds, ceiling: r.cfg.Caps.PlanCeiling, iteration: round,
 		terminateAfter: []string{SubmitPlanTool},
@@ -248,11 +251,11 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 		// `direct` on its own skips Review outright. Both together let a
 		// rescued turn deliver nothing and report done, so the turn loop
 		// keys on the mark rather than on the synthesised word.
-		log.Warn("plan_never_submitted", "round", round, "rounds_used", res.Rounds)
+		log.WarnContext(ctx, "plan_never_submitted", "round", round, "rounds_used", res.Rounds)
 		payload = planPayload{Decision: string(turn.PlanDirect), Reasoning: res.Text}
 	}
 
-	r.emitter().completed(ctx, phaseRecord{
+	r.emitter().completed(phaseCtx, phaseRecord{
 		Phase: phase.Plan, Iteration: round, System: system, User: user,
 		Result: res.Result, Exhausted: res.Exhausted,
 		Decision: payload.Decision, Rescued: !submitted,
@@ -314,7 +317,7 @@ func (r *Runner) Execute(ctx context.Context, round int, p turn.Plan, history []
 		ConversationHistory: r.cfg.Conversation,
 	})
 
-	res, err := r.runPhase(ctx, phaseRun{
+	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface, system: system, user: user,
 		rounds: r.cfg.Caps.ExecuteRounds, ceiling: r.cfg.Caps.ExecuteCeiling, iteration: round,
 		allowSuspend: true,
@@ -328,7 +331,7 @@ func (r *Runner) Execute(ctx context.Context, round int, p turn.Plan, history []
 	}
 
 	missing := missingTools(surface, snapshot)
-	r.emitter().completed(ctx, phaseRecord{
+	r.emitter().completed(phaseCtx, phaseRecord{
 		Phase: phase.Execute, Iteration: round, System: system, User: user,
 		Result: res.Result, Exhausted: res.Exhausted,
 		// Execute reaches no structured verdict and never rescues — it has
@@ -371,7 +374,7 @@ func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Exec
 		EarlierIterations: ledger.RenderIterations(history, r.cfg.SkipNames),
 	})
 
-	res, err := r.runPhase(ctx, phaseRun{
+	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Review, surface: surface, system: system, user: r.cfg.Task,
 		rounds: r.cfg.Caps.ReviewRounds, iteration: round,
 		terminateAfter: []string{SubmitReviewTool},
@@ -387,18 +390,18 @@ func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Exec
 		// was judged good" and "nothing judged it", and those look
 		// identical downstream. Loop back instead — the delivery gate and
 		// the stall guard bound how long that can go on.
-		log.Warn("review_never_submitted", "round", round, "rounds_used", res.Rounds)
+		log.WarnContext(ctx, "review_never_submitted", "round", round, "rounds_used", res.Rounds)
 		rescue := turn.Review{
 			Decision: phase.SelfIterate,
 			Notes: "The review phase produced no decision. Re-check the plan's " +
 				"success criteria against what Execute actually did, and call " +
 				SubmitReviewTool + ".",
 		}
-		r.emitter().completed(ctx, reviewRecord(round, system, r.cfg.Task, res,
+		r.emitter().completed(phaseCtx, reviewRecord(round, system, r.cfg.Task, res,
 			string(rescue.Decision), rescue.Notes, true, surface))
 		return rescue, nil
 	}
-	r.emitter().completed(ctx, reviewRecord(round, system, r.cfg.Task, res,
+	r.emitter().completed(phaseCtx, reviewRecord(round, system, r.cfg.Task, res,
 		payload.Decision, payload.Notes, false, surface))
 	return turn.Review{
 		Decision:      phase.Decision(payload.Decision),
@@ -481,8 +484,36 @@ type phaseRun struct {
 	allowSuspend bool
 }
 
-func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error) {
+// runPhase returns the PHASE'S CONTEXT as well as its result.
+//
+// The caller needs it to publish agent_phase_completed under this phase's span
+// rather than the turn's, which is what turns the dashboard's trace tree from
+// a flat list under one turn node into trigger -> turn -> {plan, execute,
+// review}. The span has ENDED by then, and that is fine: an event recording a
+// phase belongs to that phase's span, and a span id is a label rather than a
+// lifetime.
+//
+// It is returned under its own name rather than shadowing the caller's ctx on
+// purpose — work the caller does AFTER the phase must not be attributed to a
+// span that is closed.
+func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, phaseResult, error) {
 	ph, surface := in.phase, in.surface
+	// ONE SPAN PER PHASE, wrapping the WHOLE extension loop below rather
+	// than each toolloop.Run inside it: an extended Execute is one phase
+	// that ran longer, and a span per invocation would report it as two
+	// phases and split its rounds across them.
+	//
+	// The attributes are deliberately thin. Everything a reader wants about
+	// what a phase DID — prompts and response verbatim, every tool call's
+	// arguments and result, tokens, the decision — is already on
+	// agent_phase_completed (d-506), and duplicating it onto a span would
+	// send whole prompts to a collector that is not the event store. What
+	// no event records is DURATION, per phase and per round, and that is
+	// exactly what a span adds.
+	ctx, span := tracing.Start(ctx, "agent.runner", "agent.turn."+string(ph),
+		attribute.String("crewlet.phase", string(ph)),
+		attribute.Int("crewlet.iteration", in.iteration))
+	defer span.End()
 	system, user := in.system, in.user
 	iteration, ceiling := in.iteration, in.ceiling
 	terminateAfter := in.terminateAfter
@@ -492,13 +523,19 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error)
 	// left showing an in-flight call with no response and no reason.
 	emit := r.emitter()
 	progress := &toolloop.Progress{}
-	fail := func(err error) (phaseResult, error) {
+	// Returns the phase context too, so `return fail(err)` stays a single
+	// line now that runPhase hands its context back.
+	fail := func(err error) (context.Context, phaseResult, error) {
+		// The span carries the failure too. The event below is the record
+		// of WHAT broke; the span is what makes the broken phase findable
+		// in a trace beside the calls that led to it.
+		tracing.Fail(span, err)
 		emit.completed(ctx, phaseRecord{
 			Phase: ph, Iteration: iteration, System: system, User: user,
 			Result: progress.Snapshot(), Available: surface.Active(),
 			Failed: true, Err: err,
 		})
-		return phaseResult{}, err
+		return ctx, phaseResult{}, err
 	}
 
 	members, err := r.cfg.Models.Chain(r.cfg.Seat.Role, ph)
@@ -572,18 +609,24 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error)
 		messages = res.Messages
 
 		if res.Suspended || !res.ExhaustedRounds {
-			return out, nil
+			// Read off the phase TOTALS, never off `res`: an extended
+			// phase ran the loop more than once and the last invocation
+			// knows only its own slice.
+			span.SetAttributes(
+				attribute.Int("crewlet.rounds", out.Rounds),
+				attribute.Bool("crewlet.suspended", out.Suspended))
+			return ctx, out, nil
 		}
 		granted, decision := extension.Consider(ctx, r.cfg.Judge, policy, extension.Request{
 			Phase: ph, Task: r.cfg.Task, Calls: calls(surface),
 			LastText: res.Text, RoundsUsed: out.Rounds,
 		})
 		if granted <= 0 {
-			log.Info("phase_not_extended", "phase", ph, "iteration", iteration,
+			log.InfoContext(ctx, "phase_not_extended", "phase", ph, "iteration", iteration,
 				"rounds_used", out.Rounds, "reason", decision.Reason)
-			return out, nil
+			return ctx, out, nil
 		}
-		log.Info("phase_extended", "phase", ph, "iteration", iteration,
+		log.InfoContext(ctx, "phase_extended", "phase", ph, "iteration", iteration,
 			"granted", granted, "rounds_used", out.Rounds, "reason", decision.Reason)
 		messages = append(messages, llm.Message{
 			Role:    llm.RoleUser,

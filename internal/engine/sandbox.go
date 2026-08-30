@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -24,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // The sandbox's engine-side wiring: which concrete thing satisfies which seam.
@@ -245,8 +248,27 @@ type resumeInput struct {
 // observing a config change across its own suspension — is real and accepted,
 // and it is why suspension is a phase boundary rather than a mid-round pause.
 func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
+	// A SUSPEND IS A RETURN, AND A SPAN CANNOT SURVIVE IT. The suspending
+	// phase's span ended when that phase returned; the process may have
+	// exited, the seat may have moved node, and days may have passed. So the
+	// resume does not continue a span — it RECONSTRUCTS the suspended one as
+	// a remote parent from the ids on the run's own row, and opens a new
+	// span beneath it. That is the honest shape: two spans in one trace,
+	// with the wait between them visible as the gap it actually is.
+	//
+	// A run written by a build before those ids were stored carries none,
+	// and WithRemote turns that into a fresh root rather than refusing to
+	// resume — a rolling upgrade guarantees some of those exist.
+	ctx = tracing.WithRemote(ctx, events.TraceContext{
+		TraceID: in.Run.TraceID, SpanID: in.Run.SpanID,
+	})
+	ctx, span := tracing.Start(ctx, "engine", "agent.turn.resume",
+		attribute.String("crewlet.seat", in.Turn.Handle()),
+		attribute.String("crewlet.turn_id", in.Run.TurnID))
+	defer span.End()
+
 	company := e.Company()
-	tel := e.describeResume(company, in)
+	tel := e.describeResume(ctx, company, in)
 	r, err := company.RunnerFor(in.Turn.Handle(), RunnerInput{
 		Task:      resumeTask(in),
 		Publisher: e.backends.Queue,
@@ -404,10 +426,26 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	if id, ok := company.Org.AgentIDFor(seat); ok {
 		agentID = id.String()
 	}
+	// THE TRACE THE RUN BELONGS TO, which nothing set before.
+	//
+	// TurnRef has carried TraceID and SpanID since the OTLP receiver was
+	// written, and this — its only construction site — left both empty. So
+	// PendingRun.TraceID was always "", RunEnv returned nil for every launch
+	// (it refuses to mint a token scoped to an empty trace, which is the one
+	// property that scoping has), and no coding run has ever exported
+	// telemetry through an endpoint the engine goes to some length to offer.
+	// The same emptiness broke the resume: describeResume built the resumed
+	// turn's events from Run.TraceID, so every resumed turn was filed under
+	// no trace at all.
+	//
+	// Taken from the ACTIVE span, which at this point is the run_sandbox
+	// tool call, so the box's spans nest under the call that started them.
+	runTrace := tracing.TraceOf(ctx)
 	return sandbox.Launch(ctx, manager, pending, e.backends.Queue, sandbox.LaunchRequest{
 		Turn: sandbox.TurnRef{
 			TurnID: t.ID, AgentID: agentID, AgentHandle: t.Handle(), Role: seat.Name,
 			Depth: t.Depth, Chain: t.Chain,
+			TraceID: runTrace.TraceID, SpanID: runTrace.SpanID,
 		},
 		Brief:      brief,
 		Setup:      setup,

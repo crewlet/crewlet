@@ -139,11 +139,11 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	if err != nil {
 		reclaim(ctx, m, box.ID())
 		if relErr := store.ReleaseBox(ctx, req.Turn.TurnID); relErr != nil {
-			log.Warn("sandbox_launch_release_failed",
+			log.WarnContext(ctx, "sandbox_launch_release_failed",
 				"turn_id", req.Turn.TurnID, "error", relErr.Error())
 		}
 		if setErr := store.SetStatus(ctx, req.Turn.TurnID, StatusFailed, req.Fence); setErr != nil {
-			log.Warn("sandbox_launch_mark_failed",
+			log.WarnContext(ctx, "sandbox_launch_mark_failed",
 				"turn_id", req.Turn.TurnID, "error", setErr.Error())
 		}
 		return LaunchResult{}, fmt.Errorf("sandbox: starting the coding agent: %w", err)
@@ -179,17 +179,17 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	// owns it — which is this one, but the event is what makes that true
 	// after a restart as well.
 	if err := q.Publish(ctx, topics.Event(started.EventType()), ev); err != nil {
-		log.Warn("sandbox_started_publish_failed",
+		log.WarnContext(ctx, "sandbox_started_publish_failed",
 			"turn_id", req.Turn.TurnID, "error", err.Error())
 	}
 	if control := topics.AgentControl(req.Turn.AgentHandle); control != "" {
 		if err := q.Publish(ctx, control, ev); err != nil {
-			log.Warn("sandbox_started_control_failed",
+			log.WarnContext(ctx, "sandbox_started_control_failed",
 				"turn_id", req.Turn.TurnID, "error", err.Error())
 		}
 	}
 
-	log.Info("sandbox_run_started",
+	log.InfoContext(ctx, "sandbox_run_started",
 		"turn_id", req.Turn.TurnID, "agent", req.Turn.AgentHandle,
 		"sandbox_id", box.ID(), "coding_agent", req.Spec.CodingAgent, "reused", reused)
 
@@ -212,7 +212,7 @@ func acquire(ctx context.Context, m *Manager, req LaunchRequest) (Sandbox, Runne
 		if err == nil {
 			return box, runner, true, nil
 		}
-		log.Warn("sandbox_reuse_failed",
+		log.WarnContext(ctx, "sandbox_reuse_failed",
 			"turn_id", req.Turn.TurnID, "sandbox_id", req.ReuseBox, "error", err.Error())
 	}
 	box, runner, err := m.Acquire(ctx, req.Spec, req.Setup)
@@ -231,7 +231,7 @@ func reclaim(ctx context.Context, m *Manager, sandboxID string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
 	if err := m.Provider().Kill(ctx, sandboxID); err != nil {
-		log.Warn("sandbox_launch_reclaim_failed", "sandbox_id", sandboxID, "error", err.Error())
+		log.WarnContext(ctx, "sandbox_launch_reclaim_failed", "sandbox_id", sandboxID, "error", err.Error())
 	}
 }
 

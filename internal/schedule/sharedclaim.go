@@ -97,7 +97,7 @@ func (c *SharedClaimer) Claim(ctx context.Context, run Run) (bool, error) {
 	}
 	if c.history != nil {
 		if _, err := c.history.Claim(ctx, run); err != nil {
-			log.Warn("scheduled_run_not_recorded", "error", err,
+			log.WarnContext(ctx, "scheduled_run_not_recorded", "error", err,
 				"schedule", run.ScheduleName, "scope_id", run.ScopeID,
 				"fire", run.FireLabel,
 				"detail", "the fire was claimed and dispatched; only this node's audit row is missing")

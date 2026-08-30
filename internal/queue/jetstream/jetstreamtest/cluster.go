@@ -66,7 +66,7 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 			cfg.Replicas = n
 		}
 
-		srv, err := js.StartServer(cfg)
+		srv, err := js.StartServer(t.Context(), cfg)
 		if err != nil {
 			t.Fatalf("StartCluster: member %d: %v", i, err)
 		}

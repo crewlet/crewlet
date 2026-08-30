@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -147,6 +148,26 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	}
 
 	routing := inbox.Route(surviving, d.ledgered)
+
+	// THE TRIGGER'S TRACE, restored before anything below publishes or logs,
+	// so this turn's spans hang under whatever caused it — a webhook, a
+	// schedule, another agent — instead of each seat rooting a trace of its
+	// own and the join a reader follows from "a message arrived" to "here is
+	// what it did" never existing.
+	//
+	// It is bound FIRST of the three context values rather than beside them,
+	// because the coalescing record and the conversation-history warning are
+	// both emitted between here and there: bound after them, those would be
+	// the two lines about a turn that do not name its trace, which is
+	// precisely when an operator is looking for them.
+	//
+	// A COALESCED TURN HAS ONE TRACE AND SEVERAL CAUSES. The trace comes from
+	// the first event of the partition, the same event describeTurn takes the
+	// trigger from — ten Slack comments become one turn under one trace. The
+	// others are already recorded as the turn's interactions; a span cannot
+	// have two parents, and inventing a root to hold them would put a node
+	// above the webhook that actually happened.
+	ctx = tracing.WithRemote(ctx, triggerTrace(routing.Events))
 	req := Request{
 		Handle: handle, Events: routing.Events,
 		WorkKey: routing.WorkKey, Coalesce: routing.Coalesce,
@@ -161,7 +182,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 		// context, not a seat that cannot work. The read RAISES rather
 		// than returning empty precisely so this decision is made here,
 		// visibly, instead of a database outage looking like a first turn.
-		log.Warn("conversation_history_unreadable",
+		log.WarnContext(ctx, "conversation_history_unreadable",
 			"seat", handle, "conversation", req.ConversationKey, "error", err)
 	}
 
@@ -251,7 +272,7 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 			}
 			key := workkey.Derive([]string{ev.ID.String()})
 			if err := d.Completions.Record(ctx, handle, key, "", now); err != nil {
-				log.Warn("completion_not_recorded", "seat", handle, "error", err)
+				log.WarnContext(ctx, "completion_not_recorded", "seat", handle, "error", err)
 				break
 			}
 		}
@@ -269,7 +290,7 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 	}
 	if err := d.Conversations.Append(ctx, handle, req.ConversationKey, entry,
 		req.WorkKey, now, 0); err != nil {
-		log.Warn("conversation_not_recorded", "seat", handle,
+		log.WarnContext(ctx, "conversation_not_recorded", "seat", handle,
 			"conversation", req.ConversationKey, "error", err)
 	}
 }
@@ -395,7 +416,29 @@ func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, conversation str
 		Count:              len(routing.Events),
 		FirstAt:            first.UTC().Format(time.RFC3339),
 		LastAt:             last.UTC().Format(time.RFC3339),
-	}, events.NewTrace())
+	}, tracing.TraceOf(ctx))
 	ev.Source = "engine." + routing.Events[0].Source
 	d.Observe(ctx, ev)
+}
+
+// triggerTrace is the trace a partition of trigger events belongs to.
+//
+// The FIRST non-nil event, matching describeTurn's choice of trigger, so the
+// trace and the trigger a turn reports are always the same event's. Taking
+// them from different events is how a turn ends up filed under a trace whose
+// root says something it did not react to.
+//
+// An empty result is ordinary rather than exceptional: an event written by a
+// build older than tracing carries no ids, and a rolling upgrade guarantees
+// some do. WithRemote turns that into a fresh root.
+func triggerTrace(evs []*events.Event) events.TraceContext {
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		return events.TraceContext{
+			TraceID: ev.TraceID, SpanID: ev.SpanID, ParentSpanID: ev.ParentSpanID,
+		}
+	}
+	return events.TraceContext{}
 }

@@ -462,20 +462,39 @@ Crewlet uses **OpenTelemetry** for distributed tracing. Every event carries W3C 
 
 ```mermaid
 flowchart TD
-    A["Webhook arrives (OTel span created)"]
-    B["NotificationService (restores trace context)"]
-    C["ExternalNotification → agent inbox (trace preserved)"]
-    D["Executor (creates child span 'agent.turn')"]
-    E["TaskStarted, TaskCompleted, etc."]
-    F["Tool calls (messages, decisions)"]
-    G["AgentTurnCompleted"]
+    A["<b>webhook.receive</b><br/>the delivery arrives, and roots the trace"]
+    B["the wake is published to the seat's inbox<br/><i>trace rides in the event envelope</i>"]
+    C["<b>agent.turn</b><br/>the dispatcher restores the trigger's trace"]
+    D["<b>agent.turn.plan / .execute / .review</b><br/>one span per phase"]
+    E["<b>llm.round</b><br/>one per model round trip"]
+    F["<b>tool.call</b><br/>one per call, including the refused ones"]
+    G["<b>agent.turn.resume</b><br/>a suspended run re-entering, days later"]
     A --> B --> C --> D
     D --> E
     D --> F
-    D --> G
+    C -.->|"suspend, then resume"| G
 ```
 
-Each Event's `trace_id`/`span_id` fields are auto-populated from the active OTel span at creation time. When events cross async boundaries (EventQueue → handler), the receiving component calls the context restore to reconnect the trace.
+**Five span names, and that is the whole set.** `webhook.receive`,
+`agent.turn` (plus `agent.turn.resume`), `agent.turn.<phase>`, `llm.round` and
+`tool.call`, alongside `schedule.fire` for cron-started work.
+
+Span attributes are deliberately thin: the seat, the phase, the model, the
+round, the tool and its outcome, and token counts. Everything about what a turn
+*did* — prompts and responses verbatim, tool arguments and results, the
+decision — is already in the [event store](#the-event-store), and a span
+carries what no event does, which is **duration**.
+
+Only the LLM *round* is spanned, not the fallback chain, each member's backend
+and the credential pool beneath it — on a three-member chain over a four-key
+pool that would nest a dozen spans per round and tell you nothing you could act
+on. Which member and which credential answered is on the phase event.
+
+**A suspended run is two spans, not one.** A [code sandbox](../concepts/code-sandbox.md)
+run detaches: the phase returns, the process may exit, the seat may move node,
+and the resume can be days later. A live span cannot survive that, so the
+suspending span ends and the resume opens a new one under a reconstructed
+parent — the wait shows up as the gap it actually is.
 
 #### Dashboard Trace View
 
@@ -491,10 +510,40 @@ The dashboard (`/dashboard` → Traces) groups events by `trace_id` into collaps
 To export traces to Jaeger, Grafana Tempo, or any OTLP-compatible backend:
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318/v1/traces
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 ```
 
-When this env var is set, the engine configures a `BatchSpanProcessor` with an `OTLPSpanExporter` at startup. Without it, spans are still created (for trace context propagation) but not exported.
+That is the collector's **base** URL — the engine appends `/v1/traces` itself.
+Do not include the signal path here; use `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
+when you need to give the full URL. Getting this wrong also reaches the sandbox
+forwarder, which appends a signal path of its own, and the collector sees
+`/v1/traces/v1/traces`.
+
+When either is set the engine installs a batching exporter at startup and
+flushes it during shutdown, after the drain, so the spans a shutdown itself
+produces are exported rather than dropped. Without it, spans are still created
+and their ids still reach every event, the event store and the dashboard's
+trace view — there is simply nothing shipping them anywhere.
+
+The full set of variables, including the protocol, the service name and the
+sampling ratio, is in
+[Environment Variables](../reference/environment-variables.md#opentelemetry-optional).
+The engine's exporter and the sandbox OTLP forwarder read the **same** endpoint
+and headers on purpose: a coding agent's spans land in the same backend as the
+turn that started them, nested underneath it.
+
+#### Correlating logs with traces
+
+Every log line emitted inside a span carries `trace_id` and `span_id`, in all
+three [log formats](#logging). So a span you are looking at in Jaeger and the
+lines the engine wrote while it was open are joined by the same identifier:
+
+```bash
+crewlet run -log-format json | jq 'select(.trace_id == "4bf92f35…")'
+```
+
+Lines emitted outside any span carry neither field rather than carrying an
+empty one, so a shipper indexing `trace_id` never sees a placeholder.
 
 #### Querying Traces in the Event Store
 
@@ -636,9 +685,21 @@ Every significant operation emits structured log entries:
   "task_id": "def-456",
   "llm_input_tokens": 1200,
   "llm_output_tokens": 647,
-  "duration_ms": 3200
+  "duration_ms": 3200,
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "span_id": "00f067aa0ba902b7"
 }
 ```
+
+`trace_id` and `span_id` are present on any line emitted inside a span — which
+is every line a turn produces — and absent entirely on lines that are not, so a
+shipper indexing them never sees an empty placeholder. They are the same ids the
+[tracing](#tracing) section exports, which is what lets you pivot from a slow
+span in Jaeger to the lines the engine wrote while it was open.
+
+Note the JSON key for the message is `msg`, slog's own; `event` above is
+illustrative of the *value* — the short, machine-parsable event name every line
+carries in place of a sentence.
 
 ### Reacting to events
 

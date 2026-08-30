@@ -114,7 +114,7 @@ type Backends struct {
 func (b *Backends) Close(ctx context.Context) {
 	if b.Queue != nil {
 		if err := b.Queue.Stop(ctx); err != nil {
-			log.Warn("queue_stop_failed", "error", err)
+			log.WarnContext(ctx, "queue_stop_failed", "error", err)
 		}
 	}
 	if b.conn != nil {
@@ -127,7 +127,7 @@ func (b *Backends) Close(ctx context.Context) {
 	}
 	if b.Store != nil {
 		if err := b.Store.Close(); err != nil {
-			log.Warn("store_close_failed", "error", err)
+			log.WarnContext(ctx, "store_close_failed", "error", err)
 		}
 		b.Store = nil
 	}
@@ -287,7 +287,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 		return &Backends{Queue: q}, q.Conn(), nil
 	}
 
-	server, err := jetstream.StartServer(cfg)
+	server, err := jetstream.StartServer(ctx, cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("engine: stream: %w", err)
 	}
@@ -429,7 +429,7 @@ func openCoordinationEstate(ctx context.Context, b *config.Bootstrap, out *Backe
 	var conn *nats.Conn
 	var err error
 	if estate.Embedded() {
-		server, serr := jetstream.StartServer(jetstream.Config{
+		server, serr := jetstream.StartServer(ctx, jetstream.Config{
 			StoreDir:    estate.StoreDir,
 			ClusterName: estate.Cluster.Name,
 			ClusterURLs: estate.Cluster.Peers,

@@ -222,7 +222,7 @@ func (c *Coordinator) OnStarted(ctx context.Context, ev types.SandboxRunStarted)
 		return nil
 	}
 	c.syncBusy(ctx, ev.AgentHandle)
-	log.Info("sandbox_agent_busy",
+	log.InfoContext(ctx, "sandbox_agent_busy",
 		"agent", ev.AgentHandle, "turn_id", ev.TurnID, "sandbox_id", ev.SandboxID)
 	return nil
 }
@@ -238,7 +238,7 @@ func (c *Coordinator) OnStarted(ctx context.Context, ev types.SandboxRunStarted)
 func (c *Coordinator) syncBusy(ctx context.Context, handle string) {
 	runs, err := c.pending.ListActiveForSeat(ctx, handle)
 	if err != nil {
-		log.Warn("sandbox_busy_sync_failed", "agent", handle, "error", err.Error())
+		log.WarnContext(ctx, "sandbox_busy_sync_failed", "agent", handle, "error", err.Error())
 		return
 	}
 	n := 0
@@ -269,13 +269,13 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		// Already claimed by a duplicate signal — successive poll ticks both
 		// firing before this claim landed, or an at-least-once redelivery —
 		// or terminal.
-		log.Info("sandbox_completion_already_claimed", "turn_id", ev.TurnID)
+		log.InfoContext(ctx, "sandbox_completion_already_claimed", "turn_id", ev.TurnID)
 		return nil
 	}
 
 	result, err := c.collect(ctx, run)
 	if err != nil {
-		log.Error("sandbox_collect_failed", "turn_id", run.TurnID, "error", err.Error())
+		log.ErrorContext(ctx, "sandbox_collect_failed", "turn_id", run.TurnID, "error", err.Error())
 		// The job is OVER even though collection failed. Free the seat and
 		// settle the row whatever the cleanup manages: both are network
 		// calls that can fail on their own, and neither failing is a reason
@@ -312,9 +312,9 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 		return Result{}, err
 	}
 	if err := box.Pause(ctx); err != nil {
-		log.Warn("sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
+		log.WarnContext(ctx, "sandbox_pause_failed", "turn_id", run.TurnID, "error", err.Error())
 	} else if err := c.pending.MarkBoxPaused(ctx, run.TurnID, c.now()); err != nil {
-		log.Warn("sandbox_pause_record_failed", "turn_id", run.TurnID, "error", err.Error())
+		log.WarnContext(ctx, "sandbox_pause_record_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 	return result, nil
 }
@@ -327,11 +327,11 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 	}
 	over, err := c.account.Charge(ctx, run.AgentID, run.AgentHandle, tokens)
 	if err != nil {
-		log.Warn("sandbox_accounting_failed", "turn_id", run.TurnID, "error", err.Error())
+		log.WarnContext(ctx, "sandbox_accounting_failed", "turn_id", run.TurnID, "error", err.Error())
 		return
 	}
 	if over {
-		log.Warn("sandbox_spend_over_budget",
+		log.WarnContext(ctx, "sandbox_spend_over_budget",
 			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens)
 	}
 }
@@ -356,10 +356,10 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	if run.PauseTTLSeconds == 0 {
 		c.teardown(ctx, run)
 		if err := c.pending.SetStatus(ctx, run.TurnID, StatusReseed, fenceOf(run)); err != nil {
-			log.Warn("sandbox_reseed_mark_failed", "turn_id", run.TurnID, "error", err.Error())
+			log.WarnContext(ctx, "sandbox_reseed_mark_failed", "turn_id", run.TurnID, "error", err.Error())
 		}
 	}
-	log.Info("sandbox_run_awaiting_clarification",
+	log.InfoContext(ctx, "sandbox_run_awaiting_clarification",
 		"turn_id", run.TurnID, "audience", result.AskTo)
 
 	announcement := types.SandboxClarificationRequested{
@@ -389,7 +389,7 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversat
 		// FAIL OPEN. An unreadable store must not swallow an ordinary
 		// message: handling it as a normal inbound is recoverable, dropping
 		// it is not.
-		log.Warn("sandbox_answer_lookup_failed",
+		log.WarnContext(ctx, "sandbox_answer_lookup_failed",
 			"agent", handle, "conversation", conversation, "error", err.Error())
 		return false, nil
 	}
@@ -405,7 +405,7 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversat
 		// not ALSO run as an unrelated message.
 		return true, nil
 	}
-	log.Info("sandbox_clarification_answered",
+	log.InfoContext(ctx, "sandbox_clarification_answered",
 		"turn_id", claimed.TurnID, "conversation_key", conversation)
 	// The seat goes busy again for the duration of the resume: the parked
 	// run freed it, and re-entering the Execute loop is work like any other.
@@ -425,7 +425,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	if len(run.ExecuteState) == 0 {
 		// No suspended conversation to resume — a crash between launching
 		// the job and persisting the suspend. The turn cannot continue.
-		log.Warn("sandbox_resume_no_execute_state", "turn_id", run.TurnID)
+		log.WarnContext(ctx, "sandbox_resume_no_execute_state", "turn_id", run.TurnID)
 		c.settleFailed(ctx, run)
 		return nil
 	}
@@ -448,10 +448,10 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		if revert == "" {
 			revert = StatusRunning
 		}
-		log.Error("sandbox_resume_failed",
+		log.ErrorContext(ctx, "sandbox_resume_failed",
 			"turn_id", run.TurnID, "revert_to", revert, "error", err.Error())
 		if setErr := c.pending.SetStatus(ctx, run.TurnID, revert, fenceOf(run)); setErr != nil {
-			log.Error("sandbox_resume_revert_failed",
+			log.ErrorContext(ctx, "sandbox_resume_revert_failed",
 				"turn_id", run.TurnID, "error", setErr.Error())
 		}
 		c.markBusy(run.AgentHandle)
@@ -460,13 +460,13 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 
 	latest, found, err := c.pending.Get(ctx, run.TurnID)
 	if err != nil {
-		log.Warn("sandbox_settle_read_failed", "turn_id", run.TurnID, "error", err.Error())
+		log.WarnContext(ctx, "sandbox_settle_read_failed", "turn_id", run.TurnID, "error", err.Error())
 		return nil
 	}
 	if found && latest.Status == StatusRunning {
 		// The resumed executor called run_sandbox AGAIN: a new detached job
 		// owns the box and the suspending turn re-marked the seat busy.
-		log.Info("sandbox_reused_in_turn", "turn_id", run.TurnID)
+		log.InfoContext(ctx, "sandbox_reused_in_turn", "turn_id", run.TurnID)
 		return nil
 	}
 	// Tear down the box the LATEST row points at: a re-seeded run
@@ -477,7 +477,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	}
 	c.teardown(ctx, settle)
 	if err := c.pending.SetStatus(ctx, run.TurnID, StatusDone, fenceOf(run)); err != nil {
-		log.Warn("sandbox_done_mark_failed", "turn_id", run.TurnID, "error", err.Error())
+		log.WarnContext(ctx, "sandbox_done_mark_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 	return nil
 }
@@ -489,7 +489,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 // to leave a seat parked on a run that is over.
 func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun) {
 	if err := c.pending.SetStatus(ctx, run.TurnID, StatusFailed, fenceOf(run)); err != nil {
-		log.Warn("sandbox_failed_mark_failed", "turn_id", run.TurnID, "error", err.Error())
+		log.WarnContext(ctx, "sandbox_failed_mark_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 	c.teardown(ctx, run)
 	c.clearBusy(run.AgentHandle)
@@ -501,11 +501,11 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 		return
 	}
 	if err := c.mgr().Provider().Kill(ctx, run.SandboxID); err != nil {
-		log.Warn("sandbox_teardown_failed",
+		log.WarnContext(ctx, "sandbox_teardown_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
 	}
 	if err := c.pending.ReleaseBox(ctx, run.TurnID); err != nil {
-		log.Warn("sandbox_release_failed", "turn_id", run.TurnID, "error", err.Error())
+		log.WarnContext(ctx, "sandbox_release_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 }
 
@@ -538,24 +538,24 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 	for _, run := range active {
 		switch run.Status {
 		case StatusResumed:
-			log.Warn("sandbox_abandoned_tail_reaped",
+			log.WarnContext(ctx, "sandbox_abandoned_tail_reaped",
 				"turn_id", run.TurnID, "agent", run.AgentHandle, "sandbox_id", run.SandboxID)
 			c.teardown(ctx, run)
 			if err := c.pending.SetStatus(ctx, run.TurnID, StatusFailed, Fence{}); err != nil {
-				log.Warn("sandbox_abandoned_mark_failed",
+				log.WarnContext(ctx, "sandbox_abandoned_mark_failed",
 					"turn_id", run.TurnID, "error", err.Error())
 			}
 			abandoned++
 		case StatusRunning:
 			if _, err := c.pending.ClaimOwnership(ctx, run.TurnID, owner, epoch); err != nil {
-				log.Warn("sandbox_ownership_claim_failed",
+				log.WarnContext(ctx, "sandbox_ownership_claim_failed",
 					"turn_id", run.TurnID, "error", err.Error())
 			}
 			c.markBusy(run.AgentHandle)
 			recovered++
 		}
 	}
-	log.Info("sandbox_seat_recovered",
+	log.InfoContext(ctx, "sandbox_seat_recovered",
 		"seat", handle, "epoch", epoch, "running", recovered,
 		"abandoned", abandoned, "active", len(active))
 	return nil

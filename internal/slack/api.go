@@ -226,7 +226,7 @@ func (a *Admin) retrying(ctx context.Context, method, token string, body, out an
 					"many seats needs to be spread out or resumed: %w",
 				method, RateLimitBudget, err)
 		}
-		log.Info("slack_rate_limited", "method", method, "waiting", wait.String())
+		log.InfoContext(ctx, "slack_rate_limited", "method", method, "waiting", wait.String())
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():

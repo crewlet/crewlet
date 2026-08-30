@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // One websocket per agent seat.
@@ -194,7 +195,7 @@ func (f *Fleet) Add(ctx context.Context, seat Seat, c *Client) error {
 		defer close(s.done)
 		f.run(loopCtx, s)
 	}()
-	log.Info("mattermost_seat_attached", "handle", seat.Handle,
+	log.InfoContext(ctx, "mattermost_seat_attached", "handle", seat.Handle,
 		"url", c.URL(), "username", seat.Username)
 	return nil
 }
@@ -241,7 +242,7 @@ func (f *Fleet) run(ctx context.Context, s *seatSocket) {
 		}
 		socket, err := f.connect(ctx, s.seat, s.client)
 		if err != nil {
-			log.Warn("mattermost_connect_failed", "handle", s.seat.Handle,
+			log.WarnContext(ctx, "mattermost_connect_failed", "handle", s.seat.Handle,
 				"attempt", attempt+1, "error", err.Error())
 			continue
 		}
@@ -276,7 +277,7 @@ func (f *Fleet) pump(ctx context.Context, s *seatSocket, socket Socket) {
 		body, err := socket.Read(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
-				log.Info("mattermost_socket_closed", "handle", s.seat.Handle,
+				log.InfoContext(ctx, "mattermost_socket_closed", "handle", s.seat.Handle,
 					"error", err.Error())
 			}
 			return
@@ -296,7 +297,7 @@ func (f *Fleet) replay(ctx context.Context, s *seatSocket) {
 		if when, err := s.client.ServerTime(ctx); err == nil {
 			s.mark(when)
 		} else {
-			log.Warn("mattermost_server_time_unavailable",
+			log.WarnContext(ctx, "mattermost_server_time_unavailable",
 				"handle", s.seat.Handle, "error", err.Error())
 		}
 		return
@@ -311,7 +312,7 @@ func (f *Fleet) replay(ctx context.Context, s *seatSocket) {
 		// Logged with what is being skipped rather than silently
 		// truncated: "we missed two hours" is something an operator
 		// needs to know, and a seat cannot infer it.
-		log.Warn("mattermost_backfill_window_exceeded", "handle", s.seat.Handle,
+		log.WarnContext(ctx, "mattermost_backfill_window_exceeded", "handle", s.seat.Handle,
 			"gap", floor.Add(f.backfill).Sub(since).String(),
 			"window", f.backfill.String())
 		since = floor
@@ -319,7 +320,7 @@ func (f *Fleet) replay(ctx context.Context, s *seatSocket) {
 
 	channels, err := f.channels(ctx, s)
 	if err != nil {
-		log.Warn("mattermost_backfill_channels_unavailable",
+		log.WarnContext(ctx, "mattermost_backfill_channels_unavailable",
 			"handle", s.seat.Handle, "error", err.Error())
 		return
 	}
@@ -327,7 +328,7 @@ func (f *Fleet) replay(ctx context.Context, s *seatSocket) {
 	for _, ch := range channels {
 		posts, err := s.client.PostsSince(ctx, ch.ID, since)
 		if err != nil {
-			log.Warn("mattermost_backfill_failed", "handle", s.seat.Handle,
+			log.WarnContext(ctx, "mattermost_backfill_failed", "handle", s.seat.Handle,
 				"channel", ch.ID, "error", err.Error())
 			continue
 		}
@@ -340,7 +341,7 @@ func (f *Fleet) replay(ctx context.Context, s *seatSocket) {
 		}
 	}
 	if replayed > 0 {
-		log.Info("mattermost_backfilled", "handle", s.seat.Handle,
+		log.InfoContext(ctx, "mattermost_backfilled", "handle", s.seat.Handle,
 			"posts", replayed, "since", since.UTC().String())
 	}
 }
@@ -359,7 +360,7 @@ func (f *Fleet) replay(ctx context.Context, s *seatSocket) {
 func (f *Fleet) floor(ctx context.Context, s *seatSocket) (time.Time, bool) {
 	now, err := s.client.ServerTime(ctx)
 	if err != nil {
-		log.Warn("mattermost_backfill_floor_from_local_clock",
+		log.WarnContext(ctx, "mattermost_backfill_floor_from_local_clock",
 			"handle", s.seat.Handle, "error", err.Error())
 		now = f.now().UTC()
 	}
@@ -379,7 +380,7 @@ func (f *Fleet) channels(ctx context.Context, s *seatSocket) ([]Channel, error) 
 		if err != nil {
 			// One team failing must not lose the others: a seat in
 			// three teams should still hear two of them.
-			log.Warn("mattermost_team_channels_unavailable",
+			log.WarnContext(ctx, "mattermost_team_channels_unavailable",
 				"handle", s.seat.Handle, "team", team.ID, "error", err.Error())
 			continue
 		}
@@ -422,10 +423,10 @@ func (f *Fleet) deliver(ctx context.Context, s *seatSocket, body map[string]any,
 
 	ev := events.New(types.RawWebhook{
 		Body: body, Headers: map[string]string{}, Handle: s.seat.Handle,
-	}, events.NewTrace())
+	}, tracing.TraceOf(ctx))
 	ev.Source = Backend
 	if err := f.publisher.Publish(ctx, topics.NotificationsInbound, ev); err != nil {
-		log.Error("mattermost_publish_failed", "handle", s.seat.Handle,
+		log.ErrorContext(ctx, "mattermost_publish_failed", "handle", s.seat.Handle,
 			"post", id, "error", err.Error(),
 			"detail", "the post was read off the socket and could not be queued; "+
 				"it will not be re-read, because the cursor has moved past it")
@@ -570,7 +571,7 @@ func (s *wsSocket) Read(ctx context.Context) (map[string]any, error) {
 			// A frame this process cannot read will not become
 			// readable, and the connection is otherwise healthy —
 			// dropping it beats tearing down a live socket.
-			log.Debug("mattermost_frame_unreadable", "error", err.Error())
+			log.DebugContext(ctx, "mattermost_frame_unreadable", "error", err.Error())
 			continue
 		}
 		if frame.Event != "posted" || frame.Data == nil {
@@ -583,7 +584,7 @@ func (s *wsSocket) Read(ctx context.Context) (map[string]any, error) {
 		serialised, _ := frame.Data["post"].(string)
 		var post map[string]any
 		if err := json.Unmarshal([]byte(serialised), &post); err != nil {
-			log.Debug("mattermost_post_unreadable", "error", err.Error())
+			log.DebugContext(ctx, "mattermost_post_unreadable", "error", err.Error())
 			continue
 		}
 		body["post"] = post

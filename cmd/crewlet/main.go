@@ -42,6 +42,7 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/version"
 
 	"gopkg.in/yaml.v3"
@@ -635,7 +636,38 @@ func runEngine(args []string, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Info("engine_starting", "version", version.String(), "company", company.Name)
+	// TRACING BEFORE THE ENGINE, because engine.New starts subscriptions
+	// and registers the publish listener, and every one of those can open a
+	// span. A provider installed after them would leave the boot — the one
+	// stretch an operator most often wants a trace of — reporting nothing.
+	//
+	// The flush is DEFERRED rather than written at each return. There are
+	// six ways out of this function, five of them boot failures, and a
+	// deferred call registered here runs after all of them AND after the
+	// drain below, which is exactly the ordering the batch processor needs:
+	// the spans the drain itself emits are in the buffer when it flushes.
+	// Writing it at each return is how five of the six quietly stop doing it.
+	nodeID, err := config.ResolveNodeID(boot, nil)
+	if err != nil {
+		return err
+	}
+	flushTraces, err := tracing.Configure(ctx, tracing.Options{
+		NodeID:  nodeID,
+		Version: version.String(),
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if flushErr := flushTraces(ctx); flushErr != nil {
+			// Losing telemetry is not worth failing a shutdown that has
+			// otherwise succeeded — the drain has already released the
+			// seats and closed the backends by the time this runs.
+			log.WarnContext(ctx, "trace_flush_failed", "error", flushErr)
+		}
+	}()
+
+	log.InfoContext(ctx, "engine_starting", "version", version.String(), "company", company.Name)
 	e, err := engine.New(ctx, engine.Options{Bootstrap: boot, Company: company})
 	if err != nil {
 		return err
@@ -746,7 +778,7 @@ func runEngine(args []string, stderr io.Writer) error {
 	// runtime's kill grace, or the operator's second interrupt that the
 	// stop() above just re-armed. Both already have one and can see
 	// things this process cannot.
-	log.Info("engine_draining")
+	log.InfoContext(ctx, "engine_draining")
 	e.Stop(context.WithoutCancel(ctx))
 	return nil
 }
@@ -769,7 +801,7 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	if err := s.server.Shutdown(shutdown); err != nil {
 		// A listener that would not close is not a reason to skip the
 		// drain: the seats are the expensive thing to strand.
-		log.Warn("api_shutdown_failed", "error", err)
+		log.WarnContext(ctx, "api_shutdown_failed", "error", err)
 	}
 	// After the listener, so no socket can be reading the projection while
 	// its feed is torn down, and before the engine drains, so the drain's
@@ -812,7 +844,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// API and no webhook endpoint. Saying so is the point — an
 		// operator who expected an integration to work should learn it
 		// here rather than from a webhook that never arrives.
-		log.Warn("api_disabled",
+		log.WarnContext(ctx, "api_disabled",
 			"hint", "api.port is 0, so this node serves no dashboard, no REST "+
 				"API and no webhook endpoint; every integration is deaf here")
 		return nil, nil
@@ -956,11 +988,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	}
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("api_serve_failed", "error", err)
+			log.ErrorContext(ctx, "api_serve_failed", "error", err)
 		}
 	}()
 
-	log.Info("api_listening", "addr", listener.Addr().String(),
+	log.InfoContext(ctx, "api_listening", "addr", listener.Addr().String(),
 		"anonymous_read", app.Guard().AnonymousRead(),
 		"tokens", app.Guard().Tokens())
 	if app.Guard().AnonymousRead() && !auth.BindIsLoopback(boot.API.Host) {
@@ -968,7 +1000,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// transcripts, diary entries and the whole event stream, and on a
 		// bind anything else can reach that is a decision somebody may
 		// not have made deliberately.
-		log.Warn("api_anonymous_read_on_a_reachable_bind",
+		log.WarnContext(ctx, "api_anonymous_read_on_a_reachable_bind",
 			"host", boot.API.Host,
 			"hint", "reads serve without a token on an address other machines "+
 				"can reach; set api.auth.allow_anonymous_read to false to close them")

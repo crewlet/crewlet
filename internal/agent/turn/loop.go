@@ -277,7 +277,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 			if p.Decision == PlanSkip {
 				// Nothing was being asked. The turn ends with the planner's
 				// reasoning as its output and nothing reaches the requester.
-				log.Info("turn_skipped", "turn_id", in.TurnID, "reason", p.Reasoning)
+				log.InfoContext(ctx, "turn_skipped", "turn_id", in.TurnID, "reason", p.Reasoning)
 				res.Decision = phase.Skipped
 				res.Artifact = p.Reasoning
 				return res, nil
@@ -294,7 +294,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 			// closed and must not be appended, because its Review has not
 			// run and appending it would tell the resumed turn a delivery
 			// was judged when nothing judged it.
-			log.Info("turn_suspended", "turn_id", in.TurnID, "round", round)
+			log.InfoContext(ctx, "turn_suspended", "turn_id", in.TurnID, "round", round)
 			res.Suspended = true
 			res.Decision = phase.SelfIterate
 			res.Artifact = exec.Text
@@ -329,20 +329,20 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		// that delivered nothing would complete as done.
 		skipReview := p.Decision == PlanDirect && !p.Rescued
 		if p.Decision == PlanDirect && p.Rescued {
-			log.Warn("review_forced_plan_was_rescued",
+			log.WarnContext(ctx, "review_forced_plan_was_rescued",
 				"turn_id", in.TurnID, "round", round,
 				"detail", "the planner never submitted a decision, so the engine "+
 					"cannot honour one; Review judges what Execute actually did")
 		}
 		if skipReview && gate.MustReview() {
-			log.Warn("review_forced_execute_skipped_delivery",
+			log.WarnContext(ctx, "review_forced_execute_skipped_delivery",
 				"turn_id", in.TurnID, "round", round,
 				"tools_needed", p.ToolsNeeded, "phantom", phantom,
 				"called", gate.ExecuteCalled)
 			skipReview = false
 		}
 		if skipReview {
-			log.Info("review_skipped_per_plan", "turn_id", in.TurnID, "round", round)
+			log.InfoContext(ctx, "review_skipped_per_plan", "turn_id", in.TurnID, "round", round)
 			res.Decision = phase.Done
 			res.Artifact = exec.Text
 			return res, nil
@@ -364,7 +364,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 
 		if decision == phase.Done {
 			if override, correction := gate.OverrideDone(); override {
-				log.Warn("review_done_overridden_undelivered",
+				log.WarnContext(ctx, "review_done_overridden_undelivered",
 					"turn_id", in.TurnID, "round", round,
 					"tools_needed", p.ToolsNeeded, "phantom", phantom,
 					"called", gate.Called())
@@ -386,7 +386,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 
 		stall.Observe(artifact)
 		if stall.ShouldAbort() {
-			log.Info("turn_stall_aborted", "turn_id", in.TurnID, "round", round)
+			log.InfoContext(ctx, "turn_stall_aborted", "turn_id", in.TurnID, "round", round)
 			res.Decision = phase.Failed
 			res.Breach = &Breach{
 				Kind:   BreachStall,
@@ -419,7 +419,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		})
 	}
 
-	log.Info("turn_max_iterations_exhausted", "turn_id", in.TurnID, "max", maxRounds)
+	log.InfoContext(ctx, "turn_max_iterations_exhausted", "turn_id", in.TurnID, "max", maxRounds)
 	res.Decision = phase.Failed
 	res.Breach = &Breach{
 		Kind: BreachMaxIterations,

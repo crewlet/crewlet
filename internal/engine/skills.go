@@ -121,7 +121,7 @@ func (e *Engine) syncSkillsFrom(ctx context.Context, c *Company, walk func(conte
 	}
 	pages, err := walk(ctx, container)
 	if err != nil {
-		log.Error("tool_skill_sync_failed", "container", container, "error", err.Error(),
+		log.ErrorContext(ctx, "tool_skill_sync_failed", "container", container, "error", err.Error(),
 			"detail", "the registry keeps whatever it already held; agents run "+
 				"without this company's tool guidance until the next sync")
 		return

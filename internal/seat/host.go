@@ -525,7 +525,7 @@ func (h *Host) Start(ctx context.Context) {
 	go func() { defer h.wg.Done(); h.heartbeatLoop(loopCtx) }()
 	go func() { defer h.wg.Done(); h.sweepLoop(loopCtx) }()
 
-	log.Info("seat_host_started", "node", h.nodeID, "owner", h.owner, "held", len(h.Held()))
+	log.InfoContext(ctx, "seat_host_started", "node", h.nodeID, "owner", h.owner, "held", len(h.Held()))
 }
 
 // BeginDrain stops claiming but keeps renewing what is already held.
@@ -546,7 +546,7 @@ func (h *Host) BeginDrain(ctx context.Context) {
 	held := len(h.held)
 	h.mu.Unlock()
 	h.releaseNodePresence(ctx)
-	log.Info("seat_host_draining", "node", h.nodeID, "held", held)
+	log.InfoContext(ctx, "seat_host_draining", "node", h.nodeID, "held", held)
 }
 
 // ResumeClaiming undoes [Host.BeginDrain]: claim again, and count again.
@@ -563,7 +563,7 @@ func (h *Host) ResumeClaiming(ctx context.Context) {
 	h.draining = false
 	h.mu.Unlock()
 	h.renewNodePresence(ctx)
-	log.Info("seat_host_resumed", "node", h.nodeID)
+	log.InfoContext(ctx, "seat_host_resumed", "node", h.nodeID)
 }
 
 // Draining reports whether this node has stopped claiming.
@@ -595,7 +595,7 @@ func (h *Host) Stop(ctx context.Context) {
 
 	stranded := h.Unproven()
 	if len(stranded) > 0 {
-		log.Error("seat_host_stopped_with_unproven_seats", "node", h.nodeID, "seats", stranded,
+		log.ErrorContext(ctx, "seat_host_stopped_with_unproven_seats", "node", h.nodeID, "seats", stranded,
 			"hint", "these seats' teardown was never proven, so their leases were held rather "+
 				"than released; they lapse at the TTL and a peer picks them up then")
 	}
@@ -606,7 +606,7 @@ func (h *Host) Stop(ctx context.Context) {
 	clear(h.acquireBackoffs)
 	clear(h.seatLocks)
 	h.mu.Unlock()
-	log.Info("seat_host_stopped", "node", h.nodeID)
+	log.InfoContext(ctx, "seat_host_stopped", "node", h.nodeID)
 }
 
 // ReleaseAll hands every seat back — each one the moment IT goes idle.
@@ -700,7 +700,7 @@ func (h *Host) finishRelease(ctx context.Context, handle string, entry *heldSeat
 		h.mu.Lock()
 		h.undead[handle] = &undeadSeat{held: entry, reason: reason, since: now, attempts: 1, lastAlarm: now}
 		h.mu.Unlock()
-		log.Error("seat_release_unproven", "seat", handle, "epoch", entry.lease.Epoch,
+		log.ErrorContext(ctx, "seat_release_unproven", "seat", handle, "epoch", entry.lease.Epoch,
 			"reason", reason.String(), "error", err,
 			"hint", "keeping the lease and renewing it: this node may still be consuming the "+
 				"seat, and releasing now would let a peer run the same agent concurrently. "+
@@ -711,7 +711,7 @@ func (h *Host) finishRelease(ctx context.Context, handle string, entry *heldSeat
 	if err != nil {
 		// The seat IS torn down locally; the row simply lapses on its own.
 		// Nothing here is worth failing a drain.
-		log.Warn("seat_release_unavailable", "seat", handle, "error", err)
+		log.WarnContext(ctx, "seat_release_unavailable", "seat", handle, "error", err)
 		return false
 	}
 	return released
@@ -751,12 +751,12 @@ func (h *Host) retryUndeadTeardown(ctx context.Context, handle string) bool {
 	delete(h.unprovenAdmission, handle)
 	h.mu.Unlock()
 
-	log.Info("seat_release_recovered", "seat", handle, "epoch", lease.Epoch,
+	log.InfoContext(ctx, "seat_release_recovered", "seat", handle, "epoch", lease.Epoch,
 		"attempts", attempts, "stranded_seconds", now.Sub(since).Seconds())
 
 	if _, err := h.backend.Release(ctx, lease.Resource, h.owner, lease.Epoch); err != nil {
 		// Torn down locally either way; the row lapses on its own.
-		log.Warn("seat_release_unavailable", "seat", handle, "error", err)
+		log.WarnContext(ctx, "seat_release_unavailable", "seat", handle, "error", err)
 	}
 	return true
 }
@@ -829,13 +829,13 @@ func (h *Host) noteAdmission(ctx context.Context, handle string, admitted bool) 
 	}
 	h.mu.Unlock()
 
-	log.Info("seat_admission_changed", "seat", handle, "admitted", admitted)
+	log.InfoContext(ctx, "seat_admission_changed", "seat", handle, "admitted", admitted)
 	if h.hooks == nil {
 		return
 	}
 	err := callHook("on_admission", handle, func() error { return h.hooks.OnAdmission(ctx, handle, admitted) })
 	if err != nil {
-		log.Error("seat_admission_hook_failed", "seat", handle, "admitted", admitted, "error", err)
+		log.ErrorContext(ctx, "seat_admission_hook_failed", "seat", handle, "admitted", admitted, "error", err)
 	}
 }
 

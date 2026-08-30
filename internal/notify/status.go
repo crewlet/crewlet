@@ -453,7 +453,7 @@ func (d *StatusDriver) heartbeat(ctx context.Context, s *session) {
 		// than a spin: its indicator lapses, which is a cosmetic loss,
 		// where a zero-interval ticker is a hot loop against a vendor's
 		// rate limiter.
-		log.Warn("status_poster_declares_no_refresh", "backend", d.poster.StatusBackend())
+		log.WarnContext(ctx, "status_poster_declares_no_refresh", "backend", d.poster.StatusBackend())
 		<-ctx.Done()
 		return
 	}
@@ -486,14 +486,14 @@ func (d *StatusDriver) post(ctx context.Context, key statusKey, text string) {
 		text = ""
 	}
 	if !d.poster.SetStatus(ctx, key.handle, key.channel, key.thread, text) {
-		log.Debug("working_status_not_raised", "backend", d.poster.StatusBackend(),
+		log.DebugContext(ctx, "working_status_not_raised", "backend", d.poster.StatusBackend(),
 			"handle", key.handle, "channel", key.channel)
 	}
 }
 
 func (d *StatusDriver) clear(ctx context.Context, key statusKey) {
 	if !d.poster.ClearStatus(ctx, key.handle, key.channel, key.thread) {
-		log.Debug("working_status_not_cleared", "backend", d.poster.StatusBackend(),
+		log.DebugContext(ctx, "working_status_not_cleared", "backend", d.poster.StatusBackend(),
 			"handle", key.handle, "channel", key.channel)
 	}
 }

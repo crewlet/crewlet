@@ -1,6 +1,7 @@
 package jetstream
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -53,7 +54,7 @@ func TestMain(m *testing.M) {
 
 // runSignalProbe is the child. It never returns.
 func runSignalProbe() {
-	server, err := StartServer(Config{ServerName: "signal-probe"})
+	server, err := StartServer(context.Background(), Config{ServerName: "signal-probe"})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "probe: start:", err)
 		os.Exit(2)

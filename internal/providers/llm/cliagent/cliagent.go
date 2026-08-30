@@ -204,7 +204,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			// and failing it over a cleanup would throw away work the
 			// operator paid for. The next call into this seat prunes
 			// again, so the state does not compound.
-			log.Warn("cli_agent_release_failed", "provider", p.key, "seat", seat, "error", err)
+			log.WarnContext(ctx, "cli_agent_release_failed", "provider", p.key, "seat", seat, "error", err)
 		}
 	}()
 
@@ -226,7 +226,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	if err != nil {
 		return nil, p.fail(llm.KindFatal, 0, err)
 	}
-	log.Debug("cli_agent_call", "provider", p.key, "agent", p.agent, "model", p.model,
+	log.DebugContext(ctx, "cli_agent_call", "provider", p.key, "agent", p.agent, "model", p.model,
 		"seat", seat, "exit", res.exitCode, "elapsed_ms", time.Since(started).Milliseconds())
 
 	return p.completion(prompt, res)

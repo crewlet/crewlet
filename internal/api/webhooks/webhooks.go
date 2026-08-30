@@ -31,6 +31,10 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
@@ -41,6 +45,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 var log = logging.Get("api.webhooks")
@@ -284,7 +289,24 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 		return
 	}
 
-	trace := events.NewTrace()
+	// THE TRACE A WEBHOOK STARTS, and the root of almost every trace this
+	// engine produces: a delivery arrives, wakes a seat, and everything the
+	// turn does hangs beneath it.
+	//
+	// A span rather than a bare minted id, so the arrival itself has a
+	// duration and a name at the collector rather than being an id that
+	// appears from nowhere. No vendor Crewlet serves sends W3C traceparent
+	// today, but the propagator is installed and an inbound one is honoured
+	// if it ever is — which costs nothing and is what makes a delivery
+	// forwarded through an operator's own gateway join their trace.
+	ctx, span := tracing.Start(
+		otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(req.Header)),
+		"api.webhooks", "webhook.receive",
+		attribute.String("crewlet.source", d.source),
+		attribute.String("crewlet.seat", d.handle))
+	defer span.End()
+
+	trace := tracing.TraceOf(ctx)
 	routed := d.routed
 	if routed == nil {
 		routed = d.body
@@ -325,7 +347,7 @@ func (r *Receiver) claim(ctx context.Context, d delivery) bool {
 	}
 	won, err := r.claims.Claim(ctx, claimKey(d), coord.ClaimTTL, r.now())
 	if err != nil {
-		log.Warn("delivery_dedupe_unavailable", "source", d.source, "error", err,
+		log.WarnContext(ctx, "delivery_dedupe_unavailable", "source", d.source, "error", err,
 			"detail", "handling the delivery, which may duplicate one a peer took")
 		return true
 	}
@@ -341,7 +363,7 @@ func (r *Receiver) release(ctx context.Context, d delivery) {
 	// hung up would leave the claim standing for the whole TTL — which is
 	// precisely the delivery this is trying to save.
 	if err := r.claims.Release(context.WithoutCancel(ctx), claimKey(d)); err != nil {
-		log.Warn("delivery_release_failed", "source", d.source, "key", d.key, "error", err,
+		log.WarnContext(ctx, "delivery_release_failed", "source", d.source, "key", d.key, "error", err,
 			"detail", "the provider's retry of this delivery will be refused until the claim expires")
 	}
 }
@@ -374,7 +396,7 @@ func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceCon
 			TraceID: trace.TraceID, SpanID: trace.SpanID,
 			Payload: json.RawMessage(d.raw),
 		}); err != nil {
-			log.Warn("event_store_write_failed", "source", d.source, "error", err)
+			log.WarnContext(ctx, "event_store_write_failed", "source", d.source, "error", err)
 		}
 	}
 	if r.stream == nil {

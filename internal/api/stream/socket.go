@@ -180,7 +180,7 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 				// not the client's. Dropping it keeps the socket alive
 				// for every other kind rather than tearing down a
 				// working dashboard over one malformed push.
-				log.Error("stream_encode_failed", "kind", env.Kind, "error", err)
+				log.ErrorContext(ctx, "stream_encode_failed", "kind", env.Kind, "error", err)
 				continue
 			}
 			if err := conn.Write(ctx, websocket.MessageText, raw); err != nil {
@@ -211,7 +211,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 		if err := decodeRequest(raw, &req); err != nil {
 			// Unparseable input from a client is not a reason to drop a
 			// socket that is otherwise working.
-			log.Debug("stream_bad_frame", "error", err)
+			log.DebugContext(ctx, "stream_bad_frame", "error", err)
 			continue
 		}
 		switch req.Kind {
@@ -261,7 +261,7 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 		// The reason reaches the LOG, not the client. A query failure can
 		// carry a database path or a driver's own message, and the socket
 		// is the one surface an unauthenticated reader may be holding.
-		log.Warn("stream_query_failed", "what", req.What, "error", err)
+		log.WarnContext(ctx, "stream_query_failed", "what", req.What, "error", err)
 		client.send(queryError(req, CodeQueryFailed))
 	}
 }

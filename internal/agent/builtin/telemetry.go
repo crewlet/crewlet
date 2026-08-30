@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // Telemetry is where a builtin's own lifecycle events go.
@@ -39,7 +40,7 @@ func note(ctx context.Context, out Telemetry, turn *turnctx.Turn, payload events
 	if out == nil || payload == nil {
 		return
 	}
-	ev := events.NewFrom(payload, events.NewTrace())
+	ev := events.NewFrom(payload, tracing.TraceOf(ctx))
 	if ev == nil {
 		return
 	}

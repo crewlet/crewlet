@@ -478,7 +478,7 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		// the event — a real broker drops it too. EnsureSubscription
 		// exists precisely so a seat's mail never depends on someone
 		// being attached at the time.
-		log.Debug("event_unsubscribed", "topic", topic, "event_type", ev.Type)
+		log.DebugContext(ctx, "event_unsubscribed", "topic", topic, "event_type", ev.Type)
 		return nil
 	}
 	// Sorted so a multi-group topic drains in a stable order; map
@@ -519,7 +519,7 @@ func notifyListener(ctx context.Context, l queue.PublishListener, topic string, 
 	// the event, not the observer.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error("publish_listener_failed", "topic", topic, "error", r)
+			queue.LogListenerPanic(log, topic, ev, r)
 		}
 	}()
 	l(ctx, topic, ev)
@@ -543,7 +543,7 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 	if err != nil {
 		return err
 	}
-	log.Debug("subscription_added", "topic", topic, "group", group)
+	log.DebugContext(ctx, "subscription_added", "topic", topic, "group", group)
 	q.broker.drain(ctx, sub, false)
 	return nil
 }
@@ -573,7 +573,7 @@ func (q *Queue) SubscribeBatch(
 	if err != nil {
 		return err
 	}
-	log.Debug("batch_subscription_added", "topic", topic, "group", group)
+	log.DebugContext(ctx, "batch_subscription_added", "topic", topic, "group", group)
 	q.broker.drain(ctx, sub, false)
 	return nil
 }
@@ -661,7 +661,7 @@ func (q *Queue) Unquiesce(ctx context.Context, topic, group string) (bool, error
 	sub := q.broker.subs[key]
 	q.broker.mu.Unlock()
 
-	log.Info("subscription_unquiesced", "topic", topic, "group", group)
+	log.InfoContext(ctx, "subscription_unquiesced", "topic", topic, "group", group)
 	if sub != nil {
 		q.broker.drain(ctx, sub, false)
 	}
@@ -756,10 +756,10 @@ func (q *Queue) DeleteSubscription(ctx context.Context, topic, group string) (bo
 	// this is the one log site whose volume is unbounded, so it is also
 	// the one that would hold the broker mutex longest.
 	for _, ev := range discarded {
-		log.Info("event_discarded", "topic", topic, "group", group,
+		log.InfoContext(ctx, "event_discarded", "topic", topic, "group", group,
 			"event_type", ev.Type, "reason", "subscription_deleted")
 	}
-	log.Info("subscription_deleted", "topic", topic, "group", group)
+	log.InfoContext(ctx, "subscription_deleted", "topic", topic, "group", group)
 	return true, nil
 }
 
@@ -857,8 +857,7 @@ func deliverStream(ctx context.Context, s *streamSub, topic string, ev *events.E
 	// with it, nor stop the next subscriber being served.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error("stream_handler_failed", "topic", topic,
-				"topic_pattern", s.pattern, "error", r)
+			queue.LogStreamHandlerPanic(log, topic, ev, r)
 		}
 	}()
 	s.handler(ctx, topic, ev)
@@ -944,7 +943,7 @@ func (q *Queue) ResumeTopic(ctx context.Context, topic, group, reason string) er
 	if len(held) > 0 {
 		remaining := slices.Sorted(maps.Keys(held))
 		q.broker.mu.Unlock()
-		log.Info("memory_topic_still_paused", "topic", topic, "group", group,
+		log.InfoContext(ctx, "memory_topic_still_paused", "topic", topic, "group", group,
 			"released", reason, "held_by", remaining)
 		return nil
 	}
@@ -956,7 +955,7 @@ func (q *Queue) ResumeTopic(ctx context.Context, topic, group, reason string) er
 	}
 	q.broker.mu.Unlock()
 
-	log.Info("memory_topic_resumed", "topic", topic, "group", group,
+	log.InfoContext(ctx, "memory_topic_resumed", "topic", topic, "group", group,
 		"reason", reason, "backlog", backlog)
 	if sub != nil {
 		q.broker.drain(ctx, sub, false)

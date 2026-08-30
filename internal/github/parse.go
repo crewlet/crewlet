@@ -379,13 +379,13 @@ func (p *Parser) thread(ctx context.Context, h hook, fan fanout) []target {
 	}
 	owner, repo := h.owner(), h.repo()
 	if owner == "" || repo == "" {
-		log.Warn("github_thread_repository_unknown",
+		log.WarnContext(ctx, "github_thread_repository_unknown",
 			"kind", fan.kind, "number", fan.number)
 		return nil
 	}
 	people, err := p.participants.Of(ctx, owner, repo, fan.kind, fan.number)
 	if err != nil {
-		log.Warn("github_participants_unavailable", "repo", h.Repository.FullName,
+		log.WarnContext(ctx, "github_participants_unavailable", "repo", h.Repository.FullName,
 			"kind", fan.kind, "number", fan.number, "error", err.Error())
 		return nil
 	}

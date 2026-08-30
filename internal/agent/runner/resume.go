@@ -62,7 +62,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.E
 		return turn.Execution{}, turn.Surface{}, err
 	}
 
-	res, err := r.runPhase(ctx, phaseRun{
+	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface,
 		rounds: r.cfg.Caps.ExecuteRounds, ceiling: r.cfg.Caps.ExecuteCeiling,
 		iteration: state.Round,
@@ -79,7 +79,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.E
 	}
 
 	missing := missingTools(surface, snapshot)
-	r.emitter().completed(ctx, phaseRecord{
+	r.emitter().completed(phaseCtx, phaseRecord{
 		Phase: phase.Execute, Iteration: state.Round,
 		// No system or user prompt: this phase did not open a conversation,
 		// it re-entered one. Publishing the original opening again would

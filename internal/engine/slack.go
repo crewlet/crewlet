@@ -32,7 +32,7 @@ func (e *Engine) startSlack(ctx context.Context, c *Company, cfg *config.Slack) 
 		// Configured with no provisioned apps is a company mid-setup, not
 		// a failure: `crewlet slack provision` has not run yet, or its
 		// tokens have not reached this node's environment.
-		log.Info("slack_configured_with_no_apps",
+		log.InfoContext(ctx, "slack_configured_with_no_apps",
 			"detail", "no seat's integrations.slack.bot_token resolved, so "+
 				"nothing sends or receives on this surface")
 		return nil, nil

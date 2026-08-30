@@ -250,7 +250,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			// ONE SEAT AT A TIME. A mistyped code paste or an invalid
 			// manifest must not cost the seats that would have worked
 			// — see [Result.Failed].
-			log.Error("slack_seat_provisioning_failed", "handle", seat.Handle,
+			log.ErrorContext(ctx, "slack_seat_provisioning_failed", "handle", seat.Handle,
 				"error", err.Error())
 			res.Failed[seat.Handle] = err.Error()
 		}

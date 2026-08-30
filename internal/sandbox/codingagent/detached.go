@@ -160,7 +160,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	if err != nil {
 		return sandbox.RunHandle{}, fmt.Errorf("codingagent: starting %s: %w", r.cli.Name(), err)
 	}
-	log.Info("coding_agent_started", "agent", r.cli.Name(), "pid", pid)
+	log.InfoContext(ctx, "coding_agent_started", "agent", r.cli.Name(), "pid", pid)
 	return sandbox.RunHandle{CommandID: pid}, nil
 }
 
@@ -228,7 +228,7 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 			return false, nil
 		}
 		if !alive {
-			log.Warn("coding_agent_process_gone",
+			log.WarnContext(ctx, "coding_agent_process_gone",
 				"agent", r.cli.Name(), "pid", handle.CommandID)
 			return true, nil
 		}
@@ -348,7 +348,7 @@ func (r *Runner) overlayAsk(ctx context.Context, box sandbox.Sandbox, result san
 	if err := json.Unmarshal([]byte(blob), &ask); err != nil {
 		// A malformed signal is not a reason to lose the result the run
 		// did produce; the run reads as finished rather than as parked.
-		log.Warn("coding_agent_ask_unreadable", "agent", r.cli.Name(), "error", err.Error())
+		log.WarnContext(ctx, "coding_agent_ask_unreadable", "agent", r.cli.Name(), "error", err.Error())
 		return result, nil
 	}
 	if ask.Question == "" {

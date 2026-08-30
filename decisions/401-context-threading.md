@@ -21,8 +21,10 @@ turn that created it has finished.
 
 ## The rule
 
-**`TurnContext` is an explicit argument. `context.Context` carries exactly two
-engine values, and only because their consumers are leaves.**
+**`TurnContext` is an explicit argument. `context.Context` carries a closed,
+enumerated set of engine values — two when this was written, three since
+[d-508](508-the-tracing-pipeline.md) — and each only because its consumer is a
+leaf.**
 
 ```go
 // TurnContext is everything a turn's own code needs and nothing else.
@@ -43,7 +45,7 @@ Every phase, tool and provider entry point takes
 `(ctx context.Context, tc *TurnContext, …)`. Two parameters, in that order,
 always — `ctx` for cancellation and deadlines, `tc` for what the turn is.
 
-### The two exceptions, and why they earn it
+### The exceptions, and why they earn it
 
 `context.Context` values are for facts a LEAF needs that no intermediate frame
 has any business knowing. Two qualify:
@@ -58,6 +60,21 @@ empty work key means "a turn with no ledgerable trigger", which is exactly the
 case that skips the duplicate guard; absent log fields mean a line with less
 context, never a wrong one. Nothing branches on their presence to decide
 correctness.
+
+### Amended by d-508: there is a third, and it is the OTel span
+
+| value | consumer | why not an argument |
+| --- | --- | --- |
+| the active span | the tracer, and `logging` for the ids | OpenTelemetry has no other carrier — `context.Context` *is* its API. A span on `TurnContext` would be the exact bug the section below forbids: turn state in a struct a tool or a goroutine can capture and outlive the turn with. |
+
+It is admitted on the same three tests: the consumer is a leaf, the value is
+immutable, and it fails safe when absent — no span means a **no-op** span, never
+wrong behaviour. See [508](508-the-tracing-pipeline.md).
+
+The "log fields" row above was decided here and built there, as `WithTrace` in
+`internal/logging` — and as two validated hex fields rather than the open field
+bag the phrase suggests, because an open bag is a route for arbitrary text to
+reach a terminal.
 
 Nothing else goes in `context.Context`. In particular the config pin does NOT:
 a turn reading config through an ambient channel is how a mid-turn reload gets

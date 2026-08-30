@@ -184,7 +184,7 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 		return nil, err
 	}
 	if len(candidates) == 0 {
-		log.Debug("skill_refinement_skipped", "reason", "no_live_skills",
+		log.DebugContext(ctx, "skill_refinement_skipped", "reason", "no_live_skills",
 			"agent_handle", handle, "turn_id", t.Event.TurnID)
 		return nil, nil
 	}
@@ -211,7 +211,7 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 		// The model declined, which is the expected answer for a turn that
 		// taught its skills nothing. Not an error: asking is cheap and
 		// most turns teach nothing.
-		log.Debug("skill_refinement_declined", "agent_handle", handle,
+		log.DebugContext(ctx, "skill_refinement_declined", "agent_handle", handle,
 			"turn_id", t.Event.TurnID)
 		return nil, nil
 	}
@@ -220,7 +220,7 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 		// A NAME THE MODEL INVENTED. Dropped rather than fuzzy-matched: a
 		// bullet appended to the wrong procedure is worse than no bullet,
 		// and the candidates were listed by exact name in the prompt.
-		log.Debug("skill_refinement_named_nothing", "agent_handle", handle,
+		log.DebugContext(ctx, "skill_refinement_named_nothing", "agent_handle", handle,
 			"named", choice.SkillName)
 		return nil, nil
 	}
@@ -235,7 +235,7 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 		// a bullet per turn grows without bound, and a clip lands mid-step
 		// where the model reads the remainder as the whole procedure. The
 		// manual tool refuses instead, because there a person can retry.
-		log.Info("skill_refinement_skipped", "reason", "body_cap",
+		log.InfoContext(ctx, "skill_refinement_skipped", "reason", "body_cap",
 			"agent_handle", handle, "skill", target.Name,
 			"chars", len(body), "cap", r.bodyMax)
 		return nil, nil
@@ -253,7 +253,7 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 		return nil, fmt.Errorf("learning: appending to %s's skill %q: %w",
 			handle, target.Name, err)
 	}
-	log.Info("skill_refined", "agent_handle", handle, "skill", updated.Name,
+	log.InfoContext(ctx, "skill_refined", "agent_handle", handle, "skill", updated.Name,
 		"skill_id", updated.ID, "version", updated.Version, "kind", string(kind))
 	return []events.Payload{types.SkillRefined{
 		Agent:          t.Event.Agent,

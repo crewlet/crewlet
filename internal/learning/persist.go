@@ -282,7 +282,7 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 	// store is unhappy.
 	existing, err := d.diary.Recent(ctx, t.Event.Agent, now, dedupPoolLimit)
 	if err != nil {
-		log.Warn("persist_decider_dedup_unavailable",
+		log.WarnContext(ctx, "persist_decider_dedup_unavailable",
 			"turn_id", t.Event.TurnID, "agent_id", t.Event.Agent, "error", err)
 		existing = nil
 	}
@@ -309,7 +309,7 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		text = strings.TrimSpace(completion.Content)
 	}
 	if text == "" {
-		log.Debug("persist_decider_empty_response", "turn_id", t.Event.TurnID)
+		log.DebugContext(ctx, "persist_decider_empty_response", "turn_id", t.Event.TurnID)
 		return Decision{Tier: types.PersistNOOP}, nil
 	}
 	// Some models answer the bare sentinel instead of the JSON contract.
@@ -325,7 +325,7 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		// has stopped honouring the contract — a bare tier count would
 		// say classification collapsed to NOOP without saying why.
 		// Capped because the response can carry the turn's own content.
-		log.Warn("persist_decider_unparseable",
+		log.WarnContext(ctx, "persist_decider_unparseable",
 			"turn_id", t.Event.TurnID, "response", preview(text, 200))
 		return Decision{Tier: types.PersistNOOP}, nil
 	}
@@ -340,7 +340,7 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 		// the dispatch below so an empty DOC does not fire a directive
 		// naming no rule, and an empty LONG does not reach a write the
 		// store would refuse.
-		log.Debug("persist_decider_empty_content", "turn_id", t.Event.TurnID, "kind", string(tier))
+		log.DebugContext(ctx, "persist_decider_empty_content", "turn_id", t.Event.TurnID, "kind", string(tier))
 		return Decision{Tier: types.PersistNOOP}, nil
 	}
 
@@ -351,7 +351,7 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 			TargetHint: strings.TrimSpace(stringField(parsed, "target_hint")),
 			Rationale:  strings.TrimSpace(stringField(parsed, "rationale")),
 		}
-		log.Info("persist_decider_doc_observed", "turn_id", t.Event.TurnID,
+		log.InfoContext(ctx, "persist_decider_doc_observed", "turn_id", t.Event.TurnID,
 			"agent_handle", t.Event.AgentHandle, "target_hint", dir.TargetHint,
 			"content", preview(dir.Content, 120))
 		return Decision{Tier: types.PersistDoc, Directive: dir}, nil
@@ -376,7 +376,7 @@ func (d *PersistDecider) Decide(ctx context.Context, t Turn) (Decision, error) {
 	// An unknown tier is a NOOP, not a guess. A model answering
 	// {"scope": "org"} — the shape an older three-scope prompt asked for
 	// — must not have "org" read as anything writable.
-	log.Warn("persist_decider_unknown_tier", "turn_id", t.Event.TurnID, "kind", string(tier))
+	log.WarnContext(ctx, "persist_decider_unknown_tier", "turn_id", t.Event.TurnID, "kind", string(tier))
 	return Decision{Tier: types.PersistNOOP}, nil
 }
 
@@ -413,7 +413,7 @@ func (d *PersistDecider) write(
 	if !ttl.IsZero() {
 		deadline = ttl.UTC().Format(time.RFC3339)
 	}
-	log.Info("persist_decider_stored", "turn_id", t.Event.TurnID, "doc_id", entry.ID,
+	log.InfoContext(ctx, "persist_decider_stored", "turn_id", t.Event.TurnID, "doc_id", entry.ID,
 		"kind", string(kind), "agent_handle", t.Event.AgentHandle, "ttl_until", deadline)
 	return entry, nil
 }

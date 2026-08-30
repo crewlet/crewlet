@@ -78,7 +78,7 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 	tick := cfg.Tick()
 	claimer, err := e.scheduleClaimer()
 	if err != nil {
-		log.Error("scheduler_not_started", "error", err,
+		log.ErrorContext(ctx, "scheduler_not_started", "error", err,
 			"detail", "role and unit schedules will not fire on this node")
 		return
 	}
@@ -107,7 +107,7 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 		// mistake rather than an operator one, so failing the whole engine
 		// would take a company down over work it can run without — but a
 		// silent nil here is precisely how this subsystem went missing.
-		log.Error("scheduler_not_started", "error", err,
+		log.ErrorContext(ctx, "scheduler_not_started", "error", err,
 			"detail", "role and unit schedules will not fire on this node")
 		return
 	}
@@ -122,7 +122,7 @@ func (e *Engine) armSchedulerLocked(ctx context.Context, c *Company) {
 		defer close(done)
 		s.Run(loopCtx)
 	}()
-	log.Info("scheduler_armed",
+	log.InfoContext(ctx, "scheduler_armed",
 		"schedules", schedule.CountSchedules(c.Org),
 		"tick_seconds", tick.Seconds())
 }

@@ -142,7 +142,7 @@ func (s *SQLConversations) History(ctx context.Context, handle, conversation str
 			// One unreadable row must not cost the whole history: the
 			// other entries still stop a duplicate reply, which is what
 			// the ledger is for. Skipped loudly rather than silently.
-			log.Warn("conversation_entry_undecodable", "seat", handle,
+			log.WarnContext(ctx, "conversation_entry_undecodable", "seat", handle,
 				"conversation", conversation, "error", err)
 			continue
 		}

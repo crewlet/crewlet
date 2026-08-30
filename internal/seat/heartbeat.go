@@ -116,13 +116,13 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 			// the same TTL the lease was granted with.
 			elapsed := now.Sub(t.renewedAt)
 			if elapsed < h.ttl {
-				log.Warn("seat_heartbeat_unavailable", "seat", t.handle,
+				log.WarnContext(ctx, "seat_heartbeat_unavailable", "seat", t.handle,
 					"seconds_since_renew", elapsed.Seconds(), "ttl_seconds", h.ttl.Seconds(),
 					"error", err)
 				h.noteAdmission(ctx, t.handle, false)
 				continue
 			}
-			log.Error("seat_dropped_unrenewable", "seat", t.handle,
+			log.ErrorContext(ctx, "seat_dropped_unrenewable", "seat", t.handle,
 				"seconds_since_renew", elapsed.Seconds(), "ttl_seconds", h.ttl.Seconds(),
 				"error", err,
 				"hint", "the lease store has been unreachable for longer than the TTL, so this "+
@@ -152,7 +152,7 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 				delete(h.undead, t.handle)
 			}
 			h.mu.Unlock()
-			log.Error("seat_undead_lease_lost", "seat", t.handle, "epoch", t.lease.Epoch,
+			log.ErrorContext(ctx, "seat_undead_lease_lost", "seat", t.handle, "epoch", t.lease.Epoch,
 				"hint", "teardown was never proven and the lease has now moved to a peer; "+
 					"this process may still be consuming the seat")
 			continue
@@ -258,7 +258,7 @@ func (h *Host) dropLostSeat(ctx context.Context, t heartbeatTarget) bool {
 	h.acquireBackoffs[t.handle] = h.now().Add(h.acquireBackoff)
 	h.mu.Unlock()
 
-	log.Warn("seat_lease_lost", "seat", t.handle, "epoch", t.lease.Epoch,
+	log.WarnContext(ctx, "seat_lease_lost", "seat", t.handle, "epoch", t.lease.Epoch,
 		"hint", "a peer may already own this seat; dropping it locally, and standing back "+
 			"for one backoff so a peer gets the next attempt")
 
@@ -267,7 +267,7 @@ func (h *Host) dropLostSeat(ctx context.Context, t heartbeatTarget) bool {
 	// the lease is already gone — so an unproven teardown is logged, not
 	// retained.
 	if err := h.notifyRelease(ctx, t.handle, t.lease, ReasonLeaseLost); err != nil {
-		log.Error("seat_lost_release_unproven", "seat", t.handle, "epoch", t.lease.Epoch, "error", err,
+		log.ErrorContext(ctx, "seat_lost_release_unproven", "seat", t.handle, "epoch", t.lease.Epoch, "error", err,
 			"hint", "the lease is already gone, so there is nothing to keep; this process may "+
 				"still be consuming a seat a peer now owns")
 	}

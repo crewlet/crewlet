@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // The inbound edge: a verified webhook becomes a woken seat, or a recorded
@@ -263,7 +264,7 @@ func (s *Service) Start(ctx context.Context) error {
 		sources = append(sources, src)
 	}
 	slices.Sort(sources)
-	log.Info("notify_inbound_started", "sources", sources)
+	log.InfoContext(ctx, "notify_inbound_started", "sources", sources)
 	return nil
 }
 
@@ -294,7 +295,7 @@ func (s *Service) Sources() []string {
 // again as fast as the broker will serve it. A deferral cannot spin.
 func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	if s.admits != nil && !s.admits() {
-		log.Info("inbound_delivery_deferred", "source", ev.Source,
+		log.InfoContext(ctx, "inbound_delivery_deferred", "source", ev.Source,
 			"event", ev.ID, "reason", "config posture is shedding")
 		return queue.Defer("config posture is shedding")
 	}
@@ -305,7 +306,7 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 		// redelivery, so ACK it rather than NAK: retrying a malformed
 		// delivery burns the redelivery budget and dead-letters it
 		// anyway, just later and noisier.
-		log.Error("inbound_payload_unreadable", "source", ev.Source, "event", ev.ID)
+		log.ErrorContext(ctx, "inbound_payload_unreadable", "source", ev.Source, "event", ev.ID)
 		s.skip(ctx, ev.Source, "", "unreadable delivery payload")
 		return queue.Ack()
 	}
@@ -319,7 +320,7 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 		// "nothing happened" are opposite facts, and only the first one
 		// tells an operator their integration is wired at the edge and
 		// nowhere else.
-		log.Warn("inbound_source_unparsed", "source", ev.Source, "event", ev.ID)
+		log.WarnContext(ctx, "inbound_source_unparsed", "source", ev.Source, "event", ev.ID)
 		s.skip(ctx, ev.Source, "", "no parser for this source")
 		return queue.Ack()
 	}
@@ -327,7 +328,7 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	reg := s.registry()
 	routed, err := parser.Parse(ctx, *w, reg)
 	if err != nil {
-		log.Error("inbound_parse_failed", "source", ev.Source,
+		log.ErrorContext(ctx, "inbound_parse_failed", "source", ev.Source,
 			"event", ev.ID, "error", err.Error())
 		s.skip(ctx, ev.Source, "", "parse failed: "+err.Error())
 		return queue.Ack()
@@ -358,25 +359,25 @@ func (s *Service) Handle(ctx context.Context, ev *events.Event) queue.Result {
 func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, ev *events.Event, r Routed) error {
 	party, ok := s.resolve(reg, r)
 	if !ok {
-		log.Warn("notification_undeliverable", "source", r.Source,
+		log.WarnContext(ctx, "notification_undeliverable", "source", r.Source,
 			"handle", r.To.Handle, "email", r.To.Email)
 		s.skip(ctx, r.Source, r.To.Handle, "no seat matches this recipient")
 		return nil
 	}
 	if deliverable, why := Deliverable(prompts, reg, r.Inbound, party); !deliverable {
-		log.Info("notification_skipped", "source", r.Source,
+		log.InfoContext(ctx, "notification_skipped", "source", r.Source,
 			"handle", party.Handle, "reason", why)
 		s.skip(ctx, r.Source, party.Handle, why)
 		return nil
 	}
 	if allowed, err := s.allow(ctx, party); !allowed {
-		log.Warn("notification_rate_limited", "source", r.Source, "handle", party.Handle)
+		log.WarnContext(ctx, "notification_rate_limited", "source", r.Source, "handle", party.Handle)
 		s.skip(ctx, r.Source, party.Handle, "rate limit exceeded")
 		return nil
 	} else if err != nil {
 		// FAILED OPEN: the notification is going through. Logged so an
 		// operator can see the valve is blind rather than idle.
-		log.Warn("notification_valve_unavailable", "handle", party.Handle,
+		log.WarnContext(ctx, "notification_valve_unavailable", "handle", party.Handle,
 			"error", err.Error())
 	}
 
@@ -424,7 +425,7 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	if err := s.queue.Publish(ctx, topics.AgentInbox(party.Handle), wake); err != nil {
 		return fmt.Errorf("notify: wake %s: %w", party.Handle, err)
 	}
-	log.Info("notification_routed", "source", r.Source, "handle", party.Handle,
+	log.InfoContext(ctx, "notification_routed", "source", r.Source, "handle", party.Handle,
 		"agent_id", party.AgentID.String())
 	return nil
 }
@@ -486,10 +487,10 @@ func (s *Service) allow(ctx context.Context, party Party) (bool, error) {
 func (s *Service) skip(ctx context.Context, source, handle, reason string) {
 	ev := events.New(types.NotificationSkipped{
 		Handle: handle, Reason: reason, NotificationSource: source,
-	}, events.NewTrace())
+	}, tracing.TraceOf(ctx))
 	ev.Source = "notify." + source
 	if err := s.queue.Publish(ctx, topics.Event(types.NotificationSkipped{}.EventType()), ev); err != nil {
-		log.Warn("notification_skip_unrecorded", "source", source,
+		log.WarnContext(ctx, "notification_skip_unrecorded", "source", source,
 			"handle", handle, "reason", reason, "error", err.Error())
 	}
 }

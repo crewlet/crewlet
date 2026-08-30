@@ -290,7 +290,7 @@ func TestAClusteredServerMustBeNamed(t *testing.T) {
 	//
 	// A generated name satisfies the first and quietly breaks the second on
 	// every restart, which is why this is an error and not a default.
-	_, err := StartServer(Config{ClusterName: "unnamed", ClusterPort: 0})
+	_, err := StartServer(t.Context(), Config{ClusterName: "unnamed", ClusterPort: 0})
 	if err == nil {
 		t.Fatal("a clustered server started with no ServerName")
 	}
@@ -299,7 +299,7 @@ func TestAClusteredServerMustBeNamed(t *testing.T) {
 	}
 
 	// Solo is unaffected: there is no cluster to be unique within.
-	srv, err := StartServer(Config{})
+	srv, err := StartServer(t.Context(), Config{})
 	if err != nil {
 		t.Fatalf("a solo server needs no name: %v", err)
 	}

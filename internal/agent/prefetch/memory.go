@@ -170,7 +170,7 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request) []learning.Di
 			Handle: r.AgentID, Embedding: vector, Limit: memoryVectorLimit,
 		}, now)
 		if err != nil {
-			log.Warn("memory_recall_failed", "agent_id", r.AgentID, "error", err.Error())
+			log.WarnContext(ctx, "memory_recall_failed", "agent_id", r.AgentID, "error", err.Error())
 		}
 		for _, hit := range hits {
 			add(hit.Entry)
@@ -178,7 +178,7 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request) []learning.Di
 	}
 	recent, err := f.src.Diary.Recent(ctx, r.AgentID, now, memoryRecencyLimit)
 	if err != nil {
-		log.Warn("memory_recent_failed", "agent_id", r.AgentID, "error", err.Error())
+		log.WarnContext(ctx, "memory_recent_failed", "agent_id", r.AgentID, "error", err.Error())
 	}
 	for _, entry := range recent {
 		add(entry)
@@ -321,7 +321,7 @@ func (f *Fetcher) embed(ctx context.Context, text string) ([]float32, bool) {
 	vector, err := f.src.Embed(ctx, text)
 	if err != nil || len(vector) == 0 {
 		if err != nil {
-			log.Warn("prefetch_embedding_failed", "error", err.Error())
+			log.WarnContext(ctx, "prefetch_embedding_failed", "error", err.Error())
 		}
 		return nil, false
 	}

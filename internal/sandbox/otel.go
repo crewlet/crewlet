@@ -238,7 +238,7 @@ func (r *OtelReceiver) Forward(ctx context.Context, signal string, body []byte, 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		r.upstream+"/v1/"+signal, bytes.NewReader(body))
 	if err != nil {
-		log.Warn("sandbox_otel_forward_failed", "signal", signal, "error", err.Error())
+		log.WarnContext(ctx, "sandbox_otel_forward_failed", "signal", signal, "error", err.Error())
 		return
 	}
 	for k, v := range r.headers {
@@ -250,13 +250,13 @@ func (r *OtelReceiver) Forward(ctx context.Context, signal string, body []byte, 
 
 	resp, err := r.http.Do(req)
 	if err != nil {
-		log.Warn("sandbox_otel_forward_failed", "signal", signal, "error", err.Error())
+		log.WarnContext(ctx, "sandbox_otel_forward_failed", "signal", signal, "error", err.Error())
 		return
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 400 {
-		log.Warn("sandbox_otel_forward_refused",
+		log.WarnContext(ctx, "sandbox_otel_forward_refused",
 			"signal", signal, "status", resp.StatusCode)
 	}
 }

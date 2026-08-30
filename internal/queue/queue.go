@@ -540,6 +540,48 @@ func LogBatchResult(l *slog.Logger, topic, group, batchKey string, evs []*events
 	}
 }
 
+// LogListenerPanic emits the standard line for a publish listener that
+// panicked and was recovered, and [LogStreamHandlerPanic] the one for a
+// stream handler.
+//
+// # Why these live in the contract
+//
+// The same reason [LogBatchResult] does, and here it is not hypothetical:
+// the three backends had drifted into three spellings of one situation.
+// `memory` logged `publish_listener_failed` with the recovered value under
+// `error`; `jetstream` and `pulsar` logged `publish_listener_panicked` with
+// it under `panic`. The stream side was worse — the same two backends keyed
+// the topic as `subject` while `memory` keyed it as `topic` and added a
+// `topic_pattern` nobody else emitted. An operator grepping
+// `publish_listener_panicked` saw every backend but the in-memory twin, and
+// the twin is what the tests run on, so nothing caught it.
+//
+// # `panic` rather than `error`
+//
+// A recovered value is not an error. It is whatever was passed to panic(),
+// carries no Error() method in general, and the distinction is exactly what
+// tells an operator the callback CRASHED rather than returned badly — two
+// different bugs in two different places.
+//
+// Error level, not Warn: unlike a Nak there is no redelivery behind this.
+// The listener's work for this event is simply gone.
+func LogListenerPanic(l *slog.Logger, topic string, ev *events.Event, r any) {
+	l.Error("publish_listener_panicked", "topic", topic,
+		"event_type", eventType(ev), "panic", r)
+}
+
+// LogStreamHandlerPanic emits the standard line for a stream handler that
+// panicked and was recovered. See [LogListenerPanic] for why it is here.
+//
+// The topic key is `topic`, matching [StreamHandler]'s own parameter name
+// and every other line in this file. Two backends called it `subject`,
+// which is NATS's word for the same thing and a word this contract does not
+// use.
+func LogStreamHandlerPanic(l *slog.Logger, topic string, ev *events.Event, r any) {
+	l.Error("stream_handler_panicked", "topic", topic,
+		"event_type", eventType(ev), "panic", r)
+}
+
 func errText(err error) string {
 	if err == nil {
 		return ""

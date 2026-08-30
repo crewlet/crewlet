@@ -90,7 +90,7 @@ func (p meteredProvider) Complete(ctx context.Context, req llm.Request) (*llm.Co
 			// caller's work is valid; failing it here would turn a
 			// coordination blip into a reflection outage, and the
 			// pre-flight gate is what actually stops the spending.
-			log.Warn("auxiliary_spend_uncounted", "error", spendErr,
+			log.WarnContext(ctx, "auxiliary_spend_uncounted", "error", spendErr,
 				"tokens", tokens, "model", completion.Model,
 				"detail", "the fleet counter now understates this company's spend")
 		}

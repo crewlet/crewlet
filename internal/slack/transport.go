@@ -225,7 +225,7 @@ func (t *Transport) Start(ctx context.Context) error {
 	seats := make(map[string]runningSeat, len(found))
 	for i, r := range found {
 		if r.err != nil {
-			log.Error("slack_seat_unavailable", "handle", t.cfg.Seats[i].Handle,
+			log.ErrorContext(ctx, "slack_seat_unavailable", "handle", t.cfg.Seats[i].Handle,
 				"error", r.err.Error(),
 				"detail", "this seat sends and receives nothing until its app "+
 					"token is fixed; leaving it out is what stops it answering "+
@@ -244,7 +244,7 @@ func (t *Transport) Start(ctx context.Context) error {
 	if len(seats) == 0 {
 		return fmt.Errorf("slack: no app token resolved, so no seat can send or receive")
 	}
-	log.Info("slack_wired", "seats", len(seats), "status", string(t.cfg.Status))
+	log.InfoContext(ctx, "slack_wired", "seats", len(seats), "status", string(t.cfg.Status))
 	return nil
 }
 
@@ -332,7 +332,7 @@ func (t *Transport) Send(ctx context.Context, handle, channel, thread, text stri
 	}
 	if thread != "" && t.parser.threads != nil {
 		if err := t.parser.threads.Participated(ctx, handle, channel, thread, t.now()); err != nil {
-			log.Warn("slack_participation_not_recorded", "handle", handle,
+			log.WarnContext(ctx, "slack_participation_not_recorded", "handle", handle,
 				"thread", thread, "error", err.Error())
 		}
 	}
@@ -392,7 +392,7 @@ func (t *Transport) setStatus(ctx context.Context, handle, channel, thread, stat
 		// a failed call costs nothing but its own absence — Slack
 		// expires whatever is raised on its own. A busy workspace would
 		// otherwise fill the log with them.
-		log.Debug("slack_set_status_failed", "handle", handle, "error", err.Error())
+		log.DebugContext(ctx, "slack_set_status_failed", "handle", handle, "error", err.Error())
 		return false
 	}
 	return true

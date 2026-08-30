@@ -197,7 +197,7 @@ func (p *Profiler) observe(ctx context.Context, t Turn, s subjectMessages) (even
 		// decider makes for its dedup block: a patch written without the
 		// known traits may restate one, while skipping writes nothing at
 		// all for as long as the store is unhappy.
-		log.Warn("counterparty_profile_unavailable", "observer", t.Event.AgentHandle,
+		log.WarnContext(ctx, "counterparty_profile_unavailable", "observer", t.Event.AgentHandle,
 			"subject", s.subject.ExternalID, "error", err.Error())
 	}
 
@@ -225,7 +225,7 @@ func (p *Profiler) observe(ctx context.Context, t Turn, s subjectMessages) (even
 		// The same work key was already counted — a redelivery, or two
 		// nodes racing this turn. The guard worked; announcing it would
 		// report an interaction that did not happen.
-		log.Debug("counterparty_already_counted", "observer", t.Event.AgentHandle,
+		log.DebugContext(ctx, "counterparty_already_counted", "observer", t.Event.AgentHandle,
 			"subject", s.subject.ExternalID, "work_key", t.Event.TurnID)
 		return nil, nil
 	}
@@ -276,7 +276,7 @@ func (p *Profiler) patch(ctx context.Context, t Turn, s subjectMessages,
 		// Logged rather than returned: a model writing prose has still
 		// told us nothing new, and failing the observation would stop the
 		// interaction counter as well.
-		log.Warn("counterparty_patch_unparseable", "turn_id", t.Event.TurnID,
+		log.WarnContext(ctx, "counterparty_patch_unparseable", "turn_id", t.Event.TurnID,
 			"subject", s.subject.ExternalID, "response", preview(text, 200))
 		return nil, nil
 	}

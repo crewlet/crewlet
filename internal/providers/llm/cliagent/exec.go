@@ -104,7 +104,7 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 		// how a usage figure or a closing fence goes missing, and an
 		// operator debugging a mangled answer needs to know the output
 		// was cut rather than malformed.
-		log.Warn("cli_agent_output_truncated", "binary", in.binary,
+		log.WarnContext(ctx, "cli_agent_output_truncated", "binary", in.binary,
 			"dropped_bytes", dropped, "limit_bytes", maxOutput)
 	}
 	if res.timedOut {
@@ -112,7 +112,7 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 		// anything still alive after Wait returned is a survivor that
 		// ignored SIGTERM, and it holds a concurrency slot until killed.
 		if err := procgroup.Kill(pgid); err != nil && !errors.Is(err, errors.ErrUnsupported) {
-			log.Warn("cli_agent_group_kill_failed", "pgid", pgid, "error", err)
+			log.WarnContext(ctx, "cli_agent_group_kill_failed", "pgid", pgid, "error", err)
 		}
 	}
 

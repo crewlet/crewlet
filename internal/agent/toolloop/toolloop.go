@@ -35,7 +35,10 @@ import (
 	"strings"
 	"sync"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // maxForcedToolRetries bounds the corrective re-prompts issued when the caller
@@ -348,14 +351,39 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			choice = "auto"
 		}
 
-		completion, err := cfg.Provider.Complete(ctx, llm.Request{
+		// ONE SPAN PER ROUND, around the provider call only. The round is
+		// the unit whose LATENCY an operator cares about — it is the wait
+		// a seat spends on a model — and it is the one thing no event
+		// records: agent_turn_progress reports the round's content twice
+		// per round, and never how long it took.
+		//
+		// This is also the ONLY layer of the provider stack that is
+		// spanned. Below it sit the fallback chain, each member's backend
+		// and the credential pool's rotation, which on a three-member
+		// chain over a four-key pool would nest up to twelve spans per
+		// round and tell a reader nothing they could act on. Which member
+		// and which credential answered is on the completion, and reaches
+		// the record through the phase event.
+		roundCtx, roundSpan := tracing.Start(ctx, "agent.toolloop", "llm.round",
+			attribute.String("crewlet.phase", cfg.Surface.Phase()),
+			attribute.Int("crewlet.round", roundsUsed))
+		completion, err := cfg.Provider.Complete(roundCtx, llm.Request{
 			Messages:   msgs,
 			Tools:      tools,
 			ToolChoice: choice,
 		})
 		if err != nil {
+			tracing.Fail(roundSpan, err)
+			roundSpan.End()
 			return nil, fmt.Errorf("toolloop: %s round %d: %w", cfg.Surface.Phase(), roundsUsed, err)
 		}
+		roundSpan.SetAttributes(
+			attribute.String("crewlet.model", completion.Model),
+			attribute.Int("crewlet.input_tokens", completion.InputTokens),
+			attribute.Int("crewlet.output_tokens", completion.OutputTokens),
+			attribute.Int("crewlet.cache_read_tokens", completion.CacheRead),
+			attribute.Int("crewlet.tool_calls", len(completion.ToolCalls)))
+		roundSpan.End()
 		if model == "" {
 			// The completion names the model that actually served this
 			// round, which is what the per-model token breakdown is built

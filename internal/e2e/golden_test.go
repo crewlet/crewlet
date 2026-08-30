@@ -192,6 +192,12 @@ func read(ctx context.Context, conn *websocket.Conn, into *capture) {
 // would.
 func (n *node) wake(t *testing.T, handle, text string) {
 	t.Helper()
+	n.wakeInTrace(t, handle, text, events.TraceContext{})
+}
+
+// wakeInTrace is wake with a chosen trace, so a test can follow it through.
+func (n *node) wakeInTrace(t *testing.T, handle, text string, tc events.TraceContext) {
+	t.Helper()
 	body := text
 	ev := events.New(types.ExternalNotification{
 		NotificationSource: "slack",
@@ -200,7 +206,7 @@ func (n *node) wake(t *testing.T, handle, text string) {
 		Subject:            "How did the week go?",
 		Body:               text,
 		SalientBody:        &body,
-	}, events.TraceContext{})
+	}, tc)
 	if err := n.engine.Backends().Queue.Publish(t.Context(),
 		topics.AgentInbox(handle), ev); err != nil {
 		t.Fatalf("wake %s: %v", handle, err)
@@ -586,5 +592,118 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 	if seatUsed != used {
 		t.Errorf("seat spent %d and the org %d; one charge must move both",
 			seatUsed, used)
+	}
+}
+
+// The trace a wake starts must reach the events the turn it caused writes —
+// through the broker, the dispatcher, the turn engine and the publish listener
+// — or `GET /events/trace/{id}` answers with the wake alone and the dashboard's
+// trace view has nothing to arrange.
+//
+// This is the gate for the whole tracing change, and it is here rather than in
+// internal/tracing for the reason d-506 gives: every component's own tests stop
+// at a seam and substitute the thing on the other side, so "does anything
+// actually connect these" is the one question none of them asks.
+func TestATurnsEventsJoinTheTriggersTrace(t *testing.T) {
+	n := start(t)
+
+	waitFor(t, "the seat to be claimed", func() bool {
+		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
+	})
+
+	// A trace this test can recognise, in the shape a real tracer emits.
+	const (
+		traceID     = "4bf92f3577b34da6a3ce929d0e0e4736"
+		triggerSpan = "00f067aa0ba902b7"
+	)
+	n.wakeInTrace(t, "ceo", "How did the week go?",
+		events.TraceContext{TraceID: traceID, SpanID: triggerSpan})
+
+	waitFor(t, "the turn to complete", func() bool {
+		rows, err := n.engine.Backends().Store.Events().List(t.Context(),
+			store.ListQuery{Limit: 200})
+		if err != nil {
+			return false
+		}
+		for _, r := range rows {
+			if r.Type == "agent_turn_completed" {
+				return true
+			}
+		}
+		return false
+	})
+
+	rows, err := n.engine.Backends().Store.Events().List(t.Context(),
+		store.ListQuery{Limit: 200})
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+
+	var checked int
+	spans := map[string]bool{}
+	var sawTurnParent bool
+	for _, r := range rows {
+		switch r.Type {
+		case "agent_phase_completed", "agent_turn_completed":
+		default:
+			continue
+		}
+		checked++
+
+		if r.TraceID != traceID {
+			t.Errorf("%s carries trace_id %q, want the trigger's %q — the turn "+
+				"started a trace of its own", r.Type, r.TraceID, traceID)
+		}
+		// The bug this replaces: the turn used to publish the TRIGGER's
+		// span id as its own, and a resumed turn published none at all.
+		if r.SpanID == "" {
+			t.Errorf("%s carries no span_id; the dashboard cannot place it", r.Type)
+		}
+		if r.SpanID == triggerSpan {
+			t.Errorf("%s claims the trigger's span %q as its own", r.Type, r.SpanID)
+		}
+		spans[r.SpanID] = true
+		if r.ParentSpanID == triggerSpan {
+			sawTurnParent = true
+		}
+	}
+
+	if checked == 0 {
+		t.Fatal("no turn events were stored; this test asserted nothing")
+	}
+	// More than one, because each phase publishes under its OWN phase span
+	// and the turn event under the turn's. One id across the whole turn is
+	// what the dashboard's tree collapses to a single node, and it is what
+	// this looked like before phase events stopped inheriting a fixed trace.
+	if len(spans) < 2 {
+		t.Errorf("turn events carry %d distinct span id(s); the trace tree "+
+			"cannot separate the phases from the turn", len(spans))
+	}
+	if !sawTurnParent {
+		t.Errorf("nothing hung off the trigger's span %q — the turn did not "+
+			"join the trace that woke it", triggerSpan)
+	}
+
+	// --- and what the LOGS said ---------------------------------------- //
+	// The other half of the correlation: a trace is only useful if the lines
+	// the engine wrote while a span was open name it, so an operator can go
+	// from a slow span to the log lines underneath it. This is what the
+	// conversion of the turn path onto slog's *Context methods buys, and
+	// without an assertion it would rot the first time someone wrote
+	// log.Info in a frame that has a ctx.
+	lines := logs.linesFor(traceID)
+	if len(lines) == 0 {
+		t.Fatalf("no log line carried trace_id %s; the turn ran without "+
+			"correlation", traceID)
+	}
+	var withSpan int
+	for _, line := range lines {
+		if strings.Contains(line, `"span_id":"`) {
+			withSpan++
+		}
+	}
+	if withSpan == 0 {
+		t.Errorf("%d lines carried the trace id but none carried a span id",
+			len(lines))
 	}
 }

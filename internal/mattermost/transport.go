@@ -190,7 +190,7 @@ func (t *Transport) URL() string { return t.cfg.URL }
 // into a whole-company outage. The failure is reported per seat.
 func (t *Transport) Start(ctx context.Context) error {
 	if len(t.cfg.Seats) == 0 {
-		log.Info("mattermost_no_seats_configured")
+		log.InfoContext(ctx, "mattermost_no_seats_configured")
 		return nil
 	}
 
@@ -218,14 +218,14 @@ func (t *Transport) Start(ctx context.Context) error {
 				mu.Lock()
 				failed = append(failed, cfg.Handle)
 				mu.Unlock()
-				log.Error("mattermost_seat_failed", "handle", cfg.Handle,
+				log.ErrorContext(ctx, "mattermost_seat_failed", "handle", cfg.Handle,
 					"error", err.Error())
 			}
 		}()
 	}
 	wg.Wait()
 	sort.Strings(failed)
-	log.Info("mattermost_started", "seats", len(t.cfg.Seats),
+	log.InfoContext(ctx, "mattermost_started", "seats", len(t.cfg.Seats),
 		"connected", len(t.cfg.Seats)-len(failed), "failed", failed,
 		"typing_status", string(t.status.Mode()))
 	if len(failed) == len(t.cfg.Seats) {
@@ -354,7 +354,7 @@ func (t *Transport) readInstance(ctx context.Context) {
 		// the agents — which send no Origin the server checks the same
 		// way — keep working perfectly. Nothing else reports it.
 		if reported := SiteURL(conf); reported != "" && !OriginMatches(t.cfg.URL, reported) {
-			log.Warn("mattermost_site_url_mismatch",
+			log.WarnContext(ctx, "mattermost_site_url_mismatch",
 				"configured", t.cfg.URL, "reported", reported,
 				"detail", "the server accepts a websocket only from an origin "+
 					"matching its own SiteURL, so browsers will fail to connect "+
@@ -371,7 +371,7 @@ func (t *Transport) Stop(ctx context.Context) {
 	t.mu.Lock()
 	t.seats = map[string]runningSeat{}
 	t.mu.Unlock()
-	log.Info("mattermost_stopped")
+	log.InfoContext(ctx, "mattermost_stopped")
 }
 
 // Handles lists the seats this node is running, sorted.
@@ -457,7 +457,7 @@ func (t *Transport) SetStatus(ctx context.Context, handle, channel, thread, _ st
 		return false
 	}
 	if err := s.client.Typing(ctx, s.seat.UserID, channel, thread); err != nil {
-		log.Debug("mattermost_typing_failed", "handle", handle, "error", err.Error())
+		log.DebugContext(ctx, "mattermost_typing_failed", "handle", handle, "error", err.Error())
 		return false
 	}
 	return true

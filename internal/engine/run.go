@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
@@ -27,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // Engine is one process running a company.
@@ -496,7 +499,7 @@ func (e *Engine) Start(ctx context.Context) error {
 		return fmt.Errorf("engine: start: %w", err)
 	}
 	company := e.Company()
-	log.Info("engine_started", "company", company.Config.Name,
+	log.InfoContext(ctx, "engine_started", "company", company.Config.Name,
 		"seats", len(company.Seats()))
 	return nil
 }
@@ -526,7 +529,7 @@ func (e *Engine) Stop(ctx context.Context) {
 	if e.ownsBackends {
 		e.backends.Close(ctx)
 	}
-	log.Info("engine_stopped")
+	log.InfoContext(ctx, "engine_stopped")
 }
 
 // Node exposes this process's participation in the fleet, for the operator
@@ -602,12 +605,24 @@ func (e *Engine) pause(ctx context.Context, handle, reason string) error {
 	if subject == "" || group == "" {
 		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
 	}
-	log.Info("seat_inbox_paused", "handle", handle, "reason", reason)
+	log.InfoContext(ctx, "seat_inbox_paused", "handle", handle, "reason", reason)
 	return e.backends.Queue.PauseTopic(ctx, subject, group, pauseReasonNoTurnEngine)
 }
 
 // runTurn is the default turn: build the seat's runner and drive the loop.
 func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) {
+	// THE TURN'S OWN SPAN, opened before anything else so every phase, LLM
+	// round and tool call below is a child of it and every event the turn
+	// publishes carries its id. The dispatcher has already restored the
+	// trigger's trace onto ctx, so this is a child of the wake rather than
+	// a root.
+	ctx, span := tracing.Start(ctx, "engine", "agent.turn",
+		attribute.String("crewlet.seat", req.Handle),
+		attribute.String("crewlet.work_key", req.WorkKey),
+		attribute.Bool("crewlet.coalesced", req.Coalesce),
+		attribute.Int("crewlet.delegation_depth", req.Depth))
+	defer span.End()
+
 	// PINNED ONCE. Two reads of the epoch can straddle an apply, and a turn
 	// that built its runner from one revision and took its round caps from
 	// the next is running a company that never existed — the exact failure
@@ -616,7 +631,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// Assembled BEFORE the runner, because the runner needs it: every phase
 	// event carries the turn's identity, and a runner built without it
 	// publishes phases attributed to nobody.
-	tel := e.describeTurn(company, req)
+	tel := e.describeTurn(ctx, company, req)
 	task := DescribeTrigger(req.Events)
 	// RENDERED BEFORE THE RUNNER, which is what freezes it: the runner
 	// receives strings and has nowhere to re-fetch from, so a self_iterate
@@ -803,7 +818,7 @@ func (e *Engine) observe(ctx context.Context, ev *events.Event) {
 		return
 	}
 	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-		log.Warn("engine_observation_dropped", "event", ev.Type,
+		log.WarnContext(ctx, "engine_observation_dropped", "event", ev.Type,
 			"error", err.Error(),
 			"detail", "the work itself is unaffected; the feed will not show it")
 	}

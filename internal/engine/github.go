@@ -83,12 +83,12 @@ func (g *githubIdentities) resolve(ctx context.Context, api, web string, tokens 
 				APIBase: api, WebBase: web, Token: token,
 			})
 			if err != nil {
-				log.Warn("github_seat_client_failed", "error", err.Error())
+				log.WarnContext(ctx, "github_seat_client_failed", "error", err.Error())
 				return
 			}
 			login, err := client.Me(ctx)
 			if err != nil {
-				log.Warn("github_seat_identity_unresolved", "error", err.Error(),
+				log.WarnContext(ctx, "github_seat_identity_unresolved", "error", err.Error(),
 					"detail", "this seat receives no code-host events until "+
 						"the next apply re-resolves it")
 				return
@@ -209,7 +209,7 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 		// difference is what the request buys: verifying this one buys
 		// nothing, while resolving those is the entire integration.
 	} else {
-		log.Warn("github_has_no_engine_token",
+		log.WarnContext(ctx, "github_has_no_engine_token",
 			"detail", "thread activity reaches the item's author and assignees "+
 				"rather than everyone taking part")
 	}
@@ -222,10 +222,10 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 		// refused every lookup. Logged loudly either way, because the
 		// integration is completely inert in this state and nothing else
 		// will say so.
-		log.Warn("github_has_no_seat_identities", "api", api,
+		log.WarnContext(ctx, "github_has_no_seat_identities", "api", api,
 			"detail", "every code-host webhook will name a stranger")
 	}
-	log.Info("github_wired", "api", api,
+	log.InfoContext(ctx, "github_wired", "api", api,
 		"seat_identities", registered, "participants_lookup", lookup != nil)
 	return github.NewParser(github.ParserOptions{Participants: lookup}), nil
 }
@@ -256,16 +256,16 @@ func (e *Engine) reconcileGitHub(ctx context.Context, c *Company) {
 		// THE PREVIOUS PARSER KEEPS RUNNING, same posture as the
 		// self-hosted host's: routing by a stale credential is worse than
 		// the new one and much better than not routing at all.
-		log.Error("github_reconcile_failed", "error", errorText(err),
+		log.ErrorContext(ctx, "github_reconcile_failed", "error", errorText(err),
 			"detail", "the previous hosted code-host wiring is still current")
 		return
 	}
 	if err := svc.Replace(parser, githubPrompt()); err != nil {
-		log.Error("github_reconcile_failed", "error", err.Error(),
+		log.ErrorContext(ctx, "github_reconcile_failed", "error", err.Error(),
 			"detail", "the previous hosted code-host wiring is still current")
 		return
 	}
-	log.Info("github_reconciled", "company", c.Config.Name)
+	log.InfoContext(ctx, "github_reconciled", "company", c.Config.Name)
 }
 
 // githubPrompt is the hosted code host's trigger builder. A value, held by

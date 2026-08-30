@@ -87,7 +87,7 @@ var _ Completions = (*FleetCompletions)(nil)
 func (f *FleetCompletions) Worked(ctx context.Context, handle string, keys []string) map[string]bool {
 	got, err := f.ledger.Worked(ctx, handle, keys)
 	if err != nil {
-		log.Warn("completion_ledger_unreadable", "seat", handle, "error", err,
+		log.WarnContext(ctx, "completion_ledger_unreadable", "seat", handle, "error", err,
 			"detail", "treating every trigger as unworked, which may repeat a turn a peer took")
 		return nil
 	}

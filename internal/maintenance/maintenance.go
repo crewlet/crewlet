@@ -197,7 +197,7 @@ func (w *Worker) Start(ctx context.Context) {
 		// once at Info so an operator wondering why a table is growing
 		// can tell "the sweep is not wired" from "the sweep found
 		// nothing", which are otherwise the same silence.
-		log.Info("maintenance_worker_idle", "reason", "no jobs configured")
+		log.InfoContext(ctx, "maintenance_worker_idle", "reason", "no jobs configured")
 		return
 	}
 	ctx, cancel := context.WithCancel(ctx)
@@ -207,7 +207,7 @@ func (w *Worker) Start(ctx context.Context) {
 		defer close(done)
 		w.loop(ctx)
 	}()
-	log.Info("maintenance_worker_started",
+	log.InfoContext(ctx, "maintenance_worker_started",
 		"interval", w.interval.String(), "jobs", w.Jobs(),
 		"fleet_singleton", w.claimDuty != nil)
 }
@@ -246,7 +246,7 @@ func (w *Worker) loop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if _, err := w.Tick(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				log.Warn("maintenance_tick_failed", "error", err.Error())
+				log.WarnContext(ctx, "maintenance_tick_failed", "error", err.Error())
 			}
 		}
 	}
@@ -282,7 +282,7 @@ func (w *Worker) Tick(ctx context.Context) (map[string]int64, error) {
 		}
 	}
 	if len(swept) > 0 {
-		log.Info("maintenance_swept", "rows", total(swept), "tables", swept)
+		log.InfoContext(ctx, "maintenance_swept", "rows", total(swept), "tables", swept)
 	}
 	return swept, errors.Join(errs...)
 }
@@ -302,7 +302,7 @@ func (w *Worker) mayTick(ctx context.Context) (bool, error) {
 		if errors.Is(err, context.Canceled) {
 			return false, err
 		}
-		log.Warn("maintenance_duty_claim_failed", "error", err.Error())
+		log.WarnContext(ctx, "maintenance_duty_claim_failed", "error", err.Error())
 		return false, nil
 	}
 	return holds, nil

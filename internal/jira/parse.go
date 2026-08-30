@@ -135,7 +135,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		// A payload naming no issue. Every rule below rests on the issue
 		// — the watcher lookup, the conversation key, the recon pointer
 		// — so a copy without one is a wake with nowhere to look.
-		log.Debug("jira_event_names_no_issue", "event_type", event)
+		log.DebugContext(ctx, "jira_event_names_no_issue", "event_type", event)
 		return nil, nil
 	}
 	meta := base.Metadata
@@ -169,7 +169,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// the every-target-was-the-actor reading would call the most
 	// important case in the integration self-service and stay silent.
 	if meta["assignee_account_id"] != "" && meta["assignee_account_id"] == actor {
-		log.Debug("jira_actor_owns_the_issue", "issue", meta["issue_key"],
+		log.DebugContext(ctx, "jira_actor_owns_the_issue", "issue", meta["issue_key"],
 			"event_type", event)
 		return nil, nil
 	}
@@ -206,7 +206,7 @@ func (p *Parser) watching(ctx context.Context, issueKey string) []string {
 	}
 	ids, err := p.watchers.Of(ctx, issueKey)
 	if err != nil {
-		log.Warn("jira_watchers_unavailable", "issue", issueKey,
+		log.WarnContext(ctx, "jira_watchers_unavailable", "issue", issueKey,
 			"error", err.Error(),
 			"detail", "this event reaches the assignee and anyone mentioned; "+
 				"seats merely watching the issue do not hear about it")

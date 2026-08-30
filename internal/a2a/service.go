@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 var log = logging.Get("a2a")
@@ -125,7 +126,7 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 	opened := events.New(types.A2AChannelOpened{
 		ChannelID: id, Requester: ask.Requester, Target: ask.Target,
 		Participants: ch.Participants(),
-	}, events.NewTrace())
+	}, tracing.TraceOf(ctx))
 	opened.Source = ask.Requester
 	if err := s.queue.Publish(ctx, topics.Event(opened.Type), opened); err != nil {
 		return "", fmt.Errorf("a2a: announce channel %s: %w", id, err)
@@ -155,7 +156,7 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 		return "", fmt.Errorf("a2a: wake %s: %w", ask.Target, err)
 	}
 
-	log.Info("channel_requested", "channel_id", id,
+	log.InfoContext(ctx, "channel_requested", "channel_id", id,
 		"requester", ask.Requester, "target", ask.Target)
 	return id, nil
 }
@@ -239,7 +240,7 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 		return fmt.Errorf("a2a: wake %s: %w", recipient, err)
 	}
 
-	log.Info("message_sent", "channel_id", ans.ChannelID,
+	log.InfoContext(ctx, "message_sent", "channel_id", ans.ChannelID,
 		"sender", ans.Sender, "recipient", recipient, "length", len(ans.Content))
 	return nil
 }
@@ -266,7 +267,7 @@ func (s *Service) Close(ctx context.Context, id string) error {
 		ChannelID: id, Participants: ch.Participants(),
 		MessageCount: ch.Messages,
 		DurationMS:   float64(ch.Duration(now).Milliseconds()),
-	}, events.NewTrace())
+	}, tracing.TraceOf(ctx))
 	if err := s.queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
 		return fmt.Errorf("a2a: announce close of %s: %w", id, err)
 	}
@@ -277,7 +278,7 @@ func (s *Service) publishSent(ctx context.Context, channelID, sender, recipient,
 	ev := events.New(types.A2AMessageSent{
 		ChannelID: channelID, Sender: sender, Recipient: recipient,
 		Content: content, SenderRole: role,
-	}, events.NewTrace())
+	}, tracing.TraceOf(ctx))
 	ev.Source = sender
 	if err := s.queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
 		return fmt.Errorf("a2a: record message on %s: %w", channelID, err)

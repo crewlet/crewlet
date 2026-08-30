@@ -63,8 +63,10 @@ type Bootstrap struct {
 // property of the TERMINAL SOMEONE IS LOOKING AT rather than of the
 // deployment. The same file is applied to a container with no terminal and
 // run on a laptop with one, and a field that had to be edited between those
-// two would be describing the reader rather than the node — the same reason
-// `-roles`, `-api-host` and $CREWLET_LOG_LEVEL are not file fields either.
+// two would be describing the reader rather than the node. Colour is the
+// only one of these knobs with NO file form: `node.roles`, `api.host` and
+// `logging.level` are all Tier A fields that `-roles`, `-api-host` and
+// $CREWLET_LOG_LEVEL merely override for one invocation.
 // The console format works this out from its sink; see internal/logging.
 type Logging struct {
 	// Level is how loud this node is. Empty is info.

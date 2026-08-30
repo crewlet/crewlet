@@ -188,6 +188,8 @@ internal/
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, auth/
 ├── observe/              # The observability edge (store row + live push)
+├── tracing/              # OpenTelemetry: one provider, W3C propagation, and
+│                         #   the bridge to the envelope's trace fields
 ├── secrets/              # Config encryption at rest + the ${VAR} resolver
 └── version/ logging/ redact/ envref/ envfile/ workkey/  # small shared grammars
 

@@ -70,8 +70,11 @@ type Server struct {
 }
 
 // StartServer starts an embedded broker without any client attached.
-func StartServer(cfg Config) (*Server, error) {
-	e, err := startEmbedded(cfg)
+//
+// The context bounds the START, not the server's life: a broker that is up
+// outlives it, and stopping one is [Server.Shutdown].
+func StartServer(ctx context.Context, cfg Config) (*Server, error) {
+	e, err := startEmbedded(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("start embedded nats: %w", err)
 	}
@@ -105,7 +108,7 @@ func (s *Server) Shutdown() {
 	}
 }
 
-func startEmbedded(cfg Config) (*embeddedServer, error) {
+func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	clustered := cfg.ClusterName != "" || len(cfg.ClusterURLs) > 0 || cfg.ClusterPort != 0
 	name := cfg.ServerName
 	if name == "" {
@@ -178,11 +181,35 @@ func startEmbedded(cfg Config) (*embeddedServer, error) {
 		removeScratch(scratch)
 		return nil, fmt.Errorf("configure embedded server: %w", err)
 	}
+	// BEFORE Start, or the boot is the one stretch that logs nowhere —
+	// which is where stream recovery and a failed store directory report.
+	// Trace is never enabled: it is a line per protocol message, and the
+	// engine publishes every event through here.
+	natsLog, natsDebug := newNATSLogger(ctx)
+	ns.SetLoggerV2(natsLog, natsDebug, false, false)
 	go ns.Start()
-	if !ns.ReadyForConnections(readyTimeout) {
+
+	// THE WAIT IS CANCELLABLE, which is the whole reason this function takes
+	// a context. ReadyForConnections blocks for up to readyTimeout with no way
+	// to interrupt it, so a Ctrl-C during a slow cold start — a large file
+	// store recovering its streams — used to sit out the full 30 seconds
+	// before the process could begin its drain.
+	ready := make(chan bool, 1)
+	go func() { ready <- ns.ReadyForConnections(readyTimeout) }()
+	select {
+	case ok := <-ready:
+		if !ok {
+			ns.Shutdown()
+			removeScratch(scratch)
+			return nil, errors.New("embedded nats server did not become ready")
+		}
+	case <-ctx.Done():
+		// Shutdown makes the in-flight ReadyForConnections return, so the
+		// goroutine above finishes into its buffered channel rather than
+		// leaking.
 		ns.Shutdown()
 		removeScratch(scratch)
-		return nil, errors.New("embedded nats server did not become ready")
+		return nil, fmt.Errorf("start embedded nats: %w", ctx.Err())
 	}
 	return &embeddedServer{
 		ns: ns, inProcess: opts.DontListen, scratch: scratch, clustered: clustered,
@@ -414,7 +441,7 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 func (q *Queue) runStreamHandler(ctx context.Context, h queue.StreamHandler, subject string, ev *events.Event) {
 	defer func() {
 		if r := recover(); r != nil {
-			q.log.Error("stream_handler_panicked", "subject", subject, "panic", r)
+			queue.LogStreamHandlerPanic(q.log, subject, ev, r)
 		}
 	}()
 	h(ctx, subject, ev)

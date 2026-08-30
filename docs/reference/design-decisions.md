@@ -270,6 +270,35 @@ its parser again, that is the shape to rebuild.
 
 ---
 
+## Tracing Is Configured by the Standard OTel Environment, Not by `crewlet.yaml`
+
+The OTLP endpoint, headers, protocol, service name and sampling ratio are the
+`OTEL_*` variables every collector's own documentation uses — there is no
+`tracing:` block in Tier A. Two reasons, and both are about not making you
+translate.
+
+An operator wiring a collector should be able to paste the vendor's snippet.
+And the engine's own exporter shares those variables with the
+[sandbox OTLP forwarder](../concepts/code-sandbox.md), deliberately: the
+forwarder stamps a trace context into a coding sandbox so the box's spans nest
+under the turn that started them, and two settings would let those halves point
+at different backends, where that link resolves on neither.
+
+**The tracer is always running; only the exporter is optional.** A trace id is
+not just an exporter's concern here — it is an indexed column in the event
+store, the key `GET /events/trace/{id}` answers on, and what the dashboard's
+trace view arranges into a tree. All of that works with no collector anywhere,
+so ids flow whether or not anything is collecting them, and no part of the
+engine branches on whether tracing is "on".
+
+**Spans carry timing; events carry content.** Prompts, responses, tool
+arguments and results, and token counts are all already on the phase events in
+the store. A span adds the one thing no event records — how long it took — so
+span attributes stay to small enums and counts rather than shipping whole
+prompts to a tracing backend.
+
+---
+
 ## Provider Abstraction via Protocols
 
 All external dependencies (LLM, embeddings, storage) are behind interfaces **defined by the package that calls them**, kept to what that caller needs — there is no `interfaces.go`, and a provider package exports a concrete type. No vendor SDK lock-in. This enables:

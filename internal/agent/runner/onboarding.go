@@ -240,7 +240,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	})
 	const user = "Complete your onboarding now."
 
-	res, err := r.runPhase(ctx, phaseRun{
+	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Onboarding, surface: surface, system: system, user: user,
 		rounds: r.cfg.Onboarding.Rounds, ceiling: r.cfg.Onboarding.Ceiling,
 		iteration:      onboardingIteration,
@@ -260,7 +260,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	if marked {
 		notes, decision = "marked", "done"
 	}
-	r.emitter().completed(ctx, phaseRecord{
+	r.emitter().completed(phaseCtx, phaseRecord{
 		Phase: phase.Onboarding, Iteration: onboardingIteration,
 		System: system, User: user, Result: res.Result, Exhausted: res.Exhausted,
 		Decision: decision, Notes: notes, Available: surface.Active(),

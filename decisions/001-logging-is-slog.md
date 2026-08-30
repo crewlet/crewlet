@@ -30,7 +30,7 @@ encoder is a handler in this package.**
    `net/http`'s `Server.ErrorLog` bridge, the MCP SDK, and every library written
    after Go 1.21 accepts. Adopting zap does not remove slog from the tree; it adds a
    second logger and a `zapslog` bridge at every boundary that wants the standard
-   type. The engine has 63 component loggers and passes `*slog.Logger` across almost
+   type. The engine has 59 component loggers and passes `*slog.Logger` across almost
    every package seam.
 
 2. **Nothing here needs the performance.** zap's case is zero-allocation structured
@@ -40,30 +40,41 @@ encoder is a handler in this package.**
 
    Measured, not asserted — `go test ./internal/logging -bench .`, and the
    benchmarks are committed beside the package so the next reader can re-run them
-   rather than trust this table (Xeon @ 2.10 GHz, Go 1.27):
+   rather than trust this table (Xeon @ 2.80 GHz, Go 1.27):
 
    | | ns/op | B/op | allocs/op |
    |---|---|---|---|
-   | An emitted line, through `lazy` | 976 | 296 | 5 |
-   | The same line, straight at the handler | 714 | 8 | 1 |
-   | A **suppressed** debug line | 9.6 | 0 | 0 |
+   | An emitted `console` line, through `lazy` | 1245 | 296 | 5 |
+   | The same line, straight at the handler | 919 | 8 | 1 |
+   | An emitted `json` line, through `lazy` | 1750 | 424 | 8 |
+   | The same line, straight at the handler | 920 | 0 | 0 |
+   | A **suppressed** debug line | 14.2 | 0 | 0 |
+
+   **Both formats are here because `console` alone flatters the design.** Its own
+   encoder allocates, so `lazy` is a smaller fraction of a bigger total; slog's
+   `json` handler is zero-allocation, and `lazy` is what turns it into eight. `json`
+   is what a log shipper is pointed at, so it is the honest worst case and the one a
+   reader should judge this by.
 
    A suppressed debug line already costs nothing, because `lazy.Enabled` answers
    from the root without replaying the recorded ops — so a `Debug` call in a loop
-   needs no hand-written guard. That is the case that would have mattered.
+   needs no hand-written guard. That is the case that would have mattered. It is
+   also only 14% of the call sites (86 `Debug` of 596 outside tests), so it defends
+   the loop case rather than the tree as a whole.
 
-### The 262 ns this design does cost, and why it stays
+### The 326 ns this design does cost, and why it stays
 
 `lazy.resolve` rebuilds the handler chain for **every emitted record** — the gap in
-the table above, ~262 ns and 4 allocations a line. It buys the guarantee this package
-exists for: a `var log = logging.Get("store")` evaluated at package init still follows
+the table above, ~326 ns and 4 allocations a line on `console`, and ~830 ns and
+*eight* on `json`, where the handler it wraps allocates nothing at all. It buys the
+guarantee this package exists for: a `var log = logging.Get("store")` evaluated at package init still follows
 a `Configure` that happens after flag parsing.
 
 It could be cached behind a generation counter bumped by `install`, which would
 recover most of it. That is deliberately **not** done, for the same reason zap is not
 adopted: there is no hot path, the volume is low, and the object in question is the
 process-wide logging root — where a stale cache entry after a reconfiguration is
-exactly the bug `lazy` exists to prevent. Buying 262 ns with that risk would
+exactly the bug `lazy` exists to prevent. Buying 326 ns with that risk would
 contradict the argument three paragraphs up. Revisit it if a profile ever shows
 logging in it; the benchmarks above are how you would know.
 
@@ -120,8 +131,11 @@ One probe — *is a person watching this stream right now?* — settles two thin
   a redirected log is read *later*, and a line that says only `19:55:12` cannot be
   correlated with anything a day afterwards.
 
-Colour is **not** a Tier A field, and that is the same call `-roles`, `-api-host` and
-`$CREWLET_LOG_LEVEL` already make. The same `crewlet.yaml` is applied to a container
+Colour is **not** a Tier A field, and it is the only one of these knobs with no file
+form at all — `node.roles`, `api.host` and `logging.level` are all Tier A fields that
+`-roles`, `-api-host` and `$CREWLET_LOG_LEVEL` merely override for one invocation.
+There is nothing for colour to override, because there is nothing a *node* could say
+about it. The same `crewlet.yaml` is applied to a container
 with no terminal and run on a laptop with one; a field that had to be edited between
 those two would be describing the reader rather than the node.
 
@@ -133,6 +147,17 @@ for every suppressed debug line. That shortcut is correct only while every handl
 `Configure` can install answers `Enabled` from its level and nothing else. slog's text
 and JSON handlers do; `consoleHandler` does. A handler that consulted its attributes
 there would filter the wrong lines, and only the *suppressed* ones would show it.
+
+**Trace correlation was added inside `lazy.Handle` rather than as a fourth
+handler**, and this constraint is why. `Handle` injects the `trace_id` and
+`span_id` bound onto the context ([508](508-the-tracing-pipeline.md)) and
+forwards; `Enabled` is untouched, so the three handlers above are still the
+whole set and still answer from their level alone. Wrapping them inside
+`install` would have been the obvious shape and is wrong twice: it would give
+console, text and json the same concrete type — which
+`TestEveryDeclaredFormatInstallsItsOwnHandler` refuses, precisely so a format
+cannot silently render as another — and it would put a level decision behind a
+value that varies by whether a call site passed a context.
 
 ## What this replaced
 
