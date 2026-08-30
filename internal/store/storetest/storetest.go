@@ -18,7 +18,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,6 +54,10 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"ReadFloor", testReadFloor},
 		{"RetentionSweep", testRetention},
 		{"RetentionSweepDrainsABacklogWiderThanOneBatch", testRetentionBacklog},
+		{"BackupIsAReadableCopyOfTheData", testBackup},
+		{"BackupIsOneSelfContainedFile", testBackupSelfContained},
+		{"BackupRefusesAnOccupiedDestination", testBackupOccupied},
+		{"BackupSurvivesConcurrentWrites", testBackupUnderWrites},
 		{"RecordSkipsUntrackedTypes", testRecordUntracked},
 		{"NullUnconstrainedWorkKey", testWorkKeyNull},
 		{"FollowRoundTrips", testFollowRoundTrips},
@@ -622,6 +629,135 @@ func testRetentionBacklog(t *testing.T, db *store.DB) {
 	}
 	if _, err := log.ByID(ctx, "keep"); err != nil {
 		t.Fatalf("sweep took a row inside retention: %v", err)
+	}
+}
+
+// testBackup: the copy a backup produces is a database that OPENS and holds
+// the rows the original held. The whole artifact is worthless if it cannot be
+// read back, and this is the only place that is proven before the day it
+// matters.
+func testBackup(t *testing.T, db *store.DB) {
+	log := db.Events()
+	ctx := t.Context()
+	write(t, log, store.EventRecord{
+		ID: "backed-up", Type: "task_created", Source: "pm",
+		Time: base, Category: "task",
+	})
+
+	dest := filepath.Join(t.TempDir(), "copy.db")
+	info, err := db.Backup(ctx, dest)
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	if info.Path != dest {
+		t.Errorf("BackupInfo.Path = %q, want %q", info.Path, dest)
+	}
+	if info.Bytes <= 0 {
+		t.Errorf("backup reports %d bytes", info.Bytes)
+	}
+	// The schema the copy carries is what a restore would bring back, so a
+	// copy that claims a different one than this binary applied would
+	// restore into a migration that runs from the wrong place.
+	if !slices.Equal(info.Migrations, store.SchemaVersions()) {
+		t.Errorf("copy carries schema %v, want %v", info.Migrations, store.SchemaVersions())
+	}
+
+	// Opened as a database in its own right — the restore path, exercised.
+	restored, err := store.Open(ctx, dest, store.Options{})
+	if err != nil {
+		t.Fatalf("the copy will not open as a database: %v", err)
+	}
+	defer func() { _ = restored.Close() }()
+	if _, err := restored.Events().ByID(ctx, "backed-up"); err != nil {
+		t.Fatalf("the copy lost a row the original held: %v", err)
+	}
+}
+
+// testBackupSelfContained: the copy is ONE file. A backup that silently
+// depended on a -wal beside it would restore as an older database — or as a
+// corrupt one — whenever an operator moved only the file they were told to.
+func testBackupSelfContained(t *testing.T, db *store.DB) {
+	write(t, db.Events(), store.EventRecord{
+		ID: "solo", Type: "task_created", Source: "pm", Time: base, Category: "task",
+	})
+	dest := filepath.Join(t.TempDir(), "copy.db")
+	if _, err := db.Backup(t.Context(), dest); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	for _, sidecar := range []string{"-wal", "-shm", "-tshm", ".part"} {
+		if _, err := os.Stat(dest + sidecar); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the backup left %s beside it, so the artifact is not one file", dest+sidecar)
+		}
+	}
+}
+
+// testBackupOccupied: a destination that exists is refused, and the file in
+// the way is left alone. It is by construction somebody's only copy of
+// something.
+func testBackupOccupied(t *testing.T, db *store.DB) {
+	dest := filepath.Join(t.TempDir(), "taken.db")
+	if err := os.WriteFile(dest, []byte("an earlier backup"), 0o600); err != nil {
+		t.Fatalf("seed the destination: %v", err)
+	}
+	_, err := db.Backup(t.Context(), dest)
+	if !errors.Is(err, store.ErrBackupExists) {
+		t.Fatalf("backup onto an occupied path: %v, want ErrBackupExists", err)
+	}
+	body, readErr := os.ReadFile(dest)
+	if readErr != nil || string(body) != "an earlier backup" {
+		t.Fatalf("the refused backup disturbed what was already there: %q, %v", body, readErr)
+	}
+}
+
+// testBackupUnderWrites: the copy is taken WITHOUT stopping the engine, so
+// the case that matters is a database being written throughout. The copy must
+// still open and verify — a point-in-time image, not a torn one.
+func testBackupUnderWrites(t *testing.T, db *store.DB) {
+	ctx := t.Context()
+	log := db.Events()
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// Failures are not asserted on: the point is that the
+			// backup does not break the writer's database, not that
+			// every write in a hot loop commits.
+			_ = log.Append(ctx, store.EventRecord{
+				ID:   fmt.Sprintf("live-%04d", i),
+				Type: "task_created", Source: "pm",
+				Time: base.Add(time.Duration(i) * time.Millisecond), Category: "task",
+			})
+		}
+	}()
+
+	dest := filepath.Join(t.TempDir(), "hot.db")
+	_, err := db.Backup(ctx, dest)
+	close(stop)
+	wg.Wait()
+	if err != nil {
+		t.Fatalf("backup under concurrent writes: %v", err)
+	}
+
+	restored, err := store.Open(ctx, dest, store.Options{})
+	if err != nil {
+		t.Fatalf("a copy taken under writes will not open: %v", err)
+	}
+	if err := restored.Close(); err != nil {
+		t.Fatalf("close the copy: %v", err)
+	}
+	// The original is still writable afterwards: a backup must not leave
+	// the live database wedged behind a lock or a stale transaction.
+	if err := log.Append(ctx, store.EventRecord{
+		ID: "after", Type: "task_created", Source: "pm", Time: base, Category: "task",
+	}); err != nil {
+		t.Fatalf("the live database is unwritable after a backup: %v", err)
 	}
 }
 
