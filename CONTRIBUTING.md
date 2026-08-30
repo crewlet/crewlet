@@ -320,10 +320,14 @@ commits are written, and an inference that changes its mind writes a bare
 capitalises the `Bump` and offers no way not to, so a bump is the one subject
 here that does not start lowercase.
 
-`internal/version` asserts both halves of the author/actor guard and the
-`--auto --squash` flags, because every one of those fails silently: the
-workflow keeps running, it just runs on the wrong pull requests or merges
-before a check has reported.
+Nothing checks any of that for you. `internal/version` used to assert both
+halves of the author/actor guard and the `--auto --squash` flags; those tests
+were dropped, and no linter in this repository reads a workflow file. Every one
+of them fails silently — the workflow keeps running, it just starts running on
+the wrong pull requests or merging before a check has reported — and the job
+holds `contents: write` and `pull-requests: write`. Read the `if:` and the merge
+command on any diff that touches
+[`.github/workflows/dependabot-merge.yml`](.github/workflows/dependabot-merge.yml).
 
 ## Releasing
 

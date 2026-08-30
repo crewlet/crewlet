@@ -76,21 +76,29 @@ The stamp is the one part of this pipeline with no other symptom: rename the
 variable or move the package and it silently stops applying, with every
 release reporting the build-info fallback. So both release jobs run the built
 binary and compare what it reports against the version goreleaser recorded in
-`dist/metadata.json`, and a test in `internal/version` splits the `-X` target
-into its import path and its variable and checks both against the tree.
+`dist/metadata.json`.
 
-Both of those are equality against something derived, and deliberately so.
-The first spelling of each was a sentinel and a literal — the workflow
-searched the binary's output for `dev`, and the test searched the config for
-the import path written out longhand — and both went quiet without failing.
-The literal is a second copy of the thing this section exists to keep from
-having two copies of, so it stayed green through exactly the renames it was
-watching for. The sentinel stopped matching when the language moved
+That comparison is equality against something derived, and deliberately so.
+Its first spelling was a sentinel — the workflow searched the binary's output
+for `dev` — and it went quiet without failing when the language moved
 underneath it: since Go 1.24 an unstamped build inside a repository reports a
 pseudo-version derived from the tags rather than `dev`, so a stamp that
 applied to nothing produced a green release. A check whose failure mode is
 silence has to compare against something the tree computes, not against a
 constant somebody remembered to write down.
+
+A second check sat beside it and no longer does. `internal/version` held a
+test that split the `-X` target into its import path and its variable and
+checked both against the tree — the module path from `go.mod` plus this
+directory, and a package-level string var parsed out of the AST. It went with
+the rest of this package's assertions over the release config; see *What is
+deliberately not asserted* below. The runtime comparison above is what
+remains, and on everything it can see it is the stronger of the two: the
+rename, the move and the changed module path all end with the binary
+reporting a version goreleaser did not build. What it cannot see is a stamp
+that lands on a build whose artifacts are not the ones packaged — it verifies
+the `crewlet` build's staged binary by path — so a second `builds:` entry is
+the case to re-check by hand.
 
 ## Four targets
 
@@ -247,13 +255,49 @@ reads and a claim nobody checks. It lands when there is a consumer.
 covers every artifact, is the same proof as eight signatures with one fetch
 instead of eight.
 
+## What is deliberately not asserted
+
+`internal/version` used to carry eleven tests that read the release
+configuration itself — `.goreleaser.yaml`, the `Dockerfile`,
+`.github/dependabot.yml`, `.github/release.yml` and the workflow files — and
+asserted the properties above against their contents. They were dropped, and
+this section records why, because the shape is one a future reader would
+plausibly re-add.
+
+The invariants are unchanged and still real. What did not hold up was the
+mechanism. Every one of those tests except the `-X` stamp check was a
+`strings.Contains` over a whole YAML file, with no notion of which key the
+match sat under, which job it belonged to, or whether it was live config or a
+comment. Measured by mutation — 105 breaking edits applied to the real files —
+they killed 50 and let 55 through, and the survivors were not exotic: `&&`
+swapped for `||` in the auto-merge guard, the whole `if:` commented out,
+`--admin` appended after `--auto --squash`, the catch-all `*` moved from
+`labels:` into `exclude:`, `CGO_ENABLED=1` with the old value left in a
+comment beside it, a second `v*` workflow written as a block sequence instead
+of an inline one. A check that stays green through the edit it exists to catch
+is the failure mode this file already names two sections up, and it is worse
+than no check because it reads as coverage.
+
+They also cost 32 false positives on harmless edits, several of them
+anti-correlated with the invariant: the stamp check went red on goreleaser's
+own documented `- -s -w -X …` single-entry idiom, and the sibling check in
+`internal/api` went red on an upgrade to `actions/setup-node`.
+
+So the properties are now maintained by reading, and `RELEASING.md` lists them
+under *What nothing guards* for exactly that purpose. **If they are asserted
+again, they must be asserted structurally** — decode the file with
+`gopkg.in/yaml.v3`, which is already a direct dependency, and assert the node
+under the key that matters. Restoring the substring checks would restore the
+false confidence with them.
+
 ## One workflow owns the tag, and the pipeline rehearses without one
 
-Exactly one workflow carries `push: tags: ["v*"]`, and `internal/version`
-asserts that there is only one. Two workflows triggered by the same tag both
-try to create one GitHub Release for it, and the loser fails the run after its
-artifacts are already built — a race with no symptom until the day it
-publishes.
+Exactly one workflow carries `push: tags: ["v*"]`. Two workflows triggered by
+the same tag both try to create one GitHub Release for it, and the loser fails
+the run after its artifacts are already built — a race with no symptom until
+the day it publishes. `internal/version` used to assert there was only one;
+nothing does now, so adding a workflow means reading the trigger blocks of the
+ones already there.
 
 The whole pipeline — every target, the archives, the checksums, the image —
 also runs in snapshot mode on demand and on any pull request that touches the
