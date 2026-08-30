@@ -442,7 +442,6 @@ all in the [coordination slot](../concepts/coordination.md) instead.
 
 The load-bearing tables:
 
-- **`token_usage`** — per-agent cumulative token consumption. The shared tool loop (used by every phase of the [Turn Engine](../concepts/turn-engine.md) — Plan, Execute, Review, sub-agent) writes to it after every LLM completion that passes the budget check, giving durable audit totals. The *enforced* counter is the shared one in coordination; this is the record.
 - **`agent_diary`** — vector-indexed, each agent's private observation log. Written by the reflect path, which embeds content on write. The `## Personal memory` prefetch reads it via hybrid candidate selection (vector top-K ∪ recency top-K, deduped, capped at 100) handed to an aux-LLM relevance filter. Shared knowledge is **not** stored here — the knowledge base is searched live at query time; see [knowledge system](../concepts/knowledge-system.md).
 - **`episodes`** — vector-indexed, one row per completed turn, raw and LLM-compacted shapes in the same table. Drained by the episode-lifecycle duty.
 - **`synthesized_skills`** + **`synthesized_skill_versions`** — auto-drafted skills the agent can load, plus their refinement history.
@@ -454,7 +453,7 @@ The load-bearing tables:
 - **`company_config`** — the revision payloads. Which one is *current* is the fleet's business, and lives in coordination; see the [control plane](../concepts/control-plane.md).
 - **`secret_values`** — the bootstrap half of the [secret store](../concepts/secret-store.md). The company's credentials live on the coordination KV; rows written here while the engine was stopped are migrated there at its next start.
 
-Migrations are **forward-only**: each file in `internal/store/schema/` is applied once and recorded by filename, and there are no downgrade scripts. Downgrading the binary below the schema it already migrated is not supported; restore a backup instead. There is no migration lock and no advisory-lock protocol, because one process owns the file — the whole idiom disappears.
+Migrations are **forward-only**: each file in `internal/store/schema/` is applied once and recorded by filename, and there are no downgrade scripts. Downgrading the binary below the schema it already migrated is not supported; restore a [backup](backup.md) instead. There is no migration lock and no advisory-lock protocol, because one process owns the file — the whole idiom disappears.
 
 Everything else is either:
 

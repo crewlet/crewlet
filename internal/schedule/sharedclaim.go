@@ -20,11 +20,10 @@ import (
 // until there are two nodes"), which the per-node table made a refusal of the
 // symptom rather than the cause.
 //
-// The split is the one migration 0011 made between the shared token counter
-// and the per-agent token_usage rows: what the FLEET has to agree on is "may I
-// start", and nothing more. The node's own ledger stays as its audit record of
-// what it dispatched — which is what the dashboard reads and what the
-// retention sweep purges.
+// The split is the one migration 0011 made for the token counter: what the
+// FLEET has to agree on is "may I start", and nothing more. The node's own
+// ledger stays as its audit record of what it dispatched — which is what the
+// dashboard reads and what the retention sweep purges.
 
 // FireClaims is the fleet-shared half of the guard, satisfied by
 // coord.Fires.

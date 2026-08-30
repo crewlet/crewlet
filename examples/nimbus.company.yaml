@@ -31,11 +31,12 @@ policies:
 # is set below, so this 10M ceiling is the only budget in force and the
 # whole company shares it.
 #
-# NOTE: the counter lives in memory and is NOT rehydrated from the
-# ``token_usage`` ledger on boot — it resets to 0 every time the engine
-# restarts.  So this is a per-engine-run ceiling, not a cumulative
-# lifetime-of-the-company total.  See docs/guides/deployment.md § Token
-# Budgets and docs/getting-started/quickstart.md § Token Budgets.
+# NOTE: usage is durable — the counter lives in the fleet's coordination
+# store, so it survives engine restarts and is one number for the whole
+# company however many nodes run it.  Reset it deliberately, against a
+# running node: ``crewlet budgets reset``.  See
+# docs/guides/deployment.md § Token Budgets and
+# docs/getting-started/quickstart.md § Token Budgets.
 token_budget: 10000000                          # 10M tokens, org-wide (all agents combined)
 
 # Skill variables — generic name->value facts substituted into tool-skill

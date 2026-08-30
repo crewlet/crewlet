@@ -253,14 +253,11 @@ theoretical one:
 - **A wedged-alive zombie can act for up to one LLM round plus one heartbeat
   interval** after losing its lease. Fencing bounds the damage to that window;
   it does not prevent the window.
-- **Two seat-scoped writes still duplicate, deliberately.** A
+- **One seat-scoped write still duplicates, deliberately.** A
   differently-worded `agent_diary` entry (identical content already
-  collapses on write) and a `token_usage` row. Nothing can key a reworded
+  collapses on write). Nothing can key a reworded
   memory to its twin — that needs the duplicate *turn* not to happen, which
-  is the completion ledger's job — and `token_usage` is observability on a
-  high-volume path swept on a TTL, where a guard costs more than the skew.
-  Budget *enforcement* is unaffected: it reads the fleet's shared
-  counter. `episodes` and the counterparty interaction
+  is the completion ledger's job. `episodes` and the counterparty interaction
   count are collapsed against the reader that matters — both live in the
   node's own database, which only that node reads, so the duplicate the
   work key removes is the one *that* node would otherwise write twice — and

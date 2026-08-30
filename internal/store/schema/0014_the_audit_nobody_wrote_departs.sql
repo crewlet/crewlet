@@ -1,0 +1,21 @@
+-- token_usage departs: the audit record nobody ever wrote.
+--
+-- Migration 0011 moved the enforced token counter to the fleet's coordination
+-- store and kept this table on one premise: "It is the per-agent audit record
+-- — what was spent, for the operator's history". That premise was never true
+-- in this tree. No code writes a row here and none reads one — the turn
+-- loop's accounting goes to the coordination counter and to the phase events,
+-- the dashboard's spend view rolls those events up, and a grep for the table
+-- name finds only comments and docs describing a writer that does not exist.
+-- Its own CREATE comment ("budget enforcement reads this... shared across
+-- every node") was wrong twice over the day 0011 landed.
+--
+-- DROPPED rather than left in place, for the same reason as 0010 through
+-- 0013: a table nothing writes is worse than one nothing reads — it is a
+-- permanently empty spend history, and an empty spend figure is exactly the
+-- shape somebody would wire a dashboard to and read as "this seat spent
+-- nothing". If a durable per-agent spend audit is wanted, it will be built
+-- deliberately — writer, reader and retention in one change — rather than
+-- resurrected as a schema with a hope attached.
+
+DROP TABLE IF EXISTS token_usage;

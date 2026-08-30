@@ -136,7 +136,6 @@ The node's own database holds everything a *single* node is the only reader of. 
 - **The secret store's bootstrap half, and only that.** The company's credentials are a shared slot (`secrets`, above); what stays in a node's own file is the rows `crewlet secrets set` writes against a *stopped* node, which that node migrates onto the fleet at its next start and deletes locally. The keyring that opens either is Tier A on disk, never a shared record — see [Secret Store § Propagation](secret-store.md#propagation).
 - **`scheduled_runs`** — this node's dispatch *history*, for the dashboard and the retention sweep. Not the claim; that is the `fires` slot above.
 - **Thread follows.**
-- **`token_usage`** — the per-agent audit *record* of what was spent. Not the counter anything enforces against; that is the `budgets` slot above.
 
 And two things stay **per-process** deliberately:
 
