@@ -440,7 +440,7 @@ const (
 
 	// componentWidth is the longest component name in the tree
 	// ("sandbox.coding_agent" and "providers.credential", both 20), so
-	// every one of the 63 names in use today lands in a straight column.
+	// every one of the 57 names in use today lands in a straight column.
 	componentWidth = 20
 
 	// timeLayout is wall-clock only, for a terminal someone is watching:
