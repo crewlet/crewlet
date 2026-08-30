@@ -50,9 +50,25 @@ type nodeClient struct {
 // Ten seconds, against routes that are a coordination-store read and a
 // handful of writes. Long enough for a broker under load and a fleet-wide
 // listing; short enough that an operator who pointed at the wrong address
-// learns so rather than watching a cursor. Not configurable: a longer wait
-// never turns a wrong address into a right one.
+// learns so rather than watching a cursor. Not configurable BY AN OPERATOR: a
+// longer wait never turns a wrong address into a right one, so the one route
+// that genuinely needs longer takes it in code. See [nodeClient.patiently].
 const nodeRequestTimeout = 10 * time.Second
+
+// patiently returns a client that waits longer for one call.
+//
+// THE EXCEPTION to the reasoning above, and a narrow one. Every other route
+// here answers from memory or a coordination read, so how long it takes is a
+// property of the NETWORK and ten seconds is a diagnosis. A backup's duration
+// is a property of the DATA — it copies the whole store and every stream — so
+// the same ceiling would abandon a working backup on a large company and
+// report a failure for work the engine goes on to finish, leaving a complete
+// backup on disk that the operator has been told did not happen.
+func (c *nodeClient) patiently(limit time.Duration) *nodeClient {
+	patient := *c
+	patient.http = &http.Client{Timeout: limit}
+	return &patient
+}
 
 // nodeClientFor is the shared "one config argument, then find the node"
 // preamble the node-facing operator commands share.

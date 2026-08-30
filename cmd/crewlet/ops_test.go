@@ -142,9 +142,17 @@ func newFakeNode(t *testing.T) *fakeNode {
 // one token, which is what the commands read their defaults from.
 func bootstrapForNode(t *testing.T, node *fakeNode) string {
 	t.Helper()
-	host, port, err := net.SplitHostPort(strings.TrimPrefix(node.server.URL, "http://"))
+	return bootstrapForURL(t, node.server.URL)
+}
+
+// bootstrapForURL is the same, for any test server. Split out because more
+// than one kind of fake node needs it and a second copy of this would be one
+// that drifts.
+func bootstrapForURL(t *testing.T, serverURL string) string {
+	t.Helper()
+	host, port, err := net.SplitHostPort(strings.TrimPrefix(serverURL, "http://"))
 	if err != nil {
-		t.Fatalf("split %q: %v", node.server.URL, err)
+		t.Fatalf("split %q: %v", serverURL, err)
 	}
 	dir := t.TempDir()
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n"+
