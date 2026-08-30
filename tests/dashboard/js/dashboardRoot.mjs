@@ -38,8 +38,8 @@ const named = process.env.CREWLET_DASHBOARD_ROOT;
  * The dashboard tree under test, as a filesystem path.
  *
  * Resolved against the *repository* rather than the process's working
- * directory when it is relative: `node tests/test_dashboard/js/store.test.mjs`
- * and `cd tests/test_dashboard/js && node store.test.mjs` must name the same
+ * directory when it is relative: `node tests/dashboard/js/store.test.mjs`
+ * and `cd tests/dashboard/js && node store.test.mjs` must name the same
  * tree, and cwd does not survive that.
  */
 export const DASHBOARD_DIR = named

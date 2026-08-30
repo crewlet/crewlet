@@ -98,7 +98,7 @@
  * clears every gate in BOTH themes with ≥18% margin while keeping the set
  * inside the comfort band.
  *
- * The gates, measured by tests/test_dashboard/js/palette.test.mjs against
+ * The gates, measured by tests/dashboard/js/palette.test.mjs against
  * this file on every run — not by hand, and not once:
  *   - normal-vision separation, worst adjacent pair  ≥ 15
  *   - protan / deutan separation, worst adjacent pair ≥ 8

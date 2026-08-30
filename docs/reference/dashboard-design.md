@@ -766,7 +766,7 @@ for them would leave a colour nobody else reads as red. The rule that colour
 never carries identity alone is what closes that gap.
 
 **These numbers are computed, not remembered.**
-`tests/test_dashboard/js/palette.test.mjs` reads `tokens.css` and `state.js`
+`tests/dashboard/js/palette.test.mjs` reads `tokens.css` and `state.js`
 on every run and measures all of it — contrast bands, ink and mark floors,
 chroma ceilings, and OKLab separation for normal, protan and deutan vision
 across both orders. They were measured by hand once before that, and by the
@@ -986,7 +986,7 @@ operator went looking for them.
 3. **New surface? Use the panel recipe** by adding the selector to the shared
    rule in `components.css`.
 4. **New hue or reassignment?** Run
-   `node tests/test_dashboard/js/palette.test.mjs`. It measures both
+   `node tests/dashboard/js/palette.test.mjs`. It measures both
    adjacency orders in both themes against every gate — and each colour
    against the worst of the ten surfaces the design composites, not
    against the panel. Do not eyeball it: the panel-anchored version of this
