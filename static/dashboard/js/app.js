@@ -103,7 +103,7 @@ let unsubscribeEvents = null;
 
 // Context handed to every view. `query` is the only way a view reaches
 // the server, and it goes over the same socket the pushes arrive on.
-// tests/test_dashboard/js/wiring.test.mjs holds every view's declared
+// tests/dashboard/js/wiring.test.mjs holds every view's declared
 // dependencies against these keys — the Fleet view once asked for an
 // `api` that was never here, and failed silently for it.
 const ctx = {
