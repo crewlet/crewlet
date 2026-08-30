@@ -904,7 +904,7 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
       ${block("episodes", "var(--blue-ink)", "activity", "Episodes", (m.episodes || []).length, episodes)}
       ${block("cp", "var(--green-ink)", "users", "Counterparty profiles", (m.counterparty_profiles || []).length, counterparties)}
       ${block("skills", "var(--amber-ink)", "book", "Synthesized skills", (m.synthesized_skills || []).length, skills)}
-      <div class="seat-note">Memory is durable and per seat: the diary and its episodes live in PostgreSQL, keyed by this agent's runtime id. A deployment without a database carries none of it.</div>`;
+      <div class="seat-note">Memory is durable and per seat: the diary and its episodes live in the node's local store, keyed by this agent's runtime id. A node without a store carries none of it.</div>`;
   }
 
   // ---- tab: cost ----
@@ -1011,7 +1011,7 @@ export function createSeatView({ store, query, navigate, refresh, params = {} })
       return empty(
         "message",
         "No conversation ledger on this node",
-        "The ledger lives in PostgreSQL. This node has none wired, so it cannot show what any seat has said.",
+        "The ledger lives in the node's local store. This node has none wired, so it cannot show what any seat has said.",
       );
     }
     const list = threads.conversations || [];

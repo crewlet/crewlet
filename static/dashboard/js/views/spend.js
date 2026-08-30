@@ -184,7 +184,7 @@ export function createSpendView({ store, query, refresh }) {
           skeletonCards(2),
           "zap",
           "No shared usage counter",
-          "Budget usage lives in PostgreSQL so every node enforces against one number. Without a database each process would count alone, so nothing durable is recorded.",
+          "Budget usage lives in the fleet's coordination store so every node enforces against one number. Without it each process would count alone, so nothing durable is recorded.",
         )
       );
     }
