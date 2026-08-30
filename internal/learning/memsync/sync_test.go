@@ -2,6 +2,7 @@ package memsync
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -237,5 +238,110 @@ func TestHydratingASeatWithNoMemoryIsAQuietNoOp(t *testing.T) {
 	}
 	if carried != 0 {
 		t.Errorf("hydrated %d rows for a seat that has never run", carried)
+	}
+}
+
+// A broker that cannot answer must FAIL the hydration, not report an empty
+// memory.
+//
+// "Nothing recorded" and "could not ask" are different facts, and this is the
+// one place in the package where collapsing them is worse than losing a row:
+// hydration runs inside seat acquisition and every other failure path refuses
+// the seat, so a swallowed error is the single way a seat is admitted with an
+// empty memory AND a success reported to the caller that gates on it.
+//
+// This one covers the OPENING of the replay. The counting call after it has
+// its own case below, because it is a second place the same mistake fits and
+// a closed connection never reaches it.
+func TestAnUnreachableBrokerFailsTheHydrationRatherThanReportingNoMemory(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	db := openStore(t)
+	syncer := syncerOn(t, db, conn)
+
+	// Seed real memory, so a wrong answer here cannot be excused as the
+	// seat genuinely having none.
+	seedMemory(t, db)
+	if _, err := syncer.Publish(context.Background(), seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	// Now take the broker away. Everything below asks a connection that
+	// cannot reach a server.
+	conn.Close()
+
+	carried, err := syncer.Hydrate(context.Background(), seat.Handle)
+	if err == nil {
+		t.Fatalf("hydrating through a closed connection reported success with "+
+			"%d rows — the seat would take work having silently forgotten "+
+			"everything it knows", carried)
+	}
+	if carried != 0 {
+		t.Errorf("a failed hydration reports %d rows carried", carried)
+	}
+}
+
+// countFailsJS is a JetStream whose consumers cannot say how much is pending.
+//
+// Embedded rather than stubbed: the real thing satisfies everything except
+// the one call under test, so this is two methods instead of the whole
+// interface — and it stays correct when the interface grows.
+type countFailsJS struct {
+	jetstream.JetStream
+}
+
+func (j countFailsJS) CreateConsumer(ctx context.Context, stream string,
+	cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+	consumer, err := j.JetStream.CreateConsumer(ctx, stream, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return countFailsConsumer{consumer}, nil
+}
+
+type countFailsConsumer struct {
+	jetstream.Consumer
+}
+
+func (c countFailsConsumer) Info(context.Context) (*jetstream.ConsumerInfo, error) {
+	return nil, errors.New("the broker did not answer")
+}
+
+// The replay opens, and then the broker stops answering before it can say how
+// much there is to carry.
+//
+// The narrow window the case above cannot reach: a connection that is up when
+// the consumer is created and gone a round trip later. Read as "nothing
+// pending" it returns SUCCESS with an empty memory, which is the one shape
+// that gets a seat admitted having forgotten everything — the seat host gates
+// on this error and on nothing else.
+func TestABrokerThatCannotCountPendingFailsTheHydration(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	ctx := context.Background()
+
+	db := openStore(t)
+	seedMemory(t, db)
+	if _, err := syncerOn(t, db, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	// A new node, with a JetStream whose Info call fails.
+	newOwner := openStore(t)
+	syncer, err := New(newOwner, conn, func(string) string { return seat.AgentID })
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	syncer.js = countFailsJS{syncer.js}
+
+	carried, err := syncer.Hydrate(ctx, seat.Handle)
+	if err == nil {
+		t.Fatalf("a broker that could not count reported success with %d rows", carried)
+	}
+	if carried != 0 {
+		t.Errorf("a failed hydration reports %d rows carried", carried)
+	}
+	if got := countRows(t, newOwner, "agent_diary"); got != 0 {
+		t.Errorf("the failed hydration left %d diary rows behind", got)
 	}
 }

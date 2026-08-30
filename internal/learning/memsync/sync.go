@@ -24,6 +24,15 @@ import (
 // minute delays a seat rather than stalling placement behind it.
 const hydrateWait = 15 * time.Second
 
+// consumerCleanupTimeout bounds deleting the ephemeral replay consumer.
+//
+// Five seconds against one API round trip: far past a healthy answer, and
+// bounded because this runs inside seat acquisition. What it costs when it
+// expires is nothing an operator sees — the server reaps an idle ephemeral
+// consumer on its own, which is why the deletion is hygiene rather than a
+// step whose failure means anything.
+const consumerCleanupTimeout = 5 * time.Second
+
 // fetchBatch is how many rows one replay pull takes.
 //
 // The rows are small and the transfer is local, so this is about round trips
@@ -143,6 +152,24 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 		return 0, fmt.Errorf("memsync: open a replay for %s: %w", handle, err)
 	}
 
+	defer func() {
+		// The consumer is ephemeral, so the server reaps it when it goes
+		// idle — but a node acquiring seats in a sweep would otherwise
+		// leave one per seat lying around until then.
+		//
+		// WithoutCancel because a cleanup that inherits the failure it is
+		// cleaning up after does nothing at all — and then its OWN bound,
+		// because WithoutCancel drops the deadline with the cancellation.
+		// This runs before Hydrate returns, inside seat acquisition, so an
+		// unbounded call here would hang the acquisition on exactly the
+		// wedged broker that made the hydration fail.
+		cleanupCtx, stop := context.WithTimeout(
+			context.WithoutCancel(ctx), consumerCleanupTimeout)
+		defer stop()
+		_ = s.js.DeleteConsumer(cleanupCtx,
+			topics.MemoryStream, consumer.CachedInfo().Name)
+	}()
+
 	// HOW MANY ROWS THERE ARE, BEFORE READING ANY. This runs inside seat
 	// acquisition, so a blind fetch is not affordable: with nothing to
 	// replay it would wait out its own timeout, and the seat would still
@@ -150,17 +177,16 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	// seats hydrating nothing cost four seconds and the node lost both
 	// leases. Asking the consumer what is pending turns the empty case,
 	// which is every seat on a fresh company, into one round trip.
-	pending := 0
-	if info, infoErr := consumer.Info(ctx); infoErr == nil {
-		pending = int(info.NumPending)
+	info, err := consumer.Info(ctx)
+	if err != nil {
+		// FAILS THE HYDRATION rather than reading as "nothing to carry".
+		// Those are not the same fact, and collapsing them here is worse
+		// than anywhere else in this package: every other failure path
+		// refuses the seat, so a swallowed error would be the one way a
+		// seat is admitted with an empty memory AND a success reported.
+		return 0, fmt.Errorf("memsync: count %s's memory: %w", handle, err)
 	}
-	defer func() {
-		// The consumer is ephemeral, so the server reaps it when it goes
-		// idle — but a node acquiring seats in a sweep would otherwise
-		// leave one per seat lying around until then.
-		_ = s.js.DeleteConsumer(context.WithoutCancel(ctx),
-			topics.MemoryStream, consumer.CachedInfo().Name)
-	}()
+	pending := int(info.NumPending)
 	if pending == 0 {
 		return 0, nil
 	}
