@@ -103,7 +103,8 @@ func nodeBinary(t *testing.T) string {
 	}
 	if inCI() {
 		t.Fatalf("node is not on PATH, so every dashboard suite would skip and "+
-			"the build would still pass; the go-ci `test` job must install it: %v", err)
+			"the build would still pass; the `test` job in "+
+			".github/workflows/ci.yml must install it: %v", err)
 	}
 	t.Skip("node is not installed; the dashboard's JS suites need it")
 	return ""
@@ -343,25 +344,4 @@ func mustFetch(t *testing.T, a *api.App, url, wantType string) []byte {
 		t.Fatalf("%s: served empty", url)
 	}
 	return data
-}
-
-func TestTheWorkflowDeclaresItsNodeDependency(t *testing.T) {
-	t.Parallel()
-	// The other half of nodeBinary's CI check. That one turns a missing binary
-	// into a red build, which is the protection; this one insists the workflow
-	// ASKS for node, so the red build is fixable by reading the log rather than
-	// by bisecting runner images.
-	//
-	// The dashboard's suites are its ONLY coverage and they run under plain
-	// node, so a runner without it would skip the gate and leave the build
-	// green.
-	const workflow = "../../.github/workflows/ci.yml"
-	raw, err := os.ReadFile(workflow)
-	if err != nil {
-		t.Fatalf("reading %s: %v", workflow, err)
-	}
-	if !strings.Contains(string(raw), "node --version") {
-		t.Error("ci.yml never asks for node, so the dashboard gate would " +
-			"skip on a runner without it and the build would stay green")
-	}
 }

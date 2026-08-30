@@ -154,7 +154,7 @@ then something has to arbitrate, and that arbitration is a rule every reader of
 the file has to know before they can predict what it does. `logging.level` says
 everything `debug:` said and three things it could not.
 
-The key is not simply dropped: it is in `config.retiredFields`, so a file still
+The key is not simply dropped: it is in `config.retiredBootstrapFields`, so a file still
 carrying it is refused with the line that replaces it rather than with "check the
 spelling". This project's own quickstart and example told people to write it, and
 reporting that as a typo sends them hunting for one that is not there. Entries

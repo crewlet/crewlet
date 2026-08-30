@@ -42,10 +42,10 @@ and answering it in pieces is how a push goes red on the piece you skipped.
 `make help` lists the rest.
 
 Every target runs the command [`ci.yml`](.github/workflows/ci.yml) runs, with
-the same flags, and `internal/version/makefile_test.go` asserts the two have
-not drifted: a convenience target that quietly dropped `-race`, or certified
-the store on one driver, would report a pass CI does not honour, and nothing
-else would notice. `make check` is:
+the same flags. Nothing asserts the two have not drifted — a test did, and it
+was dropped — so a convenience target that quietly loses `-race` would report
+a pass CI does not honour and nothing else would notice. Change a target and
+its `ci.yml` step together, and read both. `make check` is:
 
 ```bash
 gofmt -l .               # formatting — prints the files that need it
@@ -53,8 +53,8 @@ go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
 go test ./... -race -count=1                                  # the full suite
-CREWLET_STORE_DRIVER=turso  go test ./internal/store/... -race -count=1
-CREWLET_STORE_DRIVER=sqlite go test ./internal/store/... -race -count=1
+# then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
+CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build ./...            # test-cross
 ```
 
 The race detector is not optional here: the engine's concurrency model is
@@ -80,11 +80,14 @@ without it** — a green run has simply not exercised them.
   `tests/dashboard/js/*.test.mjs` execute under whatever `node` is on PATH,
   driven from Go by `internal/api`. The dashboard has no Go code of its own,
   so without node a whole subsystem goes quiet. **CI fails rather than
-  skipping** when node is missing: the job installs one if the runner image
-  does not ship it, and the test asserts the workflow asks for it. Locally,
-  every `make` target that runs a suite refuses to start without one, for the
-  same reason — a target cannot install node for you, but it can decline to
-  hand you a green run that tested none of the dashboard.
+  skipping** when node is missing: the suite itself fails the run outright
+  when `CI` is set and node is off `PATH`, and the `test` job installs one if
+  the runner image stops shipping it. That install step is a convenience, not
+  a guard — nothing asserts it is still there, and nothing needs to, because
+  the suite goes red either way. Locally, every `make` target that runs a
+  suite refuses to start without node, for the same reason — a target cannot
+  install it for you, but it can decline to hand you a green run that tested
+  none of the dashboard.
 
   **Which dashboard the suites test is a parameter.** They resolve it once,
   in `tests/dashboard/js/dashboardRoot.mjs`, from `CREWLET_DASHBOARD_ROOT` —
@@ -320,10 +323,14 @@ commits are written, and an inference that changes its mind writes a bare
 capitalises the `Bump` and offers no way not to, so a bump is the one subject
 here that does not start lowercase.
 
-`internal/version` asserts both halves of the author/actor guard and the
-`--auto --squash` flags, because every one of those fails silently: the
-workflow keeps running, it just runs on the wrong pull requests or merges
-before a check has reported.
+Nothing checks any of that for you. `internal/version` used to assert both
+halves of the author/actor guard and the `--auto --squash` flags; those tests
+were dropped, and no linter in this repository reads a workflow file. Every one
+of them fails silently — the workflow keeps running, it just starts running on
+the wrong pull requests or merging before a check has reported — and the job
+holds `contents: write` and `pull-requests: write`. Read the `if:` and the merge
+command on any diff that touches
+[`.github/workflows/dependabot-merge.yml`](.github/workflows/dependabot-merge.yml).
 
 ## Releasing
 

@@ -5,8 +5,8 @@
 # and passes only where CI would pass. A convenience target that quietly drops
 # `-race`, or runs the store suite on one driver, is worse than no target at
 # all: it reports a pass CI will not honour, and the divergence is invisible
-# until the pull request goes red. internal/version/makefile_test.go asserts
-# the two have not drifted.
+# until the pull request goes red. Nothing asserts the two agree -- keep them
+# in step by hand, and change both in the same commit.
 #
 # The second thing this file is for is the suites that need something the
 # machine may not have. `node` and a Pulsar broker are absent by default and
@@ -43,8 +43,9 @@ GOTEST := $(GO) test -race -count=1
 # The release targets, cross-compiled. Nothing else builds for anything but
 # the machine you are on, so a build tag or a platform-gated file that only
 # breaks darwin reaches the tag — and a broken tag is a release to re-cut.
-# ci.yml runs these as a matrix; the pairs are .goreleaser.yaml's, and
-# internal/version asserts all three lists agree.
+# ci.yml runs these as a matrix and the pairs are .goreleaser.yaml's. All
+# three lists have to agree and nothing checks that they do, so a target
+# added or dropped here belongs in the other two in the same commit.
 CROSS_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
 # Where `make pulsar-up` puts the broker, and therefore where the conformance

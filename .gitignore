@@ -14,9 +14,9 @@
 # carrying a pid, a hostname and a timestamp.
 #
 # `*.db.lock` and not `*.lock`: the broad pattern would silently swallow
-# yarn.lock, Cargo.lock, uv.lock and every other dependency manifest, and
-# internal/version's dependency-surface test exists precisely because a
-# manifest nobody can see is a surface nobody watches. This is exactly as
+# yarn.lock, Cargo.lock, uv.lock and every other dependency manifest, and a
+# manifest nobody can see is a surface nobody watches -- it gets no
+# Dependabot entry and nothing reports the omission. This is exactly as
 # broad as the `*.db` above it, which is the thing it shadows.
 *.db.lock
 /crewlet-data/

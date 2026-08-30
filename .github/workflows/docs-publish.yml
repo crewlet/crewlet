@@ -42,8 +42,9 @@ on:
   # The name must match `name:` in .github/workflows/release.yml EXACTLY —
   # GitHub matches this list against that string and reports no error when
   # nothing matches, so a mismatch just silently never fires and the site
-  # falls back to the hourly poll this trigger exists to pre-empt. Asserted
-  # by internal/version, because "silently never fires" has no other symptom.
+  # falls back to the hourly poll this trigger exists to pre-empt. Nothing
+  # asserts the two strings match, and "silently never fires" has no other
+  # symptom, so re-read both on any workflow rename.
   workflow_run:
     workflows: [release]
     types: [completed]

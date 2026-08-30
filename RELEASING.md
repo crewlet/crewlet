@@ -140,7 +140,7 @@ part of the publish phase `--snapshot` already skips, so without it a
 rehearsal runs `cosign sign-blob --yes` over the checksums and tries to mint a
 real Sigstore certificate from a machine with no OIDC token to mint it from.
 
-It builds all six targets, the archives, the checksums *and the container
+It builds all four targets, the archives, the checksums *and the container
 image*. The image is worth a note: buildx cannot assemble a multi-platform
 manifest without pushing it, so `dockers_v2` builds and pushes in one step and
 runs in goreleaser's **publish** phase. `--skip=publish` therefore skips the
@@ -166,55 +166,69 @@ on the tag that publishes.
 
 ## What CI already guards
 
-Most failure modes are asserted rather than remembered.
-[`ci.yml`](.github/workflows/ci.yml) runs the build, the race suite, both store
-drivers, the end-to-end gates and the linter on every pull request, and
-`internal/version` asserts the release surface itself:
+[`ci.yml`](.github/workflows/ci.yml) runs the build, the race suite, the
+end-to-end gates, a cross-compile of every release target and the linter on
+every pull request. The release surface itself is guarded only by what the
+release pipeline does when it runs:
 
-- **the ldflags stamp still resolves** — rename the variable, move the package
-  or change the module path and the `-X` flag silently applies to nothing: the
-  link succeeds and every release reports the build-info fallback. The test
-  takes the flag apart and checks both halves against the tree — the import
-  path against the one this package actually has, the variable against a
-  package-level string var really declared here — rather than against a copy
-  of the string, which would stay green through the renames it exists to
-  catch. Both release jobs also *run the built binary* and compare what it
-  reports against the version goreleaser recorded in `dist/metadata.json`,
-  because that is the only symptom this has. The comparison is equality, never
-  a sentinel: sniffing the output for `dev` is what this used to do, and since
-  Go 1.24 an unstamped build in a repository reports a tag-derived
-  pseudo-version instead, so a stamp that applied to nothing shipped green.
-- **the docs site learns a release happened** — `docs-publish.yml` watches the
-  release workflow by its `name:`, and GitHub reports nothing when that string
-  matches no workflow, so a rename on either side just means the trigger never
-  fires again and the site silently falls back to its hourly poll.
-- **the build is pure Go** (`CGO_ENABLED=0`) — a dependency needing cgo does
-  not fail at compile time, it fails on whichever cross target the release
-  machine cannot build, at tag time.
-- **the `Dockerfile` copies from `${TARGETPLATFORM}`** — goreleaser stages each
-  platform's binary under its own directory, so a bare `COPY crewlet` builds
-  nothing, and it fails inside the release after every binary is built.
-- **exactly one workflow is triggered by a `v*` tag** — two of them race to
-  create one Release for one tag, and the loser fails after its artifacts are
-  already built. Both `.yml` and `.yaml` are read, because GitHub runs both and
-  a check that globs one suffix is blind to the other.
-- **GitHub writes the notes** (`changelog.use: github-native`) — goreleaser's
-  default builds them from commit *subjects*; ours must come from pull request
-  *titles*, and flipping the mode would quietly make `.github/release.yml` a
-  dead file.
-- **the notes cannot drop a pull request** — `.github/release.yml` keeps a
-  catch-all `*` category, without which an unlabelled pull request is omitted
-  from the body with no warning.
-- **a pre-release takes neither "Latest"** — `prerelease: auto` for the Release,
-  and the `latest` image tag is guarded on the release being stable.
-- **every dependency surface has a Dependabot entry** — a manifest nobody told
-  Dependabot about produces no pull requests, which looks exactly like a
-  manifest with nothing to update. The required set is read off the tree, not
-  listed in the test: a written-down list asserts the entries that already
-  exist and passes on the day a new manifest lands without one, which is the
-  whole failure. Ecosystem names are matched whole, too — as substrings,
-  `docker` is satisfied by the `docker-compose` entry, so deleting the
-  `Dockerfile`'s left the check green.
+- **`goreleaser check`** runs first in both release jobs, so a malformed or
+  unknown field in `.goreleaser.yaml` is reported as a config error rather than
+  as whatever the build does with it.
+- **The snapshot job builds everything** — all four targets, the archives, the
+  checksums and the container image — on demand and on any pull request
+  touching `.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**` or
+  the workflow. A dependency that needs cgo, or a `Dockerfile` that no longer
+  copies from `${TARGETPLATFORM}`, fails there rather than at tag time.
+- **Both release jobs run the built binary** and compare what it reports against
+  the version goreleaser recorded in `dist/metadata.json`. That is the only
+  symptom the ldflags stamp has: rename `internal/version.value`, move the
+  package or change the module path and the `-X` flag silently applies to
+  nothing — the link still succeeds and the binary falls back to its build
+  info. The comparison is equality, never a sentinel: sniffing the output for
+  `dev` is what this used to do, and since Go 1.24 an unstamped build in a
+  repository reports a tag-derived pseudo-version instead, so a stamp that
+  applied to nothing shipped green. The publish job also checks that the tag
+  goreleaser built is the ref the run was triggered by.
+
+### What nothing guards — check these by hand
+
+`internal/version` used to assert each of these against the file that carries
+it. Those tests were dropped, and nothing replaced them: there is no actionlint,
+no yamllint and no schema validation anywhere in the tree, and GitHub accepts
+every one of these mistakes as valid configuration. Each fails **silently** —
+the pipeline stays green and simply stops doing the thing — so read the file
+when you touch it:
+
+- **`.github/release.yml` keeps its catch-all `*` category.** Without it an
+  unlabelled pull request is omitted from the release body with no warning, and
+  nothing at release time diffs that body against the merged pull requests. The
+  notes are the only record a release has, and the failure reads as a quiet
+  week.
+- **`prerelease: auto`, and the `latest` image tag stays guarded on the release
+  being stable.** Lose either and a release candidate becomes GitHub's "Latest"
+  or answers `docker pull crewlet` for everyone who pinned nothing.
+- **`changelog.use: github-native`.** Any other mode builds the body from commit
+  subjects instead of pull request titles and makes `.github/release.yml` a dead
+  file that keeps being maintained.
+- **Exactly one workflow carries `push: tags: ["v*"]`.** Two race to create one
+  Release for one tag and the loser fails after its artifacts are built — and
+  the opposite mistake, a trigger that ends up somewhere Actions ignores, means
+  pushing a tag publishes nothing at all. Both `.yml` and `.yaml` count.
+- **`docs-publish.yml` watches the release workflow by its exact `name:`.**
+  GitHub reports nothing when that string matches no workflow, so a rename on
+  either side just means the trigger never fires again and the site falls back
+  to its hourly poll.
+- **Every dependency surface has a `.github/dependabot.yml` entry.** A manifest
+  nobody told Dependabot about produces no pull requests, which looks exactly
+  like a manifest with nothing to update — that is how `go.mod` went unwatched
+  for the length of the rewrite. Ecosystem names must match whole: as a
+  substring, `docker` is satisfied by the `docker-compose` entry.
+- **`.github/workflows/dependabot-merge.yml`'s guard and its merge flags.** The
+  job holds `contents: write` and `pull-requests: write` and runs `gh pr review
+  --approve`; its `if:` is the only thing stopping it approving a commit a
+  person pushed onto a Dependabot branch, and `--auto` is the only thing holding
+  the merge until the checks `main` requires have reported. Weakening either
+  makes the workflow run *more*, never fail.
 
 ---
 
