@@ -38,6 +38,13 @@ import (
 // exist for — `PUT /config/roles/{handle}` changes one seat — and inventing a
 // list syntax here would give two answers to one question.
 //
+// That is an argument about THIS format, and the obvious reply is to reach for
+// one that does address list members — RFC 6902, or a Kubernetes-style merge
+// key. Neither replaces the entity routes, and the reason is not about
+// formats: a patch addresses by STRUCTURE and a seat is addressed by
+// IDENTITY, which is why the same handle reaches a seat whether it sits at
+// the root or three units down. decisions/505 records the comparison.
+//
 // # `null` deletes
 //
 // Also RFC 7396, and the reason this is a merge patch rather than an ad-hoc

@@ -117,6 +117,62 @@ replace: "make section X exactly this, without my having to know what is in
 it". That is the lost-update pattern the compare-and-set below exists to
 remove, scoped to one section. Not having it is the point.
 
+## Why not a patch format that CAN address a list member
+
+The argument above — arrays replace, so editing one seat needs a route — is an
+argument about RFC 7396 specifically, and it does not survive the obvious
+reply: *then use a patch format that addresses list members.* Two exist, and
+this record did not evaluate either, so it does so here.
+
+**RFC 6902 (JSON Patch)** addresses array elements, but positionally only. RFC
+6901 §4 admits digits and the append sentinel `-` and nothing else — "if an
+array is referenced with a non-numeric token, an error condition will be
+raised." Its `test` op supplies the guard a positional path needs, and a failed
+op aborts the whole document, so a stale index fails rather than corrupting.
+
+**Strategic merge patch** (Kubernetes) is the format built for exactly this: a
+`patchMergeKey` tells the server to merge a list by a member's key rather than
+replacing it. It is not a standard, it needs schema metadata published to
+clients, it grew four in-band directives to express deletion, ordering,
+primitive lists and unions, and Kubernetes has since superseded it with
+server-side apply.
+
+**Neither replaces the entity routes, and the reason is not about formats.**
+A patch document addresses by STRUCTURE. This config addresses a seat by
+IDENTITY, and the two are deliberately different namespaces. In the shipped
+Nimbus example the eight seats sit at eight different structural paths —
+`/roles/0`, `/units/0/children/0/roles/0`, `/units/2/children/0/roles/2` — and
+every one of them is `PUT /config/roles/{handle}`, because `eachRole` walks the
+whole tree and a handle is unique across it. A seat's durable id is a UUIDv5
+over (company name, handle); WHERE it sits in the chart is not part of who it
+is, and an operator editing "the CTO" does not know or care which unit chain
+it hangs from. JSON Patch would make the caller write the chain and re-derive
+it whenever the chart is reorganised; strategic merge patch would let the
+caller key each LEVEL by name but still walk `units → children → roles` to
+reach the seat. Both turn a flat namespace into a structural one, which is the
+capability the entity route exists to provide rather than an ergonomic
+preference.
+
+**What the comparison genuinely costs us**, recorded because it is the half an
+argument like this usually omits:
+
+- `llm-providers` is a MAP, so `PATCH /config` already addresses one provider
+  by key today, deep-merging it. That route earns its place on replace
+  semantics and on being uniform with the other three, not on addressability —
+  it is the one of the four a redesign could drop.
+- A patch sends only the fields it changes, so it never sends a mask back and
+  needs no mask restore at all. The entity routes re-send a whole entity, which
+  is why `RestoreRedacted` exists — and that mechanism is where a reorder was
+  found handing each seat its neighbour's credentials. A narrower write is a
+  smaller attack surface for that entire class of fault.
+- One route covers every future collection; four routes are four, and a fifth
+  collection needs a fifth.
+
+The call is to keep both, for the reason above rather than the one this record
+originally gave: the entity routes provide identity addressing over a nested
+document, which no patch format provides at any price, and `PATCH /config`
+covers everything whose shape IS its address.
+
 ## The masked document must be able to come back
 
 Python's answer was to document that the read is not round-trippable and point

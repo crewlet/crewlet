@@ -24,6 +24,11 @@ import (
 // revision summary mean something and what makes two people editing different
 // parts of the company safe.
 //
+// Why not a patch format that addresses list members instead — RFC 6902, or a
+// merge key — is the question this shape invites, and decisions/505 records
+// the comparison rather than leaving it to be re-derived: a patch addresses by
+// structure, and a handle is deliberately not structural.
+//
 // # It is the same write underneath
 //
 // An entity PUT is not a patch protocol. It opens the active revision,
