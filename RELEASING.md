@@ -81,6 +81,18 @@ checksummed.
    "Latest" on GitHub nor the `latest` image tag, so an operator who pinned
    nothing never receives one.
 
+   While the major number is `0`, a **break in a surface an earlier tag
+   shipped** moves the minor too, and it is exactly the kind of thing worth a
+   paragraph in `release.header` (see [Release notes](#release-notes)) —
+   a title alone cannot tell an operator what to change. A change to a surface
+   **no tag has shipped** is not a break: nobody could be running it, so it
+   needs no paragraph, no `!` and no `BREAKING CHANGE:` footer, and the
+   contributor was free to make it outright. What settles which of the two you
+   are looking at is whether the previous tag carried the path at all —
+   `git log <previous tag>..HEAD -- <path>`;
+   [CONTRIBUTING.md](CONTRIBUTING.md#nothing-is-released-until-a-tag-ships-it)
+   carries the rule contributors work to.
+
 2. **Skim the merged pull requests** since the previous tag — they *are* the
    release notes. GitHub builds the body from their titles, so a title that
    reads as a commit log rather than a release note is worth editing on the
