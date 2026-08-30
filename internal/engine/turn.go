@@ -148,6 +148,26 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	}
 
 	routing := inbox.Route(surviving, d.ledgered)
+
+	// THE TRIGGER'S TRACE, restored before anything below publishes or logs,
+	// so this turn's spans hang under whatever caused it — a webhook, a
+	// schedule, another agent — instead of each seat rooting a trace of its
+	// own and the join a reader follows from "a message arrived" to "here is
+	// what it did" never existing.
+	//
+	// It is bound FIRST of the three context values rather than beside them,
+	// because the coalescing record and the conversation-history warning are
+	// both emitted between here and there: bound after them, those would be
+	// the two lines about a turn that do not name its trace, which is
+	// precisely when an operator is looking for them.
+	//
+	// A COALESCED TURN HAS ONE TRACE AND SEVERAL CAUSES. The trace comes from
+	// the first event of the partition, the same event describeTurn takes the
+	// trigger from — ten Slack comments become one turn under one trace. The
+	// others are already recorded as the turn's interactions; a span cannot
+	// have two parents, and inventing a root to hold them would put a node
+	// above the webhook that actually happened.
+	ctx = tracing.WithRemote(ctx, triggerTrace(routing.Events))
 	req := Request{
 		Handle: handle, Events: routing.Events,
 		WorkKey: routing.WorkKey, Coalesce: routing.Coalesce,
@@ -179,23 +199,6 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	// turn's context is built, rather than at each phase, so a new phase
 	// cannot forget it.
 	ctx = llm.WithSeat(ctx, handle)
-
-	// And the trigger's trace, so this turn's spans hang under whatever
-	// caused it — a webhook, a schedule, another agent — instead of each
-	// seat rooting a trace of its own and the join a reader follows from
-	// "a message arrived" to "here is what it did" never existing.
-	//
-	// Bound HERE, with the other two, because the consumer is a leaf and
-	// because this is the single place a turn's context is built: a phase
-	// added later cannot forget it.
-	//
-	// A COALESCED TURN HAS ONE TRACE AND SEVERAL CAUSES. The trace is taken
-	// from the first event of the partition, which is the same event
-	// describeTurn takes the trigger from — ten Slack comments become one
-	// turn under one trace. The others are already recorded as the turn's
-	// interactions; a span cannot have two parents, and inventing a root to
-	// hold them would put a node above the webhook that actually happened.
-	ctx = tracing.WithRemote(ctx, triggerTrace(routing.Events))
 
 	result, err := d.Turn(ctx, req)
 	if err != nil {
@@ -413,7 +416,7 @@ func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, conversation str
 		Count:              len(routing.Events),
 		FirstAt:            first.UTC().Format(time.RFC3339),
 		LastAt:             last.UTC().Format(time.RFC3339),
-	}, events.NewTrace())
+	}, tracing.TraceOf(ctx))
 	ev.Source = "engine." + routing.Events[0].Source
 	d.Observe(ctx, ev)
 }

@@ -477,10 +477,20 @@ func DataAs[T Payload](e *Event) (T, bool) {
 // tracer silently drops.
 //
 // SHAPED rather than merely random: a 32-hex trace id and a 16-hex span id are
-// what a real tracer accepts when one is wired, so ids already stored stay
+// what a real tracer accepts, so ids stored before one was wired stayed
 // meaningful across that change. crypto/rand cannot fail on any supported
 // platform — it panics internally instead — so there is no error to handle and
 // no degraded id to invent.
+//
+// # One caller
+//
+// [github.com/crewlet/crewlet/internal/tracing.TraceOf], which reports the
+// active span's ids and falls back to this when there is no span. That is the
+// single place a root is minted now; the eight publishers that used to call
+// this directly ask TraceOf instead, so an event's trace comes from the span
+// it was published under whenever there is one. Do not add a second caller —
+// a root minted outside TraceOf is an event that has left its turn's trace.
+// See decisions/508.
 func NewTrace() TraceContext {
 	var buf [24]byte
 	_, _ = rand.Read(buf[:])
