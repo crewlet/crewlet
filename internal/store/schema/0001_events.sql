@@ -5,11 +5,11 @@
 -- history that produced them belongs to a database this binary will never
 -- open: a deployment stands up fresh, with no data migration from it.
 --
--- Every statement here must parse on BOTH certified drivers — Turso and
--- mainline SQLite — because Turso's dialect is the narrower of the two and
--- the dual-driver test job was the only thing that caught a divergence.
--- Three conventions follow from that, plus one
--- from the engine owning its own clock:
+-- Every statement here was written to parse on BOTH certified drivers —
+-- Turso and mainline SQLite — because Turso's dialect was the narrower of
+-- the two. The fallback driver is retired (see store.go § One driver), but
+-- the conventions it forced still hold: each has a reason of its own.
+-- Three of them, plus one from the engine owning its own clock:
 --
 --   * TIMESTAMPTZ  -> INTEGER, microseconds since the Unix epoch, UTC.
 --     Not TEXT. Keyset paging compares (event_time, event_id) as a tuple,
@@ -18,7 +18,7 @@
 --     naive. Integers make that class of bug unrepresentable, and
 --     microseconds is exactly the resolution TIMESTAMPTZ carried, so no
 --     precision is traded for it.
---   * JSONB        -> TEXT holding JSON. Both drivers ship json1, so
+--   * JSONB        -> TEXT holding JSON. The driver ships json1, so
 --     json_extract() still reaches into a column when a query needs to.
 --   * BOOLEAN      -> INTEGER 0/1.
 --

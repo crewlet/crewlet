@@ -32,7 +32,7 @@ var migrateMu sync.Mutex
 //
 // Forward-only, one transaction per file, with the schema_migrations row
 // written inside that transaction — so a file is either fully applied and
-// recorded, or neither. Both drivers make DDL transactional, which is what
+// recorded, or neither. Turso makes DDL transactional, which is what
 // lets a whole file go in as one statement batch: the Postgres migrator split
 // files on ';' and then had to validate its own naive splitter (dollar-quoted
 // bodies would be cut in half). Nothing here needs that.
