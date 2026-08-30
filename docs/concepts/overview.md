@@ -70,7 +70,7 @@ flowchart TD
     ENG --> DB
 ```
 
-**Infrastructure**: none to operate. The stream is a NATS JetStream server the process embeds, and the store is a local file it creates — both slots take an external address (NATS or Apache Pulsar; see [Running a Fleet](../guides/fleet.md)) when a deployment outgrows one node. OpenTelemetry for distributed tracing.
+**Infrastructure**: none to operate. The stream is a NATS JetStream server the process embeds, and the store is a local file it creates. Outgrowing one node moves only the stream: the embedded servers join one cluster, or every node dials one external NATS (see [Running a Fleet](../guides/fleet.md)). It is the same client code either way — embedded versus external is a connection choice, not a second backend — and the store stays each node's own file. OpenTelemetry for distributed tracing.
 
 **One node type**: `crewlet run` is the node, and what it does is a config value — `node.roles` picks from `ingress` (serve the HTTP API and its webhooks), `seats` (run agents), and `workers` (the company-wide singleton duties). The default is all three: one process serving the API and the dashboard and running every agent, which is the whole stack. Splitting the API off is the same command with `-roles ingress`, so both topologies are the same code path rather than two wirings that have to be kept in step.
 
@@ -84,11 +84,11 @@ flowchart TD
 |---|---|---|
 | Language | Go 1.27+ | One self-contained binary, real parallelism, a standard library that covers most of this table |
 | Distribution | A single `CGO_ENABLED=0` binary | Nothing to install alongside it. The matrix is linux and macOS on amd64 and arm64 — bounded by the platforms the store driver embeds its database engine for, not by the compiler. The linux binaries need glibc: that engine is loaded with `dlopen`, which no pure-Go build avoids |
-| Event stream | Embedded NATS JetStream | Persistent pub/sub *inside the process* — a company runs with no broker to operate. An external NATS or Apache Pulsar takes the same slot for a fleet |
+| Event stream | Embedded NATS JetStream | Persistent pub/sub *inside the process* — a company runs with no broker to operate. An external NATS cluster takes the same slot for a fleet, on the same client code. A seat's mailbox is a durable consumer created with nothing attached, which here is an ordinary API call (~1.7 ms) rather than an admin endpoint |
 | Store | Turso | One local file this process owns exclusively; pure Go, SQLite file format, and the vector functions the learning subsystem's recall is written against |
 | Vector search | The store's vector distance functions | The per-agent diary and the episodic store, in the same file as everything else. The *arithmetic* is the database's; there is no ANN index reachable from the Go driver yet, so recall is a scan behind the per-agent index |
 | Event store | A table in that file | LLM-invocation observability and the event dashboards, written inline by a publish listener |
-| Coordination | TTL leases with a fencing epoch | Seat ownership and the fleet's shared counters, in a KV slot separate from the store file |
+| Coordination | TTL leases with a fencing epoch | Seat ownership and the fleet's shared counters, in a KV riding the stream's own NATS connection — never the store file, and never a second connection that could fail on its own |
 | Config | YAML → typed structs → generated JSON Schema | One definition drives validation, the schema editors read, and the docs |
 | Tracing | OpenTelemetry | W3C Trace Context, automatic propagation, OTLP export to Jaeger/Tempo |
 | LLM clients | Official vendor SDKs | Anthropic and OpenAI, plus any OpenAI-compatible endpoint |
@@ -157,8 +157,9 @@ internal/
 │                         #   wake it twice), ledger/ (iteration, conversation
 │                         #   and budget ledgers), prefetch/, prompts/,
 │                         #   skills/, builtin/, subagent/
-├── queue/                # The EventQueue contract + memory, jetstream and
-│                         #   pulsar backends, all certified by one suite
+├── queue/                # The EventQueue contract + the jetstream backend
+│                         #   and the in-memory twin, both certified by one
+│                         #   suite
 ├── coord/                # TTL leases with a fencing epoch + the shared KV
 ├── seat/                 # Which seats this node runs, and the watchdog
 ├── store/                # The local file: events, learning, runtime state

@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
-	"github.com/crewlet/crewlet/internal/queue/pulsar"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -23,9 +22,8 @@ import (
 //
 // TWO SLOTS, chosen independently and validated together: the STREAM carries
 // events, and COORDINATION carries seat ownership. The combinations that make
-// sense are enumerated in config's topology validation — a Pulsar stream has no
-// compare-and-set, so it cannot also be the coordination store, and a
-// multi-node fleet cannot coordinate locally.
+// sense are enumerated in config's topology validation — a multi-node fleet
+// cannot coordinate locally, and a two-member fleet has no quorum.
 //
 // The STORE is not a third slot in that sense — there is nothing to choose, and
 // nothing to validate against the other two. It is this node's own file, a
@@ -162,8 +160,6 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 	var out *Backends
 	var err error
 	switch b.Stream.Type {
-	case config.StreamPulsar:
-		out, err = openPulsar(ctx, b)
 	case config.StreamNATS, config.StreamEmbedded, "":
 		out, err = openNATS(ctx, b)
 	default:
@@ -231,13 +227,29 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 // ends up without a fleet store — which is not a startup error but a panic
 // hours later in whichever subsystem reached for it first.
 func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
+	// THROUGH THE RESOLVER, never the raw field. `node.id` is only one of
+	// the three places a node's name comes from — the file, then
+	// CREWLET_NODE_ID, then the default — and the raw field is empty for
+	// the shape a container orchestrator actually uses, which is to inject
+	// the variable and leave the key out.
+	//
+	// Empty is not a harmless default here. JetStream places replicas BY
+	// SERVER NAME, so this value is the member's identity in the cluster:
+	// a clustered member with no name is REFUSED at boot (see
+	// jetstream.startEmbedded), which made the documented fleet shape fail
+	// to start, and a solo one silently fell back to the literal
+	// "crewlet", quietly detaching the broker's identity from the node's.
+	nodeID, err := config.ResolveNodeID(b, nil)
+	if err != nil {
+		return nil, fmt.Errorf("engine: stream: %w", err)
+	}
 	cfg := jetstream.Config{
 		URL:         b.Stream.URL,
 		StoreDir:    b.Stream.StoreDir,
 		ClusterName: b.Stream.Cluster.Name,
 		ClusterURLs: b.Stream.Cluster.Peers,
 		ClusterPort: b.Stream.Cluster.Port,
-		ServerName:  b.Node.ID,
+		ServerName:  nodeID,
 		Replicas:    b.Stream.Replicas,
 		Credentials: b.Stream.Credentials,
 		Token:       b.Stream.Token,
@@ -355,144 +367,6 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 		return fmt.Errorf("engine: coordination: %w", err)
 	}
 	out.Coord = leases
-	return nil
-}
-
-// openPulsar builds a Pulsar stream and the NATS estate its leases live on.
-//
-// TWO ESTATES, and that is the whole shape of this topology. Pulsar has no
-// compare-and-set, which is the one primitive a lease needs, so the
-// coordination slot cannot be the stream — it is a NATS KV the nodes reach
-// separately, either one an operator runs or a cluster they embed among
-// themselves.
-//
-// The coordination estate is opened FIRST, so a config with nowhere to keep
-// leases fails before any Pulsar client exists. The order is NOT load-bearing
-// and it is worth saying so rather than implying otherwise: pulsar.Open
-// connects lazily — it validates and constructs, it does not dial — so neither
-// order can leave a node attached to topics it must not take work from. Both
-// orders clean up after themselves, and the difference is which error an
-// operator with two broken halves reads first.
-func openPulsar(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
-	// CHECKED BEFORE EITHER DIAL. Reaching a broker only to discover the
-	// topology cannot use it wastes a connection attempt and, worse,
-	// reports a network failure when the problem is a configuration one —
-	// an operator whose broker happens to be down would read the wrong
-	// error and go fix the wrong thing.
-	if b.Coordination.Type != config.CoordinationEmbeddedKV {
-		return nil, fmt.Errorf("engine: a %q stream needs %q coordination: "+
-			"Pulsar has no compare-and-set, so it cannot hold leases",
-			config.StreamPulsar, config.CoordinationEmbeddedKV)
-	}
-
-	// Not a duplicate of the topology validation, which refuses this too.
-	// An empty block is genuinely unopenable rather than merely invalid:
-	// "embed a member with defaults" and "nothing was said about leases"
-	// are the same value, and taking the first reading gives every node in
-	// a fleet its own private in-memory lease table — so every node claims
-	// every seat, and nothing anywhere reports a problem.
-	if b.Coordination.NATS.IsZero() {
-		return nil, fmt.Errorf("engine: a %q stream keeps its leases on a NATS "+
-			"estate and this config names none: set coordination.nats.url, "+
-			"or coordination.nats.cluster to embed one", config.StreamPulsar)
-	}
-
-	out := &Backends{}
-	if err := openCoordinationEstate(ctx, b, out); err != nil {
-		return nil, err
-	}
-
-	q, err := pulsar.Open(ctx, pulsar.Config{
-		URL:               b.Stream.URL,
-		Tenant:            b.Stream.Tenant,
-		Namespace:         b.Stream.Namespace,
-		AdminURL:          b.Stream.AdminURL,
-		Token:             b.Stream.Token,
-		TLSTrustCertsPath: b.Stream.TLSTrustCerts,
-	})
-	if err != nil {
-		out.Close(ctx)
-		return nil, fmt.Errorf("engine: stream: %w", err)
-	}
-	out.Queue = q
-	return out, nil
-}
-
-// openCoordinationEstate fills the coordination slot from its own NATS estate.
-//
-// Only reachable on a Pulsar topology — validation refuses the block anywhere
-// else, because every other stream type already carries coordination on the
-// connection it is using for work.
-func openCoordinationEstate(ctx context.Context, b *config.Bootstrap, out *Backends) error {
-	estate := b.Coordination.NATS
-
-	var conn *nats.Conn
-	var err error
-	if estate.Embedded() {
-		server, serr := jetstream.StartServer(ctx, jetstream.Config{
-			StoreDir:    estate.StoreDir,
-			ClusterName: estate.Cluster.Name,
-			ClusterURLs: estate.Cluster.Peers,
-			ClusterPort: estate.Cluster.Port,
-			ServerName:  b.Node.ID,
-			Credentials: estate.Credentials,
-			Token:       estate.Token,
-			TLS:         streamTLS(estate.TLS),
-		})
-		if serr != nil {
-			return fmt.Errorf("engine: coordination estate: %w", serr)
-		}
-		// Recorded before the connection is opened, so a failure below is
-		// cleaned up by Close rather than leaking the server it started.
-		//
-		// NOT COVERED, and not coverable from here: Conn fails only when
-		// the server is already shut down, which cannot be true one line
-		// after starting it. The ordering is correctness by construction
-		// rather than by test — kept because the alternative is a leak
-		// that would only appear if that ever stopped being true.
-		out.stopServer = server.Shutdown
-		conn, err = server.Conn()
-	} else {
-		// Credentials and Token are passed through UNCOVERED. Standing up
-		// a NATS server that REQUIRES either is not something this
-		// package can do — StartServer's own Token is a client dial
-		// option, not an authorization rule, so an embedded server always
-		// accepts anyone. It is the least costly of the gaps here: an
-		// operator whose credentials never arrive reads an authorization
-		// violation at boot, which is loud, immediate and names itself.
-		conn, err = jetstream.Dial(jetstream.Config{
-			URL:         estate.URL,
-			Credentials: estate.Credentials,
-			Token:       estate.Token,
-			TLS:         streamTLS(estate.TLS),
-		})
-	}
-	if err != nil {
-		out.Close(ctx)
-		return fmt.Errorf("engine: coordination connection: %w", err)
-	}
-	out.conn = conn
-
-	// Replicas is passed through UNCOVERED: a replica count above 1 only
-	// takes effect against a clustered estate, and a single member never
-	// reaches quorum — measured on the stream side, it waits the full 60 s
-	// and fails — so a one-process test cannot tell 3 from 1. What would
-	// cover it is the fleet suite, three members and one bucket.
-	leases, err := kv.Open(ctx, conn, kv.Config{
-		TTL:      leaseTTL(b),
-		Replicas: estate.Replicas,
-	})
-	if err != nil {
-		out.Close(ctx)
-		return fmt.Errorf("engine: coordination: %w", err)
-	}
-	shared, err := openFleet(ctx, conn, estate.Replicas)
-	if err != nil {
-		out.Close(ctx)
-		return fmt.Errorf("engine: coordination: %w", err)
-	}
-	out.Coord = leases
-	out.Fleet = shared
 	return nil
 }
 

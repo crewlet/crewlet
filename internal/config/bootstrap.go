@@ -161,20 +161,6 @@ func (b *Bootstrap) validateTopology() error {
 	peers := len(b.Stream.Cluster.Peers)
 	clustered := peers > 0 || b.Stream.Cluster.Name != "" || b.Stream.Type != StreamEmbedded
 
-	// The COORDINATION quorum is counted over the coordination estate,
-	// which is the stream's own members everywhere except a Pulsar
-	// topology — where the leases live on a separate NATS cluster whose
-	// membership the stream block says nothing about. Counting the stream
-	// there reads a Pulsar fleet's two-member lease cluster as one node
-	// and passes it, which is exactly the pairing the check below exists
-	// to refuse.
-	coordPeers := peers
-	coordPeersField := "stream.cluster.peers"
-	if b.Stream.Type == StreamPulsar {
-		coordPeers = len(b.Coordination.NATS.Cluster.Peers)
-		coordPeersField = "coordination.nats.cluster.peers"
-	}
-
 	if b.Coordination.Type == CoordinationLocal && clustered {
 		p.add("coordination.type", ErrConflict,
 			"local coordination holds its leases in this process, so every "+
@@ -187,89 +173,33 @@ func (b *Bootstrap) validateTopology() error {
 	// serving the moment either restarts — and a rolling upgrade restarts
 	// them one at a time, which makes the outage certain rather than
 	// unlucky.
+	//
+	// Counted over the STREAM's members, because that is where the leases
+	// live: the coordination store rides the stream's own connection on
+	// every topology, so the KV's quorum is the stream cluster's quorum.
 	if b.Coordination.Type == CoordinationEmbeddedKV {
-		members := coordPeers + 1
-		if members == 2 {
-			p.add(coordPeersField, ErrConflict,
+		if members := peers + 1; members == 2 {
+			p.add("stream.cluster.peers", ErrConflict,
 				"a two-node fleet has no coordination quorum: run one node "+
 					"or three or more (this config names %d peer, so %d nodes)",
-				coordPeers, members)
+				peers, members)
 		}
 	}
 
-	// Pulsar has no compare-and-set, so it can never fill the coordination
-	// slot. A Pulsar estate still coordinates through the embedded KV
-	// cluster; saying so here beats discovering it when two nodes run one
-	// seat.
-	if b.Stream.Type == StreamPulsar && b.Coordination.Type == CoordinationLocal {
-		p.add("coordination.type", ErrConflict,
-			"an external Pulsar stream cannot also carry coordination "+
-				"(Pulsar has no compare-and-set): use %q", CoordinationEmbeddedKV)
-	}
-
-	if b.Stream.Replicas > 1 && peers == 0 {
+	// Only an EMBEDDED stream is refused for this. Its members are the
+	// peers named right here, so a replica count above their number is a
+	// statement this file contradicts on its own.
+	//
+	// An external cluster's membership is not in this file and cannot be:
+	// `stream.url` names an address, and how many servers answer behind it
+	// is the operator's business. Refusing replicas there capped every
+	// external-NATS fleet at one copy of everything — not only the streams
+	// but the lease and fleet KV buckets, which take the same number (see
+	// engine.attachCoordination) — so a deployment that ran three brokers
+	// for availability kept its seat mailboxes and every lease on whichever
+	// single server happened to hold them, and lost them with it.
+	if b.Stream.Type != StreamNATS && b.Stream.Replicas > 1 && peers == 0 {
 		p.add("stream.replicas", ErrConflict,
-			"replicas > 1 needs peers to replicate to; a solo node keeps 1")
-	}
-
-	p.wrap(b.validateCoordinationEstate())
-	return p.err()
-}
-
-// validateCoordinationEstate decides where the leases live.
-//
-// Separated from validateTopology because it is one question asked three ways
-// — is this block needed, is it allowed, and is it coherent on its own — and
-// every answer depends on the STREAM type rather than on anything inside the
-// block. A rule that reads two slots belongs where both are in scope.
-func (b *Bootstrap) validateCoordinationEstate() error {
-	var p problems
-	estate := b.Coordination.NATS
-
-	switch {
-	case b.Coordination.Type != CoordinationEmbeddedKV && !estate.IsZero():
-		// Read by nobody: local coordination holds its leases in this
-		// process and never opens a NATS connection at all.
-		p.add("coordination.nats", ErrConflict,
-			"only %q coordination keeps leases on a NATS estate; this config says %q",
-			CoordinationEmbeddedKV, b.Coordination.Type)
-
-	case b.Stream.Type != StreamPulsar && !estate.IsZero():
-		// Also read by nobody, and the reason is the interesting one: on
-		// a NATS stream the coordination store rides the STREAM'S OWN
-		// connection, deliberately. Two connections to one broker fail
-		// independently, so a node could hold live leases over a
-		// connection that still works while the one carrying its inbox
-		// has dropped — alive to its peers, deaf to its work.
-		p.add("coordination.nats", ErrConflict,
-			"a %q stream already carries coordination on its own connection; "+
-				"this block is only for a %q stream, which cannot",
-			b.Stream.Type, StreamPulsar)
-
-	case b.Stream.Type == StreamPulsar && b.Coordination.Type == CoordinationEmbeddedKV &&
-		estate.IsZero():
-		// The gap that made every Pulsar topology unrunnable: the slot
-		// was chosen and there was nowhere for it to live.
-		p.add("coordination.nats", ErrMissing,
-			"a %q stream has no compare-and-set, so its leases need a NATS "+
-				"estate: give coordination.nats a url, or a cluster to embed",
-			StreamPulsar)
-	}
-
-	if estate.URL != "" {
-		if estate.StoreDir != "" {
-			p.add("coordination.nats.store_dir", ErrConflict,
-				"an external coordination estate stores nothing locally; "+
-					"remove the url to embed a member instead")
-		}
-		if !estate.Cluster.IsZero() {
-			p.add("coordination.nats.cluster", ErrConflict,
-				"an external coordination estate is not clustered by this "+
-					"config; remove the url to embed a member instead")
-		}
-	}
-	if estate.Replicas > 1 && len(estate.Cluster.Peers) == 0 && estate.URL == "" {
-		p.add("coordination.nats.replicas", ErrConflict,
 			"replicas > 1 needs peers to replicate to; a solo node keeps 1")
 	}
 	return p.err()
@@ -543,25 +473,21 @@ const (
 	// StreamNATS dials an external NATS cluster. The same client code
 	// either way; the difference is where the server runs.
 	StreamNATS StreamType = "nats"
-	// StreamPulsar dials an external Pulsar estate — the multi-tenant
-	// deployment, one tenant per company. Pulsar never fills the
-	// coordination slot.
-	StreamPulsar StreamType = "pulsar"
 )
 
 // StreamTypes is the closed set.
-var StreamTypes = []StreamType{StreamEmbedded, StreamNATS, StreamPulsar}
+var StreamTypes = []StreamType{StreamEmbedded, StreamNATS}
 
 // Stream is the durable event log every node writes through.
 type Stream struct {
 	// Type selects the slot. Default embedded — a company with nothing
 	// configured runs with no external services at all.
-	Type StreamType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=embedded|nats|pulsar" desc:"embedded (default), nats, or pulsar."`
+	Type StreamType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=embedded|nats" desc:"embedded (default) or nats."`
 
-	// URL is the external server to dial. Required for nats and pulsar,
-	// and refused for embedded — a URL on an embedded stream is read by
-	// nobody, which is the classic "I configured it and nothing happened".
-	URL string `yaml:"url,omitempty" json:"url,omitempty" desc:"External broker URL. Required for nats/pulsar, refused for embedded."`
+	// URL is the external server to dial. Required for nats, and refused
+	// for embedded — a URL on an embedded stream is read by nobody, which
+	// is the classic "I configured it and nothing happened".
+	URL string `yaml:"url,omitempty" json:"url,omitempty" desc:"External NATS URL. Required for nats, refused for embedded."`
 
 	// StoreDir is where an EMBEDDED server persists its streams. Empty
 	// selects an in-memory server, which is what a test wants and what a
@@ -590,29 +516,11 @@ type Stream struct {
 	Token string `yaml:"token,omitempty" json:"token,omitempty" desc:"Bearer token for an external server; ${VAR} supported."`
 
 	// TLS is the transport for an external NATS server: a private CA to
-	// trust, and a client certificate to present. The Pulsar half of this
-	// block has TLSTrustCerts; without this the NATS half had nothing,
-	// so a broker configured the way a hardened NATS deployment is
-	// configured — `tls { verify: true }`, which REQUIRES a client
-	// certificate — was simply unreachable.
+	// trust, and a client certificate to present. Without it a broker
+	// configured the way a hardened NATS deployment is configured —
+	// `tls { verify: true }`, which REQUIRES a client certificate — is
+	// simply unreachable.
 	TLS NATSTLS `yaml:"tls,omitempty" json:"tls,omitzero"`
-
-	// Tenant and Namespace scope every subject on a PULSAR estate, which
-	// is how one cluster serves many companies. Neither is ever
-	// auto-created — a non-default tenant must exist before start.
-	Tenant    string `yaml:"tenant,omitempty" json:"tenant,omitempty" js:"pattern=^[A-Za-z0-9][A-Za-z0-9._-]*$" desc:"Pulsar tenant holding this company's topics."`
-	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty" js:"pattern=^[A-Za-z0-9][A-Za-z0-9._-]*$" desc:"Pulsar namespace under the tenant."`
-
-	// AdminURL is the Pulsar broker's admin HTTP endpoint, which
-	// subscription lifecycle runs over. Empty derives it from URL using
-	// Pulsar's own default ports, which is what every standalone and helm
-	// deployment ships.
-	AdminURL string `yaml:"admin_url,omitempty" json:"admin_url,omitempty" desc:"Pulsar admin HTTP endpoint; empty derives it from url."`
-
-	// TLSTrustCerts is the CA bundle for a pulsar+ssl broker and its https
-	// admin endpoint. Without it a TLS estate is unreachable, which is not
-	// a degraded mode — it is the whole slot.
-	TLSTrustCerts string `yaml:"tls_trust_certs,omitempty" json:"tls_trust_certs,omitempty" desc:"CA bundle path for a pulsar+ssl broker."`
 }
 
 // StreamCluster is an embedded server's membership in a cluster.
@@ -630,22 +538,20 @@ func (c StreamCluster) IsZero() bool {
 	return c.Name == "" && c.Port == 0 && len(c.Peers) == 0
 }
 
-var pulsarNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-
 func (s *Stream) validate(path string) error {
 	var p problems
 	if s.Type != "" && !oneOf(s.Type, StreamTypes) {
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", s.Type, names(StreamTypes))
 		return p.err() // the rest of the rules key on the type
 	}
-	external := s.Type == StreamNATS || s.Type == StreamPulsar
+	external := s.Type == StreamNATS
 	switch {
 	case external && strings.TrimSpace(s.URL) == "":
 		p.add(at(path, "url"), ErrMissing, "an external %q stream needs a URL to dial", s.Type)
 	case !external && s.URL != "":
 		p.add(at(path, "url"), ErrConflict,
 			"url only applies to an external stream; an embedded server has "+
-				"no address. Remove it, or set type to %s", names([]StreamType{StreamNATS, StreamPulsar}))
+				"no address. Remove it, or set type to %q", StreamNATS)
 	}
 	if external && s.StoreDir != "" {
 		p.add(at(path, "store_dir"), ErrConflict,
@@ -662,37 +568,7 @@ func (s *Stream) validate(path string) error {
 	if s.Cluster.Port < 0 || s.Cluster.Port > 65535 {
 		p.add(at(path, "cluster.port"), ErrOutOfRange, "must be 0..65535, got %d", s.Cluster.Port)
 	}
-	for _, field := range []struct {
-		name  string
-		value string
-	}{{"tenant", s.Tenant}, {"namespace", s.Namespace}} {
-		if field.value == "" {
-			continue
-		}
-		if s.Type != StreamPulsar {
-			p.add(at(path, field.name), ErrConflict,
-				"%s scopes a Pulsar estate's subjects; this stream is type %q",
-				field.name, s.Type)
-			continue
-		}
-		if !pulsarNamePattern.MatchString(field.value) {
-			p.add(at(path, field.name), ErrUnknownValue,
-				"%q must start alphanumeric and contain only letters, digits, "+
-					"'.', '_' or '-'", field.value)
-		}
-	}
 	p.wrap(s.TLS.validate(at(path, "tls")))
-	// SAID RATHER THAN IGNORED. A Pulsar estate has its own CA field
-	// (tls_trust_certs) and its client library never reads this block, so
-	// material set here would be silently unused — an operator would see
-	// a TLS handshake failure and go on trusting a file the process never
-	// opened.
-	if s.Type == StreamPulsar && !s.TLS.IsZero() {
-		p.add(at(path, "tls"), ErrConflict,
-			"tls configures a NATS connection; a %q stream uses tls_trust_certs "+
-				"instead, and its coordination estate has its own "+
-				"coordination.nats.tls", StreamPulsar)
-	}
 	return p.err()
 }
 
@@ -731,60 +607,6 @@ type Coordination struct {
 	// 0 takes the coordination layer's own measured default; shortening it
 	// speeds up failover at the cost of shedding seats over a store blip.
 	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Lease TTL; 0 takes the measured default."`
-
-	// NATS is the estate the KV lives on when the stream is not itself
-	// NATS — which today means a Pulsar stream, and only a Pulsar stream.
-	//
-	// A lease needs compare-and-set and Pulsar has none, so a Pulsar
-	// estate coordinates through a NATS KV the nodes reach separately.
-	// On a NATS or embedded stream this block is REFUSED rather than
-	// ignored: the coordination store rides the stream's own connection
-	// there, deliberately, so that a node cannot end up holding live
-	// leases over a connection that still works while the one carrying
-	// its inbox has dropped.
-	NATS CoordinationNATS `yaml:"nats,omitempty" json:"nats,omitzero"`
-}
-
-// CoordinationNATS is the NATS estate a Pulsar topology keeps its leases on.
-//
-// The same two shapes the stream slot has, for the same reasons: dial one an
-// operator runs, or embed a member of a cluster the nodes form among
-// themselves. Embedded is the one that keeps the deployment count down — the
-// estate carries leases and nothing else, so it is small enough to live inside
-// the processes that use it.
-type CoordinationNATS struct {
-	// URL is an external NATS server to dial. Mutually exclusive with the
-	// embedded fields below: a config naming both has said two different
-	// things about where its leases live.
-	URL string `yaml:"url,omitempty" json:"url,omitempty" desc:"External NATS URL for leases; empty embeds a member instead."`
-
-	// StoreDir is where an EMBEDDED coordination member persists its KV.
-	// Empty selects an in-memory member, which loses every lease on a
-	// restart — survivable, since leases are TTL-bounded and re-claimed,
-	// but it means a restart sheds this node's seats rather than resuming
-	// them.
-	StoreDir string `yaml:"store_dir,omitempty" json:"store_dir,omitempty" desc:"Embedded lease persistence directory. Empty = in-memory (a restart sheds this node's seats)."`
-
-	// Cluster makes the embedded member join its peers, which is what
-	// gives the KV a quorum to compare-and-set against.
-	Cluster StreamCluster `yaml:"cluster,omitempty" json:"cluster,omitzero"`
-
-	// Replicas is the KV bucket's replica count: 1 solo, 3 in a fleet.
-	Replicas int `yaml:"replicas,omitempty" json:"replicas,omitempty" js:"min=0" desc:"Lease bucket replica count: 1 solo, 3 in a fleet."`
-
-	// Credentials is a path to a NATS credentials file.
-	Credentials string `yaml:"credentials,omitempty" json:"credentials,omitempty" desc:"Path to a NATS credentials file for an external server."`
-
-	// Token is a bearer token presented to an external server. Use ${VAR}
-	// to read it from the environment.
-	Token string `yaml:"token,omitempty" json:"token,omitempty" desc:"Bearer token for an external server; ${VAR} supported."`
-
-	// TLS is the transport for an external NATS estate — see
-	// [Stream.TLS]. Its own field rather than the stream's, because on a
-	// Pulsar topology these are two different estates reached over two
-	// different connections, and one of them may be mutually
-	// authenticated while the other is not.
-	TLS NATSTLS `yaml:"tls,omitempty" json:"tls,omitzero"`
 }
 
 // NATSTLS is the transport material for an external NATS server.
@@ -838,20 +660,6 @@ func (t NATSTLS) validate(path string) error {
 	return p.err()
 }
 
-// IsZero lets an unset coordination estate drop out of a JSON round trip.
-func (c CoordinationNATS) IsZero() bool {
-	return c.URL == "" && c.StoreDir == "" && c.Cluster.IsZero() &&
-		c.Replicas == 0 && c.Credentials == "" && c.Token == "" &&
-		c.TLS.IsZero()
-}
-
-// Embedded reports whether this estate is one the nodes run themselves.
-//
-// The absence of a URL, not the presence of a store directory: an in-memory
-// embedded member names neither, and reading it as "external with no URL"
-// would refuse the one shape a test wants.
-func (c CoordinationNATS) Embedded() bool { return c.URL == "" }
-
 func (c *Coordination) validate(path string) error {
 	var p problems
 	if c.Type != "" && !oneOf(c.Type, CoordinationTypes) {
@@ -861,7 +669,6 @@ func (c *Coordination) validate(path string) error {
 		p.add(at(path, "lease_ttl_seconds"), ErrOutOfRange,
 			"must be 0 (the default) or positive, got %v", c.LeaseTTLSeconds)
 	}
-	p.wrap(c.NATS.TLS.validate(at(at(path, "nats"), "tls")))
 	return p.err()
 }
 

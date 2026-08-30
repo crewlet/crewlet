@@ -220,7 +220,7 @@ no env file to source, no shell to be in.
 flowchart LR
     EXT["<b>External surfaces</b><br/>Mattermost / Slack · Jira / Confluence<br/>GitHub / GitLab"]
     API["<b>REST API + dashboard</b><br/><i>embedded, or its<br/>own process</i>"]
-    Q["<b>Event stream</b><br/><i>embedded JetStream,<br/>or Pulsar for a fleet</i>"]
+    Q["<b>Event stream</b><br/><i>embedded JetStream,<br/>clustered or external for a fleet</i>"]
     ENG["<b>Engine</b><br/><i>one turn engine<br/>per seat</i>"]
     DB[("<b>Store</b><br/>one local file<br/>events · memory · config")]
 

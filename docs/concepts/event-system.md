@@ -1,6 +1,6 @@
 # Event System
 
-All inter-component communication in Crewlet flows through a persistent event queue (`internal/queue`), backed by Apache Pulsar.
+All inter-component communication in Crewlet flows through a persistent event queue (`internal/queue`), backed by NATS JetStream — a broker the engine runs **inside its own process** by default, and an external NATS cluster when a fleet needs one.
 
 ---
 
@@ -10,18 +10,84 @@ One protocol serves all inter-component communication:
 
 - **`EventQueue`** — persistent pub/sub with consumer groups. For fire-and-forget messages: task routing to agent inboxes, inbound/outbound notifications.
 
-An in-memory implementation (`queue/memory` in `internal/queue/memory`) is used exclusively in tests. Production deployments use Apache Pulsar.
+**Two implementations** sit behind it — the JetStream client and an in-memory twin — and **nothing above `internal/queue` may branch on which one is running**. Where the broker itself runs is a third question, and it is a *connection* choice inside the first implementation rather than a second code path:
+
+| Where the broker runs | What that is |
+|---|---|
+| **In this process** — `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving; left empty they live in memory, which is what a test and a stateless ingress-only node want. |
+| **Somewhere else** — `stream.type: nats` | The same client code against a NATS server or cluster somebody else runs, dialled through `stream.url`. That sameness is what lets a laptop run the whole company with no services and a fleet run the same binary against a cluster. |
+| **Nowhere — the in-memory twin** (`internal/queue/memory`) | The test twin: a real broker object plus N clients rather than one fused thing, so a test can stop a node and still inspect what its subscription retained. |
+
+Both are certified by **one** conformance suite (`internal/queue/queuetest`). A backend that suite has not certified does not exist as far as the engine is concerned — which is exactly why the twin is certified by the same cases as the real broker rather than by cases written for a twin.
+
+A fleet's shape is a stream choice: clustered embedded members (`stream.cluster.name` / `.port` / `.peers` on each node, `stream.replicas: 3`) or one external cluster every node dials. See [Running a Fleet](../guides/fleet.md).
 
 ---
 
 ## Topic Structure
 
-```
-# EventQueue topics (persistent, at-least-once via Apache Pulsar)
+```text
+# Per-seat, durable. One consumer group per seat, so membership IS ownership:
+# the node that attaches is the node that gets that seat's work.
 crewlet.agent.{handle}.inbox         # Per-agent inbox — all work arrives here
+crewlet.agent.{handle}.control       # Sandbox completions — separate, because a
+                                     #   detached run PAUSES the inbox and a
+                                     #   completion riding it would queue behind
+                                     #   the very pause it exists to lift
+
+# Fleet-wide work queues — ONE consumer group each, so whichever node wins a
+# delivery is the node that has to route it
 crewlet.notifications.inbound        # Inbound webhooks from external systems
 crewlet.notifications.outbound       # Outbound messages to external systems
+crewlet.events.{type}                # Internal routing (see Routing, below)
+
+# Control plane. Best-effort nudges: losing one costs a poll interval, never a
+# revision, because the authoritative path polls the activation pointer
+crewlet.config.revision_activated
+crewlet.config.revision_applied
+
+# Dead letters, deliberately OUTSIDE the crewlet.* space so the dashboard's
+# crewlet.events.> stream cannot resurface poison as live traffic
+dlq.{topic}.{group}.{digest}         # the head is for grepping, the digest is
+                                     #   the identity: a join alone aliases
+                                     #   distinct (topic, group) pairs
 ```
+
+Every one of those strings is built by `internal/queue/topics` and nowhere else. The inbox subject alone had nine call sites when it was formatted by hand — nine chances for a producer and a consumer to disagree about a name that has to match exactly, and a mismatch raises nothing anywhere: it is a message published to a topic nobody reads.
+
+The subjects are grouped into streams by **purpose**, because retention differs by purpose rather than by taste:
+
+| Stream | Carries | Retention, and why |
+|---|---|---|
+| `CREWLET_AGENT` | `crewlet.agent.>` | **Interest.** A message is kept while a durable consumer that has not acked it exists, and a publish to a subject no consumer covers is dropped. That is precisely the mailbox semantic the contract already promises, so the broker enforcing it is a feature — and it is why every seat's consumer must exist before anything publishes to it |
+| `CREWLET_NOTIFICATIONS` | `crewlet.notifications.>` | Interest, for the same reason: these are work queues, not a log |
+| `CREWLET_EVENTS` | `crewlet.events.>` | **Limits**, with an age bound — 30 days, or `stream.event_retention_hours`. Its consumers are ephemeral dashboards and per-node materializers that must be able to fall behind, disconnect and catch up |
+| `CREWLET_CONFIG` | `crewlet.config.>` | Limits, one hour. A short bound keeps a restarted node from replaying a week of stale activation announcements |
+| `CREWLET_DLQ` | `dlq.>` | Limits, the event stream's age bound. Nothing consumes dead letters automatically, and an operator investigating poison needs them still to be there |
+
+A subject in a namespace the engine does not itself define gets a stream provisioned on demand, with the mailbox semantic as its default. That is deliberate rather than lax: the stream topology is the backend's business, but the **subject space** is the engine's, and a whitelist here would make the backend the authority on what the engine may name.
+
+---
+
+## Delivery Semantics
+
+What the engine relies on, and where each behaviour is enforced (`internal/queue/jetstream`):
+
+**Pull, not push.** Consumers fetch — one message for an ordinary subscription, one drain's worth for an inbox — when they are ready to run one. Nothing is pushed into a client-side queue, so a consumer that is quiesced, paused or detached holds no mail hostage; it simply stops asking. It is also what makes quiescing reversible at no cost: resuming is fetching again, not reclaiming a prefetch.
+
+**A durable consumer, created detached.** `EnsureSubscription` creates a seat's consumer with explicit acks and nothing attached, positioned at `DeliverAll` — about a millisecond, which is what makes it affordable for every node to create the mailbox behind every seat in the company at boot. Never at "latest": such a consumer exists and still discards everything published before something first attaches to it, which is the whole failure this call prevents.
+
+**Three outcomes, not two.** A handler acks, naks, or **defers**:
+
+- **Ack** — done. It is the zero value, so the quiet path is the safe one.
+- **Nak** — the handler failed. Redelivered after a one-second spacing, because an immediately-redelivered failure spins the loop at full speed against whatever is broken.
+- **Defer** — *this process has lost the right to do this work*. The message goes back with an immediate Nak — about a millisecond, where letting the ack timer expire would park a seat's mail for the whole ack window on every lease movement — and the consumer **quiesces itself**, since continuing to fetch would hand it more work it has equally lost the right to do. Never a republish: a republished event is a new message at the stream's tail, and both the [completion ledger](seat-ownership.md#the-completion-ledger)'s idempotency and the batch layer's aging key on the identity a Nak preserves.
+
+**The ack clock is real.** A fetched-unacked message stays invisible to every other consumer of that subscription for `ackWait` — **30 minutes**, sized for a wait behind a running turn plus one worst-case turn. It is a backstop rather than the handoff path: a seat that loses its lease defers explicitly and its successor sees the message in about a millisecond, where waiting the clock out would cost half an hour.
+
+**Dead-lettering is decided client-side, with the broker as backstop.** A message is republished to `CREWLET_DLQ` and terminated once it has been delivered 25 times. The decision lives in the consume loop because that is where the dead-letter subject is known and the body is in hand; the broker's own `MaxDeliver` is configured to the same number so a bug in that path cannot produce an infinite loop. Twenty-five is sized for handoffs as well as poison — a deferral returns via Nak and **counts as a delivery**, so a message would have to be in flight across 25 seat migrations to exhaust the budget. The honest caveat, which no budget solves: a fast crash-loop is indistinguishable from poison.
+
+**Order within a conversation comes from event timestamps, not from the broker.** A redelivered message returns *behind* never-delivered ones. Nothing above the queue may assume otherwise, which is why the batch layer sorts by the events' own timestamps.
 
 ---
 
@@ -35,7 +101,7 @@ Handlers read the org through a provider on every event (never a captured snapsh
 
 ### A seat's mailbox exists before the seat is running
 
-A durable subscription **is** the mailbox, and it exists independently of whether anyone is consuming it. That is not a detail — publishing to a topic that no subscription covers **drops the event silently**, with nothing anywhere reporting a loss.
+A durable subscription **is** the mailbox, and it exists independently of whether anyone is consuming it. That is not a detail — publishing to a topic that no subscription covers **drops the event silently**, with nothing anywhere reporting a loss. On the shipped backend that is the broker's own rule rather than a convention the engine could soften: the agent and notification streams use interest retention, which keeps a message exactly while some durable consumer that has not acked it exists.
 
 So every node creates the subscription behind **every agent seat in the company** as it starts, before it claims a single one, and again whenever an applied revision adds a role. Not its own share: a mailbox is a fact about the company, and the node that ends up serving a seat may not be the one that made its mailbox. Creating one is idempotent, so a fleet doing it N times costs N−1 no-ops.
 
@@ -56,7 +122,7 @@ An agent turn takes minutes; webhooks arrive in seconds. Without batching, ten c
 
 ```mermaid
 flowchart TD
-    BACKLOG["Pulsar backlog (the buffer)<br/>inbox: [c1 POC-7] [c2 POC-7] [c3 thread-A] [c4 POC-7]"]
+    BACKLOG["The subscription's backlog (the buffer)<br/>inbox: [c1 POC-7] [c2 POC-7] [c3 thread-A] [c4 POC-7]"]
     DRAIN["1. DRAIN — collect everything available<br/>(+ optional linger window)"]
     PART["2. PARTITION by conversation key,<br/>preserving arrival order"]
     P1["[c1, c2, c4] — jira:POC-7"]
@@ -68,9 +134,9 @@ flowchart TD
     PART --> P2 --> T2
 ```
 
-**`subscribe_batch`** (`EventQueue` protocol; Pulsar + memory backends) implements steps 1–4: after the first message arrives it drains everything immediately available — plus anything arriving within `BatchOptions.LingerSeconds` of the first message — up to `BatchOptions.MaxBatch`, partitions by a caller-supplied key, invokes the handler **once per partition** (sequentially — per-agent serialization is unchanged), and acknowledges a partition's messages only after its handler returns. A failing partition negatively-acknowledges exactly its own messages (normal redelivery / DLQ policy per message) without blocking or replaying other conversations from the same drain. `pause_delivery` during collection NAKs anything fetched-but-undispatched so the next engine subscription gets it promptly.
+**`SubscribeBatch`** (the `EventQueue` contract; both implementations) does steps 1–4: after the first message arrives it drains everything immediately available — plus anything arriving within `BatchOptions.LingerSeconds` of the first message — up to `BatchOptions.MaxBatch`, partitions by a caller-supplied key, invokes the handler **once per partition** (sequentially — per-agent serialization is unchanged), and acknowledges a partition's messages only after its handler returns. A failing partition negatively-acknowledges exactly its own messages (normal redelivery / DLQ policy per message) without blocking or replaying other conversations from the same drain. A pause taken *during* collection — `PauseDelivery`, or a hold on this seat's inbox — NAKs the whole drain back rather than flushing it past the pause: the point of pausing a seat's inbox is that no turn starts, and a batch collected a moment earlier would start one.
 
-**The ack budget, and the one backend it does not bite on.** Every drained message's ack clock starts at receive, but a partition handler is typically a full multi-minute turn — so dispatching a long tail of partitions sequentially holds later messages delivered-but-unacked for the *sum* of the preceding turns. On **JetStream**, the default backend, that clock is real: `ackWait` is 30 minutes, sized for a wait behind a running turn plus one worst-case turn, and collection plus one handler run must fit inside it — which is why `BatchOptions.LingerSeconds` is capped at 60s (`queue.MaxLingerSeconds`), enforced at the contract rather than in config so programmatic construction cannot bypass it. On **Pulsar** there is no such clock at all: `apache/pulsar-client-go` exposes no `ConsumerOptions.AckTimeout`, it keeps no client-side unacked tracker, and Pulsar has no broker-side equivalent for a *connected* consumer, so a fetched message stays that consumer's until it acks, naks, or closes. A 60-second batch dispatch budget, with a requeue-by-republish path for the partitions left over when it expired, is the natural answer to a client whose ack clock starts at receive. On this one there is no clock to race, so no budget exists. Nothing is republished, which is just as well: the queue contract forbids substituting a republish, because it sends an event to the topic tail while its prefetched siblings replay from the head and reorders the conversation. What the absence costs, stated so nobody has to rediscover it: a drain of N slow partitions holds N messages unacked for the sum of the turns, and the only ceiling is Pulsar's `maxUnackedMessagesPerConsumer` (50 000 by default) against a batch capped at `max_batch` (20 by default) — four orders of magnitude of margin. Partitions dispatch **oldest conversation first** (by oldest constituent event timestamp): a waiting conversation ages and outranks the hot conversation's fresh arrivals on the next drain, so steady inflow on one issue cannot starve a waiting DM.
+**The ack budget.** Every drained message's ack clock starts at receive, but a partition handler is typically a full multi-minute turn — so dispatching a long tail of partitions sequentially holds later messages delivered-but-unacked for the *sum* of the preceding turns. That clock is real: `ackWait` is 30 minutes, and collection plus one handler run must fit inside it — which is why `BatchOptions.LingerSeconds` is capped at 60 s (`queue.MaxLingerSeconds`), enforced at the contract rather than in config so programmatic construction cannot bypass it. A drain whose partitions together outlast the window is not lost, it is **redelivered**: the tail comes back, each redelivery spends one unit of the 25-delivery budget, and the [completion ledger](seat-ownership.md#the-completion-ledger) plus the same-id dedupe are what make that a redelivery rather than a second turn (`TurnTriggerSkipped` is emitted precisely so it is not invisible). What is never substituted is a republish: it would be a *new* message at the stream's tail, and both the ledger's idempotency and the batch layer's aging key on the identity a NAK preserves. Partitions dispatch **oldest conversation first** (by oldest constituent event timestamp): a waiting conversation ages and outranks the hot conversation's fresh arrivals on the next drain, so steady inflow on one issue cannot starve a waiting DM.
 
 **Conversation keys** (`notify.Prompt.ConversationKey`) are derived by pure logic from webhook metadata, via the same per-source `notify.Prompt` classes that own prompt building: Jira keys on the issue (`jira:POC-7`), Confluence on the page, GitHub on `repo#number`. Slack keys on the **whole channel for top-level DM and group-DM messages** (`channel_type` `im`/`mpim`, or a `D`-prefixed channel id when the event variant omits the field — a human firing four rapid top-level DM messages is one conversation; a DM *thread reply* keeps its thread key so the merged trigger never carries the wrong reply target) and on channel + thread root elsewhere (`slack:C9:1718.001` — a top-level channel message keys on its own `ts` so its replies join it, while two unrelated asks in a shared channel never merge). Everything else — `task_assigned`, A2A wakes, notifications without a derivable conversation — keys uniquely on the event id and is **never coalesced**: single-event partitions follow exactly the pre-batching dispatch path.
 
@@ -78,7 +144,7 @@ The same key now has a second consumer that outlives the drain. Coalescing merge
 
 **Busy agents queue; parked agents requeue.** A delivery that finds its agent mid-turn does not fail: `turn.Engine.Run` WAITS for the running turn to finish (the handler already holds the delivery for a full turn, so JetStream's ack window — 30 minutes — is sized for exactly that: a wait plus a worst-case turn). A delivery that finds the agent parked on a detached sandbox job (`AWAITING_SANDBOX`, potentially hours) is requeued + acked instead — the coordinator keeps the topic paused, so the copies buffer on the broker and flow when the job completes. Before the engine has a turn engine at all (booted with zero LLM providers), the handler pauses the topic and requeues likewise; the late turn-engine build resumes every inbox. Busy-agent handling therefore never consumes-and-drops and never pushes healthy events toward the dead-letter topic.
 
-**Unsubscribe.** `EventQueue.Unsubscribe` tears down the durable group consumer(s) for the pair and deletes the broker-side subscription (retained messages for the group are dropped). The engine calls it when a role is decommissioned live, so a removed seat neither keeps a consumer bound to a terminated instance nor accumulates undeliverable events forever. Inbox subscription is idempotent per agent handle — boot and the late turn-engine path both walk the pool, and only the first subscribe per agent creates a consumer.
+**Letting go of a subscription — four verbs, not one.** "Unsubscribe" never said *which* kind of letting go it meant, so the contract spells all four out by destructiveness: `Quiesce` stops taking new work while staying attached, `Unquiesce` undoes it, `Detach` closes this process's consumers and leaves the durable subscription (its cursor and its retained mail survive, which is what makes a seat handoff cheap and an unowned seat safe), and `DeleteSubscription` destroys the subscription and the mail it retains. The engine calls the last one when a role is decommissioned live, so a removed seat neither keeps a consumer bound to a terminated instance nor accumulates undeliverable events forever — and it deliberately does not require a local attachment, because decommissioning a role must not depend on which node happened to be running the seat. Creating an inbox subscription is idempotent per agent handle: boot and the late turn-engine path both walk the pool, and only the first call per seat creates a consumer.
 
 **The digest trigger.** A multi-event partition is merged by `internal/notify`'s coalescer into ONE notification: a chronological digest of the earlier messages, then the **latest** constituent's full enriched body — so the per-source scaffolding (triage rules, `## Get Full Context`) renders exactly once and points at the most recent state. Two noise filters apply in the digest: per-source supersede rules (`notify.Prompt.DigestBody` — Jira `issue_updated` bodies, stale full descriptions whose current state the Jira prompt never renders anyway, collapse to their event lead) and a source-agnostic **same-sender duplicate dedupe** — a constituent whose effective body is byte-identical to a later message from the same sender collapses to a marker (GitHub lifecycle webhooks re-emit the full PR description per event; the later copy still renders, so nothing is lost, and two different people saying "+1" both survive). Comments and messages always keep their text. The merged event carries every constituent in `messages` (sender, salient body, metadata, per-message recon flag — full fidelity for the [learning workers](agent-learning.md), which observe **each distinct sender**), a conservative event-level recon merge, the max-depth constituent's delegation bookkeeping (batching cannot launder the depth cap), and the latest constituent's trace context. Same-id duplicate deliveries (an at-least-once edge the requeue machinery itself can produce) are dropped at the handler before any merging. If a partition cannot be merged (a malformed constituent), the engine degrades to per-event dispatch — the tail is requeued as independent inbox messages FIRST, then the first event runs in the current ack scope — so a requeue failure aborts before any turn ran and a completed turn is never replayed by a later event's failure; partially-requeued copies collapse via the same-id dedupe on redelivery. A `NotificationsCoalesced` telemetry event records each merge for the dashboard / event store.
 
@@ -218,7 +284,7 @@ an `Actor()` (role, then source, then agent id, then `system`). An event type
 this build does not know decodes into the envelope with `Data` nil, and
 re-publishes losslessly.
 
-Changes are additive-only — new fields get defaults, existing fields are never removed, and an event type this build does not know round-trips through it losslessly rather than being dropped: a rolling upgrade puts unknown types on the wire in both directions. Every backend retains each subscription's undelivered backlog until it is consumed, so a restart resumes cleanly; durable, replayable event history is the [event store](../guides/deployment.md#the-event-store), not the queue. On Pulsar, time-based retention of already-acknowledged messages is an optional namespace retention policy.
+Changes are additive-only — new fields get defaults, existing fields are never removed, and an event type this build does not know round-trips through it losslessly rather than being dropped: a rolling upgrade puts unknown types on the wire in both directions. Every backend retains each subscription's undelivered backlog until it is consumed, so a restart resumes cleanly; durable, replayable event history is the [event store](../guides/deployment.md#the-event-store), not the queue. The queue keeps no ledger of everything ever published, and that is the mailbox semantic rather than a gap: on the work-queue streams an acked message is gone at once, and what a subscription retains is what nobody has acked yet. The one stream that keeps history is `CREWLET_EVENTS`, and it keeps it by **age** (`stream.event_retention_hours`, 30 days by default) rather than until someone reads it.
 
 ---
 
@@ -274,21 +340,21 @@ The dashboard groups events by `trace_id` into collapsible trace trees. See [Dep
 
 ## Publish Listeners
 
-The `EventQueue` supports **publish listeners** — async callbacks invoked inline during every `publish()` call. Listeners receive the topic and event, and run in the same coroutine as the publish. Exceptions in listeners are logged but do not prevent the publish or affect queue delivery.
+The `EventQueue` supports **publish listeners** — callbacks `AddPublishListener` registers, invoked inline during every `Publish`. Listeners receive the topic and the event and run on the publishing goroutine, after the broker has acknowledged the message. A listener that fails, or panics, is logged and never propagates: telemetry must not be able to fail a publish.
 
 This is used by the **event store writer** to persist events directly at publish time, inline on the node that published — no subscription, and therefore no consumer group that could let two nodes write one row or lose one in a rebalance. See [Deployment — The event store](../guides/deployment.md#the-event-store) for details.
 
 ---
 
-## Broadcast Streams (`subscribe_stream`)
+## Broadcast Streams (`SubscribeStream`)
 
-Beyond competing-consumer `subscribe()` and inline `add_publish_listener`, the `EventQueue` exposes **`subscribe_stream(topic_pattern, handler)`** for live-stream consumers (dashboards, real-time log views). Every subscriber receives every matching event — no consumer-group division.
+Beyond competing-consumer `Subscribe` and inline `AddPublishListener`, the `EventQueue` exposes **`SubscribeStream(pattern, handler)`** for live-stream consumers (dashboards, real-time log views). Every subscriber receives every matching event — no consumer-group division.
 
-The Pulsar backend implements this with a per-caller **regex topic-pattern subscription**, started at the latest message (so it streams new events — backfill is served separately by the REST event store) and torn down when the caller unsubscribes. Because Pulsar discovers pattern-matching topics on a periodic cycle, a brand-new agent's first events may lag the stream briefly; already-active topics match immediately. The memory backend implements it with a topic-filtered publish listener.
+The JetStream backend implements it as a per-caller **ephemeral consumer** on the stream the pattern resolves to, and three of its settings are the whole design. It delivers from *now* rather than from the beginning, because a live feed that replayed a month of history on every browser refresh would be unusable and the durable half of that question is a REST query against the event store. It acknowledges nothing, because a dashboard must never be able to hold a message — a slow subscriber misses events rather than keeping them from anyone else. And it carries a one-minute inactivity threshold, so the server reaps it shortly after a browser tab goes away even if the caller never unsubscribes. A pattern that would span every namespace is refused rather than resolved to a guess. The memory twin implements the same primitive with a topic-filtered publish listener.
 
 The dashboard's `/ws/stream` endpoint uses this primitive: each connected tab is one ephemeral consumer, and the in-process `api/stream` both updates the live-state projection and fans every event out to every connected WebSocket. See [API Endpoints — Live Stream](../reference/api-endpoints.md#live-stream).
 
-`topic_pattern` accepts subject wildcards: `*` matches one segment, `>` matches one-or-more trailing segments.
+The pattern accepts subject wildcards: `*` matches one segment, `>` matches one-or-more trailing segments. Crewlet's subject grammar **is** NATS grammar, which is a large part of why this backend fits: the wildcards a caller writes are the wildcards the broker matches, with no translation layer to disagree about.
 
 ---
 

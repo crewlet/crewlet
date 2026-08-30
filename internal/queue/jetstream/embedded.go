@@ -108,7 +108,15 @@ func (s *Server) Shutdown() {
 	}
 }
 
-func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
+// embeddedOptions is the nats-server option set a Config produces, together
+// with the scratch directory the caller owns and must remove.
+//
+// SEPARATED FROM THE START for the same reason dialOptions is, and it earns it
+// twice over here: two of these options have no observable effect until the
+// day they matter. A wrong MaxPayload surfaces as one oversized publish
+// failing in production, and a wrong SyncAlways surfaces only as acked data
+// missing after a host loses power — which no test can stage.
+func embeddedOptions(cfg Config) (*server.Options, string, error) {
 	clustered := cfg.ClusterName != "" || len(cfg.ClusterURLs) > 0 || cfg.ClusterPort != 0
 	name := cfg.ServerName
 	if name == "" {
@@ -118,7 +126,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 			// survives a restart, and a name minted at boot silently
 			// orphans this member's replicas every time the process
 			// comes back. See Config.ServerName.
-			return nil, errors.New("jetstream: ServerName is required for a clustered embedded server")
+			return nil, "", errors.New("jetstream: ServerName is required for a clustered embedded server")
 		}
 		name = "crewlet"
 	}
@@ -131,6 +139,44 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		// cannot be reached by anything but this process.
 		DontListen: len(cfg.ClusterURLs) == 0 && cfg.ClusterPort == 0,
 		StoreDir:   cfg.StoreDir,
+
+		// The transport's own ceiling, from the contract's number rather
+		// than nats-server's 1 MiB default — see queue.MaxPayloadBytes for
+		// what that default cost. A SERVER limit rather than a per-stream
+		// one, deliberately: the client reads it off the server's INFO and
+		// refuses an oversized publish locally, which is what turns "this
+		// delivery is too big" into an error the publisher can report
+		// instead of a connection the broker closes underneath it.
+		MaxPayload: queue.MaxPayloadBytes,
+
+		// WHAT "PERSISTED" MEANS, and the one place it is decided.
+		//
+		// EventQueue.Publish promises that a returned publish is durable.
+		// Left unset, nats-server's file store flushes on a 2-MINUTE
+		// background interval (server/filestore.go defaultSyncInterval),
+		// so an acked publish survives this process crashing and does NOT
+		// survive the host losing power — up to two minutes of acked
+		// events, and with them the coordination KV that rides this same
+		// server: the completion ledger, claimed scheduled fires, a
+		// detached (billed) sandbox run, a just-written secret. Losing
+		// those replays a trigger already worked and forgets a box still
+		// running.
+		//
+		// So a SOLO member fsyncs every write. There is no peer to recover
+		// from, which makes its disk the only copy, and the cost is
+		// affordable at this engine's write rate: events are paced by LLM
+		// turns and lease renewals by a 15-second heartbeat, not by a
+		// throughput workload.
+		//
+		// A CLUSTERED member does not, because the quorum IS the
+		// durability: a publish returns once a majority holds it, so the
+		// host that loses power loses nothing its peers cannot replay.
+		// nats-server draws the same line itself — it enables the
+		// async-flush path for a replicated stream only when SyncAlways is
+		// off (server/filestore.go) — so forcing it on every member would
+		// spend an fsync per write to protect a copy two others already
+		// have.
+		SyncAlways: cfg.Replicas <= 1,
 
 		// THE ENGINE OWNS THE PROCESS SIGNALS. Left false, Server.Start
 		// installs its own SIGINT/SIGTERM handler, which shuts the
@@ -167,7 +213,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		// "no store configured" was always meant to mean.
 		dir, err := os.MkdirTemp("", "crewlet-jetstream-")
 		if err != nil {
-			return nil, fmt.Errorf("embedded jetstream scratch dir: %w", err)
+			return nil, "", fmt.Errorf("embedded jetstream scratch dir: %w", err)
 		}
 		opts.StoreDir, scratch = dir, dir
 	}
@@ -175,6 +221,15 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		opts.Cluster = server.ClusterOpts{Name: cfg.ClusterName, Port: cfg.ClusterPort}
 		opts.Routes = server.RoutesFromStr(joinURLs(cfg.ClusterURLs))
 	}
+	return opts, scratch, nil
+}
+
+func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
+	opts, scratch, err := embeddedOptions(cfg)
+	if err != nil {
+		return nil, err
+	}
+	clustered := opts.Cluster.Name != "" || len(opts.Routes) > 0 || opts.Cluster.Port != 0
 
 	ns, err := server.NewServer(opts)
 	if err != nil {
@@ -292,12 +347,11 @@ func joinURLs(urls []string) string {
 // Dial opens a NATS connection to an external server with this package's own
 // reconnect policy.
 //
-// Exported for the one caller outside the queue: on a Pulsar topology the
-// coordination KV lives on a NATS estate of its own, and it needs the same
-// reconnect-forever behaviour for the same reason. Reimplementing the option
-// list there would give two places to disagree about how long a node survives
-// a broker blip — and the whole point of that policy is that it keeps its
-// seats through one.
+// Exported so a caller outside this package that needs a plain connection to
+// the same estate gets the same reconnect-forever behaviour. Reimplementing
+// the option list there would give two places to disagree about how long a
+// node survives a broker blip — and the whole point of that policy is that it
+// keeps its seats through one.
 //
 // The caller owns the connection and must close it.
 func Dial(cfg Config) (*nats.Conn, error) { return dial(cfg) }

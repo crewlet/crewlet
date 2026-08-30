@@ -201,7 +201,6 @@ jobs:
         with:
           version: latest
           # No working-directory: the module is the repository.
-
   # THERE IS NO SEPARATE "integration" JOB, and that is a correction rather
   # than an omission. One existed, running `go test ./... -tags=integration`
   # with CREWLET_INTEGRATION=1 — and NOTHING reads either: no file carries
@@ -209,116 +208,10 @@ jobs:
   # again, at the cost of a second full race-detector run on every pull
   # request, reported under a name that implied coverage it did not have.
   #
-  # The suite that genuinely needs a service has its own job and its own
-  # gate: `pulsar`, against a real broker. Embedded NATS runs in-process, so
-  # the JetStream conformance and fleet suites need no container at all, and
-  # the store's suites run under `test` now that there is one driver to run
-  # them on.
-
-  pulsar:
-    name: pulsar conformance
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-
-      # The broker is docker-compose.yml's `pulsar` service, and that file is
-      # the ONLY place its version and its settings live. Dependabot watches
-      # it (the `docker-compose` ecosystem in .github/dependabot.yml), so a
-      # bump reaches this job by being merged — where a second pin here would
-      # have to be noticed and moved by hand, and a conformance run against
-      # whichever version nobody moved is green either way. A local
-      # `make pulsar-up` and this job now certify the same build by
-      # construction rather than by two pins somebody keeps equal. Nothing
-      # asserts that, so read docker-compose.yml before changing the pin.
-      #
-      # A `services:` block still cannot do this: the apachepulsar/pulsar
-      # image has no entrypoint that starts a broker (its CMD is a shell), and
-      # `services:` accepts `options` but no command, so there is nowhere to
-      # say `bin/pulsar standalone`. Compose can, which is what both this job
-      # and `make pulsar-up` drive.
-      #
-      # The service is NAMED rather than the profile brought up whole: Dekaf
-      # shares the `pulsar` profile and is a web UI with no bearing on what
-      # the suite certifies, so naming the broker keeps a second image out of
-      # the job. Naming a service also activates its profile on its own; the
-      # flag is kept so the line reads the same as the one in the Makefile.
-      #
-      # --wait blocks on the service's own healthcheck
-      # (`pulsar-admin brokers healthcheck`) instead of a readiness loop this
-      # job would maintain separately. The ceiling is that healthcheck's worst
-      # case — a 30s start_period plus 10 retries at 10s — with room for a cold
-      # start on a shared runner, and it fails in minutes rather than hanging
-      # to GitHub's six-hour ceiling.
-      - name: start pulsar
-        run: docker compose --profile pulsar up -d --wait --wait-timeout 300 pulsar
-
-      # THE SETTINGS ARE PROVED, NOT TRUSTED — and that is what lets this job
-      # take them from the compose file at all. The service applies them with
-      # the image's apply-config-from-env.py, and a config mechanism nothing
-      # verifies is a config mechanism that silently does nothing, which is
-      # why this job used to append the three keys itself. Reading back the
-      # file the broker booted from costs a second and settles it.
-      #
-      # All three are load-bearing. Two reapers are on by default and both
-      # destroy the invariant seat ownership rests on — a subscription that
-      # outlives its consumer (docs/guides/fleet.md,
-      # docs/concepts/seat-ownership.md): brokerDeleteInactiveTopicsEnabled
-      # removes an idle topic outright, and subscriptionExpirationTimeMinutes
-      # deletes a subscription whose last consumer left. Certifying against a
-      # broker whose reapers would eat an unowned seat's mailbox in production
-      # is certifying the wrong broker. forceDeleteNamespaceAllowed is for the
-      # suite alone: each queue under test gets its own namespace (parallel
-      # subtests share subject names), and without it the cleanup cannot
-      # remove one that still holds topics.
-      #
-      # The host probe is the other half. The healthcheck runs INSIDE the
-      # container, so it says the broker is well without saying the published
-      # ports reached the runner — and the suite drives subscription lifecycle
-      # over admin REST on 8080, not just the binary protocol on 6650. A
-      # deployment without 8080 reachable is one where seat mailboxes cannot
-      # be created at all.
-      - name: verify the broker took its settings
-        run: |
-          status=0
-          for setting in brokerDeleteInactiveTopicsEnabled=false \
-                         subscriptionExpirationTimeMinutes=0 \
-                         forceDeleteNamespaceAllowed=true; do
-            key=${setting%%=*}
-            want=${setting#*=}
-            # The LAST occurrence, not any occurrence. Pulsar reads this file
-            # with java.util.Properties, where a later line wins, so "the
-            # value is in there somewhere" answers a different question from
-            # "this is the value the broker took" -- and the two differ in
-            # exactly the case worth catching, a default left below an
-            # override.
-            got=$(docker compose --profile pulsar exec -T pulsar sh -c \
-                    "grep -E '^[[:space:]]*$key[[:space:]]*=' conf/standalone.conf | tail -1" \
-                  | tr -d '\r' | sed -e 's/^[^=]*=[[:space:]]*//' -e 's/[[:space:]]*$//')
-            if [ "$got" = "$want" ]; then
-              echo "  ok  $key=$got"
-            else
-              echo "::error::the broker took $key=${got:-<absent>}, not $want"
-              status=1
-            fi
-          done
-          curl -sf http://localhost:8080/admin/v2/clusters >/dev/null \
-            || { echo "::error::admin REST is not reachable on the runner"; status=1; }
-          exit $status
-
-      # The conformance suite SKIPS without this variable, and skipping is not
-      # passing — this job is the only place the Pulsar backend is actually
-      # certified. The timeout is generous because every subtest provisions
-      # its own namespace on a cold standalone broker.
-      - name: conformance
-        run: go test ./internal/queue/pulsar/... -race -count=1 -timeout 25m
-        env:
-          CREWLET_TEST_PULSAR_URL: pulsar://localhost:6650
-          CREWLET_TEST_PULSAR_ADMIN_URL: http://localhost:8080
-
-      - name: broker logs
-        if: failure()
-        run: docker compose --profile pulsar logs --tail 200 pulsar
+  # NO JOB HERE STARTS A BROKER, either, and that is worth stating because it
+  # used to. Every queue backend now certifies itself in-process: the
+  # JetStream conformance and fleet suites start an embedded NATS server per
+  # test, and the store's suites run under `test` now that there is one driver
+  # to run them on. So `test` is the whole queue gate, with nothing to
+  # configure and no environment variable whose absence silently skips a
+  # backend.

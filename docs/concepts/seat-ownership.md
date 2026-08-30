@@ -8,7 +8,7 @@ The rule the whole design serves is one sentence: **a seat is not a thing you ca
 
 ## The problem
 
-Every seat has a durable inbox topic, `crewlet.agent.{handle}.inbox`, consumed under a **Shared** subscription named `agent-{handle}`. Shared means competing consumers: each message goes to exactly one attached member.
+Every seat has a durable inbox topic, `crewlet.agent.{handle}.inbox`, consumed under a **durable subscription** named `agent-{handle}`. A subscription is a competing-consumer group: each message goes to exactly one attached member.
 
 That is exactly right when the members are one node's consumer. It is catastrophic when two nodes both attach: the broker splits the seat's traffic between them, so one agent's conversation runs as two interleaved turn streams on two processes, each unaware of the other. Turn exclusion is in-process state; neither node can see the collision, and nothing raises.
 
@@ -68,7 +68,7 @@ Releasing has **two modes**, because losing a lease and choosing to let go are o
 | **Voluntary** | drain, capacity rebalance, role decommissioned | quiesce → let the in-flight handler finish under a bounded wait → detach → release the lease |
 | **Fenced** | renew returned `False`, the TTL grace expired, an acquire hook failed, config posture went `shed`/`stuck` | **detach first**, abandon in-flight work, republish nothing |
 
-Fenced release never republishes. A peer may already be running the seat; republishing hands it a second copy of work it is already doing, and sends those messages to the topic tail while the successor replays its prefetched siblings from the head — which reorders the conversation.
+Fenced release never republishes. A peer may already be running the seat, and a republished event is a **new message**: a second copy of work the successor is already doing, carrying none of the identity the completion ledger's idempotency and the batch layer's aging both key on — so nothing downstream can collapse the two. Handing the delivery back unacked keeps that identity, and the successor gets exactly what this node never finished.
 
 **A teardown that cannot be proven does not release the lease.** A lease held too long costs latency; one released too early costs correctness. So a seat whose `on_release` hook raises goes *undead*: out of the held set, so this node starts nothing new on it, and still renewed, so no peer can take a seat this process may still be consuming.
 
@@ -78,13 +78,13 @@ Only a restart of that process can free a seat whose teardown never succeeds —
 
 ## Deferring a delivery
 
-A handler has two ordinary outcomes: return (ack) or raise (negative-ack, which spends the message's dead-letter budget). Seat handoff needs a third, so the queue protocol has one:
+A handler has two ordinary outcomes: return (ack) or raise (negative-ack, which asks for the message back and goes on consuming). Seat handoff needs a third, so the queue protocol has one:
 
 ```go
 return queue.Defer(fmt.Sprintf("seat %q is not owned here", handle))
 ```
 
-The delivery is left **unacked** and the attachment stops consuming. Measured against a real broker, a close-driven handoff does *not* increment `redeliveryCount`: the messages return to the seat's next owner in order, at count 0. A NAK would burn the budget on messages nothing is wrong with.
+The delivery goes back to the broker at once — a NAK is how a JetStream client returns one, and the seat's next owner sees it in about a millisecond, where letting the ack window lapse instead would park that seat's mail for thirty minutes on every lease movement — and the attachment then **stops consuming**. The second half is what a bare NAK does not have. A node that handed the message back and kept fetching would be handed it straight back, refuse it again, and spend one of the message's twenty-five deliveries on every lap, until an event nothing is wrong with dead-letters on a node that was never entitled to it. One handoff costs one delivery, which is what that budget is sized for.
 
 Three paths use it, and they are the three ways this node can be the wrong one to run a delivery it was just handed: the seat is not owned here, the in-turn fence tripped mid-dispatch, or the config posture went `shed`/`stuck`. Each also records the deferral, because a deferral quiesces the consumer and the resume is edge-triggered on the next successful renew — without it the seat is owned, attached and deaf.
 
@@ -161,35 +161,37 @@ A seat is unowned during a lease gap, a claim ramp, a rebalance, or a full fleet
 
 It does, because the **durable subscription** is what retains messages, and the subscription exists whether or not anything is attached to it:
 
-- Every seat's subscription is created at boot, behind the `worker:seat-subscriptions` singleton lease, at the **earliest** message. Behind a singleton because creating one by *subscribing* joins a Shared subscription a peer may be actively serving and takes a share of that seat's live traffic into the joining process — manufacturing the very state this design exists to prevent. Creation runs over the broker's admin API instead, which needs no consumer.
+- Every seat's subscription is created at boot, by **every node**, at the **earliest** message — and for every seat in the company rather than this node's share, because a mailbox is a fact about the company and the node that ends up serving a seat may not be this one. Creating one is a plain client call that attaches nothing (1.7 ms, idempotent), so it can neither take a share of a peer's live traffic the way creating one by *subscribing* would, nor cost anything when a peer got there first. A config apply that adds a role runs the same walk again.
 - Detach is non-destructive: the subscription and its cursor survive, so unacked messages return to whoever attaches next.
 - Deleting one is explicit (`delete_subscription`) and reserved for a decommissioned role, whose inbox must not accumulate undeliverable events forever.
 
-> **The broker's reapers will delete an unowned seat's subscription.**
+> **Creation is a boot step because the alternative is a silent drop, not a slow one.**
 >
-> Two Pulsar reapers are enabled by default and both destroy the thing this invariant depends on. `brokerDeleteInactiveTopicsEnabled` removes an idle topic outright; `subscriptionExpirationTimeMinutes` deletes a subscription whose last-active time is older than the threshold.
+> The agent and notification streams retain by **interest**: a message is kept while a durable consumer that has not acked it exists, and a message published to a subject no subscription covers is discarded at the publish. That is the queue contract's stated behaviour rather than a broker surprise, and it is the same rule that makes an unowned seat's mail safe — the subscription, not a consumer, is what holds it.
 >
-> Under owner-only attachment a seat's subscription has **no connected consumer for as long as the seat is unowned**, so both settings become lossy. Set subscription expiry off (or far above any credible unowned window) and inactive-topic deletion off, or to `delete_when_subscriptions_caught_up`. The repo's `docker-compose.yml` ships the correct values; an operator who upgrades the engine without changing the broker gets a fleet that quietly loses a quiet seat's mail, and nothing in the engine can detect it.
+> So the window that loses mail is the one *before* a seat's subscription exists, which is why every node creates every seat's mailbox at boot and why the cost of doing so had to be a millisecond. Once it exists nothing reaps it: a durable consumer carries no inactivity threshold, so a seat can stay unowned for as long as a rebalance, a failed teardown or an operator takes.
 
 ## The wedged node, and why it leaves
 
 Every failure above assumes a node either works or dies. The one that is neither is a process whose **duties have stopped turning while the process stays alive** — a deadlock, a duty blocked on something that never returns — and it is the worst case, because the two halves of ownership come apart:
 
 - Its seat leases lapse, because nothing is renewing them. Peers take the seats over, correctly.
-- Its **broker session does not lapse.** The Pulsar client answers keepalives from its own IO threads, so the broker goes on treating it as a live consumer and holding its prefetch of those seats' messages — **until the connection dies**, not until a clock expires: `apache/pulsar-client-go` has no ack timeout and Pulsar has no broker-side one for a connected consumer, so nothing releases that mail on its own. The new owner cannot see mail that is already reserved for a corpse, and waiting will not change that.
+- Its **stalled handler is still holding a delivery.** Pull consumers prefetch nothing, so what a stopped loop holds is bounded by the batch already in its hands rather than by the seat's backlog — but those messages are ack-pending for a corpse, and the clock on them is the broker's: JetStream returns a fetched-unacked message when the 30-minute ack window elapses, and closing the connection does not shorten it. The successor serves everything published after it claims the seat; it is that one batch that waits.
 
-Nothing can be scheduled out of that state either: the duty that stalled is the one that would have to run the recovery, so anything queued behind it waits on the very blockage it is reacting to. **What a watcher can do unilaterally is end the process** — and that is the whole remedy, because the client dies with the process, the broker sees the session end, and redelivery is immediate (9 ms, measured).
+Nothing can be scheduled out of that state either: the duty that stalled is the one that would have to run the recovery, so anything queued behind it waits on the very blockage it is reacting to. **What a watcher can do unilaterally is end the process** — and it is worth being exact about what that buys, because it is *not* the held mail back:
 
-So every node runs a **watchdog**: each duty stamps a beat as it turns, a separate goroutine compares, and it calls `os.Exit(75)` when the lag passes the **lease TTL**. Four things about it are deliberate:
+- **It removes the actor.** A wedged node that later resumes acts on a seat it no longer owns, with its MCP children still spawned and its credentials still live — and a turn's outbound effects, a chat post or a work-item comment, are not something an epoch fence can reach.
+- **It lets the node come back.** A process that neither works nor dies goes on answering `/health`, so nothing restarts it: the seats it was handed are covered by peers, but its capacity stays lost until a person notices.
+
+So every node runs a **watchdog**: each duty stamps a beat as it turns, a separate goroutine compares, and it calls `os.Exit(75)` when the lag passes the **lease TTL**. Five things about it are deliberate:
 
 - **The threshold is not a config knob.** It is the same number the lease TTL is. Past it the node is provably not the owner, and letting the two drift is how a process gets to be simultaneously "not the owner" and "still holding the mail".
 - **The exit is the crudest possible one** — `os.Exit`, which runs no deferred function, rather than a panic, a signal, or a graceful shutdown. The duty that stalled is the one that would have to run the shutdown, so anything waiting on it hangs; trying is how a watchdog ends up wedged too. The notice goes straight to stderr rather than through the logger for the same reason: a configured handler may batch, format, or ship lines somewhere, which is more machinery than a wedged process has earned. Exit code **75** is distinct from any ordinary failure, so an orchestrator's restart log says what happened.
 - **It is disarmed for the whole of a normal shutdown.** Teardown is the one part of the process that legitimately blocks the loop — reaping MCP subprocesses, joining threads, tearing sandboxes down — and exiting through the middle of it would abandon the seat release that makes a drain graceful. A shutdown that hangs is a `SIGKILL` away; a shutdown that exits without releasing costs every peer a full TTL of dark seats.
 - **The beat cadence is scaled to the threshold, not set independently.** A beat slower than the threshold makes a perfectly healthy node shoot itself, so both the stamp interval and the poll interval are ceilings derived from it.
+- **A duty that is *gone* is not a duty that is *wedged*.** From the watcher the two are indistinguishable — the beat simply stops refreshing — and they are opposite situations. A wedged duty is still alive inside a live process: still sitting on a fetched batch, and still able to act on a seat it no longer owns. A duty that has finished took its work with it, so there is nothing left holding anything. The watchdog therefore stands down when nothing it watches is live any more, rather than exiting. Without that check, every engine abandoned rather than stopped arms a suicide timer that fires one TTL later on a perfectly healthy process — which is not hypothetical: it killed this repository's own test suite at 63%, exit 75, with zero test failures.
 
-- **A duty that is *gone* is not a duty that is *wedged*.** From the watcher the two are indistinguishable — the beat simply stops refreshing — and they are opposite situations. A wedged duty is still alive and still holding a peer's mail, which is the entire reason to exit. A duty that has finished took its share of the client with it, so there is nothing left to hold. The watchdog therefore stands down when nothing it watches is live any more, rather than exiting. Without that check, every engine abandoned rather than stopped arms a suicide timer that fires one TTL later on a perfectly healthy process — which is not hypothetical: it killed this repository's own test suite at 63%, exit 75, with zero test failures.
-
-Single node or fleet, it is armed the same way. With one node nothing is waiting on the prefetch, but a wedged engine is a dead engine either way, and leaving is what lets a supervisor notice.
+Single node or fleet, it is armed the same way. With one node no peer is waiting on anything the wedged process still holds, but a wedged engine is a dead engine either way, and leaving is what lets a supervisor notice.
 
 ## Sandbox control is owner-routed
 
@@ -220,20 +222,18 @@ agent here?", and a miss means "not on this node", never "does not exist".
 
 Some work belongs to the company rather than to a seat. Running it on every node is not merely wasteful, it races — N reapers deciding independently to expire the same paused sandbox, N clustering passes writing N sets of near-identical auto-drafted skills.
 
-Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**, so a node that dies mid-duty releases it by lapsing and a peer picks it up on its next tick with no handoff protocol. There are six:
+Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**, so a node that dies mid-duty releases it by lapsing and a peer picks it up on its next tick with no handoff protocol. There are four:
 
 | Duty | What it does | Why once |
 |---|---|---|
-| `seat-subscriptions` | Creates every seat's inbox and control subscription at boot | Only needs doing once per company; no reason for every node to walk every seat at every boot |
 | `sandbox-waiter` | Polls live sandbox boxes, keeps them alive, reaps expired pauses | Each poll is a reconnect, so N nodes means N reconnects per box per tick — and N racing reapers |
 | `scheduler` | Evaluates every schedule and fires what is due | The fleet's fire claim already makes a dispatch at-most-once, so peers are not *wrong* — they lose the race on every fire, having walked the whole org to get there |
-| `skill-clustering` | Synthesises skills from episodes | Reads every agent's episodes and **writes** skills: N nodes produce N sets of near-identical pages and N× the LLM spend |
-| `skill-curator` | Transitions skills active → stale → archived | Publishes a lifecycle event per transition, and races its own optimistic-concurrency guard |
+| `skill-curator` | All three learning background passes: clustering skills out of episodes, the active → stale → archived lifecycle, and episode compaction | Clustering reads every agent's episodes and **writes** skills, so N nodes produce N sets of near-identical pages and N× the LLM spend; the curator publishes a lifecycle event per transition and races its own optimistic-concurrency guard. One lease for all three because they run on one loop — and the name stays the curator's, since renaming it would split a rolling upgrade across two coordination keys with a node on each believing it held *the* duty |
 | `maintenance` | Retention sweeps for every short-horizon table in the node's own database — `events`, `scheduled_runs`, `conversation_sessions`, `chat_thread_follows` — plus both halves of the A2A channel sweep: the idle-close of an ask no turn ever answered, and the delete of one closed long enough. The channel record is the one *shared* thing swept here, and the [coordination store](coordination.md#retention-is-a-buckets-age) says why: its other slots expire on a bucket's age, which cannot tell an open channel from a closed one | Idempotent range deletes, so peers are harmless — just N times the write amplification and vacuum churn |
 
 Without a placement host — the single-node case — the answer is always yes: there is no fleet to be a singleton within. A duty claim that *fails* (an unreachable lease store) skips the tick rather than proceeding: unknown ownership is not ownership, and assuming otherwise is how every node decides it is the singleton at once.
 
-**Not everything periodic is a duty.** The tool-skill boot walk looks like one and is not: it populates a *process-local* registry, so every node has to run it or its agents have no tool skills at all. The test is whether the work produces shared state (a duty) or warms a local cache (not one). The episode-lifecycle worker is a third shape — it consumes a fleet-wide subscription, so the broker already delivers each request to exactly one node and a lease would add nothing.
+**Not everything periodic is a duty.** The tool-skill boot walk looks like one and is not: it populates a *process-local* registry, so every node has to run it or its agents have no tool skills at all. The test is whether the work produces shared state (a duty) or warms a local cache (not one). The reflect dispatcher is a third shape — it consumes a fleet-wide group subscription, so the broker already hands each completed turn to exactly one node and a lease would add nothing. The seat-mailbox walk is a fourth, and the sharpest: it *is* company-wide state, and it still runs on every node, because creating a durable consumer is idempotent and costs a millisecond — while putting it behind a lease would leave a seat added by a config apply with no mailbox until the duty's holder got round to it, and mail published to a subject with no subscription is dropped rather than queued.
 
 ## Mixed-version fleets
 
@@ -260,14 +260,14 @@ The current protocol is **3**, and it has moved twice — each time because hold
 
 ## Single node
 
-Everything above runs unchanged on one node — it is the degenerate case, not a second code path. With no database configured the leases live in memory, which means the process believes it owns the whole company. That is correct for one node and catastrophic for two, so the engine says so at boot:
+Everything above runs unchanged on one node — it is the degenerate case, not a second code path. On the default `coordination.type: local` the leases never leave the process, which means it believes it owns the whole company. That is correct for one node and catastrophic for two, so the engine says so at boot:
 
 ```
 seat_placement_is_process_local  node=node-0
-  hint=no database configured, so seat leases are held in this process only…
+  hint=coordination.type is local, so seat leases are held in this process only…
 ```
 
-Configure `providers.database.dsn` to run a fleet.
+A fleet sets `coordination.type: embedded-kv` and gives the nodes one stream to share — a clustered embedded server or an external NATS. The two go together by construction: the coordination KV rides the stream's own connection, and Tier A refuses `local` coordination beside a clustered or external stream rather than letting the halves drift apart. See [Running a Fleet](../guides/fleet.md#what-a-fleet-needs).
 
 ---
 

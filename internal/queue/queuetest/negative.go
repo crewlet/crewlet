@@ -44,8 +44,8 @@ import (
 // correct backend look broken; the author who investigates pays far more than
 // the check costs. This suite has made that mistake twice: it required a free
 // deferral, which JetStream trades away (a deferred message costs a
-// redelivery there, measured), and it required head-replay on nak, which is
-// Pulsar-only. Both are [Capabilities] flags now, not requirements.
+// redelivery there, measured), and it required head-replay on nak, which only
+// the twin does. Both are [Capabilities] flags now, not requirements.
 //
 // The four cases below were checked that way rather than by waiting for a
 // failure. The contract defines all four attachment verbs and permits none of
@@ -197,7 +197,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		// let alone deferred. On an asynchronous backend this wait returns at
 		// once, the Unquiesce below finds nothing quiesced and does nothing,
 		// the deferral lands a millisecond later, and the attachment is
-		// quiesced with nothing left to resume it. Measured by the Pulsar
+		// quiesced with nothing left to resume it. Measured on a broker-backed
 		// backend at 3 of 12 full-suite runs, and 16 of 20 run alone.
 		//
 		// It could not fail on the backend it was written against: the twin

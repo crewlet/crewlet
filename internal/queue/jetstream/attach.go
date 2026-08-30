@@ -408,7 +408,7 @@ func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
 // still be legitimately paused for a running sandbox, and clearing that
 // would deliver into a suspended turn.
 //
-// Unlike the Pulsar backend this needs no prefetch reclamation — pull
+// This needs no prefetch reclamation — pull
 // consumers never pushed anything into a client-side queue, so resuming is
 // simply fetching again.
 func (q *Queue) Unquiesce(_ context.Context, topic, group string) (bool, error) {

@@ -164,17 +164,16 @@ migrations — there is no separate observability database to configure.
 
 Every Tier A field below takes a `${VAR}`, so these are **conventions** rather than variables the engine looks up by name — the name is whatever your `crewlet.yaml` writes. They are listed because a deployment that invents its own names ends up with the same value spelled three ways.
 
-The whole block lives under `stream:`, which is where an external NATS estate and a Pulsar estate are both configured. (There is no `providers.queue` — Tier A refuses unknown keys, so a config written against that path fails to load.)
+The whole block lives under `stream:`, which is the only place an external NATS estate is configured. (There is no `providers.queue` — Tier A refuses unknown keys, so a config written against that path fails to load.)
 
 | Variable | Tier A field | Where to get it |
 |----------|--------------|-----------------|
-| `CREWLET_PULSAR_URL` | `stream.url` — the broker address. Required for `type: nats` and `type: pulsar`, and **refused** for `embedded` | Your broker's service address (`pulsar://…`, `nats://…`) |
-| `CREWLET_PULSAR_TOKEN` | `stream.token` — this engine's bearer token, for a broker running with token authentication (see [Deployment § Authentication](../guides/deployment.md)) | `bin/pulsar tokens create --subject <engine-role>` |
-| `PULSAR_ADMIN_TOKEN` | None — read by the compose broker config, its healthcheck and `pulsar-admin`, never by the engine | `bin/pulsar tokens create --subject admin` |
+| `CREWLET_STREAM_URL` | `stream.url` — the NATS server to dial. Required for `type: nats`, and **refused** for `embedded`, which starts a server in this process and has no address for anyone to dial. The value goes to the NATS client verbatim, so a comma-separated list of a cluster's members is one setting and the client fails over between them | Your cluster's client address (`nats://nats-1.internal:4222`) |
+| `CREWLET_NATS_TOKEN` | `stream.token` — this engine's bearer token, for a server running with token authentication (see [Deployment § An external NATS server](../guides/deployment.md#an-external-nats-server)) | Whoever runs the cluster: it is the value in the server's `authorization { token: … }` |
 
-Two more `stream:` fields carry no `${VAR}` convention because they are paths and names rather than credentials: `stream.credentials` is a NATS credentials file on disk (the usual way to authenticate to an external NATS estate, instead of `stream.token`), and `stream.tenant` / `stream.namespace` scope this company's topics inside a Pulsar estate.
+Four more `stream:` fields carry no `${VAR}` convention because they are paths on disk rather than credentials. `stream.credentials` is a NATS credentials file — an NKey/JWT `.creds`, and the usual way to authenticate to an external estate instead of `stream.token`. `stream.tls.ca` / `.cert` / `.key` are the transport underneath that authentication: the private CA to trust for the server's certificate, and the client certificate to present. A broker configured the way a hardened NATS deployment is — `tls { verify: true }` — refuses a connection presenting no client certificate, whatever credentials would have followed.
 
-A Pulsar stream keeps its **leases** on a NATS estate rather than on Pulsar — Pulsar has no compare-and-set — so `coordination.nats.url` / `.token` / `.credentials` are configured alongside, with the same shapes. See [Coordination](../concepts/coordination.md#backends).
+**There is no coordination variable, because there is no second broker to authenticate against.** The coordination KV — the completion ledger, the delivery dedupe, the token counter, the activation pointer, the company's sealed secrets, and in a fleet the seat leases too — rides the stream's *own* NATS connection on every topology, so `coordination:` carries only `type` (`local` or `embedded-kv`) and `lease_ttl_seconds`, and has nothing to point anywhere. A second dial would work and would be worse: two connections to one broker fail independently, so a node could hold live leases over a connection that still works while the one carrying its inbox has dropped — alive to its peers, deaf to its work. See [Coordination](../concepts/coordination.md#backends).
 
 ---
 

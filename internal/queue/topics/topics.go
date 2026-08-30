@@ -206,12 +206,18 @@ func DeadLetter(topic, group string) string {
 // subjectSafe rewrites the parts of a name that would stop the result from
 // being a publishable subject.
 //
-// The set is exactly what the backends refuse on the way in: whitespace, the
-// two wildcards, '/' (which Pulsar reads as a tenant/namespace separator, so
-// an unescaped one would address another company's namespace), and an empty
-// segment. A dead-letter subject tripping any of those is a poison message
+// The set is exactly what makes a subject unpublishable: whitespace, the two
+// wildcards (which would make the result a PATTERN rather than a subject),
+// and an empty segment. That is nats-server's own rule — see isValidSubject,
+// which rejects an empty token and a subject that is anything but a literal
+// past a '>'. A dead-letter subject tripping any of those is a poison message
 // that cannot be published at all — and that is the one message where losing
 // it costs the only copy of the evidence.
+//
+// Nothing else is rewritten, deliberately. A character that the broker
+// accepts is a character this must not mangle: the head is here to be read by
+// a person grepping a DLQ, and every substitution makes two different pairs
+// look more alike.
 //
 // Dots are left alone: they are legal, and keeping them keeps a DLQ greppable
 // by topic. Being lossy is safe here only because the digest beside it, not
@@ -221,7 +227,7 @@ func subjectSafe(s string) string {
 	for i, segment := range segments {
 		segment = strings.Map(func(r rune) rune {
 			switch r {
-			case ' ', '\t', '\r', '\n', '*', '>', '/':
+			case ' ', '\t', '\r', '\n', '*', '>':
 				return '_'
 			}
 			return r

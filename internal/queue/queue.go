@@ -1,8 +1,9 @@
 // Package queue defines the EventQueue contract — the transport every
 // inter-component message in Crewlet travels through.
 //
-// One interface, several backends (an in-memory twin, embedded NATS
-// JetStream, external Pulsar), all certified by ONE conformance suite. A
+// One interface, two backends (an in-memory twin, and NATS JetStream —
+// embedded by default, external when configured), both certified by ONE
+// conformance suite. A
 // backend that the suite has not certified does not exist as far as the
 // engine is concerned, and nothing above this package may branch on which
 // backend is running.
@@ -32,6 +33,30 @@ import (
 )
 
 var log = logging.Get("queue.contract")
+
+// MaxPayloadBytes is the largest single event any backend must carry.
+//
+// It is a CONTRACT number rather than a backend's own, because both ends need
+// it and they sit in different packages: the broker is configured to accept
+// this much (see internal/queue/jetstream, which sets the embedded server's
+// max_payload from it), and every producer that buffers caller-supplied bytes
+// has to refuse anything that would not fit BEFORE it accepts the work — see
+// internal/api/webhooks, whose body cap is derived from this.
+//
+// Written down because the two drifted, and the failure had no floor: the
+// webhook edge accepted a 25 MiB delivery, verified its signature, claimed it,
+// and then could not publish it through a broker whose default payload limit
+// is 1 MiB. The delivery was refused with a 503, so the provider retried, and
+// every retry failed the same way forever. Nothing in that loop is a
+// transient, and nothing logged a size.
+//
+// 8 MiB is nats-server's own MAX_PAYLOAD_MAX_SIZE — the threshold above which
+// it warns that a payload is too large to be a good idea (server/const.go).
+// Sitting AT that boundary takes eight times the default without arguing with
+// the broker about what it was built for: a message is buffered whole, in the
+// server and again in every client that receives it, so this is memory per
+// in-flight event and not a disk number.
+const MaxPayloadBytes = 8 << 20
 
 // MaxLingerSeconds is the hard ceiling on a batch linger window.
 //
@@ -446,8 +471,8 @@ func eventType(ev *events.Event) string {
 // Within a partition: event timestamp, not delivery order. This is what
 // makes a conversation read correctly regardless of how a broker interleaves
 // redeliveries with fresh arrivals — measured, JetStream returns a
-// redelivered message BEHIND never-delivered ones, where Pulsar replays it
-// from the head. Relying
+// redelivered message BEHIND never-delivered ones, where the in-memory twin
+// replays it from the head. Relying
 // on the timestamps the engine already trusts, rather than on one broker's
 // replay semantics, removes a correctness dependency that would otherwise
 // have to be re-verified for every backend.
@@ -547,14 +572,14 @@ func LogBatchResult(l *slog.Logger, topic, group, batchKey string, evs []*events
 // # Why these live in the contract
 //
 // The same reason [LogBatchResult] does, and here it is not hypothetical:
-// the three backends had drifted into three spellings of one situation.
+// the backends had drifted into different spellings of one situation.
 // `memory` logged `publish_listener_failed` with the recovered value under
-// `error`; `jetstream` and `pulsar` logged `publish_listener_panicked` with
-// it under `panic`. The stream side was worse — the same two backends keyed
-// the topic as `subject` while `memory` keyed it as `topic` and added a
-// `topic_pattern` nobody else emitted. An operator grepping
-// `publish_listener_panicked` saw every backend but the in-memory twin, and
-// the twin is what the tests run on, so nothing caught it.
+// `error`; the broker-backed side logged `publish_listener_panicked` with
+// it under `panic`. The stream side was worse — it keyed the topic as
+// `subject` while `memory` keyed it as `topic` and added a `topic_pattern`
+// nobody else emitted. An operator grepping `publish_listener_panicked` saw
+// every backend but the in-memory twin, and the twin is what the tests run
+// on, so nothing caught it.
 //
 // # `panic` rather than `error`
 //

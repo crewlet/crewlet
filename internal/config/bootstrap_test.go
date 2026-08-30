@@ -29,7 +29,6 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"unknown stream type", "stream:\n  type: kafka\n", "stream.type", ErrUnknownValue},
 		{"external stream with no url", "stream:\n  type: nats\ncoordination:\n  type: embedded-kv\n", "stream.url", ErrMissing},
 		{"embedded stream with a url", "stream:\n  url: nats://localhost:4222\n", "stream.url", ErrConflict},
-		{"pulsar tenant on a nats stream", "stream:\n  type: nats\n  url: nats://x:4222\n  tenant: acme\ncoordination:\n  type: embedded-kv\n", "stream.tenant", ErrConflict},
 
 		{"unknown coordination type", "coordination:\n  type: zookeeper\n", "coordination.type", ErrUnknownValue},
 
@@ -48,22 +47,6 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 				"coordination:\n  type: embedded-kv\n",
 			"stream.tls.cert", ErrMissing,
 		},
-		{
-			"coordination client cert with no key",
-			"coordination:\n  type: embedded-kv\n  nats:\n    url: nats://x:4222\n" +
-				"    tls:\n      cert: /etc/c.pem\n",
-			"coordination.nats.tls.key", ErrMissing,
-		},
-		// A PULSAR STREAM READS tls_trust_certs, never this block, so
-		// material set here would be silently unused — an operator would
-		// watch a handshake fail while trusting a file no process opened.
-		{
-			"nats tls on a pulsar stream",
-			"stream:\n  type: pulsar\n  url: pulsar://x:6650\n  tls:\n    ca: /etc/ca.pem\n" +
-				"coordination:\n  type: embedded-kv\n  nats:\n    url: nats://x:4222\n",
-			"stream.tls", ErrConflict,
-		},
-
 		{"port out of range", "api:\n  port: 70000\n", "api.port", ErrOutOfRange},
 		{"token with no id", "api:\n  auth:\n    tokens:\n      - id: \"\"\n        token: abc\n", "api.auth.tokens[0].id", ErrMissing},
 		{"token with no value", "api:\n  auth:\n    tokens:\n      - id: founder\n        token: \"\"\n", "api.auth.tokens[0].token", ErrMissing},
@@ -109,55 +92,10 @@ func TestBootstrapTopologyRules(t *testing.T) {
 			want: "no coordination quorum",
 		},
 		{
-			name: "pulsar filling the coordination slot",
-			yaml: "stream:\n  type: pulsar\n  url: pulsar://localhost:6650\n",
-			path: "coordination.type",
-			want: "compare-and-set",
-		},
-		{
 			name: "replicas with nobody to replicate to",
 			yaml: "stream:\n  replicas: 3\n",
 			path: "stream.replicas",
 			want: "needs peers",
-		},
-		{
-			// The gap that made every Pulsar topology unrunnable: the
-			// slot was chosen and there was nowhere for it to live.
-			name: "pulsar with nowhere to keep its leases",
-			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: pulsar\n  url: pulsar://localhost:6650\n  tenant: acme\n  namespace: default\n",
-			path: "coordination.nats",
-			want: "leases need a NATS estate",
-		},
-		{
-			// Read by nobody. On a NATS stream the coordination store
-			// rides the stream's own connection, deliberately.
-			name: "a coordination estate on a stream that already carries one",
-			yaml: "coordination:\n  type: embedded-kv\n  nats:\n    url: nats://elsewhere:4222\n",
-			path: "coordination.nats",
-			want: "already carries coordination",
-		},
-		{
-			name: "a coordination estate with local coordination",
-			yaml: "coordination:\n  type: local\n  nats:\n    url: nats://elsewhere:4222\n",
-			path: "coordination.nats",
-			want: "keeps leases on a NATS estate",
-		},
-		{
-			// Two different statements about where the leases live.
-			name: "a coordination estate that is both dialled and embedded",
-			yaml: "coordination:\n  type: embedded-kv\n  nats:\n    url: nats://elsewhere:4222\n    store_dir: /tmp/coord\nstream:\n  type: pulsar\n  url: pulsar://localhost:6650\n  tenant: acme\n  namespace: default\n",
-			path: "coordination.nats.store_dir",
-			want: "stores nothing locally",
-		},
-		{
-			// The quorum check used to read stream.cluster.peers, which
-			// on a Pulsar topology describes a cluster that does not
-			// hold the leases — so a two-member lease cluster counted as
-			// one node and passed.
-			name: "a two-member lease cluster on a pulsar stream",
-			yaml: "coordination:\n  type: embedded-kv\n  nats:\n    cluster:\n      name: coord\n      peers: [nats://b:6222]\nstream:\n  type: pulsar\n  url: pulsar://localhost:6650\n  tenant: acme\n  namespace: default\n",
-			path: "coordination.nats.cluster.peers",
-			want: "no coordination quorum",
 		},
 	}
 	for _, tc := range cases {
@@ -177,15 +115,18 @@ func TestSupportedTopologiesLoad(t *testing.T) {
 	for _, doc := range []string{
 		"",
 		"coordination:\n  type: local\n",
-		// A Pulsar topology, which could not run at all until the
-		// coordination estate existed: the slot was validated, documented
-		// and refused at open. Both shapes of estate load.
-		"coordination:\n  type: embedded-kv\n  nats:\n    store_dir: /var/lib/crewlet/coord\nstream:\n  type: pulsar\n  url: pulsar://localhost:6650\n  tenant: acme\n  namespace: default\n",
-		"coordination:\n  type: embedded-kv\n  nats:\n    url: nats://coord:4222\nstream:\n  type: pulsar\n  url: pulsar://localhost:6650\n  tenant: acme\n  namespace: default\n",
-		// Three lease members, which is the fleet shape.
-		"coordination:\n  type: embedded-kv\n  nats:\n    store_dir: /var/lib/crewlet/coord\n    replicas: 3\n    cluster:\n      name: coord\n      peers: [nats://b:6222, nats://c:6222]\nstream:\n  type: pulsar\n  url: pulsar://localhost:6650\n  tenant: acme\n  namespace: default\n",
+		// Three members, which is the fleet shape: a clustered embedded
+		// stream carrying its own coordination, and an external one.
 		"coordination:\n  type: embedded-kv\nstream:\n  replicas: 3\n  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
 		"stream:\n  type: nats\n  url: nats://localhost:4222\ncoordination:\n  type: embedded-kv\n",
+		// An external cluster asking for replicas. Its membership is not
+		// in this file and cannot be — the url names an address, not a
+		// member list — so the peers rule must not reach it. It did, and
+		// the cost was silent: every external-NATS fleet was capped at
+		// one copy of its streams AND of its lease and fleet KV buckets,
+		// so the seat mailboxes and every lease lived on whichever single
+		// server held them and died with it.
+		"stream:\n  type: nats\n  url: nats://localhost:4222\n  replicas: 3\ncoordination:\n  type: embedded-kv\n",
 	} {
 		if _, err := ParseBootstrap([]byte(doc), EnvOnly()); err != nil {
 			t.Fatalf("%q should load:\n%v", doc, err)

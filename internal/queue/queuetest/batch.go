@@ -338,9 +338,9 @@ func (s *suite) runBatch(t *testing.T) {
 	t.Run("within_a_partition_events_are_ordered_by_timestamp", func(t *testing.T) {
 		t.Parallel()
 		// A conversation must read in its own chronological order no
-		// matter how the broker handed the events over. Measured, the two
-		// brokers disagree: JetStream returns a redelivered message
-		// BEHIND never-delivered ones, where Pulsar replays it from the
+		// matter how the broker handed the events over. Measured, the
+		// backends disagree: JetStream returns a redelivered message
+		// BEHIND never-delivered ones, where the twin replays it from the
 		// head. So within-
 		// conversation order comes from the timestamps the engine already
 		// trusts and already preserves across requeue — never from

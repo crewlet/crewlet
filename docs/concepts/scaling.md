@@ -43,9 +43,9 @@ flowchart TB
         N2["node-b<br/><i>ingress · seats · workers</i>"]
         N3["sat-eu<br/><i>seats</i> · zone=eu"]
     end
-    subgraph shared["Shared state — the company"]
-        KV[("Coordination<br/>leases · config epochs<br/>counters · ledgers")]
-        MQ[("Pulsar<br/>one durable subscription<br/>per seat inbox")]
+    subgraph shared["Shared state — the company · one NATS estate"]
+        KV[("Coordination KV<br/>leases · config epochs<br/>counters · ledgers")]
+        MQ[("JetStream streams<br/>one durable consumer<br/>per seat inbox")]
     end
     N1 --- KV
     N2 --- KV
@@ -55,11 +55,25 @@ flowchart TB
     N3 --- MQ
 ```
 
+That shared box is a *logical* one. In the default fleet shape it lives inside
+the nodes themselves — each embeds a member of one NATS cluster and the streams
+replicate between them (`stream.cluster.*`, `stream.replicas: 3`) — and
+`stream.type: nats` is the same picture with the estate moved out to a cluster
+somebody else runs. One estate either way, carrying both slots — see
+[what the fleet shares](#what-the-fleet-shares).
+
 **The node id must be distinct and stable across restarts.** It comes from the
 deployment (`CREWLET_NODE_ID`, or `node.id` in the Tier A file) rather than
 being generated, because a fresh value per boot orphans whatever the previous
 incarnation registered under the old one. Two nodes sharing an id miscount the
-fleet and each compute too small a share of the seats.
+fleet and each compute too small a share of the seats. On a clustered embedded
+stream it is also this member's NATS server name, and JetStream places stream
+replicas **by server name**: a node that comes back under a new one is a new
+peer, its old replicas orphaned on a member that no longer exists, and the
+stream left short of quorum waiting for a server that will never return. It is
+never generated for you either: an unset id is `node-0` on *every* node, which
+is the two-nodes-sharing-an-id failure with an extra symptom — NATS refuses a
+route from a member whose name it already knows.
 
 A role is subtracted from **this node, not from the company**, so a fleet can be
 assembled node by node into a shape where a whole job is done by nobody while no
@@ -79,7 +93,7 @@ what a lock fixes**:
 |---|---|---|
 | **1** | **Control plane** — config activation, secret rotation, identity maps were delivered over a competing-consumer subscription, so exactly one replica applied a revision and the rest ran the previous company forever | An append-only activation epoch every node polls — see [Control Plane](control-plane.md) |
 | **2** | **Process-bound resources** — a seat's stdio MCP servers are child processes of the engine holding its credentials. A seat's tools live where its subprocesses live, so "any node can serve any seat" is false unless placement decides tools *and* routing together | Seat leases: claiming a seat is what spawns its MCP children — see [Seat Ownership](seat-ownership.md) |
-| **3** | **Per-seat exclusion** — two nodes attached to one seat's Shared subscription split its traffic, running one agent's conversation as two interleaved turn streams that neither can see | A TTL lease with an epoch fencing token. **This is the class a lock fixes**, and it is one of five |
+| **3** | **Per-seat exclusion** — two nodes attached to one seat's durable consumer split its traffic, running one agent's conversation as two interleaved turn streams that neither can see | A TTL lease with an epoch fencing token. **This is the class a lock fixes**, and it is one of five |
 | **4** | **Shared mutable counters** — budgets, concurrency, webhook dedupe, credential cooldowns were per-process, so an org cap of 500 k tokens silently became N × 500 k | Shared storage, not exclusion — see [what the fleet shares](#what-the-fleet-shares) below |
 | **5** | **Boot walks with external side effects** — schema migration, sandbox recovery, skill clustering all ran unconditionally at boot, where "abandoned by a dead engine" is a valid inference only when there is exactly one engine | Singleton duty leases, an advisory lock on `migrate()`, and per-seat recovery inside the acquire hook |
 
@@ -110,12 +124,22 @@ stopping it.
 The full list, what each retention is sized from, and what deliberately stays
 node-local are in [Coordination](coordination.md).
 
-The broker carries the other half: one durable Shared subscription per seat
-inbox, attached only by the node holding that seat's lease. The subscription is
-what holds an unowned seat's mail until somebody claims it — which is why two
-Pulsar reapers **must** be turned off, since an unowned seat's subscription has
-no connected consumer and both reapers delete exactly that. See
-[the fleet guide](../guides/fleet.md#what-a-fleet-needs).
+The stream carries the other half: one durable consumer per seat inbox,
+attached only by the node holding that seat's lease. That consumer **is** the
+mailbox — it holds an unowned seat's mail until somebody claims it, and it is
+created with no inactivity threshold precisely so nothing reaps it while a seat
+is between owners. It also has to exist *before* anything publishes: the agent
+and notification streams keep a message only while some durable consumer that
+has not acked it exists, so a subject no consumer covers drops what is
+published to it. See [a seat's mailbox](event-system.md#a-seats-mailbox-exists-before-the-seat-is-running)
+and [the fleet guide](../guides/fleet.md#what-a-fleet-needs).
+
+**Both halves ride one connection**, deliberately. The coordination KV is
+JetStream KV on the stream's own NATS connection rather than an estate of its
+own: two connections to one broker fail independently, so a node could hold
+live leases over a connection that still works while the one carrying its inbox
+has dropped — alive to its peers, deaf to its work. One connection makes
+"reachable" a single fact about a node rather than two that can disagree.
 
 ### What stays per-process, deliberately
 
@@ -139,50 +163,79 @@ no connected consumer and both reapers delete exactly that. See
 
 ## Where the constants come from
 
-The seat-handover numbers were measured against **Apache Pulsar standalone**
-with `apache/pulsar-client-go`, and each constant they set carries its own
-measurement at its definition in `internal/queue/pulsar`.
-`internal/queue/pulsar/conformance_test.go` is what holds them, and it is worth
-being exact about how: it asserts the **behaviour** each number describes — that
-a close returns everything unacked at `redeliveryCount` 0, that a subscription
-retains mail with nothing attached, that the prefetch hostage is bounded by
-`receiver_queue_size` — and it asserts no timing. A broker that got slower would
-not fail the build; a broker that stopped behaving this way would.
+The seat-handover constants are set by what the shipped backend actually does,
+and the shipped backend is **NATS JetStream** — embedded in each node or dialled
+as an external cluster, the same client code either way
+(`internal/queue/jetstream`, where each number carries its reasoning at its
+definition). The behaviours they rest on are held by the ONE conformance suite
+every backend runs (`internal/queue/queuetest`), and it is worth being exact
+about how: it asserts the **behaviour** each number describes — that a durable
+consumer retains mail with nothing attached, that re-attaching replays it in
+order, that a successor receives what its predecessor never acked, that one
+client's detach leaves its peers attached — and it asserts no timing. A broker
+that got slower would not fail the build; a broker that stopped behaving this
+way would.
 
-| Measurement | Result |
+| What a handover rests on | What the backend does |
 |---|---|
-| Redelivery after a **graceful close** | **9 ms**, all held messages recovered |
-| Redelivery from a **wedged** consumer that never closes | never — held until the connection dies (this client has no ack timeout) |
-| **Cursor continuity** on owner handoff | owner acked `[0,1,2]`, successor saw `[3,4,5]`, replayed `[]` |
-| **Attach latency** to an existing subscription | **4.9 ms** |
-| **Prefetch hostage** at `receiver_queue_size=64` | **64** of 256 held (the 1000 default would have held all 256) |
+| Creating a seat's mailbox | A durable consumer created with **nothing attached**, at `DeliverAll` — **1.7 ms**, a plain client call, which is what makes it affordable for every node to create every seat's mailbox at boot |
+| Handing a seat over cleanly | The loser NAKs its unfinished partition (a `Defer`); the successor sees it in **about a millisecond** |
+| Losing a node with no handoff | Nothing NAKs, so those deliveries wait out the ack window — **30 minutes** — before they are redelivered |
+| Prefetch a consumer can hold | **None.** Pull consumers fetch one message, or one drain's worth, when they are ready to run it |
+| Delivery budget | **25**, then the dead-letter stream. A handoff spends one of them, because a NAK counts as a delivery |
 
 What each one decides:
 
-- **Owner-only Shared subscriptions are sound.** The shared cursor survives a
-  change of owner with no replay and no loss. That was the entire case against
-  Exclusive subscriptions, and it is measured rather than asserted.
-- **The broker imposes no floor on the lease TTL.** A graceful close releases in
-  9 ms and attaching costs 5 ms, so a successor is productive essentially
-  immediately. The **45-second TTL** is therefore bounded by heartbeat
-  reliability — 15 s interval × 2 tolerated consecutive misses, plus headroom
-  for clock skew — and not by anything the broker does.
-- **The claim-rate limit is not about attaching.** At 5 ms attach is free; the
-  real cost of a takeover is spawning that seat's MCP children, which is what
-  the limiter is sized against.
-- **A wedged-but-alive node holds its prefetch until its connection dies.**
-  Not for a timeout — for as long as the process lives. `apache/pulsar-client-go`
-  has no `ConsumerOptions.AckTimeout` and Pulsar has no broker-side equivalent
-  for a *connected* consumer, and the client answers keepalives from IO threads
-  a stalled duty never touches, so nothing releases that mail on its own. There
-  is no clock to wait out. That is precisely why correctness against zombies
-  comes from epoch fencing rather than from waiting, and why the **64-message
-  prefetch cap** matters: it bounds how much of a seat's mail one wedged node
-  can hold hostage indefinitely. Above all it is why the
+- **One durable consumer per seat, attached by whoever holds the lease, is
+  sound.** The cursor belongs to the *consumer*, not to the connection that was
+  reading it, so a change of owner replays nothing and loses nothing: what the
+  loser never acked is exactly what the successor is handed. A consumer per node
+  instead would either replay the whole subject on every handoff or lose
+  whatever arrived while a seat was unowned. The suite asserts it rather than
+  taking the broker's word for it.
+- **The broker imposes no floor on the lease TTL** — so the **45-second TTL**
+  is not a number any broker measurement sets. Creating a mailbox costs
+  ~1.7 ms and a clean handoff returns the mail in about a millisecond, so a
+  successor is productive essentially immediately. What
+  bounds the TTL is heartbeat reliability: 45 s is three **15-second** heartbeat
+  intervals, which tolerates two consecutive missed renewals — a GC pause, a
+  store blip, a scheduling hiccup — with a full interval left to recover in,
+  plus headroom for the skew between two machines' opinions of the time. Shorter
+  drops a healthy node's seats on ordinary jitter, and every spurious handoff
+  costs a real MCP respawn; longer is time a dead node's seats sit dark, because
+  nothing can claim them until the TTL runs out.
+- **The claim-rate limit is not about attaching.** At a millisecond, attaching
+  is free. The real cost of a takeover is spawning that seat's MCP children,
+  which is what the limiter is sized against: four claims per five-second sweep
+  — twenty seats absorbed in ~25 s, and never more than four subprocess trees
+  forked in one tick — against two releases, since giving a seat up interrupts a
+  live agent while claiming one only starts it.
+- **A wedged-but-alive node holds only what it already fetched.** There is no
+  prefetch to hold hostage: a pull consumer asks for work when it is ready to
+  run it, so a loop that has stopped turning is holding at most the batch in its
+  hands. It also stops asking without being told to — admission reads the
+  *freshness* of this node's last renew, so within one heartbeat interval the
+  next delivery here is deferred, which NAKs it straight back and quiesces the
+  consumer. What that does **not** cover is the delivery a wedged handler is
+  still sitting on: nothing NAKs it, the ack clock is server-side and per
+  message, and ending the process does not shorten it — that batch returns to
+  the successor when the 30-minute window expires, not when the corpse falls
+  over. The successor serves everything published after it claims the seat
+  normally; it is the already-fetched batch that waits. So the
   [event-loop watchdog](seat-ownership.md#the-wedged-node-and-why-it-leaves)
-  **ends the process** rather than trying to signal a loop that has stopped
-  turning: killing the client is the only thing that ends the session, and it
-  collapses an unbounded hold to 9 ms.
+  **ends the process** for blunter reasons than releasing mail: a wedged node
+  neither works nor dies. It keeps its MCP children, its credentials and any
+  turn already past the ownership check — and a turn's external side effects, a
+  chat post or a work-item comment, are not something an epoch fence can reach —
+  while still answering a liveness probe, so nothing restarts it. In a fleet
+  its leases lapse and peers absorb the seats, so what is lost is that node's
+  capacity; on a single node there is no peer, and the seats stay dark until a
+  person notices. Nothing can be signalled out of that state either, because
+  the code that would handle the signal is the code that is stuck;
+  `os.Exit(75)` is the only unilateral move, and the distinct exit code is what
+  makes a supervisor's restart log say what happened. It is also
+  why correctness against zombies comes from epoch fencing rather than from
+  waiting for anything to time out.
 
 ---
 

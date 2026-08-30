@@ -12,22 +12,23 @@
 // Crewlet's subject grammar IS NATS grammar: dot-separated segments with `*`
 // and `>` wildcards. More importantly, a durable consumer can be created
 // with nothing attached (measured: 1.7 ms), which is the operation a seat's
-// mailbox is built on. Pulsar needs an admin REST call for that because
-// joining a Shared subscription to create it steals a live peer's traffic;
-// here it is an ordinary API call, and that whole workaround disappears.
+// mailbox is built on — an ordinary API call here, where a broker that only
+// creates a subscription by joining it needs an out-of-band admin call to
+// avoid stealing a live peer's traffic.
 //
-// Pull consumers remove the other Pulsar hazard: nothing is pushed into a
-// client-side queue, so a wedged node holds no mail it has not fetched, and
-// resuming a quiesced attachment does not have to reclaim a prefetch.
+// Pull consumers are the other half: nothing is pushed into a client-side
+// queue, so a wedged node holds no mail it has not fetched, and resuming a
+// quiesced attachment does not have to reclaim a prefetch.
 //
-// # Where it differs, and what that cost
+// # What it costs, measured
 //
-// Two Pulsar behaviours do not carry over, both measured. There is no free handoff
-// (every path back to the broker increments the delivery count), and
-// redeliveries return BEHIND never-delivered messages rather than replaying
-// from the head. The first is absorbed by a larger delivery budget; the
-// second is why conversation order comes from event timestamps rather than
-// from the broker.
+// Two properties an engine might want are not on offer, and both shaped the
+// code above this package. There is no free handoff — every path back to the
+// broker increments the delivery count — and redeliveries return BEHIND
+// never-delivered messages rather than replaying from the head. The first is
+// absorbed by a larger delivery budget (see maxDeliver); the second is why
+// conversation order comes from event timestamps rather than from the broker
+// (see queue.OrderForDispatch).
 package jetstream
 
 import (
@@ -59,9 +60,10 @@ const (
 
 // maxDeliver is the delivery budget before a message is dead-lettered.
 //
-// On Pulsar this covered poison ∧ node-death. On JetStream it must also
-// cover HANDOFF, because a deferred delivery returns via Nak and that
-// increments the count (measured). 25 leaves ample headroom: a message is
+// It covers poison, node-death AND HANDOFF — the last because a deferred
+// delivery returns via Nak and that increments the count (measured), which
+// is why this is 25 rather than the ~10 a broker with a free handoff needs.
+// 25 leaves ample headroom: a message is
 // normally handled in seconds, seat migrations are rate-limited, and a
 // message would have to be in flight across 25 of them to exhaust the
 // budget — a fleet thrashing that hard has a louder problem.

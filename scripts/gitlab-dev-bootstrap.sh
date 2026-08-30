@@ -40,9 +40,8 @@ COMPANY="${COMPANY:-}"
 #
 # The engine's EMBEDDED API serves that route when the Tier A file sets
 # api.port: 80 (the single-host walkthrough shape — see
-# docs/integrations/gitlab.md § Local testing; NOT 8080 — that's Pulsar's
-# admin port in this compose). On Docker Desktop reach the host via
-# host.docker.internal; on Linux the gateway IP works.
+# docs/integrations/gitlab.md § Local testing). On Docker Desktop reach the
+# host via host.docker.internal; on Linux the gateway IP works.
 #
 # The knob used to be WEBHOOK_URL and took a full endpoint. Silently
 # ignoring one left in an operator's shell would send hooks to the default

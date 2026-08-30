@@ -426,8 +426,10 @@ it is still answering.  `agent_turn_progress` is *stream-only*
 snapshot means a tab that refreshes or reconnects mid-call re-renders
 the live row immediately instead of waiting for the next progress
 event.  State transitions in the projection are
-gated on the event timestamp so out-of-order delivery (the standalone
-API's Pulsar topics order only *within* a topic) can't clobber newer
+gated on the event timestamp so out-of-order delivery (measured,
+JetStream returns a redelivered message *behind* never-delivered ones
+rather than replaying it from the head, and in a fleet several nodes
+publish into the event stream at once) can't clobber newer
 state with an older event — including a final progress round that
 overtakes its own phase completion, which would otherwise re-open the
 row of a phase that had already finished.
@@ -519,7 +521,7 @@ reconnect restores every field without a second round trip.
   "engine": true,
   "version": "0.4.0",
   "started_at": "2026-04-01T12:00:00+00:00",
-  "queue": "pulsar",
+  "queue": "jetstream-embedded",
   "event_store": "durable",
   "feed_hydrated": true,
   "clients": 3,
@@ -536,7 +538,7 @@ reconnect restores every field without a second round trip.
 | `engine` | Whether this process has an engine to ask. `false` on the [standalone API](../guides/deployment.md), where `in_flight` / `engine_started_at` / `shutting_down` are absent — the flag is what lets a client tell "nothing is running" from "this process cannot know", instead of rendering a confident zero for both. |
 | `version` | The `crewlet` version this process is running. |
 | `started_at` | When the **API process** started. Deliberately separate from `engine_started_at`: on the standalone deployment those are two processes on two clocks, and one merged "uptime" would be wrong for at least one of them. |
-| `queue` | The event queue's backend — `pulsar` or `memory`. Read off the `EventQueue` protocol, never sniffed from a class name. Display only; nothing may branch on it. |
+| `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
 | `event_store` | `durable`, `memory`, or `none`. Three-valued because "a store is wired" is not "history survives a restart": with no database the CLI still wraps in-memory legs in a `CompositeEventStore`, so a presence check answers yes while every event is one process death from gone. |
 | `feed_hydrated` | Whether the live-state projection was seeded from stored history at startup. Hydration is best-effort and swallows its own store errors, so this is the only signal that the activity feed starts at this process's boot rather than at the retained history. |
 | `clients` | Dashboards currently connected to this API process. |
@@ -599,9 +601,12 @@ up.
   within one `meter_id`; a new one means the engine restarted and every
   prior figure is dead, so a consumer must **replace** what it holds
   rather than merge or take a maximum.
-- `seq` is monotonic within a `meter_id`. Broker ordering holds only
-  within a topic and the standalone API reads a broadcast subscription
-  across all of them, so a report at or below the held `seq` is dropped.
+- `seq` is monotonic within a `meter_id`. The feed it arrives on is
+  **best-effort**: the standalone API reads an ephemeral broadcast
+  subscription that takes no acks, starts at the stream's tail on every
+  (re)connect, and lets a slow consumer miss frames rather than hold
+  them. So a report at or below the held `seq` is dropped rather than
+  merged, and a gap is closed by the next report rather than replayed.
 - `refused_at` — when the cap last turned a charge away. That, and not
   `used >= max`, is what "exhausted" means: a refused charge increments
   nothing, so the counter stops short of the cap by the size of the round
@@ -688,8 +693,9 @@ REST route calls, so the two surfaces cannot diverge:
 
 Both deployment paths feed events into a single `StreamService.ingest`
 entry point.  The standalone API process subscribes to the engine's
-Pulsar event stream with an **ephemeral broadcast consumer** (it receives
-every event — this is a broadcast, not a work queue); the
+NATS JetStream event stream with an **ephemeral broadcast consumer** (it
+receives every event — this is a broadcast, not a work queue, because a
+dashboard served by one node must show turns that ran on another); the
 embedded API path (engine + API in the same process) wires `ingest` as
 a publish listener directly, no queue round-trip required.  Each event
 updates the live-state projection *and* fans out to connected
@@ -1226,6 +1232,6 @@ The body is read **whole even when the request will be refused**, and bounded at
 crewlet run -config config.yaml -roles ingress -api-host 0.0.0.0 -api-port 8000
 ```
 
-The API is read-only against the database and publishes commands/notifications to Pulsar. It does not run agents — the engine process handles that.
+The API is read-only against the database, and the one thing it publishes is inbound webhook deliveries, onto `crewlet.notifications.inbound`. It does not run agents — the engine process handles that.
 
 See [Deployment](../guides/deployment.md) for how the API and engine run together, and the integration docs ([Slack](../integrations/slack.md), [Jira](../integrations/jira.md)) for webhook setup.

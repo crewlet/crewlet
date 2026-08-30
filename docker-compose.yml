@@ -1,180 +1,14 @@
+# Local integration loops, and nothing else.
+#
+# EVERY SERVICE HERE IS PROFILE-GATED, which is the whole shape of this file:
+# `docker compose up` on its own starts NOTHING, because the engine needs
+# nothing. It embeds its own NATS JetStream server and creates its own store
+# file, so a company runs with no service in this file at all.
+#
+# What is here is the vendors an integration is developed against — a chat
+# surface and a code host — brought up one profile at a time by the `make`
+# targets that wrap them.
 services:
-  # ---------------------------------------------------------------------------
-  # Pulsar — the EXTERNAL stream backend, for developing against a fleet.
-  #
-  # Profile-gated, and that is the whole shape of this file now: `docker
-  # compose up` on its own starts NOTHING, because the engine needs nothing.
-  # It embeds its own JetStream server and creates its own store file, so a
-  # company runs with no service here at all.
-  #
-  # Bring this up with `make pulsar-up` (or `docker compose --profile pulsar
-  # up -d --wait`) when working on the Pulsar backend itself, and certify the
-  # backend against it with:
-  #
-  #   make test-pulsar
-  #
-  # which is the same run CI makes, flags included:
-  #
-  #   CREWLET_TEST_PULSAR_URL=pulsar://localhost:6650 \
-  #   CREWLET_TEST_PULSAR_ADMIN_URL=http://localhost:8080 \
-  #     go test ./internal/queue/pulsar/... -race -count=1 -timeout 25m
-  #
-  # That suite SKIPS without those variables, and skipping is not passing —
-  # it is the only place the Pulsar backend is certified at all.
-  # ---------------------------------------------------------------------------
-  pulsar:
-    # Pinned, and this is the ONLY place the broker's version lives. The
-    # conformance job in ci.yml starts THIS service rather than pinning a
-    # broker of its own, so a local run and CI certify the same build by
-    # construction -- they were two pins held equal by an assertion, which
-    # works right until somebody moves one and both runs stay green against
-    # different brokers. It also means Dependabot's docker-compose entry is
-    # what moves the version CI certifies: the bump pull request IS the
-    # re-certification. `latest` would undo both halves -- no version for
-    # Dependabot to bump, on a service watched by nothing that looks exactly
-    # like one with nothing to update, and a conformance pass naming a build
-    # nobody can identify afterwards. Nothing asserts it stays one pin, or
-    # that ci.yml still brings this service up -- check both by hand.
-    image: apachepulsar/pulsar:4.2.4
-    profiles: [pulsar]
-    # Standalone runs broker + metadata + BookKeeper in one container.
-    # Functions worker and stream storage are unused by crewlet, so disable
-    # them to keep startup fast and the footprint lean.  ``apply-config-from-env``
-    # folds the PULSAR_PREFIX_* settings below into standalone.conf first.
-    command:
-      - bash
-      - -c
-      - "bin/apply-config-from-env.py conf/standalone.conf && exec bin/pulsar standalone --no-functions-worker --no-stream-storage"
-    environment:
-      # CAP THE JVM -- this is the setting that matters.  The image default
-      # ("-Xms2g -Xmx2g -XX:MaxDirectMemorySize=4g") commits 2 GB of heap at
-      # startup and can grow direct memory to 4 GB (~6 GB total); on a
-      # constrained host that exhausts RAM and the box swaps -> a sustained
-      # disk-read storm + high load at startup that can take the host down
-      # (no disk/retention setting fixes a memory problem).  Hold it to
-      # ~1.5 GB; ~800 MB idle in practice.
-      PULSAR_MEM: "-Xms512m -Xmx1g -XX:MaxDirectMemorySize=512m"
-      # SUBSCRIPTION EXPIRY IS OFF, and it has to be.
-      #
-      # This used to be 30 minutes, on the premise that "the engine's own
-      # subscriptions have a connected consumer the whole time it runs".
-      # Seat ownership breaks that premise by design: a seat's inbox is
-      # attached only by the node that HOLDS the seat, so between owners
-      # — a lease gap, a claim ramp, a rolling deploy, a seat nobody has
-      # got to yet — it has no connected consumer at all. The
-      # subscription retaining its backlog through that window is the
-      # whole reason an unowned seat's mail survives.
-      #
-      # With expiry on, a company quiet for the threshold loses the
-      # subscription and, with it, every message held for that seat. The
-      # engine cannot detect this: publishing into a topic with no
-      # subscription succeeds, and the message is simply gone — no dead
-      # letter, no producer error.
-      #
-      # ``0`` disables the reaper. The leak it was guarding against —
-      # the dashboard's per-tab broadcast consumers after an unclean
-      # shutdown — is real but bounded and cheap; losing a seat's mail
-      # is neither. If you must re-enable it, set it far above any
-      # credible unowned window (hours, not minutes).
-      PULSAR_PREFIX_subscriptionExpirationTimeMinutes: "0"
-      # Inactive-topic deletion is OFF for the same reason. The default
-      # sweep removes an idle topic outright — observed doing exactly
-      # that to a test topic ("Topic deleted successfully due to
-      # inactivity") — which takes its subscriptions with it. A seat
-      # nobody has messaged yet is idle by definition.
-      #
-      # If a deployment needs the reaper, the only safe mode is
-      # ``delete_when_subscriptions_caught_up``: it will not delete a
-      # topic whose subscriptions still hold a backlog.
-      PULSAR_PREFIX_brokerDeleteInactiveTopicsEnabled: "false"
-      # Force namespace deletion, for the conformance suite alone -- and it
-      # is what makes the run above a rehearsal of CI rather than something
-      # subtly different. Each queue under test gets its OWN namespace
-      # (parallel subtests share subject names), and the suite deliberately
-      # leaves subscriptions and backlogs behind, because that is what
-      # several cases assert about. Its cleanup therefore deletes with
-      # ``?force=true``, which the broker refuses unless this is set.
-      #
-      # The refusal is silent by design: the cleanup logs and moves on
-      # rather than failing a green run over a leaked namespace
-      # (internal/queue/pulsar/conformance_test.go). So without this every
-      # local run leaves its namespaces, topics and subscriptions on the
-      # broker for the next one to accumulate behind -- with nothing but a
-      # t.Logf, on a run that passed, to say so. The CI job that certifies
-      # this backend sets it for the same reason.
-      PULSAR_PREFIX_forceDeleteNamespaceAllowed: "true"
-      # Token auth (off by default for local dev). Uncomment to require
-      # JWTs and confine the engine to its own namespace via grants --
-      # full recipe (key/token generation, grants, engine + Dekaf config,
-      # authed healthcheck) in docs/guides/deployment.md "Authentication".
-      # PULSAR_PREFIX_authenticationEnabled: "true"
-      # PULSAR_PREFIX_authenticationProviders: "org.apache.pulsar.broker.authentication.AuthenticationProviderToken"
-      # PULSAR_PREFIX_authorizationEnabled: "true"
-      # PULSAR_PREFIX_superUserRoles: "admin"
-      # PULSAR_PREFIX_tokenSecretKey: "file:///pulsar/keys/secret.key"
-      # PULSAR_PREFIX_brokerClientAuthenticationPlugin: "org.apache.pulsar.client.impl.auth.AuthenticationToken"
-      # PULSAR_PREFIX_brokerClientAuthenticationParameters: "token:${PULSAR_ADMIN_TOKEN}"
-    # Hard ceiling so the container can never swap the host even if the JVM
-    # cap above is somehow exceeded -- it gets OOM-killed (and restarted)
-    # instead.  Sits comfortably above the ~1.5 GB JVM total.
-    mem_limit: 2g
-    ports:
-      - "6650:6650"   # broker (binary protocol — the engine connects here)
-      - "8080:8080"   # admin / REST (pulsar-admin, metrics)
-    volumes:
-      - pulsar-data:/pulsar/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "bin/pulsar-admin brokers healthcheck || exit 1"]
-      interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
-
-  # Pulsar web UI (topics, subscriptions, backlog, message browse).  Dekaf
-  # is the UI recommended by the Pulsar docs -- Apache-2.0, no account or
-  # license needed.  Reaches the broker by service name (binary + admin).
-  # Open http://localhost:8090.  (CLI alternative:
-  #   docker compose exec pulsar bin/pulsar-admin topics list public/default)
-  dekaf:
-    # Dekaf publishes no ``:latest`` tag, so this is an explicit pin -- as is
-    # the broker above, for a different reason.
-    # Dependabot opens the bump as a pull request when a newer version ships
-    # (see .github/dependabot.yml), so noticing the release is not a job.
-    image: visortelle/dekaf:1.2.1
-    profiles: [pulsar]
-    depends_on:
-      pulsar:
-        condition: service_healthy
-    environment:
-      DEKAF_PULSAR_BROKER_URL: "pulsar://pulsar:6650"
-      DEKAF_PULSAR_WEB_URL: "http://pulsar:8080"
-      # The address the BROWSER uses to reach Dekaf -- it sets the SPA's
-      # <base href>, so the UI's own API calls go here.  Defaults to
-      # localhost for local dev.  When Dekaf runs on a remote server, set
-      # DEKAF_PUBLIC_BASE_URL (e.g. in .env) to the address you open in the
-      # browser -- http://<server-ip-or-host>:8090 -- otherwise the UI
-      # tries to reach the browser machine's own localhost and fails with
-      # an Envoy "upstream connect error ... 111".
-      DEKAF_PUBLIC_BASE_URL: "${DEKAF_PUBLIC_BASE_URL:-http://localhost:8090}"
-    ports:
-      - "8090:8090"   # web UI
-    volumes:
-      - dekaf-library:/dekaf/data/library
-    restart: unless-stopped
-    # Dekaf fronts its gRPC/HTTP backends with Envoy on 8090; that backend
-    # takes a few seconds after the container starts.  Hitting the UI
-    # before it's up yields Envoy's "upstream connect error ... 111".  The
-    # healthcheck makes `docker compose ps` / `up --wait` report readiness
-    # so you don't open it too early, and flags the backend if it later
-    # dies (e.g. starved on a RAM-pressured host).
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8090/"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 30s
-
   # ---------------------------------------------------------------------------
   # GitLab — local instance for integration-testing the GitLab integration.
   #
@@ -222,8 +56,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Lean config settles around ~1.9 GiB; this ceiling OOM-kills (and
-    # restarts) rather than letting the box swap the host — same guard the
-    # pulsar service uses.
+    # restarts) rather than letting the box swap the host.
     mem_limit: 4g
     restart: unless-stopped
     healthcheck:
@@ -273,8 +106,8 @@ services:
   # command instead of a System Console detour.
   #
   # No mem_limit — this is a single Go binary, not a multi-GB JVM/Rails
-  # process that can swap
-  # the host (pulsar / gitlab are the two that can, and are the two capped).
+  # process that can swap the host (gitlab is the one that can, and is
+  # the one capped).
   # ---------------------------------------------------------------------------
   mattermost:
     # Team Edition, where upstream's env.example defaults to
@@ -415,8 +248,6 @@ services:
       start_period: 10s
 
 volumes:
-  pulsar-data:
-  dekaf-library:
   gitlab-config:
   gitlab-logs:
   gitlab-data:

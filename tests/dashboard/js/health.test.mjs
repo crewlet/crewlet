@@ -125,7 +125,7 @@ const OK = {
   configured: true,
   engine: true,
   version: "0.1.0",
-  queue: "pulsar",
+  queue: "jetstream",
   event_store: "durable",
   feed_hydrated: true,
   in_flight: 2,
@@ -134,7 +134,7 @@ const OK = {
 
 test("a healthy engine reports every wiring fact it knows", () => {
   const html = renderHealthPopover(OK, null, [], true);
-  assert.ok(html.includes("pulsar"));
+  assert.ok(html.includes("jetstream"));
   assert.ok(html.includes("durable"));
   assert.ok(html.includes("history survives a restart"));
   assert.ok(html.includes("seeded from history"));

@@ -133,7 +133,7 @@ The node's own database holds everything a *single* node is the only reader of. 
 - **The event log, the diary, episodes, counterparty profiles, synthesized skills.** A seat's memory is read by the node running that seat.
 - **Conversation history.** Replicating a long thread to the whole fleet buys nothing: the seat's owner is the only reader, and ownership already moves with the lease.
 - **The company payload.** Bulk that every node holds its own copy of. Only *which revision is current* is shared — see [Control Plane](control-plane.md).
-- **The secret store.** Each node resolves `${VAR}` through its own encrypted rows, sealed with the Tier A keyring it was deployed with. This one is node-local *and* the fleet has no substitute for it: `crewlet secrets set` writes one node's rows, so on more than one node a rotated credential has to be set on each — see [Secret Store § Propagation](secret-store.md#propagation).
+- **The secret store's bootstrap half, and only that.** The company's credentials are a shared slot (`secrets`, above); what stays in a node's own file is the rows `crewlet secrets set` writes against a *stopped* node, which that node migrates onto the fleet at its next start and deletes locally. The keyring that opens either is Tier A on disk, never a shared record — see [Secret Store § Propagation](secret-store.md#propagation).
 - **`scheduled_runs`** — this node's dispatch *history*, for the dashboard and the retention sweep. Not the claim; that is the `fires` slot above.
 - **Thread follows.**
 - **`token_usage`** — the per-agent audit *record* of what was spent. Not the counter anything enforces against; that is the `budgets` slot above.
@@ -149,10 +149,11 @@ And two things stay **per-process** deliberately:
 
 | Topology | Coordination store | When |
 |---|---|---|
-| Embedded (default) | The engine's own in-process NATS JetStream KV | One node, or a small fleet pointed at one another |
-| External NATS | A JetStream cluster's KV | A fleet that wants coordination to outlive any single engine |
-| Pulsar | A NATS estate alongside the Pulsar broker | Pulsar carries the events; coordination still needs a KV |
+| Embedded (default) | The engine's own in-process NATS JetStream KV | One node, or a fleet whose embedded servers cluster with each other |
+| External NATS | The same KV, on a cluster this node dials | A fleet that wants the stream and everything riding it to outlive any single engine |
 | Memory | An in-process twin | Tests |
+
+Coordination is never an estate of its own, and that is a construction rule rather than a convenience: **the coordination store rides the stream's own NATS connection.** The engine starts or dials exactly one broker, and the leases and the shared records above are opened on the connection the queue is already using. A second dial would work and would be worse — two connections to one broker fail independently, so a node could go on renewing leases over the one that still works while the one carrying its inbox has dropped. Alive to its peers, deaf to its work, and holding every seat it owns while doing none of it.
 
 The twin is not a lesser implementation: it is held to the **same certified suite** as the real backends (`internal/coord/coordtest`), because a twin that agrees only with itself proves nothing.
 

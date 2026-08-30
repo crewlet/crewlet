@@ -27,13 +27,13 @@ import (
 // "Nearly" is doing real work, and this paragraph used to say "the whole" and
 // "no behaviour of its own". That was untested and false, and a defect had
 // already moved into the gap: this backend's DEFAULT delivery budget is a
-// property of this backend alone — Pulsar ships 10 total attempts, JetStream
-// 25 — so the shared suite cannot assert it, and does not. It configures the
-// budget explicitly in every case that touches one, which is correct for a
-// portable suite and means the default is exercised by nothing. The default
-// was one attempt out of step with Pulsar for as long as it existed, and the
-// suite passed identically before and after the fix. A per-backend default is
-// exactly the shape of thing "it all belongs in the shared suite" cannot hold.
+// property of this backend alone, so the shared suite cannot assert it, and
+// does not. It configures the budget explicitly in every case that touches
+// one, which is correct for a portable suite and means the default is
+// exercised by nothing — the default was one attempt out of step with the
+// broker it tracked for as long as it existed, and the suite passed
+// identically before and after the fix. A per-backend default is exactly the
+// shape of thing "it all belongs in the shared suite" cannot hold.
 func TestConformance(t *testing.T) {
 	t.Parallel()
 	queuetest.RunWith(t,
@@ -73,13 +73,21 @@ func TestConformance(t *testing.T) {
 			// backend with real fetch latency cannot promise.
 			InlineDispatch:   true,
 			StrictRoundRobin: true,
-			// Pulsar-shaped replay: a NAK returns the event to the head,
-			// ahead of what queued behind it. The engine no longer
-			// depends on it, but the fleet
-			// suite runs against this twin, so the twin must not quietly
-			// stop modelling the broker it was built to model.
-			// A deferral here returns the events untouched: nothing is
-			// acked, nothing is counted. Pulsar's free handoff, modelled.
+			// Both are properties of a mutex over a map rather than
+			// choices: a NAK puts the event back at the head of the
+			// slice it came from, and a deferral returns the batch
+			// untouched, so nothing is acked and nothing is counted.
+			//
+			// BOTH ARE MORE FORGIVING THAN THE ONLY SHIPPED BROKER, and
+			// that is the thing to know when reading a test that passes
+			// here. JetStream returns a redelivery BEHIND
+			// never-delivered messages and spends an attempt on every
+			// deferral. Nothing above internal/queue may depend on
+			// either: conversation order comes from event timestamps
+			// (see queue.OrderForDispatch) precisely so that it does
+			// not, and the contract's actual requirement — that a
+			// deferral must not kill a healthy event — is met by both
+			// backends through different mechanisms.
 			FreeDeferral:    true,
 			HeadReplayOnNak: true,
 			RequiresStart:   true,
@@ -89,41 +97,40 @@ func TestConformance(t *testing.T) {
 		})
 }
 
-// TestDefaultDeliveryBudgetMatchesPulsar pins the DEFAULT budget, which the
-// conformance suite cannot: the correct value differs per backend, so the suite
-// sets it explicitly in every case that reads one.
+// TestDefaultDeliveryBudgetMatchesJetStream pins the DEFAULT budget, which the
+// conformance suite cannot: the correct value is a property of one backend, so
+// the suite sets it explicitly in every case that reads one.
 //
-// Ten TOTAL attempts, matching internal/queue/pulsar's maxDeliveries = 10. The
-// two constants are written in different currencies — this backend counts
-// redeliveries after the first, Pulsar counts total deliveries — so they agree
-// at 9 and 10 respectively, and agreeing at 10 and 10 is the bug this catches.
-// Asserted on the OBSERVABLE (how many times a handler runs) rather than on the
-// constant, because the constant is the half that was already wrong while
-// reading correct.
+// Twenty-five TOTAL attempts, matching internal/queue/jetstream's maxDeliver.
+// The two constants are written in different currencies — this backend counts
+// redeliveries after the first, JetStream counts total deliveries — so they
+// agree at 24 and 25 respectively, and agreeing at 25 and 25 is the bug this
+// catches. Asserted on the OBSERVABLE (how many times a handler runs) rather
+// than on the constant, because the constant is the half that can be wrong
+// while reading correct.
 //
-// Pulsar is the twin to track, not JetStream: both this backend and Pulsar
-// deliver a deferral for free, while JetStream spends an attempt on one and
-// budgets 25 to cover handoff. If Pulsar's number moves, this moves with it.
+// JetStream is the twin to track because it is the only broker this engine
+// ships. Its budget is 25 rather than the 10 a free-handoff broker needs
+// because a deferral there returns via Nak and spends an attempt; this twin
+// defers for free and would otherwise sit on less than half the production
+// budget, calibrating every test written against it to a broker nobody runs.
 //
 // SCOPE, measured by counterfactual rather than assumed, because a landing
 // check on this test proves only that the test reads the constant. The one
 // consumer of the default is internal/node's fleet suite, which builds the twin
 // with no options — and instrumenting the redelivery counter shows it reaches a
 // depth of 0 there: the fleet suite never Naks a message, so the budget is
-// unreachable from it (positive control: the same instrument reads 11 on this
-// package's own tests, so the 0 is a real absence and not a dead probe). The
-// correction that came out of that was one full counterfactual run FAILING and
-// reading as proof the value mattered, before four more runs passed and the
-// mechanism showed the branch is never entered at all.
+// unreachable from it (positive control: the same instrument reads a non-zero
+// depth on this package's own tests, so the 0 is a real absence and not a dead
+// probe).
 //
-// So this fix aligned the twin with the backend it models; it did not repair a
-// demonstrated failure, and this test is now the only thing holding the value.
-// That is a weaker claim than "fixed a live bug" and it is the true one — a
-// twin that silently disagrees with its subject is a latent hazard for the day
-// a case does reach the branch, which is reason enough to keep both.
-func TestDefaultDeliveryBudgetMatchesPulsar(t *testing.T) {
+// So this test is the only thing holding the value, and that is the honest
+// claim rather than "it fixes a live bug" — a twin that silently disagrees
+// with its subject is a latent hazard for the day a case does reach the
+// branch, which is reason enough to keep it.
+func TestDefaultDeliveryBudgetMatchesJetStream(t *testing.T) {
 	t.Parallel()
-	const pulsarTotalAttempts = 10
+	const jetstreamTotalAttempts = 25
 
 	q := memory.New()
 	if err := q.Start(context.Background()); err != nil {
@@ -156,9 +163,9 @@ func TestDefaultDeliveryBudgetMatchesPulsar(t *testing.T) {
 	mu.Lock()
 	got := attempts
 	mu.Unlock()
-	if got != pulsarTotalAttempts {
+	if got != jetstreamTotalAttempts {
 		t.Errorf("default budget ran the handler %d times, want %d "+
-			"(Pulsar's maxDeliveries; see defaultMaxRedeliveries)", got, pulsarTotalAttempts)
+			"(JetStream's maxDeliver; see defaultMaxRedeliveries)", got, jetstreamTotalAttempts)
 	}
 	if dl := q.DeadLetters("topic", "grp"); len(dl) != 1 {
 		t.Errorf("exhausted event reached the dead-letter subject %d times, want 1", len(dl))

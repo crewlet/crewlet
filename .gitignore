@@ -39,10 +39,10 @@
 slack-apps.json
 **/slack-apps.json
 
-# Pulsar JWT signing key + tokens the deployment guide's auth recipe lands
-# in the repo root — see docs/guides/deployment.md "Authentication". Key
-# material never belongs in git, hence the blanket *.key / *.pem too.
-pulsar-keys/
+# Key material never belongs in git. A `stream.tls` block for an external
+# NATS server names a private CA bundle and a client keypair (see
+# docs/guides/deployment.md), and those are files an operator drops beside the
+# config in a checkout — so the patterns are blanket rather than per-recipe.
 *.key
 *.pem
 

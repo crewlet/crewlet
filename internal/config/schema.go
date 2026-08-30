@@ -432,7 +432,7 @@ func bootstrapRules() []any {
 	externalNeedsURL := map[string]any{
 		"$comment": "an external stream needs a URL to dial.",
 		"if": has("stream", has("type", map[string]any{
-			"enum": []any{string(StreamNATS), string(StreamPulsar)},
+			"enum": []any{string(StreamNATS)},
 		})),
 		"then": has("stream", has("url", map[string]any{"minLength": 1})),
 	}

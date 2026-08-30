@@ -2,7 +2,7 @@
 
 Crewlet companies are defined across **two tiers** — see the [Configuration concept page](../concepts/configuration.md) for the full design.
 
-- **Tier A** (`crewlet.yaml`, restart-only): DB DSN, Pulsar URL, API host/port/auth, logging, knowledge backend.
+- **Tier A** (`crewlet.yaml`, restart-only): this node's identity and roles, the store file, the stream and coordination slots, API host/port/auth, the secret keyring, logging.
 - **Tier B** (`company.yaml` imported into the store, live-editable): everything else — identity, providers, integrations, MCP servers, roles, units, turn engine, learning, budgets, scheduling.
 
 This page documents the **Tier B** fields below.  For Tier A see [Configuration concept page §"Tier A example"](../concepts/configuration.md#tier-a-example-crewletyaml).
@@ -326,30 +326,47 @@ Tier A (`crewlet.yaml`, restart-only) says where this node's stream, store and
 API are.  Example:
 
 ```yaml
-# config.yaml — Tier A bootstrap
+# crewlet.yaml — Tier A bootstrap
 stream:
-  type: embedded                    # a JetStream server inside this process.
-                                    #   `nats` or `pulsar` point the same slot
-                                    #   at an external one, and then need `url`
+  type: embedded                    # a JetStream server inside this process:
+                                    #   no listener, no port, no service to
+                                    #   operate. `nats` points the same slot at
+                                    #   an external server — the same client
+                                    #   code either way, so it is a connection
+                                    #   choice rather than a second backend
   store_dir: "./crewlet-data/stream"  # empty = in-memory: right for a test,
                                     #   and nothing published survives a restart
-  # url: "pulsar://localhost:6650"  # required for nats/pulsar, refused for embedded
-  # admin_url: ""                   # Pulsar only — empty derives it from `url`
-                                    #   (pulsar://host:6650 -> http://host:8080).
-                                    #   Each seat's durable subscription is created
-                                    #   over admin REST, so this must be reachable
-  # tenant: public                  # optional — must already exist; tenants and
-  # namespace: default              #   namespaces are never auto-created
-  # token: "${CREWLET_PULSAR_TOKEN}"  # JWT for token auth; grant its role only
-                                    #   this engine's namespace
-  # tls_trust_certs: ""             # CA bundle for pulsar+ssl:// URLs (Pulsar only)
-  # credentials: ""                 # path to a NATS credentials file (nats only)
-  # tls:                            # nats only — the transport under that auth.
-  #   ca: /etc/crewlet/ca.pem       #   a private CA to trust; empty = host roots
+  # url: "nats://nats.internal:4222"  # required for `nats`, REFUSED for
+                                    #   embedded — an embedded server has no
+                                    #   address, so a url there is read by
+                                    #   nobody
+  # replicas: 3                     # 1 solo (the default); 3 across an EMBEDDED
+                                    #   cluster, where it is what makes a publish
+                                    #   quorum-durable before it returns. It is
+                                    #   checked against `cluster.peers`, so >1
+                                    #   without them is refused — this node has
+                                    #   nothing to replicate to
+  # cluster:                        # an EMBEDDED server joining its peers, which
+  #   name: crewlet                 #   is the fleet topology: every node embeds
+  #   port: 6222                    #   one member of one cluster. `node.id` is
+  #   peers:                        #   the member name, so it must survive a
+  #     - "nats://node-1:6222"      #   restart — a name minted at boot orphans
+  #     - "nats://node-2:6222"      #   this member's replicas every time
+  # event_retention_hours: 720      # 0 takes the queue's own default (30 days).
+                                    #   Unbounded is deliberately not expressible:
+                                    #   an event log nothing sweeps grows for the
+                                    #   life of the deployment
+  # credentials: ""                 # path to a NATS credentials file
+  # token: "${CREWLET_NATS_TOKEN}"  # bearer token for an external server
+  # tls:                            # the TCP layer under that auth: which CA to
+  #   ca: /etc/crewlet/ca.pem       #   trust; empty = the host roots
   #   cert: /etc/crewlet/client.pem #   the CLIENT certificate, for a broker
   #   key: /etc/crewlet/client.key  #   configured `tls { verify: true }`.
                                     #   Both or neither — half a keypair is
-                                    #   refused at validation
+                                    #   refused at validation. There is no
+                                    #   skip-verify switch, deliberately: it is
+                                    #   set once during a bring-up and never
+                                    #   unset, and a private CA is one file
 
 store:
   path: "./crewlet-data/company.db"   # ONE file, owned exclusively by this
@@ -358,13 +375,21 @@ store:
 
 coordination:
   type: local                       # one node holding its own seat leases;
-                                    #   a fleet needs `embedded-kv`
-  # nats:                           # only for a PULSAR stream, which cannot
-  #   url: "nats://leases:4222"     #   hold leases: the estate that does
-  #   tls:                          #   takes the same three fields as the
-  #     ca: /etc/crewlet/ca.pem     #   stream's block above, because it is a
-  #     cert: /etc/crewlet/client.pem  #   separate connection to a separate
-  #     key: /etc/crewlet/client.key   #   broker
+                                    #   a fleet needs `embedded-kv`. There is no
+                                    #   address to give it: the coordination KV
+                                    #   rides the stream's OWN connection. A
+                                    #   second dial to the same broker fails
+                                    #   independently, so a node could hold live
+                                    #   leases over a connection that still works
+                                    #   while the one carrying its inbox has
+                                    #   dropped — alive to its peers, deaf to
+                                    #   its work
+  # lease_ttl_seconds: 45           # 0 takes the seat layer's own measured
+                                    #   default of 45s — three heartbeat
+                                    #   intervals, so two consecutive missed
+                                    #   renewals still leave a full interval to
+                                    #   recover in. Shorter speeds failover and
+                                    #   sheds healthy seats on ordinary jitter
 
 api:
   host: "0.0.0.0"

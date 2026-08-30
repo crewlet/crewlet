@@ -6,15 +6,49 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// MaxBodyBytes bounds what an unverified caller can make this process buffer.
+// MaxBodyBytes bounds what an unverified caller can make this process buffer,
+// and — the half that used to be missing — what it can make this process
+// promise to deliver.
 //
-// The body must be read BEFORE the signature can be checked — the signature is
-// over the body — so without a bound anyone who can reach the port picks the
-// allocation size. 25 MiB is GitHub's own documented ceiling and the largest of
-// the six providers', so no legitimate delivery is refused by it.
-const MaxBodyBytes = 25 << 20
+// The body must be read BEFORE the signature can be checked, because the
+// signature is over the body, so without a bound anyone who can reach the port
+// picks the allocation size. That was the whole of it, and the number was
+// GitHub's own documented 25 MiB ceiling so that no legitimate delivery was
+// refused.
+//
+// ACCEPTING IS A PROMISE TO PUBLISH, and that is what made 25 MiB the wrong
+// number. A verified delivery is claimed and published as one event; a body
+// the broker will not carry is therefore accepted, verified, claimed, and then
+// refused with a 503 that asks the provider to retry something that cannot
+// ever succeed. Deriving the cap from the transport's own ceiling is what
+// makes the refusal happen at the door instead — a 413 naming the limit, on
+// the first attempt, which a provider surfaces to whoever configured the hook.
+//
+// The divisor is the amplification a delivery undergoes on the way to the
+// wire, not a safety margin. types.RawWebhook carries BOTH the parsed body
+// (re-marshaled, and JSON escaping can make that larger than what arrived) and
+// the exact signed bytes, which marshal as base64 at 4/3 — so one body is on
+// the wire roughly 2.4 times, and 3 is that rounded up. The headroom covers
+// the rest of the envelope: headers, ids, trace context and the seat handle.
+const (
+	// bodyAmplification is how many times a body's own length the encoded
+	// event can reach. See the derivation above.
+	bodyAmplification = 3
+
+	// envelopeHeadroom is everything on the wire that is not the body.
+	// Generous on purpose: it is subtracted once, and the cost of being
+	// wrong in this direction is a slightly smaller cap rather than a
+	// publish that fails after the delivery was already claimed.
+	envelopeHeadroom = 256 << 10
+
+	// MaxBodyBytes is what a provider may send, derived so that whatever
+	// this accepts, the transport can carry.
+	MaxBodyBytes = (queue.MaxPayloadBytes - envelopeHeadroom) / bodyAmplification
+)
 
 // errBodyTooLarge is what a body over the cap surfaces as.
 var errBodyTooLarge = errors.New("webhooks: body over the limit")

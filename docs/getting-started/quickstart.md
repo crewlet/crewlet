@@ -60,10 +60,11 @@ api:
   host: "0.0.0.0"
   port: 8000        # a port > 0 makes `crewlet run` serve the API EMBEDDED in
                     # the engine process (dashboard + webhooks included) — one
-                    # process is the whole stack. (Avoid 8080: that's Pulsar's
-                    # admin port in the bundled compose. The full Nimbus example
-                    # uses port 80 instead so webhook URLs need no port suffix —
-                    # see examples/nimbus.config.yaml for the trade-offs.)
+                    # process is the whole stack. (Any free port will do; pick
+                    # one nothing else on the host has already taken. The full
+                    # Nimbus example uses port 80 instead so webhook URLs need
+                    # no port suffix — see examples/nimbus.config.yaml for the
+                    # trade-offs.)
   auth:
     # Needed for WRITES and for /config. Reads — the dashboard, /events,
     # /agents — serve without one by default; add

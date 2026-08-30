@@ -54,8 +54,10 @@ logging:
 # survive a restart must not leave it unset, because nothing published
 # outlives the process.
 #
-# `type: nats` dials an external cluster and `type: pulsar` an external
-# estate; the client code is the same either way.
+# `type: nats` dials an external NATS server or cluster instead, and takes
+# `url` (plus `credentials` / `token` / `tls` where the estate demands
+# them).  It is the same client code either way: embedded versus external
+# is a connection choice, not a second backend.
 stream:
   type: embedded
   store_dir: "./nimbus-data/stream"
@@ -76,10 +78,15 @@ store:
 
 # ── Seat ownership ────────────────────────────────────────────────────
 #
-# `local` is a single node holding its own leases in its own store.  A
-# fleet needs `embedded-kv`, where every node embeds a member of one NATS
-# cluster and the leases live there — which is what stops two processes
-# running the same seat.  See docs/guides/fleet.md.
+# `local` keeps the leases inside this process — correct for exactly one
+# node, and catastrophic for more than one, since every node would hold
+# every lease and run every seat.  A fleet needs `embedded-kv`: the leases
+# live in a replicated KV riding the STREAM's own NATS connection, which
+# is what stops two processes running the same seat.  One connection
+# deliberately — two to the same broker fail independently, so a node
+# could go on renewing live leases over a working connection while the one
+# carrying its inbox is dead: alive to its peers, deaf to its work.  See
+# docs/guides/fleet.md.
 coordination:
   type: local
 
@@ -115,8 +122,7 @@ api:
   # (persist in /etc/sysctl.d/) or grant CAP_NET_BIND_SERVICE; (b) the
   # host's port 80 must be free.  In a SPLIT deployment the ingress node serves this and
   # the others set port 0 so only one process binds it (see
-  # docs/guides/deployment.md).  (8080 is Pulsar's admin port in this
-  # repo's compose — never use that one.)
+  # docs/guides/deployment.md).
   port: 80
   auth:
     tokens:
