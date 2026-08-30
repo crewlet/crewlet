@@ -320,8 +320,8 @@ func listRevisions(ctx context.Context, cs *configStore, limit int, stdout io.Wr
 //
 // # Paths and values, not lines
 //
-// The same differ the API's /config/revisions/{id}/diff serves, and for the
-// reason adr-505 records: the stored form is JSON produced by marshalling a
+// The same differ the API's /config/revisions/{id}/diff serves, and for one
+// reason: the stored form is JSON produced by marshalling a
 // struct, so re-ordering a map or adding a field with a default rewrites
 // lines that mean nothing. What an operator asks is "what changed about the
 // company", and that is answered by paths and values.

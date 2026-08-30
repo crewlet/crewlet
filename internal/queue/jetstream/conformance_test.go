@@ -158,7 +158,7 @@ func capabilities() queuetest.Capabilities {
 		// HeadReplayOnNak — measured false: a redelivered message returns
 		// BEHIND never-delivered ones. This is precisely why
 		// within-conversation order comes from event timestamps rather
-		// than from the broker (adrs/102).
+		// than from the broker.
 		//
 		// History — this backend has no ledger of everything ever
 		// published; interest retention deliberately drops what no

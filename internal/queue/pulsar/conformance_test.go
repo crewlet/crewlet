@@ -32,10 +32,9 @@ const (
 //
 // It needs a REAL broker and skips without one. There is deliberately no
 // in-process fake: a twin that is not the broker does not merely fail to
-// catch bugs, it certifies them, and this repo has the scars to prove it
-// (adrs/103-payload-pointer-invariant.md). Skipping is not
-// passing — the CI job in .github/workflows/ci.yml is where this actually
-// runs.
+// catch bugs, it certifies them, and this repo has the scars to prove it.
+// Skipping is not passing — the CI job in .github/workflows/ci.yml is where
+// this actually runs.
 func TestConformance(t *testing.T) {
 	requireBroker(t)
 	queuetest.RunWith(t, newConformanceQueue, capabilities())
@@ -77,8 +76,8 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 	// Production timings would make this suite take minutes of pure
 	// waiting: a one-second poll and a one-second redelivery delay. The
 	// behaviours under test are the same at any scale, and the numbers
-	// themselves are pinned separately (the constants in pulsar.go, with
-	// their measurements in adrs/104-pulsar-redelivery-economics.md).
+	// themselves are pinned separately: the constants in pulsar.go carry
+	// their measurements.
 	if cfg.ReceiveWait == 0 {
 		cfg.ReceiveWait = 25 * time.Millisecond
 	}
@@ -246,11 +245,8 @@ func capabilities() queuetest.Capabilities {
 
 		// FREE DEFERRAL — the property this backend has and JetStream does
 		// not. Measured on Pulsar 4.2.4: a graceful consumer close returns
-		// unacked messages at redeliveryCount 0 where an ack
-		// timeout costs one (the table at the head of
-		// tests/test_queue/test_broker_behavior.py, and
-		// adrs/102-jetstream-redelivery.md). So a deferral
-		// here leaves the message unacked and the consumer's close — or
+		// unacked messages at redeliveryCount 0 where an ack timeout
+		// costs one. So a deferral here leaves the message unacked and the consumer's close — or
 		// Unquiesce's recycle — hands it back whole.
 		FreeDeferral: true,
 
@@ -264,7 +260,7 @@ func capabilities() queuetest.Capabilities {
 		// Nothing depends on it: within-conversation order comes from
 		// event timestamps, which
 		// within_a_partition_events_are_ordered_by_timestamp certifies
-		// for every backend (adr-102 decision 3).
+		// for every backend.
 		//
 		// InlineDispatch — a consumer receives on its own schedule, so a
 		// publish returns before anything has been dispatched.

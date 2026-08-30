@@ -791,7 +791,7 @@ request. They ride on the heartbeat that already re-sends roles and labels
 on every beat, rather than over a request/reply to the owning node: every
 answer would then be partial, it opens a new trust edge, and it duplicates
 the mechanism the lease table already is. See
-[adr-501](https://github.com/crewlet/crewlet/blob/main/adrs/501-node-runtime.md).
+
 
 **Absent is not zero.** A node that publishes no status — one whose engine
 is not co-located — omits those fields entirely, and the dashboard draws an

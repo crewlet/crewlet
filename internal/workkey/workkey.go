@@ -88,7 +88,7 @@ type ctxKey struct{}
 // The tempting shape is an ambient channel set once around an inbox dispatch
 // and read several frames below by writers that have no other reason to know
 // about it. This threads it through context instead — the same reach, but
-// visible in every signature that carries it, which is the point of adr-401.
+// visible in every signature that carries it.
 func With(ctx context.Context, key string) context.Context {
 	return context.WithValue(ctx, ctxKey{}, key)
 }

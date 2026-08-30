@@ -101,7 +101,7 @@ jobs:
   # contract suites twice over CREWLET_STORE_DRIVER=turso|sqlite, because
   # mainline SQLite was a certified fallback driver and the matrix was what
   # kept every statement inside the two dialects' intersection. There is one
-  # driver now (adrs/003), the variable is gone, and the suites run in
+  # driver now, the variable is gone, and the suites run in
   # the `test` job with everything else — under -race, which the old job also
   # gave them and which the general job gives them too.
   #
@@ -170,8 +170,7 @@ jobs:
             echo "loaded with dlopen, which a static binary cannot do — this"
             echo "artifact will segfault at its first query. Whatever added"
             echo "-static (or an external link mode) has to come back out."
-            echo "See adrs/901-release-tooling.md, which records the"
-            echo "measurement."
+            echo "This was measured; the linked-static build segfaults."
             exit 1
           fi
         env:

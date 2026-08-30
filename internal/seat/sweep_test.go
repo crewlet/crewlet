@@ -14,8 +14,7 @@ import (
 // A NODE ADVERTISES WHAT IT IS DOING, not only what it is. Only the node
 // running a seat knows its in-flight count and its drain state, and /health
 // answers about whichever node served the request — so behind a load
-// balancer a refresh tells a different story each time. See
-// adrs/501-node-runtime.md.
+// balancer a refresh tells a different story each time.
 func TestPresenceCarriesThisNodesLiveStatus(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)

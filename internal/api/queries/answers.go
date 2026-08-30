@@ -214,7 +214,7 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// projection keys its overlays by ROLE NAME, which is what the engine's
 	// `agents` push carries. Reading only `role` meant every seat page
 	// answered 400 and rendered its error state; the client is the
-	// compatibility reference for a frame's shape (adr-502), so the answer
+	// compatibility reference for a frame's shape, so the answer
 	// takes what the client sends and resolves it.
 	seat := firstOf(p.String("id"), p.String("role"))
 	role := s.roleOf(seat)

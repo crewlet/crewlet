@@ -99,8 +99,7 @@ without it** — a green run has simply not exercised them.
   and it is the one environment variable a store test can be defeated by.
 
   Turso is the only store driver — `CREWLET_STORE_DRIVER` and the Tier A
-  `store.driver` field are both retired (see
-  [`adrs/003`](adrs/003-turso-is-the-only-driver.md)), so there is
+  `store.driver` field are both retired, so there is
   no dialect intersection to keep statements inside any more and no second
   suite run. Write `internal/store` against Turso.
 
@@ -140,8 +139,8 @@ without it** — a green run has simply not exercised them.
   Forcing a static ELF needs `-linkmode external`, which needs cgo — and that
   binary, which `file(1)` does call static, SIGSEGVs on its first query on the
   machine that built it, because a static program cannot `dlopen`.
-  `adrs/901` has the full table. The `cross` CI job asserts the artifact
-  is still dynamic, so this is a red build rather than a release.
+  The `cross` CI job asserts the artifact is still dynamic, so this is a red
+  build rather than a release.
 
   ```bash
   # What CI cross-compiles on every pull request.
@@ -387,17 +386,13 @@ linked there** — the site build fails on a page nothing links to.
 
 `docs/` is written for people *running* Crewlet. Reasoning aimed at people
 *changing* it goes in a package doc, where `go doc` surfaces it beside the
-code — or, when a change makes a call a future reader would plausibly reverse,
-in [`adrs/`](adrs/README.md). Cite the record from the code it governs: one
-nothing points at is one nobody will find, and `internal/version` fails the
-build if a citation stops resolving.
+code — including the part that matters most: why the obvious alternative is
+wrong, and what it cost when it was tried. A comment that only restates what
+the code does has not earned its line.
 
-An ADR records what was decided and on what evidence; it does not bind. If you
-disagree with one, you do not need permission to change the code — write the
-ADR that supersedes it, say which premise stopped holding, and mark the old one
-`Superseded by adr-NNN`. Reversing a decision a week after it was made is the
-system working. Silently working around a record, or leaving one in place that
-no longer describes the engine, is not.
+None of it binds. If a rationale no longer matches the engine, change the code
+and rewrite the comment in the same commit — a doc comment describing a design
+the tree no longer has is worse than none.
 
 ## Commit messages
 

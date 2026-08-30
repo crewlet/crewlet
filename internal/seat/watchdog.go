@@ -15,7 +15,7 @@ var watchLog = logging.Get("seat.watchdog")
 
 // The watchdog's own cadence. Both are CEILINGS, scaled down against the
 // threshold — see [Host.beatInterval] for the other half of the same
-// rule and adrs/301-watchdog.md for why the threshold is not a
+// rule.md for why the threshold is not a
 // knob.
 const (
 	// WatchdogBeatInterval is the fastest a watched duty needs to prove it
@@ -71,7 +71,7 @@ type Stall struct {
 // prefetch of those seats' messages UNTIL THE CONNECTION DIES — there is no
 // clock to wait out. apache/pulsar-client-go has no ConsumerOptions.AckTimeout
 // and Pulsar has no broker-side equivalent for a connected consumer, so a
-// fetched message is that consumer's until it acks, naks, or closes (adr-104).
+// fetched message is that consumer's until it acks, naks, or closes.
 // The new owner cannot see mail that is already reserved for a corpse, and no
 // amount of waiting releases it.
 //

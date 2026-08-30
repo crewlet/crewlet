@@ -110,9 +110,9 @@ var envelopeKeys = map[string]struct{}{
 // (see PayloadPtr). The copy also means a caller that keeps mutating its
 // struct after publishing does not mutate the published event.
 //
-// Trace context is passed rather than read from an ambient span: the Go
-// rewrite threads context explicitly (see adrs/401), and the
-// callers that create events already hold the context that knows the span.
+// Trace context is passed rather than read from an ambient span: nothing in
+// this engine travels ambiently, and the callers that create events already
+// hold the context that knows the span.
 func New[T any, P PayloadPtr[T]](data T, tc TraceContext) *Event {
 	p := P(&data)
 	return &Event{

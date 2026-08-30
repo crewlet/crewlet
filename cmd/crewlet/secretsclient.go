@@ -22,7 +22,7 @@ import (
 // The CLI's client for /secrets, and why the command has one at all.
 //
 // The company's secrets live on the coordination KV so every node reads the
-// same rows (adrs/203). On the default topology that KV is inside the
+// same rows. On the default topology that KV is inside the
 // engine's own process and does not listen on a socket, so a second process
 // cannot write it — the running node is the only thing that can. This is how
 // `crewlet secrets` reaches it.

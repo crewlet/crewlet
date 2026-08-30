@@ -32,8 +32,9 @@
 // message takes 1.8 ms, and a fresh consumer receives it 8.6 ms later still
 // at redeliveryCount 0 — where an ack timeout costs one. (An independent
 // harness measured the same free handoff on 4.2.4 with the C++ client: 9 ms,
-// redeliveryCount 0. See adrs/104-pulsar-redelivery-economics.md
-// for the full table, and 102 for the JetStream column it contrasts with.)
+// redeliveryCount 0.) JetStream is the contrast and is measured in that
+// backend's own package doc: there a handoff SPENDS a delivery, which is why
+// its budget is 25 and this one's is 10.
 //
 // So Defer here means what the contract says it means — leave it unacked,
 // stop consuming — and never a NAK. This is the property JetStream does NOT
@@ -50,7 +51,7 @@
 //     here, which deletes the batch dispatch budget outright, and leaves a wedged
 //     consumer holding its prefetch until its connection dies rather than
 //     until a clock expires — see the batch dispatch budget note at the top
-//     of batch.go, and adr-104.
+//     of batch.go,.
 //   - There is no exported RedeliverUnacknowledgedMessages. Reclaiming a
 //     quiesced consumer's prefetch is done by RECYCLING the consumer —
 //     close, reopen — which on Pulsar is free. See attachment.reopen.
@@ -102,7 +103,7 @@ const (
 	// node deaths per message.
 	//
 	// It does NOT have to cover handoffs, which is where JetStream had to
-	// re-derive it upward to 25 (adr-102 decision 2). Here a handoff closes
+	// re-derive it upward to 25. Here a handoff closes
 	// its consumer and the message comes back at redeliveryCount 0.
 	//
 	// COUNTING CONVENTION, stated because this repo holds both: Pulsar's

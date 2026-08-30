@@ -59,7 +59,7 @@ type Turn struct {
 	// Trace is the completed turn's trace context, carried so a worker
 	// publishing its own events links them to the turn that caused them.
 	// It lives on the envelope, never on the payload, so it has to be
-	// handed down explicitly: adr-401 is why nothing here is ambient.
+	// handed down explicitly, because nothing in a turn travels ambiently.
 	Trace events.TraceContext
 }
 

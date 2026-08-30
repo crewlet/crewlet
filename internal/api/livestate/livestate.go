@@ -303,7 +303,7 @@ func (s *LiveState) MergeAgents(static []map[string]any) []map[string]any {
 // phase, and the seat stayed idle on the dashboard from start to finish.
 //
 // The client is the compatibility reference and wins any disagreement about a
-// frame's shape (adrs/502). This is that rule applied.
+// frame's shape. This is that rule applied.
 //
 // A role with no live state is SKIPPED rather than sent as an empty overlay:
 // the client merges these onto its existing rows, so a blank one would erase

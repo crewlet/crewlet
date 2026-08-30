@@ -122,7 +122,7 @@ type Request struct {
 	// and a plain float64 cannot tell that apart from a caller who said
 	// nothing. Nil means "leave it to the provider's configured default".
 	//
-	// This is the case adr-000 states as a rule: a field whose zero value is
+	// This is the rule the whole tree follows: a field whose zero value is
 	// a legitimate SETTING may not use the zero value to mean "unset". A
 	// plain float here would make omission mean 0.0 and run every phase in
 	// the engine deterministic without anyone choosing it. Read it through

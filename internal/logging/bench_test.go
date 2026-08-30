@@ -7,7 +7,8 @@ import (
 	"testing"
 )
 
-// These exist so adrs/001's numbers are RUNNABLE rather than remembered.
+// These exist so the zap-versus-slog numbers are RUNNABLE rather than
+// remembered.
 // The question they settle is "should this be zap?", and the honest answer
 // depends on what the current design actually costs — which nobody could
 // check without them.

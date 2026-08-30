@@ -669,7 +669,7 @@ type SecretRecord struct {
 //
 // # Why it is here and not in the node's database
 //
-// It was the last piece of company-wide state that was not (adr-203). The
+// It was the last piece of company-wide state that was not. The
 // company CONFIG already travels this way — [Plane.Activate] writes a payload
 // sealed with the very same keyring into the very same bucket family, and a
 // company document may itself carry credentials inline — so the secret store

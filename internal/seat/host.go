@@ -120,8 +120,7 @@ type Config struct {
 	// Nil publishes none, which is a real answer rather than a zero: a
 	// node whose engine is not co-located has no in-flight count to
 	// report, and a peer reading 0 for it would draw an idle row for a
-	// process that is simply not saying. See
-	// adrs/501-node-runtime.md.
+	// process that is simply not saying.
 	//
 	// It takes a context because answering may mean reading a store, and
 	// this runs on the path that renews presence: the beat bounds it to

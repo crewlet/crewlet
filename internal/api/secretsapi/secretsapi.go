@@ -6,7 +6,7 @@
 // On the default topology the coordination broker runs INSIDE the engine's
 // process and does not listen on a socket at all, so a second process has no
 // way to reach the bucket. That is the whole reason this surface exists: the
-// rows are fleet-wide (adrs/203), and the engine is the only thing that
+// rows are fleet-wide, and the engine is the only thing that
 // can put one there.
 //
 // # Every route is guarded, reads included

@@ -36,10 +36,9 @@ func eventOf(d delivery) *events.Event { return d.ev }
 // previous engine believed Pulsar's ack clock started at receive; measured
 // against this client, it does not, and the budget is deleted.
 //
-// Deleting it also removes the requeue-by-republish path, which adr-101 §1
-// forbids anyway ("Never substitute a republish: that sends the event to the
-// topic tail while its prefetched siblings replay from the head, reordering
-// the conversation").
+// Deleting it also removes the requeue-by-republish path, which the queue
+// contract forbids anyway: a republish sends the event to the topic tail while
+// its prefetched siblings replay from the head, reordering the conversation.
 //
 // What the absence costs, stated so nobody has to rediscover it: a batch of N
 // slow partitions holds N messages unacked for the sum of the turns. Pulsar's

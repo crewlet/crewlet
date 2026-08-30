@@ -78,8 +78,7 @@ type attachment struct {
 // The loop therefore CLOSES the consumer whenever it is blocked and opens a
 // fresh one when it is not. Closing is what returns everything unacked and
 // everything prefetched, in order, at redeliveryCount 0 — measured at 1.8 ms
-// to close and 8.6 ms to receive it again on a fresh consumer
-// (adrs/104-pulsar-redelivery-economics.md). It is the same
+// to close and 8.6 ms to receive it again on a fresh consumer. It is the same
 // mechanism for all four reasons a consumer can be blocked, which is why
 // there is only one of it.
 func (a *attachment) blocked() bool {
@@ -287,7 +286,7 @@ func (q *Queue) consumerOptions(topic, group string, maxBatch int) pulsar.Consum
 // closeConsumer closes and forgets this attachment's consumer.
 //
 // Closing is the free hand-back: unacked messages return to whoever attaches
-// next, in order and at redeliveryCount 0 (measured; adr-104). That is what
+// next, in order and at redeliveryCount 0 (measured). That is what
 // makes a seat handoff cost nothing against the delivery budget.
 func (a *attachment) closeConsumer() {
 	a.consMu.Lock()
@@ -303,7 +302,7 @@ func (a *attachment) closeConsumer() {
 //
 // It does not ack, nak or republish — it CLOSES. On Pulsar a graceful close
 // returns every unacked message AND everything sitting in the prefetch to
-// whoever attaches next, in order and at redeliveryCount 0 (measured; adr-104),
+// whoever attaches next, in order and at redeliveryCount 0 (measured),
 // so a hand-back costs nothing against the dead-letter budget and reorders
 // nothing. That is why a deferral here is free where JetStream's is a NAK.
 //
@@ -492,9 +491,8 @@ const (
 // on a message nothing is wrong with, and a healthy event that changed hands
 // often enough would eventually die having never failed. On Pulsar there is a
 // third option and it costs nothing, so this backend takes it: leave it
-// unacked and let the close hand it back
-// (adrs/102-jetstream-redelivery.md — the free handoff JetStream
-// does not have, which is why Capabilities.FreeDeferral is a capability).
+// unacked and let the close hand it back — the free handoff JetStream does
+// not have, which is why Capabilities.FreeDeferral is a capability.
 func actionFor(outcome queue.Outcome) brokerAction {
 	switch outcome {
 	case queue.OutcomeNak:
@@ -560,8 +558,9 @@ func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
 //
 // Required, not optional: a node whose coordination store blipped quiesces and
 // must be able to come back, or it holds the seat, stays attached and consumes
-// nothing for the rest of its life. Reclaiming the prefetch — which adr-101 §3
-// demands of a prefetching backend — happened at the quiesce, when the loop
+// nothing for the rest of its life. Reclaiming the prefetch — which the
+// contract demands of a prefetching backend, so that a quiesced consumer holds
+// nothing its peers cannot reach — happened at the quiesce, when the loop
 // closed the consumer; this opens a fresh one, and everything handed back
 // arrives again at redeliveryCount 0.
 //

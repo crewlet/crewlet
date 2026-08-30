@@ -53,15 +53,15 @@ const (
 // Recall returns a seat's most similar past episodes.
 //
 // A SCAN, and the database does the arithmetic. There is still no ANN index
-// reachable from the Go driver (adrs/002, re-measured at the pin), so
-// every embedded row for the seat is visited — what the per-seat time index
+// reachable from the Go driver, re-measured at the pin, so every embedded
+// row for the seat is visited — what the per-seat time index
 // buys is that it is one seat's episodes rather than the whole table. A
 // company's seat has thousands of turns, not millions.
 //
 // It used to visit them in Go: select every row, decode every vector, cosine
 // each one. That was written when a second driver with no vector functions
 // had to be served and it then ran on BOTH drivers unconditionally, because
-// nothing ever called the other path. With one driver (adrs/003) the
+// nothing ever called the other path. With one driver the
 // ordering is `vector_distance_cos` in an ORDER BY, and only the rows that
 // survive the LIMIT cross the driver boundary.
 //
@@ -283,7 +283,7 @@ func cosine(a, b []float32) (float64, bool) {
 // It reported db.Caps().VectorFunctions "for the operator surface", and no
 // operator surface ever called it — while recall, the one thing the answer was
 // about, ignored it and ran the Go loop either way. Recall is now written
-// against vector_distance_cos on the one driver that has it (adrs/003),
+// against vector_distance_cos on the one driver that has it,
 // so the question has one answer for a given build, and the place it is
 // actually reported is the store_opened log line, which prints all three
 // capabilities at every start.

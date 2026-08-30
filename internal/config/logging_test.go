@@ -198,7 +198,7 @@ func TestTheRetiredStoreDriverKeyNamesItsReplacement(t *testing.T) {
 // AND IT IS SCOPED TO ITS BLOCK, not to the word.
 //
 // The retired table is keyed on `Store.driver` rather than on `driver`, for
-// the same reason adrs/001 keyed it per TIER one level up: `driver` under
+// the same reason the retired keys are tracked per TIER one level up: `driver` under
 // `store:` was the storage engine and is retired, while a `driver:` typed
 // under `stream:` never existed there at all. An ungated table would answer
 // the second with advice about the first, sending its author to edit a block

@@ -7,8 +7,8 @@
 --
 -- Every statement here must parse on BOTH certified drivers — Turso and
 -- mainline SQLite — because Turso's dialect is the narrower of the two and
--- the dual-driver test job is the only thing that catches a divergence
--- (adrs/002). Three conventions follow from that, plus one
+-- the dual-driver test job was the only thing that caught a divergence.
+-- Three conventions follow from that, plus one
 -- from the engine owning its own clock:
 --
 --   * TIMESTAMPTZ  -> INTEGER, microseconds since the Unix epoch, UTC.

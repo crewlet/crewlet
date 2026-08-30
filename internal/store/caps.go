@@ -8,13 +8,13 @@ import (
 // Capabilities records what the live driver can actually do, measured at Open
 // rather than assumed from a version number.
 //
-// The three answers here are the ones adrs/002 found the docs and the
-// code disagreeing about: Turso ships the vector column type and the distance
+// The three answers here are the ones where the docs and the code disagree:
+// Turso ships the vector column type and the distance
 // functions, but its ANN index and its full-text index are announced surface
 // not yet reachable from Go. That is still true at the pinned version, and it
-// is the reason this type survived the drop of the second driver
-// (adrs/003): with one driver these are no longer a comparison between
-// two implementations, they are a TRIPWIRE on one. A pin bump that lands a
+// is the reason this type survived the drop of the second driver: with one
+// driver these are no longer a comparison between two implementations, they
+// are a TRIPWIRE on one. A pin bump that lands a
 // feature turns a skipping test into a passing one, and a pin bump that loses
 // one fails the build — see capability_test.go, which turns each answer into a
 // test that passes, skips, or fails deliberately.

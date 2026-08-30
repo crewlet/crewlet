@@ -2,8 +2,7 @@
 #
 # A release is still one command — `git tag v1.2.0 && git push origin v1.2.0`
 # — but what a tag produces is now a set of binaries rather than a package on
-# an index. See adrs/901-release-tooling.md for why goreleaser,
-# and RELEASING.md for the runbook.
+# an index. See RELEASING.md for the runbook.
 #
 # THE TAG IS THE VERSION. Nothing in the tree records it: the tag is stamped
 # into `internal/version.value` at link time, so there is no second place for
@@ -52,9 +51,9 @@ builds:
       # needs cgo — and THAT build produces a binary file(1) calls "statically
       # linked" which SIGSEGVs on its first query, on the machine that built
       # it, because a static program has no dynamic loader and cannot dlopen
-      # anything. glibc's linker warns about it up front. adrs/901 has
-      # the table; ci.yml's `cross` job asserts the artifact is still dynamic
-      # so this cannot be re-discovered by a release.
+      # anything. glibc's linker warns about it up front. This was measured;
+      # ci.yml's `cross` job asserts the artifact is still dynamic so it
+      # cannot be re-discovered by a release.
       #
       # The linux binaries therefore require GLIBC; on a musl system they
       # fail at execve, before any Go code runs, and `-tags musl` does NOT
@@ -84,15 +83,15 @@ builds:
     # linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64,
     # and for nothing else.
     #
-    # Windows is dropped even though windows/amd64 has one (adrs/003).
+    # Windows is dropped even though windows/amd64 has an embedded library.
     # The release used to publish windows/amd64 AND windows/arm64, and the
     # second could not open a store at all: no embedded library, so the binary
     # started and failed at its first query unless the operator knew to set
     # CREWLET_STORE_DRIVER=sqlite — the fallback driver that has since been
     # removed. Shipping one architecture of an operating system and silently
     # breaking the other is worse than shipping neither, and a Windows build
-    # was already the one that refused `providers.sandbox: {type: local}`
-    # (adrs/901). internal/store/platform.go turns a build for any
+    # was already the one that refused `providers.sandbox: {type: local}`.
+    # internal/store/platform.go turns a build for any
     # platform off this list into a compile error that says why.
     goos: [linux, darwin]
     goarch: [amd64, arm64]

@@ -103,13 +103,13 @@ var protocolCases = []testCase{
 		// continuously, for as long as the upgrade takes: the exact
 		// window the gate exists to make safe.
 		//
-		// SCOPE, because the corpus permits one exception and this case
-		// must not be read as forbidding it. The violation here is
+		// SCOPE, because the contract permits one exception and this
+		// case must not be read as forbidding it. The violation here is
 		// already visible when the claim arrives, so a backend sees it
-		// on its check and must write nothing. adr-201 §3 records the
-		// other path deliberately: a KV cannot express the gate as a
-		// predicate inside a compare-and-swap, so it does check → claim
-		// → RE-CHECK → release on violation. A violation that appears
+		// on its check and must write nothing. The other path is
+		// deliberate: a KV cannot express the gate as a predicate
+		// inside a compare-and-swap, so it does check → claim →
+		// RE-CHECK → release on violation. A violation that appears
 		// between a backend's check and its claim therefore leaves a
 		// touched record — a burned epoch and a tombstone — because the
 		// claim was made and given back rather than never made. That is

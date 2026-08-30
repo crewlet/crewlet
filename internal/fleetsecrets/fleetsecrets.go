@@ -4,7 +4,7 @@
 // # Why it is not internal/store's
 //
 // It was, and that was the last piece of company-wide state living somewhere
-// only one node could see (adr-203). `crewlet secrets set` reached exactly the
+// only one node could see. `crewlet secrets set` reached exactly the
 // node whose Tier A file it was pointed at; every peer kept what it booted
 // with, and nothing failed until a seat landed on one of them and a vendor
 // rejected a credential the operator believed they had rotated.

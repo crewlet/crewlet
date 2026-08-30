@@ -487,9 +487,9 @@ const DefaultStorePath = "crewlet.db"
 //
 // # There is no driver field
 //
-// There was one — `driver: turso | sqlite` — and it is retired
-// (adrs/003). Turso is the database and the only driver, so the field
-// selected between two implementations of which one exists. A file that still
+// There was one — `driver: turso | sqlite` — and it is retired. Turso is the
+// database and the only driver, so the field selected between two
+// implementations of which one exists. A file that still
 // carries it is answered by name rather than as a misspelling; see
 // retiredBootstrapFields in load.go.
 type Store struct {

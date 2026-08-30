@@ -7,8 +7,7 @@
 // engine is concerned, and nothing above this package may branch on which
 // backend is running.
 //
-// The design rationale that a reader should not have to re-derive lives in
-// adrs/101-queue-contract.md. The short version:
+// The rationale a reader should not have to re-derive:
 //
 //   - A durable subscription IS a seat's mailbox. It exists without a
 //     consumer, retains what is published while nothing is attached, and
@@ -248,8 +247,8 @@ type EventQueue interface {
 	// survive into the next life, and the restarted queue reported itself
 	// running and was silently deaf.
 	//
-	// AFTER Stop the answer is not a capability at all — see Stop.
-	// The asymmetry is written up in adrs/105-the-queue-lifecycle-verbs.md.
+	// AFTER Stop the answer is not a capability at all — see Stop, which
+	// is where the asymmetry is written up.
 	//
 	// The DRAIN protocol is exempt along with Start and Stop, because it
 	// exists to run around a stop rather than in spite of one:
@@ -448,7 +447,7 @@ func eventType(ev *events.Event) string {
 // makes a conversation read correctly regardless of how a broker interleaves
 // redeliveries with fresh arrivals — measured, JetStream returns a
 // redelivered message BEHIND never-delivered ones, where Pulsar replays it
-// from the head (see adrs/102-jetstream-redelivery.md). Relying
+// from the head. Relying
 // on the timestamps the engine already trusts, rather than on one broker's
 // replay semantics, removes a correctness dependency that would otherwise
 // have to be re-verified for every backend.

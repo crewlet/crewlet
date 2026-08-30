@@ -58,8 +58,7 @@ type Config struct {
 
 	// Status is what this node is DOING, advertised to peers on the
 	// presence heartbeat. Nil publishes none, which reads as "did not
-	// say" rather than as an idle node — see
-	// adrs/501-node-runtime.md.
+	// say" rather than as an idle node.
 	//
 	// The beat bounds it: see [seat.Config].Status.
 	Status func(context.Context) coord.NodeStatus

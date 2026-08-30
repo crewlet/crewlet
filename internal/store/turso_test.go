@@ -239,7 +239,7 @@ func TestAnUnusableCacheRootIsReportedAsOne(t *testing.T) {
 
 // AND A LIBRARY THAT WILL NOT VERIFY EVEN AFTER A HEAL NAMES THE WAY OUT.
 // There used to be two ways out — clear the cache by hand, or move to the
-// certified fallback driver — and dropping the second driver (adrs/003)
+// certified fallback driver — and dropping the second driver
 // deleted one of them. That makes the remaining message MORE load-bearing,
 // not less: it is now the only thing standing between an operator and a
 // binary that will not start, so it must name the cache directory to delete

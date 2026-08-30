@@ -106,7 +106,7 @@ type DetachedResult struct {
 	// can be persisted and re-entered when the detached work finishes.
 	// Honoured only where the phase allows suspending — Execute — and
 	// logged and ignored elsewhere, because a phase that never persists a
-	// partial conversation cannot resume one. See adr-402.
+	// partial conversation cannot resume one.
 	Suspend bool
 
 	// Payload is handed to the caller to persist alongside the state.

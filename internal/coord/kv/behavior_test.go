@@ -1,8 +1,8 @@
 // Broker measurement harness — the empirical half of the coordination design.
 //
-// Every claim in adrs/201-coordination-contract.md §2 rests on a
-// behaviour of JetStream KV, and none of them is in the client's documentation
-// in a form you could design against. These are MEASUREMENTS, not unit tests:
+// Every property the coordination contract rests on is a behaviour of
+// JetStream KV, and none of them is in the client's documentation in a form
+// you could design against. These are MEASUREMENTS, not unit tests:
 // each one asserts the property the design depends on and prints the number the
 // design is tuned to, so a broker upgrade that changes the behaviour fails here
 // rather than in a seat handoff at 3am.

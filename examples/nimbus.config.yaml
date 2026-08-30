@@ -72,7 +72,7 @@ store:
   path: "./nimbus-data/nimbus.db"
   # There is no `driver:` here and no CREWLET_STORE_DRIVER either — Turso
   # is the database and the only one.  A file that still carries the key
-  # is answered by name rather than as a typo; see adrs/003.
+  # is answered by name rather than as a typo.
 
 # ── Seat ownership ────────────────────────────────────────────────────
 #

@@ -82,4 +82,3 @@ Connecting the external surfaces agents work on:
 - **[Dashboard Design System](reference/dashboard-design.md)** — The dashboard's rooms and its visual system: what each room answers that no other one does, how a seat is coloured by what it is doing rather than by who it is, tokens measured against the worst surface they can land on, the shared panel recipe, the validated categorical hues, and the rules a change has to keep
 - **[Environment Variables](reference/environment-variables.md)** — All configuration env vars
 - **[Design Decisions](reference/design-decisions.md)** — Why certain architectural choices were made
-- **[Architecture Decision Records](https://github.com/crewlet/crewlet/tree/main/adrs)** — The full record behind the page above, for people changing the engine: what was decided, when, on what evidence, and what the alternative cost

@@ -9,7 +9,7 @@
 // turn that created it has finished. There is no copy-on-spawn to bound it, so
 // what would elsewhere merely obscure a dependency is a live data race.
 //
-// So (adrs/401) a turn's inputs are an argument. The type is named
+// So a turn's inputs are an argument. The type is named
 // TurnContext there; here it is [Turn], because turnctx.TurnContext stutters and
 // the package name already says what it is.
 //
@@ -22,7 +22,7 @@
 //
 // The config pin is deliberately NOT one of them: a turn reading config through
 // an ambient channel is how a mid-turn reload gets observed halfway, which is
-// the failure immutable epochs exist to remove (adrs/404).
+// the failure immutable epochs exist to remove.
 package turnctx
 
 import (

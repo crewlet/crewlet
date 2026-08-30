@@ -266,7 +266,7 @@ var unknownFieldRE = regexp.MustCompile(`^line (\d+): field (\S+) not found in t
 // different things in different blocks. `driver` under `store:` was the
 // storage engine and is retired; a `driver:` typed under `stream:` never
 // existed there and has to read as the ordinary typo it is — the same
-// distinction adrs/001 drew between the two TIERS, one level down.
+// distinction the two TIERS draw, one level down.
 func retiredKey(goType, field string) string {
 	if dot := strings.LastIndex(goType, "."); dot >= 0 {
 		goType = goType[dot+1:]
