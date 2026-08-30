@@ -268,8 +268,33 @@ type RoleAtlassian struct {
 }
 
 // validate checks a seat's product list.
+//
+// # An ABSENT products key is refused, and that is the whole point of the block
+//
+// The three states are real but two of them are spelled almost the same: no
+// `atlassian` block at all means every product the company configures, and
+// `atlassian: {products: []}` means none. `atlassian: {}` sits between them
+// and reads as neither — [Role.Seat] turns it into a non-nil empty slice,
+// which IS the "none" setting, so a block an author wrote to say something
+// about this seat silently takes away every licence it would otherwise have
+// had. Nothing downstream can tell that from a deliberate stand-down, and the
+// symptom is a seat the provisioner skips with a note about a products list
+// its author never wrote.
+//
+// Refused here naming both spellings, because the fix depends on which one
+// they meant. The sibling blocks reach the same answer from the other
+// direction: [RoleSlack.validate] refuses a bare `slack: {}` too, because
+// every state a block can carry has to be one somebody chose.
 func (a *RoleAtlassian) validate(path string) error {
 	var p problems
+	if a.Products == nil {
+		p.add(at(path, "products"), ErrMissing,
+			"required — an atlassian block has to say which products this seat "+
+				"holds a licence for. Remove the whole block to take every "+
+				"product the company configures, or write `products: []` to "+
+				"licence none; an empty block reads as the second and is almost "+
+				"never what was meant")
+	}
 	seen := make(map[AtlassianProduct]bool, len(a.Products))
 	for i, product := range a.Products {
 		switch {

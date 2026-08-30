@@ -17,6 +17,8 @@
         },
         "token_expiry_days": {
           "description": "Lifetime of a minted agent token, 1-365 days. Default 300. Nothing renews it on a schedule; re-run the provisioner.",
+          "maximum": 365,
+          "minimum": 1,
           "type": "integer"
         }
       },

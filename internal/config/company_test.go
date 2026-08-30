@@ -356,6 +356,19 @@ func TestCompanyValidatorRejections(t *testing.T) {
 				"roles:\n  - {name: SWE, integrations: {atlassian: {products: [jira, jira]}}}\n",
 			"roles[0].integrations.atlassian.products[1]", ErrConflict,
 		},
+		// A BARE BLOCK IS NOT A SETTING. The three states are real but two
+		// of them are spelled almost the same, and the transform turns an
+		// absent products key into the non-nil empty slice that MEANS
+		// "none" — so a block written to say something about this seat
+		// silently takes away every licence it would have had, and the
+		// provisioner then skips it citing a list its author never wrote.
+		{
+			"a seat whose atlassian block says nothing at all",
+			"name: Acme\nintegrations:\n  jira: {cloud_id: abc, token: t}\n" +
+				"  atlassian: {org_id: o}\n" +
+				"roles:\n  - {name: SWE, integrations: {atlassian: {}}}\n",
+			"roles[0].integrations.atlassian.products", ErrMissing,
+		},
 		// THE PARITY HOLE THIS FOUND. `typing_status` carries a schema
 		// enum, so an editor refused a typo that `crewlet validate` waved
 		// through — and the engine then read the unknown value as the

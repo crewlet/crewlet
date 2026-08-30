@@ -245,7 +245,7 @@ type Atlassian struct {
 	// mean — and because it is refused rather than honoured: Atlassian
 	// requires an expiry, so a zero would be a credential that is dead
 	// before the run finishes. Absent takes the default.
-	TokenExpiryDays *int `yaml:"token_expiry_days,omitempty" json:"token_expiry_days,omitempty" desc:"Lifetime of a minted agent token, 1-365 days. Default 300. Nothing renews it on a schedule; re-run the provisioner."`
+	TokenExpiryDays *int `yaml:"token_expiry_days,omitempty" json:"token_expiry_days,omitempty" js:"min=1;max=365" desc:"Lifetime of a minted agent token, 1-365 days. Default 300. Nothing renews it on a schedule; re-run the provisioner."`
 }
 
 // atlassianDefaultDisplayNamePrefix is what a provisioned account is named
