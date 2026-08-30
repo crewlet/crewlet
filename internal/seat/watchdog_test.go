@@ -145,9 +145,10 @@ func TestAHealthyDutyIsNeverKilled(t *testing.T) {
 func TestAStalledDutyEndsTheProcess(t *testing.T) {
 	t.Parallel()
 	// The whole remedy: a wedged-but-alive node keeps its broker session
-	// open, so the broker holds its prefetch of seats a peer now owns for a
-	// full unacked-message timeout — roughly 30 minutes. Exiting collapses
-	// that to the 9 ms a closed session takes to release.
+	// open, so the broker holds its prefetch of seats a peer now owns until
+	// that session ends — on Pulsar there is no ack timeout to wait out at
+	// all. Exiting collapses an unbounded hold to the 9 ms a closed session
+	// takes to release.
 	clock := newClock()
 	fired, onStall := caught()
 	w := newWatchdog(time.Minute, clock.Now, onStall)
@@ -381,7 +382,7 @@ func TestAWedgedHeartbeatPassIsWhatTheWatchdogSees(t *testing.T) {
 	// runs Go code" would sleep through the one failure that matters: the
 	// renewals stop, this node's seats move to a peer, and its queue client
 	// — whose goroutines the stall never touched — stays attached and holds
-	// their mail for the broker's full ack timeout.
+	// their mail for as long as that session lives.
 	f := newFleet(t)
 	release := make(chan struct{})
 	defer close(release)
