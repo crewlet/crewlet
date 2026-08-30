@@ -68,7 +68,7 @@ written down 35 times. This project collapses that shape everywhere else it
 appears (`queue/topics.py`, `env_refs.py`, `env_file.py`) for the same reason:
 a fact recorded in many places can only ever be moved in most of them.
 
-## Three assertions, because they are three different things
+## Three assertions, because they were three different things
 
 `internal/api/dashboardjs_test.go`:
 
@@ -114,30 +114,43 @@ problem and the rest of the Go suite still runs.
 
 In CI it is a **red build**. This is the dashboard's only coverage, so letting
 it go quiet would retire 348 assertions behind a green tick — the failure mode
-CONTRIBUTING names ("a skip is not a pass"). `ci`'s `test` job installs node
-if the image stops shipping one, and `TestTheWorkflowDeclaresItsNodeDependency`
-asserts the step is still there: the fatal turns a missing binary red, and the
-step makes the red build fixable by reading the log rather than by bisecting
-runner images.
+CONTRIBUTING names ("a skip is not a pass"). `nodeBinary` is what enforces
+that: `t.Fatalf` whenever `CI` is set and node is off `PATH`. `ci.yml`'s `test`
+job installs node if the image stops shipping one, which makes the red build
+fixable by reading the log rather than by bisecting runner images — but that
+step is a convenience, not the gate, and nothing asserts it is still there.
 
-The workflow also had to start **watching** the dashboard. `go-ci` filtered on
-`go/**`, and neither of this gate's inputs was under it — the suites sat in
-the Python tree and the tree they certify was held identical to the Python one.
-A dashboard edit would have reached no job that runs its tests against the Go
-server. A path filter that does not name a gate's inputs retires the gate in
-silence, so both paths went into it.
+`TestTheWorkflowDeclaresItsNodeDependency` used to assert it. It was dropped:
+it grepped the whole of `ci.yml` for `node --version`, a string that appears in
+two jobs, so deleting the step from the `test` job — the only one that runs
+this gate — left it green. It also went red on `node -v` and on an upgrade to
+`actions/setup-node`, an edit that would make the invariant stronger. See
+decisions/901, *What is deliberately not asserted*, for the general form.
+
+The workflow also had to start **watching** the dashboard. During the rewrite
+`go-ci` filtered on `go/**`, and neither of this gate's inputs was under it —
+the suites sat in the Python tree and the tree they certify was held identical
+to the Python one. A dashboard edit would have reached no job that runs its
+tests against the Go server. A path filter that does not name a gate's inputs
+retires the gate in silence, so both paths went into it. `ci.yml` has since
+dropped path filtering altogether and runs on every change, which settles the
+same question by removing it.
 
 ## Measurement
 
-Twelve mutants, all caught: a static-reference regex that matches nothing, a
-module-specifier regex that matches nothing, modules served as
-`application/octet-stream`, the icons dropped from the embed pattern, one byte
-of drift between the two trees, a broken function in the served `store.js`, the
-runner not passing `CREWLET_DASHBOARD_ROOT` (which silently tests the Python
-tree — caught only because the served tree was broken in the same mutant), the
-runner ignoring the exit code, a suite glob pointing at nothing, the workflow's
-node step removed, and each of the two path filters removed.
+Twelve mutants were run when this gate was built, and all were caught: a
+static-reference regex that matches nothing, a module-specifier regex that
+matches nothing, modules served as `application/octet-stream`, the icons
+dropped from the embed pattern, one byte of drift between the two trees, a
+broken function in the served `store.js`, the runner not passing
+`CREWLET_DASHBOARD_ROOT` (which silently tests the Python tree — caught only
+because the served tree was broken in the same mutant), the runner ignoring the
+exit code, a suite glob pointing at nothing, the workflow's node step removed,
+and each of the two path filters removed.
 
-The one invalid mutant is worth recording: deleting `"node --version"` from the
-*assertion list* survived, as it must — a test cannot catch the removal of its
-own assertion. It was re-run against the workflow instead, where it is caught.
+Three of those twelve no longer apply: the drift mutant went with the Python
+tree, and the two path-filter mutants went with `ci.yml`'s path filters. The
+node-step mutant was caught by `TestTheWorkflowDeclaresItsNodeDependency`,
+which has since been dropped — a later run showed it only caught the step
+being deleted from *both* jobs, not from the `test` job alone. The nine
+mutants that bear on the two surviving assertions still hold.

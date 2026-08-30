@@ -80,11 +80,14 @@ without it** — a green run has simply not exercised them.
   `tests/dashboard/js/*.test.mjs` execute under whatever `node` is on PATH,
   driven from Go by `internal/api`. The dashboard has no Go code of its own,
   so without node a whole subsystem goes quiet. **CI fails rather than
-  skipping** when node is missing: the job installs one if the runner image
-  does not ship it, and the test asserts the workflow asks for it. Locally,
-  every `make` target that runs a suite refuses to start without one, for the
-  same reason — a target cannot install node for you, but it can decline to
-  hand you a green run that tested none of the dashboard.
+  skipping** when node is missing: the suite itself fails the run outright
+  when `CI` is set and node is off `PATH`, and the `test` job installs one if
+  the runner image stops shipping it. That install step is a convenience, not
+  a guard — nothing asserts it is still there, and nothing needs to, because
+  the suite goes red either way. Locally, every `make` target that runs a
+  suite refuses to start without node, for the same reason — a target cannot
+  install it for you, but it can decline to hand you a green run that tested
+  none of the dashboard.
 
   **Which dashboard the suites test is a parameter.** They resolve it once,
   in `tests/dashboard/js/dashboardRoot.mjs`, from `CREWLET_DASHBOARD_ROOT` —

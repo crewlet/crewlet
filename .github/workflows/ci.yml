@@ -57,8 +57,12 @@ jobs:
         # modules and `node:assert` and nothing else, so a major bump is not
         # a risk worth a setup action; what IS worth having is the number in
         # the log, so "it broke on the new image" is a diff rather than a
-        # theory. TestTheGoWorkflowDeclaresItsNodeDependency asserts this step
-        # is still here.
+        # theory.
+        #
+        # Nothing asserts this step exists. What it buys is a readable log
+        # line: the protection is in the suite itself, where nodeBinary()
+        # fails the run outright when CI is set and node is missing, rather
+        # than skipping.
         run: |
           command -v node || {
             sudo apt-get update
