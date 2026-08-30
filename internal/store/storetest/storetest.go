@@ -17,6 +17,7 @@ package storetest
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -49,6 +50,7 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"ByID", testByID},
 		{"ReadFloor", testReadFloor},
 		{"RetentionSweep", testRetention},
+		{"RetentionSweepDrainsABacklogWiderThanOneBatch", testRetentionBacklog},
 		{"RecordSkipsUntrackedTypes", testRecordUntracked},
 		{"NullUnconstrainedWorkKey", testWorkKeyNull},
 		{"FollowRoundTrips", testFollowRoundTrips},
@@ -587,6 +589,39 @@ func testRetention(t *testing.T, db *store.DB) {
 	if store.EventRetention < store.EventHistory {
 		t.Fatalf("retention %v is shorter than the read floor %v",
 			store.EventRetention, store.EventHistory)
+	}
+}
+
+// testRetentionBacklog: a purge over a backlog wider than one batch drains
+// it completely and keeps what is inside retention. The batch bound exists
+// so no single statement holds the writer for a whole overhang — but a loop
+// that stopped after one batch would leave the tail in place and report a
+// sweep that had not finished.
+func testRetentionBacklog(t *testing.T, db *store.DB) {
+	log := db.Events()
+	ctx := t.Context()
+	stale := store.EventPurgeBatch + 3
+	when := time.Now().UTC().Add(-store.EventRetention - time.Hour)
+	for i := range stale {
+		write(t, log, store.EventRecord{
+			ID: fmt.Sprintf("stale-%04d", i), Type: "task_created", Source: "pm",
+			Time: when.Add(time.Duration(i) * time.Millisecond), Category: "task",
+		})
+	}
+	write(t, log, store.EventRecord{
+		ID: "keep", Type: "task_created", Source: "pm",
+		Time: time.Now().UTC().Add(-time.Hour), Category: "task",
+	})
+
+	n, err := log.Purge(ctx)
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if n != int64(stale) {
+		t.Fatalf("purged %d rows, want the whole %d-row backlog", n, stale)
+	}
+	if _, err := log.ByID(ctx, "keep"); err != nil {
+		t.Fatalf("sweep took a row inside retention: %v", err)
 	}
 }
 

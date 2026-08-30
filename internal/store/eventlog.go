@@ -43,6 +43,16 @@ const (
 	// the floor were unreachable and permanent.
 	EventRetention = EventHistory + 24*time.Hour
 
+	// EventPurgeBatch bounds how many rows one purge statement deletes, so
+	// no single statement holds the writer for a whole backlog — see Purge
+	// for why that matters to the inline event Append. Five hundred rows at
+	// the fat end of real payloads (tens of KB of phase prompts each) is
+	// 10–25 MB of pages per statement, tens of milliseconds of writer hold,
+	// while a week-long overhang still clears in a couple hundred
+	// statements within one maintenance tick. Exported for the contract
+	// suite, which proves the sweep drains a backlog wider than one batch.
+	EventPurgeBatch = 500
+
 	// MaxTraceEvents caps one trace's rows. A trace is unbounded in
 	// principle — a long turn with sub-agents accumulates thousands of
 	// spans — and the whole thing goes out in a single WebSocket frame, so
@@ -322,18 +332,36 @@ func (l *EventLog) ByID(ctx context.Context, id string) (EventRecord, error) {
 // floor and has no honest reason to vary per deployment: a shorter one deletes
 // rows the log still serves, and a longer one keeps rows nothing can reach.
 // Offering the choice would only make both mistakes possible.
+//
+// It deletes in batches, each its own autocommit statement, because this is
+// the highest-volume table in the deployment and its rows carry whole phase
+// payloads: one DELETE over a multi-day overhang — a fleet that was down, a
+// singleton duty that lapsed — holds the single writer for the whole
+// statement, and the event Append runs INLINE in the publishing goroutine,
+// which drops the event with a warning once busy_timeout runs out. Batching
+// releases the writer between statements, so live appends interleave with the
+// catch-up instead of losing to it. On the steady-state tick the overhang is
+// one batch and the loop runs once.
 func (l *EventLog) Purge(ctx context.Context) (int64, error) {
-	res, err := l.db.sql.ExecContext(ctx,
-		"DELETE FROM crewlet_events WHERE event_time < ?",
-		EncodeTime(now().Add(-EventRetention)))
-	if err != nil {
-		return 0, fmt.Errorf("store: purge events: %w", err)
+	cutoff := EncodeTime(now().Add(-EventRetention))
+	var total int64
+	for {
+		res, err := l.db.sql.ExecContext(ctx,
+			`DELETE FROM crewlet_events WHERE rowid IN (
+				SELECT rowid FROM crewlet_events WHERE event_time < ? LIMIT ?)`,
+			cutoff, EventPurgeBatch)
+		if err != nil {
+			return total, fmt.Errorf("store: purge events: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, fmt.Errorf("store: purge events count: %w", err)
+		}
+		total += n
+		if n < EventPurgeBatch {
+			return total, nil
+		}
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("store: purge events count: %w", err)
-	}
-	return n, nil
 }
 
 func (l *EventLog) scanRows(ctx context.Context, query string, args ...any) ([]EventRecord, error) {
