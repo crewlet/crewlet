@@ -159,8 +159,8 @@ const purgeSQL = `DELETE FROM scheduled_runs WHERE fired_at < ?`
 // Purge drops rows fired strictly before the cutoff, returning how many went.
 //
 // Deleting the row deletes the claim, because in this backend they are the
-// same row — which is the property the twin has to reproduce by hand and the
-// Python twin got wrong.
+// same row — which is the property a twin has to reproduce by hand, and the
+// one a twin most easily gets wrong.
 func (l *Ledger) Purge(ctx context.Context, before time.Time) (int, error) {
 	if l == nil || l.db == nil {
 		return 0, ErrNoDB

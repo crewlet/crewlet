@@ -21,7 +21,7 @@ func init() {
 // the event is a nudge, and the authoritative path is the epoch pointer, so
 // losing one costs a poll interval rather than a revision.
 //
-// The Python class redeclares the envelope's own `source` field. It is NOT a
+// The tempting shape redeclares the envelope's own `source` field. It is NOT a
 // payload field here: the envelope owns that key and drops a colliding one, so
 // declaring it would produce a field that silently never arrives. Read the
 // envelope's Source instead.
@@ -66,9 +66,9 @@ const (
 // The DB row stays active whatever the outcome — divergence is surfaced through
 // this event, not by deactivating what the rest of the fleet is happily serving.
 //
-// Status has no useful zero value: ApplyOK is Python's default while Go's zero
-// value is "", so a publisher must set it explicitly. An unset status reads as
-// not-ok here, exactly as it would in Python.
+// Status has no useful zero value: the wire default is ApplyOK while the Go
+// zero value is "", so a publisher must set it explicitly. An unset status
+// reads as not-ok.
 type ConfigRevisionApplied struct {
 	RevisionID        string      `json:"revision_id"`
 	Status            ApplyStatus `json:"status"`

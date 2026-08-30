@@ -10,9 +10,9 @@ import (
 //
 // There is ONE output field, not an output-plus-error pair, and that is
 // deliberate: the text goes back to the model either way, and splitting it
-// into two fields is how a Python incident happened — the upstream error was
-// written to `error` while the loop rendered `output`, so the agent was shown
-// a generic "tool execution failed" instead of the server's actual reason. It
+// into two fields is how a real incident happened: the upstream error went to
+// `error` while the loop rendered `output`, so the agent was shown a generic
+// "tool execution failed" instead of the server's actual reason. It
 // maps onto toolloop.ToolResult field for field.
 type Result struct {
 	// Output is fed back to the model as the tool message's content.

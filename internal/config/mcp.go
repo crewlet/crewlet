@@ -170,9 +170,9 @@ func (m *MCPServer) validate(path string) error {
 				"headers only apply to transport http; a stdio server takes env instead")
 		}
 	case TransportHTTP:
-		// Python never checked this, so an http entry with no url parsed
-		// cleanly and produced a server that could never connect — with
-		// the seat's tools simply absent from its prompt.
+		// Unchecked, an http entry with no url parses cleanly and
+		// produces a server that can never connect — with the seat's
+		// tools simply absent from its prompt.
 		if strings.TrimSpace(m.URL) == "" {
 			p.add(at(path, "url"), ErrMissing, "an http server needs a URL to connect to")
 		}

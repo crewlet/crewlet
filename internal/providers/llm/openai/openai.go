@@ -83,8 +83,8 @@ type Config struct {
 	Cooldowns credential.Policy
 
 	// MaxTokens caps the output for a request that names none. Zero sends
-	// no cap, which is what the Python backend did and what an
-	// openai-compatible endpoint with an unknown context window needs.
+	// no cap, which is what an openai-compatible endpoint with an unknown
+	// context window needs.
 	MaxTokens int
 
 	// Temperature is used for a request that names none (see llm.Request:
@@ -264,9 +264,8 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 			params.ReasoningEffort = p.effort
 		}
 		// The reasoning models reject max_tokens outright and reject any
-		// temperature but their own default. Python sent max_tokens here
-		// too, which 400s every o-series call the moment a caller sets a
-		// cap.
+		// temperature but their own default. Sending max_tokens here too
+		// 400s every o-series call the moment a caller sets a cap.
 		if maxTokens > 0 {
 			params.MaxCompletionTokens = param.NewOpt(maxTokens)
 		}
@@ -404,9 +403,10 @@ func toolChoice(choice string) (string, bool) {
 
 func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error) {
 	if len(resp.Choices) == 0 {
-		// Python returned an empty completion with finish_reason "error"
-		// here, which the tool loop reads as a clean finish: the phase
-		// produces nothing and reports success. An endpoint that returned
+		// Returning an empty completion with finish_reason "error" here
+		// is the tempting shape, and the tool loop reads it as a clean
+		// finish: the phase produces nothing and reports success. An
+		// endpoint that returned
 		// no choice has malfunctioned, so it is a server failure — the
 		// chain may still get an answer from another model, and no
 		// credential is benched for it.

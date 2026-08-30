@@ -4,16 +4,16 @@
 // THE DECISIONS ARE SEPARATED FROM THE I/O. The loop here owns what happens
 // between phases — the delivery overrides, the stall guard, the iteration
 // ledger, when a turn is done and when it has failed — and reaches the model
-// only through the [Phases] interface. In Python all of this was inline in one
-// 2,688-line method with forty injected dependencies, which meant the engine's
-// most consequential rules could only be exercised by standing up a whole
-// company. Here they are exercised with a fake.
+// only through the [Phases] interface. Inline, this is one enormous method
+// with dozens of injected dependencies, and the engine's most consequential
+// rules can then only be exercised by standing up a whole company. Here they
+// are exercised with a fake.
 //
-// A TURN RUNS UNDER ONE CONFIG SNAPSHOT, taken as a value at Run. Python read
-// each of ~18 settings from a live cell on every access, so a hot reload
-// landing mid-turn let Plan run under one round cap and Execute under another,
-// or sized a sub-agent's budget from a fraction the parent never saw. It
-// needed a context-local "pin" to paper over that. Passing the snapshot makes
+// A TURN RUNS UNDER ONE CONFIG SNAPSHOT, taken as a value at Run. Reading each
+// of ~18 settings from a live cell on every access lets a hot reload landing
+// mid-turn run Plan under one round cap and Execute under another, or size a
+// sub-agent's budget from a fraction the parent never saw — and then needs a
+// context-local "pin" to paper over it. Passing the snapshot makes
 // the bug unrepresentable, so there is nothing to pin.
 package turn
 

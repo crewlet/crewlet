@@ -3,8 +3,8 @@
 // how a tool call's arguments survive the JSON round trip.
 //
 // It exists because the alternative is two copies. llm.go records what two
-// copies cost the Python engine — "three backends three subtly different ideas
-// of exhausted" — and the drift is not hypothetical here either: the Anthropic
+// copies cost — three backends with three subtly different ideas of
+// "exhausted" — and the drift is not hypothetical here either: the Anthropic
 // and OpenAI SDKs raise structurally identical errors from two different
 // internal packages, so the only thing a backend can honestly own is the
 // errors.As that names its own SDK type. Everything after that is this
@@ -126,9 +126,9 @@ func isNetworkError(err error) bool {
 //
 // Two shapes, because the vendors chose differently: OpenAI sends a duration
 // ("6m0s", "1.5s", sometimes a bare number of seconds) and Anthropic sends an
-// RFC 3339 instant. The Python engine read only the OpenAI names and only the
-// bare-number form, so "6m0s" — the value OpenAI actually sends once a limit
-// has properly tripped — parsed as nothing and the static TTL applied.
+// RFC 3339 instant. Reading only the OpenAI names and only the bare-number
+// form leaves "6m0s" — the value OpenAI actually sends once a limit has
+// properly tripped — parsing as nothing, and the static TTL applies.
 var resetHeaders = []string{
 	"x-ratelimit-reset-requests",
 	"x-ratelimit-reset-tokens",

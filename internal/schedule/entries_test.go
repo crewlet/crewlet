@@ -10,8 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule"
 )
 
-// Ported from tests/test_schedule/test_describe.py, plus the resolved
-// next-run the Python left to its API layer.
+// Describe's rendering, plus the resolved next-run — which belongs here rather
+// than in an API layer, so the two cannot disagree.
 
 func describeOrg() *org.Organization {
 	return &org.Organization{

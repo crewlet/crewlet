@@ -54,8 +54,7 @@ func TestActionForKeepsADeferralFree(t *testing.T) {
 		{"ack", queue.OutcomeAck, actionAck},
 		{"nak", queue.OutcomeNak, actionNak},
 		{"defer", queue.OutcomeDefer, actionLeave},
-		// The zero value is Ack, the same default a bare return gives in
-		// the Python engine.
+		// The zero value is Ack: the quiet path is the safe one.
 		{"the zero outcome", queue.Result{}.Outcome, actionAck},
 	} {
 		if got := actionFor(tc.outcome); got != tc.want {

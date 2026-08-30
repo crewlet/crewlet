@@ -48,8 +48,8 @@ type Outcome int
 
 const (
 	// OutcomeAck acknowledges the delivery. It is the zero value, so a
-	// handler returning Result{} acknowledges — the same default a bare
-	// `return` gives in the Python engine.
+	// handler returning Result{} acknowledges: the quiet path is the safe
+	// one.
 	OutcomeAck Outcome = iota
 
 	// OutcomeNak negatively acknowledges: the handler failed and the
@@ -319,8 +319,9 @@ type EventQueue interface {
 //
 // The consume loop re-reads these at the start of every collection cycle, so
 // a hot config reload takes effect on the next batch with no
-// re-subscription. Unlike the Python mutable dataclass this is safe to write
-// from another goroutine while a loop is reading it.
+// re-subscription. Mutable and read concurrently is a data race unless it is
+// guarded, so it is: this is safe to write from another goroutine while a loop
+// is reading it.
 type BatchOptions struct {
 	mu            sync.RWMutex
 	lingerSeconds float64

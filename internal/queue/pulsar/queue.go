@@ -32,7 +32,7 @@ type Queue struct {
 
 	// attachments holds one entry per (topic, group) this process
 	// consumes, keyed by the PAIR. Keying by topic alone was a real bug in
-	// the Python engine twice over: a pause hold outlived its attachment
+	// twice over: a pause hold outlived its attachment
 	// so a re-attaching node was silently deaf, and every group on a
 	// shared subject got gated together.
 	mu          sync.Mutex
@@ -110,8 +110,8 @@ func clientOptions(cfg Config) pulsar.ClientOptions {
 //
 // slog has no "raise the level of an existing logger" operation, and the
 // alternative — handing the client the engine's root logger — floods an
-// operator's log with connection lifecycle at INFO. The Python engine solved
-// the same problem by giving the C++ client its own logger pinned to WARNING.
+// operator's log with connection lifecycle at INFO. So the client gets its own
+// logger with a floor pinned at WARNING.
 func atLeast(l *slog.Logger, min slog.Level) *slog.Logger {
 	return slog.New(&floorHandler{inner: l.Handler(), min: min})
 }
@@ -200,7 +200,7 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		return err
 	}
 
-	// Listeners run inline, exactly as the Python engine's do: the event
+	// Listeners run inline, and must: the event
 	// store's writer is one, and it must see the event as part of the
 	// publish rather than racing a consumer. Their failures are logged and
 	// never propagate — telemetry must not be able to fail a publish.

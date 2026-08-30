@@ -21,10 +21,10 @@ import (
 // a seat that is already busy, and on a backend that dispatches inline it
 // would run inside the first turn's own stack.
 //
-// The Python this replaces had exactly that problem and carried a guard for
-// it: its inline dispatch re-entered the handler within one asyncio task, so
-// awaiting the agent there waited on the task doing the awaiting. Every Go
-// backend here forecloses it structurally instead — the pull loops fetch again
+// That is a real failure and it is normally met with a guard: an inline
+// dispatch that re-enters the handler on the same task makes waiting for the
+// agent wait on the task doing the waiting. Every backend here forecloses it
+// structurally instead — the pull loops fetch again
 // only after a handler returns, and the in-process twin defers a nested drain
 // to the loop already running rather than starting a second one — which is why
 // no such guard exists in this codebase.

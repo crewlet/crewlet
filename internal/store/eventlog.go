@@ -369,8 +369,8 @@ func finishRecord(rec *EventRecord, micros int64, tagJSON string) {
 	tags := map[string]string{}
 	// A tags blob that will not decode costs the failure flag and the
 	// related-agent match for that one row; it must not cost the row. This
-	// is the same choice the Python reader makes, and the alternative —
-	// failing the page — hides every event around the malformed one too.
+	// is deliberate: the alternative — failing the page — hides every
+	// event around the malformed one too.
 	if err := json.Unmarshal([]byte(tagJSON), &tags); err != nil {
 		tags = map[string]string{}
 	}

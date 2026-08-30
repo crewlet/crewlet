@@ -122,8 +122,8 @@ type Options struct {
 // New assembles the app.
 //
 // The auth guard is mounted UNCONDITIONALLY. Tier A supplies the posture, never
-// the existence of a check — see the auth package for what the alternative cost
-// the Python this replaces.
+// the existence of a check — see the auth package for what the alternative
+// costs.
 func New(opts Options) *App {
 	now := opts.Now
 	if now == nil {

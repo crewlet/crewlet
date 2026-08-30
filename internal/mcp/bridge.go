@@ -15,10 +15,10 @@ import (
 
 // ErrServerExists is returned by Add for a name the bridge already runs.
 //
-// Refusing rather than replacing is the fix for a leak: the Python bridge
-// indexed the new client over the old one, so a second Add of the same name
-// left the first subprocess running, unreachable and unstoppable, for the life
-// of the engine. Replacing a server is Restart, which stops the incumbent
+// Refusing rather than replacing is the fix for a leak: indexing the new
+// client over the old one leaves a second Add of the same name with the first
+// subprocess still running, unreachable and unstoppable, for the life of the
+// engine. Replacing a server is Restart, which stops the incumbent
 // first and says so in its name.
 var ErrServerExists = errors.New("mcp: server already added")
 

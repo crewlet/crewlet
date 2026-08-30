@@ -29,11 +29,10 @@ var ErrInvalidSpec = errors.New("mcp: invalid server spec")
 // child of a `shared: false` template.
 //
 // It carries the transport rather than leaving it to which method the caller
-// picked, and that is deliberate. The Python bridge had add_server /
-// add_http_server / restart_server / restart_http_server, and the restart pair
-// is where it cost: a live edit to a shared HTTP server's url went through the
-// stdio restart, which relaunched a remote connection as a subprocess with an
-// empty command. With the kind ON the spec there is one Add and one Restart,
+// picked, and that is deliberate. A bridge with add_server / add_http_server /
+// restart_server / restart_http_server pays for it at the restart pair: a live
+// edit to a shared HTTP server's url goes through the stdio restart, which
+// relaunches a remote connection as a subprocess with an empty command. With the kind ON the spec there is one Add and one Restart,
 // and picking the wrong one is not a thing a caller can do.
 type Spec struct {
 	// Name is the instance name: the bare server name for a shared server,
@@ -147,11 +146,10 @@ func (s Spec) Server() string { return ServerName(s.Name) }
 // the same child with the same environment, or the same endpoint with the same
 // headers.
 //
-// It covers BOTH transports' identity in one place. The Python check compared
-// only the stdio fields, so an edit to a shared HTTP server's url or headers
-// (rotating a remote token, say) matched as "unchanged" and the stale
-// connection went on serving with the credential the operator had just
-// revoked.
+// It covers BOTH transports' identity in one place. A check that compares only
+// the stdio fields matches an edit to a shared HTTP server's url or headers
+// (rotating a remote token, say) as "unchanged", and the stale connection goes
+// on serving with the credential the operator has just revoked.
 //
 // It is NOT the whole question a live config diff asks — see SameCatalogue —
 // and it is not the question CREDENTIAL ROTATION asks at all. On that path the
@@ -176,11 +174,11 @@ func (s Spec) SameProcess(other Spec) bool {
 // This is what a live config diff should branch on, not SameProcess. Three of
 // these fields change nothing about the child and everything about the
 // catalogue — the prefix renames every tool, the exclusions remove some, and
-// the annotation overrides decide whether a sub-agent may call one. The Python
-// diff compared only the process fields, so an operator who added
-// tool_annotations to a running server got no effect at all and no way to tell
-// why: the edit activated, the revision advanced, and the guard went on
-// reading what the server had advertised.
+// the annotation overrides decide whether a sub-agent may call one. A diff
+// that compares only the process fields gives an operator who adds
+// tool_annotations to a running server no effect at all and no way to tell
+// why: the edit activates, the revision advances, and the guard goes on
+// reading what the server advertised.
 func (s Spec) SameCatalogue(other Spec) bool {
 	return s.SameProcess(other) &&
 		s.ToolPrefix == other.ToolPrefix &&

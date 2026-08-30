@@ -23,10 +23,10 @@ func TestOriginGrammar(t *testing.T) {
 	}
 }
 
-// TWO REGISTRANTS, not four. "custom" and "extension:<name>" came from a
-// Python engine that could be embedded and could load plugins; this one is a
-// static binary whose only extension point is MCP, out of process. Keeping
-// them would have left the dashboard two groups nothing could ever fill.
+// TWO REGISTRANTS, not four. "custom" and "extension:<name>" belong to an
+// engine that can be embedded and can load plugins; this one is a static
+// binary whose only extension point is MCP, out of process. Carrying them
+// would leave the dashboard two groups nothing could ever fill.
 func TestTheGrammarNamesOnlyWhatCanRegister(t *testing.T) {
 	t.Parallel()
 	for _, gone := range []string{"custom", "extension:"} {

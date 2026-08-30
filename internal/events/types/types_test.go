@@ -247,7 +247,7 @@ func TestPayloadTagsAreDistinctAndSnakeCase(t *testing.T) {
 					t.Errorf("field %q collides with an envelope key and would be dropped", key)
 				}
 				if !snakeCase.MatchString(key) {
-					t.Errorf("field %q is not snake_case; Python spells it that way", key)
+					t.Errorf("field %q is not snake_case, which every wire field here is", key)
 				}
 			}
 		})

@@ -221,7 +221,7 @@ func TestHTTPRequestBodyIsNotLogged(t *testing.T) {
 	// A JSON-RPC request body is tool ARGUMENTS an agent composed, which can
 	// carry a credential it was handed to pass along. There is no redaction
 	// pass on this side of the engine, and a log line is a permanent place to
-	// put a secret. The Python client logged it; this deliberately does not.
+	// put a secret. This deliberately does not log it.
 	srv, h := newHTTPMCPServer(t, toolsJSON([3]string{"leaky", "d", ""}))
 	h.mu.Lock()
 	h.fail, h.failBody = http.StatusInternalServerError, "boom"

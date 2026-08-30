@@ -37,8 +37,7 @@ import (
 // It owns exactly three things — the epoch, the backends, and the node — and
 // the wiring between them. Everything else it delegates: the guard order is
 // the inbox package's, the turn's rules are the turn package's, the seat math
-// is the placement package's. That is the whole reason this file is short and
-// the Python it replaces was seven and a half thousand lines.
+// is the placement package's. That is the whole reason this file is short.
 type Engine struct {
 	// epoch is the company this engine is running, replaced whole by an
 	// apply and never mutated. See epoch.go.

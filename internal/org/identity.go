@@ -31,10 +31,9 @@ import (
 // counterparty profiles. The seat keeps working; it has simply lost its
 // memory. Treat as load-bearing.
 //
-// The value is carried over from the Python engine. The rewrite is a clean
-// break with no data migration, so nothing requires this specific
-// namespace — but keeping it costs nothing and leaves the door open for
-// anyone who does want to carry a company's memory across.
+// The value is arbitrary and must never change: every per-agent row in every
+// deployed store is keyed on ids derived from it, so a new namespace orphans
+// all of them at once.
 var agentIDNamespace = uuid.MustParse("c1ea9c6e-3f5d-4c9c-9e9f-1d2c3b4a5e6f")
 
 var nonSlugRunes = regexp.MustCompile(`[^a-z0-9]+`)

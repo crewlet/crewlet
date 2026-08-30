@@ -9,8 +9,8 @@
 // MINT credentials into them, and the org model uses them to tell a contact
 // identity from a literal.
 //
-// In the Python engine each carried its own regex, and they disagreed. That
-// is never a style question here; it is a correctness or security bug. Two
+// Written once per consumer, each carries its own regex and they disagree.
+// That is never a style question; it is a correctness or security bug. Two
 // real ones:
 //
 //   - `\$\{[^}]+\}` (redaction) matched braces the resolver ignores, so a
@@ -87,8 +87,8 @@ func Names(value string) []string {
 // Expand substitutes every reference using lookup.
 //
 // A name lookup reports its value and whether it was found. An UNRESOLVED
-// reference expands to the empty string — matching shell behaviour and the
-// Python engine — and is reported in the returned unresolved list so callers
+// reference expands to the empty string — matching shell behaviour — and is
+// reported in the returned unresolved list so callers
 // can warn by NAME. That distinction matters: a value like
 // "Bearer ${TOKEN}" with TOKEN unset resolves to "Bearer ", which is
 // truthy-but-broken, and a caller that only checked for emptiness would pass

@@ -124,7 +124,7 @@ func aliceInbox() (string, string) {
 // subscription-existence invariant rests on. A subscription created at the
 // latest message EXISTS and still discards everything published before its
 // first consumer attached — which is the precise failure EnsureSubscription
-// is for, and it was measured on the first real run of the Python harness.
+// is for, and it was measured rather than inferred.
 func TestEnsureSubscriptionAsksForEarliest(t *testing.T) {
 	t.Parallel()
 	srv := newAdminServer(t)

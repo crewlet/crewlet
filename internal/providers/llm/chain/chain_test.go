@@ -205,9 +205,9 @@ func TestTheCompletionNamesTheMemberThatActuallyServed(t *testing.T) {
 	}
 }
 
-// An exhausted credential pool is a retryable failure like any other. Python
-// needed a dedicated exception and a dedicated catch here; the classification
-// carried on the error is enough.
+// An exhausted credential pool is a retryable failure like any other. It needs
+// no dedicated error type and no dedicated catch: the classification carried on
+// the error is enough.
 func TestAnExhaustedPoolFallsThroughWithNoSpecialCase(t *testing.T) {
 	t.Parallel()
 	exhausted := &llm.Error{
@@ -299,9 +299,9 @@ func TestEveryMemberFailingReportsAnExhaustedChain(t *testing.T) {
 
 // --- the fallback hook -------------------------------------------------
 
-// Python passed the literal string "next" at both call sites, so every
-// ProviderFallback event ever published recorded to_provider_key="next": the
-// one field that says which provider took over, naming no provider at all.
+// Passing a literal "next" at both call sites makes every ProviderFallback
+// event record to_provider_key="next": the one field that says which provider
+// took over, naming no provider at all.
 func TestFallbackHookNamesTheProviderThatTookOver(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex

@@ -4,7 +4,7 @@
 // THESE ROUTES ARE EXEMPT FROM THE API'S BEARER TOKEN, which is why every one
 // of them verifies a provider credential BEFORE the delivery is recorded,
 // broadcast or republished. That ordering is the whole security property, and
-// the Python this replaces lost it twice: Slack skipped verification entirely
+// an earlier edge lost it twice: Slack skipped verification entirely
 // when no secret was configured — so anyone who could reach the port could
 // publish a raw_webhook addressed at any seat, and the engine woke that agent
 // and drove a turn — while Jira and Confluence verified only inside their
@@ -71,8 +71,8 @@ const (
 // Only [Receiver.authenticate] mints one and [Receiver.accept] requires one, so
 // a handler cannot reach the event store or the queue without having checked a
 // provider credential first. The compiler holds an ordering that was previously
-// a convention, and conventions are what the two Python regressions in this
-// package's doc comment broke.
+// a convention, and conventions are what the two regressions in this package's
+// doc comment broke.
 type verified struct {
 	// source is the ROUTE that authenticated, which is not always the
 	// integration the payload belongs to: Forge relays Jira and Confluence

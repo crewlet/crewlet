@@ -237,9 +237,9 @@ func TestHandleFromInboxIsTheInverseOfAgentInbox(t *testing.T) {
 //
 // It is pinned rather than fixed because the fix is a wire-format change: the
 // group name is the durable subscription name a running fleet is already
-// attached to, and the Python engine mints the identical string. A backend
-// that ever keys a subscription on the group ALONE would collapse two seats
-// onto one mailbox, which is the failure this note exists to prevent.
+// attached to. A backend that ever keys a subscription on the group ALONE
+// would collapse two seats onto one mailbox, which is the failure this note
+// exists to prevent.
 func TestGroupNamesAreNotUniqueOnTheirOwn(t *testing.T) {
 	t.Parallel()
 

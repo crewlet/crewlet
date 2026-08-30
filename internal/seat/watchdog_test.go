@@ -231,8 +231,8 @@ func TestAStoppedHostStandsTheWatchdogDown(t *testing.T) {
 	//
 	// Getting this wrong is not a subtle bug: every engine that is
 	// abandoned rather than stopped arms a suicide timer that fires one
-	// lease TTL later on a perfectly healthy process. In the Python engine
-	// it killed this repo's own test suite at 63%, exit code 75.
+	// lease TTL later on a perfectly healthy process. It once killed this
+	// repo's own test suite at 63%, exit code 75.
 	f := newFleet(t)
 	clock := newClock()
 	fired, onStall := caught()

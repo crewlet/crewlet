@@ -5,9 +5,8 @@ package node_test
 // ONE coordination store, and asserts the five properties seat ownership
 // exists to provide.
 //
-// Every property here failed at least once in the Python engine's history,
-// and each failure was invisible from a single node — which is why this suite
-// runs two.
+// Every property here has failed at least once, and each failure was invisible
+// from a single node — which is why this suite runs two.
 
 import (
 	"context"

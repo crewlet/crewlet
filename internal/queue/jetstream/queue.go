@@ -135,10 +135,10 @@ type Queue struct {
 	js         jetstream.JetStream
 
 	// attachments holds one entry per (topic, group) this process
-	// consumes, keyed by the PAIR. Keying by topic alone was a real bug
-	// in the Python engine twice over: a pause hold outlived its
-	// attachment so a re-attaching node was silently deaf, and every
-	// group on a shared subject got gated together.
+	// consumes, keyed by the PAIR. Keying by topic alone breaks twice
+	// over: a pause hold outlives its attachment so a re-attaching node
+	// is silently deaf, and every group on a shared subject gets gated
+	// together. Both have happened.
 	mu          sync.Mutex
 	attachments map[attachKey][]*attachment
 	holds       map[attachKey]map[string]struct{}
@@ -430,8 +430,8 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		return fmt.Errorf("publish %s: %w", topic, err)
 	}
 
-	// Listeners run inline, exactly as the Python engine's do: the event
-	// store's writer is one, and it must see the event as part of the
+	// Listeners run inline, and must: the event store's writer is one of
+	// them, and it has to see the event as part of the
 	// publish rather than racing a consumer. Their failures are logged and
 	// never propagate — telemetry must not be able to fail a publish.
 	for _, l := range listeners {

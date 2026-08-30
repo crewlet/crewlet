@@ -28,10 +28,10 @@ func (e *Engine) prefetcher(company *Company) *prefetch.Fetcher {
 	src := prefetch.Sources{
 		Knowledge: e.Knowledge(),
 		Models:    company.Models,
-		// SummarizeEpisodes gates ONLY the episode summary. The Python
-		// engine wired this switch by passing a nil provider pool, which
-		// silently disabled the memory and knowledge filters too — an
-		// operator turning off a summary got a company with no memory.
+		// SummarizeEpisodes gates ONLY the episode summary. Wiring this
+		// switch by passing a nil provider pool silently disables the
+		// memory and knowledge filters too — an operator turning off a
+		// summary gets a company with no memory.
 		SummarizeEpisodes: company.Config.Learning.Reflect.SummarizeEpisodes.Or(true),
 	}
 	if db := e.backends.Store; db != nil {

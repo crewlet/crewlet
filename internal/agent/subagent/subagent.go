@@ -25,9 +25,9 @@
 //
 //   - A CHILD'S FAILURE IS A RESULT, NOT AN ERROR. Timeout, budget exhaustion
 //     and a panic all come back as a Result with Failed set and the partial
-//     transcript intact. In the Python engine the timeout and budget paths
-//     returned early, so the phase-failure guard never saw them and the spawn
-//     published NOTHING: the parent's Execute event showed a spawn_subagent
+//     transcript intact. The trap is a timeout or budget path that returns
+//     early: the phase-failure guard never sees it and the spawn publishes
+//     NOTHING — the parent's Execute event shows a spawn_subagent
 //     call whose sub-agent left no phase record, no partial transcript and no
 //     reason it stopped. Here every path produces exactly one Result carrying
 //     all three, so the caller's phase event cannot be missing.
@@ -106,20 +106,19 @@ const (
 // ScopeSubagent is the budget scope a refused sub-agent charge names.
 //
 // It exists so the refusal cannot be read as the PARENT's budget running out.
-// Python needed a bespoke exception for this, because its spend outcome was a
-// bare boolean and the loop would otherwise publish a budget_exhausted event
-// pointing at the seat's own cap — which sends an operator to raise a limit
-// that was never reached. [toolloop.SpendOutcome] carries the scope, so here
-// the honest answer is simply a different scope name.
+// A bare boolean spend outcome cannot express it, and the loop then publishes
+// a budget_exhausted event pointing at the seat's own cap — which sends an
+// operator to raise a limit that was never reached.
+// [toolloop.SpendOutcome] carries the scope, so the honest answer is simply a
+// different scope name.
 const ScopeSubagent = "subagent"
 
 // errorLimit caps the failure text carried back to the model, in runes.
 //
 // A panic's message can arrive with a stack behind it and a provider error can
 // carry a whole response body; either would blow past the tool result the
-// planner reads. 500 is Python's number and holds two or three sentences —
-// enough to say what stopped, never enough to bury the sibling results it is
-// rendered next to.
+// planner reads. 500 runes holds two or three sentences — enough to say what
+// stopped, never enough to bury the sibling results it is rendered next to.
 const errorLimit = 500
 
 // controlDenylist is the first-party engine-control surface a sub-agent never
@@ -534,9 +533,8 @@ func Spawn(ctx context.Context, cfg Config, req Request) (Result, error) {
 // BatchRefusedError is a batch that never started because its budget slice
 // could not give every child a workable share.
 //
-// One error for the batch rather than one synthetic failure per child —
-// which is what Python returned — because the refusal is a property of the
-// BATCH. N copies of one sentence reads to a planner as N independent
+// One error for the batch rather than one synthetic failure per child, because
+// the refusal is a property of the BATCH. N copies of one sentence reads to a planner as N independent
 // failures, and the obvious reaction to that is to retry them individually,
 // which is exactly the thing the floor exists to prevent.
 type BatchRefusedError struct {
@@ -639,10 +637,10 @@ func SpawnBatch(ctx context.Context, cfg Config, req BatchRequest) ([]Result, er
 	// a data race on the result slots and a goroutine leak the caller has
 	// no handle on. The deadline is enforced by CANCELLING their contexts,
 	// which is what actually stops the work; waiting only costs the time a
-	// provider takes to notice. Python could abandon its gather because a
-	// cancelled coroutine stops at its next await — a goroutine has no such
-	// point, and its writes would land in a slice the caller already
-	// returned.
+	// provider takes to notice. Abandoning the wait is only safe in a
+	// runtime where a cancelled task stops at its next suspension point. A
+	// goroutine has no such point, and its writes would land in a slice the
+	// caller already returned.
 	wg.Wait()
 
 	publishBatched(ctx, cfg, results)
@@ -1025,11 +1023,11 @@ func union(a, b []string) []string {
 // Tool is `spawn_subagent`, bound to ONE parent turn.
 //
 // Bound rather than registered globally: everything a spawn needs — the
-// parent's surface, its remaining budget, its trace — is per-turn, and the
-// Python engine reached it by hanging a dictionary off the tool-call context
-// and validating the shape at every call. A closure over the turn's Config
-// makes that whole class of "engine config missing or malformed" failure
-// unrepresentable.
+// parent's surface, its remaining budget, its trace — is per-turn. The
+// alternative is a global registration that reaches those values by hanging a
+// map off the tool-call context and validating its shape at every call. A
+// closure over the turn's Config makes that whole class of "engine config
+// missing or malformed" failure unrepresentable.
 type Tool struct{ cfg Config }
 
 var _ tools.Callable = (*Tool)(nil)

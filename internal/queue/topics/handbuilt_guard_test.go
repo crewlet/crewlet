@@ -21,9 +21,9 @@ import (
 // This is the reason the package exists, restated as a check. A producer and
 // a consumer that disagree about a name raise nothing: the publish succeeds
 // into a subject nobody reads, the seat never wakes, and the only symptom is
-// a company that looks idle. Nine call sites in the Python engine formatted
-// crewlet.agent.{handle}.inbox by hand — nine chances for a grammar change to
-// reach some of them and not the others.
+// a company that looks idle. Formatted by hand, crewlet.agent.{handle}.inbox
+// reaches nine call sites — nine chances for a grammar change to reach some of
+// them and not the others.
 //
 // # What it walks
 //

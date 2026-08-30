@@ -9,11 +9,10 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule"
 )
 
-// The cases below are the Python suite (tests/test_schedule/test_cron.py)
-// ported case for case, plus the ones Go's own shape makes reachable. Where a
-// Python case pinned an evaluator behaviour the two DST directions depend on,
-// the doc comment travels with it: those are the reason the evaluator iterates
-// UTC and matches the LOCAL projection rather than the other way round.
+// The cases below cover the grammar and the evaluator. Where a case pins an
+// evaluator behaviour the two DST directions depend on, the doc comment
+// travels with it: those are the reason the evaluator iterates UTC and matches
+// the LOCAL projection rather than the other way round.
 
 func mustParse(t *testing.T, expr string) schedule.Expr {
 	t.Helper()
@@ -53,11 +52,10 @@ func TestParseAcceptsTheGrammar(t *testing.T) {
 		"30 9 * * 5",
 		"0 0 13 * 5",
 		"0 0 * jan-mar *",
-		// Go-side additions: the forms the Python parser accepts but no
-		// Python case ever sent, so nothing pinned them.
+		// The forms the grammar accepts that are easy to leave unpinned:
 		"0-30/10 * * * *",   // range with a step
 		"5/15 * * * *",      // a/step, meaning a..max by step
-		"0 0 * * SUN",       // a day NAME, where the Python only sent MON
+		"0 0 * * SUN",       // a day NAME
 		"0 0 * DEC *",       // a month name on its own
 		"  0   9  *  *  * ", // arbitrary inter-field whitespace
 		"0 9 * * 7",         // 7 is Sunday
@@ -148,8 +146,8 @@ func TestStepAndList(t *testing.T) {
 
 func TestRangeWithAStepStopsAtTheRangeEnd(t *testing.T) {
 	t.Parallel()
-	// 0-30/10 is 0,10,20,30 — NOT every tenth minute of the hour. The
-	// Python parser has this behaviour and no Python case sent the form.
+	// 0-30/10 is 0,10,20,30 — NOT every tenth minute of the hour. The step
+	// applies within the range, and the form is easy to leave unpinned.
 	e := mustParse(t, "0-30/10 * * * *")
 	for _, mi := range []int{0, 10, 20, 30} {
 		requireMatch(t, e, at(2026, time.June, 8, 12, mi), true)
@@ -187,7 +185,7 @@ func TestDayNamesAndSundayAliases(t *testing.T) {
 		t.Fatalf("7 and 0 parsed differently: %+v vs %+v", got, want)
 	}
 	requireMatch(t, mustParse(t, "0 9 * * 0"), at(2026, time.June, 14, 9, 0), true) // a Sunday
-	// Case folding, which the Python does with .lower() and no case sends.
+	// Case folding, which nothing else in this file sends.
 	if got, want := mustParse(t, "0 9 * * Sun"), mustParse(t, "0 9 * * SUN"); got != want {
 		t.Fatalf("day names are case-sensitive: %+v vs %+v", got, want)
 	}
@@ -198,9 +196,9 @@ func TestDayNamesAndSundayAliases(t *testing.T) {
 
 func TestTheMonthFieldRestricts(t *testing.T) {
 	t.Parallel()
-	// A gap found by mutation: the Python suite PARSED "0 0 * jan-mar *" and
-	// never handed a month-restricted expression to the matcher, so deleting
-	// the month check was only caught incidentally, by a leap-year case
+	// A gap found by mutation: parsing "0 0 * jan-mar *" without ever
+	// handing a month-restricted expression to the matcher means deleting
+	// the month check is only caught incidentally, by a leap-year case
 	// several files away.
 	e := mustParse(t, "0 0 * jan-mar *")
 	requireMatch(t, e, at(2026, time.January, 15, 0, 0), true)
@@ -225,8 +223,8 @@ func TestOnlyOneDayFieldRestrictedDecidesAlone(t *testing.T) {
 	requireMatch(t, dom, at(2026, time.June, 1, 0, 0), true)
 	requireMatch(t, dom, at(2026, time.June, 2, 0, 0), false)
 
-	// The other half of the same rule, which the Python suite never sent:
-	// dow restricted alone must NOT be widened by the unrestricted dom.
+	// The other half of the same rule, and the easy half to miss: dow
+	// restricted alone must NOT be widened by the unrestricted dom.
 	dow := mustParse(t, "0 0 * * 1")
 	requireMatch(t, dow, at(2026, time.June, 8, 0, 0), true)  // Monday
 	requireMatch(t, dow, at(2026, time.June, 9, 0, 0), false) // Tuesday
@@ -385,9 +383,9 @@ func TestTheHorizonReachesTheRarestLegalFire(t *testing.T) {
 	// across a century that is not a leap year: 2096-02-29 to 2104-02-29,
 	// because 2100 is divisible by 100 and not by 400.
 	//
-	// The Python evaluator scanned 400 days and so reported "never" for a
-	// quadrennial schedule in three years out of four — and for this one in
-	// seven years out of eight. The horizon here is sized to the grammar
+	// A 400-day scan reports "never" for a quadrennial schedule in three
+	// years out of four — and for this one in seven years out of eight.
+	// The horizon here is sized to the grammar
 	// rather than to a round number; this case is what holds it there.
 	e := mustParse(t, "0 0 29 2 *")
 	got, ok := e.Next(at(2096, time.March, 1, 0, 0), time.UTC)

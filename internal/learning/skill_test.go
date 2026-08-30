@@ -476,8 +476,8 @@ func TestTheArchiveAndTheLiveRowCannotDisagree(t *testing.T) {
 	}
 
 	// Direction two: the archive lands and the body write fails. The version
-	// row must be gone with it — this is the direction the Python store could
-	// not hold, since it wrote the two outside a transaction.
+	// row must be gone with it — the direction a store cannot hold if it
+	// writes the two outside a transaction.
 	fault.failFrom(sqlBodyUpdate, 1, boom)
 	if _, err := s.Update(ctx, sk.ID, rev, learning.Refinement{
 		Kind: learning.RefineObserved, At: base,
@@ -1055,9 +1055,9 @@ func TestAStoreFailureIsNotAGuardMiss(t *testing.T) {
 		t.Fatal("a failed transition reported success")
 	}
 	if !errors.Is(err, boom) {
-		t.Fatalf("err = %v, want the injected failure — the Python store "+
-			"returned a bare False here, so an outage rendered as the race "+
-			"guard doing its job", err)
+		t.Fatalf("err = %v, want the injected failure — returning a bare "+
+			"false here renders an outage as the race guard doing its "+
+			"job", err)
 	}
 	// SetPinned tells the two apart the same way — it writes a different
 	// statement, so it is armed separately rather than assumed covered.

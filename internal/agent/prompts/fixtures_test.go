@@ -7,10 +7,10 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// The reference company these tests build prompts for, carried from the
-// Python suite's fixture so the assertions transfer one-for-one: a two-seat
-// engineering team with a lead, a mission and vision, two policies, and a
-// seat wired to two MCP servers.
+// The reference company these tests build prompts for: a two-seat engineering
+// team with a lead, a mission and vision, two policies, and a seat wired to two
+// MCP servers. Every prompt assertion in this package is written against it, so
+// changing the fixture moves every expected string at once.
 func acme() *org.Organization {
 	o := &org.Organization{
 		Name:     "Acme",

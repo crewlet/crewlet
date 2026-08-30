@@ -10,11 +10,10 @@ import (
 
 func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 	t.Parallel()
-	// The Python this replaces took no lock and said so, on the grounds
-	// that a single-threaded event loop made every mutation atomic. That
-	// reasoning does not survive the port: here the stream feeds the
-	// projection from its own goroutine while HTTP handlers and WebSocket
-	// sends read it. Under -race this fails immediately without the lock;
+	// A projection like this is often written lock-free, on the grounds
+	// that a single-threaded scheduler makes every mutation atomic. That
+	// reasoning does not hold here: the stream feeds the projection from
+	// its own goroutine while HTTP handlers and WebSocket sends read it. Under -race this fails immediately without the lock;
 	// without -race it fails as a torn read on a loaded box, which is
 	// worse because it is rare.
 	s := livestate.New()

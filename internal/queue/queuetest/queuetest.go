@@ -14,9 +14,8 @@
 // returns would pass on the twin and fail on a real broker, which is precisely
 // the divergence this suite exists to prevent.
 //
-// Subtests are named after the Python suite they are ported from
-// (tests/test_queue/test_protocol.py), so a failure here names the spec that
-// describes it.
+// Subtests are named after the contract clause they certify, so a failure
+// here names the rule it broke rather than the call it made.
 //
 // # If you are bringing up a new backend and a case fails, suspect the case
 //
@@ -186,8 +185,9 @@ type Capabilities struct {
 	//
 	// It asks for TOTAL ATTEMPTS — an observable — rather than for a
 	// "budget", because a budget is not one number and the contract never
-	// says which one it is. Pulsar and the Python twin count redeliveries
-	// AFTER the first delivery (10 means 11 attempts); NATS MaxDeliver
+	// says which one it is. Pulsar and the in-process twin count
+	// redeliveries AFTER the first delivery (10 means 11 attempts); NATS
+	// MaxDeliver
 	// counts deliveries INCLUDING the first (25 means 25). Both numbers
 	// live in this repo, in different documents, meaning different things.
 	//

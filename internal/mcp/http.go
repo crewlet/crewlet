@@ -142,9 +142,8 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 	// remote server says WHY (a scope missing, a token expired, a workspace
 	// suspended). Read it here, log it, and hand the SDK an identical one.
 	//
-	// The REQUEST body is deliberately not logged, which differs from the
-	// Python client. It is the JSON-RPC call, and its params are tool
-	// arguments an agent composed — which can carry a credential it was given
+	// The REQUEST body is deliberately not logged. It is the JSON-RPC
+	// call, and its params are tool arguments an agent composed — which can carry a credential it was given
 	// to pass along. There is no redaction pass on this side of the engine
 	// yet, and a log line is a permanent place to put a secret.
 	//

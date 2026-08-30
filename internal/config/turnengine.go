@@ -12,9 +12,9 @@ package config
 // accessor below applies the default, so a config that says nothing and a
 // config that says `turn_engine:` behave identically.
 //
-// The Python engine validated none of this. A max_iterations of 0 parsed
-// cleanly and failed every turn in the company on the first guard check,
-// with nothing in the file looking wrong — so the bounds below are new.
+// Unvalidated, a max_iterations of 0 parses cleanly and fails every turn in
+// the company on the first guard check, with nothing in the file looking
+// wrong. Hence the bounds below.
 type TurnEngine struct {
 	// MaxIterations caps Plan-Execute-Review rounds per turn. Review
 	// returning self_iterate increments it; on breach the turn is

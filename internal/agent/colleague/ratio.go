@@ -5,9 +5,10 @@ import (
 	"strings"
 )
 
-// ratio is Python's difflib.SequenceMatcher.ratio, ported.
+// ratio implements difflib's SequenceMatcher.ratio — the gestalt
+// pattern-matching similarity measure.
 //
-// PORTED RATHER THAN SUBSTITUTED, and the reason is the cutoff. FuzzyCutoff is
+// IMPLEMENTED RATHER THAN SUBSTITUTED, and the reason is the cutoff. FuzzyCutoff is
 // 0.6 on THIS measure — a number that was tuned against real role names by
 // watching which near-misses it let through. Swapping in Levenshtein or
 // Jaro-Winkler, both of which Go has libraries for, would keep the constant
@@ -33,10 +34,11 @@ func ratio(a, b string) float64 {
 	if total == 0 {
 		// TWO EMPTY STRINGS ARE IDENTICAL, and difflib says 1.0 rather
 		// than dividing by zero. Unreachable from Resolve — tier 4 needs
-		// a query of at least MinFuzzyQuery runes — but a ported
-		// primitive that disagrees with its original anywhere is a
+		// a query of at least MinFuzzyQuery runes — but a primitive that
+		// disagrees with the measure it implements anywhere is a
 		// disagreement waiting for a caller, and this one was found by
-		// differential-testing 600 random pairs against Python.
+		// differential-testing 600 random pairs against a reference
+		// implementation.
 		return 1
 	}
 	return 2 * float64(matched(ar, br)) / float64(total)

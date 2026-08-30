@@ -235,9 +235,9 @@ func ParseFormatName(name string) (Format, bool) {
 }
 
 // Get returns a logger bound to component. The name is a dotted subsystem
-// path — "queue.memory", "seat.host", "agent.turn" — matching the
-// get_logger() names the Python engine uses, so operator runbooks and log
-// queries keep working across the rewrite.
+// path — "queue.memory", "seat.host", "agent.turn". The vocabulary is stable
+// on purpose: operator runbooks and log queries are written against these
+// names, so renaming one breaks a query nothing in this repo can see.
 //
 // # It resolves the root on every record, not once here
 //

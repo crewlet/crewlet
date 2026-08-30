@@ -26,8 +26,8 @@ const maintenanceDutyTTL = 3 * maintenance.Interval
 //
 // EVERY short-horizon table in this process's stores, in one worker. They
 // were all designed to be swept — each migration says so and each ships the
-// index for it — and in the Python engine none of them ever were, because
-// `purge` existed on every store and nothing called it. Wiring them here,
+// index for it — and a `purge` that exists on every store with nothing calling
+// it sweeps none of them. Wiring them here,
 // rather than each subsystem arming its own loop, is what makes that
 // impossible to repeat quietly: a store with a Purge and no entry in this
 // function is visible in one place.

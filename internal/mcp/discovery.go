@@ -150,9 +150,9 @@ func ListServerTools(merged []Entry, available map[string]struct{}) *MetaTool {
 //
 // `surface` is a SUPPLIER rather than the surface itself: the surface is built
 // with its meta-tools already in it, so neither can be constructed with the
-// other in hand. Python solved that with a one-element list the closure read
-// through; a function that returns the current surface is the same trick
-// without the container, and it also keeps working if the surface is replaced
+// other in hand. A one-element container the closure reads through solves it;
+// a function that returns the current surface is the same trick without the
+// container, and it also keeps working if the surface is replaced
 // mid-phase rather than mutated.
 //
 // `merged` is the role's UNFILTERED catalogue, which is what lets the failure

@@ -13,9 +13,9 @@ package mcp
 // them, so producer and consumer both derive them here rather than typing the
 // literal.
 //
-// TWO REGISTRANTS, not four. The Python this replaces also had "custom" (a
-// tool handed in by an application embedding the engine) and "extension:<name>"
-// (a plugin's), and neither can exist here: nothing under internal/ is
+// TWO REGISTRANTS, not four. The obvious other two are "custom" (a tool handed
+// in by an application embedding the engine) and "extension:<name>" (a
+// plugin's), and neither can exist here: nothing under internal/ is
 // importable from outside the module, and the engine loads no plugins — it is
 // one static binary whose extension point is MCP, out of process. Carrying the
 // other two forward would have given the dashboard two groups nothing could

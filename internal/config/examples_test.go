@@ -17,8 +17,7 @@ const repoRoot = "../.."
 
 // The shipped examples and the docs are a promise: someone copies them and
 // runs them. Nothing else stops them drifting away from what the loader
-// accepts, so this suite is what holds them to the models — the Python
-// engine keeps the same test for the same reason.
+// accepts, so this suite is what holds them to the models.
 func TestShippedCompanyExampleLoads(t *testing.T) {
 	t.Parallel()
 	data, err := os.ReadFile(filepath.Join(repoRoot, "examples", "nimbus.company.yaml"))
@@ -139,11 +138,7 @@ func TestQuickstartExportsEveryVariableItReferences(t *testing.T) {
 
 // THE SHIPPED EXAMPLE LOADS, which is the whole point of shipping one.
 //
-// It was the Python-era shape for the length of the rewrite — a `providers:`
-// block naming a Pulsar broker and a PostgreSQL DSN, which this engine runs
-// on neither — and the test here pinned the refusal so the break was a
-// decision with a name on it. The file is now the Go shape, so what is
-// pinned is that it stays loadable: it is what the quickstart, both
+// What is pinned is that it stays loadable: it is what the quickstart, both
 // bootstrap scripts and every integration walkthrough tell a founder to run,
 // and nothing else notices when it stops working.
 func TestBootstrapExampleLoads(t *testing.T) {

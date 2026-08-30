@@ -28,9 +28,9 @@ var readCases = []testCase{
 		// A Lease handed out by the store was live when it was read —
 		// that is what lets a caller act on one without re-checking a
 		// deadline against its own wall clock. So a lapsed record reads
-		// as nil, exactly as an unclaimed one does. (The Python store's
-		// get() returned lapsed rows too; nothing in the engine read
-		// them, and the narrower answer is the one callers can trust.)
+		// as nil, exactly as an unclaimed one does. (A read that returned
+		// lapsed rows too would have no caller, and the narrower answer
+		// is the one callers can trust.)
 		lease := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: ShortTTL})
 		h.lapse()
 		h.mustBeUnheld("seat:ceo")

@@ -10,10 +10,10 @@
 // documentation: the epoch that must not reset on release, the release that
 // must not clear its successor's lease, the renew that must not report loss
 // because the store was unreachable for two seconds. The last one is not
-// hypothetical — in the Python engine an unreachable store answered exactly
-// as a peer holding the resource does, and a blip had a node logging "another
-// process holds this node id's presence lease" at an operator while it
-// quietly stopped refreshing its own presence.
+// hypothetical: an unreachable store that answers exactly as a peer holding
+// the resource does turns a blip into a node logging "another process holds
+// this node id's presence lease" at an operator while it quietly stops
+// refreshing its own presence.
 //
 // # Bringing up a new backend: if a case fails, suspect the case
 //
@@ -27,8 +27,8 @@
 //     honestly cannot say whether a peer won or a record lapsed underneath it.
 //     Unknown is the contract's third answer, available at any moment; the
 //     suite was demanding the twin's single-mutex behaviour from everyone.
-//   - It read an omitted Protocol as the OLDEST version, ported from a Python
-//     keyword default of 1. Go's struct zero inverts that risk, and the
+//   - It read an omitted Protocol as the OLDEST version, which is only safe
+//     where omission is a named default rather than a struct zero. The
 //     contract now says an omitted protocol claims at THIS build.
 //   - It asserted a gate-refused claim leaves the record pristine. adr-201 §3
 //     permits a KV to touch it — check → claim → re-check → release means the

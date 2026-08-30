@@ -4,9 +4,9 @@
 // both the REST route and the WebSocket query frame call it. That is not tidy
 // packaging — it is the whole point. Two surfaces answering one question from
 // two implementations is how they end up disagreeing with nobody noticing,
-// which the Python this replaces had happen repeatedly: a filter honoured on
-// one path and ignored on the other, a limit clamped differently, a field
-// present over HTTP and missing over the socket.
+// which happens repeatedly once they diverge: a filter honoured on one path
+// and ignored on the other, a limit clamped differently, a field present over
+// HTTP and missing over the socket.
 package queries
 
 import (

@@ -2,7 +2,7 @@
 // the vocabulary a turn speaks to one.
 //
 // It is deliberately small and deliberately dumb about failure. Two things it
-// does NOT do, each because the Python engine learned it the expensive way:
+// does NOT do, each learned the expensive way:
 //
 //   - It does not retry. Every backend sets its SDK's retry count to zero,
 //     because retrying inside a provider hides the one signal the layers above
@@ -108,8 +108,8 @@ type Completion struct {
 func (c Completion) TotalTokens() int { return c.InputTokens + c.OutputTokens }
 
 // Request is one call's inputs. A struct rather than a parameter list because
-// it grows: every provider feature added to the Python signature over time
-// became another positional argument at forty call sites.
+// it grows, and every provider feature added over time would otherwise become
+// another positional argument at forty call sites.
 //
 // Temperature and MaxTokens spell "unset" DIFFERENTLY, on purpose. Making them
 // symmetrical would be the worse contract, so the reason is at each field.

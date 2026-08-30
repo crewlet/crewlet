@@ -59,9 +59,9 @@ func (s *streamSub) close() {
 // wildcard is a fleet-wide feed rather than an estate-wide one.
 //
 // The subscription is NON-DURABLE and uniquely named, so it disappears with
-// its consumer. The Python engine used a durable one and called unsubscribe()
-// on close, which fails on a Shared subscription with more than one consumer
-// and leaves an orphan pinning events on disk when a browser tab dies
+// its consumer. A durable one unsubscribed on close is the obvious
+// alternative, and it fails on a Shared subscription with more than one
+// consumer — leaving an orphan pinning events on disk when a browser tab dies
 // uncleanly.
 func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.StreamHandler) (queue.Unsubscribe, error) {
 	if h == nil {

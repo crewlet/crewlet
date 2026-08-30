@@ -9,8 +9,8 @@ import (
 
 func TestElideCutsRunesNotBytes(t *testing.T) {
 	t.Parallel()
-	// The Go-specific hazard the Python this replaces could not have. A
-	// byte slice at limit 4 lands inside the second rune of "日本語テスト"
+	// The hazard a character-wise language does not have. A byte slice at
+	// limit 4 lands inside the second rune of "日本語テスト"
 	// and produces invalid UTF-8, which a JSON encoder then replaces with
 	// U+FFFD — so a truncated argument reaches the model as mojibake rather
 	// than as a short version of itself.

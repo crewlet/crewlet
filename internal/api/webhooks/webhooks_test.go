@@ -276,7 +276,7 @@ func TestAnUnsignedDeliveryReachesNothing(t *testing.T) {
 	// the API's bearer token, so an unverified POST that got as far as the
 	// event store would pollute the audit log and inject content into every
 	// connected dashboard — without ever waking an agent, which is what
-	// made the Python version of this hole invisible.
+	// made this hole invisible when it was open.
 	for _, route := range []struct{ path, header string }{
 		{"/webhooks/github", "X-Hub-Signature-256"},
 		{"/webhooks/gitlab", "webhook-signature"},
@@ -352,9 +352,8 @@ func TestARouteWithNoSecretHoldsTheDelivery(t *testing.T) {
 
 func TestAnEmptySlackMapIsCannotVerifyNotNothingToVerify(t *testing.T) {
 	t.Parallel()
-	// The exact hole this replaces: with no Slack secret configured the
-	// Python route skipped verification entirely and answered 200 to an
-	// unsigned POST. Anyone who could reach the port could publish a
+	// The exact hole this closes: with no Slack secret configured, a route
+	// that skips verification entirely answers 200 to an unsigned POST. Anyone who could reach the port could publish a
 	// raw_webhook addressed at any seat, and the engine treats that as a
 	// message from Slack — it wakes the agent and drives a turn.
 	e := newEdge(t)
@@ -704,7 +703,7 @@ func TestSlackCarriesTheSeatItWasAddressedTo(t *testing.T) {
 func TestSlackRetriesAreDedupedOnTheEventID(t *testing.T) {
 	t.Parallel()
 	// Slack repeats event_id on a retry and sets X-Slack-Retry-Num. The
-	// Python edge deduped nothing here: it left the question to a
+	// obvious edge dedupes nothing here and leaves the question to a
 	// per-process ring in the transport, which answers correctly for one
 	// node and wrongly for two.
 	e := newEdge(t)

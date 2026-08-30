@@ -21,12 +21,12 @@ func eventOf(d delivery) *events.Event { return d.ev }
 
 // THE BATCH DISPATCH BUDGET IS DELIBERATELY NOT PORTED.
 //
-// The Python engine capped how long one batch drain could keep dispatching
-// partition handlers (_BATCH_DISPATCH_BUDGET_MS = 60 s) and requeued the rest
-// by republishing them. The entire reason was the C++ client's ack timeout:
-// every drained message's 30-minute clock started at receive, so a long tail
-// of multi-minute turns would blow through it mid-drain and produce
-// redelivered duplicate turns.
+// The design this contract came from capped how long one batch drain could
+// keep dispatching partition handlers (60 s) and requeued the rest by
+// republishing them. The entire reason was the C++ client's ack timeout: every
+// drained message's 30-minute clock started at receive, so a long tail of
+// multi-minute turns would blow through it mid-drain and produce redelivered
+// duplicate turns.
 //
 // github.com/apache/pulsar-client-go has NO ack timeout — no
 // ConsumerOptions.AckTimeout, no client-side unacked tracker — and Pulsar has

@@ -269,8 +269,7 @@ func (n *Node) Stop(ctx context.Context) {
 // It is a REPORTING cadence, not a deadline — see Drain for why there is no
 // deadline — so it is sized for a human watching a deploy: often enough that
 // the console does not look hung, rare enough that a ten-minute turn does not
-// print a hundred lines. Carried from the Python engine, which chose the same
-// value for the same reason.
+// print a hundred lines.
 const drainLogInterval = 10 * time.Second
 
 // Drain performs this node's graceful departure and returns once its seats
@@ -288,8 +287,8 @@ const drainLogInterval = 10 * time.Second
 //     given back, so a peer can take over immediately rather than waiting
 //     out a TTL.
 //
-// Step 3 waits INDEFINITELY, bounded only by ctx. That is deliberate and it
-// is the same call the Python engine made: a turn parked mid-LLM-round is
+// Step 3 waits INDEFINITELY, bounded only by ctx. That is deliberate: a turn
+// parked mid-LLM-round is
 // making progress a timer cannot see, and cutting it off buys a faster deploy
 // by abandoning work that was nearly done. The hard deadline belongs to
 // whatever supervises the process — a container runtime's kill grace, an

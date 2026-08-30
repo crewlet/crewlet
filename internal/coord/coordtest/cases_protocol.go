@@ -179,9 +179,9 @@ var protocolCases = []testCase{
 	{"an_omitted_protocol_claims_at_this_build", func(h *harness) {
 		// Go moves the danger, so the contract moves the default.
 		//
-		// Python's Protocol was a keyword argument defaulting to 1, so
-		// OMITTING it was harmless. Go's is a struct zero, so omitting
-		// it is the case that happens by accident — and read as
+		// A named argument defaulting to 1 makes OMITTING it harmless.
+		// A struct zero makes omitting it the case that happens by
+		// accident — and read as
 		// "oldest", one AcquireOptions{Owner, TTL} anywhere in the
 		// engine would hold a live lease below every newer node's floor
 		// and stall the whole fleet's claims, looking exactly like a

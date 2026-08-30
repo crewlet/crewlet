@@ -67,8 +67,8 @@ const (
 // message would have to be in flight across 25 of them to exhaust the
 // budget — a fleet thrashing that hard has a louder problem.
 //
-// The honest caveat the Python engine records still stands and no cap
-// solves it: a fast crash-loop is indistinguishable from poison.
+// The honest caveat stands and no cap solves it: a fast crash-loop is
+// indistinguishable from poison.
 const maxDeliver = 25
 
 // budgetFor resolves the delivery budget for a queue, letting a test shrink
@@ -90,10 +90,10 @@ const ackWait = 30 * time.Minute
 
 // defaultEventRetention bounds the audit/event stream.
 //
-// The Python event store had NO retention sweep at all and leaned on
-// TimescaleDB chunking, which made it the one table that grew without
-// policy. Here the stream's own age limit is the authority and the local
-// materialized index mirrors it.
+// An event store with no retention sweep, leaning on the database engine's
+// own partition management, is the one table that grows without policy. Here
+// the stream's own age limit is the authority and the local materialized index
+// mirrors it.
 const defaultEventRetention = 30 * 24 * time.Hour
 
 // streamSpec describes the stream carrying a subject namespace.

@@ -180,9 +180,9 @@ type Claims interface {
 type Ledger interface {
 	// Worked returns the subset of keys already recorded under scope.
 	//
-	// FAILS OPEN in BOTH directions, which is the property the Python
-	// engine paid for twice: not knowing whether work was done has one
-	// safe answer and it is the pre-ledger one — do the work. A read that
+	// FAILS OPEN in BOTH directions, a property paid for twice: not
+	// knowing whether work was done has one safe answer and it is the
+	// pre-ledger one — do the work. A read that
 	// failed closed would make a store blip look like a company that had
 	// already answered everything.
 	Worked(ctx context.Context, scope string, keys []string) (map[string]bool, error)

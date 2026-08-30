@@ -10,9 +10,8 @@ package api_test
 // contract — the only place the shape the browser actually parses is written
 // down and checked.
 //
-// So it runs here, from Go, against THE TREE THIS BINARY EMBEDS. There is
-// only one tree now: through the rewrite this was a copy of the Python one,
-// held byte-identical by a test that retired with it.
+// So it runs here, from Go, against THE TREE THIS BINARY EMBEDS — the one a
+// browser will actually be served, not a copy of it.
 //
 // Two things are asserted, and they are different things:
 //
@@ -50,9 +49,7 @@ import (
 // Paths, relative to this package's directory, which is where `go test` runs.
 //
 // The module root is the repository root, so two levels up reaches both the
-// embedded tree and the suites that test it. There is ONE dashboard tree
-// now: the Python copy this used to be held byte-identical to is gone, and
-// with it the test that compared them.
+// embedded tree and the suites that test it. There is ONE dashboard tree.
 const (
 	// The directory package static embeds, on disk.
 	staticDir = "../../static"
@@ -69,9 +66,9 @@ const (
 //
 // Each is a few hundred pure-function assertions over a vendored DOM and
 // finishes in well under a second; this exists so a hung node fails the build
-// instead of stalling it. It matches the Python wrapper's cap deliberately —
-// two runners with different patience would disagree about which suite is
-// "slow", and the answer would depend on who ran it.
+// instead of stalling it. One cap for every runner, deliberately: two runners
+// with different patience would disagree about which suite is "slow", and the
+// answer would depend on who ran it.
 const suiteTimeout = 60 * time.Second
 
 // dashboardRootEnv is how a suite is told which tree to test. Its one

@@ -12,9 +12,9 @@ import (
 // The epoch and how a new one replaces it.
 //
 // A CONFIG REVISION IS AN IMMUTABLE EPOCH, AND APPLYING ONE PUBLISHES A NEW
-// EPOCH — nothing is ever mutated in place (adrs/404). The Python
-// this replaces applied a revision by mutating the live objects and keeping
-// their identity, so that anything holding a reference kept working. That is
+// EPOCH — nothing is ever mutated in place (adrs/404). Applying a revision by
+// mutating the live objects keeps their identity, so that anything holding a
+// reference keeps working. That is
 // precisely the problem: anything holding a reference kept working, and kept
 // reading, mid-turn, values from two different revisions. A turn that read the
 // budget cap before the swap and the model chain after it ran under a company

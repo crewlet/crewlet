@@ -164,8 +164,7 @@ func BuildRosterSection(s Seat) []string {
 	return parts
 }
 
-// capitalize matches Python's str.capitalize: upper-case the first rune,
-// lower-case the rest.
+// capitalize upper-cases the first rune and lower-cases the rest.
 //
 // It is what renders "Github ID:" rather than "GitHub ID:" — carried as-is
 // because the roster line is prompt text, and prompt text is not where a

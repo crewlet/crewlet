@@ -19,8 +19,8 @@ var log = logging.Get("agent.phase")
 // provider configured", which is a real answer over an ordered list and no
 // answer at all over a Go map — range order is randomised per iteration, so a
 // map-backed registry would hand two seats booted from one config two
-// different models, and hand the same seat a different one on restart. Python
-// got this free from dict insertion order; here it is a field.
+// different models, and hand the same seat a different one on restart. So the
+// order is a field rather than something the map is trusted to remember.
 type Registry struct {
 	order []string
 	byKey map[string]llm.Provider

@@ -7,8 +7,8 @@
 //
 // The decision is separated from the EFFECTS — no broker, no database, no
 // event queue is reachable from here. A handler that mixes the two can only be
-// exercised against a live broker, which is why the Python this replaces had
-// its ordering pinned by integration tests that took a container to run.
+// exercised against a live broker — which means its ordering can only be
+// pinned by integration tests that take a container to run.
 //
 // Two stages, and the split is structural rather than stylistic: [Screen] runs
 // every guard that must precede the completion-ledger read, and returns the
@@ -157,10 +157,10 @@ func (s Screening) Result() queue.Result {
 //     forever. Deferring cannot spin: the consumer stops after the first one.
 //
 // There is NO re-entrancy stage, and its absence is a decision rather than an
-// omission. The Python this replaces carried one: a publish to a seat's own
-// inbox from inside its running turn dispatched inline within the same asyncio
-// task, so handling it awaited the turn from within the turn. Every queue
-// backend here forecloses that structurally — the pull loops fetch again only
+// omission. The hazard is real where a publish to a seat's own inbox from
+// inside its running turn dispatches inline on the same task, so handling it
+// waits on the turn from within the turn. Every queue backend here forecloses
+// that structurally — the pull loops fetch again only
 // after a handler returns, and the in-process twin defers a nested drain to the
 // loop already running rather than starting a second one — so the condition
 // cannot arise and a guard for it would be a branch no delivery can reach.

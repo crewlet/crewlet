@@ -62,9 +62,8 @@ func (m MapSource) Lookup(name string) (string, bool) {
 // value never reaches a log line.
 //
 // A Resolver is safe for concurrent use. It is passed explicitly rather than
-// installed as a process global — the Python engine needed a global because
-// ~25 synchronous call sites could not be handed one, and every one of them
-// is a parameter here.
+// installed as a process global. A global is what call sites that cannot be
+// handed one require; every one of them is a parameter here.
 type Resolver struct {
 	sources []Source
 
@@ -159,8 +158,8 @@ func (r *Resolver) warnShadowed(name, winner string, index int) {
 // Expand substitutes every reference in value and reports the names that
 // resolved to nothing.
 //
-// An unresolved reference expands to the empty string, matching the shell
-// and the Python engine — and it is REPORTED rather than swallowed, because
+// An unresolved reference expands to the empty string, matching the shell —
+// and it is REPORTED rather than swallowed, because
 // the empty string is not detectable downstream. "Bearer ${TOKEN}" with
 // TOKEN unset resolves to "Bearer ", which is truthy-but-broken: a caller
 // that only checked for emptiness would hand it straight to an API and read

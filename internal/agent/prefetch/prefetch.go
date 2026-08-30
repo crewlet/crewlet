@@ -184,9 +184,9 @@ type Sources struct {
 	Embed func(ctx context.Context, text string) ([]float32, error)
 
 	// SummarizeEpisodes is the operator's switch for whether episode hits
-	// are passed through the auxiliary model. It gates ONLY that call —
-	// the Python engine's version of this knob was wired by passing a nil
-	// provider pool, which silently disabled the memory and knowledge
+	// are passed through the auxiliary model. It gates ONLY that call.
+	// Wiring a knob like this by passing a nil provider pool is the
+	// tempting shortcut, and it silently disables the memory and knowledge
 	// filters too.
 	SummarizeEpisodes bool
 }

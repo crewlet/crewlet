@@ -74,9 +74,8 @@ type ProviderFallback struct {
 func (ProviderFallback) EventType() string { return "provider_fallback" }
 
 // SummaryFor is handed the publisher as its actor: this event carries a handle
-// rather than a role or an agent id, and neither the chain nor its Python
-// original reads a handle — contributing AgentHandle as the agent id would
-// change behaviour rather than port it.
+// rather than a role or an agent id, and the chain does not read a handle —
+// contributing AgentHandle as the agent id would change behaviour.
 func (e ProviderFallback) SummaryFor(actor string) string {
 	return lead(actor, fmt.Sprintf("fallback %s → %s (%s)",
 		e.FromProviderKey, e.ToProviderKey, e.ErrorKind))
