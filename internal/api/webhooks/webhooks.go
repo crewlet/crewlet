@@ -321,10 +321,30 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 	ev.Source = d.source
 
 	if err := r.publisher.Publish(ctx, topics.NotificationsInbound, ev); err != nil {
+		r.release(ctx, d)
+		// TWO FAILURES, AND ONLY ONE OF THEM IS WORTH RETRYING. A broker
+		// that is down comes back, so the provider should try again; a
+		// delivery that does not fit on the wire will not fit on the
+		// next attempt either, and answering it as an outage asks the
+		// provider to repeat a request that cannot ever succeed —
+		// claiming and releasing on every pass, forever, with nothing in
+		// the loop reporting a size.
+		//
+		// The size is logged because it is the only place it appears: the
+		// body passed the reader's own cap, and what made it too big
+		// happened during encoding.
+		if errors.Is(err, queue.ErrTooLarge) {
+			log.Warn("webhook_event_too_large", "source", d.source, "route", v.source,
+				"body_bytes", len(d.raw), "error", err,
+				"detail", "the delivery was verified and is too large to publish; "+
+					"refused permanently so the provider does not retry it")
+			writeJSON(w, http.StatusRequestEntityTooLarge,
+				map[string]string{"error": "delivery too large to queue"})
+			return
+		}
 		log.Error("webhook_publish_failed", "source", d.source, "route", v.source,
 			"error", err, "detail", "the delivery was verified and could not be "+
 				"queued; releasing its claim so the provider's retry is not refused")
-		r.release(ctx, d)
 		unavailable(w, "queue_unavailable", NoRevisionRetryAfter)
 		return
 	}

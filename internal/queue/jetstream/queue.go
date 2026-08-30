@@ -427,6 +427,16 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		return fmt.Errorf("serialize event %s: %w", ev.Type, err)
 	}
 	if _, err := q.js.Publish(ctx, topic, data); err != nil {
+		// TRANSLATED, not passed through. "Too large" is the one publish
+		// failure a producer must not retry, and nats.ErrMaxPayload is
+		// this backend's private word for it — a caller matching on that
+		// would be branching on which backend is running, which the
+		// contract forbids. Wrapped rather than replaced so the original
+		// still reads in a log.
+		if errors.Is(err, nats.ErrMaxPayload) {
+			return fmt.Errorf("publish %s: %d bytes exceeds the %d-byte limit: %w: %w",
+				topic, len(data), queue.MaxPayloadBytes, queue.ErrTooLarge, err)
+		}
 		return fmt.Errorf("publish %s: %w", topic, err)
 	}
 

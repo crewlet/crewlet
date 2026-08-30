@@ -435,6 +435,17 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	if err != nil {
 		return fmt.Errorf("memory: serialize event %s: %w", ev.Type, err)
 	}
+	// THE SAME CEILING THE REAL BROKER ENFORCES, because the twin is what
+	// the tests run on: without this an oversized event publishes cleanly
+	// here and is refused in production, which is the one direction a twin
+	// must never be wrong in. Measured on the wire bytes rather than on any
+	// input length, for the reason queue.ErrTooLarge gives — what a body
+	// costs encoded is a property of its bytes.
+	if len(wire) > queue.MaxPayloadBytes {
+		return fmt.Errorf("memory: publish %s: %d bytes exceeds the %d-byte limit: %w",
+			topic, len(wire), queue.MaxPayloadBytes, queue.ErrTooLarge)
+	}
+
 	var received events.Event
 	if err := json.Unmarshal(wire, &received); err != nil {
 		return fmt.Errorf("memory: deserialize event %s: %w", ev.Type, err)

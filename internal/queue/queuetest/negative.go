@@ -3,6 +3,7 @@ package queuetest
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -56,6 +57,50 @@ import (
 // case A reaches from the other direction.
 func (s *suite) runNegativePaths(t *testing.T) {
 	ctx := t.Context()
+
+	t.Run("an_oversized_publish_is_refused_as_permanently_too_large", func(t *testing.T) {
+		t.Parallel()
+		// "Too large" is the one publish failure that never becomes
+		// true on a retry, and a producer can only act on that if every
+		// backend says it the same way — the layers above are forbidden
+		// to ask which backend is running. So the sentinel is the
+		// contract's, and both backends translate their own refusal
+		// into it.
+		//
+		// Without this the webhook edge treated an oversized delivery
+		// as a broker outage and asked the provider to retry something
+		// that could not succeed, forever.
+		q := s.start(ctx, t)
+		const topic, group = "crewlet.agent.big.inbox", "agent-big"
+		if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
+			t.Fatalf("EnsureSubscription: %v", err)
+		}
+
+		ev := newEvent("oversized")
+		// Extra rather than Data: this suite publishes no typed
+		// payloads, and the bytes are the whole subject here. The key
+		// must not be an envelope field — those are reserved and
+		// silently dropped, which produced a 214-byte "oversized"
+		// event the first time this was written.
+		ev.Extra = map[string]any{"blob": strings.Repeat("x", queue.MaxPayloadBytes)}
+
+		err := q.Publish(ctx, topic, ev)
+		if err == nil {
+			t.Fatal("an event over the payload ceiling published successfully")
+		}
+		if !errors.Is(err, queue.ErrTooLarge) {
+			t.Errorf("Publish refused an oversized event with %v, which does not "+
+				"match queue.ErrTooLarge: a producer cannot tell it apart from a "+
+				"broker that is merely down, so it retries forever", err)
+		}
+		// And it must not have half-landed: nothing is retained for a
+		// delivery the transport refused.
+		if backlog := s.caps.Backlog; backlog != nil {
+			if got := backlog(q, topic, group); len(got) != 0 {
+				t.Errorf("a refused publish left %d events in the mailbox", len(got))
+			}
+		}
+	})
 
 	t.Run("ensure_subscription_on_an_existing_one_keeps_its_mail", func(t *testing.T) {
 		t.Parallel()
