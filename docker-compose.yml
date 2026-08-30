@@ -33,8 +33,8 @@ services:
     # re-certification. `latest` would undo both halves -- no version for
     # Dependabot to bump, on a service watched by nothing that looks exactly
     # like one with nothing to update, and a conformance pass naming a build
-    # nobody can identify afterwards. internal/version asserts it stays one
-    # pin, and that ci.yml still brings this service up.
+    # nobody can identify afterwards. Nothing asserts it stays one pin, or
+    # that ci.yml still brings this service up -- check both by hand.
     image: apachepulsar/pulsar:4.2.4
     profiles: [pulsar]
     # Standalone runs broker + metadata + BookKeeper in one container.

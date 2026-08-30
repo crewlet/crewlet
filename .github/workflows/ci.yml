@@ -121,8 +121,9 @@ jobs:
     # be re-cut. goreleaser is the thing that would catch it and it runs only
     # on a `v*` push.
     #
-    # The pairs mirror .goreleaser.yaml, and internal/version asserts that
-    # they still do. Compiling is the whole test: these binaries are not run,
+    # The pairs mirror .goreleaser.yaml and the Makefile's CROSS_TARGETS,
+    # and nothing asserts that they still do -- change all three together.
+    # Compiling is the whole test: these binaries are not run,
     # because a darwin binary cannot be, and what breaks a cross-target is
     # almost always a build constraint rather than behaviour.
     strategy:
@@ -232,8 +233,8 @@ jobs:
       # have to be noticed and moved by hand, and a conformance run against
       # whichever version nobody moved is green either way. A local
       # `make pulsar-up` and this job now certify the same build by
-      # construction rather than by two pins somebody keeps equal;
-      # internal/version asserts it stays one pin.
+      # construction rather than by two pins somebody keeps equal. Nothing
+      # asserts that, so read docker-compose.yml before changing the pin.
       #
       # A `services:` block still cannot do this: the apachepulsar/pulsar
       # image has no entrypoint that starts a broker (its CMD is a shell), and

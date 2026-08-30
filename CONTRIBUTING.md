@@ -42,10 +42,10 @@ and answering it in pieces is how a push goes red on the piece you skipped.
 `make help` lists the rest.
 
 Every target runs the command [`ci.yml`](.github/workflows/ci.yml) runs, with
-the same flags, and `internal/version/makefile_test.go` asserts the two have
-not drifted: a convenience target that quietly dropped `-race`, or certified
-the store on one driver, would report a pass CI does not honour, and nothing
-else would notice. `make check` is:
+the same flags. Nothing asserts the two have not drifted — a test did, and it
+was dropped — so a convenience target that quietly loses `-race` would report
+a pass CI does not honour and nothing else would notice. Change a target and
+its `ci.yml` step together, and read both. `make check` is:
 
 ```bash
 gofmt -l .               # formatting — prints the files that need it
