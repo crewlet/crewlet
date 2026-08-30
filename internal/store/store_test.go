@@ -30,90 +30,50 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// certified is every driver the store may be opened with. The contract suite
-// runs against all of them, because a statement is only known to be in the
-// dialect intersection once both have parsed it.
-var certified = []store.Driver{store.DriverTurso, store.DriverSQLite}
-
+// TestContract runs the store's contract suite. One driver now, so the loop
+// that ran it per driver is gone — what it certifies did not change with it.
 func TestContract(t *testing.T) {
-	for _, drv := range certified {
-		t.Run(string(drv), func(t *testing.T) {
-			t.Parallel()
-			requireDriver(t, drv)
-			storetest.Run(t, func(t *testing.T) *store.DB {
-				return open(t, drv)
-			})
-		})
-	}
+	t.Parallel()
+	storetest.Run(t, func(t *testing.T) *store.DB { return open(t) })
 }
 
-// TestDriverSelection covers the one decision Open makes before it touches a
-// file. An unknown name is an ERROR, not a fallback: a mistyped log level may
-// safely resolve to info, but a mistyped driver name silently opening a
-// different storage engine is a data-loss shape.
-func TestDriverSelection(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		env     string
-		opt     store.Driver
-		want    store.Driver
-		wantErr bool
-	}{
-		{name: "default is turso", want: store.DriverTurso},
-		{name: "env selects", env: "sqlite", want: store.DriverSQLite},
-		{name: "option beats env", env: "sqlite", opt: store.DriverTurso, want: store.DriverTurso},
-		{name: "unknown env", env: "postgres", wantErr: true},
-		{name: "unknown option", opt: "mysql", wantErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(store.DriverEnv, tc.env)
-			requireDriver(t, tc.want)
-			db, err := store.Open(t.Context(),
-				filepath.Join(t.TempDir(), "c.db"),
-				store.Options{Driver: tc.opt})
-			if tc.wantErr {
-				if err == nil {
-					_ = db.Close()
-					t.Fatal("want an error for an unknown driver name")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("open: %v", err)
-			}
-			defer func() { _ = db.Close() }()
-			if db.Driver() != tc.want {
-				t.Fatalf("driver %q, want %q", db.Driver(), tc.want)
-			}
-		})
+// THE ONLY DRIVER LINKED IN IS TURSO, and this is what says so.
+//
+// It replaces TestDriverSelection, which covered a choice that no longer
+// exists: `store.driver` in the Tier A file and CREWLET_STORE_DRIVER both
+// picked between turso and mainline SQLite (decisions/003). Deleting a
+// selector is easy to do halfway — the field goes, the blank import stays,
+// and the binary quietly carries a second storage engine that nothing can
+// reach but that anything with a raw sql.Open can. So the assertion is about
+// the LINKED SET, not about a config field: "sqlite" registered here means
+// modernc.org/sqlite came back into the build.
+func TestTursoIsTheOnlyDriverInTheBinary(t *testing.T) {
+	t.Parallel()
+	linked := sql.Drivers()
+	if !slices.Contains(linked, "turso") {
+		t.Fatalf("the turso driver is not registered (have %v) — the store "+
+			"cannot open anything, and every test below would skip rather "+
+			"than fail", linked)
+	}
+	if slices.Contains(linked, "sqlite") {
+		t.Errorf("modernc.org/sqlite is linked into this binary (drivers: %v). "+
+			"It was removed with the second-driver escape hatch; a blank "+
+			"import that came back ships a whole storage engine nothing "+
+			"selects", linked)
 	}
 }
 
 // open builds a database on its own file. Each one is exclusive: the engine
 // owns its file, and sharing one between subtests would test an arrangement
 // nothing runs in.
-func open(t *testing.T, drv store.Driver) *store.DB {
+func open(t *testing.T) *store.DB {
 	t.Helper()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "store.db"),
-		store.Options{Driver: drv})
+		store.Options{})
 	if err != nil {
-		t.Fatalf("open %s: %v", drv, err)
+		t.Fatalf("open: %v", err)
 	}
 	// Tolerant of a test that closed it already — the reopen case does.
 	t.Cleanup(func() { _ = db.Close() })
 	return db
-}
-
-// requireDriver skips rather than fails when a driver is not compiled in. Both
-// are in go.mod today; a build that drops one (a cgo-free constraint, a
-// platform without the Turso native library) should lose that driver's
-// coverage, not the whole suite.
-func requireDriver(t *testing.T, drv store.Driver) {
-	t.Helper()
-	if drv == "" {
-		return
-	}
-	if !slices.Contains(sql.Drivers(), string(drv)) {
-		t.Skipf("driver %q is not registered in this build", drv)
-	}
 }

@@ -154,18 +154,31 @@ func (e *Episodes) Append(ctx context.Context, ep Episode) (bool, error) {
 	return n > 0, nil
 }
 
-// encodeEmbedding packs a vector, refusing one of the wrong width.
+// encodeEmbedding packs a vector, refusing one of the wrong width and
+// DEGRADING one that is not finite.
 //
-// Checked HERE because the column is a plain BLOB: Turso does not enforce a
-// declared vector width (measured), so a mismatched vector stores happily and
-// then makes every distance query against it return nothing — a seat whose
-// recall silently stops working, with no error anywhere.
+// The width is checked because the column is a plain BLOB: Turso does not
+// enforce a declared vector width (measured), so a mismatched vector stores
+// happily and then makes every distance query against it return nothing — a
+// seat whose recall silently stops working, with no error anywhere. That is a
+// configuration fault, and the write fails.
+//
+// A NaN or an infinity is a different thing and gets the opposite answer: the
+// row is written WITHOUT its embedding, exactly as if the provider had been
+// unreachable. Failing the write instead would cost the episode, and an
+// episode is the record of a turn that really happened — the one thing this
+// subsystem may not lose to a bad response from an embeddings API. Storing it
+// anyway is not an option either: [store.ErrVectorNotFinite] says why.
 func (e *Episodes) encodeEmbedding(v []float32) (any, error) {
 	if len(v) == 0 {
 		return nil, nil
 	}
 	blob, err := e.db.EncodeVector(v)
-	if err != nil {
+	switch {
+	case errors.Is(err, store.ErrVectorNotFinite):
+		log.Warn("episode_embedding_discarded", "error", err.Error())
+		return nil, nil
+	case err != nil:
 		return nil, fmt.Errorf("learning: encode embedding: %w", err)
 	}
 	return blob, nil

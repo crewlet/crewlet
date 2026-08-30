@@ -1,6 +1,6 @@
 # Deployment
 
-**Crewlet requires no infrastructure services.** The engine is one static
+**Crewlet requires no infrastructure services.** The engine is one
 binary: its event stream is a NATS JetStream server it embeds, and its store
 is a local file it creates and owns exclusively. A single host runs a whole
 company with nothing else installed.
@@ -320,10 +320,12 @@ and where the constants come from — see
 
 ## The store
 
-One local file per node, opened through one of two certified pure-Go drivers —
-`turso` by default and `sqlite` (mainline SQLite) as the escape hatch, selected
-with `CREWLET_STORE_DRIVER`. Every statement in the engine parses on both, and
-CI runs the store suites twice to keep that true.
+One local file per node, opened by **Turso** — the only driver. There was a
+second, mainline SQLite behind `store.driver` / `CREWLET_STORE_DRIVER`, and
+both the field and the variable are retired: a config that still sets the field
+is refused with a message saying so, and the variable is read by nothing. The
+file format did not change, so an existing store opens untouched and any
+SQLite-compatible client still reads it.
 
 **Turso keeps a native library cache, and the engine prepares it before the
 first query.** The driver is pure Go in the sense that matters — no cgo, no C
@@ -339,9 +341,17 @@ re-extracts a cache entry that will not verify. Two consequences worth knowing:
   container. A read-only or per-restart cache costs a 20 MB extraction on every
   start; a cache root that cannot be created at all fails the store open with an
   error naming the directory.
-- **A cache that cannot be repaired names the way out.** Clear that directory,
-  or run with `CREWLET_STORE_DRIVER=sqlite` — the certified fallback needs no
-  native library at all, which is exactly what makes it the escape hatch.
+- **A cache that cannot be repaired names the way out**, and there is no
+  second driver to fall back to any more: delete that directory by hand, or
+  point `TURSO_GO_CACHE_DIR` at a writable directory of its own.
+- **The linux binaries need glibc, and there is no musl build.** The database
+  engine is a native library loaded with `dlopen`, which makes the binary
+  dynamically linked against `libc.so.6` even though it is pure Go and built
+  with `CGO_ENABLED=0`. On Alpine and other musl systems it fails at `execve`,
+  reported as `no such file or directory` about a file that plainly exists.
+  Use a glibc base image — the published one is `debian:trixie-slim` for
+  exactly this reason — or run the engine on a glibc host. macOS is
+  unaffected.
 
 **The engine owns the file exclusively.** A second process pointed at the same
 path is not a degraded configuration, it is corruption waiting for a schedule

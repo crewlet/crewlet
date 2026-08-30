@@ -11,7 +11,6 @@ Two kinds of variable appear below. A few names are **read directly by the engin
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
 | `CREWLET_NODE_ID` | This process's identity, when `node.id` is unset in the Tier A file. Labels every log line, health payload, and config-apply event. Must be **stable across restarts**; defaults to `node-0` | Your orchestrator (Kubernetes pod name / StatefulSet ordinal, or the host name) |
-| `CREWLET_STORE_DRIVER` | Which certified driver opens the store file — `turso` (the default) or `sqlite`. Overridden by `store.driver` in the Tier A file | Leave unset unless you are exercising the fallback driver |
 | `TURSO_GO_CACHE_DIR` | Read directly by the `turso` driver (and by the engine, which prepares it): where its embedded ~20 MB native library is extracted and loaded from. Default `os.UserCacheDir()` — `~/.cache` on Linux. Point it at a writable, persistent path in an ephemeral container, or every restart pays the extraction again. See [Deployment § The store](../guides/deployment.md#the-store) | — |
 | `CREWLET_API_TOKEN_FOUNDER` | Bearer token for the founder API identity (`api.auth.tokens`) | Generate one: `openssl rand -hex 32` |
 | `LLM_API_KEY` | API key for your LLM provider (`providers.llm.default.api_keys`) | Your LLM provider dashboard |
@@ -151,7 +150,11 @@ corrupt it. Everything that genuinely has to be shared between nodes — seat
 leases, config activations, the completion ledger, dedupe and the rate
 valves — lives in the `coordination` slot instead.
 
-`CREWLET_STORE_DRIVER` picks which certified driver opens it (see Core above).
+There is no driver to pick. Turso is the store, and both the `store.driver`
+field and the `CREWLET_STORE_DRIVER` variable that used to select mainline
+SQLite instead are retired — a Tier A file that still sets the field is refused
+by name. `TURSO_GO_CACHE_DIR` (see Core above) is where its native database
+engine is extracted.
 The event store is a table in that same file, created by the engine's own
 migrations — there is no separate observability database to configure.
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -88,13 +89,20 @@ func (d *Diary) Write(ctx context.Context, e DiaryEntry) error {
 		return fmt.Errorf("learning: a %q entry must not carry a deadline", DiaryLong)
 	}
 
+	// Same policy as an episode's embedding, and for the same reason — see
+	// Episodes.encodeEmbedding. A wrong width fails the write; a non-finite
+	// component costs the vector and not the observation.
 	var blob any
 	if len(e.Embedding) > 0 {
 		packed, err := d.db.EncodeVector(e.Embedding)
-		if err != nil {
+		switch {
+		case errors.Is(err, store.ErrVectorNotFinite):
+			log.Warn("diary_embedding_discarded", "entry", e.ID, "error", err.Error())
+		case err != nil:
 			return fmt.Errorf("learning: encode diary embedding: %w", err)
+		default:
+			blob = packed
 		}
-		blob = packed
 	}
 	if _, err := d.db.SQL().ExecContext(ctx, `
 		INSERT INTO agent_diary (id, agent_id, kind, content, ttl_until, source,
@@ -167,9 +175,15 @@ func (d *Diary) Recent(ctx context.Context, agentID string, now time.Time, limit
 
 // Recall returns a seat's most similar live entries.
 //
-// Same shape as episode recall and for the same reasons — brute force, a
-// relevance floor, a total order — but scoped to one agent id, which is what
-// makes the diary private.
+// Same shape as episode recall and for the same reasons — a scan the database
+// ranks, a relevance floor, a total order, a Go re-score over the rows that
+// survive — but scoped to one agent id, which is what makes the diary private.
+// See [Episodes.Recall] for why each of those is the way it is; the only thing
+// this adds is the liveness predicate.
+//
+// Live means unexpired, applied here as well as by the background sweep,
+// because the sweep runs on a timer and a memory that has just passed its
+// deadline is exactly as wrong as one that passed it a week ago.
 func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now time.Time) ([]DiaryHit, error) {
 	if agentID == "" {
 		return nil, fmt.Errorf("learning: diary recall needs an agent")
@@ -184,12 +198,26 @@ func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now t
 	if floor == 0 {
 		floor = defaultMinSimilarity
 	}
+	probe, width, err := vectorProbe(d.db, q.Embedding)
+	if err != nil {
+		return nil, fmt.Errorf("learning: diary recall for %s: %w", agentID, err)
+	}
 	rows, err := d.db.SQL().QueryContext(ctx,
-		`SELECT `+diaryColumns+` FROM agent_diary
-		 WHERE agent_id = ? AND embedding IS NOT NULL
-		   AND (ttl_until IS NULL OR ttl_until > ?)
-		 ORDER BY created_at DESC, id DESC`,
-		agentID, store.EncodeTime(now))
+		`SELECT `+diaryColumns+` FROM agent_diary WHERE id IN (
+		    SELECT id FROM (
+		        SELECT id, created_at,
+		               vector_distance_cos(embedding, ?) AS distance
+		        FROM agent_diary
+		        WHERE agent_id = ?
+		          AND embedding IS NOT NULL
+		          AND length(embedding) = ?
+		          AND (ttl_until IS NULL OR ttl_until > ?)
+		    )
+		    WHERE distance <= ?
+		    ORDER BY distance ASC, created_at DESC, id DESC
+		    LIMIT ?
+		 )`,
+		probe, agentID, width, store.EncodeTime(now), 1-floor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("learning: diary recall for %s: %w", agentID, err)
 	}
@@ -206,9 +234,6 @@ func (d *Diary) Recall(ctx context.Context, agentID string, q RecallQuery, now t
 		hits = append(hits, DiaryHit{Entry: e, Similarity: sim})
 	}
 	rankDiary(hits)
-	if len(hits) > limit {
-		hits = hits[:limit]
-	}
 	return hits, nil
 }
 

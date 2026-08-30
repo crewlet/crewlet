@@ -162,3 +162,57 @@ func TestTheRetiredKeyHintIsScopedToItsTier(t *testing.T) {
 		t.Errorf("an ordinary unknown key must read as one: %v", err)
 	}
 }
+
+// THE RETIRED STORE DRIVER NAMES ITS REPLACEMENT TOO, and there is no
+// replacement to name — which is exactly why the message has to exist.
+//
+// `store.driver` shipped in the quickstart, in examples/nimbus.config.yaml and
+// in the deployment guide, so an operator upgrading has it written down. The
+// generic "check the spelling" would send them looking for a typo in a key
+// this project told them to write, and the only true answer — Turso is the
+// database now, delete the line — is one nothing else says.
+//
+// Both values are covered: `sqlite` is the one that used to select the driver
+// that no longer exists, and `turso` is the one that is still correct as a
+// VALUE and still has to be refused as a KEY, because a field nothing reads is
+// how a config comes to mean something it does not.
+func TestTheRetiredStoreDriverKeyNamesItsReplacement(t *testing.T) {
+	t.Parallel()
+	for _, doc := range []string{
+		"store:\n  driver: sqlite\n",
+		"store:\n  driver: turso\n",
+	} {
+		err := rejectsBootstrap(t, doc, "Turso is the database")
+		if !errors.Is(err, ErrUnknownField) {
+			t.Errorf("%q: want %v, got %v", doc, ErrUnknownField, err)
+		}
+		if strings.Contains(err.Error(), "check the spelling") {
+			t.Errorf("%q was reported as a misspelling: %v", doc, err)
+		}
+		if !strings.Contains(err.Error(), "Delete the line") {
+			t.Errorf("%q: the error does not say what to do: %v", doc, err)
+		}
+	}
+}
+
+// AND IT IS SCOPED TO ITS BLOCK, not to the word.
+//
+// The retired table is keyed on `Store.driver` rather than on `driver`, for
+// the same reason decisions/001 keyed it per TIER one level up: `driver` under
+// `store:` was the storage engine and is retired, while a `driver:` typed
+// under `stream:` never existed there at all. An ungated table would answer
+// the second with advice about the first, sending its author to edit a block
+// they are not in.
+func TestTheRetiredDriverHintIsScopedToItsBlock(t *testing.T) {
+	t.Parallel()
+	err := rejectsBootstrap(t, "stream:\n  driver: nats\n", "line 2")
+	if !errors.Is(err, ErrUnknownField) {
+		t.Fatalf("want %v, got %v", ErrUnknownField, err)
+	}
+	if strings.Contains(err.Error(), "Turso is the database") {
+		t.Errorf("a stream key was given the store's advice: %v", err)
+	}
+	if !strings.Contains(err.Error(), "check the spelling") {
+		t.Errorf("an ordinary unknown key must read as one: %v", err)
+	}
+}

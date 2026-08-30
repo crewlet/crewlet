@@ -92,26 +92,115 @@ applied to nothing produced a green release. A check whose failure mode is
 silence has to compare against something the tree computes, not against a
 constant somebody remembered to write down.
 
-## Six targets
+## Four targets
 
-`linux`, `darwin` and `windows` × `amd64` and `arm64`. All six cross-compile
-from one machine with `CGO_ENABLED=0`, because everything underneath is pure
-Go — both certified store drivers (`turso.tech/database/tursogo`,
-`modernc.org/sqlite`) and the embedded NATS server. That is what keeps this a
-plain GOOS/GOARCH loop instead of a cross-toolchain estate, and it is worth
-protecting: a dependency that needs cgo turns this section into a zig
-toolchain and a build container.
+`linux` and `darwin` × `amd64` and `arm64`. All four cross-compile from one
+machine with `CGO_ENABLED=0`, because everything underneath is pure Go — the
+store driver (`turso.tech/database/tursogo`) and the embedded NATS server. That
+is what keeps this a plain GOOS/GOARCH loop instead of a cross-toolchain
+estate, and it is worth protecting: a dependency that needs cgo turns this
+section into a zig toolchain and a build container. It is also, as the rest of
+this section works through, the property a musl target would cost.
 
-**Windows ships with a caveat, deliberately.** The local sandbox backend is
-POSIX-only and says so at construction
-(`internal/sandbox/process_other.go`): every containment property it
-offers — process groups and `killpg` to reach a coding agent's whole tree,
-`SIGSTOP`/`SIGCONT` for the clarification pause, `/proc` start times for the
-pid-reuse guard — is a POSIX primitive with no equivalent. So a Windows
-operator gets an engine that runs a company and refuses `type: local` code
-work, naming the reason, rather than no binary at all. The alternative
-readings — ship a partial port, or ship nothing — are worse in both
-directions.
+**"Pure Go" is not "self-contained", and that is what bounds the list.** The
+driver's database engine is a native shared object embedded in its module and
+extracted at run time. Upstream embeds it for linux/amd64, linux/arm64 (each
+glibc and musl), darwin/amd64, darwin/arm64 and windows/amd64 — and for nothing
+else. The compiler would happily produce a binary for any GOOS; that binary
+would fail at its first query. `internal/store/platform.go` makes it fail at
+build time instead, with a sentence.
+
+**A static binary is not the answer, and the surprising part is why
+`CGO_ENABLED=0` does not already give us one.** That is the normal Go rule and
+it is the first thing anyone will reach for, so here is the whole chain,
+measured on one machine:
+
+| build | result |
+|---|---|
+| `CGO_ENABLED=0 go build` — a hello-world | **statically linked** |
+| `CGO_ENABLED=0 go build` — crewlet | **dynamically linked**, interpreter `/lib64/ld-linux-x86-64.so.2` |
+| `CGO_ENABLED=0` + `-extldflags "-static"` — crewlet | **dynamically linked** (unchanged) |
+| `CGO_ENABLED=1 -linkmode external -extldflags "-static"` — crewlet | statically linked, and **SIGSEGV at the first query** |
+
+Row 1 is the control: the toolchain makes static binaries perfectly well, so
+row 2 is the dependency and not the environment. It is not a NEW dependency
+either — `main` before the single-driver change was already dynamic, with the
+same three `NEEDED` entries, because Turso was already the default driver.
+d-003 has that measurement and the counterfactual beside it. The cause is in purego, and
+its build tag is the joke — `dlfcn_nocgo_linux.go` is `//go:build !cgo`, the
+file that applies *precisely when cgo is off*, and it says so: "if there is no
+Cgo we must link to each of the functions from dlfcn.h". It declares `dlopen`,
+`dlsym`, `dlerror` and `dlclose` with `//go:cgo_import_dynamic`, which the Go
+linker honours whether or not cgo is enabled, and the binary comes out with an
+ELF interpreter and `DT_NEEDED` entries. `readelf --dyn-syms` on the shipped
+artifact lists exactly those four as undefined.
+
+Row 3 is why `CGO_ENABLED=1` appears at all in row 4, which otherwise reads
+backwards. `-extldflags` is passed to the EXTERNAL linker, and a cgo-free build
+links internally — the flag reaches nothing. External linking is the only way
+to force a static ELF, and external linking requires cgo. So row 4 is not "the
+normal way to build static", it is the only lever left after rows 2 and 3.
+
+And it does not work:
+
+```
+/usr/bin/ld: warning: Using 'dlopen' in statically linked applications
+  requires at runtime the shared libraries from the glibc version used
+  for linking
+file(1): "statically linked"
+./crewlet migrate: SIGSEGV, signal arrived during cgo execution,
+  inside purego.RegisterFunc -> the first call into the Turso library
+```
+
+On the machine that built it, against the glibc it linked against, with a
+clean library cache. The identical run on the ordinary dynamic build applies
+13 migrations. This is not a flag that wants tuning: the driver reaches its
+engine with `dlopen`, and a statically linked program has no dynamic loader to
+do that with. Static linking and a runtime-loaded shared object are mutually
+exclusive, so a "static build" here is an artifact that looks more portable and
+crashes at its first query. `ci.yml`'s `cross` job asserts the binary is still
+dynamic for exactly this reason — the assertion is guarding against an
+improvement that isn't one.
+
+The version that WOULD work is upstream's to make: `turso-go-platform-libs`
+ships `libturso_sync_sdk_kit.a` beside the `.so` for both musl targets, and a
+driver that linked the archive through cgo would need no loader at all. But
+`tursogo` has no such path — every entry point goes through
+`InitLibrary` -> `LoadTursoLibrary` -> `dlopen`, and there is no build tag,
+no `#cgo LDFLAGS` and no `import "C"` anywhere in it. Using those archives
+means a fork or an upstream change, not a flag here.
+
+**There is no musl archive, and `-tags musl` is not what would produce one.**
+This was nearly shipped and the measurement stopped it. The tag selects which
+shared object the driver embeds; it does not change the binary's own linkage,
+and the binary is not static: purego declares its dlopen imports with
+`//go:cgo_import_dynamic`, so `CGO_ENABLED=0 go build` still emits
+`interpreter /lib64/ld-linux-x86-64.so.2` with `NEEDED libc.so.6` — identical
+with and without the tag. A `_musl` archive built that way fails at `execve`
+on Alpine, which is worse than no archive: it is a signed artifact promising a
+platform it cannot run on, the same defect as the windows/arm64 binary below.
+
+A real musl artifact needs a musl toolchain to build on (`zig cc -target
+x86_64-linux-musl`, or Alpine's own gcc) and a musl host to test on. That is a
+genuine option and it is not this change: it trades the plain GOOS/GOARCH loop
+for a cross-toolchain on one target, which is the property this section exists
+to protect, so it deserves its own decision rather than being smuggled in.
+Until then the honest position is the one the docs take: the linux binaries
+require glibc.
+
+**Windows was dropped, and it is worth being exact about why.** Not "Turso has
+no Windows build" — it has one, for amd64. The release published windows/amd64
+AND windows/arm64, and the second had no embedded library at all: it started
+fine and failed at its first query unless the operator knew to set
+`CREWLET_STORE_DRIVER=sqlite`, the fallback driver that d-003 has since
+removed. Shipping one architecture of an operating system and silently breaking
+the other is worse than shipping neither. A Windows build was in any case the
+one that refused `providers.sandbox: {type: local}`: the local sandbox backend
+is POSIX-only and says so at construction (`internal/sandbox/process_other.go`),
+because every containment property it offers — process groups and `killpg` to
+reach a coding agent's whole tree, `SIGSTOP`/`SIGCONT` for the clarification
+pause, `/proc` start times for the pid-reuse guard — is a POSIX primitive with
+no equivalent.
 
 ## One image, with a userland
 
@@ -119,7 +208,9 @@ Multi-arch (`linux/amd64`, `linux/arm64`) to GHCR, because the release
 workflow already holds a token scoped to this repository and a second
 registry would mean a second account and a second credential.
 
-Base: `debian:trixie-slim`, **not** distroless or scratch. A static pure-Go
+Base: `debian:trixie-slim`, **not** distroless or scratch. The binary is not
+static on linux at all (see above), so `scratch` does not merely lose the
+userland below — the process would not start. Even setting that aside: a
 binary would run on `scratch` and that is the right image for most Go
 services. Not for this one, because the engine SPAWNS things:
 

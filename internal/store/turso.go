@@ -129,11 +129,47 @@ func loadOrHealTursoLibrary(dir string) error {
 	clearTursoCache(dir)
 	if err := loadTursoLibrary(); err != nil {
 		return fmt.Errorf("store: the Turso native library could not be prepared. Its cache "+
-			"at %s was cleared and re-extracted and still does not verify — clear that "+
-			"directory by hand, or select the certified fallback driver with %s=%s: %w",
-			dir, DriverEnv, DriverSQLite, err)
+			"at %s was cleared and re-extracted and still does not verify or will not "+
+			"load — delete that directory by hand, or point %s at a writable directory "+
+			"of its own and start again. There is no second driver to fall back to.%s: %w",
+			dir, tursoCacheEnv, libcAdvice(), err)
 	}
 	return nil
+}
+
+// libcAdvice names the C library requirement, when there is evidence it is
+// the thing in the way.
+//
+// # Why this sentence exists
+//
+// Everything about this engine says "static binary" — one file, no runtime,
+// CGO_ENABLED=0 — and on linux that is FALSE, measured. The driver reaches its
+// database engine through purego, which declares its dlopen/dlsym imports with
+// //go:cgo_import_dynamic, so the linker emits a DYNAMIC executable even with
+// cgo off: interpreter /lib64/ld-linux-x86-64.so.2, NEEDED libc.so.6. The
+// linux binaries require glibc.
+//
+// On a plain musl system that fails at execve and nothing here ever runs, so
+// this is not the message that case gets — the kernel's is, and it is
+// "no such file or directory" about a file that exists. What this covers is
+// the case that DOES reach Go: a musl host with a glibc shim (gcompat and
+// friends), where the process starts and then the extracted shared object
+// will not load. That failure otherwise arrives dressed as "the cache will not
+// verify", about a cache that is perfect, and sends an operator to delete a
+// directory that is rebuilt identically.
+//
+// Appended rather than substituted, and phrased as "looks like": the evidence
+// is one glob (see runningOnMusl), a host can carry both C libraries, and the
+// underlying error is still the thing to read.
+func libcAdvice() string {
+	if !runningOnMusl() {
+		return ""
+	}
+	return "\n\nThis host looks like a musl system (Alpine and friends). The linux " +
+		"binaries are dynamically linked against GLIBC — the database engine is " +
+		"loaded with dlopen, which is not something a pure-Go build avoids — so " +
+		"the shared object will not load here even under a glibc shim. Run the " +
+		"published container image, or use a glibc base image."
 }
 
 // loadTursoLibrary extracts-if-absent, verifies and loads.

@@ -174,25 +174,41 @@ func SchemaVersions() []string {
 // deployment looks like rather than an error: reporting a missing table
 // would send an operator to investigate the state every new install starts
 // in.
+//
+// # It takes the lock, and gives it back
+//
+// Reading is still a second process on a file this engine owns exclusively,
+// and the answer to that is [ErrLocked] naming the holder — not an opaque
+// driver error, and not a silent read of a file somebody is writing. It held
+// no lock at all until this was fixed, so `crewlet migrate` reported the
+// schema of a live engine's database and only refused at the point it tried
+// to change it: the check that runs first was the one with no guard.
+//
+// The lock is released before returning, and NOT because [Open] would
+// otherwise be refused — it would not. The claim is refcounted per process
+// (see lock.go), so `crewlet migrate` calling Pending and then Open shares one
+// claim either way, and a Pending that never released would look perfectly
+// fine from inside that command.
+//
+// It is released because a claim this process no longer needs is a claim it
+// must not keep: the lock lives as long as the process, so a leak here would
+// leave the file excluded from every OTHER process for the rest of this one's
+// life, with nothing to point at. That is why the test asserts the refcount
+// rather than a following Open — an Open that succeeds proves nothing.
 func Pending(ctx context.Context, path string, opts Options) (applied, pending []string, err error) {
-	drv, err := resolveDriver(opts.Driver)
+	lock, err := lockStore(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	busy := opts.BusyTimeout
-	if busy <= 0 {
-		busy = defaultBusyTimeout
-	}
-	pool, err := openPool(string(drv), path, busy, opts.WrapDriver)
+	defer lock.release()
+
+	pool, err := openPrepared(ctx, path, opts)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer func() { _ = pool.Close() }()
-	if err = pool.PingContext(ctx); err != nil {
-		return nil, nil, fmt.Errorf("store: open %s (%s): %w", path, drv, err)
-	}
 
-	db := &DB{sql: pool, drv: drv, path: path}
+	db := &DB{sql: pool, path: path}
 	if applied, err = db.appliedVersions(ctx); err != nil {
 		// A database that has never been migrated has no
 		// schema_migrations table, and that is the ordinary state of a

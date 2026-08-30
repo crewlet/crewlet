@@ -128,7 +128,6 @@ func TestBootstrapSchemaEnumsMatchTheValidators(t *testing.T) {
 	}{
 		{"Logging", "level", strs(logging.Levels)},
 		{"Logging", "format", strs(logging.Formats)},
-		{"Store", "driver", strs(StoreDrivers)},
 	} {
 		def, ok := defs[tc.def].(map[string]any)
 		if !ok {

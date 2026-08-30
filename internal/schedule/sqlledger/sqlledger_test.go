@@ -1,7 +1,6 @@
 package sqlledger_test
 
 import (
-	"database/sql"
 	"errors"
 	"io"
 	"log/slog"
@@ -26,25 +25,19 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// certified is every driver the store may be opened with. The ledger's
-// statements run against all of them, because a statement is only known to be
-// in the dialect intersection once both have parsed it (d-002).
-var certified = []store.Driver{store.DriverTurso, store.DriverSQLite}
-
 // TestContract runs the SAME suite the memory twin runs. That is the point of
 // having a twin at all: a semantic divergence between the two becomes a named
 // failing case rather than a production surprise on whichever deployment runs
 // the other one.
+//
+// One driver now (decisions/003), so the per-driver loop that used to wrap
+// this is gone. What it certified — that the ledger's SQL means the same
+// thing as the in-memory twin — never depended on there being two.
 func TestContract(t *testing.T) {
-	for _, drv := range certified {
-		t.Run(string(drv), func(t *testing.T) {
-			t.Parallel()
-			requireDriver(t, drv)
-			scheduletest.Run(t, func(t *testing.T) schedule.Ledger {
-				return sqlledger.New(open(t, drv).SQL())
-			})
-		})
-	}
+	t.Parallel()
+	scheduletest.Run(t, func(t *testing.T) schedule.Ledger {
+		return sqlledger.New(open(t).SQL())
+	})
 }
 
 // TestALedgerWithNoDatabaseSaysSo covers the one state the contract suite
@@ -86,14 +79,20 @@ func TestALedgerWithNoDatabaseSaysSo(t *testing.T) {
 // would present as a company whose schedules silently never run.
 func TestAClaimAgainstNoTableIsUnknownNotARefusal(t *testing.T) {
 	t.Parallel()
-	requireDriver(t, store.DriverSQLite)
-	db, err := sql.Open(string(store.DriverSQLite), filepath.Join(t.TempDir(), "bare.db"))
-	if err != nil {
-		t.Fatalf("open a schemaless database: %v", err)
+	// A MIGRATED STORE WITH THE TABLE DROPPED, not a raw sql.Open on a
+	// bare file. The driver loads a native library on its first connection
+	// and PANICS on a half-written cache unless store.Open has prepared it
+	// (internal/store/turso.go), so a second way into a connection is a
+	// second way to take the test binary down — the same defect
+	// store.Pending had. Dropping the table is the honest way to reach
+	// "the statements have no table to run against".
+	db := open(t)
+	if _, err := db.SQL().ExecContext(t.Context(),
+		`DROP TABLE scheduled_runs`); err != nil {
+		t.Fatalf("drop scheduled_runs: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
 
-	ok, err := sqlledger.New(db).Claim(t.Context(), schedule.Run{
+	ok, err := sqlledger.New(db.SQL()).Claim(t.Context(), schedule.Run{
 		FireKey: schedule.FireKey{ScopeID: "qa", ScheduleName: "smoke", FireLabel: "20260608T0900"},
 	})
 	if err == nil {
@@ -114,8 +113,7 @@ func TestAClaimAgainstNoTableIsUnknownNotARefusal(t *testing.T) {
 // statements expect turns that into one failure that says what moved.
 func TestTheStatementsNameTheirColumns(t *testing.T) {
 	t.Parallel()
-	requireDriver(t, store.DriverSQLite)
-	db := open(t, store.DriverSQLite)
+	db := open(t)
 
 	rows, err := db.SQL().QueryContext(t.Context(), `SELECT * FROM scheduled_runs LIMIT 0`)
 	if err != nil {
@@ -141,23 +139,13 @@ func TestTheStatementsNameTheirColumns(t *testing.T) {
 // open builds a migrated store on its own file. Each one is exclusive: the
 // engine owns its file, and sharing one between parallel subtests would
 // exercise an arrangement nothing runs in.
-func open(t *testing.T, drv store.Driver) *store.DB {
+func open(t *testing.T) *store.DB {
 	t.Helper()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "schedule.db"),
-		store.Options{Driver: drv})
+		store.Options{})
 	if err != nil {
-		t.Fatalf("open %s: %v", drv, err)
+		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
-}
-
-// requireDriver skips rather than fails when a driver is not compiled in. Both
-// are in go.mod today; a build that drops one should lose that driver's
-// coverage, not the whole suite.
-func requireDriver(t *testing.T, drv store.Driver) {
-	t.Helper()
-	if !slices.Contains(sql.Drivers(), string(drv)) {
-		t.Skipf("driver %q is not registered in this build", drv)
-	}
 }

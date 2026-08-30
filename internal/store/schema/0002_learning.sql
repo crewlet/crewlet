@@ -46,7 +46,11 @@ CREATE TABLE episodes (
     -- a 3-element vector inserts happily into F32_BLOB(4)), and
     -- vector_distance_cos() reads a plain BLOB column and a bound []byte
     -- identically — so the declaration bought nothing and cost a phase.
-    -- The Go layer validates the width instead.
+    -- The Go layer validates the width on write instead, and recall filters
+    -- on `length(embedding)` on read: vector_distance_cos FAILS THE WHOLE
+    -- STATEMENT on a width mismatch, so a company that changed embedding
+    -- model would otherwise find recall erroring rather than skipping the
+    -- rows it cannot compare.
     embedding      BLOB,
 
     kind                       TEXT    NOT NULL DEFAULT 'raw',
@@ -76,10 +80,11 @@ CREATE TABLE episodes (
     -- SQL treats NULLs as distinct, so a PLAIN unique index over a
     -- nullable column gives identical semantics — and a plain index is
     -- the only thing a bare `ON CONFLICT (agent_handle, work_key)` can
-    -- target: aiming ON CONFLICT at a partial index is a parse error on
-    -- both drivers unless the predicate is repeated verbatim in the
-    -- statement (measured). The store maps '' <-> NULL at the boundary so
-    -- Go callers keep the zero value.
+    -- target: aiming ON CONFLICT at a partial index is a parse error
+    -- unless the predicate is repeated verbatim in the statement
+    -- (measured, and still measured — see TestPartialIndexConflictTarget).
+    -- The store maps '' <-> NULL at the boundary so Go callers keep the
+    -- zero value.
     work_key         TEXT,
     -- conversation_key — which conversation the turn served, as
     -- {source}:{local}. NULL for triggers with no derivable conversation
@@ -95,10 +100,12 @@ CREATE UNIQUE INDEX episodes_agent_work_key_idx
     ON episodes (agent_handle, work_key);
 
 -- Per-agent time windows — the recent-episodes read, and the scan vector
--- recall runs over. Recall is brute force here (no ANN index reaches the
--- Go driver yet, decisions/002), so this index doing the
--- agent-scoping is what keeps the cosine loop over thousands of rows
--- rather than the whole table.
+-- recall runs over. Recall is still a SCAN (no ANN index reaches the Go
+-- driver, decisions/002), even though the distance arithmetic itself is the
+-- database's since decisions/003 — so this index doing the agent-scoping is
+-- what keeps that scan over one seat's thousands of rows rather than the
+-- whole table. It also carries recall's tie-break: equal distances order by
+-- ended_at DESC.
 CREATE INDEX episodes_agent_ended_at_idx
     ON episodes (agent_handle, ended_at DESC);
 

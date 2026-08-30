@@ -70,8 +70,9 @@ stream:
 # rebuildable copy — the stream is the truth, this is the cache.
 store:
   path: "./nimbus-data/nimbus.db"
-  # driver: turso                 # turso (default) or sqlite; CREWLET_STORE_DRIVER
-                                  #   selects it when this is unset
+  # There is no `driver:` here and no CREWLET_STORE_DRIVER either — Turso
+  # is the database and the only one.  A file that still carries the key
+  # is answered by name rather than as a typo; see decisions/003.
 
 # ── Seat ownership ────────────────────────────────────────────────────
 #

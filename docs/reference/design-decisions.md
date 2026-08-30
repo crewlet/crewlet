@@ -92,6 +92,56 @@ This avoids duplicating task state and keeps the audit trail in the tool the tea
 
 ---
 
+## One Store Driver, and the Platforms It Bounds
+
+The store is **Turso** (`turso.tech/database/tursogo`), and it is the only
+driver. There was a second — mainline SQLite (`modernc.org/sqlite`) behind
+`store.driver` in the Tier A file and `CREWLET_STORE_DRIVER` in the
+environment — kept as an escape hatch, and the escape hatch turned out not to
+be one. Only Turso has the vector distance functions the [agent-learning
+subsystem's](../concepts/agent-learning.md) recall reads through, so an
+operator who flipped the variable kept every table and lost their agents'
+memory, with nothing saying so. Both the field and the variable are retired: a
+Tier A file that still sets the field is refused with a message naming the
+change rather than reported as a misspelling.
+
+**Nothing about the data moves.** Turso is SQLite-compatible in its file
+format, so an existing store opens untouched, there is no migration to run,
+and any SQLite-compatible client still reads the file for forensics.
+
+What the single dialect buys is spent on recall: the cosine distance now runs
+**in the database** rather than in Go over every row the seat owns. There is
+still no approximate-nearest-neighbour index reachable from the Go driver, so
+recall remains a scan behind the per-agent index — that is the honest claim,
+and it is not the same as "native vector search". Nor is full-text search
+available: knowledge search is the external backend behind
+`knowledge.Searcher`, as it always was.
+
+**The driver also decides what Crewlet ships for.** "Pure Go" is not
+"self-contained" here: the database engine is a native library embedded in the
+driver module and extracted at run time. Upstream embeds that library for
+linux and macOS on amd64 and arm64 — linux in a glibc and a musl variant — and
+for windows/amd64, and for nothing else. What Crewlet ships is narrower than
+that list, and the two bullets below are why.
+
+- **There is no Windows build.** The release used to publish windows/amd64 and
+  windows/arm64, and the second had no library at all: it started, then failed
+  at its first query. Shipping one architecture of an operating system while
+  silently breaking the other is worse than shipping neither, and a Windows
+  binary was in any case the one that refused
+  [`providers.sandbox: {type: local}`](../concepts/code-sandbox.md).
+- **There is no musl build either, so the linux binaries need glibc.** Loading
+  that native library means `dlopen`, which makes the binary dynamically linked
+  against `libc.so.6` even though it is pure Go and built with
+  `CGO_ENABLED=0`. On Alpine and other musl systems it fails at `execve`,
+  reported as `no such file or directory` about a file that plainly exists. Use
+  a glibc base image — the published one is `debian:trixie-slim` for exactly
+  this reason — or a glibc host. Building it `-static` is not the way out: a
+  static program has no dynamic loader and cannot `dlopen` at all. macOS is
+  unaffected.
+
+---
+
 ## One Knowledge Backend, Behind a Seam That Keeps It Swappable
 
 The knowledge base is **single-homed**: the engine wires exactly one

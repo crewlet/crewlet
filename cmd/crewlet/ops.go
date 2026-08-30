@@ -63,7 +63,6 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	opts := store.Options{
-		Driver:       store.Driver(boot.Store.Driver),
 		MaxOpenConns: boot.Store.MaxOpenConns,
 		BusyTimeout: time.Duration(
 			boot.Store.BusyTimeoutSeconds * float64(time.Second)),
@@ -72,7 +71,17 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 
 	applied, pending, err := store.Pending(ctx, boot.Store.Path, opts)
 	if err != nil {
-		return err
+		// READING IS ALSO A SECOND PROCESS ON THE FILE, and until Pending
+		// took the lock this was the one path that did not say so: -check
+		// reported the schema of a live engine's database, and only the
+		// apply below was refused. The remedy differs from the apply's,
+		// though — nothing here would change the file, so an operator
+		// wanting the answer has a route that does not involve stopping
+		// the company.
+		return engineHoldsTheStore(err, bootstrapPath,
+			"Stop `crewlet run` on this node and re-run. A running engine has "+
+				"already applied every migration this binary carries, so a node "+
+				"that is up is a node with nothing pending.")
 	}
 	if *check {
 		fmt.Fprintf(stdout, "%s: %d applied, %d pending\n",

@@ -24,7 +24,6 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"blank label key", "node:\n  labels:\n    \"\": eu\n", "node.labels", ErrMissing},
 
 		{"no store path", "store:\n  path: \"\"\n", "store.path", ErrMissing},
-		{"unknown driver", "store:\n  driver: postgres\n", "store.driver", ErrUnknownValue},
 		{"negative pool", "store:\n  max_open_conns: -1\n", "store.max_open_conns", ErrOutOfRange},
 
 		{"unknown stream type", "stream:\n  type: kafka\n", "stream.type", ErrUnknownValue},

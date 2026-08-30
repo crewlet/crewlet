@@ -643,16 +643,19 @@ func TestCloseLeavesTheStoreClosed(t *testing.T) {
 	}
 }
 
-func TestTheStoreTakesItsDriverAndBusyTimeoutFromConfig(t *testing.T) {
+func TestTheStoreTakesItsPoolKnobsFromConfig(t *testing.T) {
 	t.Parallel()
 	// Both are Tier A knobs an operator sets and nothing else reports. A
-	// driver silently ignored means running on a different storage engine
-	// than the one configured — which the config's own validator calls a
-	// data-loss shape, not a cosmetic one — and a busy timeout ignored
-	// means statements giving up on lock contention far sooner than asked.
+	// busy timeout ignored means statements giving up on lock contention
+	// far sooner than asked, and a pool bound ignored means the dashboard's
+	// read burst landing on however many connections database/sql felt
+	// like opening.
+	//
+	// The driver used to be the third knob here and is gone with it
+	// (decisions/003): there is one driver, and TestTursoIsTheOnlyDriver-
+	// InTheBinary in internal/store is what asserts that now.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-		b.Store.Driver = config.StoreDriverSQLite
 		b.Store.BusyTimeoutSeconds = 11
 		b.Store.MaxOpenConns = 3
 	})
@@ -662,9 +665,6 @@ func TestTheStoreTakesItsDriverAndBusyTimeoutFromConfig(t *testing.T) {
 	}
 	t.Cleanup(func() { back.Close(t.Context()) })
 
-	if got := back.Store.Driver(); got != store.DriverSQLite {
-		t.Errorf("driver = %q, want the configured %q", got, store.DriverSQLite)
-	}
 	var busyMS int
 	if err := back.Store.SQL().QueryRowContext(t.Context(),
 		"PRAGMA busy_timeout").Scan(&busyMS); err != nil {
@@ -678,7 +678,7 @@ func TestTheStoreTakesItsDriverAndBusyTimeoutFromConfig(t *testing.T) {
 	}
 }
 
-func TestAnUnsetDriverAndTimeoutTakeTheStoreDefaults(t *testing.T) {
+func TestAnUnsetTimeoutTakesTheStoreDefault(t *testing.T) {
 	t.Parallel()
 	// The counterfactual. Passing the configured values through is only
 	// half the contract: zero must reach the store as "you choose", not as
@@ -693,9 +693,6 @@ func TestAnUnsetDriverAndTimeoutTakeTheStoreDefaults(t *testing.T) {
 	}
 	t.Cleanup(func() { back.Close(t.Context()) })
 
-	if got := back.Store.Driver(); got != store.DriverTurso {
-		t.Errorf("driver = %q, want the default %q", got, store.DriverTurso)
-	}
 	var busyMS int
 	if err := back.Store.SQL().QueryRowContext(t.Context(),
 		"PRAGMA busy_timeout").Scan(&busyMS); err != nil {

@@ -476,21 +476,6 @@ func NewIncarnation(nodeID string) string {
 // in an empty directory works.
 const DefaultStorePath = "crewlet.db"
 
-// StoreDriver selects the SQLite implementation behind the store.
-type StoreDriver string
-
-const (
-	// StoreDriverTurso is the default: vector search and full-text search
-	// are native, so recall does not fall back to a brute-force scan.
-	StoreDriverTurso StoreDriver = "turso"
-	// StoreDriverSQLite is mainline SQLite — the certified fallback, and
-	// what the dual-driver CI job proves still works.
-	StoreDriverSQLite StoreDriver = "sqlite"
-)
-
-// StoreDrivers is the closed set, shared by the validator and the schema.
-var StoreDrivers = []StoreDriver{StoreDriverTurso, StoreDriverSQLite}
-
 // Store is the local database this node materializes the stream into.
 //
 // It is a FILE, owned exclusively by this process for the life of the
@@ -498,15 +483,17 @@ var StoreDrivers = []StoreDriver{StoreDriverTurso, StoreDriverSQLite}
 // pointed at one file corrupt it, and a fleet's nodes each keep their own
 // rebuildable copy: the store is the synchronous truth and the index an
 // asynchronous cache of it.
+//
+// # There is no driver field
+//
+// There was one — `driver: turso | sqlite` — and it is retired
+// (decisions/003). Turso is the database and the only driver, so the field
+// selected between two implementations of which one exists. A file that still
+// carries it is answered by name rather than as a misspelling; see
+// retiredBootstrapFields in load.go.
 type Store struct {
 	// Path is the database file. Created if absent, along with its parent.
 	Path string `yaml:"path,omitempty" json:"path,omitempty" desc:"Local database file this node owns exclusively."`
-
-	// Driver selects the SQLite implementation. Empty consults
-	// CREWLET_STORE_DRIVER and then defaults to turso. A mistyped name is
-	// an error rather than a fallback: silently opening a different
-	// storage engine is a data-loss shape, not a cosmetic one.
-	Driver StoreDriver `yaml:"driver,omitempty" json:"driver,omitempty" js:"enum=turso|sqlite" desc:"turso (default) or sqlite."`
 
 	// MaxOpenConns bounds the connection pool; 0 takes the store's own
 	// default, which is sized to the dashboard's query concurrency.
@@ -523,10 +510,6 @@ func (s *Store) validate(path string) error {
 		p.add(at(path, "path"), ErrMissing,
 			"the store is a local file this node owns; name one (e.g. %q)",
 			DefaultStorePath)
-	}
-	if s.Driver != "" && !oneOf(s.Driver, StoreDrivers) {
-		p.add(at(path, "driver"), ErrUnknownValue, "%q (want %s)",
-			s.Driver, names(StoreDrivers))
 	}
 	if s.MaxOpenConns < 0 {
 		p.add(at(path, "max_open_conns"), ErrOutOfRange,

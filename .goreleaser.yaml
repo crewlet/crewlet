@@ -27,10 +27,46 @@ builds:
     main: ./cmd/crewlet
     binary: crewlet
     env:
-      # Pure Go, all the way down: both certified store drivers
-      # (turso.tech/database/tursogo, modernc.org/sqlite) and the embedded
-      # NATS server compile without cgo, which is what makes the matrix
-      # below a plain GOOS/GOARCH loop instead of a cross-toolchain estate.
+      # No cgo, so the matrix below is a plain GOOS/GOARCH loop rather than a
+      # cross-toolchain estate. That is what CGO_ENABLED=0 buys here, and it
+      # is ALL it buys — see the two notes below, both measured.
+      #
+      # NOT A STATIC BINARY, on linux, and DO NOT TRY TO MAKE IT ONE. The
+      # store driver reaches its database engine through purego, which
+      # declares its dlopen/dlsym imports with //go:cgo_import_dynamic — so
+      # the linker emits a DYNAMIC executable even with cgo off. Measured on
+      # the linux/amd64 artifact: interpreter /lib64/ld-linux-x86-64.so.2,
+      # NEEDED libdl.so.2, libpthread.so.0, libc.so.6. (A hello-world at
+      # CGO_ENABLED=0 is statically linked, so this is the dependency and
+      # not the toolchain.)
+      #
+      # The CGO_ENABLED=0 above therefore does NOT mean "static", which is
+      # the one thing everyone assumes it means. purego's no-cgo file is the
+      # one that forces this: dlfcn_nocgo_linux.go is `//go:build !cgo` and
+      # declares dlopen/dlsym/dlerror/dlclose with //go:cgo_import_dynamic,
+      # which the linker honours with cgo off.
+      #
+      # Nor does adding `-extldflags -static` here change anything: that flag
+      # is for the EXTERNAL linker and a cgo-free build links internally, so
+      # nothing reads it. Forcing a static ELF needs external linking, which
+      # needs cgo — and THAT build produces a binary file(1) calls "statically
+      # linked" which SIGSEGVs on its first query, on the machine that built
+      # it, because a static program has no dynamic loader and cannot dlopen
+      # anything. glibc's linker warns about it up front. decisions/901 has
+      # the table; ci.yml's `cross` job asserts the artifact is still dynamic
+      # so this cannot be re-discovered by a release.
+      #
+      # The linux binaries therefore require GLIBC; on a musl system they
+      # fail at execve, before any Go code runs, and `-tags musl` does NOT
+      # change that — the tag only selects which .so the driver embeds, not
+      # this binary's own interpreter. Publishing a musl archive means
+      # producing and testing one on a musl toolchain, which nothing here
+      # does.
+      #
+      # "Pure Go" is not "self-contained" either: the database engine is a
+      # native library embedded in the driver module and extracted at run
+      # time (internal/store/turso.go). That is what bounds the matrix below
+      # — the loop is free, the platforms are not.
       - CGO_ENABLED=0
     flags:
       # Strip the build machine's paths out of the binary, so two builds of
@@ -43,7 +79,22 @@ builds:
     # same reason as -trimpath: a rebuild of a tag must be verifiable
     # against the artifact that shipped.
     mod_timestamp: "{{ .CommitTimestamp }}"
-    goos: [linux, darwin, windows]
+    # FOUR TARGETS, and the list is bounded by the driver rather than by the
+    # compiler. turso-go-platform-libs embeds its native library for
+    # linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64,
+    # and for nothing else.
+    #
+    # Windows is dropped even though windows/amd64 has one (decisions/003).
+    # The release used to publish windows/amd64 AND windows/arm64, and the
+    # second could not open a store at all: no embedded library, so the binary
+    # started and failed at its first query unless the operator knew to set
+    # CREWLET_STORE_DRIVER=sqlite — the fallback driver that has since been
+    # removed. Shipping one architecture of an operating system and silently
+    # breaking the other is worse than shipping neither, and a Windows build
+    # was already the one that refused `providers.sandbox: {type: local}`
+    # (decisions/901). internal/store/platform.go turns a build for any
+    # platform off this list into a compile error that says why.
+    goos: [linux, darwin]
     goarch: [amd64, arm64]
 
 archives:
@@ -51,10 +102,9 @@ archives:
     ids: [crewlet]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    # tar.gz everywhere. The zip override existed for Windows and went with
+    # it; linux and darwin both want a tarball.
     formats: [tar.gz]
-    format_overrides:
-      - goos: windows
-        formats: [zip]
     files:
       - LICENSE
       - README.md
@@ -118,6 +168,9 @@ changelog:
 # GHCR rather than Docker Hub: the release workflow already holds a GitHub
 # token scoped to this repository, so publishing needs no second account and
 # no second credential.
+# The image is debian:trixie-slim, and that is not a size preference — see
+# the Dockerfile, and the GLIBC note on the build above. A musl base does not
+# work at all.
 dockers_v2:
   - id: crewlet
     ids: [crewlet]

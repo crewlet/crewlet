@@ -6,22 +6,20 @@
 //
 // The engine owns its database file EXCLUSIVELY. A second binary pointed at
 // the same path is not a degraded configuration, it is corruption waiting for
-// a schedule to collide — and the two certified drivers disagree about it,
-// which is worse than either answer alone. Measured: turso refuses, but as an
-// opaque connect error and only while the first process holds live
-// connections; modernc sqlite ACCEPTS IT SILENTLY. So on the fallback driver
-// the failure arrives later as a corrupt file with no event to trace it to,
-// and on the default one it arrives as a message about locking that names no
-// holder.
+// a schedule to collide — and the driver says so only sometimes, which is
+// worse than never. Measured: Turso refuses a second opener, but as an opaque
+// connect error ("File is locked by another process") that names no holder,
+// and only while the first process still has live connections. A peer that
+// opens the file in the window between the engine's connections finds nothing
+// in its way at all.
 //
 // [Open] therefore takes an advisory OS lock for the life of the handle and
-// answers a second PROCESS with [ErrLocked] — before any driver work, the
-// same way on both drivers, naming the pid that holds the file. See lock.go
-// for why an OS lock rather than a pid file, and why two handles inside one
-// process share the claim instead. That is what makes the rule above true
-// rather than merely stated: the secret-store CLIs open this database from a
-// second process as their documented gesture, and before the lock the only
-// defence was this comment.
+// answers a second PROCESS with [ErrLocked] — before any driver work, and
+// naming the pid that holds the file. See lock.go for why an OS lock rather
+// than a pid file, and why two handles inside one process share the claim
+// instead. That is what makes the rule above true rather than merely stated:
+// the secret-store CLIs open this database from a second process as their
+// documented gesture, and before the lock the only defence was this comment.
 //
 // Everything that genuinely needs cross-process coordination — seat leases,
 // config activations, the completion ledger, dedupe and rate valves — lives in
@@ -33,55 +31,47 @@
 // each race the DDL from a different OS process. One process means one
 // in-process mutex, and the lock protocol simply disappears.
 //
-// # Two drivers, one dialect
+// # One driver
 //
-// Two drivers are certified and selected by CREWLET_STORE_DRIVER: "turso"
-// (the default) and "sqlite" (modernc.org/sqlite — pure Go, no cgo). Every
-// statement in this package must parse on BOTH, because Turso's dialect is the
-// narrower of the two today and the dual-driver test job is the only thing
-// that catches a divergence. See decisions/002 for what the spike
-// measured and Capabilities for what the probe re-measures at open.
+// Turso (turso.tech/database/tursogo) is the database, and it is the only
+// driver. There was a second — modernc.org/sqlite, kept as a certified
+// fallback so that every statement here had to parse on both — and dropping
+// it is decisions/003. The short version: the fallback never ran anything
+// but its own test job, the two drivers are not substitutable for a database
+// with rows in it (only Turso has the vector functions the learning
+// subsystem's recall needs), and writing in the intersection of two dialects
+// cost the engine every Turso-only feature it is on Turso for.
+//
+// What that buys is spent immediately and deliberately: recall's distance
+// arithmetic now runs in the database (see internal/learning), because
+// vector_distance_cos is present on the one driver rather than probable on
+// two. [Capabilities] still measures what the pinned driver can do, and is
+// still the tripwire for the two features Turso announces and does not yet
+// reach Go — an ANN vector index and a full-text index.
 package store
 
 import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
 
-	// Both drivers register themselves under the names Driver selects
-	// between. They are blank imports because nothing here touches their
-	// types — the whole point of the database/sql seam is that swapping one
-	// for the other changes a string.
-	_ "modernc.org/sqlite"
+	// The driver registers itself under the name [driverName]. A blank
+	// import because nothing here touches its types — the whole point of
+	// the database/sql seam is that the engine talks to an interface.
 	_ "turso.tech/database/tursogo"
 )
 
-// Driver names one of the two certified database drivers.
-type Driver string
-
-const (
-	// DriverTurso is turso.tech/database/tursogo, the default.
-	DriverTurso Driver = "turso"
-	// DriverSQLite is modernc.org/sqlite: mainline SQLite compiled to pure
-	// Go. It is the certified fallback, and it is what proves a statement
-	// is written in the dialect intersection rather than in Turso's.
-	DriverSQLite Driver = "sqlite"
-)
-
-// DriverEnv selects the driver when Options leaves it unset.
-const DriverEnv = "CREWLET_STORE_DRIVER"
-
-// ErrUnknownDriver is returned when a driver name matches neither certified
-// driver. It is an error rather than a fallback: a mistyped log level may
-// safely resolve to info, but a mistyped driver name silently opening a
-// different storage engine is a data-loss shape, not a cosmetic one.
-var ErrUnknownDriver = errors.New("store: unknown driver")
+// driverName is what the Turso driver registers itself as with database/sql.
+//
+// Unexported, and there is no longer a knob that selects it: a store.driver
+// config field and a CREWLET_STORE_DRIVER environment variable both chose
+// between two implementations, and there is one. See decisions/003, and
+// internal/config for the retired-key message a file that still sets it gets.
+const driverName = "turso"
 
 // Defaults for Options. Both are anchored to the dashboard, which is the only
 // component that reads this store concurrently with the engine writing it.
@@ -100,15 +90,10 @@ const (
 	defaultBusyTimeout = 5 * time.Second
 )
 
-// Options configures Open. The zero value is valid and selects the driver from
-// the environment.
+// Options configures Open. The zero value is valid.
 type Options struct {
-	// Driver overrides CREWLET_STORE_DRIVER. Empty consults the
-	// environment, and an unset environment means DriverTurso.
-	Driver Driver
-
-	// WrapDriver wraps the certified driver before any connection is
-	// opened. It exists for FAULT INJECTION and nothing else.
+	// WrapDriver wraps the driver before any connection is opened. It
+	// exists for FAULT INJECTION and nothing else.
 	//
 	// Every fail-open read in this codebase has a branch that only runs
 	// when a result set fails PART WAY THROUGH — after the query
@@ -117,9 +102,9 @@ type Options struct {
 	// dangerous one, and no amount of closing the database reaches it:
 	// closing makes the query itself fail, which is the other branch.
 	//
-	// It wraps rather than replaces, so the two-certified-drivers rule
-	// holds: what runs underneath is still turso or sqlite. Nil in every
-	// non-test caller, and there is no config field for it.
+	// It wraps rather than replaces, so what runs underneath is still the
+	// real driver against a real file. Nil in every non-test caller, and
+	// there is no config field for it.
 	WrapDriver func(driver.Driver) driver.Driver
 
 	// MaxOpenConns bounds the connection pool; 0 means defaultMaxOpenConns.
@@ -139,11 +124,29 @@ type Options struct {
 	EmbeddingDim int
 }
 
+// maxOpenConns is the pool bound with the default applied. A method rather
+// than a branch at each call site: [Open] and [Pending] both build a pool, and
+// the second one skipping a bound the first applies is exactly the drift that
+// made Pending a different database connection from the engine's.
+func (o Options) maxOpenConns() int {
+	if o.MaxOpenConns <= 0 {
+		return defaultMaxOpenConns
+	}
+	return o.MaxOpenConns
+}
+
+// busyTimeout is the lock wait with the default applied. See maxOpenConns.
+func (o Options) busyTimeout() time.Duration {
+	if o.BusyTimeout <= 0 {
+		return defaultBusyTimeout
+	}
+	return o.BusyTimeout
+}
+
 // DB is an open handle on the local store: a connection pool, the schema it
 // has applied, and the capability answers probed against the live driver.
 type DB struct {
 	sql  *sql.DB
-	drv  Driver
 	path string
 	caps Capabilities
 	dim  int
@@ -165,10 +168,6 @@ var log = logging.Get("store")
 // how. A second crewlet process opening the same path gets [ErrLocked] rather
 // than a database the two of them corrupt between them.
 func Open(ctx context.Context, path string, opts Options) (*DB, error) {
-	drv, err := resolveDriver(opts.Driver)
-	if err != nil {
-		return nil, err
-	}
 	// THE LOCK FIRST, before the native library and before the pool: both
 	// of those touch shared state on the way up, and taking them for a
 	// database this process turns out not to own is work done against a
@@ -185,42 +184,13 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 			lock.release()
 		}
 	}()
-	// BEFORE THE POOL, because the Turso driver loads its native library on
-	// the first connection and PANICS if the shared cache it loads from is
-	// half-written — see turso.go. Preparing it here turns a process that
-	// dies on its first query into an error a caller can read, and stops
-	// two engines starting at once from corrupting that cache at all.
-	if drv == DriverTurso {
-		if err = prepareTursoLibrary(); err != nil {
-			return nil, err
-		}
-	}
-	maxConns := opts.MaxOpenConns
-	if maxConns <= 0 {
-		maxConns = defaultMaxOpenConns
-	}
-	busy := opts.BusyTimeout
-	if busy <= 0 {
-		busy = defaultBusyTimeout
-	}
 
-	pool, err := openPool(string(drv), path, busy, opts.WrapDriver)
+	pool, err := openPrepared(ctx, path, opts)
 	if err != nil {
 		return nil, err
 	}
-	pool.SetMaxOpenConns(maxConns)
-	// Idle capacity matches open capacity: these are file handles on local
-	// storage, not sockets to a remote server, so retiring one buys nothing
-	// and paying to re-establish it (plus its session pragmas) on the next
-	// query costs real latency on the read path.
-	pool.SetMaxIdleConns(maxConns)
 
-	if err = pool.PingContext(ctx); err != nil {
-		_ = pool.Close()
-		return nil, fmt.Errorf("store: open %s (%s): %w", path, drv, err)
-	}
-
-	db := &DB{sql: pool, drv: drv, path: path, dim: opts.EmbeddingDim, lock: lock}
+	db := &DB{sql: pool, path: path, dim: opts.EmbeddingDim, lock: lock}
 	applied, err := db.migrate(ctx)
 	if err != nil {
 		_ = pool.Close()
@@ -229,7 +199,8 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	db.caps = probe(ctx, pool)
 
 	log.InfoContext(ctx, "store_opened",
-		"driver", string(drv), "path", path,
+		"path", path,
+		"engine_version", engineVersion(ctx, pool),
 		"migrations_applied", len(applied),
 		"vector_functions", db.caps.VectorFunctions,
 		"vector_index", db.caps.VectorIndex,
@@ -238,24 +209,73 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 	return db, nil
 }
 
-// resolveDriver picks the driver from the explicit option, then the
-// environment, then the default.
-func resolveDriver(want Driver) (Driver, error) {
-	name := string(want)
-	if name == "" {
-		name = os.Getenv(DriverEnv)
+// openPrepared readies the native library and returns a live pool with this
+// package's bounds and session state applied.
+//
+// ONE PATH TO A CONNECTION, and that is the whole reason it exists. [Open] and
+// [Pending] both need a pool, and Pending used to build its own: it resolved
+// the driver, called openPool and pinged — but never prepared the native
+// library, so the first connection `crewlet migrate` made went straight into
+// the driver's own loader, whose answer to a half-written cache is a PANIC
+// inside a sync.Once (see turso.go). The command that exists to report the
+// schema safely was the one command that could take the process down on it.
+// It also silently ran on an unbounded pool. Neither was a decision; both were
+// a second code path drifting from the first.
+//
+// It does NOT lock. The claim on the file belongs to the caller, because the
+// two callers want opposite things from it: Open holds it for the life of the
+// handle, and Pending takes it only across its read.
+func openPrepared(ctx context.Context, path string, opts Options) (*sql.DB, error) {
+	// BEFORE THE POOL, because the driver loads its native library on the
+	// first connection and PANICS if the shared cache it loads from is
+	// half-written. Preparing it here turns a process that dies on its
+	// first query into an error a caller can read, and stops two engines
+	// starting at once from corrupting that cache at all.
+	if err := prepareTursoLibrary(); err != nil {
+		return nil, err
 	}
-	switch Driver(name) {
-	case "":
-		return DriverTurso, nil
-	case DriverTurso:
-		return DriverTurso, nil
-	case DriverSQLite:
-		return DriverSQLite, nil
-	default:
-		return "", fmt.Errorf("%w %q (want %q or %q)",
-			ErrUnknownDriver, name, DriverTurso, DriverSQLite)
+	pool, err := openPool(path, opts.busyTimeout(), opts.WrapDriver)
+	if err != nil {
+		return nil, err
 	}
+	pool.SetMaxOpenConns(opts.maxOpenConns())
+	// Idle capacity matches open capacity: these are file handles on local
+	// storage, not sockets to a remote server, so retiring one buys nothing
+	// and paying to re-establish it (plus its session pragmas) on the next
+	// query costs real latency on the read path.
+	pool.SetMaxIdleConns(opts.maxOpenConns())
+
+	if err := pool.PingContext(ctx); err != nil {
+		_ = pool.Close()
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
+	return pool, nil
+}
+
+// engineVersion is what the database engine calls itself, for the one log line
+// an operator reads when a store behaves unlike it did before a driver bump.
+// Worth having because the driver is pre-1.0 and pinned, so "what changed" is
+// a real support question with no other answer inside the process.
+//
+// TWO NUMBERS, because there are two and they disagree. Measured at
+// tursogo v0.8.0-pre.7: turso_version() answers "3.47.0" and sqlite_version()
+// answers "3.50.4". Neither is the driver's own module version, and this file
+// deliberately does not claim to know which of them is the engine's release
+// and which is a compatibility level — it reports what was asked rather than
+// an interpretation that could be wrong in a log line nobody can re-check.
+// The identifier that is unambiguous is the pin in go.mod.
+//
+// Best effort: a driver that stopped answering either query must not fail an
+// open that has already succeeded.
+func engineVersion(ctx context.Context, pool *sql.DB) string {
+	ask := func(fn string) string {
+		var v string
+		if err := pool.QueryRowContext(ctx, `SELECT `+fn+`()`).Scan(&v); err != nil {
+			return "unknown"
+		}
+		return v
+	}
+	return fmt.Sprintf("turso=%s sqlite=%s", ask("turso_version"), ask("sqlite_version"))
 }
 
 // Close releases the pool and this process's claim on the file.
@@ -277,9 +297,6 @@ func (d *DB) Close() error {
 // them per query.
 func (d *DB) Caps() Capabilities { return d.caps }
 
-// Driver reports which certified driver is serving this handle.
-func (d *DB) Driver() Driver { return d.drv }
-
 // Path reports the file this handle owns.
 func (d *DB) Path() string { return d.path }
 
@@ -299,11 +316,10 @@ func (d *DB) SQL() *sql.DB { return d.sql }
 // The session state cannot be set once on the pool: database/sql opens
 // connections lazily and replaces them freely, so a PRAGMA issued through the
 // pool lands on whichever connection answered and no other. It cannot be
-// passed in the DSN either — modernc.org/sqlite accepts `?_pragma=…` and Turso
-// does not, and a per-driver DSN dialect is exactly the divergence this
-// package exists to avoid. A connector wrapping the driver is the one place
-// that runs on every connection, on both drivers, identically.
-func openPool(driverName, path string, busy time.Duration,
+// passed in the DSN either — Turso's DSN parser takes a path and a small set
+// of its own options, and none of them is a pragma. A connector wrapping the
+// driver is the one place that runs on every connection, identically.
+func openPool(path string, busy time.Duration,
 	wrap func(driver.Driver) driver.Driver,
 ) (*sql.DB, error) {
 	// sql.Open is lazy — it validates the driver name and nothing else — so
@@ -324,9 +340,7 @@ func openPool(driverName, path string, busy time.Duration,
 		dsn: path,
 		session: []string{
 			// WAL, so a dashboard read never blocks the engine's write
-			// and vice versa. Without it modernc.org/sqlite returns
-			// SQLITE_BUSY under any concurrent write at all (measured:
-			// 70 failures out of 80 writes across 4 connections).
+			// and vice versa.
 			"PRAGMA journal_mode = WAL",
 			// SQLite defaults foreign keys OFF, which makes a declared
 			// constraint look enforced right up until the day it

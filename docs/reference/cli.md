@@ -1,6 +1,6 @@
 # CLI Reference
 
-Crewlet ships one command, `crewlet` — a single static binary. Every
+Crewlet ships one command, `crewlet` — a single self-contained binary. Every
 subcommand below is served by it.
 
 ---

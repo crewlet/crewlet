@@ -1,11 +1,13 @@
-// Package storetest is the contract suite every certified store driver must
-// pass.
+// Package storetest is the store's contract suite.
 //
-// It exists because there are two drivers and one dialect: Turso is the
-// engine's database, mainline SQLite is the certified fallback, and the only
-// thing that keeps a statement inside their intersection is running the same
-// assertions against both (decisions/002). A suite that ran on one
-// driver would certify whichever dialect that driver happens to accept.
+// It was written when there were two drivers and one dialect, to keep every
+// statement inside their intersection by running the same assertions against
+// both. There is one driver now (decisions/003) and the suite is still the
+// contract: what it pins is the BEHAVIOUR the packages above the store depend
+// on — keyset paging that does not skip a row, a read floor, an idempotent
+// append, a retention sweep that stops where it is told — none of which is a
+// property of a driver name. A driver pin bump runs it unchanged, which is
+// exactly the day it earns its keep.
 //
 // Run takes a constructor rather than a *store.DB so each subtest gets its own
 // file: the store owns its file exclusively, and sharing one across parallel
@@ -100,11 +102,10 @@ func testSchema(t *testing.T, db *store.DB) {
 // reopen is the whole assertion.
 func testSchemaIdempotent(t *testing.T, db *store.DB) {
 	path := db.Path()
-	drv := db.Driver()
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	again, err := store.Open(t.Context(), path, store.Options{Driver: drv})
+	again, err := store.Open(t.Context(), path, store.Options{})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

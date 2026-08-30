@@ -238,8 +238,13 @@ func TestAnUnusableCacheRootIsReportedAsOne(t *testing.T) {
 }
 
 // AND A LIBRARY THAT WILL NOT VERIFY EVEN AFTER A HEAL NAMES THE WAY OUT.
-// There are exactly two: clear the cache by hand, or move to the certified
-// fallback driver. An operator can guess neither.
+// There used to be two ways out — clear the cache by hand, or move to the
+// certified fallback driver — and dropping the second driver (decisions/003)
+// deleted one of them. That makes the remaining message MORE load-bearing,
+// not less: it is now the only thing standing between an operator and a
+// binary that will not start, so it must name the cache directory to delete
+// and the variable that relocates it, and say plainly that there is nothing
+// to fall back to.
 func TestALibraryThatWillNotHealSaysWhatToDo(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(tursoCacheEnv, root)
@@ -262,7 +267,8 @@ func TestALibraryThatWillNotHealSaysWhatToDo(t *testing.T) {
 	if err == nil {
 		t.Fatal("a library that cannot be verified or healed was accepted")
 	}
-	for _, want := range []string{filepath.Join(root, tursoCacheDirName), DriverEnv, string(DriverSQLite)} {
+	for _, want := range []string{filepath.Join(root, tursoCacheDirName), tursoCacheEnv,
+		"no second driver"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %v; it must name %q", err, want)
 		}
@@ -273,8 +279,8 @@ func TestALibraryThatWillNotHealSaysWhatToDo(t *testing.T) {
 // preparing the library here instead of letting the driver do it on the first
 // connection: the driver's answer to a cache it cannot verify is a PANIC, from
 // inside a sync.Once that marks itself done even when the function panicked —
-// so the process cannot recover, and a caller that would happily have fallen
-// back to the certified driver never gets the chance.
+// so the process cannot recover, and a caller that would happily have printed
+// a remediation never gets the chance.
 //
 // A child process, because the preparation is memoised per process and this
 // has to be the first store this one opens.
@@ -298,7 +304,7 @@ func TestOpenWithABrokenLibraryCacheInAChildProcess(t *testing.T) {
 		t.Skip("not a child process; see TestOpenReportsABrokenLibraryCacheInsteadOfPanicking")
 	}
 	_, err := Open(t.Context(), filepath.Join(t.TempDir(), "state.db"),
-		Options{Driver: DriverTurso})
+		Options{})
 	if err == nil {
 		t.Fatal("Open succeeded against a library cache that cannot exist")
 	}

@@ -141,11 +141,7 @@ func openInSubprocess(t *testing.T, path string) (string, error) {
 func runHelper(t *testing.T, path, mode string) (string, error) {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=NoSuchTest")
-	cmd.Env = append(os.Environ(),
-		helperEnv+"="+path, helperModeEnv+"="+mode,
-		// The driver choice has to match, or the helper opens the file
-		// with a different engine than the case that locked it.
-		store.DriverEnv+"="+os.Getenv(store.DriverEnv))
+	cmd.Env = append(os.Environ(), helperEnv+"="+path, helperModeEnv+"="+mode)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

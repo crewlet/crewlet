@@ -152,7 +152,6 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 		}
 	}
 	db, err := store.Open(ctx, boot.Store.Path, store.Options{
-		Driver:       store.Driver(boot.Store.Driver),
 		MaxOpenConns: boot.Store.MaxOpenConns,
 		BusyTimeout: time.Duration(
 			boot.Store.BusyTimeoutSeconds * float64(time.Second)),

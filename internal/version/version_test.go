@@ -88,8 +88,21 @@ func TestTheReleaseConfigStampsThisVariable(t *testing.T) {
 	}
 }
 
-// stampTarget pulls the one `-X <importpath>.<name>=<value>` ldflag out of the
+// stampTarget pulls the `-X <importpath>.<name>=<value>` ldflag out of the
 // release config and splits it where the linker does.
+//
+// EVERY BUILD STAMPS, AND THEY ALL STAMP THE SAME THING.
+//
+// There is one build id today, so this reads much like an assertion that there
+// is exactly one `-X` flag — and it is deliberately not that. A second build id
+// is the shape that ships an UNSTAMPED binary: the ldflags block is per-build,
+// so a copied entry that lost its `-X` line links fine and reports its module
+// build info instead of the tag, and nothing else would notice because the
+// artifact that went out is the one nobody checked. A musl build was very
+// nearly added for exactly that reason and would have been the first case.
+//
+// So the count is compared against the NUMBER OF BUILDS rather than against 1,
+// and the targets have to agree with each other.
 //
 // The split is on the first dot AFTER the last slash: an import path is full
 // of dots (github.com), and only the final path element can carry the one that
@@ -103,9 +116,18 @@ func stampTarget(t *testing.T, config string) (importPath, varName string) {
 			flags = append(flags, strings.TrimSpace(rest))
 		}
 	}
-	if len(flags) != 1 {
-		t.Fatalf("-X ldflags in .goreleaser.yaml = %v, want exactly one: the "+
-			"release stamps one version variable", flags)
+	if builds := countBuilds(t, config); len(flags) != builds {
+		t.Fatalf("-X ldflags in .goreleaser.yaml = %v (%d), but there are %d "+
+			"builds: every build must stamp the version, or the one that "+
+			"does not ships a binary reporting its module build info "+
+			"instead of the tag", flags, len(flags), builds)
+	}
+	for _, flag := range flags[1:] {
+		if flag != flags[0] {
+			t.Fatalf("the builds stamp different targets (%q and %q); one "+
+				"of them is writing to a variable the other does not have",
+				flags[0], flag)
+		}
 	}
 	target, _, ok := strings.Cut(flags[0], "=")
 	if !ok {
@@ -120,6 +142,35 @@ func stampTarget(t *testing.T, config string) (importPath, varName string) {
 		t.Fatalf("the -X target %q names no variable", target)
 	}
 	return target[:slash+1] + pkg, name
+}
+
+// countBuilds reports how many entries the release config's `builds:` block
+// has, by counting the `- id:` lines between it and the next top-level key.
+//
+// Line-scanned rather than YAML-parsed, like everything else in this file: the
+// point of these guards is that they read the same bytes goreleaser does with
+// no dependency of their own, so a malformed config fails here rather than
+// somewhere a test had already normalised it.
+func countBuilds(t *testing.T, config string) int {
+	t.Helper()
+	inBuilds, n := false, 0
+	for _, line := range strings.Split(config, "\n") {
+		switch {
+		case line == "builds:":
+			inBuilds = true
+		case !inBuilds:
+			continue
+		case strings.HasPrefix(line, "  - id:"):
+			n++
+		case line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "#"):
+			// A new top-level key ends the block.
+			inBuilds = false
+		}
+	}
+	if n == 0 {
+		t.Fatal(".goreleaser.yaml declares no builds")
+	}
+	return n
 }
 
 // thisPackagesImportPath is what the linker would have to be given to reach
@@ -228,6 +279,88 @@ func TestTheImageCopiesPerPlatform(t *testing.T) {
 		t.Error("the Dockerfile does not copy from ${TARGETPLATFORM}, so the " +
 			"image build cannot find the binary goreleaser staged")
 	}
+}
+
+// THE RELEASE MATRIX AND THE CROSS-COMPILE JOB NAME THE SAME PLATFORMS.
+//
+// windows/arm64 shipped for a release because nothing checks that a target in
+// the release matrix can actually run. It compiled — `GOOS=windows
+// GOARCH=arm64 go build` exits 0 against an empty embed.FS in the store
+// driver's platform library — and failed at the operator's first query.
+//
+// The compile-time half of the answer is internal/store/platform.go, whose
+// build constraint names the four supported pairs and refuses everything else
+// with a sentence. But a constraint only fires when something builds for that
+// platform, and the only job that builds for anything but the runner is ci's
+// `cross`. So the guard is a chain, and this test is its weak link: goreleaser
+// says what ships, `cross` says what is compiled, and if the two lists drift
+// then a target ships that platform.go never got the chance to refuse.
+//
+// Both lists are read off the tree. Writing the expected pairs here would
+// assert the ones that already exist and pass on the day a fifth is added to
+// one file and not the other, which is the entire failure.
+func TestTheCrossCompileJobCoversEveryReleaseTarget(t *testing.T) {
+	t.Parallel()
+	release := matrixPairs(t, releaseFile(t, ".goreleaser.yaml"))
+	ci := matrixPairs(t, releaseFile(t, ".github/workflows/ci.yml"))
+
+	if len(release) == 0 {
+		t.Fatal(".goreleaser.yaml declares no goos/goarch matrix")
+	}
+	if !slices.Equal(release, ci) {
+		t.Errorf("the release builds %v and CI cross-compiles %v.\n"+
+			"A target goreleaser ships and CI never builds is one nothing "+
+			"has compiled for until the tag; a target CI builds and "+
+			"goreleaser does not ship is dead work. Keep .goreleaser.yaml "+
+			"and the `cross` job in step — and remember that adding a pair "+
+			"to both is not enough on its own, because "+
+			"internal/store/platform.go still has to be taught that the "+
+			"store driver has a library for it.", release, ci)
+	}
+}
+
+// matrixPairs reads every `goos: [...]` / `goarch: [...]` list in a YAML file
+// and returns the sorted product.
+//
+// Line-scanned rather than YAML-parsed, like the rest of this file: these
+// guards read the same bytes the tools do, with no dependency of their own.
+// The two files spell the matrix differently — goreleaser puts it on a build,
+// a workflow puts it under `strategy.matrix` — and both spell it as those two
+// keys, which is the only thing this needs.
+func matrixPairs(t *testing.T, config string) []string {
+	t.Helper()
+	var oses, arches []string
+	for _, line := range strings.Split(config, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "goos:"):
+			oses = append(oses, yamlInlineList(strings.TrimPrefix(trimmed, "goos:"))...)
+		case strings.HasPrefix(trimmed, "goarch:"):
+			arches = append(arches, yamlInlineList(strings.TrimPrefix(trimmed, "goarch:"))...)
+		}
+	}
+	var pairs []string
+	for _, os := range oses {
+		for _, arch := range arches {
+			pairs = append(pairs, os+"/"+arch)
+		}
+	}
+	slices.Sort(pairs)
+	return slices.Compact(pairs)
+}
+
+// yamlInlineList splits a `[a, b]` flow sequence into its members.
+func yamlInlineList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "[")
+	raw = strings.TrimSuffix(raw, "]")
+	var out []string
+	for _, field := range strings.Split(raw, ",") {
+		if v := strings.TrimSpace(field); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // EVERY DEPENDENCY SURFACE IS WATCHED.
