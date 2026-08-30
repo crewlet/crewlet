@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // The turn-level events, published around turn.Run.
@@ -60,7 +61,7 @@ type turnTelemetry struct {
 // partition has several, and the first is the one whose thread the turn is
 // answering; branding the turn with the last would attribute it to whichever
 // message happened to arrive while the seat was busy.
-func (e *Engine) describeTurn(company *Company, req Request) turnTelemetry {
+func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request) turnTelemetry {
 	t := turnTelemetry{
 		handle:    req.Handle,
 		convKey:   req.ConversationKey,
@@ -73,18 +74,22 @@ func (e *Engine) describeTurn(company *Company, req Request) turnTelemetry {
 		}
 	}
 	t.interactions = e.interactionsOf(req.Events)
+	// The turn's own span, not the trigger's ids copied forward.
+	//
+	// This used to read `TraceID: ev.TraceID, SpanID: ev.SpanID` straight off
+	// the trigger, which made every event the turn published claim the
+	// TRIGGER's span as its own — so `span_id` named a span that had already
+	// ended and the dashboard's tree collapsed the whole turn onto the wake
+	// that started it. The trace is still inherited, which was the right
+	// half: the dispatcher restored it onto ctx before runTurn opened the
+	// turn span beneath it, so the trace id is the trigger's and the span id
+	// is this turn's, with the trigger as its parent.
+	t.trace = tracing.TraceOf(ctx)
 	for _, ev := range req.Events {
 		if ev == nil {
 			continue
 		}
 		t.trigger = types.DescribeTrigger(ev)
-		// The trace context is INHERITED from the trigger, so every event
-		// this turn emits joins the span the wake started. Minting a fresh
-		// one here would break the chain at exactly the join a reader
-		// follows to get from "a message arrived" to "here is what it did".
-		t.trace = events.TraceContext{
-			TraceID: ev.TraceID, SpanID: ev.SpanID, ParentSpanID: ev.ParentSpanID,
-		}
 		break
 	}
 	return t
@@ -257,16 +262,20 @@ func truncate(s string, n int) string {
 // trace, but a clarification ANSWER does not — it is an ordinary inbound on
 // the conversation, and taking its trace would file the second half of a turn
 // under a different root from its first half.
-func (e *Engine) describeResume(company *Company, in resumeInput) turnTelemetry {
+func (e *Engine) describeResume(ctx context.Context, company *Company, in resumeInput) turnTelemetry {
 	t := turnTelemetry{
 		handle:    in.Run.AgentHandle,
 		convKey:   in.Run.ConversationKey,
 		startedAt: time.Now().UTC(),
 		role:      in.Run.Role,
 		agentID:   in.Run.AgentID,
-		trace: events.TraceContext{
-			TraceID: in.Run.TraceID, ParentSpanID: in.Run.SpanID,
-		},
+		// The resumed turn's OWN span, opened by resumeTurn under the
+		// reconstructed suspended one. This used to be built by hand as
+		// `{TraceID: run.TraceID, ParentSpanID: run.SpanID}` with SpanID
+		// left EMPTY, so every event the second half of a turn published
+		// carried span_id="" — unplaceable in the dashboard's tree and
+		// indistinguishable from every other resumed turn.
+		trace: tracing.TraceOf(ctx),
 	}
 	if in.Trigger != nil {
 		t.trigger = types.DescribeTrigger(in.Trigger)

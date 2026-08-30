@@ -42,6 +42,7 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/version"
 
 	"gopkg.in/yaml.v3"
@@ -634,6 +635,37 @@ func runEngine(args []string, stderr io.Writer) error {
 	// turns. Nothing else in the process may install a handler.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// TRACING BEFORE THE ENGINE, because engine.New starts subscriptions
+	// and registers the publish listener, and every one of those can open a
+	// span. A provider installed after them would leave the boot — the one
+	// stretch an operator most often wants a trace of — reporting nothing.
+	//
+	// The flush is DEFERRED rather than written at each return. There are
+	// six ways out of this function, five of them boot failures, and a
+	// deferred call registered here runs after all of them AND after the
+	// drain below, which is exactly the ordering the batch processor needs:
+	// the spans the drain itself emits are in the buffer when it flushes.
+	// Writing it at each return is how five of the six quietly stop doing it.
+	nodeID, err := config.ResolveNodeID(boot, nil)
+	if err != nil {
+		return err
+	}
+	flushTraces, err := tracing.Configure(ctx, tracing.Options{
+		NodeID:  nodeID,
+		Version: version.String(),
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := flushTraces(ctx); err != nil {
+			// Losing telemetry is not worth failing a shutdown that has
+			// otherwise succeeded — the drain has already released the
+			// seats and closed the backends by the time this runs.
+			log.Warn("trace_flush_failed", "error", err)
+		}
+	}()
 
 	log.Info("engine_starting", "version", version.String(), "company", company.Name)
 	e, err := engine.New(ctx, engine.Options{Bootstrap: boot, Company: company})

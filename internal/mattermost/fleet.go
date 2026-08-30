@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // One websocket per agent seat.
@@ -422,7 +423,7 @@ func (f *Fleet) deliver(ctx context.Context, s *seatSocket, body map[string]any,
 
 	ev := events.New(types.RawWebhook{
 		Body: body, Headers: map[string]string{}, Handle: s.seat.Handle,
-	}, events.NewTrace())
+	}, tracing.TraceOf(ctx))
 	ev.Source = Backend
 	if err := f.publisher.Publish(ctx, topics.NotificationsInbound, ev); err != nil {
 		log.Error("mattermost_publish_failed", "handle", s.seat.Handle,

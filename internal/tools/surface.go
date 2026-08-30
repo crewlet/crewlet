@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"go.opentelemetry.io/otel/attribute"
 	"maps"
 	"slices"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // Surface is the set of tools ONE phase may call, and the thing the tool loop
@@ -243,6 +245,20 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		args = map[string]any{}
 	}
 
+	// THE TOOL SPAN LIVES HERE, not in toolloop, because this is the frame
+	// that knows what the call actually was: whether the tool exists, which
+	// MCP server it came from, whether a skill guard refused it, and which
+	// seat is acting. toolloop sees a name and a phase.
+	//
+	// It covers all THREE outcomes, and two of them never reach invoke: an
+	// unknown or inactive name, and a guard refusal. Those are the calls a
+	// reader is most often hunting for — a turn that spent a round on a tool
+	// it could not have — and a span opened inside invoke would miss both.
+	ctx, span := tracing.Start(ctx, "tools", "tool.call",
+		attribute.String("crewlet.tool", call.Name),
+		attribute.String("crewlet.phase", string(s.Phase())))
+	defer span.End()
+
 	s.mu.Lock()
 	offered := slices.Contains(s.active, call.Name)
 	s.mu.Unlock()
@@ -257,6 +273,9 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 			msg = fmt.Sprintf("Tool %s is not active on this surface — activate it first.", call.Name)
 		}
 		s.record(Call{Name: call.Name, Args: args, Output: msg, Failed: true})
+		span.SetAttributes(
+			attribute.Bool("crewlet.tool_failed", true),
+			attribute.String("crewlet.tool_outcome", outcomeFor(known)))
 		return toolloop.ToolResult{Output: msg, Failed: true}, nil
 	}
 
@@ -268,12 +287,23 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 			// that the turn spent a round here rather than that the tool
 			// silently did nothing.
 			s.record(Call{Name: call.Name, Args: args, Output: reason, Failed: true})
+			span.SetAttributes(
+				attribute.Bool("crewlet.tool_failed", true),
+				attribute.String("crewlet.tool_outcome", "refused_by_guard"))
 			return toolloop.ToolResult{Output: reason, Failed: true}, nil
 		}
 	}
 
+	if server, ok := e.FromMCP(); ok {
+		// WHICH server, so a slow or failing MCP child is visible as
+		// itself rather than as "some tool was slow". The registry records
+		// the origin at registration and this is the last frame that knows.
+		span.SetAttributes(attribute.String("crewlet.tool_server", server))
+	}
+
 	res, err := s.invoke(ctx, e.Tool, args)
 	if err != nil {
+		tracing.Fail(span, err)
 		// The caller's own context ended — the turn is being torn down.
 		// Nothing is reported to the model and nothing is recorded: this
 		// call did not happen as far as the ledger is concerned.
@@ -286,10 +316,40 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		// every tool the real skill was gating.
 		s.guard.Observe(call.Name, args)
 	}
+	span.SetAttributes(
+		attribute.Bool("crewlet.tool_failed", res.Failed),
+		attribute.String("crewlet.tool_outcome", invokedOutcome(res.Failed, res.Suspend)))
 	return toolloop.ToolResult{
 		Output: res.Output, Failed: res.Failed,
 		Suspend: res.Suspend, SuspendPayload: res.Payload,
 	}, nil
+}
+
+// outcomeFor names the two readings of a call that never reached a tool. The
+// difference matters to a reader for the same reason it matters to the model:
+// one is a tool to activate, the other a name that does not exist.
+func outcomeFor(known bool) string {
+	if known {
+		return "not_active"
+	}
+	return "unknown_tool"
+}
+
+// invokedOutcome names what a real invocation did.
+//
+// `suspended` is its own outcome rather than a flavour of success: a
+// suspending call is the one that returns NO ledger row — toolloop leaves it
+// unanswered and appends no Execution — so this span is the only in-band
+// record that `run_sandbox` was ever called.
+func invokedOutcome(failed, suspended bool) string {
+	switch {
+	case suspended:
+		return "suspended"
+	case failed:
+		return "failed"
+	default:
+		return "ok"
+	}
 }
 
 // invoke runs one tool, telling it who is calling when it asks.

@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // The company config a running node serves comes from the STORE, not from the
@@ -214,7 +215,7 @@ func nudge(ctx context.Context, pub queue.Publisher, revisionID, summary string,
 	}
 	ev := events.New(types.ConfigRevisionActivated{
 		RevisionID: revisionID, RevisionSummary: summary, CreatedBy: "node",
-	}, events.NewTrace())
+	}, tracing.TraceOf(ctx))
 	if err := pub.Publish(ctx, topics.ConfigRevisionActivated, ev); err != nil {
 		log.Warn("activation_nudge_not_published", "revision", revisionID,
 			"error", err, "detail", "peers converge on their reconcile interval instead")

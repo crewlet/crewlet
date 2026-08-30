@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -178,6 +179,23 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	// turn's context is built, rather than at each phase, so a new phase
 	// cannot forget it.
 	ctx = llm.WithSeat(ctx, handle)
+
+	// And the trigger's trace, so this turn's spans hang under whatever
+	// caused it — a webhook, a schedule, another agent — instead of each
+	// seat rooting a trace of its own and the join a reader follows from
+	// "a message arrived" to "here is what it did" never existing.
+	//
+	// Bound HERE, with the other two, because the consumer is a leaf and
+	// because this is the single place a turn's context is built: a phase
+	// added later cannot forget it.
+	//
+	// A COALESCED TURN HAS ONE TRACE AND SEVERAL CAUSES. The trace is taken
+	// from the first event of the partition, which is the same event
+	// describeTurn takes the trigger from — ten Slack comments become one
+	// turn under one trace. The others are already recorded as the turn's
+	// interactions; a span cannot have two parents, and inventing a root to
+	// hold them would put a node above the webhook that actually happened.
+	ctx = tracing.WithRemote(ctx, triggerTrace(routing.Events))
 
 	result, err := d.Turn(ctx, req)
 	if err != nil {
@@ -398,4 +416,26 @@ func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, conversation str
 	}, events.NewTrace())
 	ev.Source = "engine." + routing.Events[0].Source
 	d.Observe(ctx, ev)
+}
+
+// triggerTrace is the trace a partition of trigger events belongs to.
+//
+// The FIRST non-nil event, matching describeTurn's choice of trigger, so the
+// trace and the trigger a turn reports are always the same event's. Taking
+// them from different events is how a turn ends up filed under a trace whose
+// root says something it did not react to.
+//
+// An empty result is ordinary rather than exceptional: an event written by a
+// build older than tracing carries no ids, and a rolling upgrade guarantees
+// some do. WithRemote turns that into a fresh root.
+func triggerTrace(evs []*events.Event) events.TraceContext {
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		return events.TraceContext{
+			TraceID: ev.TraceID, SpanID: ev.SpanID, ParentSpanID: ev.ParentSpanID,
+		}
+	}
+	return events.TraceContext{}
 }

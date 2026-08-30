@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // Reconciler converges this node on the activation pointer.
@@ -427,7 +428,7 @@ func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation
 		Status:            applyStatus(status),
 		AppliedSubsystems: applied,
 		Error:             coord.TruncateApplyError(message),
-	}, events.NewTrace())
+	}, tracing.TraceOf(ctx))
 	ev.Timestamp = r.now()
 	// The NODE, not a seat. Every other field of the payload describes the
 	// revision; which node is reporting lives in the envelope, and the

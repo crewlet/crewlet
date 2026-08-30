@@ -54,6 +54,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 var log = logging.Get("schedule.scheduler")
@@ -183,7 +184,7 @@ type Options struct {
 	// A seam rather than a hard dependency because this build has no
 	// telemetry package yet. Whatever provides one later wires it here, and
 	// nothing else in the scheduler changes.
-	Trace func() events.TraceContext
+	Trace func(ctx context.Context) events.TraceContext
 }
 
 // Scheduler dispatches role- and unit-scoped recurring work.
@@ -200,7 +201,7 @@ type Scheduler struct {
 
 	admits func() bool
 	duty   DutyFunc
-	trace  func() events.TraceContext
+	trace  func(context.Context) events.TraceContext
 
 	// mu serialises ticks and guards lastTick.
 	//
@@ -501,7 +502,7 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	// Each dispatched run gets its OWN trace, detached from the tick, so the
 	// ledger row and exactly this turn's calls are linked. The TaskAssigned
 	// carries it and the agent's turn restores it.
-	trace := s.trace()
+	trace := s.trace(ctx)
 
 	claimed, err := s.ledger.Claim(ctx, Run{
 		FireKey: FireKey{
@@ -622,14 +623,22 @@ func runID(e Entry, label, runner string) string {
 	return fmt.Sprintf("%s:%s:%s:%s:%s", e.Scope, e.ScopeID, e.Schedule.Name, label, runner)
 }
 
-// newTrace mints a W3C-shaped trace context for one fire.
+// newTrace opens the span one fire belongs to and returns its ids.
 //
-// Shaped rather than merely random: a 32-hex trace id and a 16-hex span id are
-// what a real tracer will accept when one is wired, so the ids the ledger has
-// already stored stay meaningful across that change. crypto/rand cannot fail
-// on any supported platform — it panics internally instead — so there is no
-// error to handle and no degraded id to invent.
-func newTrace() events.TraceContext { return events.NewTrace() }
+// A REAL SPAN, not a bare minted id. A scheduled fire is a genuine root —
+// nothing caused it but the clock — so it is the one place in the engine that
+// legitimately starts a trace of its own. Minting only ids would leave the
+// turn this fire wakes hanging under a parent span that was never exported,
+// which every collector renders as a tree with its root missing.
+//
+// The span is INSTANTANEOUS on purpose: it represents the fire, not the work.
+// The turn runs asynchronously, off the event this trace is stamped onto, and
+// joins by restoring these ids at the dispatcher.
+func newTrace(ctx context.Context) events.TraceContext {
+	spanCtx, span := tracing.Start(ctx, "schedule", "schedule.fire")
+	defer span.End()
+	return tracing.TraceOf(spanCtx)
+}
 
 // cmpOr returns v unless it is the zero string.
 func cmpOr(v, def string) string {
@@ -648,7 +657,7 @@ func durOr(d, def time.Duration) time.Duration {
 }
 
 // cmpOrFunc returns f unless it is nil.
-func cmpOrFunc(f, def func() events.TraceContext) func() events.TraceContext {
+func cmpOrFunc(f, def func(context.Context) events.TraceContext) func(context.Context) events.TraceContext {
 	if f == nil {
 		return def
 	}

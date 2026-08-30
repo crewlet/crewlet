@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"go.opentelemetry.io/otel/attribute"
 	"slices"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 var log = logging.Get("agent.runner")
@@ -483,6 +485,22 @@ type phaseRun struct {
 
 func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error) {
 	ph, surface := in.phase, in.surface
+	// ONE SPAN PER PHASE, wrapping the WHOLE extension loop below rather
+	// than each toolloop.Run inside it: an extended Execute is one phase
+	// that ran longer, and a span per invocation would report it as two
+	// phases and split its rounds across them.
+	//
+	// The attributes are deliberately thin. Everything a reader wants about
+	// what a phase DID — prompts and response verbatim, every tool call's
+	// arguments and result, tokens, the decision — is already on
+	// agent_phase_completed (d-506), and duplicating it onto a span would
+	// send whole prompts to a collector that is not the event store. What
+	// no event records is DURATION, per phase and per round, and that is
+	// exactly what a span adds.
+	ctx, span := tracing.Start(ctx, "agent.runner", "agent.turn."+string(ph),
+		attribute.String("crewlet.phase", string(ph)),
+		attribute.Int("crewlet.iteration", in.iteration))
+	defer span.End()
 	system, user := in.system, in.user
 	iteration, ceiling := in.iteration, in.ceiling
 	terminateAfter := in.terminateAfter
@@ -493,6 +511,10 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error)
 	emit := r.emitter()
 	progress := &toolloop.Progress{}
 	fail := func(err error) (phaseResult, error) {
+		// The span carries the failure too. The event below is the record
+		// of WHAT broke; the span is what makes the broken phase findable
+		// in a trace beside the calls that led to it.
+		tracing.Fail(span, err)
 		emit.completed(ctx, phaseRecord{
 			Phase: ph, Iteration: iteration, System: system, User: user,
 			Result: progress.Snapshot(), Available: surface.Active(),
@@ -572,6 +594,12 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error)
 		messages = res.Messages
 
 		if res.Suspended || !res.ExhaustedRounds {
+			// Read off the phase TOTALS, never off `res`: an extended
+			// phase ran the loop more than once and the last invocation
+			// knows only its own slice.
+			span.SetAttributes(
+				attribute.Int("crewlet.rounds", out.Rounds),
+				attribute.Bool("crewlet.suspended", out.Suspended))
 			return out, nil
 		}
 		granted, decision := extension.Consider(ctx, r.cfg.Judge, policy, extension.Request{

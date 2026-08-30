@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"go.opentelemetry.io/otel/attribute"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // Engine is one process running a company.
@@ -608,6 +610,18 @@ func (e *Engine) pause(ctx context.Context, handle, reason string) error {
 
 // runTurn is the default turn: build the seat's runner and drive the loop.
 func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) {
+	// THE TURN'S OWN SPAN, opened before anything else so every phase, LLM
+	// round and tool call below is a child of it and every event the turn
+	// publishes carries its id. The dispatcher has already restored the
+	// trigger's trace onto ctx, so this is a child of the wake rather than
+	// a root.
+	ctx, span := tracing.Start(ctx, "engine", "agent.turn",
+		attribute.String("crewlet.seat", req.Handle),
+		attribute.String("crewlet.work_key", req.WorkKey),
+		attribute.Bool("crewlet.coalesced", req.Coalesce),
+		attribute.Int("crewlet.delegation_depth", req.Depth))
+	defer span.End()
+
 	// PINNED ONCE. Two reads of the epoch can straddle an apply, and a turn
 	// that built its runner from one revision and took its round caps from
 	// the next is running a company that never existed — the exact failure
@@ -616,7 +630,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// Assembled BEFORE the runner, because the runner needs it: every phase
 	// event carries the turn's identity, and a runner built without it
 	// publishes phases attributed to nobody.
-	tel := e.describeTurn(company, req)
+	tel := e.describeTurn(ctx, company, req)
 	task := DescribeTrigger(req.Events)
 	// RENDERED BEFORE THE RUNNER, which is what freezes it: the runner
 	// receives strings and has nowhere to re-fetch from, so a self_iterate

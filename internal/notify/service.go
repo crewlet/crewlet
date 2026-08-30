@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // The inbound edge: a verified webhook becomes a woken seat, or a recorded
@@ -486,7 +487,7 @@ func (s *Service) allow(ctx context.Context, party Party) (bool, error) {
 func (s *Service) skip(ctx context.Context, source, handle, reason string) {
 	ev := events.New(types.NotificationSkipped{
 		Handle: handle, Reason: reason, NotificationSource: source,
-	}, events.NewTrace())
+	}, tracing.TraceOf(ctx))
 	ev.Source = "notify." + source
 	if err := s.queue.Publish(ctx, topics.Event(types.NotificationSkipped{}.EventType()), ev); err != nil {
 		log.Warn("notification_skip_unrecorded", "source", source,

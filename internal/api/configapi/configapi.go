@@ -38,6 +38,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 var log = logging.Get("api.config")
@@ -710,7 +711,7 @@ func (s *Service) nudge(ctx context.Context, revisionID, summary, operator strin
 	}
 	ev := events.New(types.ConfigRevisionActivated{
 		RevisionID: revisionID, RevisionSummary: summary, CreatedBy: operator,
-	}, events.NewTrace())
+	}, tracing.TraceOf(ctx))
 	ev.Timestamp = s.now()
 	ev.Source = operator
 	if err := s.queue.Publish(ctx, topics.ConfigRevisionActivated, ev); err != nil {
