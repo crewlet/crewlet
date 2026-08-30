@@ -396,11 +396,17 @@ func TestAZeroConversationRetentionTakesTheDefault(t *testing.T) {
 // stubDiary remembers the clock it was swept on.
 type stubDiary struct {
 	nows []time.Time
+	caps []int
 }
 
 func (d *stubDiary) Expire(_ context.Context, now time.Time) (int64, error) {
 	d.nows = append(d.nows, now)
 	return 3, nil
+}
+
+func (d *stubDiary) TrimLong(_ context.Context, cap int) (int64, error) {
+	d.caps = append(d.caps, cap)
+	return 2, nil
 }
 
 // The diary sweep hands the tick's own clock through, not a cutoff: each
@@ -410,8 +416,21 @@ func (d *stubDiary) Expire(_ context.Context, now time.Time) (int64, error) {
 func TestTheDiarySweepRunsOnNowNotACutoff(t *testing.T) {
 	d := &stubDiary{}
 	jobs := maintenance.LearningJobs(d)
-	if len(jobs) != 1 || jobs[0].Name != "agent_diary" {
-		t.Fatalf("jobs = %+v, want one agent_diary job", jobs)
+	if len(jobs) != 2 || jobs[0].Name != "agent_diary" || jobs[1].Name != "agent_diary_long" {
+		t.Fatalf("jobs = %+v, want the diary's expiry and its durable trim", jobs)
+	}
+	// The durable half is bounded by a COUNT, so it has no horizon and
+	// ignores both clocks: a fact the agent marked durable has no deadline
+	// to pass.
+	if jobs[1].Horizon != 0 {
+		t.Errorf("the trim declares a horizon (%v); it is capped, not aged", jobs[1].Horizon)
+	}
+	if n, err := jobs[1].Run(context.Background(), base, base); err != nil || n != 2 {
+		t.Fatalf("trim Run = (%d, %v), want (2, nil)", n, err)
+	}
+	// Zero means "the shipped cap", decided by the diary rather than here.
+	if len(d.caps) != 1 || d.caps[0] != 0 {
+		t.Errorf("the trim passed caps %v, want the store's own default", d.caps)
 	}
 	if jobs[0].Horizon != 0 {
 		t.Fatalf("Horizon = %v, want 0: each entry carries its own deadline", jobs[0].Horizon)

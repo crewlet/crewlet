@@ -333,6 +333,19 @@ type EpisodeLifecycle struct {
 	// consumer is recall, where they are noise.
 	NonTerminalMaxAgeDays int `yaml:"non_terminal_max_age_days,omitempty" json:"non_terminal_max_age_days,omitempty" js:"min=0" desc:"Age at which mid-state episodes are dropped."`
 
+	// ToolFreeMaxAgeDays drops raw turns that called no tools.
+	//
+	// The ONE bound on a chat-only seat's raw rows: compaction pools turns
+	// by tool-sequence overlap, so a turn with no tools has nothing to be
+	// clustered with and is never folded. Left alone the table grows for
+	// the life of the deployment, and every row is scanned on the Plan
+	// phase of every turn.
+	//
+	// Much longer than the other raw horizons by design — those drop rows
+	// that are half-finished or already carried forward by a skill, and
+	// this one drops the only record of work that happened.
+	ToolFreeMaxAgeDays int `yaml:"tool_free_max_age_days,omitempty" json:"tool_free_max_age_days,omitempty" js:"min=0" desc:"Age at which raw turns that called no tools are dropped."`
+
 	// ConsolidatedGraceDays drops raw rows a skill already consolidated.
 	// The grace is an audit window: it is the only chance to spot a bad
 	// consolidation before its source disappears.
@@ -369,6 +382,7 @@ func DefaultEpisodeLifecycle() EpisodeLifecycle {
 		MaxRawEpisodesPerAgent:   500,
 		WriteCheckEveryN:         10,
 		NonTerminalMaxAgeDays:    14,
+		ToolFreeMaxAgeDays:       90,
 		ConsolidatedGraceDays:    30,
 		CompactionMinAgeDays:     30,
 		CompactionMinClusterSize: 3,
@@ -388,6 +402,7 @@ func (e *EpisodeLifecycle) validate(path string) error {
 	p.wrap(positive(path, "max_raw_episodes_per_agent", e.MaxRawEpisodesPerAgent))
 	p.wrap(positive(path, "write_check_every_n", e.WriteCheckEveryN))
 	p.wrap(positive(path, "non_terminal_max_age_days", e.NonTerminalMaxAgeDays))
+	p.wrap(positive(path, "tool_free_max_age_days", e.ToolFreeMaxAgeDays))
 	p.wrap(positive(path, "consolidated_grace_days", e.ConsolidatedGraceDays))
 	p.wrap(positive(path, "compaction_min_age_days", e.CompactionMinAgeDays))
 	p.wrap(positive(path, "compaction_min_cluster_size", e.CompactionMinClusterSize))

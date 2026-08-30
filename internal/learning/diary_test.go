@@ -3,6 +3,7 @@ package learning_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -324,4 +325,90 @@ func diaryHitIDs(hs []learning.DiaryHit) []string {
 		out = append(out, h.Entry.ID)
 	}
 	return out
+}
+
+// A durable entry has no deadline, so nothing ages it out — but recall scans
+// and cosines every one of a seat's rows on every Plan phase, so an unbounded
+// diary is a per-turn cost that only grows. The bound is a cap, and what it
+// drops is decided by USE rather than by age.
+func TestTheDurableDiaryIsCappedByWorthNotByAge(t *testing.T) {
+	d := diary(t)
+	ctx := context.Background()
+	at := time.Now().UTC().Add(-30 * 24 * time.Hour)
+
+	// Six entries for one seat. The two that have been recalled are the
+	// valuable ones; among the rest the oldest is the most disposable.
+	for i := range 6 {
+		mustWrite(t, d, longEntry(fmt.Sprintf("e%d", i), "agent-a",
+			fmt.Sprintf("fact %d", i), at.Add(time.Duration(i)*time.Hour)))
+	}
+	// e0 is the OLDEST and would go first on age alone — recalling it is
+	// what proves the eviction is not an age sweep in disguise.
+	d.MarkRetrieved(ctx, []string{"e0", "e0", "e1"}, at.Add(time.Hour))
+
+	// Another seat, under the cap, must be untouched: the cap is per agent.
+	mustWrite(t, d, longEntry("other", "agent-b", "theirs", at))
+
+	dropped, err := d.TrimLong(ctx, 3)
+	if err != nil {
+		t.Fatalf("TrimLong: %v", err)
+	}
+	if dropped != 3 {
+		t.Fatalf("dropped %d, want the 3 rows past the cap", dropped)
+	}
+
+	kept := map[string]bool{}
+	rows, err := d.Recent(ctx, "agent-a", time.Now().UTC(), 100)
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	for _, r := range rows {
+		kept[r.ID] = true
+	}
+	if len(kept) != 3 {
+		t.Fatalf("seat holds %d entries after a trim to 3: %v", len(kept), kept)
+	}
+	// The recalled pair survives, oldest-first ordering notwithstanding.
+	for _, id := range []string{"e0", "e1"} {
+		if !kept[id] {
+			t.Errorf("%s was recalled before and still got evicted: %v", id, kept)
+		}
+	}
+	// Of the never-recalled rows, the newest is the one worth keeping.
+	if !kept["e5"] {
+		t.Errorf("the newest un-recalled entry was evicted: %v", kept)
+	}
+
+	other, err := d.Recent(ctx, "agent-b", time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("Recent(agent-b): %v", err)
+	}
+	if len(other) != 1 {
+		t.Errorf("a seat under the cap lost entries to another seat's trim: %d", len(other))
+	}
+}
+
+// A seat under the cap is left entirely alone, and the sweep says it did
+// nothing rather than reporting a number the driver invented.
+func TestTrimmingASeatUnderTheCapChangesNothing(t *testing.T) {
+	d := diary(t)
+	ctx := context.Background()
+	at := time.Now().UTC().Add(-time.Hour)
+	for i := range 3 {
+		mustWrite(t, d, longEntry(fmt.Sprintf("k%d", i), "agent-a", "fact", at))
+	}
+	dropped, err := d.TrimLong(ctx, 10)
+	if err != nil {
+		t.Fatalf("TrimLong: %v", err)
+	}
+	if dropped != 0 {
+		t.Fatalf("dropped %d from a seat under the cap", dropped)
+	}
+	rows, err := d.Recent(ctx, "agent-a", time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("seat holds %d entries, want 3", len(rows))
+	}
 }

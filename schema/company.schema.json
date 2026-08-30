@@ -253,6 +253,11 @@
           "minimum": 0,
           "type": "integer"
         },
+        "tool_free_max_age_days": {
+          "description": "Age at which raw turns that called no tools are dropped.",
+          "minimum": 0,
+          "type": "integer"
+        },
         "write_check_every_n": {
           "description": "Writes between real threshold checks.",
           "minimum": 0,

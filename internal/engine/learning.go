@@ -256,6 +256,7 @@ func lifecycleOptions(c *config.EpisodeLifecycle) learning.Options {
 	return learning.Options{
 		Threshold:         c.MaxRawEpisodesPerAgent,
 		NonTerminalMaxAge: days(c.NonTerminalMaxAgeDays),
+		ToolFreeMaxAge:    days(c.ToolFreeMaxAgeDays),
 		ConsolidatedGrace: days(c.ConsolidatedGraceDays),
 		MinAge:            days(c.CompactionMinAgeDays),
 		MinClusterSize:    c.CompactionMinClusterSize,

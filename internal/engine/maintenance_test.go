@@ -46,6 +46,7 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// anywhere called it — expired short-term memories stayed rows
 		// every recall scanned, forever.
 		"agent_diary",
+		"agent_diary_long",
 		"chat_thread_follows",
 		"conversation_sessions",
 		"events",

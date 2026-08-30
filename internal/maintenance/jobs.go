@@ -108,11 +108,15 @@ func StoreJobs(db *store.DB) []Job {
 }
 
 // DiaryStore is the slice of the learning diary this sweep calls. Declared
-// here, by the consumer, like every other one-method seam in this tree.
+// here, by the consumer, like every other seam in this tree.
 type DiaryStore interface {
 	// Expire deletes short-term entries whose deadline has passed,
 	// reporting how many went.
 	Expire(ctx context.Context, now time.Time) (int64, error)
+
+	// TrimLong drops a seat's least-useful durable entries once it holds
+	// more than cap of them. Zero takes the shipped cap.
+	TrimLong(ctx context.Context, cap int) (int64, error)
 }
 
 // LearningJobs is the sweep for the learning subsystem's diary.
@@ -131,12 +135,26 @@ func LearningJobs(d DiaryStore) []Job {
 	if d == nil {
 		return nil
 	}
-	return []Job{{
-		Name: "agent_diary",
-		Run: func(ctx context.Context, now, _ time.Time) (int64, error) {
-			return d.Expire(ctx, now)
+	return []Job{
+		{
+			Name: "agent_diary",
+			Run: func(ctx context.Context, now, _ time.Time) (int64, error) {
+				return d.Expire(ctx, now)
+			},
 		},
-	}}
+		{
+			// The DURABLE half, and the only sweep here bounded by a
+			// count rather than a clock: a diary_long row is a fact
+			// the agent marked durable, so it has no deadline to
+			// pass — but recall scans every one of them on every
+			// Plan phase, so it cannot be unbounded either. See
+			// learning.DiaryLongCap.
+			Name: "agent_diary_long",
+			Run: func(ctx context.Context, _, _ time.Time) (int64, error) {
+				return d.TrimLong(ctx, 0)
+			},
+		},
+	}
 }
 
 // ChannelJobs is the sweep for agent-to-agent channels: close what nobody
