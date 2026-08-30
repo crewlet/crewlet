@@ -335,6 +335,42 @@ there is nothing for a tag to disagree with. The whole pipeline rehearses
 locally with `make snapshot`, without a tag and without touching GitHub; the
 full process is in [RELEASING.md](RELEASING.md).
 
+### Nothing is released until a tag ships it
+
+The tag is also the project's only compatibility boundary — it is the one
+thing an operator can pin, pull and run. So a surface no `v*` tag has ever
+shipped has nobody behind it, and **you may break it outright**: rename the
+config field, reshape the struct, drop the CLI flag, move the route. Do not
+leave a deprecated alias, a both-spellings fallback, an adapter or a
+vestigial flag behind — there is nothing on the other side of them to be
+compatible with, and code with no caller is indistinguishable from code
+whose caller nobody found.
+
+Check rather than assume; `git tag --merged` lists the tags, and
+`git log <newest tag>..HEAD -- <path>` says whether what you are changing is
+inside one. As of the only release, `v0.1.0`, that answer is *nothing*: the
+tag sits on the initial commit — the Python engine
+[`decisions/000`](decisions/000-go-native-rewrite.md) replaced, with no Go in
+it — so no package, config field, CLI command, event type, API route or
+schema file in this tree has yet been in a release.
+
+Two things a missing tag does **not** excuse, because neither is about
+releases:
+
+- **An applied migration is history, not source.** `schema_migrations` is
+  keyed on the filename, so editing a file that already ran silently never
+  re-runs it: a database that applied it keeps the old shape while the code
+  assumes the new one. Reshape with a new numbered migration under
+  `internal/store/schema/`.
+- **A rolling upgrade puts two builds on one stream.** The event envelope
+  evolves additive-only, because an unknown type must round-trip losslessly
+  in both directions — a contract between peers, not between releases. The
+  same holds for anything two builds share in the coordination store.
+
+A free break is still a complete one: the rename lands everywhere in the same
+change — `docs/`, `examples/`, the dashboard, the tests — and `schema/` is
+regenerated, never hand-edited.
+
 ## Documentation
 
 The pages under `docs/` are the source of truth and are published to
@@ -404,6 +440,10 @@ Drop the scope only when a change genuinely spans the whole repository
 Put the *why* in the body; the diff already shows the *what*. Reference issues
 in a footer (`Fixes #123`). A breaking change gets a `!` before the colon —
 `feat(config)!: …` — and a `BREAKING CHANGE:` footer describing the migration.
+Both mark a change an operator has to act on, so they belong to a surface a
+release actually shipped; changing one no tag has carried breaks nobody and
+takes neither (see [Nothing is released until a tag ships
+it](#nothing-is-released-until-a-tag-ships-it)).
 
 ### One change per commit
 
