@@ -35,7 +35,7 @@ A deployment's durable state lives in four estates:
 
 | Estate | Where | What it holds |
 |---|---|---|
-| **The node's store file** | `store.path`, plus its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers; the audit event log (30 days); the [conversation ledger](../concepts/conversation-sessions.md); scheduled-run history; the company-config revision history; the [secret store's](../concepts/secret-store.md) bootstrap rows |
+| **The node's store file** | `store.path`, plus its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, and every [coordination](../concepts/coordination.md) KV bucket: seat leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
 | **cli-agent homes** | Per-seat state directories on the engine host | Subscription CLI logins (portable via `crewlet llm export`) |
@@ -46,11 +46,15 @@ Classify before you size the job:
   valve, delivery dedupe and node status regenerate, credential cooldowns
   re-learn at the cost of some rate-limit errors — and the leases and epochs
   *provided the whole fleet cold-starts together* (they re-form from nothing).
-- **Authoritative, with no other copy:** the learning tables — a seat that
-  loses them keeps working and has simply lost its memory — the event log's
-  history, the config revision history, the sealed credential bucket, the
-  budget counters, and each detached sandbox-run record, which is the only
-  thing that knows a billed box exists.
+- **Held twice:** the learning tables and the conversation ledger. Each row is
+  also on the memory changelog, which is how a seat's memory follows it to a
+  new node — so a store file lost with the stream estate intact costs at most
+  the last sync cycle, and the seat re-hydrates the rest on its next
+  acquisition.
+- **Authoritative, with no other copy:** the event log's history, the config
+  revision history, the sealed credential bucket, the budget counters, and
+  each detached sandbox-run record, which is the only thing that knows a
+  billed box exists.
 
 ## What `crewlet backup` produces
 
@@ -82,7 +86,9 @@ Three properties worth knowing:
 - **Every estate or none.** A failure anywhere leaves the directory without a
   manifest. A backup missing an estate is not a partial backup, it is an
   unrestorable one: the store alone loses every lease, ledger and credential;
-  the streams alone lose every seat's memory.
+  the streams alone lose this node's audit log, its scheduled-run history and
+  the config revision history — everything the store holds that the memory
+  changelog does not carry.
 
 It is a copy of a **moment**, not an instant — the engine keeps working
 throughout, and the pieces are separated by however long the copy took. The
@@ -95,6 +101,39 @@ to what the fleet does next. The reverse order would leave the ledger not yet
 recording work whose episode the store already holds — the trigger is still
 unacked in its mailbox, so it runs again and the duplicate reaches whoever
 the seat was talking to.
+
+### One node, or every node?
+
+`crewlet backup` runs against **one** node and copies what that node can
+reach — which is not the same as what that node owns.
+
+The **stream estate is the fleet's**, so any node's copy of it is the whole
+company's: the mailboxes, the leases and epochs, the activation pointer with
+the current company payload, the completion ledger, the budget counters, the
+sealed credentials — and, since a seat's memory is
+[replicated onto it](../concepts/seat-ownership.md#a-seats-memory-follows-it),
+every seat's diary, episodes, profiles, skills and conversation ledger, no
+matter which node wrote them. On a clustered embedded stream you are
+snapshotting a replicated stream, so one member's snapshot carries what its
+peers hold too.
+
+The **store file is that node's alone**, and what only lives there is what
+only *that node* did: its audit event log, its scheduled-run history, its
+share of the config revision history. Those do not exist anywhere else and no
+peer's backup contains them.
+
+So:
+
+- **For the company's state — one node is enough.** Everything a restore needs
+  to bring the company back is on the stream estate, and a single node's
+  backup captures all of it.
+- **For the complete audit trail — take one per node**, on the same schedule,
+  and keep them together. The event log is per-node history with no second
+  copy, so a fleet-wide audit trail is the union of every node's.
+
+There is no fleet-wide barrier and deliberately no attempt at one: each node's
+copy is its own moment, and the estate that has to be internally consistent —
+the stream estate — is captured as one set within a single run.
 
 ### Where to put it, and how often
 
@@ -174,6 +213,12 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   coordination store beside the activation pointer, so a node restored with a
   stale store picks up the live revision; `crewlet config export` from any
   running node round-trips the document, sealed or not.
+- **A store file lost with the stream estate intact is nearly free.** The
+  learning tables and the conversation ledger re-hydrate from the memory
+  changelog when the seat is next acquired, so what is actually lost is that
+  node's audit log, its scheduled-run history and its config revision
+  history. Start the node with an empty store; it migrates fresh and its
+  seats arrive remembering.
 - **Total loss of the stream estate without a backup is survivable by
   re-provisioning** — secrets resolve store-first-env-second so a brand-new
   node starts from the environment, and every stream, bucket and mailbox is
