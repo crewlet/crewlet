@@ -142,7 +142,7 @@ no connected consumer and both reapers delete exactly that. See
 The seat-handover numbers were measured against **Apache Pulsar standalone**
 with `apache/pulsar-client-go`, and are recorded in full — method, broker
 version and client version — in
-[d-104](https://github.com/crewlet/crewlet/blob/main/decisions/104-pulsar-redelivery-economics.md).
+[adr-104](https://github.com/crewlet/crewlet/blob/main/adrs/104-pulsar-redelivery-economics.md).
 `internal/queue/pulsar/conformance_test.go` is what holds them, and it is worth
 being exact about how: it asserts the **behaviour** each number describes — that
 a close returns everything unacked at `redeliveryCount` 0, that a subscription

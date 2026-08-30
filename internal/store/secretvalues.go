@@ -18,7 +18,7 @@ import (
 //
 // The company's secrets live on the coordination KV, where every node reads
 // them — see [github.com/crewlet/crewlet/internal/fleetsecrets] and
-// decisions/203. This table is what a node can write when the KV is out of
+// adrs/203. This table is what a node can write when the KV is out of
 // reach, which on the default embedded topology is any moment the engine is
 // not running: the broker is in the engine's own process, so `crewlet secrets
 // set` on a stopped node has nowhere else to put a value.

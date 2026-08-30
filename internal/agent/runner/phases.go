@@ -114,7 +114,7 @@ type Config struct {
 
 	// Resume re-enters a suspended Execute phase. Non-nil makes this
 	// runner's turn a RESUME: Plan is skipped and Execute continues the
-	// saved conversation. See [Runner.Resume] and d-402.
+	// saved conversation. See [Runner.Resume] and adr-402.
 	Resume *Resume
 }
 

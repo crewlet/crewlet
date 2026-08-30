@@ -69,7 +69,7 @@ ON CONFLICT (scope_type, scope_id, schedule_name, fire_label, target_handle) DO 
 // row silently stops being written.
 //
 // Reporting rests on RowsAffected rather than on RETURNING. That began as a
-// dialect-intersection rule for two drivers (d-002, retired by d-003); it
+// dialect-intersection rule for two drivers (adr-002, retired by adr-003); it
 // stays because RowsAffected is what this statement needs and is the answer
 // database/sql gives whatever the driver does, so the ledger's tri-state does
 // not depend on a newer SQLite feature reaching the one that is pinned.

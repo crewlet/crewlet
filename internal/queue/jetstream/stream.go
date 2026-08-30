@@ -23,7 +23,7 @@
 // # Where it differs, and what that cost
 //
 // Two Pulsar behaviours do not carry over, both measured — see
-// decisions/102-jetstream-redelivery.md. There is no free handoff
+// adrs/102-jetstream-redelivery.md. There is no free handoff
 // (every path back to the broker increments the delivery count), and
 // redeliveries return BEHIND never-delivered messages rather than replaying
 // from the head. The first is absorbed by a larger delivery budget; the

@@ -87,7 +87,7 @@ type ToolResult struct {
 	// work outlives the turn (the detached sandbox). Honoured only when
 	// the caller set AllowSuspend; elsewhere it is logged and ignored,
 	// because a phase that never persists a partial conversation cannot
-	// resume one. See decisions/402.
+	// resume one. See adrs/402.
 	Suspend bool
 
 	// SuspendPayload is handed back to the caller to persist.
@@ -217,7 +217,7 @@ type Result struct {
 
 	// Suspended and its companions are set when a tool suspended the loop.
 	// The pending call is left UNANSWERED in Messages — exactly one
-	// dangling tool call, which d-402 makes an invariant checked on both
+	// dangling tool call, which adr-402 makes an invariant checked on both
 	// serialize and resume.
 	Suspended         bool
 	PendingToolCallID string

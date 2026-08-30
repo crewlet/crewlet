@@ -13,7 +13,7 @@ import "time"
 //
 // The alternative was request/reply: the lease table locates the owner, and
 // a caller asks it directly. That was refused — see
-// decisions/501-node-runtime.md. Every answer would become partial
+// adrs/501-node-runtime.md. Every answer would become partial
 // (some nodes reply, some time out), it opens a new trust edge (a request
 // carrying an operator's authority across a node boundary), and it
 // duplicates a mechanism that already works.

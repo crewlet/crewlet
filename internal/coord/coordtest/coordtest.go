@@ -30,7 +30,7 @@
 //   - It read an omitted Protocol as the OLDEST version, ported from a Python
 //     keyword default of 1. Go's struct zero inverts that risk, and the
 //     contract now says an omitted protocol claims at THIS build.
-//   - It asserted a gate-refused claim leaves the record pristine. d-201 §3
+//   - It asserted a gate-refused claim leaves the record pristine. adr-201 §3
 //     permits a KV to touch it — check → claim → re-check → release means the
 //     claim was made and given back.
 //   - It asked for a TTL longer than LongTTL. A store sizes its retention to
@@ -40,7 +40,7 @@
 //     is why no case could see that a value's Go type does not survive a real
 //     round trip.
 //
-// So before concluding a backend is at fault: grep decisions/ for the
+// So before concluding a backend is at fault: grep adrs/ for the
 // operation. If the case turns out to encode what the twin happens to do, the
 // case is the defect. Two backends agreeing is not evidence when the suite is
 // what made them agree.
@@ -144,8 +144,8 @@
 //
 // # Before adding a case that says a backend must NOT do something
 //
-// Grep decisions/ for the operation first. A recorded degradation is a
-// PERMITTED exception, and the corpus is where permission lives — d-201 §3
+// Grep adrs/ for the operation first. A recorded degradation is a
+// PERMITTED exception, and the corpus is where permission lives — adr-201 §3
 // records that a KV cannot express the protocol gate inside a compare-and-swap
 // and so does check → claim → re-check → release, which means a gate-refused
 // claim may legitimately leave a touched record. A "must not" written without

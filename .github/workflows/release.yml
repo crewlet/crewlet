@@ -1,7 +1,7 @@
 name: release
 
 # Publishes the Crewlet binaries, archives, checksums and container image
-# with goreleaser. See decisions/901-release-tooling.md and
+# with goreleaser. See adrs/901-release-tooling.md and
 # RELEASING.md.
 #
 # A release is one command: `git tag v1.2.0 && git push origin v1.2.0`. The

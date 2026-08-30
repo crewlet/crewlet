@@ -5,7 +5,7 @@
 // possibly on another node, possibly days later once a person answers a
 // question. The conversation cannot be a parked goroutine: the run outlives
 // the process. So it is serialized into the pending-run row and re-entered
-// from there. See decisions/402-suspend-resume.md.
+// from there. See adrs/402-suspend-resume.md.
 //
 // THIS IS A WIRE FORMAT, not an implementation detail, because it crosses two
 // boundaries:
@@ -101,7 +101,7 @@ var ErrNoPendingCall = errors.New("execstate: no pending tool call")
 // than one call unanswered.
 var ErrDanglingCalls = errors.New("execstate: more than one unanswered tool call")
 
-// Validate checks the d-402 invariants.
+// Validate checks the adr-402 invariants.
 //
 // Run on BOTH serialize and resume, because a state that violates one is
 // corrupt whichever side produced it — and the two sides are different builds,

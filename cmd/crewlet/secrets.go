@@ -36,7 +36,7 @@ import (
 // # There are two stores, and the running engine decides which one this is
 //
 // The company's rows live on the coordination KV, where every node reads
-// them (decisions/203). On the default topology that KV is inside the
+// them (adrs/203). On the default topology that KV is inside the
 // engine's own process and listens on no socket, so this command cannot
 // write it directly — it goes through the node's authenticated /secrets
 // surface instead, which is the primary path and the one a fleet uses.

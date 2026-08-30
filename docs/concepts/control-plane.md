@@ -175,7 +175,7 @@ That is the whole of the comparison, and it is over resolved values rather than 
 
 ## What a running turn sees
 
-**Nothing moves under a running turn, because nothing is mutated in place.** An epoch is published rather than edited, so the question is only ever *which* epoch a turn is reading — and a turn answers that once. `runTurn` pins the company in a local at the top and builds everything from that one value: the runner, the round caps, the prefetch, the telemetry. Two reads could straddle a publish, and a turn that built its runner from one revision and took its round caps from the next would be running a company that never existed. That is the failure publishing-instead-of-mutating exists to remove ([d-404](https://github.com/crewlet/crewlet/blob/main/decisions/404-hot-reload-epochs.md)), and the pin is what collects the benefit.
+**Nothing moves under a running turn, because nothing is mutated in place.** An epoch is published rather than edited, so the question is only ever *which* epoch a turn is reading — and a turn answers that once. `runTurn` pins the company in a local at the top and builds everything from that one value: the runner, the round caps, the prefetch, the telemetry. Two reads could straddle a publish, and a turn that built its runner from one revision and took its round caps from the next would be running a company that never existed. That is the failure publishing-instead-of-mutating exists to remove ([adr-404](https://github.com/crewlet/crewlet/blob/main/adrs/404-hot-reload-epochs.md)), and the pin is what collects the benefit.
 
 The prompt is frozen harder still: it is **rendered to strings before the runner is built**, so the runner has nowhere to re-fetch from and a `self_iterate` loop cannot move the system prompt underneath the planner between rounds.
 
@@ -225,7 +225,7 @@ curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
 
 A node that stopped reporting **drops out of this list** once its status ages past the freshness bound — which is the same fact the posture decision reads, so what an operator sees and what the fleet concluded cannot disagree.
 
-One node `error` while peers are `ok` is a per-node problem: a missing env var, an image without some MCP binary. Every node `error` on the same epoch is the revision — revert it. Any node `degraded` needs a **restart** of that process specifically: the status exists precisely for a failure past something no later apply can put back, so nothing short of a restart will. No build reports it today — see [`d-404`](https://github.com/crewlet/crewlet/blob/main/decisions/404-hot-reload-epochs.md).
+One node `error` while peers are `ok` is a per-node problem: a missing env var, an image without some MCP binary. Every node `error` on the same epoch is the revision — revert it. Any node `degraded` needs a **restart** of that process specifically: the status exists precisely for a failure past something no later apply can put back, so nothing short of a restart will. No build reports it today — see [`adr-404`](https://github.com/crewlet/crewlet/blob/main/adrs/404-hot-reload-epochs.md).
 
 ### After the fact
 

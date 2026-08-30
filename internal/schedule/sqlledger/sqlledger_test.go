@@ -30,7 +30,7 @@ func TestMain(m *testing.M) {
 // failing case rather than a production surprise on whichever deployment runs
 // the other one.
 //
-// One driver now (decisions/003), so the per-driver loop that used to wrap
+// One driver now (adrs/003), so the per-driver loop that used to wrap
 // this is gone. What it certified — that the ledger's SQL means the same
 // thing as the in-memory twin — never depended on there being two.
 func TestContract(t *testing.T) {

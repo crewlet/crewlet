@@ -116,7 +116,7 @@ func isTerminal(w io.Writer) bool {
 //
 // # Why not a logging library
 //
-// See decisions/001. The short version: the engine's logger is `*slog.Logger`
+// See adrs/001. The short version: the engine's logger is `*slog.Logger`
 // because that is the interface the ecosystem passes around, and a console
 // encoder is the only thing zap or zerolog would have been adopted for.
 type consoleHandler struct {

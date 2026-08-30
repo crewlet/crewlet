@@ -106,7 +106,7 @@ var protocolCases = []testCase{
 		// SCOPE, because the corpus permits one exception and this case
 		// must not be read as forbidding it. The violation here is
 		// already visible when the claim arrives, so a backend sees it
-		// on its check and must write nothing. d-201 §3 records the
+		// on its check and must write nothing. adr-201 §3 records the
 		// other path deliberately: a KV cannot express the gate as a
 		// predicate inside a compare-and-swap, so it does check → claim
 		// → RE-CHECK → release on violation. A violation that appears

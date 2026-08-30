@@ -20,7 +20,7 @@ import (
 // tools its own backends can actually serve.
 //
 // Which is also why this runs on EVERY apply and not once at boot: an epoch is
-// published, never mutated (decisions/404), so each new one gets a new
+// published, never mutated (adrs/404), so each new one gets a new
 // registry — and a node that equipped only its first epoch would serve a
 // company whose agents lost every builtin at the first config change, with
 // nothing failing.

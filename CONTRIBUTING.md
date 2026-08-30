@@ -100,7 +100,7 @@ without it** — a green run has simply not exercised them.
 
   Turso is the only store driver — `CREWLET_STORE_DRIVER` and the Tier A
   `store.driver` field are both retired (see
-  [`decisions/003`](decisions/003-turso-is-the-only-driver.md)), so there is
+  [`adrs/003`](adrs/003-turso-is-the-only-driver.md)), so there is
   no dialect intersection to keep statements inside any more and no second
   suite run. Write `internal/store` against Turso.
 
@@ -140,7 +140,7 @@ without it** — a green run has simply not exercised them.
   Forcing a static ELF needs `-linkmode external`, which needs cgo — and that
   binary, which `file(1)` does call static, SIGSEGVs on its first query on the
   machine that built it, because a static program cannot `dlopen`.
-  `decisions/901` has the full table. The `cross` CI job asserts the artifact
+  `adrs/901` has the full table. The `cross` CI job asserts the artifact
   is still dynamic, so this is a red build rather than a release.
 
   ```bash
@@ -356,10 +356,9 @@ whose caller nobody found.
 Check rather than assume; `git tag --merged` lists the tags, and
 `git log <newest tag>..HEAD -- <path>` says whether what you are changing is
 inside one. As of the only release, `v0.1.0`, that answer is *nothing*: the
-tag sits on the initial commit — the Python engine
-[`decisions/000`](decisions/000-go-native-rewrite.md) replaced, with no Go in
-it — so no package, config field, CLI command, event type, API route or
-schema file in this tree has yet been in a release.
+tag sits on the initial commit, which contains no Go at all — so no package,
+config field, CLI command, event type, API route or schema file in this tree
+has yet been in a release.
 
 Two things a missing tag does **not** excuse, because neither is about
 releases:
@@ -389,8 +388,16 @@ linked there** — the site build fails on a page nothing links to.
 `docs/` is written for people *running* Crewlet. Reasoning aimed at people
 *changing* it goes in a package doc, where `go doc` surfaces it beside the
 code — or, when a change makes a call a future reader would plausibly reverse,
-in [`decisions/`](decisions/README.md). Cite a decision from the code it
-governs: one nothing points at is one nobody will find.
+in [`adrs/`](adrs/README.md). Cite the record from the code it governs: one
+nothing points at is one nobody will find, and `internal/version` fails the
+build if a citation stops resolving.
+
+An ADR records what was decided and on what evidence; it does not bind. If you
+disagree with one, you do not need permission to change the code — write the
+ADR that supersedes it, say which premise stopped holding, and mark the old one
+`Superseded by adr-NNN`. Reversing a decision a week after it was made is the
+system working. Silently working around a record, or leaving one in place that
+no longer describes the engine, is not.
 
 ## Commit messages
 

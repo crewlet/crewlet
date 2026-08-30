@@ -89,7 +89,7 @@ type ctxKey struct{}
 // read several frames below by writers that have no other reason to know
 // about it. Go threads it through context instead — the same ambient reach,
 // but visible in every signature that carries it, which is the point of
-// d-401's move away from implicit context.
+// adr-401's move away from implicit context.
 func With(ctx context.Context, key string) context.Context {
 	return context.WithValue(ctx, ctxKey{}, key)
 }

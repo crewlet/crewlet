@@ -93,7 +93,7 @@ type NodeRuntime interface {
 	// entries once its MCP servers are up, and rebuilding it every few
 	// seconds to throw it away is work nobody asked for. Two methods on
 	// one seam still keeps the standalone/embedded difference in one
-	// place, which is what d-501 is about.
+	// place, which is what adr-501 is about.
 	//
 	// Nil slice is "this node serves none", which for a co-located engine
 	// is a real claim; a standalone API has no NodeRuntime at all and the
@@ -104,7 +104,7 @@ type NodeRuntime interface {
 // ToolInfo is one catalogue entry on the wire.
 //
 // The field names are the CLIENT's — name, description, source — because the
-// dashboard is the compatibility reference for a frame's shape (d-502) and it
+// dashboard is the compatibility reference for a frame's shape (adr-502) and it
 // groups the tool screen by `source`.
 type ToolInfo struct {
 	Name        string `json:"name"`

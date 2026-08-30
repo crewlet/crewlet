@@ -24,11 +24,11 @@ import (
 // A seat that keeps working accumulates one raw row per turn forever, and
 // nothing else in the system removes one. Recall is what pays for that, and it
 // pays LINEARLY: there is still no ANN index reachable from the Go driver
-// (decisions/002, re-measured at the pin), so recall visits every embedded row
+// (adrs/002, re-measured at the pin), so recall visits every embedded row
 // the seat owns, in the Plan phase of every turn.
 //
 // The constant shrank when the distance arithmetic moved into the database
-// (decisions/003) — the rows no longer cross the driver boundary to be decoded
+// (adrs/003) — the rows no longer cross the driver boundary to be decoded
 // in Go, which at 5 000 rows of 1 536 dimensions was 144 ms and 35.8 MB
 // against 34 ms and 35.8 KB for the same ranking. The SHAPE did not: it is
 // still linear in the seat's row count, still with no ceiling, and this pass

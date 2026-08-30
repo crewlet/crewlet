@@ -38,20 +38,20 @@ import (
 // subscription, so a new observable is covered here by default rather than
 // needing a new case.
 //
-// BEFORE ADDING A "MUST NOT" CASE HERE, GREP decisions/ FOR THE
+// BEFORE ADDING A "MUST NOT" CASE HERE, GREP adrs/ FOR THE
 // OPERATION. A recorded degradation is a permitted exception, and the corpus is
 // where permission lives — a case that forbids what a decision allows makes a
 // correct backend look broken, and the author who investigates pays far more
 // than the grep cost. This suite has already made that mistake twice: it
-// required a free deferral, which d-102 decisions 1-2 explicitly trade away on
-// JetStream, and it required head-replay on nak, which d-102 measures as
+// required a free deferral, which adr-102 decisions 1-2 explicitly trade away on
+// JetStream, and it required head-replay on nak, which adr-102 measures as
 // Pulsar-only. Both are capabilities now, not requirements.
 //
 // The four cases below were checked that way rather than by waiting for a
-// failure. d-101 §3 defines all four verbs and permits none of these writes;
-// d-102's only nearby exceptions are the deferral cost (gated as FreeDeferral)
+// failure. adr-101 §3 defines all four verbs and permits none of these writes;
+// adr-102's only nearby exceptions are the deferral cost (gated as FreeDeferral)
 // and Unquiesce not needing to reclaim a prefetch on a pull backend, which
-// nothing here asserts either way. d-102 also records that delete-and-recreate
+// nothing here asserts either way. adr-102 also records that delete-and-recreate
 // "resets the cursor, so unusable", which is the same conclusion case A reaches
 // from the other direction.
 func (s *suite) runNegativePaths(t *testing.T) {
@@ -171,7 +171,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		// A deferral that charged one would leave only one.
 		if !s.caps.FreeDeferral {
 			t.Skip("backend implements deferral with a nak, which costs one " +
-				"delivery count by design (decisions/102, decisions 1-2)")
+				"delivery count by design (adrs/102, decisions 1-2)")
 		}
 		newQueueWithAttempts := s.needAttempts(t)
 		deadLetters := s.needDeadLetters(t)

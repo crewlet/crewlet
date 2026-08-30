@@ -31,7 +31,7 @@ func DecodeTime(micros int64) time.Time { return time.UnixMicro(micros).UTC() }
 // NullText maps a Go string onto a nullable TEXT column, sending NULL for the
 // zero value.
 //
-// This is the boundary half of the design in decisions/002: where the
+// This is the boundary half of the design in adrs/002: where the
 // Postgres schema wrote `UNIQUE(a, b) WHERE b <> ”` to mean "an empty b is
 // legitimately unconstrained", the schema here writes a PLAIN unique index
 // over a nullable column and stores NULL for that case. SQL treats NULLs as

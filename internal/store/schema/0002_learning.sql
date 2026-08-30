@@ -101,8 +101,8 @@ CREATE UNIQUE INDEX episodes_agent_work_key_idx
 
 -- Per-agent time windows — the recent-episodes read, and the scan vector
 -- recall runs over. Recall is still a SCAN (no ANN index reaches the Go
--- driver, decisions/002), even though the distance arithmetic itself is the
--- database's since decisions/003 — so this index doing the agent-scoping is
+-- driver, adrs/002), even though the distance arithmetic itself is the
+-- database's since adrs/003 — so this index doing the agent-scoping is
 -- what keeps that scan over one seat's thousands of rows rather than the
 -- whole table. It also carries recall's tie-break: equal distances order by
 -- ended_at DESC.

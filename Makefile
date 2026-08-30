@@ -162,7 +162,7 @@ test-norace: require-node ## the full suite without -race (faster; not a gate)
 # internal/store/platform.go, for one, is a compile error by construction.
 #
 # This replaced `test-stores`, which certified the store on two drivers. There
-# is one now (decisions/003), and the slot it left is worth more here: the
+# is one now (adrs/003), and the slot it left is worth more here: the
 # release matrix was the thing nothing checked, and windows/arm64 shipped
 # broken for exactly that reason.
 test-cross: ## cross-compile every release target (ci: cross-compile the release targets)

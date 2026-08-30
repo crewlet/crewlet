@@ -346,7 +346,7 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 		// for the whole AckWait window on every lease movement.
 		//
 		// It costs one delivery count, which is why the budget covers
-		// handoffs (decisions/102). Never republish instead: a
+		// handoffs (adrs/102). Never republish instead: a
 		// republished event is a NEW message, and the completion
 		// ledger's idempotency plus the batch layer's aging both key on
 		// the identity a Nak preserves.

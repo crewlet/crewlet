@@ -24,7 +24,7 @@
 // written against at most two backends, and each time a third opinion arrived
 // the suite was wrong more often than the backend was. What that looked like:
 //
-//   - It required a deferral to cost nothing. d-102 decisions 1-2 explicitly
+//   - It required a deferral to cost nothing. adr-102 decisions 1-2 explicitly
 //     trade that away on JetStream and raise MaxDeliver to absorb it. Now
 //     FreeDeferral.
 //   - It required a nak to replay from the head. Measured Pulsar-only; JetStream
@@ -40,7 +40,7 @@
 //
 // So when this suite fails a backend nobody here wrote, the first question is
 // whether the case states a real invariant or an accident of the two backends
-// that already agreed. Check decisions/ for the operation before
+// that already agreed. Check adrs/ for the operation before
 // concluding the backend is wrong: a recorded degradation is a permitted
 // exception, and the corpus is where permission lives. If the property is real
 // but not universal, it becomes a Capabilities flag with the reason at the skip
@@ -299,7 +299,7 @@ type Capabilities struct {
 	// handoff is free; on JetStream nothing is released by closing, so
 	// deferral is implemented with Nak() and costs one delivery count —
 	// and MaxDeliver was re-derived from 10 to 25 precisely to absorb
-	// handoffs (decisions/102-jetstream-redelivery.md, decisions 1
+	// handoffs (adrs/102-jetstream-redelivery.md, decisions 1
 	// and 2).
 	//
 	// The invariant every backend still owes is the one the contract
@@ -316,7 +316,7 @@ type Capabilities struct {
 	// A capability rather than a requirement, and deliberately so:
 	// measured, Pulsar replays from the head while JetStream returns a
 	// redelivered message BEHIND never-delivered ones
-	// (decisions/102-jetstream-redelivery.md). The engine no
+	// (adrs/102-jetstream-redelivery.md). The engine no
 	// longer depends on either — within-conversation order comes from
 	// event timestamps, which
 	// within_a_partition_events_are_ordered_by_timestamp certifies for

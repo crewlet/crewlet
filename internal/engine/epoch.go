@@ -12,7 +12,7 @@ import (
 // The epoch and how a new one replaces it.
 //
 // A CONFIG REVISION IS AN IMMUTABLE EPOCH, AND APPLYING ONE PUBLISHES A NEW
-// EPOCH — nothing is ever mutated in place (decisions/404). The Python
+// EPOCH — nothing is ever mutated in place (adrs/404). The Python
 // this replaces applied a revision by mutating the live objects and keeping
 // their identity, so that anything holding a reference kept working. That is
 // precisely the problem: anything holding a reference kept working, and kept

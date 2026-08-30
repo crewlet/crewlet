@@ -19,7 +19,7 @@
 #
 # Nor is "just build it static" the way out: a static program has no dynamic
 # loader and cannot dlopen at all, so that build segfaults at its first query
-# rather than running on scratch (decisions/901 has the measurement).
+# rather than running on scratch (adrs/901 has the measurement).
 #
 # SECOND, and true even if that changed: the engine SPAWNS things.
 #

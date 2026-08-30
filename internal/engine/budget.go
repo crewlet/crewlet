@@ -27,7 +27,7 @@ import (
 //
 // Per turn, holding the caps the turn was PINNED to — so a mid-turn config
 // change cannot move the ceiling a round is judged against, which is the same
-// rule every other epoch read follows (decisions/404).
+// rule every other epoch read follows (adrs/404).
 type meter struct {
 	budgets    coord.Budgets
 	agentScope string

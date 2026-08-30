@@ -121,7 +121,7 @@ type Config struct {
 	// node whose engine is not co-located has no in-flight count to
 	// report, and a peer reading 0 for it would draw an idle row for a
 	// process that is simply not saying. See
-	// decisions/501-node-runtime.md.
+	// adrs/501-node-runtime.md.
 	//
 	// It takes a context because answering may mean reading a store, and
 	// this runs on the path that renews presence: the beat bounds it to

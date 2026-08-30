@@ -381,7 +381,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// it, because nothing on either side ran both.
 	//
 	// The client is the compatibility reference and wins any disagreement
-	// (decisions/502) — so a failure here is the SERVER's.
+	// (adrs/502) — so a failure here is the SERVER's.
 	node := nodeBinary(t)
 	n := start(t)
 

@@ -652,7 +652,7 @@ func TestTheStoreTakesItsPoolKnobsFromConfig(t *testing.T) {
 	// like opening.
 	//
 	// The driver used to be the third knob here and is gone with it
-	// (decisions/003): there is one driver, and TestTursoIsTheOnlyDriver-
+	// (adrs/003): there is one driver, and TestTursoIsTheOnlyDriver-
 	// InTheBinary in internal/store is what asserts that now.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")

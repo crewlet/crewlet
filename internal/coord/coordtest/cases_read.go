@@ -276,7 +276,7 @@ var readCases = []testCase{
 
 	// --- meta: what the holder IS --------------------------------------
 	//
-	// Meta is the one field that crosses a wire — d-201 §2 records the
+	// Meta is the one field that crosses a wire — adr-201 §2 records the
 	// ownership key carrying it as JSON — so the suite separates the two
 	// properties it could assert about a round trip and requires exactly
 	// one of them.

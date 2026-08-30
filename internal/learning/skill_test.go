@@ -1074,7 +1074,7 @@ func TestPinnedIsStoredAsTheIntegerTheCuratorFiltersOn(t *testing.T) {
 	// anything else would not raise — it would quietly hand every pinned
 	// skill to the curator — so the stored encoding is asserted directly
 	// rather than inferred from behaviour. It used to run on both certified
-	// drivers; there is one now (decisions/003), and the encoding is exactly
+	// drivers; there is one now (adrs/003), and the encoding is exactly
 	// as worth pinning against a driver upgrade as it was against a second
 	// driver.
 	s, db := skillStore(t)

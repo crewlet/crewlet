@@ -43,7 +43,7 @@ func offlineQueue(t *testing.T) *Queue {
 // message nothing is wrong with — and a busy seat changes hands often, so a
 // healthy event would eventually die having never failed. On Pulsar a
 // graceful close returns unacked messages at redeliveryCount 0 (measured;
-// d-104), so leaving it unacked is both correct and free.
+// adr-104), so leaving it unacked is both correct and free.
 func TestActionForKeepsADeferralFree(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

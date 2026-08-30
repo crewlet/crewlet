@@ -238,7 +238,7 @@ to be copied to it, and there is no first-boot step that reads a peer.
 | **One node** | Store (env as the fallback) | `crewlet secrets set`, then re-activate | From the env, then the store overlays it |
 | **A fleet** | Store (env as the fallback) | `crewlet secrets set` against any node, then re-activate | From the env, then the same store every peer reads |
 
-**The two columns are the same, and that is the point** ([d-203](https://github.com/crewlet/crewlet/blob/main/decisions/203-secrets-follow-the-config-path.md)). A credential is company-wide state, so it lives where the company config lives: one sealed copy on the coordination KV, written through any node's authenticated API, read by all of them.
+**The two columns are the same, and that is the point** ([adr-203](https://github.com/crewlet/crewlet/blob/main/adrs/203-secrets-follow-the-config-path.md)). A credential is company-wide state, so it lives where the company config lives: one sealed copy on the coordination KV, written through any node's authenticated API, read by all of them.
 
 The **environment stays the bootstrap path**, and it is a perfectly good place to keep credentials if your platform already does — a Kubernetes `Secret` projected as env, systemd's `EnvironmentFile=`, Compose's `env_file:`. A node with no keyring, or an empty store, resolves everything from the environment and runs normally. What is no longer true is that a fleet *has* to work that way.
 
