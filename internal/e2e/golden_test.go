@@ -678,4 +678,27 @@ func TestATurnsEventsJoinTheTriggersTrace(t *testing.T) {
 		t.Errorf("nothing hung off the trigger's span %q — the turn did not "+
 			"join the trace that woke it", triggerSpan)
 	}
+
+	// --- and what the LOGS said ---------------------------------------- //
+	// The other half of the correlation: a trace is only useful if the lines
+	// the engine wrote while a span was open name it, so an operator can go
+	// from a slow span to the log lines underneath it. This is what the
+	// conversion of the turn path onto slog's *Context methods buys, and
+	// without an assertion it would rot the first time someone wrote
+	// log.Info in a frame that has a ctx.
+	lines := logs.linesFor(traceID)
+	if len(lines) == 0 {
+		t.Fatalf("no log line carried trace_id %s; the turn ran without "+
+			"correlation", traceID)
+	}
+	var withSpan int
+	for _, line := range lines {
+		if strings.Contains(line, `"span_id":"`) {
+			withSpan++
+		}
+	}
+	if withSpan == 0 {
+		t.Errorf("%d lines carried the trace id but none carried a span id",
+			len(lines))
+	}
 }

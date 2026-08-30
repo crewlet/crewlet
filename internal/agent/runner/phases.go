@@ -250,7 +250,7 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 		// `direct` on its own skips Review outright. Both together let a
 		// rescued turn deliver nothing and report done, so the turn loop
 		// keys on the mark rather than on the synthesised word.
-		log.Warn("plan_never_submitted", "round", round, "rounds_used", res.Rounds)
+		log.WarnContext(ctx, "plan_never_submitted", "round", round, "rounds_used", res.Rounds)
 		payload = planPayload{Decision: string(turn.PlanDirect), Reasoning: res.Text}
 	}
 
@@ -389,7 +389,7 @@ func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Exec
 		// was judged good" and "nothing judged it", and those look
 		// identical downstream. Loop back instead — the delivery gate and
 		// the stall guard bound how long that can go on.
-		log.Warn("review_never_submitted", "round", round, "rounds_used", res.Rounds)
+		log.WarnContext(ctx, "review_never_submitted", "round", round, "rounds_used", res.Rounds)
 		rescue := turn.Review{
 			Decision: phase.SelfIterate,
 			Notes: "The review phase produced no decision. Re-check the plan's " +
@@ -607,11 +607,11 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error)
 			LastText: res.Text, RoundsUsed: out.Rounds,
 		})
 		if granted <= 0 {
-			log.Info("phase_not_extended", "phase", ph, "iteration", iteration,
+			log.InfoContext(ctx, "phase_not_extended", "phase", ph, "iteration", iteration,
 				"rounds_used", out.Rounds, "reason", decision.Reason)
 			return out, nil
 		}
-		log.Info("phase_extended", "phase", ph, "iteration", iteration,
+		log.InfoContext(ctx, "phase_extended", "phase", ph, "iteration", iteration,
 			"granted", granted, "rounds_used", out.Rounds, "reason", decision.Reason)
 		messages = append(messages, llm.Message{
 			Role:    llm.RoleUser,

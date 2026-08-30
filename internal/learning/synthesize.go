@@ -251,7 +251,7 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 		return nil, fmt.Errorf("learning: counting %s's skills: %w", handle, err)
 	}
 	if count >= s.maxPerAgent {
-		log.Debug("skill_synthesis_skipped", "reason", SkipSkillCapV,
+		log.DebugContext(ctx, "skill_synthesis_skipped", "reason", SkipSkillCapV,
 			"agent_handle", handle, "skills", count, "cap", s.maxPerAgent)
 		return nil, nil
 	}
@@ -264,7 +264,7 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 		return nil, fmt.Errorf("learning: reading %s's tool sequences: %w", handle, err)
 	}
 	if name, dup := mostSimilar(t.Event.ToolSequence, existing, s.duplicateAt); dup {
-		log.Debug("skill_synthesis_skipped", "reason", SkipDuplicateSkill,
+		log.DebugContext(ctx, "skill_synthesis_skipped", "reason", SkipDuplicateSkill,
 			"agent_handle", handle, "similar_to", name)
 		return nil, nil
 	}
@@ -291,7 +291,7 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 		// The model declined, which is the expected answer for a turn whose
 		// tool run had no reusable shape. Not an error: asking is cheap and
 		// most turns are not procedures.
-		log.Debug("skill_synthesis_declined", "agent_handle", handle,
+		log.DebugContext(ctx, "skill_synthesis_declined", "agent_handle", handle,
 			"turn_id", t.Event.TurnID)
 		return nil, nil
 	}
@@ -314,14 +314,14 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 		// ErrSkillExists is a race with a peer that drafted the same name,
 		// not a failure: the row that won is as good as the one that lost.
 		if errors.Is(err, ErrSkillExists) {
-			log.Debug("skill_synthesis_lost_race", "agent_handle", handle,
+			log.DebugContext(ctx, "skill_synthesis_lost_race", "agent_handle", handle,
 				"skill", draft.Name)
 			return nil, nil
 		}
 		return nil, fmt.Errorf("learning: writing %s's skill %q: %w", handle, draft.Name, err)
 	}
 
-	log.Info("skill_synthesized", "agent_handle", handle, "skill", draft.Name,
+	log.InfoContext(ctx, "skill_synthesized", "agent_handle", handle, "skill", draft.Name,
 		"skill_id", skill.ID, "tools", len(t.Event.ToolSequence))
 	return []events.Payload{types.SkillSynthesized{
 		Agent:       t.Event.Agent,

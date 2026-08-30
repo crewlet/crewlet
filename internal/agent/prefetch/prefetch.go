@@ -283,14 +283,14 @@ func (f *Fetcher) auxCall(ctx context.Context, seat *org.Role, system, user stri
 	}
 	member, err := f.src.Models.Head(seat, phase.Auxiliary)
 	if err != nil {
-		log.Debug("prefetch_no_auxiliary_model", "seat", seat.Handle(), "error", err)
+		log.DebugContext(ctx, "prefetch_no_auxiliary_model", "seat", seat.Handle(), "error", err)
 		return "", false
 	}
 	call, cancel := context.WithTimeout(ctx, AuxTimeout)
 	defer cancel()
 	completion, err := member.Provider.Complete(call, auxRequest(system, user, maxTokens))
 	if err != nil {
-		log.Warn("prefetch_auxiliary_call_failed", "seat", seat.Handle(),
+		log.WarnContext(ctx, "prefetch_auxiliary_call_failed", "seat", seat.Handle(),
 			"model", member.Key, "error", err.Error())
 		return "", false
 	}
@@ -299,7 +299,7 @@ func (f *Fetcher) auxCall(ctx context.Context, seat *org.Role, system, user stri
 		// checked rather than left to the recover: the recover exists for
 		// what nobody foresaw, and reaching it here would report a panic
 		// where the honest answer is "this backend returned nothing".
-		log.Warn("prefetch_auxiliary_returned_nothing", "seat", seat.Handle(),
+		log.WarnContext(ctx, "prefetch_auxiliary_returned_nothing", "seat", seat.Handle(),
 			"model", member.Key)
 		return "", false
 	}
@@ -309,7 +309,7 @@ func (f *Fetcher) auxCall(ctx context.Context, seat *org.Role, system, user stri
 		// was spent reasoning: the call returns with output at the cap
 		// and nothing visible. Reported with both numbers, because the
 		// fix is a bigger cap and nothing else says so.
-		log.Warn("prefetch_auxiliary_answered_nothing", "seat", seat.Handle(),
+		log.WarnContext(ctx, "prefetch_auxiliary_answered_nothing", "seat", seat.Handle(),
 			"model", member.Key, "output_tokens", completion.OutputTokens,
 			"max_tokens", maxTokens)
 		return "", false

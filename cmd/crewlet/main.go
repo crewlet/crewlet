@@ -801,7 +801,7 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	if err := s.server.Shutdown(shutdown); err != nil {
 		// A listener that would not close is not a reason to skip the
 		// drain: the seats are the expensive thing to strand.
-		log.Warn("api_shutdown_failed", "error", err)
+		log.WarnContext(ctx, "api_shutdown_failed", "error", err)
 	}
 	// After the listener, so no socket can be reading the projection while
 	// its feed is torn down, and before the engine drains, so the drain's
@@ -844,7 +844,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// API and no webhook endpoint. Saying so is the point — an
 		// operator who expected an integration to work should learn it
 		// here rather than from a webhook that never arrives.
-		log.Warn("api_disabled",
+		log.WarnContext(ctx, "api_disabled",
 			"hint", "api.port is 0, so this node serves no dashboard, no REST "+
 				"API and no webhook endpoint; every integration is deaf here")
 		return nil, nil
@@ -988,11 +988,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	}
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("api_serve_failed", "error", err)
+			log.ErrorContext(ctx, "api_serve_failed", "error", err)
 		}
 	}()
 
-	log.Info("api_listening", "addr", listener.Addr().String(),
+	log.InfoContext(ctx, "api_listening", "addr", listener.Addr().String(),
 		"anonymous_read", app.Guard().AnonymousRead(),
 		"tokens", app.Guard().Tokens())
 	if app.Guard().AnonymousRead() && !auth.BindIsLoopback(boot.API.Host) {
@@ -1000,7 +1000,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// transcripts, diary entries and the whole event stream, and on a
 		// bind anything else can reach that is a decision somebody may
 		// not have made deliberately.
-		log.Warn("api_anonymous_read_on_a_reachable_bind",
+		log.WarnContext(ctx, "api_anonymous_read_on_a_reachable_bind",
 			"host", boot.API.Host,
 			"hint", "reads serve without a token on an address other machines "+
 				"can reach; set api.auth.allow_anonymous_read to false to close them")

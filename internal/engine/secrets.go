@@ -82,10 +82,10 @@ func (e *Engine) refreshSecrets(ctx context.Context) bool {
 			// No keyring is a supported deployment: secrets come from the
 			// environment and the store is simply not in use. Logged once
 			// at debug rather than warned on every apply.
-			log.Debug("secret_store_unused", "reason", "this node has no keyring")
+			log.DebugContext(ctx, "secret_store_unused", "reason", "this node has no keyring")
 			return false
 		}
-		log.Error("secret_store_unreadable", "error", err,
+		log.ErrorContext(ctx, "secret_store_unreadable", "error", err,
 			"detail", "the previous snapshot keeps serving; rotated secrets "+
 				"will not be picked up until the store is readable")
 		return false
@@ -101,7 +101,7 @@ func (e *Engine) refreshSecrets(ctx context.Context) bool {
 	e.env.Store(&resolved)
 	// NAMES ONLY. This is the one log line that could put a company's whole
 	// credential set into a file, so it counts them instead.
-	log.Info("secret_snapshot_loaded", "secrets", len(values))
+	log.InfoContext(ctx, "secret_snapshot_loaded", "secrets", len(values))
 	return true
 }
 

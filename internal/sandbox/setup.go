@@ -155,7 +155,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 				}
 			}
 		}
-		log.Debug("sandbox_setup_step_applied",
+		log.DebugContext(ctx, "sandbox_setup_step_applied",
 			"step", step.Name, "files", len(step.Files), "commands", len(step.Commands))
 	}
 	return nil

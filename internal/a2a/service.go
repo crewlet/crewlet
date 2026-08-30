@@ -156,7 +156,7 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 		return "", fmt.Errorf("a2a: wake %s: %w", ask.Target, err)
 	}
 
-	log.Info("channel_requested", "channel_id", id,
+	log.InfoContext(ctx, "channel_requested", "channel_id", id,
 		"requester", ask.Requester, "target", ask.Target)
 	return id, nil
 }
@@ -240,7 +240,7 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 		return fmt.Errorf("a2a: wake %s: %w", recipient, err)
 	}
 
-	log.Info("message_sent", "channel_id", ans.ChannelID,
+	log.InfoContext(ctx, "message_sent", "channel_id", ans.ChannelID,
 		"sender", ans.Sender, "recipient", recipient, "length", len(ans.Content))
 	return nil
 }

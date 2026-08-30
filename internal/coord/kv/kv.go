@@ -266,7 +266,7 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("coord/kv: %s reported no backing stream", leases.Bucket())
 	}
 
-	log.Debug("coord_kv_open", "leases", leases.Bucket(), "epochs", epochs.Bucket(), "ttl", cfg.TTL)
+	log.DebugContext(ctx, "coord_kv_open", "leases", leases.Bucket(), "epochs", epochs.Bucket(), "ttl", cfg.TTL)
 	return &Store{
 		js:          js,
 		leases:      leases,
@@ -485,7 +485,7 @@ func (s *Store) settle(
 			if _, err := s.Release(ctx, resource, want.Owner, want.Epoch); err != nil {
 				return nil, err
 			}
-			log.Info("coord_kv_claim_yielded_to_older_peer", "resource", resource,
+			log.InfoContext(ctx, "coord_kv_claim_yielded_to_older_peer", "resource", resource,
 				"owner", want.Owner, "epoch", want.Epoch, "protocol", protocol)
 		}
 		// A re-claim of a lease we already held is NOT released: the gate
@@ -599,7 +599,7 @@ func (s *Store) Release(ctx context.Context, resource, owner string, epoch int64
 			}
 			return false, unavailable("release "+resource, err)
 		}
-		log.Debug("coord_kv_lease_released", "resource", resource, "owner", owner, "epoch", epoch)
+		log.DebugContext(ctx, "coord_kv_lease_released", "resource", resource, "owner", owner, "epoch", epoch)
 		return true, nil
 	}
 	return false, contended("Release", resource)
@@ -909,7 +909,7 @@ func (s *Store) scanLeases(ctx context.Context) ([]entry, error) {
 			// A listing that invented a resource name would put a seat
 			// nobody owns into a capacity calculation, so an unreadable
 			// record is skipped — loudly.
-			log.Warn("coord_kv_undecodable_record", "bucket", s.leases.Bucket(), "key", kve.Key())
+			log.WarnContext(ctx, "coord_kv_undecodable_record", "bucket", s.leases.Bucket(), "key", kve.Key())
 			return
 		}
 		// A write landing mid-listing can report a key twice; the later
@@ -939,12 +939,12 @@ func (s *Store) scanResources(ctx context.Context) ([]resourceValue, error) {
 	err := s.eachEntry(ctx, s.epochs, func(kve jetstream.KeyValueEntry) {
 		resource, ok := decodeKey(kve.Key())
 		if !ok {
-			log.Warn("coord_kv_undecodable_key", "bucket", s.epochs.Bucket(), "key", kve.Key())
+			log.WarnContext(ctx, "coord_kv_undecodable_key", "bucket", s.epochs.Bucket(), "key", kve.Key())
 			return
 		}
 		var v resourceValue
 		if err := json.Unmarshal(kve.Value(), &v); err != nil {
-			log.Warn("coord_kv_undecodable_record", "bucket", s.epochs.Bucket(), "key", kve.Key())
+			log.WarnContext(ctx, "coord_kv_undecodable_record", "bucket", s.epochs.Bucket(), "key", kve.Key())
 			return
 		}
 		v.Resource = resource

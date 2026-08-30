@@ -513,7 +513,7 @@ func (r *Reconciler) listen(ctx context.Context) func() {
 	}
 	unsubscribe, err := r.queue.SubscribeStream(ctx, topics.ConfigRevisionActivated,
 		func(_ context.Context, _ string, ev *events.Event) {
-			log.Debug("config_activation_nudge", "revision", nudgeRevision(ev))
+			log.DebugContext(ctx, "config_activation_nudge", "revision", nudgeRevision(ev))
 			select {
 			case r.nudged <- struct{}{}:
 			default:
@@ -532,7 +532,7 @@ func (r *Reconciler) listen(ctx context.Context) func() {
 		// teardown that inherited it would leave the subscription behind
 		// on the broker.
 		if err := unsubscribe(context.WithoutCancel(ctx)); err != nil {
-			log.Warn("activation_nudge_unsubscribe_failed", "error", err)
+			log.WarnContext(ctx, "activation_nudge_unsubscribe_failed", "error", err)
 		}
 	}
 }

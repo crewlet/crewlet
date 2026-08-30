@@ -84,12 +84,12 @@ func (g *gitlabIdentities) resolve(ctx context.Context, url string, tokens []str
 			defer wg.Done()
 			client, err := gitlab.NewClient(gitlab.ClientOptions{URL: url, Token: token})
 			if err != nil {
-				log.Warn("gitlab_seat_client_failed", "error", err.Error())
+				log.WarnContext(ctx, "gitlab_seat_client_failed", "error", err.Error())
 				return
 			}
 			username, err := client.Me(ctx)
 			if err != nil {
-				log.Warn("gitlab_seat_identity_unresolved", "error", err.Error(),
+				log.WarnContext(ctx, "gitlab_seat_identity_unresolved", "error", err.Error(),
 					"detail", "this seat receives no code-host events until "+
 						"the next apply re-resolves it")
 				return
@@ -216,7 +216,7 @@ func (e *Engine) startGitLab(ctx context.Context, c *Company, cfg *config.GitLab
 		// difference is what the request buys: verifying this one buys
 		// nothing, while resolving those is the entire integration.
 	} else {
-		log.Warn("gitlab_has_no_engine_token",
+		log.WarnContext(ctx, "gitlab_has_no_engine_token",
 			"detail", "thread activity reaches the payload's assignees "+
 				"rather than everyone taking part")
 	}
@@ -229,10 +229,10 @@ func (e *Engine) startGitLab(ctx context.Context, c *Company, cfg *config.GitLab
 		// refused every lookup. Logged loudly either way, because the
 		// integration is completely inert in this state and nothing else
 		// will say so.
-		log.Warn("gitlab_has_no_seat_identities", "url", url,
+		log.WarnContext(ctx, "gitlab_has_no_seat_identities", "url", url,
 			"detail", "every code-host webhook will name a stranger")
 	}
-	log.Info("gitlab_wired", "url", url,
+	log.InfoContext(ctx, "gitlab_wired", "url", url,
 		"seat_identities", registered, "participants_lookup", lookup != nil)
 	return gitlab.NewParser(gitlab.ParserOptions{Participants: lookup}), nil
 }
@@ -263,16 +263,16 @@ func (e *Engine) reconcileGitLab(ctx context.Context, c *Company) {
 		// THE PREVIOUS PARSER KEEPS RUNNING, same posture as the
 		// tracker's: routing by a stale credential is worse than the new
 		// one and much better than not routing at all.
-		log.Error("gitlab_reconcile_failed", "error", errorText(err),
+		log.ErrorContext(ctx, "gitlab_reconcile_failed", "error", errorText(err),
 			"detail", "the previous code-host wiring is still current")
 		return
 	}
 	if err := svc.Replace(parser, gitlabPrompt()); err != nil {
-		log.Error("gitlab_reconcile_failed", "error", err.Error(),
+		log.ErrorContext(ctx, "gitlab_reconcile_failed", "error", err.Error(),
 			"detail", "the previous code-host wiring is still current")
 		return
 	}
-	log.Info("gitlab_reconciled", "company", c.Config.Name)
+	log.InfoContext(ctx, "gitlab_reconciled", "company", c.Config.Name)
 }
 
 // gitlabSeatTokens are the distinct credentials the company's agent seats

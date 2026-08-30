@@ -112,7 +112,7 @@ func Migrate(ctx context.Context, from LocalStore, to *Store, now time.Time) ([]
 		// NAMES ONLY, and at info: this happens once per node and an
 		// operator reading the boot log needs to see that a value they
 		// set locally is now the fleet's.
-		log.Info("secrets_migrated_onto_the_fleet", "names", moved,
+		log.InfoContext(ctx, "secrets_migrated_onto_the_fleet", "names", moved,
 			"detail", "these were this node's own rows; every node reads them now")
 	}
 	return moved, nil

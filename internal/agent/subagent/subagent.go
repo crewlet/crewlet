@@ -689,7 +689,7 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 		if r == nil {
 			return
 		}
-		log.Error("subagent_panicked", "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+		log.ErrorContext(ctx, "subagent_panicked", "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
 		res.Failed = true
 		res.ErrorKind = KindPanic
 		res.Error = ledger.Elide(fmt.Sprintf("sub-agent panicked: %v", r), errorLimit)
@@ -698,7 +698,7 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 	grant := Permit(cfg.Universe, cfg.Parent, req.ToolNames)
 	res.Rejected = grant.Rejected
 	if len(grant.Rejected) > 0 {
-		log.Info("subagent_tools_rejected", "rejected", grant.Rejected,
+		log.InfoContext(ctx, "subagent_tools_rejected", "rejected", grant.Rejected,
 			"role", cfg.Seat.Role.Name)
 	}
 
@@ -713,7 +713,7 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 				// real tool: the model's call would reach the meta-tool while
 				// the catalogue described the other. Drop the meta-tool — the
 				// child loses discovery, not correctness.
-				log.Warn("subagent_meta_tool_skipped", "tool", meta.Name(), "error", err)
+				log.WarnContext(ctx, "subagent_meta_tool_skipped", "tool", meta.Name(), "error", err)
 				continue
 			}
 			universe = next
@@ -784,7 +784,7 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 		res.TimedOut = true
 		res.ErrorKind = KindTimeout
 		res.Error = reason
-		log.Warn("subagent_timed_out", "role", cfg.Seat.Role.Name,
+		log.WarnContext(ctx, "subagent_timed_out", "role", cfg.Seat.Role.Name,
 			"rounds", res.Rounds, "tokens", res.Tokens(), "reason", reason)
 	case kind != "":
 		res.ErrorKind = kind
@@ -798,7 +798,7 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 			// kind so nobody goes looking for a company budget that never
 			// ran out.
 			res.ErrorKind = KindBudget
-			log.Warn("subagent_budget_exhausted", "role", cfg.Seat.Role.Name,
+			log.WarnContext(ctx, "subagent_budget_exhausted", "role", cfg.Seat.Role.Name,
 				"used", be.Used, "slice", be.Limit)
 		}
 	default:
@@ -963,7 +963,7 @@ func publishBatched(ctx context.Context, cfg Config, results []Result) {
 	// renders as "system".
 	ev.Source = cfg.Seat.Role.Name
 	if err := cfg.Publisher.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-		log.Warn("subagent_batched_publish_failed", "error", err)
+		log.WarnContext(ctx, "subagent_batched_publish_failed", "error", err)
 	}
 }
 

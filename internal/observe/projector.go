@@ -55,7 +55,7 @@ func (p *Projector) Start(ctx context.Context) error {
 		return fmt.Errorf("observe: subscribe %s: %w", topics.EventsWildcard, err)
 	}
 	p.stop = stop
-	log.Info("projector_started", "pattern", topics.EventsWildcard)
+	log.InfoContext(ctx, "projector_started", "pattern", topics.EventsWildcard)
 	return nil
 }
 
@@ -70,7 +70,7 @@ func (p *Projector) Stop(ctx context.Context) {
 		return
 	}
 	if err := p.stop(ctx); err != nil {
-		log.Warn("projector_unsubscribe_failed", "error", err)
+		log.WarnContext(ctx, "projector_unsubscribe_failed", "error", err)
 	}
 	p.stop = nil
 }

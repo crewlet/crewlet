@@ -84,13 +84,13 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 	switch spec.kind() {
 	case TransportHTTP:
 		transport, ident = newHTTPTransport(spec, log)
-		log.Info("server_connecting", "server", spec.Name, "url", spec.URL)
+		log.InfoContext(ctx, "server_connecting", "server", spec.Name, "url", spec.URL)
 	default:
 		transport, c.child, err = newStdioTransport(spec, log)
 		if err != nil {
 			return nil, err
 		}
-		log.Info("server_starting", "server", spec.Name,
+		log.InfoContext(ctx, "server_starting", "server", spec.Name,
 			"command", spec.Command, "args", spec.Args)
 	}
 
@@ -151,7 +151,7 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 	if init := session.InitializeResult(); init != nil && init.ServerInfo != nil {
 		serverName = init.ServerInfo.Name
 	}
-	log.Info("server_initialized", "server", spec.Name, "server_name", serverName)
+	log.InfoContext(ctx, "server_initialized", "server", spec.Name, "server_name", serverName)
 	return c, nil
 }
 

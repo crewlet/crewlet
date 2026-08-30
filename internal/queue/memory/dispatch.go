@@ -310,13 +310,13 @@ func (b *Broker) invoke(
 	// nothing here logs while holding the lock.
 	switch res.Outcome {
 	case queue.OutcomeDefer:
-		log.Info("delivery_deferred", append(attrs, "reason", deferralReason(res))...)
+		log.InfoContext(ctx, "delivery_deferred", append(attrs, "reason", deferralReason(res))...)
 	case queue.OutcomeNak:
-		log.Warn(failureEvent, append(attrs, "error", errText(res.Err))...)
+		log.WarnContext(ctx, failureEvent, append(attrs, "error", errText(res.Err))...)
 	case queue.OutcomeAck:
 	}
 	for _, d := range dead {
-		log.Error("event_dead_lettered", "topic", sub.topic, "group", sub.group,
+		log.ErrorContext(ctx, "event_dead_lettered", "topic", sub.topic, "group", sub.group,
 			"event_type", d.ev.Type, "redeliveries", d.redeliveries)
 	}
 }
@@ -434,7 +434,7 @@ func (b *Broker) flushWindow(ctx context.Context, sub *subscription, m *consumer
 	if !deliverable {
 		// A stop or a pause during the window loses nothing: the events
 		// are in the mailbox, which outlives both.
-		log.Debug("memory_linger_window_closed_undelivered",
+		log.DebugContext(ctx, "memory_linger_window_closed_undelivered",
 			"topic", sub.topic, "group", sub.group, "backlog", backlog)
 		return
 	}

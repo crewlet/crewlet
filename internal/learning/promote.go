@@ -230,7 +230,7 @@ func (p *Promoter) Pass(ctx context.Context) []events.Payload {
 	// engine for the same answer once per team.
 	writer := p.writer()
 	if writer == nil {
-		log.Info("skill_promotion_idle",
+		log.InfoContext(ctx, "skill_promotion_idle",
 			"reason", "no knowledge base is configured",
 			"detail", "a promoted skill is a draft page a unit lead reviews, "+
 				"and there is nowhere to put one; configure "+
@@ -245,7 +245,7 @@ func (p *Promoter) Pass(ctx context.Context) []events.Payload {
 		}
 		payload, err := p.promoteUnit(ctx, writer, unit)
 		if err != nil {
-			log.Warn("skill_promotion_failed", "unit", unit.ID, "error", err.Error())
+			log.WarnContext(ctx, "skill_promotion_failed", "unit", unit.ID, "error", err.Error())
 			continue
 		}
 		if payload != nil {
@@ -267,7 +267,7 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 		// SOFT SKIP, with the remediation in the log. A company that
 		// configured knowledge for one team and not another is supported,
 		// and failing here would stop the configured team's promotions.
-		log.Info("skill_promotion_skipped", "unit", unit.ID,
+		log.InfoContext(ctx, "skill_promotion_skipped", "unit", unit.ID,
 			"reason", "no_knowledge_container", "detail", unit.Hint)
 		return nil, nil
 	}
@@ -279,7 +279,7 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 	clusters := poolSiblings(skills, p.poolAt)
 	best, ok := strongest(clusters, p.minSiblings)
 	if !ok {
-		log.Debug("skill_promotion_found_nothing", "unit", unit.ID,
+		log.DebugContext(ctx, "skill_promotion_found_nothing", "unit", unit.ID,
 			"skills", len(skills), "clusters", len(clusters),
 			"min_siblings", p.minSiblings)
 		return nil, nil
@@ -306,7 +306,7 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 	if !ok {
 		// The model looked at four seats' near-identical procedures and
 		// could not name a shared one. Rare and still not an error.
-		log.Debug("skill_promotion_declined", "unit", unit.ID,
+		log.DebugContext(ctx, "skill_promotion_declined", "unit", unit.ID,
 			"distinct_agents", best.DistinctAgents())
 		return nil, nil
 	}
@@ -324,12 +324,12 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 		// Already drafted on an earlier tick. Publishing again would put
 		// the same promotion in the feed every day for the life of the
 		// company.
-		log.Debug("skill_promotion_already_drafted", "unit", unit.ID,
+		log.DebugContext(ctx, "skill_promotion_already_drafted", "unit", unit.ID,
 			"page_id", page.ID, "title", page.Title)
 		return nil, nil
 	}
 
-	log.Info("skill_promoted", "unit", unit.ID, "skill", draft.Name,
+	log.InfoContext(ctx, "skill_promoted", "unit", unit.ID, "skill", draft.Name,
 		"page_id", page.ID, "container", unit.Container,
 		"siblings", len(best.Skills), "distinct_agents", best.DistinctAgents())
 	return types.SkillPromoted{

@@ -210,7 +210,7 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 		return nil, nil, err
 	}
 	if err := runner.Install(ctx, box); err != nil {
-		log.Error("sandbox_install_failed", "sandbox_id", box.ID(), "error", err.Error())
+		log.ErrorContext(ctx, "sandbox_install_failed", "sandbox_id", box.ID(), "error", err.Error())
 		m.discard(ctx, box)
 		return nil, nil, err
 	}
@@ -220,7 +220,7 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 	if err := ApplySetup(ctx, box, setup, spec.Env); err != nil {
 		// Logged distinctly from an install failure so the operator debugs
 		// the right subsystem: this one is their config.
-		log.Error("sandbox_setup_failed", "sandbox_id", box.ID(), "error", err.Error())
+		log.ErrorContext(ctx, "sandbox_setup_failed", "sandbox_id", box.ID(), "error", err.Error())
 		m.discard(ctx, box)
 		return nil, nil, err
 	}
@@ -228,7 +228,7 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 	for _, step := range setup {
 		names = append(names, step.Name)
 	}
-	log.Debug("sandbox_acquired",
+	log.DebugContext(ctx, "sandbox_acquired",
 		"sandbox_id", box.ID(), "coding_agent", spec.CodingAgent, "setup_steps", names)
 	return box, runner, nil
 }
@@ -245,7 +245,7 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
 	if err := box.Close(closeCtx); err != nil {
-		log.Warn("sandbox_discard_failed", "sandbox_id", box.ID(), "error", err.Error())
+		log.WarnContext(ctx, "sandbox_discard_failed", "sandbox_id", box.ID(), "error", err.Error())
 	}
 }
 
@@ -264,6 +264,6 @@ func (m *Manager) Reconnect(ctx context.Context, sandboxID, codingAgent string) 
 	if err != nil {
 		return nil, nil, err
 	}
-	log.Debug("sandbox_reconnected", "sandbox_id", sandboxID, "coding_agent", codingAgent)
+	log.DebugContext(ctx, "sandbox_reconnected", "sandbox_id", sandboxID, "coding_agent", codingAgent)
 	return box, runner, nil
 }

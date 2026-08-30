@@ -396,7 +396,7 @@ func classifyError(err error) string {
 func (e emitter) publish(ctx context.Context, ev *events.Event) {
 	ev.Source = e.role
 	if err := e.pub.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-		log.Warn("phase_telemetry_publish_failed", "type", ev.Type,
+		log.WarnContext(ctx, "phase_telemetry_publish_failed", "type", ev.Type,
 			"role", e.role, "turn_id", e.turn.ID, "error", err)
 	}
 }

@@ -86,12 +86,12 @@ func (j *jiraIdentities) resolve(ctx context.Context, url string, deploy jira.De
 				URL: url, Email: cred.Email, Token: cred.Token, Deployment: deploy,
 			})
 			if err != nil {
-				log.Warn("jira_seat_client_failed", "error", err.Error())
+				log.WarnContext(ctx, "jira_seat_client_failed", "error", err.Error())
 				return
 			}
 			account, err := client.Me(ctx)
 			if err != nil {
-				log.Warn("jira_seat_identity_unresolved", "error", err.Error(),
+				log.WarnContext(ctx, "jira_seat_identity_unresolved", "error", err.Error(),
 					"detail", "this seat receives no tracker events until "+
 						"the next apply re-resolves it")
 				return
@@ -184,7 +184,7 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 		// difference is what the request buys: verifying this one buys
 		// nothing, while resolving those is the entire integration.
 	} else {
-		log.Warn("jira_has_no_org_token",
+		log.WarnContext(ctx, "jira_has_no_org_token",
 			"detail", "an issue's watchers cannot be read, so events reach "+
 				"its assignee and anyone mentioned and nobody else")
 	}
@@ -197,12 +197,12 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 		// refused every lookup. Logged loudly either way, because the
 		// integration is completely inert in this state and nothing else
 		// will say so.
-		log.Warn("jira_has_no_seat_identities", "url", base,
+		log.WarnContext(ctx, "jira_has_no_seat_identities", "url", base,
 			"detail", "every tracker webhook will name a stranger, and every "+
 				"issue will fall through to its project's lead")
 	}
 	leads := jira.LeadsFrom(c.Org)
-	log.Info("jira_wired", "url", base, "deployment", string(deploy),
+	log.InfoContext(ctx, "jira_wired", "url", base, "deployment", string(deploy),
 		"seat_identities", registered, "projects_with_leads", len(leads),
 		"watcher_lookup", watchers != nil)
 
@@ -237,16 +237,16 @@ func (e *Engine) reconcileJira(ctx context.Context, c *Company) {
 		// THE PREVIOUS PARSER KEEPS RUNNING, same posture as the other
 		// two: routing by a stale credential is worse than the new one
 		// and much better than not routing at all.
-		log.Error("jira_reconcile_failed", "error", errorText(err),
+		log.ErrorContext(ctx, "jira_reconcile_failed", "error", errorText(err),
 			"detail", "the previous tracker wiring is still current")
 		return
 	}
 	if err := svc.Replace(parser, jiraPrompt()); err != nil {
-		log.Error("jira_reconcile_failed", "error", err.Error(),
+		log.ErrorContext(ctx, "jira_reconcile_failed", "error", err.Error(),
 			"detail", "the previous tracker wiring is still current")
 		return
 	}
-	log.Info("jira_reconciled", "company", c.Config.Name)
+	log.InfoContext(ctx, "jira_reconciled", "company", c.Config.Name)
 }
 
 // jiraBaseURL is the REST base, resolved.

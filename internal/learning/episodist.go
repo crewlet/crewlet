@@ -152,7 +152,7 @@ func (w *Episodist) Reflect(ctx context.Context, t Turn) ([]events.Payload, erro
 		// would report the same turn twice to every surface that counts
 		// them — which is the exact miscount the unique index exists to
 		// prevent.
-		log.Debug("episode_already_recorded", "seat", ep.Handle, "work_key", ep.WorkKey)
+		log.DebugContext(ctx, "episode_already_recorded", "seat", ep.Handle, "work_key", ep.WorkKey)
 		return nil, nil
 	}
 	return []events.Payload{types.EpisodeWritten{
@@ -215,7 +215,7 @@ func (w *Episodist) vector(ctx context.Context, summary string) []float32 {
 	defer cancel()
 	vector, err := w.embed(ctx, summary)
 	if err != nil {
-		log.Warn("episode_embedding_failed", "error", err.Error(),
+		log.WarnContext(ctx, "episode_embedding_failed", "error", err.Error(),
 			"detail", "the episode is written without a vector; recall skips "+
 				"it while the time-window queries still surface it")
 		return nil

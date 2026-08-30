@@ -135,7 +135,7 @@ func (w *Waiter) Start(ctx context.Context) {
 	w.startOnce.Do(func() {
 		ctx, w.stop = context.WithCancel(ctx)
 		go w.loop(ctx)
-		log.Info("sandbox_waiter_started", "poll_seconds", w.interval.Seconds())
+		log.InfoContext(ctx, "sandbox_waiter_started", "poll_seconds", w.interval.Seconds())
 	})
 }
 
@@ -163,7 +163,7 @@ func (w *Waiter) loop(ctx context.Context) {
 		case <-timer.C:
 		}
 		if _, err := w.Tick(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			log.Warn("sandbox_waiter_tick_failed", "error", err.Error())
+			log.WarnContext(ctx, "sandbox_waiter_tick_failed", "error", err.Error())
 		}
 		timer.Reset(w.jittered())
 	}
@@ -212,7 +212,7 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 			// the seat and marks the run failed (collect will fail to
 			// reconnect) instead of hanging.
 			if err := w.publishCompletion(ctx, run); err != nil {
-				log.Warn("sandbox_completion_publish_failed",
+				log.WarnContext(ctx, "sandbox_completion_publish_failed",
 					"turn_id", run.TurnID, "error", err.Error())
 				continue
 			}
@@ -220,12 +220,12 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 		}
 	}
 	if fired > 0 {
-		log.Info("sandbox_waiter_fired", "completions", fired)
+		log.InfoContext(ctx, "sandbox_waiter_fired", "completions", fired)
 	}
 	if reaped := w.reapExpiredPauses(ctx, runs); reaped > 0 {
 		// Said out loud: a reaped box is a checkout an operator will find
 		// gone, and the pause TTL is the knob that decides it.
-		log.Info("sandbox_paused_boxes_reaped", "count", reaped)
+		log.InfoContext(ctx, "sandbox_paused_boxes_reaped", "count", reaped)
 	}
 	return fired, nil
 }
@@ -241,7 +241,7 @@ func (w *Waiter) mayTick(ctx context.Context) bool {
 	}
 	holds, err := w.claimDuty(ctx)
 	if err != nil {
-		log.Warn("sandbox_waiter_duty_claim_failed", "error", err.Error())
+		log.WarnContext(ctx, "sandbox_waiter_duty_claim_failed", "error", err.Error())
 		// FAIL CLOSED. Not knowing whether this node holds the duty and
 		// polling anyway is the multi-poller case the duty exists to
 		// prevent — and skipping a tick costs one interval, which the next
@@ -280,7 +280,7 @@ func (w *Waiter) pollOne(ctx context.Context, run PendingRun) pollState {
 	box, err := w.manager.Provider().Connect(ctx, run.SandboxID)
 	if err != nil {
 		n := w.fail(run.TurnID)
-		log.Warn("sandbox_connect_failed",
+		log.WarnContext(ctx, "sandbox_connect_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "attempts", n)
 		if n >= MaxConnectFailures {
 			return pollGone
@@ -295,14 +295,14 @@ func (w *Waiter) pollOne(ctx context.Context, run PendingRun) pollState {
 	// go WITHOUT this heartbeat, never by a fixed run deadline: completion is
 	// detected by tracking the job, not by a clock.
 	if err = box.SetTimeout(ctx, w.manager.BoxTimeout().Seconds()); err != nil {
-		log.Debug("sandbox_keepalive_failed", "turn_id", run.TurnID, "error", err.Error())
+		log.DebugContext(ctx, "sandbox_keepalive_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 
 	runner, err := w.manager.RunnerFor(run.CodingAgent)
 	if err != nil {
 		// A misconfigured runner cannot be polled, and retrying forever
 		// would hold the seat busy for the life of the deployment.
-		log.Error("sandbox_poll_runner_missing",
+		log.ErrorContext(ctx, "sandbox_poll_runner_missing",
 			"turn_id", run.TurnID, "coding_agent", run.CodingAgent, "error", err.Error())
 		return pollGone
 	}
@@ -311,7 +311,7 @@ func (w *Waiter) pollOne(ctx context.Context, run PendingRun) pollState {
 		SessionID: run.SessionID,
 	})
 	if err != nil {
-		log.Warn("sandbox_poll_failed",
+		log.WarnContext(ctx, "sandbox_poll_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
 		return pollRunning
 	}
@@ -383,11 +383,11 @@ func (w *Waiter) reapExpiredPauses(ctx context.Context, runs []PendingRun) int {
 		if err := w.manager.Provider().Kill(ctx, sandboxID); err != nil {
 			// An already-gone box is the normal case for an old snapshot;
 			// the row is released either way.
-			log.Warn("sandbox_pause_reap_kill_failed",
+			log.WarnContext(ctx, "sandbox_pause_reap_kill_failed",
 				"turn_id", run.TurnID, "sandbox_id", sandboxID, "error", err.Error())
 		}
 		reaped++
-		log.Info("sandbox_pause_ttl_reaped",
+		log.InfoContext(ctx, "sandbox_pause_ttl_reaped",
 			"turn_id", run.TurnID, "agent", run.AgentHandle, "sandbox_id", sandboxID,
 			"paused_for_s", pausedFor.Seconds(), "pause_ttl_s", run.PauseTTLSeconds)
 	}
@@ -426,7 +426,7 @@ func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun) error {
 	if control == "" {
 		// No handle means no routable seat. The announcement still went out,
 		// so the failure is visible rather than silent.
-		log.Warn("sandbox_completion_unroutable", "turn_id", run.TurnID)
+		log.WarnContext(ctx, "sandbox_completion_unroutable", "turn_id", run.TurnID)
 		return nil
 	}
 	return w.queue.Publish(ctx, control, announcement)

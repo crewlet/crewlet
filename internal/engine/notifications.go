@@ -210,7 +210,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 			// certificate lapses — and refusing to start the
 			// company over it takes down every seat's scheduled and
 			// tracker work too.
-			log.Error("mattermost_unavailable", "error", err.Error(),
+			log.ErrorContext(ctx, "mattermost_unavailable", "error", err.Error(),
 				"detail", "the company is running without its chat surface")
 		}
 		if transport != nil {
@@ -227,7 +227,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 			// revoked, an app gets uninstalled — and refusing to start
 			// the company over it would take every seat's tracker and
 			// scheduled work down with it.
-			log.Error("slack_unavailable", "error", err.Error(),
+			log.ErrorContext(ctx, "slack_unavailable", "error", err.Error(),
 				"detail", "the company is running without its hosted chat surface")
 		}
 		if transport != nil {
@@ -240,7 +240,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		if err != nil {
 			// Same posture as the other two surfaces: the company runs
 			// without its code host rather than not at all.
-			log.Error("gitlab_unavailable", "error", err.Error(),
+			log.ErrorContext(ctx, "gitlab_unavailable", "error", err.Error(),
 				"detail", "the company is running without its code host")
 		}
 		if parser != nil {
@@ -253,7 +253,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		if err != nil {
 			// Same posture as every other surface: the company runs
 			// without its hosted code host rather than not at all.
-			log.Error("github_unavailable", "error", err.Error(),
+			log.ErrorContext(ctx, "github_unavailable", "error", err.Error(),
 				"detail", "the company is running without its hosted code host")
 		}
 		if parser != nil {
@@ -266,7 +266,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		if err != nil {
 			// Same posture as the other surfaces: the company runs
 			// WITHOUT its Atlassian tracker rather than not at all.
-			log.Error("jira_unavailable", "error", err.Error(),
+			log.ErrorContext(ctx, "jira_unavailable", "error", err.Error(),
 				"detail", "the company is running without its Atlassian tracker")
 		}
 		if parser != nil {
@@ -279,7 +279,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		if err != nil {
 			// Same posture as every other surface: the company runs
 			// WITHOUT its knowledge base rather than not at all.
-			log.Error("confluence_unavailable", "error", err.Error(),
+			log.ErrorContext(ctx, "confluence_unavailable", "error", err.Error(),
 				"detail", "the company is running without its knowledge base, "+
 					"so every Plan phase gets an empty knowledge block")
 		}
@@ -432,7 +432,7 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 	if len(seats) == 0 {
 		// Enabled with no provisioned seats is a company mid-setup, not
 		// a failure: `crewlet mattermost provision` has not run yet.
-		log.Info("mattermost_enabled_with_no_seats", "url", url)
+		log.InfoContext(ctx, "mattermost_enabled_with_no_seats", "url", url)
 		return nil, nil
 	}
 	transport, err := mattermost.NewTransport(mattermost.TransportOptions{

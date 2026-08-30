@@ -102,7 +102,7 @@ func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args 
 		return failedDetached(fmt.Sprintf("the sandbox could not be started: %v", err)), nil
 	}
 
-	log.Info("run_sandbox_suspended",
+	log.InfoContext(ctx, "run_sandbox_suspended",
 		"turn_id", turn.ID, "sandbox_id", res.SandboxID,
 		"coding_agent", res.CodingAgent, "reused", res.Reused)
 

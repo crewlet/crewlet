@@ -162,7 +162,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 		// context, not a seat that cannot work. The read RAISES rather
 		// than returning empty precisely so this decision is made here,
 		// visibly, instead of a database outage looking like a first turn.
-		log.Warn("conversation_history_unreadable",
+		log.WarnContext(ctx, "conversation_history_unreadable",
 			"seat", handle, "conversation", req.ConversationKey, "error", err)
 	}
 
@@ -269,7 +269,7 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 			}
 			key := workkey.Derive([]string{ev.ID.String()})
 			if err := d.Completions.Record(ctx, handle, key, "", now); err != nil {
-				log.Warn("completion_not_recorded", "seat", handle, "error", err)
+				log.WarnContext(ctx, "completion_not_recorded", "seat", handle, "error", err)
 				break
 			}
 		}
@@ -287,7 +287,7 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 	}
 	if err := d.Conversations.Append(ctx, handle, req.ConversationKey, entry,
 		req.WorkKey, now, 0); err != nil {
-		log.Warn("conversation_not_recorded", "seat", handle,
+		log.WarnContext(ctx, "conversation_not_recorded", "seat", handle,
 			"conversation", req.ConversationKey, "error", err)
 	}
 }

@@ -226,7 +226,7 @@ func (c *Counterparties) load(ctx context.Context, q querier, observer string, s
 	p.LastUpdatedAt = store.DecodeTime(updated)
 	p.LastCorroboratedAt = store.DecodeTime(corroborated)
 	if err := json.Unmarshal([]byte(traits), &p.Traits); err != nil {
-		log.Warn("counterparty_traits_undecodable", "observer", observer, "error", err)
+		log.WarnContext(ctx, "counterparty_traits_undecodable", "observer", observer, "error", err)
 		p.Traits = map[string]any{}
 	}
 	return p, nil

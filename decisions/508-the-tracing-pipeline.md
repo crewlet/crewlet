@@ -192,6 +192,19 @@ in the handler, which would be the idiomatic OTel route. `go list -deps
 import would put `go.opentelemetry.io/otel/trace` into every one of their
 dependency graphs to render two hex strings.
 
+Measured rather than asserted — `go test ./internal/logging -bench .`, on the
+same machine as d-001's table (Xeon @ 2.80 GHz, Go 1.27):
+
+| | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| An emitted line, nothing bound | 1232 | 296 | 5 |
+| The same line, a context with no trace | 1252 | 296 | 5 |
+| The same line, inside a span | 1487 | 376 | 6 |
+
+The middle row is the one that matters: a context carrying no trace costs one
+type assertion that finds nothing, which is every line outside a turn. The
+injection's cost is paid only where a trace exists to inject.
+
 Injection is in `lazy.Handle`, so all three formats carry the ids and no format
 learns about tracing. **`Enabled` is untouched** — d-001's constraint stands,
 and a level that varied by whether a trace happened to be bound would filter

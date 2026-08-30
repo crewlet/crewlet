@@ -158,7 +158,7 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 		if i+1 < len(c.members) {
 			next = c.members[i+1].Key
 		}
-		log.Warn("provider_fallback",
+		log.WarnContext(ctx, "provider_fallback",
 			"from", m.Key, "to", next, "kind", kind.String(), "error", err.Error())
 		if c.onFallback != nil {
 			c.onFallback(Fallback{From: m.Key, To: next, Kind: kind, Err: err})

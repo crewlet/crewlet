@@ -106,7 +106,7 @@ func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle st
 		return nil, fmt.Errorf("learning: counting %s's skills: %w", handle, err)
 	}
 	if count >= s.maxPerAgent {
-		log.Debug("skill_clustering_skipped", "reason", SkipSkillCapV,
+		log.DebugContext(ctx, "skill_clustering_skipped", "reason", SkipSkillCapV,
 			"agent_handle", handle, "skills", count, "cap", s.maxPerAgent)
 		return nil, nil
 	}
@@ -132,13 +132,13 @@ func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle st
 			break
 		}
 		if name, dup := mostSimilar(cluster.Sequence, existing, s.duplicateAt); dup {
-			log.Debug("skill_clustering_skipped", "reason", SkipDuplicateSkill,
+			log.DebugContext(ctx, "skill_clustering_skipped", "reason", SkipDuplicateSkill,
 				"agent_handle", handle, "similar_to", name, "cluster_size", cluster.Size())
 			continue
 		}
 		return s.draftFromCluster(ctx, seat, handle, cluster)
 	}
-	log.Debug("skill_clustering_found_nothing", "agent_handle", handle,
+	log.DebugContext(ctx, "skill_clustering_found_nothing", "agent_handle", handle,
 		"episodes", len(recent), "clusters", len(clusters), "min_size", s.clusterMin)
 	return nil, nil
 }
@@ -169,7 +169,7 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 		// The model looked at eleven similar runs and could not name a
 		// procedure. Rarer than the single-turn decline and still not an
 		// error: similar tool runs are not always the same work.
-		log.Debug("skill_clustering_declined", "agent_handle", handle,
+		log.DebugContext(ctx, "skill_clustering_declined", "agent_handle", handle,
 			"cluster_size", cluster.Size())
 		return nil, nil
 	}
@@ -193,7 +193,7 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 	}
 	if err := s.skills.Insert(ctx, skill); err != nil {
 		if errors.Is(err, ErrSkillExists) {
-			log.Debug("skill_clustering_lost_race", "agent_handle", handle,
+			log.DebugContext(ctx, "skill_clustering_lost_race", "agent_handle", handle,
 				"skill", draft.Name)
 			return nil, nil
 		}
@@ -201,7 +201,7 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 			handle, draft.Name, err)
 	}
 
-	log.Info("skill_synthesized", "agent_handle", handle, "skill", draft.Name,
+	log.InfoContext(ctx, "skill_synthesized", "agent_handle", handle, "skill", draft.Name,
 		"skill_id", skill.ID, "trigger", string(types.SynthesisClustered),
 		"cluster_size", cluster.Size(), "tools", len(cluster.Sequence))
 	return []events.Payload{types.SkillSynthesized{

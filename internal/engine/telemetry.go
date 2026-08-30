@@ -235,7 +235,7 @@ func (e *Engine) publishEvent(ctx context.Context, ev *events.Event, role string
 	// unsourced event as "system".
 	ev.Source = role
 	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-		log.Warn("turn_telemetry_publish_failed", "type", ev.Type,
+		log.WarnContext(ctx, "turn_telemetry_publish_failed", "type", ev.Type,
 			"role", role, "error", err)
 	}
 }

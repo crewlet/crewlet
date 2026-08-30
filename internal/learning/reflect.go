@@ -272,7 +272,7 @@ func (r *Reflector) Start(ctx context.Context, sub Subscriber) error {
 	if err := sub.Subscribe(ctx, turnCompletedTopic, ReflectGroup, r.Handle); err != nil {
 		return fmt.Errorf("learning: subscribe %s: %w", turnCompletedTopic, err)
 	}
-	log.Info("reflect_engine_started", "workers", r.names())
+	log.InfoContext(ctx, "reflect_engine_started", "workers", r.names())
 	return nil
 }
 
@@ -305,7 +305,7 @@ func (r *Reflector) Handle(ctx context.Context, ev *events.Event) queue.Result {
 	// backend that shares a goroutine across subscriptions.
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Error("reflection_panicked", "error", rec, "stack", string(debug.Stack()))
+			log.ErrorContext(ctx, "reflection_panicked", "error", rec, "stack", string(debug.Stack()))
 		}
 	}()
 	tc, ok := events.DataAs[*types.TurnCompleted](ev)
@@ -313,7 +313,7 @@ func (r *Reflector) Handle(ctx context.Context, ev *events.Event) queue.Result {
 		// The subject carries one type, so this is a build that does not
 		// know it (a rolling upgrade) or a mis-routed publish. Acked
 		// either way: redelivering it produces the same non-answer.
-		log.Debug("reflection_skipped_unreadable_event", "type", eventTypeOf(ev))
+		log.DebugContext(ctx, "reflection_skipped_unreadable_event", "type", eventTypeOf(ev))
 		return queue.Ack()
 	}
 	r.Reflect(ctx, *tc, events.TraceContext{
@@ -384,7 +384,7 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 		// A turn from a seat this epoch no longer has. Learning about a
 		// role that has been renamed or removed would write memory under
 		// an identity nothing can read back.
-		log.Debug("reflection_skipped_no_role", "turn_id", tc.TurnID, "role", tc.RoleName)
+		log.DebugContext(ctx, "reflection_skipped_no_role", "turn_id", tc.TurnID, "role", tc.RoleName)
 		return Reflection{Skip: SkipNoRole}
 	}
 
@@ -392,7 +392,7 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	// the wiring's decision — a company with learning off does not build a
 	// Reflector at all — so only an explicit false is a skip here.
 	if !role.LearningEnabled.Or(true) {
-		log.Debug("reflection_skipped_role_disabled", "turn_id", tc.TurnID, "role", role.Name)
+		log.DebugContext(ctx, "reflection_skipped_role_disabled", "turn_id", tc.TurnID, "role", role.Name)
 		return Reflection{Skip: SkipRoleDisabled}
 	}
 
@@ -413,11 +413,11 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 			// not silently stop a company learning; what keeps that from
 			// also being free is that the completion charges on the way
 			// out either way.
-			log.Warn("reflection_budget_unknown", "turn_id", tc.TurnID,
+			log.WarnContext(ctx, "reflection_budget_unknown", "turn_id", tc.TurnID,
 				"agent_handle", tc.AgentHandle, "error", err,
 				"detail", "reflecting anyway; the spend is still charged")
 		} else if !ok {
-			log.Info("reflection_skipped_no_budget", "turn_id", tc.TurnID,
+			log.InfoContext(ctx, "reflection_skipped_no_budget", "turn_id", tc.TurnID,
 				"agent_handle", tc.AgentHandle, "role", role.Name,
 				"detail", "the company or this seat is at its token ceiling, "+
 					"so no auxiliary call is made for this turn")
@@ -435,13 +435,13 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	// here wants a mark released, and a release on a path that cannot
 	// happen is a release that does nothing.
 	if !r.mark(tc.TurnID) {
-		log.Debug("reflection_skipped_duplicate", "turn_id", tc.TurnID)
+		log.DebugContext(ctx, "reflection_skipped_duplicate", "turn_id", tc.TurnID)
 		return Reflection{Skip: SkipDuplicate}
 	}
 
 	turn := Turn{Role: role, Event: tc, Trace: tr}
 	if !turn.Engaged() {
-		log.Info("reflection_skipped_no_engagement", "turn_id", tc.TurnID,
+		log.InfoContext(ctx, "reflection_skipped_no_engagement", "turn_id", tc.TurnID,
 			"agent_handle", tc.AgentHandle, "plan_decision", string(tc.PlanDecision),
 			"tool_count", len(tc.ToolSequence), "review_outcome", tc.ReviewOutcome)
 		// The sentinel still fires. A turn the dispatcher DECIDED not to
@@ -462,7 +462,7 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 				out.Skipped = map[string]string{}
 			}
 			out.Skipped[w.Name()] = reason
-			log.Debug("reflection_worker_skipped", "turn_id", tc.TurnID,
+			log.DebugContext(ctx, "reflection_worker_skipped", "turn_id", tc.TurnID,
 				"worker", w.Name(), "reason", reason)
 			continue
 		}
@@ -472,7 +472,7 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 				out.Failed = map[string]error{}
 			}
 			out.Failed[w.Name()] = err
-			log.Error("reflection_worker_failed", "turn_id", tc.TurnID,
+			log.ErrorContext(ctx, "reflection_worker_failed", "turn_id", tc.TurnID,
 				"worker", w.Name(), "error", err)
 		}
 		// Counted as RUN whether or not it failed, and whether or not it
@@ -510,7 +510,7 @@ func (r *Reflector) dispatch(ctx context.Context, w Worker, t Turn) (payloads []
 		if rec := recover(); rec != nil {
 			payloads = nil
 			err = fmt.Errorf("learning: worker %s panicked: %v", w.Name(), rec)
-			log.Error("reflection_worker_panicked", "worker", w.Name(),
+			log.ErrorContext(ctx, "reflection_worker_panicked", "worker", w.Name(),
 				"turn_id", t.Event.TurnID, "error", rec, "stack", string(debug.Stack()))
 		}
 	}()
@@ -532,7 +532,7 @@ func (r *Reflector) publish(ctx context.Context, t Turn, payload events.Payload)
 		// Swallowed on purpose: the worker's WRITE already landed. Losing
 		// the announcement of it costs a dashboard row, where propagating
 		// the failure would cost the learning it is announcing.
-		log.Warn("learning_event_publish_failed", "type", ev.Type,
+		log.WarnContext(ctx, "learning_event_publish_failed", "type", ev.Type,
 			"turn_id", t.Event.TurnID, "error", err)
 	}
 }

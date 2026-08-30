@@ -276,7 +276,7 @@ func New(opts Options) (*Scheduler, error) {
 // before the rest of the engine has come up would dispatch into a queue whose
 // subscriptions do not exist yet.
 func (s *Scheduler) Run(ctx context.Context) {
-	log.Info("scheduler_started",
+	log.InfoContext(ctx, "scheduler_started",
 		"tick_seconds", s.tick.Seconds(),
 		"default_timezone", s.defaultTZ,
 		"jitter_seconds", s.jitter.Seconds(),
@@ -286,7 +286,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("scheduler_stopped")
+			log.InfoContext(ctx, "scheduler_stopped")
 			return
 		case <-ticker.C:
 			s.Tick(ctx, time.Time{})
@@ -316,7 +316,7 @@ func (s *Scheduler) Tick(ctx context.Context, at time.Time) int {
 		// open, so once this node converges the catchup pass evaluates it.
 		// Anything a peer already fired is absorbed by the ledger claim, and
 		// anything nobody fired still runs.
-		log.Info("scheduler_tick_shed")
+		log.InfoContext(ctx, "scheduler_tick_shed")
 		return 0
 	}
 
@@ -329,7 +329,7 @@ func (s *Scheduler) Tick(ctx context.Context, at time.Time) int {
 		// The tick is a singleton because it is pure duplicated work, not
 		// because a peer's tick would be wrong: every node enumerates every
 		// schedule, and all but one lose the claim race on every due fire.
-		log.Debug("scheduler_tick_not_this_node")
+		log.DebugContext(ctx, "scheduler_tick_not_this_node")
 		return 0
 	}
 
@@ -364,13 +364,13 @@ func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, e E
 	zone := cmpOr(sch.Timezone, s.defaultTZ)
 	loc, err := time.LoadLocation(zone)
 	if err != nil {
-		log.Error("schedule_parse_failed", "schedule", sch.Name, "scope_type", e.Scope,
+		log.ErrorContext(ctx, "schedule_parse_failed", "schedule", sch.Name, "scope_type", e.Scope,
 			"scope_id", e.ScopeID, "timezone", zone, "error", err)
 		return 0
 	}
 	cron, err := Parse(sch.Cron)
 	if err != nil {
-		log.Error("schedule_parse_failed", "schedule", sch.Name, "scope_type", e.Scope,
+		log.ErrorContext(ctx, "schedule_parse_failed", "schedule", sch.Name, "scope_type", e.Scope,
 			"scope_id", e.ScopeID, "cron", sch.Cron, "error", err)
 		return 0
 	}
@@ -385,7 +385,7 @@ func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, e E
 
 	runners := e.Runners(company)
 	if len(runners) == 0 {
-		log.Warn("schedule_no_runners", "schedule", sch.Name, "scope_type", e.Scope,
+		log.WarnContext(ctx, "schedule_no_runners", "schedule", sch.Name, "scope_type", e.Scope,
 			"scope_id", e.ScopeID, "target", sch.Target)
 		return 0
 	}
@@ -486,13 +486,13 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 		// role, or a config edit that landed between runner resolution and
 		// this call. Do NOT claim — a later tick against a corrected org
 		// should still be able to fire.
-		log.Warn("schedule_runner_not_found", "handle", handle,
+		log.WarnContext(ctx, "schedule_runner_not_found", "handle", handle,
 			"schedule", e.Schedule.Name, "scope_id", e.ScopeID)
 		return false
 	}
 	agentID, ok := company.AgentIDFor(seat)
 	if !ok {
-		log.Warn("schedule_runner_not_found", "handle", handle,
+		log.WarnContext(ctx, "schedule_runner_not_found", "handle", handle,
 			"schedule", e.Schedule.Name, "scope_id", e.ScopeID,
 			"reason", "the seat has no derivable agent id")
 		return false
@@ -519,7 +519,7 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	if err != nil {
 		// Unknown, and the fail-closed direction is to skip: firing on an
 		// unreadable ledger is how one fire becomes N.
-		log.Error("schedule_claim_failed", "schedule", e.Schedule.Name,
+		log.ErrorContext(ctx, "schedule_claim_failed", "schedule", e.Schedule.Name,
 			"handle", handle, "fire_label", label, "error", err)
 		return false
 	}
@@ -550,14 +550,14 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 		// AMBIGUOUS — the broker may have persisted the event and lost the
 		// acknowledgement — so releasing the claim to retry would risk
 		// waking the seat twice. The fire is dropped, loudly.
-		log.Error("schedule_publish_failed", "schedule", e.Schedule.Name, "handle", handle,
+		log.ErrorContext(ctx, "schedule_publish_failed", "schedule", e.Schedule.Name, "handle", handle,
 			"fire_label", label, "error", err,
 			"hint", "the fire is CLAIMED and will not be retried; the ledger row records a "+
 				"dispatch that never reached the seat")
 		return false
 	}
 
-	log.Info("schedule_fired", "schedule", e.Schedule.Name, "scope_type", e.Scope,
+	log.InfoContext(ctx, "schedule_fired", "schedule", e.Schedule.Name, "scope_type", e.Scope,
 		"scope_id", e.ScopeID, "handle", handle,
 		"scheduled_at", fireUTC.Format(time.RFC3339), "trace_id", trace.TraceID)
 
@@ -572,7 +572,7 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	}, trace)
 	fired.Source = "scheduler"
 	if err := s.pub.Publish(ctx, topics.Event(fired.Type), fired); err != nil {
-		log.Error("scheduled_task_fired_publish_failed", "schedule", e.Schedule.Name, "error", err)
+		log.ErrorContext(ctx, "scheduled_task_fired_publish_failed", "schedule", e.Schedule.Name, "error", err)
 	}
 	return true
 }
@@ -594,9 +594,9 @@ func (s *Scheduler) recordSkip(ctx context.Context, e Entry, fireUTC time.Time, 
 		ScheduledAt: fireUTC,
 		Outcome:     OutcomeSkippedCatchup,
 	}); err != nil {
-		log.Error("schedule_skip_record_failed", "schedule", e.Schedule.Name, "error", err)
+		log.ErrorContext(ctx, "schedule_skip_record_failed", "schedule", e.Schedule.Name, "error", err)
 	}
-	log.Info("schedule_catchup_skipped", "schedule", e.Schedule.Name, "scope_type", e.Scope,
+	log.InfoContext(ctx, "schedule_catchup_skipped", "schedule", e.Schedule.Name, "scope_type", e.Scope,
 		"scope_id", e.ScopeID, "scheduled_at", fireUTC.Format(time.RFC3339))
 }
 
@@ -607,7 +607,7 @@ func (s *Scheduler) holdsDuty(ctx context.Context) bool {
 	}
 	held, err := s.duty(ctx)
 	if err != nil {
-		log.Error("scheduler_duty_claim_failed", "error", err)
+		log.ErrorContext(ctx, "scheduler_duty_claim_failed", "error", err)
 		return false
 	}
 	return held

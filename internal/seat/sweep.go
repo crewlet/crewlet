@@ -67,7 +67,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 			// A role the org no longer has: a live config apply deleted it,
 			// and holding its lease afterwards would look like ownership of
 			// something that no longer exists.
-			log.Info("seat_released_role_gone", "seat", handle)
+			log.InfoContext(ctx, "seat_released_role_gone", "seat", handle)
 			// Only if the release was PROVEN. Release reports false when
 			// teardown could not be confirmed and the seat went undead —
 			// still leased, still renewed, and reported as released is
@@ -84,7 +84,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 			// seat is not a question of how many we hold — no amount of
 			// spare capacity makes it ours again, and holding it means an
 			// eligible peer cannot take it.
-			log.Info("seat_released_not_placeable_here", "seat", handle, "node", h.nodeID,
+			log.InfoContext(ctx, "seat_released_not_placeable_here", "seat", handle, "node", h.nodeID,
 				"placement", seat.Placement.String())
 			if h.Release(ctx, handle, ReasonPlacement) {
 				released = append(released, handle)
@@ -115,7 +115,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 	}
 
 	if len(plan.Unplaceable) > 0 {
-		log.Warn("seats_unplaceable", "node", h.nodeID, "seats", plan.Unplaceable,
+		log.WarnContext(ctx, "seats_unplaceable", "node", h.nodeID, "seats", plan.Unplaceable,
 			"hint", "no live node that runs seats matches these seats' placement, so nothing "+
 				"is serving them. Start a node that matches, or widen the selector.")
 	}
@@ -139,7 +139,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 	h.mu.Unlock()
 
 	if len(claimed) > 0 || len(released) > 0 || blocked > 0 {
-		log.Info("seat_sweep", "node", h.nodeID, "held", result.Held, "capacity", plan.Capacity,
+		log.InfoContext(ctx, "seat_sweep", "node", h.nodeID, "held", result.Held, "capacity", plan.Capacity,
 			"live_nodes", liveNodes, "claimed", claimed, "released", released,
 			"blocked_by_protocol", blocked)
 	}
@@ -225,7 +225,7 @@ func (h *Host) shedToCapacity(ctx context.Context, capacity int) []string {
 		h.mu.Lock()
 		held := len(h.held)
 		h.mu.Unlock()
-		log.Info("seat_released_over_capacity", "seat", handle, "held", held, "capacity", capacity)
+		log.InfoContext(ctx, "seat_released_over_capacity", "seat", handle, "held", held, "capacity", capacity)
 		h.Release(ctx, handle, ReasonDrain)
 
 		// A release whose teardown could not be proven keeps the lease —
@@ -299,13 +299,13 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took, stop bool) {
 		// Stop claiming — never take a seat on unknown state — and report
 		// what this pass actually got. Distinct from a nil lease, which is
 		// a real refusal by a peer and only skips THIS seat.
-		log.Warn("seat_claim_unavailable", "seat", handle, "error", err)
+		log.WarnContext(ctx, "seat_claim_unavailable", "seat", handle, "error", err)
 		return false, true
 	}
 	if lease == nil {
 		return false, false
 	}
-	log.Info("seat_claimed", "seat", handle, "epoch", lease.Epoch)
+	log.InfoContext(ctx, "seat_claimed", "seat", handle, "epoch", lease.Epoch)
 
 	// Held from here so the heartbeat renews it while the hook runs, but
 	// ESTABLISHING so nothing may start a turn on it yet. See heldSeat.
@@ -319,7 +319,7 @@ func (h *Host) tryClaim(ctx context.Context, handle string) (took, stop bool) {
 		// straight back so a peer can try — and back off here, because
 		// retrying a config-shaped failure every 5 s spins at the cost of
 		// an MCP fork each time.
-		log.Error("seat_acquire_hook_failed", "seat", handle, "epoch", lease.Epoch, "error", err)
+		log.ErrorContext(ctx, "seat_acquire_hook_failed", "seat", handle, "epoch", lease.Epoch, "error", err)
 		h.mu.Lock()
 		h.acquireBackoffs[handle] = h.now().Add(h.acquireBackoff)
 		h.mu.Unlock()
@@ -414,7 +414,7 @@ func (h *Host) protocolBlock(ctx context.Context) int {
 	if err != nil || !found || floor >= h.protocol {
 		return 0
 	}
-	log.Warn("seat_claims_blocked_by_older_protocol", "node", h.nodeID,
+	log.WarnContext(ctx, "seat_claims_blocked_by_older_protocol", "node", h.nodeID,
 		"fleet_floor", floor, "this_node", h.protocol,
 		"hint", "an older-protocol node still holds leases; this node will claim nothing until "+
 			"it drains. Finish the rolling upgrade — do NOT roll back across a protocol bump "+
@@ -444,7 +444,7 @@ func (h *Host) plan(ctx context.Context, seats []placement.Seat) (placement.Plan
 		h.mu.Lock()
 		live = slices.Clone(h.liveProfiles)
 		h.mu.Unlock()
-		log.Warn("seat_capacity_unavailable", "node", h.nodeID,
+		log.WarnContext(ctx, "seat_capacity_unavailable", "node", h.nodeID,
 			"assumed_live_nodes", max(1, len(live)), "error", err)
 	} else {
 		live = make([]placement.NodeProfile, 0, len(leases))
@@ -592,7 +592,7 @@ func (h *Host) renewNodePresence(ctx context.Context) {
 		return
 	}
 	if lease == nil {
-		log.Warn("node_presence_refused", "node", h.nodeID,
+		log.WarnContext(ctx, "node_presence_refused", "node", h.nodeID,
 			"hint", "another process holds this node id's presence lease; two processes "+
 				"sharing one node id will miscount the fleet and each compute too small a share")
 		return
@@ -626,6 +626,6 @@ func (h *Host) releaseNodePresence(ctx context.Context) {
 
 func (h *Host) giveUpLease(ctx context.Context, lease coord.Lease) {
 	if _, err := h.backend.Release(ctx, lease.Resource, h.owner, lease.Epoch); err != nil {
-		log.Warn("node_presence_release_unavailable", "node", h.nodeID, "error", err)
+		log.WarnContext(ctx, "node_presence_release_unavailable", "node", h.nodeID, "error", err)
 	}
 }

@@ -127,7 +127,7 @@ func (b *Backend) TryAcquire(ctx context.Context, resource string, opts coord.Ac
 	if lease == nil {
 		return nil, nil
 	}
-	log.Debug("lease_acquired", "resource", resource, "owner", opts.Owner, "epoch", lease.Epoch)
+	log.DebugContext(ctx, "lease_acquired", "resource", resource, "owner", opts.Owner, "epoch", lease.Epoch)
 	return lease, nil
 }
 
@@ -228,7 +228,7 @@ func (b *Backend) Release(ctx context.Context, resource, owner string, epoch int
 	if !b.release(resource, owner, epoch) {
 		return false, nil
 	}
-	log.Debug("lease_released", "resource", resource, "owner", owner, "epoch", epoch)
+	log.DebugContext(ctx, "lease_released", "resource", resource, "owner", owner, "epoch", epoch)
 	return true, nil
 }
 

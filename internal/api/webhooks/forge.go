@@ -184,7 +184,7 @@ func (j *JWKS) Key(ctx context.Context, keyID string) (any, error) {
 			// refusing every Cloud delivery because a CDN blinked —
 			// the alternative is an outage caused by someone else's
 			// availability, and the TTL bounds how long it lasts.
-			log.Warn("forge_jwks_refresh_failed", "error", err,
+			log.WarnContext(ctx, "forge_jwks_refresh_failed", "error", err,
 				"detail", "verifying against the cached key set, which is past its TTL")
 			return key, nil
 		}
@@ -242,7 +242,7 @@ func (j *JWKS) fetch(ctx context.Context) (map[string]any, error) {
 			// carries the outgoing key alongside the incoming one
 			// through a rotation, and refusing the document over the
 			// half being retired would break the half that works.
-			log.Warn("forge_jwks_key_unusable", "kid", k.Kid, "error", err)
+			log.WarnContext(ctx, "forge_jwks_key_unusable", "kid", k.Kid, "error", err)
 			continue
 		}
 		keys[k.Kid] = pub

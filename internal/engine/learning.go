@@ -308,7 +308,7 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 		lifecycle = learning.NewLifecycle(db, learning.NewSummarizer(summarize),
 			lifecycleOptions(&cfg.EpisodeLifecycle))
 	} else {
-		log.Warn("episode_compaction_unavailable",
+		log.WarnContext(ctx, "episode_compaction_unavailable",
 			"reason", "no auxiliary model is configured for any seat",
 			"detail", "raw episodes accumulate and every recall scans all of "+
 				"them; nothing is deleted")
@@ -474,7 +474,7 @@ func (e *Engine) publishLearning(ctx context.Context, handle string, payload eve
 		// Swallowed: the pass's writes already landed. Losing the
 		// announcement costs a dashboard row; propagating the failure
 		// would cost the housekeeping it announces.
-		log.Warn("learning_background_publish_failed", "type", ev.Type,
+		log.WarnContext(ctx, "learning_background_publish_failed", "type", ev.Type,
 			"seat", handle, "error", err)
 	}
 }

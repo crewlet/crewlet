@@ -54,7 +54,7 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 		Store: db, Fleet: plane, Queue: e.Backends().Queue,
 		NodeID: nodeID, Cipher: cipher,
 		OnApply: func(epoch int64, status configplane.ApplyStatus) {
-			log.Info("config_revision_applied",
+			log.InfoContext(ctx, "config_revision_applied",
 				"epoch", epoch, "status", string(status))
 		},
 	})
@@ -66,7 +66,7 @@ func startReconciler(ctx context.Context, e *engine.Engine, boot *config.Bootstr
 	// still serves the one it has, which is the whole point of publishing
 	// an epoch rather than mutating one.
 	if err := reconciler.Tick(ctx); err != nil {
-		log.Warn("initial_reconcile_failed", "error", err,
+		log.WarnContext(ctx, "initial_reconcile_failed", "error", err,
 			"hint", "this node is serving the configuration it booted with; "+
 				"it will keep trying on its reconcile interval")
 	}
@@ -136,7 +136,7 @@ func seedCompany(ctx context.Context, db *store.DB, plane coord.Plane, pub queue
 		return fmt.Errorf("activate the seeded company config: %w", err)
 	}
 	nudge(ctx, pub, id, summary, log)
-	log.Info("company_config_seeded", "revision", id, "epoch", published.Epoch,
+	log.InfoContext(ctx, "company_config_seeded", "revision", id, "epoch", published.Epoch,
 		"parent", parent, "sealed", cipher != nil)
 	return nil
 }
@@ -177,7 +177,7 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publis
 	case found && !active.ActivatedAt.After(target.At):
 		// The fleet is on something else and decided it later. Converging
 		// on the pointer is the reconciler's job, not this function's.
-		log.Info("local_revision_superseded", "local", active.ID,
+		log.InfoContext(ctx, "local_revision_superseded", "local", active.ID,
 			"fleet", target.RevisionID, "epoch", target.Epoch,
 			"detail", "this node converges on the fleet's revision")
 		return nil
@@ -199,7 +199,7 @@ func publishLocalActive(ctx context.Context, plane coord.Plane, pub queue.Publis
 		return fmt.Errorf("publish the active revision: %w", err)
 	}
 	nudge(ctx, pub, active.ID, active.Summary, log)
-	log.Info("local_revision_published", "revision", active.ID, "epoch", published.Epoch)
+	log.InfoContext(ctx, "local_revision_published", "revision", active.ID, "epoch", published.Epoch)
 	return nil
 }
 
@@ -217,7 +217,7 @@ func nudge(ctx context.Context, pub queue.Publisher, revisionID, summary string,
 		RevisionID: revisionID, RevisionSummary: summary, CreatedBy: "node",
 	}, tracing.TraceOf(ctx))
 	if err := pub.Publish(ctx, topics.ConfigRevisionActivated, ev); err != nil {
-		log.Warn("activation_nudge_not_published", "revision", revisionID,
+		log.WarnContext(ctx, "activation_nudge_not_published", "revision", revisionID,
 			"error", err, "detail", "peers converge on their reconcile interval instead")
 	}
 }

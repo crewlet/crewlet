@@ -65,13 +65,13 @@ func (w *Writer) onPublish(ctx context.Context, _ string, ev *events.Event) {
 		// deliberate and an unknown type is a build mismatch, and neither
 		// is something a running company should shout about once per event.
 		if ev != nil && Excluded(ev.Type) == "" {
-			log.Debug("event_not_persisted", "type", ev.Type,
+			log.DebugContext(ctx, "event_not_persisted", "type", ev.Type,
 				"hint", "no category in observe.categories, so this type reaches "+
 					"neither the event store nor the activity feed")
 		}
 		return
 	}
 	if err := w.events.Append(ctx, rec); err != nil {
-		log.Warn("event_write_failed", "type", rec.Type, "id", rec.ID, "error", err)
+		log.WarnContext(ctx, "event_write_failed", "type", rec.Type, "id", rec.ID, "error", err)
 	}
 }

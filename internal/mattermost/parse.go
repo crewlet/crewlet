@@ -111,7 +111,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	}
 	seat, ok := p.seats(handle)
 	if !ok {
-		log.Warn("mattermost_post_for_unregistered_seat", "handle", handle)
+		log.WarnContext(ctx, "mattermost_post_for_unregistered_seat", "handle", handle)
 		return nil, nil
 	}
 
@@ -120,7 +120,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 		return nil, nil
 	}
 	if why := SkipReason(post); why != "" {
-		log.Debug("mattermost_post_skipped", "handle", handle, "reason", why)
+		log.DebugContext(ctx, "mattermost_post_skipped", "handle", handle, "reason", why)
 		return nil, nil
 	}
 
@@ -141,7 +141,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	if seat.UserID != "" && sender == seat.UserID {
 		if root != "" && p.threads != nil {
 			if err := p.threads.Participated(ctx, handle, channel, root, p.now()); err != nil {
-				log.Warn("mattermost_participation_not_recorded",
+				log.WarnContext(ctx, "mattermost_participation_not_recorded",
 					"handle", handle, "thread", root, "error", err.Error())
 			}
 		}
@@ -160,7 +160,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 		var err error
 		reach, err = p.threads.Reaches(ctx, handle, seat.Username, msg, p.now())
 		if err != nil {
-			log.Warn("mattermost_thread_follow_unreadable",
+			log.WarnContext(ctx, "mattermost_thread_follow_unreadable",
 				"handle", handle, "thread", root, "error", err.Error())
 		}
 		if !reach.Deliver {
@@ -173,7 +173,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	// answers to what it was asked, without being named again.
 	if p.threads != nil && root == "" && reach.Reason != "" {
 		if err := p.threads.Follow(ctx, handle, channel, postID, p.now()); err != nil {
-			log.Warn("mattermost_follow_not_recorded",
+			log.WarnContext(ctx, "mattermost_follow_not_recorded",
 				"handle", handle, "thread", postID, "error", err.Error())
 		}
 	}

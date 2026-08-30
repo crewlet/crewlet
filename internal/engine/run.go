@@ -498,7 +498,7 @@ func (e *Engine) Start(ctx context.Context) error {
 		return fmt.Errorf("engine: start: %w", err)
 	}
 	company := e.Company()
-	log.Info("engine_started", "company", company.Config.Name,
+	log.InfoContext(ctx, "engine_started", "company", company.Config.Name,
 		"seats", len(company.Seats()))
 	return nil
 }
@@ -528,7 +528,7 @@ func (e *Engine) Stop(ctx context.Context) {
 	if e.ownsBackends {
 		e.backends.Close(ctx)
 	}
-	log.Info("engine_stopped")
+	log.InfoContext(ctx, "engine_stopped")
 }
 
 // Node exposes this process's participation in the fleet, for the operator
@@ -604,7 +604,7 @@ func (e *Engine) pause(ctx context.Context, handle, reason string) error {
 	if subject == "" || group == "" {
 		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
 	}
-	log.Info("seat_inbox_paused", "handle", handle, "reason", reason)
+	log.InfoContext(ctx, "seat_inbox_paused", "handle", handle, "reason", reason)
 	return e.backends.Queue.PauseTopic(ctx, subject, group, pauseReasonNoTurnEngine)
 }
 
@@ -817,7 +817,7 @@ func (e *Engine) observe(ctx context.Context, ev *events.Event) {
 		return
 	}
 	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-		log.Warn("engine_observation_dropped", "event", ev.Type,
+		log.WarnContext(ctx, "engine_observation_dropped", "event", ev.Type,
 			"error", err.Error(),
 			"detail", "the work itself is unaffected; the feed will not show it")
 	}

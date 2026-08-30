@@ -346,7 +346,7 @@ func (r *Receiver) claim(ctx context.Context, d delivery) bool {
 	}
 	won, err := r.claims.Claim(ctx, claimKey(d), coord.ClaimTTL, r.now())
 	if err != nil {
-		log.Warn("delivery_dedupe_unavailable", "source", d.source, "error", err,
+		log.WarnContext(ctx, "delivery_dedupe_unavailable", "source", d.source, "error", err,
 			"detail", "handling the delivery, which may duplicate one a peer took")
 		return true
 	}
@@ -362,7 +362,7 @@ func (r *Receiver) release(ctx context.Context, d delivery) {
 	// hung up would leave the claim standing for the whole TTL — which is
 	// precisely the delivery this is trying to save.
 	if err := r.claims.Release(context.WithoutCancel(ctx), claimKey(d)); err != nil {
-		log.Warn("delivery_release_failed", "source", d.source, "key", d.key, "error", err,
+		log.WarnContext(ctx, "delivery_release_failed", "source", d.source, "key", d.key, "error", err,
 			"detail", "the provider's retry of this delivery will be refused until the claim expires")
 	}
 }
@@ -395,7 +395,7 @@ func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceCon
 			TraceID: trace.TraceID, SpanID: trace.SpanID,
 			Payload: json.RawMessage(d.raw),
 		}); err != nil {
-			log.Warn("event_store_write_failed", "source", d.source, "error", err)
+			log.WarnContext(ctx, "event_store_write_failed", "source", d.source, "error", err)
 		}
 	}
 	if r.stream == nil {

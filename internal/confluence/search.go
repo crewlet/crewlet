@@ -114,7 +114,7 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) []knowledge.Hi
 
 	pages, err := client.Search(ctx, cql, q.Hits()+overfetch)
 	if err != nil {
-		log.Warn("confluence_search_failed", "error", err.Error(),
+		log.WarnContext(ctx, "confluence_search_failed", "error", err.Error(),
 			"detail", "the Plan phase gets an empty knowledge block for this turn")
 		return nil
 	}

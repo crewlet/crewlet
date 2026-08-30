@@ -114,7 +114,7 @@ type Backends struct {
 func (b *Backends) Close(ctx context.Context) {
 	if b.Queue != nil {
 		if err := b.Queue.Stop(ctx); err != nil {
-			log.Warn("queue_stop_failed", "error", err)
+			log.WarnContext(ctx, "queue_stop_failed", "error", err)
 		}
 	}
 	if b.conn != nil {
@@ -127,7 +127,7 @@ func (b *Backends) Close(ctx context.Context) {
 	}
 	if b.Store != nil {
 		if err := b.Store.Close(); err != nil {
-			log.Warn("store_close_failed", "error", err)
+			log.WarnContext(ctx, "store_close_failed", "error", err)
 		}
 		b.Store = nil
 	}

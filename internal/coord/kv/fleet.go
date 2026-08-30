@@ -258,7 +258,7 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		*bucket.into = got
 	}
 
-	log.Debug("coord_kv_fleet_open", "prefix", cfg.BucketPrefix,
+	log.DebugContext(ctx, "coord_kv_fleet_open", "prefix", cfg.BucketPrefix,
 		"rate_window", cfg.RateWindow, "claim_ttl", cfg.ClaimTTL,
 		"ledger_retention", cfg.LedgerRetention, "cooldown_max", cfg.CooldownMax,
 		"status_freshness", cfg.StatusFreshness)
@@ -570,7 +570,7 @@ func (f *FleetStore) Charge(ctx context.Context, agentScope string, tokens, orgL
 			// the org over-stated, which trips the cap EARLY. That is
 			// the safe direction, and it is worth a line saying so
 			// rather than a drift nobody can later explain.
-			log.Error("coord_kv_budget_compensation_failed", "scope", coord.OrgScope,
+			log.ErrorContext(ctx, "coord_kv_budget_compensation_failed", "scope", coord.OrgScope,
 				"tokens", tokens, "error", undo,
 				"detail", "the org counter is over-stated by this charge and will refuse "+
 					"early; clear it with `crewlet budgets reset`")

@@ -101,7 +101,7 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 		Handle: handle, Embedding: vector, Limit: recallHits,
 	})
 	if err != nil {
-		log.Warn("episode_recall_failed", "seat", handle, "error", err.Error())
+		log.WarnContext(ctx, "episode_recall_failed", "seat", handle, "error", err.Error())
 		return ""
 	}
 	if len(hits) == 0 {
@@ -180,7 +180,7 @@ func (f *Fetcher) counterpartyProfile(ctx context.Context, r Request) string {
 		seen[subject] = true
 		profile, ok, err := f.src.Counterparties.Get(ctx, observer, subject)
 		if err != nil {
-			log.Warn("counterparty_lookup_failed", "observer", observer,
+			log.WarnContext(ctx, "counterparty_lookup_failed", "observer", observer,
 				"error", err.Error())
 			continue
 		}
@@ -264,7 +264,7 @@ func (f *Fetcher) synthesizedSkills(ctx context.Context, r Request) (string, []s
 	// used, so hiding it is how a useful skill starves.
 	skills, err := f.src.Skills.List(ctx, handle, learning.ListOptions{})
 	if err != nil {
-		log.Warn("skills_list_failed", "seat", handle, "error", err.Error())
+		log.WarnContext(ctx, "skills_list_failed", "seat", handle, "error", err.Error())
 		return "", nil
 	}
 	if len(skills) == 0 {
@@ -342,7 +342,7 @@ func (f *Fetcher) onboardingHint(ctx context.Context, r Request) string {
 		// every turn a database blip lasts, and a missed hint costs one
 		// turn of context while a false one costs a paragraph of every
 		// prompt.
-		log.Warn("onboarding_marker_unreadable", "agent_id", r.AgentID,
+		log.WarnContext(ctx, "onboarding_marker_unreadable", "agent_id", r.AgentID,
 			"error", err.Error())
 		return ""
 	}

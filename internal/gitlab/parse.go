@@ -266,12 +266,12 @@ func (p *Parser) thread(ctx context.Context, h hook, fan fanout) []target {
 	}
 	projectID := h.projectID()
 	if projectID == 0 {
-		log.Warn("gitlab_thread_project_unknown", "kind", fan.kind, "iid", fan.iid)
+		log.WarnContext(ctx, "gitlab_thread_project_unknown", "kind", fan.kind, "iid", fan.iid)
 		return nil
 	}
 	people, err := p.participants.Of(ctx, projectID, fan.kind, fan.iid)
 	if err != nil {
-		log.Warn("gitlab_participants_unavailable", "project", projectID,
+		log.WarnContext(ctx, "gitlab_participants_unavailable", "project", projectID,
 			"kind", fan.kind, "iid", fan.iid, "error", err.Error())
 		return nil
 	}

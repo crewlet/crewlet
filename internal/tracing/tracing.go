@@ -246,10 +246,13 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 	// unset it writes to the standard logger, which in this process is the
 	// one place a line bypasses the engine's own format.
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		// NOT WarnContext: this handler is installed GLOBALLY and outlives
+		// Configure, so capturing its ctx would pin a request-scoped value
+		// into a process-lifetime closure — the shape d-401 exists to refuse.
 		log.Warn("otel_internal_error", "error", err)
 	}))
 
-	log.Info("tracing_configured",
+	log.InfoContext(ctx, "tracing_configured",
 		"exporting", endpoint != "", "endpoint", endpoint,
 		"protocol", protocol(opts), "service", serviceName(opts))
 

@@ -194,7 +194,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// itself — so indexing must never be a casualty of a routing rule.
 	if p.onPage != nil && pageID != "" {
 		if err := p.onPage(ctx, event, pageID); err != nil {
-			log.Warn("confluence_page_index_failed", "page", pageID,
+			log.WarnContext(ctx, "confluence_page_index_failed", "page", pageID,
 				"event_type", event, "error", err.Error())
 		}
 	}
@@ -267,7 +267,7 @@ func (p *Parser) subscribed(ctx context.Context, base notify.Inbound, pageID, ac
 		// EMPTY, so the event falls through to the space lead — where it
 		// went before subscriptions existed. Waking every seat instead
 		// would turn a store blip into a company-wide interrupt.
-		log.Warn("confluence_watchers_unreadable", "page", pageID,
+		log.WarnContext(ctx, "confluence_watchers_unreadable", "page", pageID,
 			"error", err.Error(),
 			"detail", "routing by mention and space lead alone for this event")
 		return nil
@@ -353,7 +353,7 @@ func (p *Parser) subscribe(ctx context.Context, pageID string, mentioned []strin
 		}
 		seen[party.Handle] = true
 		if err := p.watchers.Watch(ctx, pageID, party.Handle, at); err != nil {
-			log.Warn("confluence_watch_not_recorded", "page", pageID,
+			log.WarnContext(ctx, "confluence_watch_not_recorded", "page", pageID,
 				"seat", party.Handle, "error", err.Error(),
 				"detail", "this seat will not be woken by later activity on the page")
 		}

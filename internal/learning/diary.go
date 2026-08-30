@@ -273,7 +273,7 @@ func (d *Diary) MarkRetrieved(ctx context.Context, ids []string, at time.Time) {
 		if _, err := d.db.SQL().ExecContext(ctx,
 			`UPDATE agent_diary SET retrieval_count = retrieval_count + 1,
 			 last_retrieved_at = ? WHERE id = ?`, store.EncodeTime(at), id); err != nil {
-			log.Warn("diary_retrieval_not_recorded", "entry", id, "error", err)
+			log.WarnContext(ctx, "diary_retrieval_not_recorded", "entry", id, "error", err)
 			return
 		}
 	}

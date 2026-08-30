@@ -197,7 +197,7 @@ func (t *ThreadTracker) Reaches(ctx context.Context, handle, selfIdentity string
 			// named the seat — deliver it and let the next mention
 			// re-establish the follow. Dropping it too would mean a
 			// store blip eats a message somebody addressed by name.
-			log.Warn("thread_follow_not_recorded", "backend", t.Backend(),
+			log.WarnContext(ctx, "thread_follow_not_recorded", "backend", t.Backend(),
 				"handle", handle, "thread", m.Thread, "error", err.Error())
 			return Delivery{Deliver: true, Reason: reason}, err
 		}

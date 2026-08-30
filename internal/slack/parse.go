@@ -206,7 +206,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	}
 	seat, ok := p.seats(handle)
 	if !ok {
-		log.Warn("slack_event_for_unregistered_seat", "handle", handle)
+		log.WarnContext(ctx, "slack_event_for_unregistered_seat", "handle", handle)
 		return nil, nil
 	}
 	// The url_verification handshake is answered at the edge, without a
@@ -214,17 +214,17 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	// else that is not an event callback is Slack telling the workspace
 	// something rather than telling this seat something.
 	if kind := str(w.Body, "type"); kind != "event_callback" {
-		log.Debug("slack_envelope_ignored", "handle", handle, "type", kind)
+		log.DebugContext(ctx, "slack_envelope_ignored", "handle", handle, "type", kind)
 		return nil, nil
 	}
 	event, _ := w.Body["event"].(map[string]any)
 	eventType := str(event, "type")
 	if eventType != "message" && eventType != "app_mention" {
-		log.Debug("slack_event_type_ignored", "handle", handle, "event_type", eventType)
+		log.DebugContext(ctx, "slack_event_type_ignored", "handle", handle, "event_type", eventType)
 		return nil, nil
 	}
 	if why := SkipReason(event); why != "" {
-		log.Debug("slack_event_skipped", "handle", handle, "reason", why)
+		log.DebugContext(ctx, "slack_event_skipped", "handle", handle, "reason", why)
 		return nil, nil
 	}
 
@@ -248,11 +248,11 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	if p.isOwn(seat, w.Body, event) {
 		if thread != "" && p.threads != nil {
 			if err := p.threads.Participated(ctx, handle, channel, thread, p.now()); err != nil {
-				log.Warn("slack_participation_not_recorded",
+				log.WarnContext(ctx, "slack_participation_not_recorded",
 					"handle", handle, "thread", thread, "error", err.Error())
 			}
 		}
-		log.Debug("slack_own_message_skipped", "handle", handle)
+		log.DebugContext(ctx, "slack_own_message_skipped", "handle", handle)
 		return nil, nil
 	}
 	if text == "" {
@@ -269,7 +269,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 		var err error
 		reach, err = p.threads.Reaches(ctx, handle, seat.BotUserID, msg, p.now())
 		if err != nil {
-			log.Warn("slack_thread_follow_unreadable",
+			log.WarnContext(ctx, "slack_thread_follow_unreadable",
 				"handle", handle, "thread", thread, "error", err.Error())
 		}
 		if !reach.Deliver {
@@ -282,7 +282,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, _ *notify.Regist
 	// answers to what it was asked, without being named again.
 	if p.threads != nil && thread == "" && reach.Reason != "" {
 		if err := p.threads.Follow(ctx, handle, channel, ts, p.now()); err != nil {
-			log.Warn("slack_follow_not_recorded",
+			log.WarnContext(ctx, "slack_follow_not_recorded",
 				"handle", handle, "thread", ts, "error", err.Error())
 		}
 	}
