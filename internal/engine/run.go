@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/learning/memsync"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/node"
@@ -81,6 +82,21 @@ type Engine struct {
 	sandboxCoordinator *sandbox.Coordinator
 	sandboxWaiter      *sandbox.Waiter
 	sandboxPending     sandbox.PendingStore
+
+	// memory carries a seat's memory between the nodes that run it.
+	//
+	// On the ENGINE rather than on an epoch, for the same reason the
+	// sandbox machinery is: it holds per-seat watermarks that describe what
+	// THIS PROCESS has already published, and rebuilding it on a config
+	// apply would republish every seat's whole history.
+	//
+	// Nil on a node with no broker or no store, where there is nothing to
+	// carry memory over and nothing to carry.
+	memory *memsync.Syncer
+
+	// memorySync is the loop that publishes it, and the handle Stop uses
+	// to end it. Nil where memory is.
+	memorySync *memorySync
 
 	// sandboxOtel mints each coding run's telemetry endpoint. Nil exports
 	// nothing from inside a box, which is the ordinary configuration.
@@ -390,6 +406,21 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err != nil {
 		return fail(fmt.Errorf("engine: node: %w", err))
 	}
+	// BEFORE THE NODE RUNS, because the first seat it acquires hydrates
+	// through this. A nil syncer is the honest shape for a node with no
+	// broker or no store: there is nowhere to carry memory to, and
+	// prepareSeat then skips the step rather than pretending it happened.
+	if e.memory, err = memsync.New(backends.Store, backends.Conn(),
+		func(handle string) string {
+			role := e.Company().Org.AgentSeatByHandle(handle)
+			id, ok := e.Company().Org.AgentIDFor(role)
+			if !ok {
+				return ""
+			}
+			return id.String()
+		}); err != nil {
+		return fail(fmt.Errorf("engine: seat memory: %w", err))
+	}
 	e.node = n
 	e.dispatch = e.buildDispatcher(opts, backends)
 	// LAST, because its fleet-singleton duty is claimed under the node's
@@ -398,6 +429,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return fail(fmt.Errorf("engine: sandbox waiter: %w", err))
 	}
 	e.startMaintenance(ctx)
+	e.startMemorySync(ctx)
 	e.startScheduler(ctx)
 	// The credential pools were attached to the fleet's ledger by equip,
 	// above, so a bench already publishes. This arms the other half: the
@@ -515,6 +547,11 @@ func (e *Engine) Stop(ctx context.Context) {
 	e.stopSandbox()
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
+	// AFTER the drain, which released every seat and flushed each one's
+	// memory on the way out. Stopping it before the drain would leave the
+	// releases to the flush alone, which is the bounded path rather than
+	// the whole one.
+	e.stopMemorySync()
 	e.stopScheduler()
 	e.stopCooldownRefresh()
 	e.node.Stop(ctx)

@@ -110,6 +110,17 @@ The row is keyed on `(agent_handle, conversation_key)` and deduped on
 turn ids, so a turn-keyed row would *record* the duplicate instead of
 collapsing it, and the next turn would read its own reply twice.
 
+The dedupe index is **partial**, over `work_key <> ''`: an empty work key is
+the documented "a turn with no ledgerable trigger", and those turns are
+legitimately distinct rows that must never collide onto one.
+
+Separately, each row carries an `entry_id` its writer mints — the row's name
+across the fleet, so [memory replication](seat-ownership.md#a-seats-memory-follows-it)
+can carry the ledger with the seat. It is not a second dedupe: the table's
+`id` is an `AUTOINCREMENT` that starts at 1 on every node and means nothing
+off the one that wrote it, and `entry_id` says nothing about what a row
+*means* — two unkeyed turns get two ids and stay two rows.
+
 `conversation_key` is the `{source}:{local}` grammar that already partitions
 every seat inbox for [coalescing](event-system.md#inbox-batching--coalescing):
 `jira:POC-7`, `slack:C9:1718.001`, `github:acme/api#42`. A trigger with no

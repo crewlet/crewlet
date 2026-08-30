@@ -258,11 +258,14 @@ theoretical one:
   collapses on write). Nothing can key a reworded
   memory to its twin — that needs the duplicate *turn* not to happen, which
   is the completion ledger's job. `episodes` and the counterparty interaction
-  count are collapsed against the reader that matters — both live in the
-  node's own database, which only that node reads, so the duplicate the
-  work key removes is the one *that* node would otherwise write twice — and
-  onboarding was already exclusive; see
-  [Keying a write on the work](seat-ownership.md#keying-a-write-on-the-work).
+  count are collapsed against the reader that matters — the node running the
+  seat, which is the only one that reads them. Memory replication carries both
+  nodes' rows onto the changelog, and the node that next replays the seat
+  imports the first and skips the second on the same index, so the collapse
+  follows the seat rather than staying behind on one node; and
+  onboarding was already exclusive. See
+  [Keying a write on the work](seat-ownership.md#keying-a-write-on-the-work)
+  and [A seat's memory follows it](seat-ownership.md#a-seats-memory-follows-it).
 - **Per-company singletons remain singletons.** They sit behind leases so any
   node can host them, but the scheduler tick, the curator, clustering and the
   sandbox waiter are each one logical instance at a time. A fleet does not

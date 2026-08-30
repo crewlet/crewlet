@@ -165,7 +165,9 @@ internal/
 ├── events/               # The envelope and the typed-payload registry
 ├── a2a/                  # Agent-to-agent channels (one ask, one answer)
 ├── schedule/             # Role/unit cron-style recurring work
-├── learning/             # What a seat remembers (there is no task package:
+├── learning/             # What a seat remembers, and memsync/ — the changelog
+│                         #   that carries it when a seat moves node
+│                         #   (there is no task package:
 │                         #   task state lives in the PM tool, and the engine
 │                         #   mirrors none of it)
 ├── knowledge/            # The backend-neutral knowledge-search seam

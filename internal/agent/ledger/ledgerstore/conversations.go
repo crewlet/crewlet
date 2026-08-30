@@ -8,6 +8,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -84,9 +86,17 @@ func (s *SQLConversations) Append(ctx context.Context, handle, conversation stri
 	return s.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO conversation_sessions
-			   (agent_handle, conversation_key, work_key, turn_id, entry, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?)
+			   (entry_id, agent_handle, conversation_key, work_key, turn_id,
+			    entry, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT DO NOTHING`,
+			// The row's name across the fleet, minted here because this is
+			// where the row is created. `id` is an AUTOINCREMENT and means
+			// nothing off this node; memory replication carries the entry
+			// under this one. Fresh every call, including for a duplicate
+			// the guard below is about to reject — an id nothing keeps
+			// costs nothing.
+			uuid.NewString(),
 			handle, conversation, workKey, entry.TurnID, string(blob), store.EncodeTime(at),
 		); err != nil {
 			return err

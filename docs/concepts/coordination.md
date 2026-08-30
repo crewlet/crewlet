@@ -130,8 +130,9 @@ This is also why the retention sweep in the [maintenance duty](seat-ownership.md
 
 The node's own database holds everything a *single* node is the only reader of. The test is not "is it durable" — all of it is — but "would a peer reading this change any answer?"
 
-- **The event log, the diary, episodes, counterparty profiles, synthesized skills.** A seat's memory is read by the node running that seat.
-- **Conversation history.** Replicating a long thread to the whole fleet buys nothing: the seat's owner is the only reader, and ownership already moves with the lease.
+- **The event log.** It records what *this node* saw; a peer's copy would claim this node had seen it too.
+- **The diary, episodes, counterparty profiles, synthesized skills — as a CACHE, not as the only copy.** A seat's memory is read by the node running that seat, and that node changes: placement moves seats, so the honest test is not "would a peer read this" but "would the seat's *next owner* need it", and the answer is yes. Every memory row is therefore also published to a compacted changelog on the stream, and a node hydrates a seat's rows into its own store before the seat takes work — see [seat memory](seat-ownership.md#a-seats-memory-follows-it). The local copy stays local because recall computes vector distance *in the database*, which is the one thing a KV cannot do.
+- **Conversation history.** Read only by the seat's owner — but carried on the same changelog as the rest of its memory, because ownership moves and a seat that forgets what it already said repeats itself in the thread.
 - **The company payload.** Bulk that every node holds its own copy of. Only *which revision is current* is shared — see [Control Plane](control-plane.md).
 - **The secret store's bootstrap half, and only that.** The company's credentials are a shared slot (`secrets`, above); what stays in a node's own file is the rows `crewlet secrets set` writes against a *stopped* node, which that node migrates onto the fleet at its next start and deletes locally. The keyring that opens either is Tier A on disk, never a shared record — see [Secret Store § Propagation](secret-store.md#propagation).
 - **`scheduled_runs`** — this node's dispatch *history*, for the dashboard and the retention sweep. Not the claim; that is the `fires` slot above.
