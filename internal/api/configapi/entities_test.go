@@ -527,3 +527,55 @@ func TestReadingAnAbsentEntityIsNotFound(t *testing.T) {
 		t.Errorf("the refusal does not name what was missing: %s", res.Body.String())
 	}
 }
+
+// AN ID NOBODY CARRIES IS A 404 EVEN WHEN THE BODY ALSO DISAGREES.
+//
+// The two refusals answer different questions, and the order decides which
+// one a caller is told about. Judging the body's identity first calls a PUT
+// to an absent id a RENAME and blames the body — when the entity addressed is
+// simply not there and the URL is what went wrong. A caller who mistypes the
+// path while sending a correct entity is the ordinary case, and it must be
+// pointed at the path.
+func TestAnAbsentEntityIsNotFoundBeforeItIsARename(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, kind, id, body string }{
+		{
+			// The mistyped URL: the body is a perfectly good CEO.
+			name: "a seat", kind: configapi.EntityRoles, id: "nobody",
+			body: `{"name":"CEO","handle":"ceo","llm":"zulu"}`,
+		},
+		{
+			// And the derived-handle shape, which is the one the identity
+			// guard reaches for first if it runs too early.
+			name: "a seat whose handle is derived", kind: configapi.EntityRoles,
+			id: "nobody", body: `{"name":"Chief Executive","llm":"zulu"}`,
+		},
+		{
+			name: "a unit", kind: configapi.EntityUnits, id: "nowhere",
+			body: `{"name":"engineering","lead":"cto"}`,
+		},
+		{
+			name: "an mcp server", kind: configapi.EntityMCPServers, id: "nothing",
+			body: `{"name":"tracker","transport":"http","url":"https://mcp.example.com"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t, nil)
+			s.seed(t, nestedDoc, nil)
+
+			path := "/config/" + tc.kind + "/" + tc.id
+			res := s.do(t, http.MethodPut, path, tc.body,
+				map[string]string{"X-Summary": "write to an id nothing carries"})
+			if res.Code != http.StatusNotFound {
+				t.Fatalf("PUT %s = %d, want 404 — the entity addressed is not "+
+					"there, which is a fact about the path rather than the "+
+					"body: %s", path, res.Code, res.Body.String())
+			}
+			if !strings.Contains(res.Body.String(), "no_such_entity") {
+				t.Errorf("the refusal blames the body rather than the path: %s",
+					res.Body.String())
+			}
+		})
+	}
+}

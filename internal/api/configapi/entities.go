@@ -119,6 +119,20 @@ var entityKinds = map[string]entityAccess{
 			if err := json.Unmarshal(raw, &incoming); err != nil {
 				return fmt.Errorf("decode role: %w", err)
 			}
+			// FOUND FIRST, judged second. Both orders refuse the same
+			// requests, but they answer a PUT to an id nothing carries
+			// differently: identity-first calls that a rename and blames
+			// the body, when the entity the caller addressed is simply not
+			// there and the URL is what they got wrong.
+			var target *config.Role
+			eachRole(c, func(r *config.Role) {
+				if target == nil && roleID(r) == id {
+					target = r
+				}
+			})
+			if target == nil {
+				return ErrNoSuchEntity
+			}
 			// THE IDENTITY IS THE ADDRESS, so a body that renames the
 			// seat is refused rather than silently moved: the caller asked
 			// to replace the entity at this id, and honouring a rename here
@@ -132,17 +146,7 @@ var entityKinds = map[string]entityAccess{
 			if got := roleID(&incoming); got != id {
 				return identityMismatch("handle", id, got)
 			}
-			var done bool
-			eachRole(c, func(r *config.Role) {
-				if done || roleID(r) != id {
-					return
-				}
-				*r = incoming
-				done = true
-			})
-			if !done {
-				return ErrNoSuchEntity
-			}
+			*target = incoming
 			return nil
 		},
 	},
@@ -169,23 +173,22 @@ var entityKinds = map[string]entityAccess{
 			if err := json.Unmarshal(raw, &incoming); err != nil {
 				return fmt.Errorf("decode unit: %w", err)
 			}
+			var target *config.Unit
+			eachUnit(c, func(u *config.Unit) {
+				if target == nil && u.Name == id {
+					target = u
+				}
+			})
+			if target == nil {
+				return ErrNoSuchEntity
+			}
 			// The same rule as a seat, and a unit's name is referenced from
 			// further away: every `manages:` entry that expands to it and
 			// every root-level seat whose `unit:` names it.
 			if incoming.Name != id {
 				return identityMismatch("name", id, incoming.Name)
 			}
-			var done bool
-			eachUnit(c, func(u *config.Unit) {
-				if done || u.Name != id {
-					return
-				}
-				*u = incoming
-				done = true
-			})
-			if !done {
-				return ErrNoSuchEntity
-			}
+			*target = incoming
 			return nil
 		},
 	},
@@ -237,15 +240,15 @@ var entityKinds = map[string]entityAccess{
 			if err := json.Unmarshal(raw, &incoming); err != nil {
 				return fmt.Errorf("decode mcp server: %w", err)
 			}
-			// The name is the key a seat declares this server's credentials
-			// under and the prefix its tools carry, so a rename here
-			// silently unhooks every seat that named it.
-			if incoming.Name != id {
-				return identityMismatch("name", id, incoming.Name)
-			}
 			for i := range c.MCPServers {
 				if c.MCPServers[i].Name != id {
 					continue
+				}
+				// The name is the key a seat declares this server's
+				// credentials under and the prefix its tools carry, so a
+				// rename here silently unhooks every seat that named it.
+				if incoming.Name != id {
+					return identityMismatch("name", id, incoming.Name)
 				}
 				c.MCPServers[i] = incoming
 				return nil
