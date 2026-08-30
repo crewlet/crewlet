@@ -47,8 +47,10 @@
 //
 //   - There is no consumer ack timeout (no ConsumerOptions.AckTimeout). The
 //     Python engine's 30-minute unacked-message window does not exist here,
-//     which deletes the batch dispatch budget outright — see
-//     dispatchBudgetIsNotPorted in batch.go.
+//     which deletes the batch dispatch budget outright, and leaves a wedged
+//     consumer holding its prefetch until its connection dies rather than
+//     until a clock expires — see the batch dispatch budget note at the top
+//     of batch.go, and d-104.
 //   - There is no exported RedeliverUnacknowledgedMessages. Reclaiming a
 //     quiesced consumer's prefetch is done by RECYCLING the consumer —
 //     close, reopen — which on Pulsar is free. See attachment.reopen.
