@@ -214,11 +214,31 @@ All read directly by the engine.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP HTTP endpoint for trace export | `http://localhost:4318/v1/traces` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | The collector's **base** URL. The engine appends the signal path, so do **not** include `/v1/traces` here. | `http://localhost:4318` |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | The traces endpoint in full, used verbatim. Overrides the base above when you need a non-standard path. | `https://collector.example.com/otlp/v1/traces` |
 | `OTEL_EXPORTER_OTLP_HEADERS` | `k=v,k2=v2` headers for the OTLP backend (e.g. auth). Also used engine-side as the upstream auth for forwarded sandbox telemetry — never handed to the sandbox itself. | `authorization=Bearer%20...` |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP protocol selector, propagated into sandbox runs so the coding agent exports the same way | `http/protobuf` |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | How the **engine** talks to the collector: `http/protobuf` (default) or `grpc`. Anything else is refused at startup, naming the two that work. | `http/protobuf` |
+| `OTEL_SERVICE_NAME` | The service the spans are reported under. Defaults to `crewlet`; set it when two companies share one collector. | `crewlet-acme` |
+| `OTEL_TRACES_SAMPLER_ARG` | Head-sampling ratio for traces this node **roots**, `0`–`1`. Unset samples everything. An unparseable or out-of-range value warns and falls back to always-on rather than refusing to boot. | `0.1` |
 
-When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the engine exports OTel spans to the specified endpoint (Jaeger, Grafana Tempo, etc.). Without it, spans are still created for internal trace context propagation but not exported.
+> **The base and the signal endpoint are different settings.** `OTEL_EXPORTER_OTLP_ENDPOINT`
+> is a base that the exporter appends `/v1/traces` to; `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
+> is the complete URL. Putting `/v1/traces` on the base is the common mistake — it also
+> reaches the sandbox forwarder, which appends `/v1/{signal}` of its own, so the
+> collector sees `/v1/traces/v1/traces`.
+
+**Sampling is parent-based**, always. A remote sampling decision is honoured
+whatever the ratio says, because these traces cross processes routinely and an
+unsampled parent with sampled children is a broken tree at the collector. The
+ratio governs only the traces this node starts itself.
+
+When `OTEL_EXPORTER_OTLP_ENDPOINT` (or the traces endpoint) is set, the engine
+exports spans to it — Jaeger, Grafana Tempo, or any OTLP backend. Without it,
+spans are still created and their ids still flow into every event, the event
+store and the dashboard's trace view; nothing is shipped anywhere. The engine's
+exporter and the [sandbox OTLP forwarder](../concepts/code-sandbox.md) read the
+**same** endpoint and headers on purpose, so a coding agent's spans land in the
+same backend as the turn that started it and nest underneath it.
 
 ---
 

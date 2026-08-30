@@ -238,22 +238,34 @@ flowchart TD
 
 **How it works:**
 
-1. Webhook handlers create an OTel span → all events created inside inherit `trace_id`
-2. When events cross async boundaries (EventQueue → handler), the receiving component restores the OTel context from the event's `trace_id`/`span_id`
-3. The Event model's `trace_id` field defaults to the active span's trace id which reads the active OTel span
+1. The webhook edge opens a span, so a delivery is the root of the trace
+   everything it causes hangs under. An inbound W3C `traceparent` is honoured
+   if one is present, which is what makes a delivery forwarded through your own
+   gateway join your trace rather than start a second one.
+2. Events carry `trace_id` / `span_id` / `parent_span_id` in the envelope. That
+   is the only carrier — the queue backends move an event's bytes and nothing
+   else — and it is what crosses the broker, the store and a node boundary.
+3. When an event wakes a seat, the dispatcher restores its trace onto the
+   context before the turn runs, so the turn's span is a child of the span that
+   caused it rather than a new root.
 
-**Where "automatic" stops.** Point 3 is a read of the *ambient* span, so it
-only works while one is open. An event constructed outside every span gets an
-**empty** `trace_id` — and an event with no trace is unreachable from the work
-it belongs to, which on the dashboard shows up as a trace link that goes
-nowhere. Phases open spans, the engine itself does not, so anything published
-from engine code *after* `run_turn` has returned is in that state. Those call
-sites copy the causing event's context forward explicitly
-(`trace_id` / `span_id` / `parent_span_id`) rather than relying on capture —
-the A2A reply and channel-close do this from the ask, and
-`A2AMessageDelivered` from the wake. Copy it **verbatim**: `run_turn` calls
-`restore_context` with those values, so the woken turn becomes a child of the
-span that caused it.
+**The trace is passed, never captured.** An event's trace is an argument to its
+constructor (`events.New(payload, trace)`), and the caller derives that
+argument from the context with `tracing.TraceOf(ctx)`. This is deliberate and
+[decisions/405](https://github.com/crewlet/crewlet/blob/main/decisions/405-event-type-system.md)
+requires it: an event that read an *ambient* span at construction would be one
+whose trace depends on which frame happened to build it.
+
+`TraceOf` never returns empty. Inside a span it reports that span's ids; with
+no span open it mints a fresh root, which is what every publisher in the engine
+used to do by hand. So there is no "events published outside a span lose their
+trace" case any more — the older behaviour, where such an event got an empty
+`trace_id` and became unreachable from the work it belonged to, is gone.
+
+**Each event's `span_id` is the span that emitted it**, and `parent_span_id`
+the span above. A turn does not republish its trigger's span id as its own;
+that made every event in a turn look like the same span and collapsed the
+dashboard's tree onto the wake that started it.
 
 **When notifications are dropped** (own message, not following thread, rate limit), a `NotificationSkipped` event is emitted with the skip reason — visible in the trace so you can see why a webhook didn't reach an agent.
 

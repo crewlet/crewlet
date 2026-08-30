@@ -148,6 +148,17 @@ for every suppressed debug line. That shortcut is correct only while every handl
 and JSON handlers do; `consoleHandler` does. A handler that consulted its attributes
 there would filter the wrong lines, and only the *suppressed* ones would show it.
 
+**Trace correlation was added inside `lazy.Handle` rather than as a fourth
+handler**, and this constraint is why. `Handle` injects the `trace_id` and
+`span_id` bound onto the context ([508](508-the-tracing-pipeline.md)) and
+forwards; `Enabled` is untouched, so the three handlers above are still the
+whole set and still answer from their level alone. Wrapping them inside
+`install` would have been the obvious shape and is wrong twice: it would give
+console, text and json the same concrete type — which
+`TestEveryDeclaredFormatInstallsItsOwnHandler` refuses, precisely so a format
+cannot silently render as another — and it would put a level decision behind a
+value that varies by whether a call site passed a context.
+
 ## What this replaced
 
 `debug: true` in Tier A was a declared field that **nothing in the tree ever read**.
