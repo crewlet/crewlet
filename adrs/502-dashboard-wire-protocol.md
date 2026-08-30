@@ -3,8 +3,9 @@
 Status: **Accepted** · Applies to: `internal/api/stream/`,
 `static/dashboard/js/socket.js`
 
-The protocol is frozen, and the dashboard is the compatibility reference, not
-the Python engine. The client's JavaScript ships unchanged and its own suite
+The protocol is frozen, and the dashboard client is the compatibility
+reference: the server is checked against it, never the other way round. The
+client's JavaScript ships unchanged and its own suite
 runs under bare `node` against vendored DOM — so that suite proves nothing
 about the server. **The wire protocol is the whole contract**, and it is stated
 here once so a server implementation is checked against a written spec rather

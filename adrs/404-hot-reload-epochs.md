@@ -6,10 +6,10 @@ Related: `401` (the pin lives in TurnContext, never in context.Context), `402`
 
 ## What dies
 
-The Python engine applied a new revision by MUTATING the live objects in place
-and keeping their identity: `clear()` then `update()`, field assignment on the
-org, provider swaps under a lock. Identity was preserved so that anything
-holding a reference kept working.
+The obvious way to apply a new revision is to MUTATE the live objects in place
+and keep their identity: clear and refill the maps, assign the org's fields,
+swap the providers under a lock. Identity is preserved so that anything holding
+a reference keeps working.
 
 That is precisely the problem. Anything holding a reference kept working — and
 kept reading, mid-turn, values from two different revisions. A turn that read
@@ -92,9 +92,8 @@ apply ahead of the swap and it becomes reachable that day.
 
 Because snapshots are immutable, rolling back is `Publish(previous)` — the
 previous snapshot is still intact and still correct, since nothing mutated it.
-Un-applying a mutation, which is what the Python engine had to attempt, is a
-second code path exercised only on the failure it exists to handle. This
-version has no second path.
+Un-applying a mutation is a second code path exercised only on the failure it
+exists to handle. This version has no second path.
 
 The exception is the restart-required subsystems, which is the whole content of
 `degraded`.
@@ -103,9 +102,9 @@ The exception is the restart-required subsystems, which is the whole content of
 
 Re-activating the same revision is the documented credential-rotation gesture,
 so a no-op check could never be a payload comparison: the payload is identical
-and the point is that its `${VAR}` references now resolve differently. The
-Python engine reached for a second comparison — a keyed digest over what those
-references resolved to — because it HAD a payload short-circuit to defeat.
+and the point is that its `${VAR}` references now resolve differently. Any
+design with a payload short-circuit therefore needs a second comparison to
+defeat it — a keyed digest over what those references resolved to.
 
 This engine has no short-circuit to defeat, so it carries no digest either.
 `Apply` is straight-line: the reconciler skips on the EPOCH it has applied,
@@ -122,8 +121,8 @@ started. That is safe for a rotation only because the spec's `env`, `headers`
 and `url` are resolved at the edge before the comparison — comparing the stored
 entry, where `${VAR}` stays verbatim, would silently stop rotation reaching MCP
 children at all. Nothing persists a digest of a live credential across applies,
-which is the property the Python fingerprint was reaching for and the one that
-would have turned the fix into a leak the moment it reached a log line.
+which is what such a digest would be reaching for, and the property that would
+turn it into a leak the moment it reached a log line.
 
 ## Lag is not divergence
 

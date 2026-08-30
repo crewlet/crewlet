@@ -5,15 +5,13 @@ Status: **Accepted** · Implementation: `.goreleaser.yaml`, `Dockerfile`,
 
 ## The question
 
-The product stops being a Python package on an index and becomes a binary.
-Everything the PyPI pipeline provided has to be provided again by something
-else: a build, a place to put it, a version, notes, and the property that no
+The product ships as a binary. Five things have to come from somewhere: a
+build, a place to put it, a version, release notes, and the property that no
 long-lived credential exists anywhere in this repository.
 
-## What is kept, because it was never about Python
+## Three properties this is built around
 
-Three properties survive the change of language, and two of them are the
-reason this decision is short.
+Two of them are the reason this decision is short.
 
 **The tag is the whole release.** `git tag v1.2.0 && git push origin v1.2.0`
 still does everything. Nothing else is a release step.
@@ -54,18 +52,17 @@ that a person can read.
 
 ## The tag is the version, and there is no second copy
 
-Python's rule was the opposite: `__version__` in `src/crewlet/__init__.py`
-was the truth, the tag had to agree, and `scripts/release_metadata.py verify`
-refused to build when they did not. That check existed because there were two
-places, and it caught the case where one was bumped and the other mistyped.
+The obvious alternative is a version constant in the tree that the tag has to
+agree with, plus a verify step that refuses to build when they diverge. That
+check is only necessary because there are two places, and it exists to catch
+one being bumped while the other is mistyped.
 
 Here there is one place. The tag is stamped into
 `internal/version.value` at link time
 (`-X github.com/crewlet/crewlet/internal/version.value={{ .Version }}`), so
 nothing in the tree records a version that a tag could disagree with, and the
-class of failure the verify step existed for stops being reachable rather
-than being caught. `scripts/release_metadata.py` and its packaging tests went
-with the Python tree.
+class of failure a verify step would exist for stops being reachable rather
+than being caught. **Never add a literal version constant back.**
 
 A binary built WITHOUT that stamp — `go install`, a local `go build` —
 reports the module's own build info instead, so it names itself honestly

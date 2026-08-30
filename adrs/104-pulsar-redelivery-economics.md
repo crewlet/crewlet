@@ -4,9 +4,9 @@ Status: **Accepted** · Method: measurement, not inference
 
 Companion to `102-jetstream-redelivery.md`, which measured the same questions
 on JetStream and named Pulsar as the contrast. This is the Pulsar column,
-re-measured on the Go client rather than inherited from the Python engine's
-numbers — because the client is not the same client, and two of its
-differences are load-bearing.
+measured against the client this engine actually drives rather than inherited
+from another one's numbers — two of this client's differences are
+load-bearing.
 
 ## What was measured
 
@@ -22,10 +22,10 @@ differences are load-bearing.
 | `RedeliverUnacknowledgedMessages` on the Consumer interface | **not exported** |
 | Subscription stats distinguish held from waiting | yes — `msgBacklog` vs `unackedMessages` |
 
-The Python engine's own harness (`tests/test_queue/test_broker_behavior.py`,
-Pulsar 4.2.4, C++ client) measured the same free handoff — "redelivery after a
-graceful close: 9 ms, nothing lost; `redeliveryCount` after a close-driven
-handoff: **0** — free" — and the prefetch hostage at exactly
+An independent harness against Pulsar 4.2.4 with the C++ client measured the
+same free handoff — redelivery after a graceful close at 9 ms with nothing
+lost, and `redeliveryCount` after a close-driven handoff at **0** — and the
+prefetch hostage at exactly
 `receiver_queue_size`. Both carry.
 
 ## The two client differences that changed the design
@@ -49,10 +49,10 @@ Consequences, both acted on:
   against the prefetch cap, and it makes a *small* prefetch more important
   here than it was on the C++ client.
 
-**2. There is no redeliver-unacknowledged command.** The Python `unquiesce`
-called `redeliver_unacknowledged_messages()` to reclaim what a quiesced
-consumer was sitting on. The Go client does not export it, so the only
-mechanism is to **close the consumer** — which on Pulsar is free.
+**2. There is no redeliver-unacknowledged command.** Reclaiming what a
+quiesced consumer is sitting on would naturally call
+`RedeliverUnacknowledgedMessages`, and this client does not export it. The only
+mechanism left is to **close the consumer** — which on Pulsar is free.
 
 ## Decisions
 
@@ -80,8 +80,8 @@ delivery count; on Pulsar the close returns it at `redeliveryCount` 0. The
 backend declares `queuetest.Capabilities.FreeDeferral`.
 
 **3. `MaxDeliveries` stays at 10.** JetStream re-derived it upward to 25
-because handoffs there spend the budget. Here they do not, so the Python
-value's original reasoning is intact: the budget covers poison ∧ node-death,
+because handoffs there spend the budget. Here they do not, so the original
+reasoning is intact: the budget covers poison ∧ node-death,
 and ten is sized for a fleet where an ack-timeout redelivery (a node that
 *died* holding the message) also increments it.
 
@@ -101,7 +101,7 @@ dead-letter topic is `topics.DeadLetter(topic, group)`, deliberately outside
 `crewlet.*` so the dashboard's `crewlet.events.>` feed cannot resurface
 poison; Pulsar's own default name (`<topic>-<sub>-DLQ`) would sit inside it.
 
-The router needs one thing the Python engine did not give it:
+The router needs one thing that is easy to leave out:
 `InitialSubscriptionName`. Without a subscription the dead-letter topic
 retains nothing, and Pulsar deletes a message published where no subscription
 covers it — destroying the poison message the budget just spent ten deliveries
@@ -119,8 +119,8 @@ not it. adr-102 decision 3 already removed the dependency.
 
 The whole admin-REST subscription lifecycle. Creating a subscription by
 subscribing joins a Shared subscription a peer may be serving and takes a
-share of that seat's traffic into this process — 12 of 20 messages, measured
-in the Python harness — and `Consumer.Unsubscribe()` needs a local consumer,
+share of that seat's traffic into this process — 12 of 20 messages, measured —
+and `Consumer.Unsubscribe()` needs a local consumer,
 which would make role decommission depend on which node ran the seat. Both
 operations therefore go through `admin/v2`, and a reachable admin endpoint is
 a deployment requirement.

@@ -18,8 +18,8 @@ fallback. An **edit** subscribes its author; a **comment** does not.
 ## Why not read Confluence's watchers
 
 Confluence keeps watchers, auto-adds page editors to them, and exposes them
-over REST. Reading that list is the obvious design, and the Python engine did
-exactly that. Three properties make it the wrong one here, and they compound:
+over REST. Reading that list is the obvious design. Three properties make it
+the wrong one, and they compound:
 
 **It is mostly people.** A wiki's watcher list is dominated by humans, whom
 Confluence has already notified natively and who resolve to nothing the engine

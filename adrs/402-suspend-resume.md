@@ -26,7 +26,8 @@ it", which is the entire point of the sandbox being detached.
 
 ## Suspension is a value, not a control-flow exception
 
-Python raised out of the loop. Go returns:
+The tempting shape is a control-flow exception thrown out of the loop. This
+returns instead:
 
 ```go
 // Outcome is what a phase run produced. Exactly one field is set.
@@ -60,8 +61,7 @@ envelope: new fields get defaults, nothing is removed or repurposed.
 
 ## The invariants, preserved verbatim
 
-These came from the Python engine at a cost and are not open for
-re-derivation. Each is checked at BOTH serialize and resume, because a state
+Each of these was learned at a cost and none is open for re-derivation. Each is checked at BOTH serialize and resume, because a state
 that violates one is corrupt whichever side produced it:
 
 1. **Exactly one dangling `tool_use`.** The suspended conversation ends with the

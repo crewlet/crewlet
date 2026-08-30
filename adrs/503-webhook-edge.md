@@ -3,8 +3,8 @@
 Status: **Accepted** · Applies to: `internal/api/webhooks/`
 
 Seven endpoints, four signature schemes, one pipeline. This records the rules
-the pipeline enforces and the four places the Go edge deliberately does
-something the Python one did not.
+the pipeline enforces, and four of them that are deliberately not the obvious
+choice.
 
 ## Why the edge verifies at all
 
@@ -13,7 +13,7 @@ granted on the stated grounds that these routes authenticate by *provider*
 credential instead — so the provider check is not defence in depth here, it is
 the only authentication the route has.
 
-The Python edge lost that property twice, and both failures were silent:
+An earlier edge lost that property twice, and both failures were silent:
 
 - **Slack skipped verification entirely when no signing secret was configured.**
   The check sat inside `if signing_secrets:`. A deployment with no Slack secret
@@ -84,10 +84,10 @@ resolves itself on the next control-plane poll; the missing-secret case waits on
 a human editing config, and a sender hammering every 15 s in the meantime buys
 nothing.
 
-## Four deliberate departures from the Python edge
+## Four rules that are not the obvious choice
 
-**1. The readiness check runs BEFORE the signature check, uniformly.** Python
-put it after verification on six routes and before it on Slack. Before is
+**1. The readiness check runs BEFORE the signature check, uniformly.** The
+tempting order is to verify first and only then look at readiness. Before is
 correct for a reason that only shows up in the answer: a node with no active
 revision has no secrets either, so verifying first answers every delivery with
 the *no-secret* 503 and its five-minute wait — telling a sender to wait out a
@@ -101,9 +101,8 @@ refused. The body must be read before the signature can be checked — the
 signature is over the body — so without a bound an unauthenticated caller picks
 this process's allocation size. Over the cap is `413`.
 
-**3. Every route is deduped at the edge.** Python claimed deliveries for GitHub
-and GitLab only and left the rest to per-process rings inside the transports,
-which answer correctly for one node and wrongly for two: the same delivery
+**3. Every route is deduped at the edge**, not just the two that send a
+delivery id. Per-process rings inside the transports answer correctly for one node and wrongly for two: the same delivery
 retried to a different node is a fresh delivery *to that node*, so the agent
 wakes twice and answers twice. Four routes carry an identifier the provider
 keeps stable across its own retries and the edge claims on it — GitHub's
@@ -143,10 +142,11 @@ auto-disabling a hook — so the redelivery volume is real and already documente
 on the integration page.
 
 **4. A republish that fails releases the claim.** The claim is taken *before* the
-republish, because two concurrent retries must not both wake the seat. Python
-stopped there — so a publish failure left the delivery claimed and unhandled,
-and the provider's retry, the only other copy, was refused by a row nothing
-clears for the TTL. The Go edge releases and answers 503.
+republish, because two concurrent retries must not both wake the seat. Stopping
+there is the bug: a publish failure would leave the delivery claimed and
+unhandled, and the provider's retry — the only other copy — would be refused by
+a row nothing clears for the TTL. So the edge releases the claim and answers
+503.
 
 Ordering inside `accept` follows from the same reasoning: claim, republish,
 *then* record. The republish is the only step that has to happen; the store row
@@ -160,10 +160,11 @@ arrived, an agent that never heard about it, and a retry the claim refuses.
   `hmac.Equal`. Comparing the hex or base64 text would be case- and
   padding-sensitive — so an arithmetically correct uppercase digest would be
   refused — and text comparison in Go is not constant-time.
-- Python's `_PLANE_SIGNATURE_RE` and `_ATLASSIAN_SIGNATURE_RE` shape prefilters
-  exist because `hmac.compare_digest` raises on non-ASCII `str` operands, which
-  would turn an unauthenticated request into a 500. Go has no such hazard —
-  `hex.DecodeString` failing *is* the prefilter — so the regexes are not ported.
+- There is no shape prefilter on the signature header, and none is needed:
+  `hex.DecodeString` failing *is* the prefilter. A regex here would only be
+  worth writing in a language whose constant-time compare rejects non-ASCII
+  operands, where an unfiltered header turns an unauthenticated request into a
+  500.
 - Jira and Confluence share one function because they are one scheme. Two copies
   of a signature check is how they come to disagree, and the disagreement is
   silent because each half stays self-consistent.

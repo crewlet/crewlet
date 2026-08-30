@@ -75,10 +75,10 @@ crashed.
 
 ## The busy gate is a predicate, not a paused topic
 
-The Python held a seat's inbox topic paused under a named reason while a run
-was in flight, and carries three paragraphs about the hazard: a hold that is
-never released leaves the seat *owned, attached and deaf* until the process
-restarts, and nothing else in the engine can release it.
+The obvious mechanism is to hold a seat's inbox topic paused under a named
+reason while a run is in flight. The hazard is worth three paragraphs on its
+own: a hold that is never released leaves the seat *owned, attached and deaf*
+until the process restarts, and nothing else in the engine can release it.
 
 Here the inbox screening already parks (requeues) a partition when a seat is
 awaiting a sandbox, so the gate is a question this node answers from memory:
@@ -129,8 +129,8 @@ calls `Wait`, and an unreaped process is a zombie that `kill -0` reports as
 ALIVE — which is the completion probe. So the detached job gets a `Wait`
 goroutine. Container mode gets the same property from `--init`.
 
-**`Kill` sends SIGKILL with no SIGCONT first**, unlike the Python it replaces.
-SIGKILL cannot be caught or blocked, so it reaches a stopped process directly;
+**`Kill` sends SIGKILL with no SIGCONT first**, which is not the obvious
+pairing. SIGKILL cannot be caught or blocked, so it reaches a stopped process directly;
 waking the group first lets a reaped clarification pause run again on its way
 out, which is the one thing `Kill` exists to avoid (`Connect` is the path that
 resumes). `Close` keeps its SIGCONT — a stopped process really never runs to

@@ -67,8 +67,8 @@ copy nobody else holds. A backend is free to use whatever wire format it likes.
 ## The generalisation
 
 This is the same shape as the `AcquireOptions.Protocol` escalation and belongs
-with it under adr-000: **wherever a Python default becomes a Go type decision,
-the default has to be made safe on purpose.** Python had one payload
-representation because a decoder there mutates the object it was handed; Go has
-two, and nothing chose between them. Choosing one, at the contract, is the fix —
-not a convention each caller is expected to follow.
+with it under adr-000: **wherever a default becomes a type decision,
+the default has to be made safe on purpose.** A language whose decoder mutates
+the object it was handed has one payload representation and no choice to make.
+Go has two, and nothing here had chosen between them. Choosing one, at the
+contract, is the fix — not a convention each caller is expected to follow.

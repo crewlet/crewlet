@@ -30,10 +30,10 @@ a delimiter-joined string.
 
 ### 1. The persistence seam is an interface with two certified backends
 
-Python had `ScheduledRunStoreProtocol`, a Postgres store, and a memory twin
-whose divergences were nobody's failing test — the twin's `purge` dropped the
-record and kept the claim key for a while, which is a permanently silent
-refusal.
+A persistence seam with a real backend and a memory twin fails in one specific
+way: the twin's divergences are nobody's failing test. A `purge` that drops the
+record and keeps the claim key is a permanently silent refusal, and only a
+shared suite catches it.
 
 Here there is `schedule.Ledger`, an in-memory twin, a SQL backend over
 `scheduled_runs`, and ONE contract suite (`scheduletest`) that both run. The
@@ -62,10 +62,10 @@ the collision `FireKey`'s struct shape avoided by never joining — a unit
 string. `FireClaimKey` escapes each component (and escapes the escape, or the
 collision just moves one level down), so the mapping stays injective.
 
-`Purge` takes an INSTANT rather than an age. Python's `purge(older_than_seconds)`
-made "drop everything" a negative number that the twin then clamped to zero, so
-the two backends' boundary behaviour differed for the one call a test actually
-makes.
+`Purge` takes an INSTANT rather than an age. An age-based `purge(older_than)`
+makes "drop everything" a negative number, which a twin is liable to clamp to
+zero — so the two backends' boundary behaviour differs for the one call a test
+actually makes.
 
 ### 2. The fleet duty is a claim per tick on `coord.WorkerResource("scheduler")`
 
@@ -86,16 +86,18 @@ duplicated work the duty exists to remove.
 
 ### 3. The cron horizon is sized to the grammar
 
-`cron.py` scanned 400 days before reporting "no next fire". The longest gap
+A 400-day scan before reporting "no next fire" is the natural choice and is too
+short. The longest gap
 between two fires of a valid 5-field expression is `0 0 29 2 *` across a
 century that is not a leap year: 2096-02-29 to 2104-02-29 is 2921 days,
 because 2100 is divisible by 100 and not by 400.
 
-So the Python evaluator reported "never" for a legitimate quadrennial schedule
-in three years out of four, and across the century gap in seven out of eight.
-Consequences: the dashboard drew no next run, and `_catchup_window` fell back
-to its minimum clamp instead of the schedule's period. `Horizon` here is 2925
-days, and `TestTheHorizonReachesTheRarestLegalFire` holds it there.
+A horizon shorter than that reports "never" for a legitimate quadrennial
+schedule in three years out of four, and across the century gap in seven out of
+eight — measured. The dashboard then draws no next run, and the catchup window
+falls back to its minimum clamp instead of the schedule's period. `Horizon`
+here is 2925 days, and `TestTheHorizonReachesTheRarestLegalFire` holds it
+there.
 
 The cost lands only on an expression that never matches at all (February 30th),
 because every reachable one terminates at its next fire. Measured:
@@ -192,6 +194,6 @@ Two seams are declared here and satisfied elsewhere:
   with (the catchup ceiling). Something above has to actually call it —
   `internal/maintenance` sweeps the node's own `scheduled_runs` history on a
   horizon clear of that
-  floor — because the Python failure mode this records is that nobody did:
-  `purge` existed on both stores and on the protocol, and NOTHING called it, so
-  the table grew for the life of the deployment.
+  floor — because the failure mode this records is that nobody does: `purge`
+  existing on both stores and on the seam, with NOTHING calling it, is how a
+  table grows for the life of a deployment.

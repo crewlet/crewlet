@@ -1,23 +1,21 @@
 # adr-401 — What travels implicitly, and what must be an argument
 
 Status: **Accepted**
-Related: `000-go-native-rewrite.md` (contextvars → context.Context is listed there
-as a translation; this is the decision that makes it precise), `402`, `404`
+Related: `000-invariants-that-outlive-refactors.md`, `402`, `404`
 
-## What it replaces
+## The temptation
 
-The Python engine carried five separate ambient channels through a turn:
-`work_key`, the `TurnPin`, the LLM scope, phase progress, and bound log fields.
-Each was a `contextvars.ContextVar`, and each was justified the same way: the
-code that needs it sits many frames below the code that knows it, behind
-functions with no other reason to carry it.
+A turn has at least five values that want to travel ambiently: `work_key`, the
+`TurnPin`, the LLM scope, phase progress, and bound log fields. Each makes the
+same case for itself — the code that needs it sits many frames below the code
+that knows it, behind functions with no other reason to carry it.
 
-That justification is real. It is also how a turn ends up with five invisible
-inputs, any of which can be missing, stale, or inherited by a goroutine nobody
-intended to give it to. Go makes the second half worse, not better: a
-`contextvars.Context` is copied into a task at creation, while a Go goroutine
-shares whatever `context.Context` it was handed, forever, including after the
-turn that created it has finished.
+That case is real, and taking it five times is how a turn ends up with five
+invisible inputs, any of which can be missing, stale, or inherited by a
+goroutine nobody intended to give it to. Go sharpens the last of those rather
+than softening it: a goroutine shares whatever `context.Context` it was handed,
+forever, including after the turn that created it has finished. There is no
+copy-on-spawn to limit the blast radius.
 
 ## The rule
 
@@ -105,7 +103,7 @@ turn state after the turn takes a copy of the values it needs.
 ## What this costs, honestly
 
 Two parameters on a few hundred functions. That is the price of a turn's inputs
-being visible in its signature, and it is worth paying: the Python engine's
-hardest bugs in this area — a sub-agent inheriting a parent's phase recorder, a
-turn reading a config field that changed underneath it — are both unrepresentable
+being visible in its signature, and it is worth paying: the two hardest bugs
+this area produces — a sub-agent inheriting a parent's phase recorder, a turn
+reading a config field that changed underneath it — are both unrepresentable
 here rather than merely unlikely.

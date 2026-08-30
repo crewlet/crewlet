@@ -8,9 +8,9 @@ compare-and-swap KV (JetStream KV in v1).
 
 ## 1. The tri-state is the return signature
 
-Python needed an exception (`LeaseError`) to distinguish "definitely not yours"
-from "cannot tell". Go's `(value, error)` already is that distinction, so the
-contract states it rather than inventing a type: `(lease, nil)` held,
+Distinguishing "definitely not yours" from "cannot tell" needs a third answer,
+and `(value, error)` already is one — so the contract states it rather than
+inventing an error type to carry it: `(lease, nil)` held,
 `(nil, nil)` definitively not held, `(nil, err)` unknown. **Any** non-nil error
 means unknown; no error is worth special-casing into a definite answer.
 
@@ -82,8 +82,8 @@ consequence changes from *silent mixed-protocol operation* to *a claim we
 immediately give back*. Combined with the gate's existing asymmetry (only newer
 nodes wait; older ones were never gated), that is a faithful degradation.
 
-This is a deliberate, recorded difference from the Python semantics — not an
-oversight. If it ever proves insufficient, the fix is a fleet-protocol key
+This is deliberate and recorded, not an oversight. If it ever proves
+insufficient, the fix is a fleet-protocol key
 maintained at presence registration, read as a single Get inside the claim path.
 
 ## 4. Everything else is a single-key CAS
@@ -166,7 +166,7 @@ history in an ageless bucket would grow without bound for rows nothing reads.
 
 ## 5. Fail-open vs fail-closed is per store, and deliberate
 
-Carried verbatim from the Python engine; a rewrite that "harmonises" these is
+Each polarity is chosen per contract, and a change that "harmonises" them is
 wrong. **Open** (unreachable ⇒ proceed): completion ledger in both directions
 (the safe answer is the pre-ledger one — run it), webhook dedupe (a duplicate is
 recoverable, a dropped delivery is lost work), rate valve, cooldown read.

@@ -7,17 +7,16 @@ reader of that file should not have to re-derive.
 
 ## 1. Three outcomes, one return value
 
-Python gives a handler two ordinary outcomes (return = ack, raise = nak) and smuggles
-the third in as a control-flow exception (`DeferDelivery`). Go makes all three
-explicit:
+A handler has three outcomes, not two, and the third must not be smuggled in as a
+control-flow signal beside the other two. All three are explicit values:
 
 ```go
 type Result struct { Outcome Outcome; Reason string; Err error }
 func Ack() Result; func Nak(err error) Result; func Defer(reason string) Result
 ```
 
-`Ack` is the zero value, so a handler that returns `queue.Result{}` acknowledges —
-the same default Python gets from a bare `return`. A handler that panics is recovered
+`Ack` is the zero value, so a handler that returns `queue.Result{}` acknowledges:
+the quiet path is the safe one. A handler that panics is recovered
 by the backend and treated as `Nak`, preserving "an unexpected failure redelivers".
 
 **Defer means: leave it unacked and stop consuming.** Not ack (that claims work this
@@ -28,9 +27,9 @@ while its prefetched siblings replay from the head, reordering the conversation.
 
 ## 2. Live-mutable batch options, made safe
 
-Python's `BatchOptions` is a deliberately mutable dataclass the consume loop re-reads
-every cycle, so a hot config reload changes linger/max-batch with no re-subscription.
-Go keeps the behaviour and removes the data race: `BatchOptions` carries a mutex, is
+`BatchOptions` is deliberately mutable and the consume loop re-reads it every cycle,
+so a hot config reload changes linger/max-batch with no re-subscription. That is a
+data race unless it is guarded, and it is: `BatchOptions` carries a mutex, is
 read through `EffectiveLinger()` / `EffectiveMaxBatch()` (which apply the clamping
 rules once, here, not per backend), and is written through `Set`. The
 `MaxLingerSeconds = 60` ceiling stays in this package because the linger counts
@@ -39,8 +38,8 @@ config validation.
 
 ## 3. What every backend must provide
 
-The interface is the same shape as the Python protocol, with the four attachment
-verbs kept under their own names because each is differently destructive:
+The four attachment verbs each keep their own name, because each is differently
+destructive:
 
 - `Quiesce` — stop taking new work, stay attached, leave fetched work unacked.
 - `Unquiesce` — its reversible inverse. Required, not optional: a node whose lease
@@ -94,9 +93,9 @@ callers must treat as "not routable" — publishing to `crewlet.agent..inbox` is
 topic nobody reads. A test greps the Go tree and fails the build on any hand-built
 `crewlet.agent.` string outside this package.
 
-## 6. Deliberately not ported
+## 6. No bridging layer
 
-The asyncio-over-C++ bridging that is ~30% of `pulsar.py` (per-consumer thread
-executors, `to_thread` wrapping every create/close, `call_soon_threadsafe` future
-marshalling) has no Go equivalent and disappears. Go goroutines are the concurrency
-model the Python code was emulating.
+Nothing here wraps a blocking client call to keep a scheduler free. A goroutine
+blocking on I/O costs nothing, so the thread-pool marshalling that a
+single-loop runtime needs around a synchronous broker client has no equivalent
+and no place: the backend calls the client directly.

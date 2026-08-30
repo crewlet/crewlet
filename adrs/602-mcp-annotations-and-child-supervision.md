@@ -42,7 +42,7 @@ Crewlet's whole tool-capability model is tri-state, and
 
 So reading the SDK struct naively flips the guard for **every under-annotated
 tool in the company** — which is most of them, and precisely the population the
-Python engine deliberately admits. A guard that denies everything it was told
+guard deliberately admits. A guard that denies everything it was told
 nothing about is not conservative, it is broken: it would cut sub-agents off
 from the tools their parent legitimately holds.
 
@@ -76,8 +76,8 @@ nothing.
 
 If the probe has no record for a tool the server returned — the wire shape
 moved under it — `annotationsFromSDK` trusts only an explicit `true` and
-reports everything else `Unknown`. That degrades to the PYTHON engine's
-behaviour rather than to a new one.
+reports everything else `Unknown`. That degrades to the documented tri-state
+behaviour rather than inventing a fourth answer under failure.
 
 `TestSDKAnnotationsCannotHoldTheTriState` is the reason probe: it fails loudly
 if the SDK ever starts carrying absence, so the next reader is told the
@@ -133,10 +133,10 @@ force-closes the read end as a last resort so no goroutine outlives the server.
 
 - **Stop and Restart RETURN the catalogue diff.** The doomed tool names must be
   captured before anything stops, because stopping drops the bridge's own
-  index. In Python that ordering was the caller's job to remember, in two
-  places, and the one that forgot left a removed server's tools in every later
-  turn's catalogue. Making the bridge compute the diff means a caller cannot
-  ask too late and cannot forget to ask.
-- **Add REFUSES a name it already runs.** The Python bridge indexed the new
-  client over the old one, leaking the first subprocess for the life of the
-  engine. Replacing a server is `Restart`, which says so in its name.
+  index. Left to the caller, that ordering has to be remembered in two places,
+  and the one that forgets leaves a removed server's tools in every later turn's
+  catalogue. Making the bridge compute the diff means a caller cannot ask too
+  late and cannot forget to ask.
+- **Add REFUSES a name it already runs.** Indexing the new client over the old
+  one leaks the first subprocess for the life of the engine. Replacing a server
+  is `Restart`, which says so in its name.

@@ -12,14 +12,6 @@ the PM tool's own UI, and every retry that arrives out of order leaves the
 engine confidently wrong about work a person can see is finished. Keeping
 nothing means there is nothing to be stale.
 
-> **Porting note.** The previous Python engine carried an `ExecutionTracker` —
-> a passive in-memory map of agent ↔ issue plus a dependency graph, with
-> `track` / `untrack` / `add_dependency` / `dependencies_met`. It has no
-> counterpart here and this page documented it long after it stopped existing.
-> Nothing read it but the turn context, and nothing in this engine needs it:
-> the routed agent is named by the webhook, and "is this unblocked" is a
-> question the PM tool already answers. If dependency-aware scheduling is
-> wanted, it is a new feature with a new design, not a restoration.
 
 ---
 

@@ -43,7 +43,7 @@ present and the rest is announced surface not yet reachable from Go.
    functions the engine is on Turso for — see adr-003 for the accounting.
 
 2. **No `ON CONFLICT` against a partial index — use NULL for "unconstrained".**
-   The Python design used `UNIQUE(agent_handle, work_key) WHERE work_key <> ''`
+   The natural spelling is `UNIQUE(agent_handle, work_key) WHERE work_key <> ''`,
    because an empty work key means "legitimately unconstrained". SQL unique indexes
    treat NULLs as distinct, so a **plain** `UNIQUE(agent_handle, work_key)` with
    `work_key = NULL` for the unconstrained case gives identical semantics with a

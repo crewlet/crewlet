@@ -48,9 +48,8 @@ turn the first into the second.
 ## Four collections are addressable on their own
 
 `PUT /config/{roles|units|llm-providers|mcp-servers}/{id}`, and a
-`config_entities` query for the read half. Not because CRUD is nice to have —
-Python had a much larger version of this and none of it was ported — but
-because the whole-document write makes every edit a company-wide one. A
+`config_entities` query for the read half. Not because CRUD is nice to have,
+but because the whole-document write makes every edit a company-wide one. A
 founder changing one seat's goal sends back a document carrying every other
 seat, every provider and every integration, and a concurrent edit anywhere in
 it is theirs to lose. Editing one entity narrows what a write CLAIMS to have
@@ -96,10 +95,12 @@ passed. What links them now is a sweep that reads the rooms' own source for
 
 The four collections earn routes because their members have identities. Every
 other section — the turn engine, learning, budgets, the notification knobs, the
-integration blocks, mission and vision — is a singleton object, and Python
-answered that with a route apiece: `identity`, `embeddings`, `turn-engine`,
-`learning`, `budgets`, `integrations/{kind}`. None were ported, and the
-decision here is that none will be.
+integration blocks, mission and vision — is a singleton object. The tempting
+answer is a route apiece: `identity`, `embeddings`, `turn-engine`, `learning`,
+`budgets`, `integrations/{kind}`. The decision here is that none of those
+exist. A singleton has no id to address and no concurrent-edit hazard to
+narrow, so a route for it buys nothing the whole-document write does not
+already give.
 
 `PATCH /config` is the general narrower form. It is an RFC 7396 merge patch
 whose shape IS the shape of the document, so one route covers every section and
@@ -221,7 +222,7 @@ be a cost with nothing on the other side.
 
 ## The masked document must be able to come back
 
-Python's answer was to document that the read is not round-trippable and point
+The cheap answer is to document that the read is not round-trippable and point
 at a CLI export. A document that cannot be sent back is a document nobody can
 edit through the API at all — and the failure mode is severe: fetch the config,
 change one line, send it back, and every credential in the company becomes the

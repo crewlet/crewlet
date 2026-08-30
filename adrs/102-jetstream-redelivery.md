@@ -20,8 +20,8 @@ Go 1.27:
 
 ## Two Pulsar properties do not carry over
 
-The Python design rests on two measured Pulsar behaviours that JetStream does
-not share:
+Two measured Pulsar behaviours do not carry to JetStream, and the queue
+contract must not assume either:
 
 1. **Free handoff.** On Pulsar a graceful consumer close returns unacked
    messages in ~9 ms at `redeliveryCount` 0 — a seat handoff costs nothing
@@ -32,10 +32,10 @@ not share:
 
 2. **Order-preserving redelivery.** Pulsar replays unacked messages from the
    head, ahead of newer arrivals. JetStream returns them at the **back**.
-   The Python code refuses to republish a deferred message precisely because
-   that "sends the event to the topic tail while its prefetched siblings replay
-   from the head, reordering the conversation" — and JetStream's *native*
-   redelivery does exactly that.
+   adr-101 §1 refuses to republish a deferred message precisely because that
+   sends the event to the topic tail while its prefetched siblings replay from
+   the head, reordering the conversation — and JetStream's *native* redelivery
+   does exactly that.
 
 ## Decisions
 
@@ -49,9 +49,9 @@ delivery count, which decision 2 absorbs.
 now spend it. 25 leaves ample headroom: a message is normally handled within
 seconds, seat migrations are rate-limited to 4 claims / 2 releases per 5 s
 sweep, and a message would have to be in flight across 25 of them to exhaust
-the budget — a fleet thrashing that badly has a louder problem. The Python
-code's own honest caveat still stands and is not solved by any cap: a fast
-crash-loop is indistinguishable from poison.
+the budget — a fleet thrashing that badly has a louder problem. The honest
+caveat stands and is not solved by any cap: a fast crash-loop is
+indistinguishable from poison.
 
 **3. Within-conversation order comes from event timestamps, not from the
 broker.** This is the important adaptation, and it makes the engine *more*
@@ -75,9 +75,9 @@ wrapper bug cannot produce an infinite loop.
 
 ## What this deletes
 
-The entire Pulsar admin-REST subscription-lifecycle workaround
-(`src/crewlet/queue/admin.py`, ~218 lines plus its deployment requirement of a
-reachable admin URL) has no JetStream equivalent: creating a durable consumer
+The entire Pulsar admin-REST subscription-lifecycle workaround — a few hundred
+lines, plus its deployment requirement of a reachable admin URL — has no
+JetStream equivalent: creating a durable consumer
 without attaching is a normal API call that takes 1.7 ms. The
 "joining a Shared subscription steals a peer's traffic" hazard — measured at
 12 of 20 messages on Pulsar — does not exist here.

@@ -6,12 +6,13 @@ Applies to: `internal/logging`
 
 ## The question that keeps coming back
 
-The engine's logging looks like Python's `logging` module — `logging.Get("task.engine")`
-reads exactly like `logging.getLogger(__name__)`, and the component names are dotted
-paths. That resemblance is deliberate and it is **only** in the naming: it exists so an
-operator's runbooks and log queries survive the rewrite from the Python engine, which
-is stated at `Get`'s doc comment. Underneath it is `log/slog` from the standard
-library, which is as native as Go logging gets.
+The API looks borrowed: `logging.Get("task.engine")` reads like the
+get-a-logger-by-dotted-name call that most languages' logging libraries expose,
+and the component names are dotted paths. That resemblance is deliberate and it
+is **only** in the naming — it exists so an operator's runbooks and log queries
+keep working against a component vocabulary that does not move, which is stated
+at `Get`'s doc comment. Underneath it is `log/slog` from the standard library,
+which is as native as Go logging gets.
 
 The resemblance invites a second question, and it arrives with a link to
 `uber-go/zap` attached: *shouldn't this be a real logging library?* Almost always the
