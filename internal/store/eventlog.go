@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -65,19 +64,12 @@ const (
 	// defaultListLimit is the page size when a caller names none.
 	defaultListLimit = 50
 
-	// relatedFetchMultiple and relatedFetchCap bound the over-fetch the
-	// RelatedAgent filter needs: it matches across the actor column plus
-	// several keys inside the tags blob, which no index covers, so it runs
-	// after the query and the query must return rows for it to match in.
-	//
-	// A heuristic, and safe to be one, because it cannot make an answer
-	// WRONG — only short. That surface's termination condition is a
-	// zero-row page rather than a short one (see ListQuery.RelatedAgent),
-	// so under-fetching costs an extra round trip and nothing else. The cap
-	// is what keeps a broad filter from pulling a whole page of history to
-	// discard it.
-	relatedFetchMultiple = 5
-	relatedFetchCap      = 500
+	// THERE IS NO OVER-FETCH ANY MORE. The RelatedAgent filter used to pull
+	// five pages of raw history per page it wanted, capped at 500 rows, and
+	// sift them in Go — because the thing it matched on lived in a JSON
+	// blob no index covers. It is a join against an indexed party table
+	// now (schema/0016), so the query returns the matches themselves and
+	// there is nothing to sift.
 )
 
 // EventRecord is one row of the audit log.
@@ -126,6 +118,37 @@ type EventRecord struct {
 	// back as not-failed — a real discontinuity at that point in the
 	// timeline, not a bug to paper over.
 	Failed bool `json:"failed"`
+
+	// Spend is what one LLM call cost, present only on a phase completion.
+	//
+	// Promoted out of the payload and into columns because the rollup that
+	// reads it is an AGGREGATION: it wants nine small values from every
+	// row in a window, and reaching them through the payload meant hauling
+	// each phase's whole prompt and response across the driver to decode
+	// them in Go. See schema/0015.
+	Spend *Spend `json:"spend,omitempty"`
+}
+
+// Spend is one LLM call's identity and its token cost.
+//
+// A pointer on [EventRecord] rather than flat fields: it is set on one event
+// type out of dozens, and flattening it would put nine always-empty fields on
+// every row the dashboard renders.
+type Spend struct {
+	// Phase is which phase ran; HostPhase is the phase a nested call ran
+	// under, and Worker names the auxiliary worker when Phase is
+	// "auxiliary" — which is why the worker rollup keys on the pair.
+	Phase     string `json:"phase,omitempty"`
+	HostPhase string `json:"host_phase,omitempty"`
+	Worker    string `json:"worker,omitempty"`
+	Model     string `json:"model,omitempty"`
+
+	TurnID    string `json:"turn_id,omitempty"`
+	Iteration int    `json:"iteration,omitempty"`
+
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
+	TotalTokens  int `json:"total_tokens,omitempty"`
 }
 
 // Cursor is an exclusive keyset position: the reader holds this row and wants
@@ -175,8 +198,11 @@ INSERT INTO crewlet_events (
 	event_time, event_id, event_type, source, category,
 	trace_id, span_id, parent_span_id,
 	agent_id, agent_role, task_id, channel_id, sender,
-	summary, actor, tags, payload
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	summary, actor, tags, payload,
+	phase, host_phase, worker, model, turn_id, iteration,
+	input_tokens, output_tokens, total_tokens
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+	?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -213,22 +239,110 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	if len(payload) == 0 {
 		payload = json.RawMessage("{}")
 	}
-	if _, err := l.db.sql.ExecContext(ctx, eventInsertSQL,
-		EncodeTime(rec.Time), rec.ID, rec.Type, rec.Source, rec.Category,
-		rec.TraceID, rec.SpanID, rec.ParentSpanID,
-		tags["agent_id"], tags["agent_role"], tags["task_id"],
-		tags["channel_id"], tags["sender"],
-		rec.Summary, rec.Actor, string(tagJSON), string(payload),
-	); err != nil {
+	// DERIVED HERE WHEN THE CALLER DID NOT SET IT, rather than trusted to
+	// have been set. [RecordFor] fills it on the one production path, so
+	// this normally costs nothing — but a caller that builds a record by
+	// hand and sets only the payload would otherwise write a phase
+	// completion whose spend columns are all zero, and a rollup reading
+	// them would report a company that spent nothing. Silence is the one
+	// failure this column promotion exists to remove, so it must not be
+	// reintroduced by the write path.
+	//
+	// The zero value writes the same empty strings and zeroes the column
+	// defaults would, so every non-phase row is unaffected.
+	var spend Spend
+	switch {
+	case rec.Spend != nil:
+		spend = *rec.Spend
+	default:
+		if derived := extractSpend(rec.Type, payload); derived != nil {
+			spend = *derived
+		}
+	}
+	// IN ONE TRANSACTION with its party rows, because the party table is an
+	// INDEX of this one and an index that can be missing entries is not an
+	// index: an event stored without its parties is invisible to the filter
+	// that reads them, permanently and with nothing to say so. The cost is
+	// a begin and a commit on a path that runs a handful of times a second.
+	if err := l.db.Tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, eventInsertSQL,
+			EncodeTime(rec.Time), rec.ID, rec.Type, rec.Source, rec.Category,
+			rec.TraceID, rec.SpanID, rec.ParentSpanID,
+			tags["agent_id"], tags["agent_role"], tags["task_id"],
+			tags["channel_id"], tags["sender"],
+			rec.Summary, rec.Actor, string(tagJSON), string(payload),
+			spend.Phase, spend.HostPhase, spend.Worker, spend.Model,
+			spend.TurnID, spend.Iteration,
+			spend.InputTokens, spend.OutputTokens, spend.TotalTokens,
+		); err != nil {
+			return err
+		}
+		for _, party := range partiesOf(rec.Actor, tags) {
+			if _, err := tx.ExecContext(ctx, partyInsertSQL,
+				party, EncodeTime(rec.Time), rec.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		return fmt.Errorf("store: append event %s: %w", rec.ID, err)
 	}
 	return nil
+}
+
+// partyInsertSQL records one (party, event) pair. Idempotent for the same
+// reason the event insert is: a publish retry replays the whole append.
+const partyInsertSQL = `
+INSERT INTO crewlet_event_parties (party, event_time, event_id) VALUES (?, ?, ?)
+ON CONFLICT (party, event_time, event_id) DO NOTHING`
+
+// partiesOf names every agent an event involves, deduplicated.
+//
+// THE ACTOR AND THE FOUR TAGS, and the set is exactly what the RelatedAgent
+// filter used to test in Go — moved to write time so the read can be an index
+// seek. Deduplicated here rather than left to the conflict clause, because an
+// event whose actor is also its sender is the common case, not the rare one.
+func partiesOf(actor string, tags map[string]string) []string {
+	seen := make(map[string]struct{}, len(agentTagKeys)+1)
+	var out []string
+	add := func(name string) {
+		if name == "" {
+			return
+		}
+		if _, dup := seen[name]; dup {
+			return
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	add(actor)
+	for _, key := range agentTagKeys {
+		add(tags[key])
+	}
+	return out
 }
 
 // listColumns is every column a listing reads. `payload` is absent
 // deliberately — see EventRecord.Payload.
 const listColumns = `event_time, event_id, event_type, source, category,
 	summary, actor, trace_id, span_id, parent_span_id, tags`
+
+// qualifiedListColumns names the same columns on the log's own table.
+//
+// Needed only when the query joins: every one of these names exists on
+// crewlet_events alone, except event_time and event_id, which the party table
+// carries too — so an unqualified select over the join is ambiguous and the
+// engine refuses it.
+func qualifiedListColumns(joined bool) string {
+	if !joined {
+		return listColumns
+	}
+	parts := strings.Split(strings.ReplaceAll(listColumns, "\n\t", ""), ", ")
+	for i, col := range parts {
+		parts[i] = "crewlet_events." + strings.TrimSpace(col)
+	}
+	return strings.Join(parts, ", ")
+}
 
 // List returns a page of events, newest first, ordered by (time, id)
 // descending.
@@ -238,11 +352,29 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 		limit = defaultListLimit
 	}
 
-	where := []string{"event_time >= ?"}
+	// The RelatedAgent filter is a JOIN rather than another WHERE clause,
+	// because "involves this agent" is one fact spread over five places on
+	// the event, and the party table is where it was normalised to. The
+	// join is two index seeks — the party's covering index, then the log's
+	// primary key — so the work scales with the number of MATCHES rather
+	// than with the size of the log. See schema/0016.
+	joined := q.RelatedAgent != ""
+	// EVERY column of the log is qualified when joined, not just the two
+	// that collide. Qualifying only `event_time` and `event_id` — the pair
+	// the party table also carries — would work today and break the day
+	// that table grows a column sharing a name with one of these.
+	col := func(name string) string {
+		if joined {
+			return "crewlet_events." + name
+		}
+		return name
+	}
+
+	where := []string{col("event_time") + " >= ?"}
 	args := []any{EncodeTime(now().Add(-EventHistory))}
-	addEq := func(col, val string) {
+	addEq := func(name, val string) {
 		if val != "" {
-			where = append(where, col+" = ?")
+			where = append(where, col(name)+" = ?")
 			args = append(args, val)
 		}
 	}
@@ -252,40 +384,108 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 	addEq("trace_id", q.TraceID)
 	addEq("actor", q.Actor)
 
+	from := "crewlet_events"
+	if joined {
+		from = `crewlet_events JOIN crewlet_event_parties
+			ON crewlet_event_parties.event_time = crewlet_events.event_time
+			AND crewlet_event_parties.event_id = crewlet_events.event_id`
+		where = append(where, "crewlet_event_parties.party = ?")
+		args = append(args, q.RelatedAgent)
+	}
+
 	if q.Before != nil {
 		// Keyset, not OFFSET: (event_time, event_id) is the primary key,
 		// so it is unique and already in index order — no sort node, and
 		// no drift as new rows land at the head while a reader pages
 		// backwards.
 		if q.Before.ID != "" {
-			where = append(where, "(event_time, event_id) < (?, ?)")
+			where = append(where,
+				"("+col("event_time")+", "+col("event_id")+") < (?, ?)")
 			args = append(args, EncodeTime(q.Before.Time), q.Before.ID)
 		} else {
-			where = append(where, "event_time < ?")
+			where = append(where, col("event_time")+" < ?")
 			args = append(args, EncodeTime(q.Before.Time))
 		}
 	}
-
-	fetch := limit
-	if q.RelatedAgent != "" {
-		fetch = min(limit*relatedFetchMultiple, relatedFetchCap)
-	}
-	args = append(args, fetch)
+	args = append(args, limit)
 
 	// Every fragment joined into `where` is a compile-time constant; each
 	// one's value travels as a bound parameter in args.
-	query := "SELECT " + listColumns + " FROM crewlet_events WHERE " +
-		strings.Join(where, " AND ") +
-		" ORDER BY event_time DESC, event_id DESC LIMIT ?"
+	query := "SELECT " + qualifiedListColumns(joined) +
+		" FROM " + from + " WHERE " + strings.Join(where, " AND ") +
+		" ORDER BY " + col("event_time") + " DESC, " + col("event_id") + " DESC LIMIT ?"
 
 	out, err := l.scanRows(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	if q.RelatedAgent != "" {
-		out = collectRelated(out, q.RelatedAgent, limit)
+	if joined {
+		siblings, err := l.traceSiblings(ctx, out, limit)
+		if err != nil {
+			return nil, err
+		}
+		out = mergeRelated(out, siblings, limit)
 	}
 	return out, nil
+}
+
+// traceSiblings fetches the other events in the traces a page of direct
+// matches belongs to.
+//
+// A SECOND QUERY rather than a wider first one, and this is the half that
+// makes the filter mean something: an agent's work is CAUSED by something — a
+// webhook, a notification, a schedule tick — and that trigger names the agent
+// nowhere. Pulling in everything sharing a trace with a direct match is what
+// puts the cause next to the effect.
+//
+// It reads through the trace index, so it costs one seek per trace on the
+// page. The old shape found siblings only among the rows it happened to have
+// over-fetched, which meant a cause older than that window was simply missing.
+func (l *EventLog) traceSiblings(ctx context.Context, direct []EventRecord, limit int) ([]EventRecord, error) {
+	traces := make([]any, 0, len(direct))
+	seen := make(map[string]struct{}, len(direct))
+	for _, rec := range direct {
+		if rec.TraceID == "" {
+			continue
+		}
+		if _, dup := seen[rec.TraceID]; dup {
+			continue
+		}
+		seen[rec.TraceID] = struct{}{}
+		traces = append(traces, rec.TraceID)
+	}
+	if len(traces) == 0 {
+		return nil, nil
+	}
+	query := "SELECT " + listColumns + " FROM crewlet_events WHERE trace_id IN (?" +
+		strings.Repeat(",?", len(traces)-1) +
+		") ORDER BY event_time DESC, event_id DESC LIMIT ?"
+	return l.scanRows(ctx, query, append(traces, limit)...)
+}
+
+// mergeRelated folds the siblings into the direct matches, newest first.
+func mergeRelated(direct, siblings []EventRecord, limit int) []EventRecord {
+	seen := make(map[string]struct{}, len(direct)+len(siblings))
+	out := make([]EventRecord, 0, len(direct)+len(siblings))
+	for _, group := range [][]EventRecord{direct, siblings} {
+		for _, rec := range group {
+			if _, dup := seen[rec.ID]; dup {
+				continue
+			}
+			seen[rec.ID] = struct{}{}
+			out = append(out, rec)
+		}
+	}
+	// The sibling pass appends in its own scan order, so the merged list is
+	// no longer the newest-first order each query guaranteed. Same
+	// (time, id) tiebreak as the queries, for the same reason.
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].Time.Equal(out[j].Time) {
+			return out[i].Time.After(out[j].Time)
+		}
+		return out[i].ID > out[j].ID
+	})
+	return truncate(out, limit)
 }
 
 // Trace returns every event in a trace, OLDEST first, because a trace is read
@@ -344,6 +544,19 @@ func (l *EventLog) ByID(ctx context.Context, id string) (EventRecord, error) {
 // one batch and the loop runs once.
 func (l *EventLog) Purge(ctx context.Context) (int64, error) {
 	cutoff := EncodeTime(now().Add(-EventRetention))
+	// THE PARTY INDEX GOES FIRST, and on its own horizon rather than per
+	// batch: it indexes this table, so a row of it that outlives its event
+	// is a primary-key seek that finds nothing — and left unswept it would
+	// grow for the life of the deployment while the thing it points at is
+	// swept every tick. Deleted ahead of the events so the window where a
+	// party row has no event is the short one, rather than the reverse,
+	// where an event would briefly be invisible to the filter that reads
+	// them. See schema/0016.
+	if _, err := l.db.sql.ExecContext(ctx,
+		"DELETE FROM crewlet_event_parties WHERE event_time < ?", cutoff,
+	); err != nil {
+		return 0, fmt.Errorf("store: purge event parties: %w", err)
+	}
 	var total int64
 	for {
 		res, err := l.db.sql.ExecContext(ctx,
@@ -409,64 +622,6 @@ func finishRecord(rec *EventRecord, micros int64, tagJSON string) {
 // agentTagKeys are the tag keys that mean "this event involves that agent".
 var agentTagKeys = []string{"agent_role", "target", "recipient", "sender"}
 
-// relatesToAgent reports whether an event is DIRECTLY about the named agent.
-func relatesToAgent(rec EventRecord, name string) bool {
-	if rec.Actor == name {
-		return true
-	}
-	return slices.ContainsFunc(agentTagKeys, func(k string) bool {
-		return rec.Tags[k] == name
-	})
-}
-
-// collectRelated returns the events related to name, plus their trace
-// siblings.
-//
-// Two passes, because the second is the point: an agent's work is caused by
-// something — a webhook, a notification, a schedule tick — and that trigger
-// carries the agent's name nowhere. Pulling in everything sharing a trace with
-// a direct match is what puts the cause next to the effect.
-func collectRelated(all []EventRecord, name string, limit int) []EventRecord {
-	var direct []EventRecord
-	traces := map[string]struct{}{}
-	for _, rec := range all {
-		if relatesToAgent(rec, name) {
-			direct = append(direct, rec)
-			if rec.TraceID != "" {
-				traces[rec.TraceID] = struct{}{}
-			}
-		}
-	}
-	if len(traces) == 0 {
-		return truncate(direct, limit)
-	}
-
-	seen := make(map[string]struct{}, len(direct))
-	for _, rec := range direct {
-		seen[rec.ID] = struct{}{}
-	}
-	out := direct
-	for _, rec := range all {
-		if _, dup := seen[rec.ID]; dup {
-			continue
-		}
-		if _, ok := traces[rec.TraceID]; ok {
-			out = append(out, rec)
-			seen[rec.ID] = struct{}{}
-		}
-	}
-	// Re-sort: the sibling pass appends in scan order, so the merged list
-	// is no longer the newest-first order the query guaranteed. Same
-	// (time, id) tiebreak as the query, for the same reason.
-	sort.SliceStable(out, func(i, j int) bool {
-		if !out[i].Time.Equal(out[j].Time) {
-			return out[i].Time.After(out[j].Time)
-		}
-		return out[i].ID > out[j].ID
-	})
-	return truncate(out, limit)
-}
-
 func truncate(recs []EventRecord, limit int) []EventRecord {
 	if limit > 0 && len(recs) > limit {
 		return recs[:limit]
@@ -500,20 +655,24 @@ const (
 	// scan of the whole table look like a supported query.
 	MaxPhaseTokenDays = 30
 
-	// phaseTokenLimit bounds the rows one rollup folds.
+	// THERE IS NO ROW CAP ON THE ROLLUP, and its absence is the point.
 	//
-	// A busy org emits three phase completions per turn; at a thousand
-	// turns a day a 30-day window is ninety thousand rows, and folding
-	// them is a second of CPU and a hundred megabytes on a request a
-	// dashboard makes on every window change. Twenty thousand covers a
-	// week of heavy use, and the rows are taken NEWEST FIRST so the cap
-	// truncates the far end of the window rather than the recent end a
-	// reader is actually looking at.
-	phaseTokenLimit = 20000
+	// There used to be one — twenty thousand rows, newest first — because
+	// each row carried the phase's whole prompt and response and folding a
+	// month of them was a second of CPU and hundreds of megabytes. It also
+	// meant the answer to "what did this company spend" was SILENTLY SHORT
+	// for any org past that many phase completions in the window, which
+	// this file's own arithmetic put at a third of a busy month.
+	//
+	// The numbers are columns now (schema/0015), so a row is nine narrow
+	// values instead of a document, and the whole window folds. A cap here
+	// would only reintroduce an undercount that looks like an underspend.
 )
 
 const phaseTokenSQL = `
-SELECT event_time, event_id, agent_id, agent_role, payload
+SELECT event_time, event_id, agent_id, agent_role,
+       phase, host_phase, worker, model, turn_id, iteration,
+       input_tokens, output_tokens, total_tokens
 FROM crewlet_events
 WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 
@@ -607,9 +766,9 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 		sql += " AND agent_role = ?"
 		args = append(args, q.AgentRole)
 	}
-	// Newest first, so the cap drops the far end of the window.
-	sql += " ORDER BY event_time DESC, event_id DESC LIMIT ?"
-	args = append(args, phaseTokenLimit)
+	// Newest first, which is the order the breakdown renders in. No LIMIT:
+	// see the note where the cap used to be.
+	sql += " ORDER BY event_time DESC, event_id DESC"
 
 	rows, err := l.db.sql.QueryContext(ctx, sql, args...)
 	if err != nil {
@@ -620,39 +779,21 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 	var out []tokens.Record
 	for rows.Next() {
 		var (
-			at             int64
-			id, aid, arole string
-			payload        string
+			at  int64
+			rec tokens.Record
 		)
-		if err := rows.Scan(&at, &id, &aid, &arole, &payload); err != nil {
+		if err := rows.Scan(&at, &rec.EventID, &rec.AgentID, &rec.AgentRole,
+			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
+			&rec.TurnID, &rec.Iteration,
+			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
+		); err != nil {
 			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
 		}
-		rec := tokens.Record{
-			EventID: id, AgentID: aid, AgentRole: arole,
-			// RFC3339Nano, because the rollup's watermark and its
-			// per-turn bounds are LEXICOGRAPHIC comparisons over this
-			// string — the same encoding the live window carries, or the
-			// two orderings would disagree about which record is newer.
-			Timestamp: DecodeTime(at).Format(time.RFC3339Nano),
-		}
-		var body map[string]any
-		if json.Unmarshal([]byte(payload), &body) == nil {
-			rec.Phase = payloadString(body, "phase")
-			rec.HostPhase = payloadString(body, "host_phase")
-			rec.Worker = payloadString(body, "worker")
-			rec.Model = payloadString(body, "model")
-			if rec.Model == "" {
-				rec.Model = payloadString(body, "provider_key")
-			}
-			rec.TurnID = payloadString(body, "turn_id")
-			rec.Iteration = payloadInt(body, "iteration")
-			rec.InputTokens = payloadInt(body, "input_tokens")
-			rec.OutputTokens = payloadInt(body, "output_tokens")
-			rec.TotalTokens = payloadInt(body, "total_tokens")
-		}
-		// A row whose payload would not decode still counts as a call
-		// with zero tokens rather than being dropped: the call happened,
-		// and losing it understates the spend it is there to report.
+		// RFC3339Nano, because the rollup's watermark and its per-turn
+		// bounds are LEXICOGRAPHIC comparisons over this string — the
+		// same encoding the live window carries, or the two orderings
+		// would disagree about which record is newer.
+		rec.Timestamp = DecodeTime(at).Format(time.RFC3339Nano)
 		out = append(out, rec)
 	}
 	if err := rows.Err(); err != nil {

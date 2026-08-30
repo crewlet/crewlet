@@ -1164,7 +1164,7 @@ auxiliary worker, agent, and turn.
 
 | Name | Default | Description |
 |------|---------|-------------|
-| `since_days` | `7` | Window in days. Clamped to `[1, 30]` — the event store keeps 30 days. |
+| `since_days` | `7` | Window in days. Clamped to `[1, 30]` — the event store keeps 30 days. The **whole** window is folded: there is no row cap, so the number is the window's real total rather than a prefix of it. |
 | `agent_role` | (none) | Restrict to one role. Used by the agent detail page's per-phase summary. |
 | `recent_turns` | `50` | Cap on the per-turn list. |
 
