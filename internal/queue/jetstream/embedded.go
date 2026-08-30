@@ -178,6 +178,12 @@ func startEmbedded(cfg Config) (*embeddedServer, error) {
 		removeScratch(scratch)
 		return nil, fmt.Errorf("configure embedded server: %w", err)
 	}
+	// BEFORE Start, or the boot is the one stretch that logs nowhere —
+	// which is where stream recovery and a failed store directory report.
+	// Trace is never enabled: it is a line per protocol message, and the
+	// engine publishes every event through here.
+	natsLog, natsDebug := newNATSLogger()
+	ns.SetLoggerV2(natsLog, natsDebug, false, false)
 	go ns.Start()
 	if !ns.ReadyForConnections(readyTimeout) {
 		ns.Shutdown()
@@ -414,7 +420,7 @@ func (q *Queue) SubscribeStream(ctx context.Context, pattern string, h queue.Str
 func (q *Queue) runStreamHandler(ctx context.Context, h queue.StreamHandler, subject string, ev *events.Event) {
 	defer func() {
 		if r := recover(); r != nil {
-			q.log.Error("stream_handler_panicked", "subject", subject, "panic", r)
+			queue.LogStreamHandlerPanic(q.log, subject, ev, r)
 		}
 	}()
 	h(ctx, subject, ev)

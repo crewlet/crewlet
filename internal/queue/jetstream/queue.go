@@ -443,7 +443,7 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 func (q *Queue) callListener(ctx context.Context, l queue.PublishListener, topic string, ev *events.Event) {
 	defer func() {
 		if r := recover(); r != nil {
-			q.log.Error("publish_listener_panicked", "topic", topic, "panic", r)
+			queue.LogListenerPanic(q.log, topic, ev, r)
 		}
 	}()
 	l(ctx, topic, ev)

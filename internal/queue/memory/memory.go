@@ -519,7 +519,7 @@ func notifyListener(ctx context.Context, l queue.PublishListener, topic string, 
 	// the event, not the observer.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error("publish_listener_failed", "topic", topic, "error", r)
+			queue.LogListenerPanic(log, topic, ev, r)
 		}
 	}()
 	l(ctx, topic, ev)
@@ -857,8 +857,7 @@ func deliverStream(ctx context.Context, s *streamSub, topic string, ev *events.E
 	// with it, nor stop the next subscriber being served.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error("stream_handler_failed", "topic", topic,
-				"topic_pattern", s.pattern, "error", r)
+			queue.LogStreamHandlerPanic(log, topic, ev, r)
 		}
 	}()
 	s.handler(ctx, topic, ev)

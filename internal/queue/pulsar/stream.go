@@ -188,7 +188,7 @@ func (q *Queue) runStream(ctx context.Context, s *streamSub, pattern string, h q
 func (q *Queue) runStreamHandler(ctx context.Context, h queue.StreamHandler, subject string, ev *events.Event) {
 	defer func() {
 		if r := recover(); r != nil {
-			q.log.Error("stream_handler_panicked", "subject", subject, "panic", r)
+			queue.LogStreamHandlerPanic(q.log, subject, ev, r)
 		}
 	}()
 	h(ctx, subject, ev)
