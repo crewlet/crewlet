@@ -128,7 +128,7 @@ part of the publish phase `--snapshot` already skips, so without it a
 rehearsal runs `cosign sign-blob --yes` over the checksums and tries to mint a
 real Sigstore certificate from a machine with no OIDC token to mint it from.
 
-It builds all six targets, the archives, the checksums *and the container
+It builds all four targets, the archives, the checksums *and the container
 image*. The image is worth a note: buildx cannot assemble a multi-platform
 manifest without pushing it, so `dockers_v2` builds and pushes in one step and
 runs in goreleaser's **publish** phase. `--skip=publish` therefore skips the
@@ -161,7 +161,7 @@ surface itself is guarded only by what the release pipeline does when it runs:
 - **`goreleaser check`** runs first in both release jobs, so a malformed or
   unknown field in `.goreleaser.yaml` is reported as a config error rather than
   as whatever the build does with it.
-- **The snapshot job builds everything** — all six targets, the archives, the
+- **The snapshot job builds everything** — all four targets, the archives, the
   checksums and the container image — on demand and on any pull request
   touching `.goreleaser.yaml`, `Dockerfile`, `go.mod`, `internal/version/**` or
   the workflow. A dependency that needs cgo, or a `Dockerfile` that no longer

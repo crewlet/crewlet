@@ -53,8 +53,8 @@ go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
 go test ./... -race -count=1                                  # the full suite
-CREWLET_STORE_DRIVER=turso  go test ./internal/store/... -race -count=1
-CREWLET_STORE_DRIVER=sqlite go test ./internal/store/... -race -count=1
+# then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
+CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build ./...            # test-cross
 ```
 
 The race detector is not optional here: the engine's concurrency model is
