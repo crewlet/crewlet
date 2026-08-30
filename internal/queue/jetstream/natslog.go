@@ -23,7 +23,7 @@ import (
 // looked wrong, because nothing was printed. `opts.NoLog` is left false the
 // whole time, so the configuration even reads as though logging were on.
 //
-// The lines land under their own component, the way `queue.pulsar.client`
+// The lines land under their own component, the way every other client
 // already separates a third-party client's chatter from the engine's own:
 // an operator can tell what the BROKER said from what the engine said about
 // it.

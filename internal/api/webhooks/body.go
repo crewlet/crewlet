@@ -14,6 +14,18 @@ import (
 // over the body — so without a bound anyone who can reach the port picks the
 // allocation size. 25 MiB is GitHub's own documented ceiling and the largest of
 // the six providers', so no legitimate delivery is refused by it.
+//
+// It is NOT the transport's limit, and deriving it from one was tried and
+// withdrawn. What a delivery costs on the wire is a property of its BYTES
+// rather than its length: the published event carries the parsed body
+// re-marshaled AND the exact signed bytes as base64, and encoding/json escapes
+// '<', '>' and '&' to six bytes each — so a body of ampersands encodes at 7.3x
+// where the same length of plain text encodes at 2.3x (measured). Any single
+// divisor is therefore wrong for one of them and wasteful for the other, and
+// the one that looked safe still let an escape-heavy body through. The
+// transport answers that question itself: an event that does not fit is
+// refused with queue.ErrTooLarge, and the receiver turns that into a 413 —
+// see Receiver.accept.
 const MaxBodyBytes = 25 << 20
 
 // errBodyTooLarge is what a body over the cap surfaces as.

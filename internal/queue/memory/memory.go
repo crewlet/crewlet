@@ -81,30 +81,29 @@ var ErrNotStarted = fmt.Errorf("memory: event queue is not started: %w", queue.E
 var ErrNilHandler = errors.New("memory: handler is nil")
 
 const (
-	// defaultMaxRedeliveries matches the Pulsar backend's budget in TOTAL
+	// defaultMaxRedeliveries matches the JetStream backend's budget in TOTAL
 	// ATTEMPTS, which is the only comparison that means anything here: this
-	// constant counts redeliveries AFTER the first delivery, while Pulsar's
-	// DLQPolicy.MaxDeliveries and NATS MaxDeliver both count total
-	// deliveries. So 9 here and 10 there are the same budget, and the 10
-	// this used to hold was one attempt MORE than Pulsar's — the same
-	// numeral denoting a different quantity.
+	// constant counts redeliveries AFTER the first delivery, while NATS
+	// MaxDeliver counts total deliveries. So 24 here and 25 there are the
+	// same budget, and writing 25 in both places would be the same numeral
+	// denoting a different quantity.
 	//
 	// That is worth the paragraph because the repo has already been bitten
 	// by it once: the suite's capability was renamed WithRedeliveryBudget
 	// -> WithDeliveryAttempts precisely because "budget" never said which
 	// convention it counted, and a backend then wrote MaxDeliver: budget+1
-	// to satisfy the missing half. The suite was fixed; this constant kept
-	// asserting "in lockstep with Pulsar" without ever naming a convention,
-	// so the claim read as checked and could not be checked.
+	// to satisfy the missing half.
 	//
-	// Pulsar is the right twin and JetStream is not: both this backend and
-	// Pulsar deliver a deferral for FREE (Capabilities.FreeDeferral on
-	// both), whereas JetStream returns a deferral via Nak, which spends an
-	// attempt — so it budgets 25 to cover handoff as well as poison. See
-	// internal/queue/pulsar/pulsar.go maxDeliveries and
-	// internal/queue/jetstream/stream.go maxDeliver; if either moves, this
-	// tracks Pulsar's.
-	defaultMaxRedeliveries = 9
+	// JetStream is the twin to track because it is the only broker this
+	// engine ships. It budgets 25 rather than the 10 a free-handoff broker
+	// needs because its deferral returns via Nak and spends an attempt —
+	// and this twin, whose Defer costs nothing, would otherwise sit on a
+	// budget less than half the production one. Where the twin's default
+	// disagrees with the real backend, every test written against the twin
+	// is calibrated to a broker nobody runs. See
+	// internal/queue/jetstream/stream.go maxDeliver; if it moves, this
+	// moves with it.
+	defaultMaxRedeliveries = 24
 
 	// defaultMaxHistory bounds the published-event log this backend keeps
 	// for tests and diagnostics. It is not a mailbox — retention that
@@ -436,6 +435,17 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 	if err != nil {
 		return fmt.Errorf("memory: serialize event %s: %w", ev.Type, err)
 	}
+	// THE SAME CEILING THE REAL BROKER ENFORCES, because the twin is what
+	// the tests run on: without this an oversized event publishes cleanly
+	// here and is refused in production, which is the one direction a twin
+	// must never be wrong in. Measured on the wire bytes rather than on any
+	// input length, for the reason queue.ErrTooLarge gives — what a body
+	// costs encoded is a property of its bytes.
+	if len(wire) > queue.MaxPayloadBytes {
+		return fmt.Errorf("memory: publish %s: %d bytes exceeds the %d-byte limit: %w",
+			topic, len(wire), queue.MaxPayloadBytes, queue.ErrTooLarge)
+	}
+
 	var received events.Event
 	if err := json.Unmarshal(wire, &received); err != nil {
 		return fmt.Errorf("memory: deserialize event %s: %w", ev.Type, err)

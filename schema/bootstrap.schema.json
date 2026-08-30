@@ -73,48 +73,12 @@
           "minimum": 0,
           "type": "number"
         },
-        "nats": {
-          "$ref": "#/$defs/CoordinationNATS"
-        },
         "type": {
           "description": "local (single node, default) or embedded-kv (a fleet).",
           "enum": [
             "local",
             "embedded-kv"
           ],
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "CoordinationNATS": {
-      "additionalProperties": false,
-      "properties": {
-        "cluster": {
-          "$ref": "#/$defs/StreamCluster"
-        },
-        "credentials": {
-          "description": "Path to a NATS credentials file for an external server.",
-          "type": "string"
-        },
-        "replicas": {
-          "description": "Lease bucket replica count: 1 solo, 3 in a fleet.",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "store_dir": {
-          "description": "Embedded lease persistence directory. Empty = in-memory (a restart sheds this node's seats).",
-          "type": "string"
-        },
-        "tls": {
-          "$ref": "#/$defs/NATSTLS"
-        },
-        "token": {
-          "description": "Bearer token for an external server; ${VAR} supported.",
-          "type": "string"
-        },
-        "url": {
-          "description": "External NATS URL for leases; empty embeds a member instead.",
           "type": "string"
         }
       },
@@ -252,10 +216,6 @@
     "Stream": {
       "additionalProperties": false,
       "properties": {
-        "admin_url": {
-          "description": "Pulsar admin HTTP endpoint; empty derives it from url.",
-          "type": "string"
-        },
         "cluster": {
           "$ref": "#/$defs/StreamCluster"
         },
@@ -268,11 +228,6 @@
           "minimum": 0,
           "type": "number"
         },
-        "namespace": {
-          "description": "Pulsar namespace under the tenant.",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-          "type": "string"
-        },
         "replicas": {
           "description": "Stream replica count: 1 solo, 3 in a fleet.",
           "minimum": 0,
@@ -282,33 +237,23 @@
           "description": "Embedded stream persistence directory. Empty = in-memory (nothing survives a restart).",
           "type": "string"
         },
-        "tenant": {
-          "description": "Pulsar tenant holding this company's topics.",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-          "type": "string"
-        },
         "tls": {
           "$ref": "#/$defs/NATSTLS"
-        },
-        "tls_trust_certs": {
-          "description": "CA bundle path for a pulsar+ssl broker.",
-          "type": "string"
         },
         "token": {
           "description": "Bearer token for an external server; ${VAR} supported.",
           "type": "string"
         },
         "type": {
-          "description": "embedded (default), nats, or pulsar.",
+          "description": "embedded (default) or nats.",
           "enum": [
             "embedded",
-            "nats",
-            "pulsar"
+            "nats"
           ],
           "type": "string"
         },
         "url": {
-          "description": "External broker URL. Required for nats/pulsar, refused for embedded.",
+          "description": "External NATS URL. Required for nats, refused for embedded.",
           "type": "string"
         }
       },
@@ -481,8 +426,7 @@
             "properties": {
               "type": {
                 "enum": [
-                  "nats",
-                  "pulsar"
+                  "nats"
                 ]
               }
             },

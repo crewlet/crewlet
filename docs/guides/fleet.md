@@ -35,6 +35,37 @@ clustered or external stream by name, because this is the one
 misconfiguration that would otherwise silently give two processes the
 same agents.
 
+There is nothing else to deploy for it: the KV rides the **stream's own
+NATS connection**, on every topology. A second connection to the same
+broker would fail independently of the first, which is the worst shape this
+could take — a node renewing leases happily over a connection that works
+while the one carrying its inbox has dropped, alive to its peers and deaf to
+its work.
+
+**One stream every node can reach.** The default embedded server binds no
+socket at all, so two nodes started side by side are not a fleet — they are
+two private brokers, sharing neither a stream nor a coordination bucket, and
+nothing says so out loud. Either cluster the embedded servers — give every
+node the same `stream.cluster.name`, a `stream.cluster.port` to route on,
+and the other members' route URLs in `stream.cluster.peers` — or point them
+all at an external cluster with `stream.type: nats` and `stream.url`. It is
+the same client code either way; embedded versus external is a connection
+choice, not a second backend.
+
+**`stream.replicas: 3` on a clustered fleet.** Replication is what makes a
+publish a quorum commit before it returns, so "published" means "survives
+losing this node" rather than "reached the member I happened to be talking
+to". Tier A refuses `replicas` above 1 when no peers are configured, because
+there is nothing to replicate to. Expect a boot to pause the first time a
+cluster forms: a member waits for the metadata group to elect a leader before
+it provisions anything — measured at about eight seconds on a quiet
+three-member cluster, and given up to sixty — because creating a replicated
+stream against a leaderless group blocks rather than failing. If the other
+members have not arrived yet the stream cannot be placed, and the node says
+so (`jetstream_stream_awaiting_peers`) while it retries inside a
+thirty-second provisioning deadline, rather than hanging with nothing to
+read.
+
 **Credentials go through a node that is running.** The
 [secret store](../concepts/secret-store.md#which-store-the-cli-writes) is on
 the KV like everything else the fleet shares, so `crewlet secrets set` against
@@ -52,22 +83,19 @@ resolves from, so a platform secret projected as env still works unchanged.
 without each other, so the fleet stops serving the moment either
 restarts — and a rolling upgrade restarts them one at a time, which makes
 the outage certain rather than unlucky. Tier A refuses a two-member
-config by name.
-
-**The right broker settings, on Pulsar.** An unowned seat's subscription
-has no connected consumer, and two Pulsar reapers delete exactly that: set
-`subscriptionExpirationTimeMinutes` to `0` and
-`brokerDeleteInactiveTopicsEnabled` to `false` (or
-`brokerDeleteInactiveTopicsMode` to
-`delete_when_subscriptions_caught_up`). The repo's `docker-compose.yml`
-ships these values under its `pulsar` profile, and CI certifies the
-backend against a broker configured this way. Nothing in the engine can detect a broker that is
-quietly deleting a quiet seat's mail.
+config by name, counting the **stream's** members: the KV rides the
+stream's connection, so the coordination quorum *is* the stream cluster's.
 
 **A distinct, stable id per node.** `node.id` in the Tier A file, or
 `CREWLET_NODE_ID`, which is how an orchestrator injects a pod name
 without templating the config. Two nodes sharing an id miscount the fleet
-and each compute too small a share.
+and each compute too small a share — and on clustered embedded servers they
+do not even get that far, because the id is also this member's server name
+and NATS rejects a route from a server whose name it already knows. That
+name is *refused* rather than generated when clustering: JetStream places
+replicas by server name, so a name minted fresh at boot makes every restart
+a new peer, orphaning the old one's replicas on a member that will never
+come back.
 
 **The schema, applied first.** [`crewlet migrate`](../reference/cli.md#crewlet-migrate)
 before starting any node.
@@ -88,7 +116,7 @@ node:
 |---|---|
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns |
-| `workers` | The company-wide singleton duties — scheduler tick, retention sweep, sandbox waiter, skill clustering and curation, seat-subscription creation |
+| `workers` | The company-wide singleton duties — scheduler tick, retention sweep, sandbox waiter, and the learning passes (skill clustering, curation, episode compaction) on one lease |
 
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
@@ -128,7 +156,7 @@ node: {id: "${CREWLET_NODE_ID}"}          # all roles, on each
 
 ```yaml
 # Ingress split out: two API nodes behind a load balancer, three
-# engines. The API nodes still need the database and the broker.
+# engines. The API nodes still need the stream and a store of their own.
 node: {id: "${CREWLET_NODE_ID}", roles: [ingress]}
 node: {id: "${CREWLET_NODE_ID}", roles: [seats, workers]}
 ```
@@ -242,8 +270,8 @@ Two consequences worth stating plainly:
 - **`seats_unplaceable`** — a seat nobody may run. Fix the selector, or
   start a node that matches.
 - **`seat_claims_blocked_by_older_protocol`** — an unfinished upgrade.
-- **`seat_placement_is_process_local`** — no database. Every node thinks
-  it owns everything.
+- **`seat_placement_is_process_local`** — `coordination.type: local`, so
+  the leases never left this process. Every node thinks it owns everything.
 - **`/health`** carries this node's seats, its in-flight count and its
   config posture; the dashboard's **Fleet** view puts every node's
   side by side, with seat ownership and per-node config epoch.
@@ -260,7 +288,8 @@ posture change.
   what it needs, and what that pin costs
 - [Scaling out](../concepts/scaling.md) — the model underneath this guide:
   what a node is, what the fleet shares, and where the constants above
-  (the 45-second TTL, the prefetch cap) were measured
+  (the 45-second TTL, the 25-delivery budget a handoff spends one of) were
+  measured
 - [Seat ownership](../concepts/seat-ownership.md) — leases, fencing,
   admission, and what a takeover actually does
 - [Control plane](../concepts/control-plane.md) — how a config revision

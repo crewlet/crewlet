@@ -1,8 +1,9 @@
 // Package queue defines the EventQueue contract — the transport every
 // inter-component message in Crewlet travels through.
 //
-// One interface, several backends (an in-memory twin, embedded NATS
-// JetStream, external Pulsar), all certified by ONE conformance suite. A
+// One interface, two backends (an in-memory twin, and NATS JetStream —
+// embedded by default, external when configured), both certified by ONE
+// conformance suite. A
 // backend that the suite has not certified does not exist as far as the
 // engine is concerned, and nothing above this package may branch on which
 // backend is running.
@@ -32,6 +33,54 @@ import (
 )
 
 var log = logging.Get("queue.contract")
+
+// ErrTooLarge reports that an event does not fit on the wire.
+//
+// THE SECOND SENTINEL THE LAYERS ABOVE MAY BRANCH ON, and for the same reason
+// as ErrNotLive: they must not branch on which backend is running, so each one
+// translates its own refusal into this and callers ask one question
+// everywhere.
+//
+// It exists because "too large" is the one publish failure that is PERMANENT.
+// Every other reason a publish fails — a broker restarting, a connection
+// dropping, a quorum briefly unavailable — is answered by trying again, so a
+// producer that cannot tell them apart has to treat all of them as transient.
+// The webhook edge did exactly that and asked the provider to retry a delivery
+// whose size guaranteed it would fail identically forever, releasing and
+// re-taking its claim on every attempt.
+//
+// Sizing a producer's own input against MaxPayloadBytes cannot replace this.
+// What a body costs on the wire is a property of its BYTES, not its length:
+// encoding/json escapes '<', '>' and '&' to six bytes each, so one JSON
+// document re-encodes at 1x and another of the same length at 6x. Any
+// up-front ratio is therefore either wrong for the second or wasteful for the
+// first — measured, and it is why this is an error from the transport rather
+// than a division at the edge.
+var ErrTooLarge = errors.New("queue: event too large for the transport")
+
+// MaxPayloadBytes is the largest single event any backend must carry.
+//
+// It is a CONTRACT number rather than a backend's own, because every backend
+// has to agree on it: the embedded broker is configured to accept exactly this
+// (see internal/queue/jetstream) and the in-memory twin enforces the same
+// ceiling, so a payload that a test accepts is one production accepts.
+//
+// Written down because there was no number at all, and the failure had no
+// floor: the webhook edge accepted a 25 MiB delivery, verified its signature,
+// claimed it, and then could not publish it through a broker left at its own
+// 1 MiB default. The delivery was refused as unavailable, so the provider
+// retried, and every retry failed the same way forever. Nothing in that loop
+// is a transient, and nothing logged a size. Raising the ceiling is half the
+// answer; ErrTooLarge, which lets a producer tell that refusal apart from a
+// broker that is merely down, is the other half.
+//
+// 8 MiB is nats-server's own MAX_PAYLOAD_MAX_SIZE — the threshold above which
+// it warns that a payload is too large to be a good idea (server/const.go).
+// Sitting AT that boundary takes eight times the default without arguing with
+// the broker about what it was built for: a message is buffered whole, in the
+// server and again in every client that receives it, so this is memory per
+// in-flight event and not a disk number.
+const MaxPayloadBytes = 8 << 20
 
 // MaxLingerSeconds is the hard ceiling on a batch linger window.
 //
@@ -111,10 +160,11 @@ type BatchHandler func(ctx context.Context, evs []*events.Event) Result
 // ErrNotLive reports that a verb reached a queue that is not live — never
 // started, or stopped.
 //
-// THE ONE SENTINEL THE LAYERS ABOVE MAY BRANCH ON for this, because they must
-// not branch on which backend is running: each backend keeps its own error
-// (jetstream.ErrClosed, memory.ErrNotStarted) and wraps this, so
-// errors.Is(err, queue.ErrNotLive) is the same question everywhere.
+// ONE OF THE TWO SENTINELS THE LAYERS ABOVE MAY BRANCH ON — see ErrTooLarge
+// for the other — because they must not branch on which backend is running:
+// each backend keeps its own error (jetstream.ErrClosed,
+// memory.ErrNotStarted) and wraps this, so errors.Is(err, queue.ErrNotLive)
+// is the same question everywhere.
 //
 // It exists because "the queue is down" is not a failure for every caller. A
 // seat release detaches the mailbox and the seat host KEEPS THE LEASE if that
@@ -446,8 +496,8 @@ func eventType(ev *events.Event) string {
 // Within a partition: event timestamp, not delivery order. This is what
 // makes a conversation read correctly regardless of how a broker interleaves
 // redeliveries with fresh arrivals — measured, JetStream returns a
-// redelivered message BEHIND never-delivered ones, where Pulsar replays it
-// from the head. Relying
+// redelivered message BEHIND never-delivered ones, where the in-memory twin
+// replays it from the head. Relying
 // on the timestamps the engine already trusts, rather than on one broker's
 // replay semantics, removes a correctness dependency that would otherwise
 // have to be re-verified for every backend.
@@ -547,14 +597,14 @@ func LogBatchResult(l *slog.Logger, topic, group, batchKey string, evs []*events
 // # Why these live in the contract
 //
 // The same reason [LogBatchResult] does, and here it is not hypothetical:
-// the three backends had drifted into three spellings of one situation.
+// the backends had drifted into different spellings of one situation.
 // `memory` logged `publish_listener_failed` with the recovered value under
-// `error`; `jetstream` and `pulsar` logged `publish_listener_panicked` with
-// it under `panic`. The stream side was worse — the same two backends keyed
-// the topic as `subject` while `memory` keyed it as `topic` and added a
-// `topic_pattern` nobody else emitted. An operator grepping
-// `publish_listener_panicked` saw every backend but the in-memory twin, and
-// the twin is what the tests run on, so nothing caught it.
+// `error`; the broker-backed side logged `publish_listener_panicked` with
+// it under `panic`. The stream side was worse — it keyed the topic as
+// `subject` while `memory` keyed it as `topic` and added a `topic_pattern`
+// nobody else emitted. An operator grepping `publish_listener_panicked` saw
+// every backend but the in-memory twin, and the twin is what the tests run
+// on, so nothing caught it.
 //
 // # `panic` rather than `error`
 //

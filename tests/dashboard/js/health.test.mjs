@@ -125,7 +125,12 @@ const OK = {
   configured: true,
   engine: true,
   version: "0.1.0",
-  queue: "pulsar",
+  // The DEFAULT wiring: an embedded broker reports itself as
+  // "jetstream-embedded" (internal/queue/jetstream/queue.go). A fixture
+  // saying "jetstream" is the external case, so it would not catch a
+  // regression in how the popover renders the shape almost every
+  // deployment actually runs.
+  queue: "jetstream-embedded",
   event_store: "durable",
   feed_hydrated: true,
   in_flight: 2,
@@ -134,7 +139,7 @@ const OK = {
 
 test("a healthy engine reports every wiring fact it knows", () => {
   const html = renderHealthPopover(OK, null, [], true);
-  assert.ok(html.includes("pulsar"));
+  assert.ok(html.includes("jetstream-embedded"));
   assert.ok(html.includes("durable"));
   assert.ok(html.includes("history survives a restart"));
   assert.ok(html.includes("seeded from history"));

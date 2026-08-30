@@ -232,8 +232,7 @@ func TestHandleFromInboxIsTheInverseOfAgentInbox(t *testing.T) {
 // That is safe only because a subscription is identified by the (topic,
 // group) PAIR — the two pairs differ in their topic, and the topics cannot
 // collide because "." cannot appear in a handle. JetStream's consumerName
-// hashes the pair for exactly this reason; Pulsar scopes a subscription to
-// its topic natively.
+// hashes the pair for exactly this reason.
 //
 // It is pinned rather than fixed because the fix is a wire-format change: the
 // group name is the durable subscription name a running fleet is already
@@ -418,8 +417,6 @@ func requirePublishableSubject(t *testing.T, subject string) {
 		t.Errorf("%q contains whitespace", subject)
 	case strings.ContainsAny(subject, "*>"):
 		t.Errorf("%q contains a wildcard, so it is a pattern rather than a subject", subject)
-	case strings.Contains(subject, "/"):
-		t.Errorf("%q contains '/', which Pulsar reads as a namespace separator", subject)
 	case strings.HasPrefix(subject, "."), strings.HasSuffix(subject, "."), strings.Contains(subject, ".."):
 		t.Errorf("%q has an empty segment", subject)
 	}

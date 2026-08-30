@@ -247,8 +247,13 @@ are five copies of one agent with five times the bill.
 When you finish, the founder should have:
 
 1. `company.yaml` — Tier B, validated, `${VAR}` for every secret.
-2. `config.yaml` — Tier A: database DSN, Pulsar URL, API host/port and
-   an auth token. Validate it too (`crewlet validate config.yaml`).
+2. `config.yaml` — Tier A: the store's file path (one local file this
+   process owns — there is no DSN), the stream slot, `coordination.type`,
+   and the API host/port with at least one auth token. Leave the stream
+   `type: embedded` with a `store_dir` and `coordination.type: local`:
+   that is one node with no broker to operate and no service to point
+   anything at, and it is what every company starts as. Validate it too
+   (`crewlet validate config.yaml`).
 3. `.env` — every `${VAR}` the two files reference, with real values.
    List them explicitly; a missing one resolves to an empty string and
    fails later, deep in a turn.
@@ -256,7 +261,7 @@ When you finish, the founder should have:
 
 ```bash
 crewlet validate company.yaml
-crewlet run config.yaml --import-company company.yaml
+crewlet run config.yaml -company company.yaml
 # dashboard on the configured api.port
 ```
 

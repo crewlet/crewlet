@@ -64,21 +64,32 @@ type Stall struct {
 //
 // The failure it exists for is the one where a node neither works nor dies.
 // Its seat leases lapse, because nothing is renewing them, and peers
-// correctly take the seats over — while its BROKER SESSION does not lapse,
-// because the client answers keepalives from goroutines the stall never
-// touched. The broker goes on treating it as a live consumer and holding its
-// prefetch of those seats' messages UNTIL THE CONNECTION DIES — there is no
-// clock to wait out. apache/pulsar-client-go has no ConsumerOptions.AckTimeout
-// and Pulsar has no broker-side equivalent for a connected consumer, so a
-// fetched message is that consumer's until it acks, naks, or closes.
-// The new owner cannot see mail that is already reserved for a corpse, and no
-// amount of waiting releases it.
+// correctly take the seats over — while the process goes on existing, holding
+// whatever its stalled handler already fetched and never acked. The successor
+// owns the seat within a lease TTL and cannot see those messages, because on
+// the shared durable consumer they are still ack-pending for the corpse.
 //
 // Nothing can be signalled out of that state, because the code that would
 // handle the signal is the code that is stuck. What the watchdog CAN do
-// unilaterally is end the process — and that is the whole remedy: the client
-// dies with the process, the broker sees the session end, and redelivery is
-// immediate (9 ms, measured).
+// unilaterally is end the process, and it is worth being exact about what that
+// buys, because the answer is NOT immediate redelivery:
+//
+//   - It removes the ACTOR. A wedged node that later resumes would act on a
+//     seat it no longer owns; ending it bounds that to the fencing window
+//     rather than leaving it open indefinitely.
+//   - It lets the node come back. A process that neither works nor dies is
+//     never restarted by an orchestrator watching for liveness, so the seats
+//     it was handed stay dark until a person notices.
+//
+// What it does not buy is the held mail back. JetStream releases a
+// fetched-unacked message when ackWait elapses (30 minutes — see
+// internal/queue/jetstream), and closing the connection does not shorten
+// that: unlike a broker that returns unacked mail on session close, there is
+// no session-scoped release here. So a wedged seat's in-flight batch — bounded
+// by the batch cap, not by the seat's whole backlog, because pull consumers
+// prefetch nothing — is invisible to the successor until ackWait expires. The
+// successor serves everything published after that point normally; it is the
+// already-fetched batch that waits.
 //
 // The threshold is deliberately NOT a config knob. It is the same number the
 // lease TTL is: past it the node is provably not the owner, and letting the

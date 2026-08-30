@@ -155,11 +155,11 @@ func (s *suite) runCore(t *testing.T) {
 		}
 		// Without strict rotation the group owes exactly one thing: every
 		// event reaches exactly ONE member. It does NOT owe the sharing of a
-		// burst — measured, Pulsar dispatches a Shared subscription by
-		// available permits and hands one consumer as many entries as it has
-		// room for, so at a production prefetch a single member legitimately
-		// takes all four. Requiring both to participate asserted the twin's
-		// dispatch strategy as though it were a broker requirement.
+		// burst — measured, a broker dispatching a shared subscription by
+		// available permits hands one consumer as many entries as it has
+		// room for, so a single member legitimately takes all four.
+		// Requiring both to participate asserted the twin's dispatch
+		// strategy as though it were a broker requirement.
 		//
 		// Each event carries its own label so this checks per-EVENT delivery
 		// rather than counting deliveries, which a backend could satisfy by

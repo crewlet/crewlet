@@ -255,7 +255,7 @@ func (s *suite) runAttachment(t *testing.T) {
 		// IN ANY ORDER. The subject here is that the re-attached seat is
 		// deliverable at all — both events arrive — and the deferred one
 		// is a REDELIVERY, which [Caps.HeadReplayOnNak] says the backends
-		// answer differently: Pulsar replays from the head, JetStream
+		// answer differently: the twin replays from the head, JetStream
 		// returns it behind never-delivered events. Asserting the
 		// sequence made this pass on an idle machine and fail under load
 		// on a backend that had already declared the behaviour, which

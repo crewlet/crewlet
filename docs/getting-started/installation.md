@@ -77,8 +77,10 @@ for the test and lint commands.
 working company:
 
 - the **event stream** is a JetStream server inside the process. A deployment
-  that outgrows one node points the same config slot at an external NATS or
-  an Apache Pulsar cluster instead — see [Fleet](../guides/fleet.md).
+  that outgrows one node either clusters those embedded servers together or
+  points the same config slot at an external NATS server — the client code is
+  identical, so it is a connection choice rather than a second backend. See
+  [Fleet](../guides/fleet.md).
 - the **store** is one local file this process owns *exclusively*. Not a
   shared database, and no DSN: two engines pointed at one file corrupt it.
   Coordination between nodes goes through a separate KV slot, never the file.
@@ -91,7 +93,6 @@ every service in it is behind a profile, because none of them is the engine:
 ```bash
 docker compose --profile gitlab up -d             # local GitLab (code host)
 docker compose --profile mattermost up -d --wait  # self-hosted Mattermost (chat)
-docker compose --profile pulsar up -d             # Pulsar + Dekaf, for the external-stream backend
 ```
 
 Each of the two self-hostable integrations pairs with a bootstrap script under
@@ -99,14 +100,10 @@ Each of the two self-hostable integrations pairs with a bootstrap script under
 [GitLab § Local testing](../integrations/gitlab.md#local-testing) and
 [Mattermost § Local testing](../integrations/mattermost.md#local-testing).
 Jira and Confluence have no profile here — Atlassian is not something a
-compose file can stand up.
+compose file can stand up. Nor is there a profile for the stream or the store:
+the engine brings both up itself, which is the whole point of embedding them.
 
-The `pulsar` profile is for developing against the external stream backend,
-and for running its conformance suite locally — that suite skips without
-`CREWLET_TEST_PULSAR_URL`, and skipping is not passing. Dekaf, the web UI the
-Pulsar docs recommend, comes up with it on <http://localhost:8090>.
-
-Running any of these on a **remote host** rather than your own machine? Each
+Running either of these on a **remote host** rather than your own machine? Each
 one has to be told the address browsers reach it on —
 `MATTERMOST_PUBLIC_URL`, and GitLab's external URL — before the stack comes
 up. For Mattermost that

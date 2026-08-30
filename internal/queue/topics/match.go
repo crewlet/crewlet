@@ -14,9 +14,9 @@ import "strings"
 // one about which events a dashboard sees — and a subscriber that quietly
 // receives too few events looks exactly like a quiet company.
 //
-// Backends whose broker matches natively (JetStream, Pulsar) do not call
-// this; it exists so the in-memory twin and any future backend without
-// native matching agree with them rather than approximating them.
+// A backend whose broker matches natively (JetStream) does not call this;
+// it exists so the in-memory twin and any future backend without native
+// matching agree with it rather than approximating it.
 func Match(pattern, subject string) bool {
 	if pattern == subject {
 		return true

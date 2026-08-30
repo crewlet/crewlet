@@ -65,14 +65,20 @@ NATS JetStream server it embeds, and its store is a local file it creates and
 owns exclusively. A single host runs a whole company with nothing else
 installed, in development and in production alike.
 
-Two slots take an external address once a deployment outgrows one node:
+Two slots change once a deployment outgrows one node:
 
 | Slot | Options |
 |---|---|
-| **Stream** | `embedded` (default, and clusterable across nodes) · an external **NATS** server · **Apache Pulsar**, including a dedicated tenant/namespace with token auth when Crewlet shares a cluster |
+| **Stream** | `embedded` (default) — and a fleet is the *same* embedded server with `stream.cluster.name/port/peers` naming its peers and `stream.replicas: 3` · or `nats` + `stream.url` to dial a NATS server or cluster somebody else runs |
 | **Coordination** | `local` (one node) · `embedded-kv` (a fleet — one node or three; two has no quorum and is refused by name) |
 
-The **store** is never one of them: it stays one file per node, which is why
+Coordination takes no address of its own, and that is deliberate rather than an
+omission: the KV holding leases, ledgers and the token counter rides the
+stream's **own** connection. Two connections to one broker fail independently,
+so a node could keep renewing leases over a link that still works while the one
+carrying its inbox has dropped — alive to its peers, deaf to its work.
+
+The **store** is never one of these: it stays one file per node, which is why
 everything genuinely shared lives in coordination instead. See
 [Running a Fleet](../guides/fleet.md) and
 [Deployment](../guides/deployment.md) for sizing and broker authentication.

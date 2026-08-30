@@ -4,16 +4,20 @@ Key architectural choices in Crewlet and why they were made.
 
 ---
 
-## One Queue Contract, Several Backends
+## One Queue Contract, and NATS JetStream Behind It
 
-Messaging is a contract, not a product. One interface with three certified
-backends — an in-memory twin, an **embedded NATS JetStream** server (the
-default: it runs inside the engine process, so a company needs no broker at
-all), and **Apache Pulsar** for a fleet that wants one. A backend the
-conformance suite has not certified does not exist as far as the engine is
-concerned, and **nothing above the queue package may branch on which one is
-running** — that rule is what keeps the twin honest and the default
-operable.
+Messaging is a contract, not a product. One interface, and the two
+implementations the conformance suite certifies: an **in-memory twin** for
+tests, and **NATS JetStream** for everything real — embedded in the engine
+process by default (`stream.type: embedded`: nothing to install, and on a
+solo node no socket at all, so the broker cannot be reached from outside the
+process), or an external cluster (`stream.type: nats`) for a fleet that
+already runs one. Embedded versus external is a *connection*
+choice, not a second backend: it is the same client code, the same subjects
+and the same consumer configuration either way. A backend the conformance
+suite has not certified does not exist as far as the engine is concerned, and
+**nothing above the queue package may branch on which one is running** — that
+rule is what keeps the twin honest and the default operable.
 
 What the contract demands of any backend:
 
@@ -29,13 +33,57 @@ What the contract demands of any backend:
   unquiesce, detach, delete-subscription. A single `unsubscribe` never said
   which one it was, and the difference is whether a seat's mail survives.
 
-On Pulsar specifically:
+**Why JetStream satisfies it cheaply.** Crewlet's subject grammar *is* NATS
+grammar — dot-separated segments with `*` and `>` wildcards — so nothing has
+to be translated. More load-bearing: a durable consumer can be created with
+nothing attached, and that is an ordinary API call costing about 1.7 ms
+(measured), where a broker that only creates a subscription by *joining* it
+needs an out-of-band admin call to avoid stealing a live peer's traffic. That
+one operation is what a seat's mailbox is built on (see
+[Seat ownership](../concepts/seat-ownership.md#the-unowned-seat)). Consumers
+are **pull**-based, so nothing is pushed into a client-side buffer: a wedged
+node holds no mail it has not fetched, and resuming a quiesced attachment has
+no prefetch to reclaim. Retention is chosen per purpose rather than per taste
+— agent inboxes and notification work queues use **interest** retention,
+which is exactly the mailbox semantic above, while the event stream uses an
+**age limit**, because its consumers are ephemeral dashboards and per-node
+materializers that must be free to fall behind and catch up.
 
-- **Persistent topics**: each internal subject (`crewlet.agent.*.inbox`, `crewlet.notifications.*`) maps to a persistent topic `persistent://{tenant}/{namespace}/{subject}` (default `public/default`; configurable via `stream.tenant` / `stream.namespace`). Tenants and namespaces are never auto-created, so a custom pair is created out-of-band by the operator; the engine calls the admin REST API only for subscription lifecycle, where both create and delete must work with no consumer attached (see [Seat ownership](../concepts/seat-ownership.md#the-unowned-seat)). Each durable subscription's undelivered backlog survives engine restarts; time-based retention of already-acknowledged messages is an optional namespace retention/TTL policy (off by default in a standalone broker).
-- **Competing consumers** (per-agent inboxes, notification fan-out) map to **Shared subscriptions** — one shared cursor per consumer group, so each message reaches exactly one member. **Broadcast** stream consumers (dashboards) map to per-caller **regex topic-pattern subscriptions**. Poison-message redelivery is capped by Pulsar's **dead-letter policy**.
+**What it costs, stated rather than glossed.** There is no free handoff:
+every path back to the broker increments the delivery count, including the
+Nak a node uses to hand a seat back, which is why the delivery budget before
+a message is dead-lettered is 25 rather than the ~10 a broker with a free
+handoff would need. And a redelivered message returns *behind* never-delivered
+ones rather than replaying from the head, which is why dispatch order comes
+from event timestamps rather than from the broker — a correctness dependency
+deliberately kept off any one broker's replay semantics.
+
+**The decisive property is that coordination rides the stream's own
+connection.** Everything a fleet has to agree on — seat leases, the
+completion ledger, the delivery dedupe, the token counter, the activation
+pointer and the company's sealed secrets — lives in a KV on the *same* NATS
+connection that carries this node's inbox, because that KV is a
+compare-and-set store the broker already provides. A
+stream whose broker cannot compare-and-set cannot hold any of it, so such a
+deployment needs a second broker technology beside the first — every install
+running two estates to serve one company. The operational cost is the smaller
+half. The real one is that two connections to one company's infrastructure
+**fail independently**: a node can hold live leases over a connection that
+still works while the one carrying its inbox has dropped — alive to its peers,
+deaf to its work, and holding every seat it is no longer serving. One
+connection makes that state unrepresentable, which is worth more than any
+broker feature the second estate would have brought.
+
 **A2A channels** ride the same agent inbox subjects as everything else: the ask wakes the target's seat, the answer wakes the asker's. They used to be an in-memory queue per channel, on the premise that every agent shares one process — which stopped being true the moment a fleet ran more than one node. The queue lived on the node that opened the channel while the wake was delivered to whichever node owned the target's seat, so the target woke to an empty channel. Channel *state* (participants, open/closed) is durable for the same reason: every authorization decision reads it, and the two parties are usually on different nodes.
 
-**Infrastructure footprint**: none by default. The embedded stream and the local store file mean a company runs on one binary; Pulsar is what a deployment adds when it wants durable per-subscription cursors, dead-letter queues and namespace retention policies across a fleet.
+**Infrastructure footprint**: none, and not only by default. The embedded
+stream and the local store file mean a company runs on one binary with
+nothing listening on a port. Growing past one node moves only where the
+broker lives — the embedded servers join one cluster (`stream.cluster`,
+`replicas: 3`, so a publish is quorum-committed before it returns), or every
+node dials one external NATS — and the store stays each node's own file.
+That is a config change, not a different architecture, which is the whole
+reason the slot is drawn this way.
 
 ---
 

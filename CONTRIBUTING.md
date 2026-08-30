@@ -64,11 +64,20 @@ and so does `make test`. `-count=1` is the other half: without it a cached
 PASS recorded before the change answers for the change. `make test-norace`
 skips the detector when you want the faster loop, and says so.
 
-Two things `make check` does not cover, because both need a service CI starts
-for itself — it prints them when it passes, rather than letting a green run
-imply more than it did: the [Pulsar conformance suite](#a-skip-is-not-a-pass)
-(`make pulsar-up test-pulsar`) and the [release pipeline](#releasing)
-(`make snapshot`).
+One thing `make check` does not cover, because it needs a service CI starts
+for itself — it prints it when it passes, rather than letting a green run
+imply more than it did: the [release pipeline](#releasing) (`make snapshot`).
+
+The queue conformance suite is not a second gap. Both backends behind the
+`EventQueue` contract — the in-memory twin and JetStream — run the single
+suite in `internal/queue/queuetest` under a plain `go test`, because the
+JetStream backend brings its own broker: `internal/queue/jetstream` starts an
+embedded NATS server per queue under test and shuts it down with the test.
+Per queue rather than per binary, deliberately — the suite asserts things like
+"a subscription nobody created retains nothing", which a broker shared with
+another subtest's streams could satisfy by accident. So there is no service to
+start, no environment variable to set and no compose profile to remember:
+`make check` certifies the backend the engine actually ships, on every run.
 
 ### A skip is not a pass
 
@@ -147,31 +156,6 @@ without it** — a green run has simply not exercised them.
   make test-cross
   ```
 
-- **`CREWLET_TEST_PULSAR_URL`** and **`CREWLET_TEST_PULSAR_ADMIN_URL`** run
-  the Pulsar conformance suite, which **skips entirely** without them — and
-  skipping is not passing, since that job is the only place the Pulsar
-  backend is certified at all. CI starts a standalone broker for it, with the
-  reapers that would otherwise eat an unowned seat's mailbox turned OFF:
-  certifying against a broker configured differently from a real deployment
-  certifies the wrong broker.
-
-  What this buys is the part of the design that is a *claim about the broker*
-  rather than about our code — a close-driven handoff returning a seat's mail
-  at redelivery count 0, a cursor surviving a change of owner, a wedged
-  consumer holding its prefetch for the ack timeout. The memory twin models
-  all three, and a twin agreeing with itself proves nothing.
-
-  The compose stack's `pulsar` profile carries that same configuration —
-  both reapers off, and forced namespace deletion on for the suite's own
-  per-queue cleanup — and the two make targets set the variables for you, so
-  the local run either certifies the backend or fails saying no broker is
-  listening. There is no spelling of it that quietly does nothing:
-
-  ```bash
-  make pulsar-up test-pulsar
-  make pulsar-down            # add -v yourself to discard the broker's data
-  ```
-
 Tests never call real LLM APIs — use the fakes in `internal/providers`. Test
 files sit beside what they cover, as Go expects.
 
@@ -246,26 +230,21 @@ the first place goes the same direction — take the newest release, and pin it
 exactly.** Establish what the newest is from the registry or index rather than
 from memory, and write it as a literal version (`4.2.4`), never a floating tag:
 `latest` and `@main` leave Dependabot nothing to bump, and a floating tag turns
-a green conformance run into a claim about a build nobody can name afterwards.
+a green run into a claim about a build nobody can name afterwards.
 Holding a version back is still fine where there is a reason — put the reason in
-a comment at the pin, as the Compose images that do it already have.
+a comment at the pin, as the Compose stack's Postgres image already does.
 
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
 bumps carry. CI runs on each pull request, and — as below — CI is what decides
 whether it lands. Three things are worth knowing:
 
-- **Some Compose images are pinned on purpose**, with the reason in a comment
-  beside each — a database image holds its major to keep an existing volume
-  readable, and Dekaf publishes no floating tag. Closing that pull request is
-  the right answer; Dependabot does not reopen one for a version you have
-  already turned down.
-- **The Pulsar bump re-certifies the backend.** The conformance job starts the
-  broker from `docker-compose.yml` rather than pinning one of its own, so that
-  file is the only place the version lives and merging its bump is what moves
-  the build the Pulsar backend is certified against. Read it as a
-  re-certification rather than a routine bump — CI proves the new broker still
-  holds the close-driven handoff seat ownership depends on.
+- **A Compose image can be held back on purpose**, with the reason in a
+  comment beside the pin — `mattermost-db` holds its Postgres major because an
+  existing `mattermost-pgdata` volume will not open under a newer one without a
+  `pg_upgrade` or a dump/restore. Closing that pull request is the right
+  answer; Dependabot does not reopen one for a version you have already turned
+  down.
 - **`docker` and `docker-compose` are two ecosystems, not one.** The first
   reads `Dockerfile`s and the second reads Compose files; neither sees the
   other's manifests, so a repository with both needs both entries.

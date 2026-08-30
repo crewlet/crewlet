@@ -9,10 +9,12 @@
 # in step by hand, and change both in the same commit.
 #
 # The second thing this file is for is the suites that need something the
-# machine may not have. `node` and a Pulsar broker are absent by default and
-# the affected suites SKIP without them — silently, with the run still green.
-# So the targets that need one FAIL saying what to install or start, which is
-# the same posture CI takes (CONTRIBUTING.md, "A skip is not a pass").
+# machine may not have. `node` is absent by default and the affected suites
+# SKIP without it — silently, with the run still green. So the targets that
+# need it FAIL saying what to install, which is the same posture CI takes
+# (CONTRIBUTING.md, "A skip is not a pass"). Every queue backend certifies
+# itself with no external service: the JetStream suite starts an embedded
+# broker per test.
 #
 # What is deliberately NOT here: running a company. `crewlet run`,
 # `crewlet validate` and `crewlet config import` act on an operator's YAML in
@@ -48,17 +50,6 @@ GOTEST := $(GO) test -race -count=1
 # added or dropped here belongs in the other two in the same commit.
 CROSS_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
-# Where `make pulsar-up` puts the broker, and therefore where the conformance
-# suite looks. Overridable for a broker somewhere else:
-#   make test-pulsar PULSAR_URL=pulsar://box:6650 \
-#       PULSAR_ADMIN_URL=http://box:8080
-PULSAR_URL ?= pulsar://localhost:6650
-PULSAR_ADMIN_URL ?= http://localhost:8080
-
-# A cold standalone broker provisions a namespace per subtest, and the suite
-# waits on real redelivery timers. 25m is what ci.yml allows the same run.
-PULSAR_TIMEOUT := 25m
-
 COMPOSE ?= docker compose
 
 # Passed through to the vendor bootstrap scripts, which provision the seats of
@@ -70,7 +61,6 @@ COMPANY ?=
 
 .PHONY: help build crewlet install fmt tidy schema \
         check fmt-check vet lint test test-norace test-cross test-e2e \
-        test-pulsar pulsar-up pulsar-down \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -111,10 +101,9 @@ clean: ## remove the build output (./crewlet and dist/)
 
 check: fmt-check vet lint build test test-cross ## every gate CI runs on a PR
 	@echo
-	@echo "All local gates passed. Two things this did NOT cover, because both"
-	@echo "need a service CI starts for itself:"
-	@echo "  - the Pulsar conformance suite  ->  make pulsar-up test-pulsar"
-	@echo "  - the release pipeline          ->  make snapshot"
+	@echo "All local gates passed. One thing this did NOT cover, because it"
+	@echo "needs a service CI starts for itself:"
+	@echo "  - the release pipeline  ->  make snapshot"
 
 fmt-check: ## fail if anything needs gofmt (ci: build + vet)
 	@unformatted="$$(gofmt -l .)"; \
@@ -190,36 +179,6 @@ require-node: ## fail unless node is on PATH (every suite target needs it)
 	  echo "  does, and re-run."; \
 	  exit 1; \
 	} >&2
-
-##@ Suites that need a broker
-
-# The suite SKIPS when these variables are unset, and skipping is not passing:
-# this is the only place the Pulsar backend is certified at all. Setting them
-# here is what turns "quietly did nothing" into "failed because no broker is
-# listening", so the preflight below reports that itself rather than leaving
-# it to a connection error 30 seconds in.
-test-pulsar: ## certify the Pulsar backend (needs `make pulsar-up`)
-	@curl -sf $(PULSAR_ADMIN_URL)/admin/v2/clusters >/dev/null 2>&1 || { \
-	  echo "No Pulsar broker is answering at $(PULSAR_ADMIN_URL)."; \
-	  echo "  Start one with: make pulsar-up"; \
-	  echo "  Or point this run at another: make test-pulsar \\"; \
-	  echo "      PULSAR_URL=pulsar://host:6650 \\"; \
-	  echo "      PULSAR_ADMIN_URL=http://host:8080"; \
-	  exit 1; \
-	} >&2
-	CREWLET_TEST_PULSAR_URL=$(PULSAR_URL) \
-	CREWLET_TEST_PULSAR_ADMIN_URL=$(PULSAR_ADMIN_URL) \
-	$(GOTEST) ./internal/queue/pulsar/... -timeout $(PULSAR_TIMEOUT)
-
-# --wait here, and nowhere else: the next thing you run is the conformance
-# suite, and a broker that is up but not ready fails it. The vendor loops
-# below hand the waiting to their bootstrap script, which reports progress
-# while it waits (GitLab's healthcheck alone allows eight minutes).
-pulsar-up: ## start the local Pulsar broker (profile: pulsar)
-	$(COMPOSE) --profile pulsar up -d --wait
-
-pulsar-down: ## stop the local Pulsar broker (add -v yourself to drop its data)
-	$(COMPOSE) --profile pulsar down
 
 ##@ Local vendor loops
 

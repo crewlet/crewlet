@@ -24,8 +24,8 @@ node:
   id: "node-0"          # optional; see below
 
 stream:
-  type: embedded        # a JetStream server inside this process; `nats` or
-                        #   `pulsar` point the same slot at an external one
+  type: embedded        # a JetStream server inside this process; `nats` points
+                        #   the same slot at an external server or cluster
   store_dir: "./crewlet-data/stream"
 
 store:
@@ -191,7 +191,7 @@ The two steps are **not one transaction**, and they span two stores — the node
 
 There is **no leader**, so any node's API may write. What keeps two operators from silently overwriting each other is that the flip is a **compare-and-set** against the revision the write was derived from: the loser gets a `409` naming what won, rather than a `201` for a change the fleet never took. See [Concurrent writes](../reference/api-endpoints.md#concurrent-writes).
 
-This replaced a pair of Pulsar **competing-consumer** subscriptions (`engine-config`, `api-config`) under which exactly one process applied any given revision and the rest ran the previous company indefinitely. The full mechanism — the activation pointer and its epoch, what a lagging node does about its own traffic, and the operator surface — is [Control Plane](control-plane.md); what follows is the apply itself.
+**The nudge carries no work, and that is the load-bearing part.** A group subscription is a *work queue* — the contract says exactly one member of a group receives each message — so a revision delivered that way would be applied by whichever process won the message while every other node kept serving the previous company indefinitely. Polling a pointer inverts that: every node reads the same value and converges on it, and a lost nudge costs a poll interval rather than a revision. The full mechanism — the activation pointer and its epoch, what a lagging node does about its own traffic, and the operator surface — is [Control Plane](control-plane.md); what follows is the apply itself.
 
 ### The engine half
 
@@ -445,7 +445,7 @@ A configured keyring also unlocks a second, independent place a `${VAR}` can res
 Add a keyring to `crewlet.yaml` and Crewlet encrypts the **entire** `company_config` payload as one opaque blob (AES-256-GCM) before it reaches the DB:
 
 ```yaml
-# config.yaml (Tier A) — the keyring is the sole root of trust
+# crewlet.yaml (Tier A) — the keyring is the sole root of trust
 secrets:
   active_key_id: "2026-01"
   keys:
@@ -469,8 +469,8 @@ Because the key gates every read, keep it as available as the database itself: t
 Encryption is opt-in and backward-compatible — a plaintext config boots with or without a keyring. To migrate an existing deployment:
 
 ```bash
-crewlet secrets keygen --key-id 2026-01     # prints a key + the config.yaml snippet
-# add the secrets: block to config.yaml, export CREWLET_SECRET_KEY_2026_01
+crewlet secrets keygen --key-id 2026-01     # prints a key + the Tier A snippet
+# add the secrets: block to crewlet.yaml, export CREWLET_SECRET_KEY_2026_01
 crewlet config seal                          # encrypts the active revision as one document
 ```
 
@@ -487,7 +487,7 @@ crewlet secrets keygen --key-id 2026-07     # mint the new key
 # add it to secrets.keys AND set active_key_id: 2026-07,
 # keeping the old key in secrets.keys so its ciphertext still decrypts
 crewlet config rekey                          # re-encrypt the document under 2026-07
-# verify a clean boot, then drop the old key from config.yaml
+# verify a clean boot, then drop the old key from crewlet.yaml
 ```
 
 The document's envelope carries the id of the key that sealed it, so `rekey` decrypts under whichever key sealed it and re-encrypts under the active key. `crewlet config rekey --dry-run` reports whether it would re-encrypt without writing.

@@ -1,11 +1,11 @@
 // Package queuetest is the conformance suite that certifies an EventQueue
 // backend.
 //
-// One suite, every backend. The in-memory twin, embedded JetStream and Pulsar
-// all have to answer the same questions, because everything above
-// internal/queue is forbidden to know which one is running — so the only place
-// a backend difference can be caught is here. A backend this suite has not
-// certified does not exist as far as the engine is concerned.
+// One suite, every backend. The in-memory twin and NATS JetStream both have
+// to answer the same questions, because everything above internal/queue is
+// forbidden to know which one is running — so the only place a backend
+// difference can be caught is here. A backend this suite has not certified
+// does not exist as far as the engine is concerned.
 //
 // The suite is written for an ASYNCHRONOUS backend even though the in-memory
 // twin dispatches inline: every positive assertion waits for the handler to
@@ -25,8 +25,8 @@
 //
 //   - It required a deferral to cost nothing. JetStream trades that away
 //     deliberately and raises MaxDeliver to absorb it. Now FreeDeferral.
-//   - It required a nak to replay from the head. Measured Pulsar-only; JetStream
-//     returns redelivered messages behind never-delivered ones. Now
+//   - It required a nak to replay from the head. JetStream returns redelivered
+//     messages behind never-delivered ones, so only the twin does this. Now
 //     HeadReplayOnNak.
 //   - It required a stopped queue to restart. The contract does not say, and two
 //     backends answered differently. Now Restartable.
@@ -185,11 +185,10 @@ type Capabilities struct {
 	//
 	// It asks for TOTAL ATTEMPTS — an observable — rather than for a
 	// "budget", because a budget is not one number and the contract never
-	// says which one it is. Pulsar and the in-process twin count
-	// redeliveries AFTER the first delivery (10 means 11 attempts); NATS
-	// MaxDeliver
-	// counts deliveries INCLUDING the first (25 means 25). Both numbers
-	// live in this repo, in different documents, meaning different things.
+	// says which one it is. The in-process twin counts redeliveries AFTER
+	// the first delivery (24 means 25 attempts); NATS MaxDeliver counts
+	// deliveries INCLUDING the first (25 means 25). Both numbers live in
+	// this repo, in different documents, meaning different things.
 	//
 	// The earlier form of this field named a budget and defined the
 	// convention in this comment, which made every backend that passed
@@ -294,12 +293,15 @@ type Capabilities struct {
 	// budget is whole afterwards.
 	//
 	// A capability rather than a requirement, for the same measured reason
-	// as HeadReplayOnNak and from the same decision. On Pulsar a graceful
-	// close returns unacked messages at redeliveryCount 0, so a seat
-	// handoff is free; on JetStream nothing is released by closing, so
-	// deferral is implemented with Nak() and costs one delivery count —
-	// and MaxDeliver was re-derived from 10 to 25 precisely to absorb
-	// handoffs.
+	// as HeadReplayOnNak and from the same decision. The in-memory twin
+	// returns a deferred batch untouched, so a seat handoff there is free;
+	// on JetStream nothing is released by closing, so deferral is
+	// implemented with Nak() and costs one delivery count — and MaxDeliver
+	// was re-derived from 10 to 25 precisely to absorb handoffs.
+	//
+	// It is the twin that declares this and the shipped broker that does
+	// not, which is worth saying plainly: the case it gates certifies the
+	// twin against itself, not production.
 	//
 	// The invariant every backend still owes is the one the contract
 	// states: a deferral must not cause a HEALTHY event to die. A backend
@@ -313,7 +315,7 @@ type Capabilities struct {
 	// behind it.
 	//
 	// A capability rather than a requirement, and deliberately so:
-	// measured, Pulsar replays from the head while JetStream returns a
+	// measured, the twin replays from the head while JetStream returns a
 	// redelivered message BEHIND never-delivered ones. The engine no
 	// longer depends on either — within-conversation order comes from
 	// event timestamps, which
@@ -500,11 +502,13 @@ const (
 	// The value stands on a NARROWER base than "no backend has reported a
 	// flake" suggests, which is what this used to claim. Ten repeats of the
 	// Batch group on JetStream came back clean, and the twin is the fastest
-	// backend and so the least informative. Pulsar contributes nothing at
-	// all: its TestConformance SKIPS without a live broker, so wherever one
-	// is absent this suite is certifying two backends, not three. A case
-	// needing more publishes per window should say so rather than assume
-	// this covers it.
+	// backend and so the least informative. A case needing more publishes
+	// per window should say so rather than assume this covers it.
+	//
+	// What the base no longer has is a THIRD opinion. Every backend this
+	// suite has ever certified found more bugs in the suite than in itself,
+	// so the loss is real even though both remaining backends now run with
+	// no external service and no environment variable to forget.
 	//
 	// The suite never asks for a linger above queue.MaxLingerSeconds, and
 	// must not: backends size their dispatch budget to that ceiling and are

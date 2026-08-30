@@ -15,12 +15,12 @@ import (
 )
 
 // The contract says every backend must emit the same name for the same
-// situation. Nothing connected that sentence to the backends, and all three
+// situation. Nothing connected that sentence to the backends, and they
 // drifted: `memory` logged a recovered listener panic as
-// `publish_listener_failed` with the value under `error`, while `jetstream`
-// and `pulsar` logged `publish_listener_panicked` with it under `panic`; the
-// stream side additionally keyed the topic as `subject` on those two and
-// `topic` on the third.
+// `publish_listener_failed` with the value under `error`, while the
+// broker-backed ones logged `publish_listener_panicked` with it under
+// `panic`; the stream side additionally keyed the topic as `subject` on
+// those and `topic` on the twin.
 //
 // The reason it survived is that the in-memory twin is the one the tests run
 // on, so the suite watched the divergent spelling go past on every run. These
@@ -101,7 +101,7 @@ func TestNoBackendWritesItsOwnPanicLine(t *testing.T) {
 		`"stream_handler_failed"`,
 	}
 
-	for _, backend := range []string{"memory", "jetstream", "pulsar"} {
+	for _, backend := range []string{"memory", "jetstream"} {
 		entries, err := os.ReadDir(filepath.Join(dir, backend))
 		if err != nil {
 			t.Fatalf("reading backend %s: %v", backend, err)

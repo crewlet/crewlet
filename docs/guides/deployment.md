@@ -5,11 +5,16 @@ binary: its event stream is a NATS JetStream server it embeds, and its store
 is a local file it creates and owns exclusively. A single host runs a whole
 company with nothing else installed.
 
-Two slots take an external address when a deployment outgrows one node — the
-stream and the coordination KV — and this page is mostly about that path. The
-store never becomes shared: it stays one file per node, which is why
-everything genuinely shared between nodes lives in the KV instead. See
-[Running a Fleet](fleet.md) and [Scaling Out](../concepts/scaling.md).
+One slot changes when a deployment outgrows one node — the stream, which
+becomes either a cluster of the members the nodes already embed or a NATS
+cluster somebody else runs — and this page is mostly about that path. The
+coordination KV is not a second address: it rides the stream's own
+connection, deliberately, so that a node cannot end up holding live leases
+over a link that still works while the one carrying its inbox has dropped —
+alive to its peers, deaf to its work. The store never becomes shared either:
+it stays one file per node, which is why everything genuinely shared between
+nodes lives in the KV instead. See [Running a Fleet](fleet.md) and
+[Scaling Out](../concepts/scaling.md).
 
 ---
 
@@ -40,138 +45,212 @@ webhooks and the dashboard, and there is nothing else to operate.
 ## The compose stack starts nothing
 
 `docker-compose.yml` in a repo checkout is for the things *around* the
-engine — the local integration loops and the external stream backend. Every
-service in it is behind a profile, so a bare `docker compose up` brings up
+engine — the local integration loops, and nothing else. There is no broker
+service in it, because there is nothing to run: the engine embeds its own.
+Every service is behind a profile, so a bare `docker compose up` brings up
 nothing at all:
 
 ```bash
 cp .env.example .env                              # first time only
 docker compose --profile gitlab up -d             # GitLab (code host)
 docker compose --profile mattermost up -d --wait  # Mattermost (chat)
-docker compose --profile pulsar up -d             # Pulsar + Dekaf
-```
-
----
-
-## Apache Pulsar as the stream
-
-Pulsar is one of the two external options for the stream slot (an external
-NATS server is the other, and is the simpler one). Everything in this
-section applies to a deployment that has chosen it; a single-host company
-needs none of it.
-
-```bash
-docker compose --profile pulsar up -d
 ```
 
 | Service | Port | Details |
 |---------|------|---------|
-| Apache Pulsar | 6650 / 8080 | `apachepulsar/pulsar` standalone, at the version [`docker-compose.yml`](../../docker-compose.yml) pins — 6650 binary protocol (the engine connects here), 8080 admin/REST (the engine needs BOTH: subscription lifecycle runs over admin REST) |
-| Dekaf (Pulsar UI) | 8090 | Pulsar web UI — topics, subscriptions, backlog, message browse |
+| GitLab | 8929 / 2424 | `gitlab/gitlab-ee`, configured `external_url http://gitlab.local:8929` — the published port and the URL GitLab builds its own links from are deliberately the same number. 2424 is git-over-SSH and optional; HTTPS plus a token is the path the engine takes |
+| Mattermost | 8065 | `${MATTERMOST_LISTEN_PORT:-8065}`. Mattermost accepts a websocket upgrade only from a browser whose `Origin` matches `MM_SERVICESETTINGS_SITEURL` exactly, host and scheme, so move the port and the site URL together or the page loads with the event stream silently dead |
 
-The Pulsar web UI is [Dekaf](https://pulsar.apache.org/docs/next/administration-dekaf-ui/) (the UI the Pulsar docs recommend — Apache-2.0, no account/license), auto-wired to the broker. The CLI works too, e.g. `docker compose exec pulsar bin/pulsar-admin topics list public/default`. Dekaf is just a UI; remove the `dekaf` service from `docker-compose.yml` if you don't want it.
+---
 
-**Local vs remote access.** Dekaf renders an absolute `<base href>` from `DEKAF_PUBLIC_BASE_URL` (default `http://localhost:8090`), so the SPA's own API calls target that URL. Locally, just open <http://localhost:8090>. **When Dekaf runs on a remote server**, set `DEKAF_PUBLIC_BASE_URL` to the address you actually open in the browser — e.g. in `.env`:
+## The stream beyond one host
 
-```bash
-DEKAF_PUBLIC_BASE_URL=http://<server-ip-or-host>:8090
+The stream slot has a default and one alternative, and they differ in who
+runs the broker rather than in what the engine speaks: `embedded` starts a
+NATS JetStream server inside this process, `nats` dials one somebody else
+runs. The client code is identical either way — one implementation, with the
+connection as the only branch — so nothing above the queue can tell which is
+in use, and no company config mentions it.
+
+A single host needs neither shape below. A fleet needs exactly one of them,
+because two nodes each embedding a *solo* server are two companies that
+cannot see each other: the solo server binds no socket at all, which is a
+security property as much as a convenience.
+
+### Every node embeds a member of one cluster
+
+The fleet still ships as one binary and there is still no broker to deploy.
+Three nodes, each naming itself, its route port and the other two:
+
+```yaml
+# config.yaml (Tier A) on the first node. The other two differ only in
+# node.id and in which peers they name.
+node:
+  id: crewlet-1
+
+stream:
+  type: embedded
+  store_dir: "/var/lib/crewlet/stream"
+  cluster:
+    name: crewlet                      # identical on every member
+    port: 6222                         # this member's route port
+    peers:                             # the others' route URLs
+      - "nats://crewlet-2.internal:6222"
+      - "nats://crewlet-3.internal:6222"
+  replicas: 3                          # a publish is committed by a quorum
+                                       #   before Publish returns
+
+coordination:
+  type: embedded-kv                    # the leases ride the stream's own
+                                       #   connection; nothing else to set
 ```
 
-Otherwise the page loads but every API call goes to the *browser machine's* `localhost:8090`, which fails.
+**`node.id` is this member's identity in the cluster, and it has to survive a
+restart.** The engine passes it as the NATS server name, which must be unique
+— a route from a server whose name the cluster already knows is rejected —
+and stable, because **JetStream places replicas by server name**. A node that
+comes back under a fresh name is a new peer: its old replicas are orphaned on
+a member that no longer exists, and the stream sits short of quorum waiting
+for a server that will never return. That is why a clustered member with no
+name is refused at startup rather than given a generated one — a generated
+name is unique, which is only half the requirement.
 
-**`upstream connect error ... connection failure ... 111`.** That's Dekaf's Envoy (on 8090) reporting its backend was unreachable. Most often it's the remote-access case above (calls hitting the wrong host); it can also mean you opened the UI before Dekaf finished starting, or its backend was starved on a RAM-pressured host. The service has a healthcheck — wait until `docker compose ps` shows `dekaf` as `healthy` (or use `docker compose up --wait`), make sure the broker/host is healthy (see the JVM-memory note above), and if it persists check `docker logs crewlet-dekaf-1` and `docker stats`.
+**It is the resolved id, so the environment is enough.** The name follows the
+same precedence as everything else that identifies this node — `node.id` in
+the file, then `CREWLET_NODE_ID`, then the default — so an orchestrator
+injecting a pod name needs no `node:` block at all. Writing
+`node.id: "${CREWLET_NODE_ID}"` (or `"${HOSTNAME}"`) works too, and means the
+same thing: Tier A expands `${VAR}` references before it decodes.
 
-**JVM memory (most important).** The `apachepulsar/pulsar` image defaults to `PULSAR_MEM="-Xms2g -Xmx2g -XX:MaxDirectMemorySize=4g"` — the standalone JVM commits 2 GB of heap *at startup* and can grow direct memory to 4 GB (~6 GB total). On a host without that much free RAM (alongside the engine itself), the box starts **swapping**, which presents as a sustained 100+ MB/s disk-read storm and high load right when you start the project, and can make the host itself unresponsive (you can lose SSH). No disk/retention setting fixes this — it's a memory problem. The bundled `docker-compose.yml` caps it to `-Xms512m -Xmx1g -XX:MaxDirectMemorySize=512m` (~800 MB idle, stays bounded under load) and sets `mem_limit: 2g` as a hard container ceiling so it can never swap the host. Raise these if you run a heavier workload and have the RAM. (Pulsar's own [docker-compose guide](https://pulsar.apache.org/docs/next/getting-started-docker-compose/) assumes ≥ 8 GB for a full cluster; the capped standalone here needs far less.)
+**One node or three, never two.** Two embedded-KV members have no quorum
+without each other, so the fleet stops serving the moment either restarts —
+and a rolling upgrade restarts them one at a time, which makes the outage
+certain rather than unlucky. Tier A refuses a two-member config by name.
 
-**Orphaned subscriptions.** Pulsar keeps a message until *every* subscription has acked it, so a durable subscription left behind by an unclean shutdown — e.g. one of the dashboard's per-tab broadcast consumers after a crash — would otherwise pin events on disk indefinitely. The bundled `docker-compose.yml` sets `subscriptionExpirationTimeMinutes=30`, which reaps a subscription that has had no connected consumer for 30 minutes (releasing its backlog). This is non-lossy for live work — the engine's own subscriptions have a connected consumer the whole time it runs. We deliberately do **not** set an aggressive message TTL or backlog-eviction quota here: those apply uniformly to the engine's durable inboxes too and would silently drop legitimately-queued tasks (e.g. for an agent that's briefly down). Genuine send/queue pressure is handled at the application layer (the Pulsar backend retries transient publish failures with backoff) and the JVM memory cap is what actually protects the host.
+**A fresh cluster takes seconds to form, and the engine waits it out rather
+than hanging.** Accepting connections is not the same as being able to serve
+JetStream: a member answers its client port as soon as it is listening, while
+the metadata group takes seconds to elect a leader — measured at around eight
+on a quiet three-member cluster — and until it has one, creating a replicated
+stream *blocks* instead of failing. So a node waits for its own JetStream to
+become current, up to 60 seconds, and then retries placement for as long as
+the cluster answers "no suitable peers", inside a 30-second provisioning
+deadline per stream. Every other error is returned at once: a bad subject or
+a conflicting retention does not clear by waiting, and retrying would turn a
+config mistake into a half-minute hang with the same message at the end.
 
-If a broker has already bloated (e.g. from repeated unclean kills on a broker running without the JVM memory cap), clear the accumulated state: `docker compose rm -sf pulsar && docker volume rm crewlet_pulsar-data`, then bring the profile back up. The engine's own store is a separate file and is untouched by this. If you want acknowledged events kept for longer queue-side replay, set a namespace retention policy, e.g. `docker compose exec pulsar bin/pulsar-admin namespaces set-retention public/default --time 7d --size -1`.
+**Set `store_dir`, or the fleet forgets.** Empty selects an in-memory member,
+which is right for a test and for a stateless ingress-only node and wrong for
+anything else: a restart loses that member's replicas, and the same server
+holds the KV buckets carrying the fleet's shared records — the token counter,
+the completion ledger, open agent-to-agent asks, claimed scheduled fires,
+detached (and billed) sandbox runs.
 
-**Custom tenant / namespace.** By default all crewlet topics live under Pulsar's built-in `public/default`, which exists on every broker. To isolate crewlet on a shared cluster, set `stream.tenant` / `stream.namespace` in the Tier A config — topics then become `persistent://<tenant>/<namespace>/<subject>`.
+> **The clustered embedded broker has no authentication and no TLS. Run it on
+> a trusted network.**
+>
+> A clustered member listens on two ports, on every interface: the route port
+> named in the config, and a client port the server picks for itself. Neither
+> carries a credential or a certificate. `credentials`, `token` and
+> `stream.tls` are **dial-side** options — they configure this process
+> connecting *out* to a URL — and an embedded server has no server-side
+> counterpart in Tier A at all. Anything that can reach those ports can
+> publish onto a seat's inbox, read every event the company produces, and
+> take its leases.
+>
+> A private subnet, a security group or a WireGuard mesh between the nodes is
+> what makes this shape safe, and no configuration substitutes for one. A
+> deployment that needs the brokers themselves mutually authenticated runs
+> `stream.type: nats` against a NATS cluster it secures itself.
 
-The engine **does** use the admin API, and needs `admin_url` reachable: seat
-subscriptions are created over admin REST rather than by subscribing, because
-creating one by subscribing joins a Shared subscription a peer already owns
-and steals its traffic — measured. What it never does is create *tenants or
-namespaces*: Pulsar auto-creates topics and nothing else, so provision those
-out-of-band before starting the engine:
+### An external NATS server
 
-```bash
-# one-time, by the operator (or your IaC):
-docker compose exec pulsar bin/pulsar-admin tenants create crewlet
-docker compose exec pulsar bin/pulsar-admin namespaces create crewlet/prod
-```
+The other multi-node shape, and the one to reach for when the broker has to
+be secured, operated, or shared on a schedule of its own:
 
 ```yaml
 # config.yaml (Tier A)
 stream:
-  type: pulsar
-  url: "pulsar://localhost:6650"
-  admin_url: "http://localhost:8080"
-  tenant: crewlet
-  namespace: prod
+  type: nats
+  url: "nats://nats-1.internal:4222,nats://nats-2.internal:4222,nats://nats-3.internal:4222"
+  credentials: "/etc/crewlet/engine.creds"   # an NKey/JWT creds file
+  # token: "${CREWLET_NATS_TOKEN}"           # or a bearer token
+  tls:
+    ca: /etc/crewlet/ca.pem                  # the private CA to trust
+    cert: /etc/crewlet/client.pem            # this engine's own certificate
+    key: /etc/crewlet/client.key
+
+coordination:
+  type: embedded-kv
 ```
 
-If the tenant/namespace doesn't exist, the engine fails at startup with the broker's "namespace/tenant not found" error on its first subscription — create it and restart.
+**The URL goes to the NATS client verbatim**, so a comma-separated list of a
+cluster's members is one value as far as this config is concerned and the
+client fails over between them. `store_dir` is refused here by name: it is
+where an *embedded* server persists, and an external cluster keeps its own
+storage.
 
-**Authentication.** The bundled compose runs the broker **unauthenticated**, which is fine on a laptop and wrong anywhere else. For a broker reachable beyond localhost, enable Pulsar's token authentication and authorization: the engine authenticates as its own *role* (the JWT's `sub` claim), and you grant that role produce/consume on its namespace only, so a stolen or stray client gets `AuthorizationError` instead of your agents' inboxes.
+**Authentication is `credentials` or `token`.** `credentials` is a path to a
+NATS credentials file, the NKey/JWT pair a NATS account setup issues per
+user; `token` is a bearer token, and takes a `${VAR}` reference so the
+secret stays out of the file and out of the config revision history. Set
+whichever the broker asks for; both are dial options, and the engine stores
+neither.
 
-1. Generate a secret key and tokens, and copy the key to the host
-   `./pulsar-keys/` directory that step 2 mounts — generating it straight
-   into `/pulsar/keys/` would strand it in the container's ephemeral
-   filesystem, and the broker recreated in step 2 (with the mount) would
-   come up without its signing key. These are credentials; the repo's
-   default `.gitignore` covers `pulsar-keys/`:
+**`stream.tls` is the transport underneath that authentication**, and it is a
+separate question from who you are: a broker configured `tls { verify: true }`
+— the hardened default every NATS guide recommends — refuses a connection
+presenting no client certificate, whatever credentials would have followed.
+`ca` is the bundle the server's certificate is verified against, and empty
+means the host's root pool, which is right for a public CA and wrong for the
+self-signed certificate most internal estates use. `cert` and `key` are this
+engine's own certificate: both or neither, because validation refuses half a
+keypair rather than letting it dial and be rejected by the broker with an
+error naming neither file. There is deliberately **no way to skip
+verification** — that switch is set once during a bring-up and never unset,
+and the connection it leaves behind carries every event this company
+publishes to whoever answers on that address.
 
-   ```bash
-   docker compose exec pulsar bin/pulsar tokens create-secret-key --output /pulsar/secret.key
-   docker compose exec pulsar bin/pulsar tokens create --secret-key file:///pulsar/secret.key --subject admin   # operator
-   docker compose exec pulsar bin/pulsar tokens create --secret-key file:///pulsar/secret.key --subject engine  # the engine
-   mkdir -p pulsar-keys
-   docker compose cp pulsar:/pulsar/secret.key pulsar-keys/secret.key
-   ```
+**Those files are opened before the dial, and the error names the field.** A
+missing `ca` reports `tls.ca /etc/crewlet/ca.pem: no such file or directory`,
+not a connection failure. Left to the NATS client, an unreadable certificate
+surfaces as a dial error that reads exactly like *the broker is
+unreachable* — and sends an operator to debug a network path that is fine,
+for a file that is simply not there.
 
-2. Enable auth on the broker (compose `pulsar` service; mount the key dir and update the healthcheck, which must now authenticate too):
+**A broker blip is not a node restart.** The engine dials with unlimited
+reconnects and a one-second wait between attempts, and never gives up on the
+URL: the coordination layer already distinguishes "unreachable" from "not
+mine", and a node that keeps its seats through a two-second outage is the
+entire point of that distinction. The coordination KV rides this same
+connection on purpose — one connection, one fate. An outage that outlasts the
+lease TTL (45 s unless `coordination.lease_ttl_seconds` says otherwise) does
+hand this node's seats to a peer, and that is the intended behaviour rather
+than something a reconnect policy should paper over.
 
-   ```yaml
-   environment:
-     PULSAR_PREFIX_authenticationEnabled: "true"
-     PULSAR_PREFIX_authenticationProviders: "org.apache.pulsar.broker.authentication.AuthenticationProviderToken"
-     PULSAR_PREFIX_authorizationEnabled: "true"
-     PULSAR_PREFIX_superUserRoles: "admin"
-     PULSAR_PREFIX_tokenSecretKey: "file:///pulsar/keys/secret.key"
-     PULSAR_PREFIX_brokerClientAuthenticationPlugin: "org.apache.pulsar.client.impl.auth.AuthenticationToken"
-     PULSAR_PREFIX_brokerClientAuthenticationParameters: "token:${PULSAR_ADMIN_TOKEN}"
-   volumes:
-     - ./pulsar-keys:/pulsar/keys:ro
-   healthcheck:
-     test: ["CMD-SHELL", "curl -fsS -H \"Authorization: Bearer ${PULSAR_ADMIN_TOKEN}\" http://localhost:8080/admin/v2/brokers/health"]
-   ```
+**The account needs more than publish and subscribe.** A node creates what it
+uses, on every start and idempotently: the five engine streams
+(`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
+`CREWLET_CONFIG`, `CREWLET_DLQ`), a stream per extra subject namespace a
+company publishes under, one durable consumer per seat mailbox — an ordinary
+API call, measured at 1.7 ms — and the twelve `crewlet_*` KV buckets holding
+the leases, the fencing epochs and the fleet's shared records. A credential
+scoped to publishing and consuming fails at boot, on the first stream it
+tries to create.
 
-3. Create the namespace and grant the engine's role — and only that role — access (operator, one-time):
+**Replication is asked for, not assumed.** `stream.replicas` is the replica
+count the engine requests for each of those streams and buckets, and it
+applies to an external cluster exactly as it does to an embedded one — set it
+to `3` against a cluster of three or more, or the engine asks for one copy and
+gets what it asked for: streams and a lease bucket that survive a process
+restart but not the loss of the single server holding them.
 
-   ```bash
-   A="--auth-plugin org.apache.pulsar.client.impl.auth.AuthenticationToken --auth-params token:$PULSAR_ADMIN_TOKEN"
-   docker compose exec pulsar bin/pulsar-admin $A tenants create crewlet
-   docker compose exec pulsar bin/pulsar-admin $A namespaces create crewlet/prod
-   docker compose exec pulsar bin/pulsar-admin $A namespaces grant-permission crewlet/prod --role engine --actions produce,consume
-   ```
-
-4. Point the engine at that namespace with its token (Tier A config; tokens are bearer secrets — use `pulsar+ssl://` plus `tls_trust_certs` whenever the broker isn't on localhost):
-
-   ```yaml
-   stream:
-     type: pulsar
-     url: "pulsar://broker:6650"
-     admin_url: "https://broker:8080"
-     tenant: crewlet
-     namespace: prod
-     token: "${CREWLET_PULSAR_TOKEN}"
-   ```
-
-5. Dekaf needs credentials too once auth is on — give it a token via `DEKAF_DEFAULT_PULSAR_AUTH: '{"type":"jwt","token":"<token>"}'`.
-
-Verified end-to-end: with the grant in place the engine completes a full publish/subscribe roundtrip in its own namespace, is refused with `AuthorizationError` on any namespace it was not granted, and anonymous connections are rejected outright.
+Tier A cannot check this number for you here. It refuses `replicas` above 1
+on an *embedded* stream that names no peers, because that file contradicts
+itself — but `stream.url` names an address rather than a member list, so how
+many servers answer behind it is yours to know. Asking for more replicas than
+the cluster has members fails at boot, on the first stream the engine tries to
+create.
 
 ---
 
@@ -190,7 +269,7 @@ api:
 crewlet run -config config.yaml    # engine + embedded API on :80
 ```
 
-(`-api-port 80` on the command line does the same.) This is the shape every single-host walkthrough in these docs uses — the bundled `examples/nimbus.config.yaml` ships `api.port: 80`, and that embedded server **is** the webhook target the integrations register (e.g. `http://host.docker.internal:80/webhooks/gitlab`). Binding 80 as a non-root process needs privileged-port access on Linux: `sudo sysctl net.ipv4.ip_unprivileged_port_start=80` (persist in `/etc/sysctl.d/`) or grant the binary `CAP_NET_BIND_SERVICE`. Avoid 8080 (Pulsar's admin port in the bundled `docker-compose.yml`) and make sure nothing else owns 80.
+(`-api-port 80` on the command line does the same.) This is the shape every single-host walkthrough in these docs uses — the bundled `examples/nimbus.config.yaml` ships `api.port: 80`, and that embedded server **is** the webhook target the integrations register (e.g. `http://host.docker.internal:80/webhooks/gitlab`). Binding 80 as a non-root process needs privileged-port access on Linux: `sudo sysctl net.ipv4.ip_unprivileged_port_start=80` (persist in `/etc/sysctl.d/`) or grant the binary `CAP_NET_BIND_SERVICE`. Make sure nothing else already owns the port you pick.
 
 Do **not** also start a second node on the same host with such a file — both read the same `api.port`, and the second binder hits `EADDRINUSE` and kills whichever server came second.
 
@@ -203,24 +282,20 @@ While seats are still being claimed the node reports what is true rather than pr
 Run ingress as its own node when you want the webhook receiver to stay up
 across engine restarts, or the two on separate hosts.
 
-**Two processes need a stream they can both reach**, which an embedded
-single-node one is not: each would have its own. Any of three works — a
-*clustered* embedded stream (`stream.cluster.peers`), an external NATS
-server (`stream.type: nats` plus `stream.url`), or Pulsar. They also need
-shared coordination: Tier A refuses `coordination.type: local` alongside any
-of them, by name, rather than letting two nodes each claim every seat.
+**Two processes need a stream they can both reach**, which a solo embedded
+one is not — it binds no socket, so each would have its own. Either shape
+from [the section above](#the-stream-beyond-one-host) works: a *clustered*
+embedded stream (`stream.cluster`), or an external NATS server
+(`stream.type: nats` plus `stream.url`). They also need shared coordination:
+Tier A refuses `coordination.type: local` alongside either of them, by name,
+rather than letting two nodes each claim every seat.
 
-An external NATS server takes `credentials` (an NKey/JWT file) or `token` for
-authentication, and `stream.tls` for the transport underneath it: `ca` for a
-private CA, and `cert`/`key` for the client certificate a broker configured
-`tls { verify: true }` requires. Both halves of the keypair or neither —
-validation refuses half of one, because half a keypair dials and is rejected
-by the broker with an error naming neither file. A Pulsar stream uses
-`tls_trust_certs` instead, and its separate NATS lease estate has its own
-`coordination.nats.tls` with the same three fields.
-
-Both nodes read the same Tier A file, so give each its roles — and its own
-`-api-port`, since only the ingress node should bind one:
+Both nodes can read the same Tier A file: against an external NATS server
+nothing in it is per-node except `node.id`, and `CREWLET_NODE_ID` injects
+that without templating anything. A clustered embedded stream is the one
+exception — each member also names its own route port and its own peers. So
+give each node its roles at the command line, and its own `-api-port`, since
+only the ingress node should bind one:
 
 ```bash
 # Terminal 1: the agents and the fleet duties, no HTTP
@@ -248,7 +323,9 @@ They are one command, and they build the **same** application: every node learns
 
 Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies).
 
-Both communicate through Pulsar. Both accept `-debug` for verbose logging.
+Both communicate through the stream, and through the coordination KV riding
+the same connection — never with each other. Both accept `-debug` for verbose
+logging.
 
 ### Replica count
 
@@ -269,24 +346,27 @@ N × that ceiling whether you wanted it or not.
 **[Running a Fleet](fleet.md)** is the guide: node roles, seat placement,
 draining, and rolling upgrades. The two things that bite hardest:
 
-> **A fleet needs shared coordination and, on Pulsar, the right broker settings.**
+> **A fleet needs shared coordination.**
 >
 > Seat leases live in the coordination slot. `coordination.type: local` is a
 > per-process store, so every node then believes it owns the whole company —
-> the engine logs `seat_placement_is_process_local` at boot. A fleet needs a
-> shared one; see [Running a Fleet](fleet.md). The slot governs the *leases*
-> only — the fleet's shared records are on the KV regardless, because they have
-> to survive a restart as much as a peer.
+> the engine logs `seat_placement_is_process_local` at boot. A fleet needs
+> `coordination.type: embedded-kv`; see [Running a Fleet](fleet.md). The slot
+> governs the *leases* only — the fleet's shared records are on the KV
+> regardless, because they have to survive a restart as much as a peer, and
+> the KV rides the stream's own connection whichever value the slot holds.
 >
-> On Pulsar, its two reapers must also be turned off, because an unowned seat's
-> subscription has no connected consumer and both reapers delete exactly that:
-> set `subscriptionExpirationTimeMinutes` to `0` and
-> `brokerDeleteInactiveTopicsEnabled` to `false` (or
-> `brokerDeleteInactiveTopicsMode` to `delete_when_subscriptions_caught_up`).
-> The repo's `docker-compose.yml` ships these values under its `pulsar`
-> profile, and CI certifies the backend against a broker configured this way.
-> Nothing in the engine can detect a broker that is quietly deleting a quiet
-> seat's mail.
+> **And, when the nodes *are* the broker, a quorum to keep it on.**
+>
+> One node or three, never two: two embedded members have no quorum without
+> each other, so the fleet stops serving the moment either restarts, and Tier
+> A refuses that config by name, counting `stream.cluster.peers`.
+> `stream.replicas: 3` is the other half — one replica count covers the
+> engine's streams *and* the coordination buckets, because both live on the
+> same broker, and at 1 the loss of a member takes a seat's mailbox or the
+> fleet's leases with it. Against an external NATS cluster the quorum is that
+> cluster's to provide rather than the engine's to count; see
+> [An external NATS server](#an-external-nats-server).
 
 Give each node a distinct id — `node.id` in the Tier A file, or the
 `CREWLET_NODE_ID` environment variable, which is how a container orchestrator
