@@ -131,6 +131,26 @@ func SoleVar(value string) (string, bool) {
 	return envref.Whole(strings.TrimSpace(value))
 }
 
+// DescribeShape says what is wrong with a config value without repeating it.
+//
+// # It never returns the value, and that is the point
+//
+// This sentence goes into a report an operator pastes into a ticket, and the
+// value here is either a literal credential or a string containing one. The
+// two shapes have different fixes — a literal needs a variable, a composite
+// needs the variable to be the WHOLE value — so collapsing them into "not a
+// reference" would leave the reader to work out which they have.
+//
+// It lives here rather than in each vendor because it was written three
+// times, and the third copy is the one that would have started disagreeing
+// with the other two about what an operator is being told to do.
+func DescribeShape(value string) string {
+	if len(ReferencedVars(value)) == 0 {
+		return "a literal"
+	}
+	return "a reference embedded in other text"
+}
+
 // Verdict is what probing a recorded credential concluded.
 //
 // FOUR OUTCOMES, not two, because the two that are easy to merge are the

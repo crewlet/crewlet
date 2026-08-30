@@ -47,12 +47,14 @@ type notifications struct {
 	// that enrich a Plan phase without taking a surface down.
 	confluence confluenceParts
 
-	// jira remembers which account each seat credential authenticates as.
+	// atlassian remembers which account each seat credential authenticates
+	// as, for BOTH products — one Atlassian account serves Jira and
+	// Confluence, and the two namespaces are populated from one walk.
 	// Outside the mutex above for the same reason the code host's is: it
 	// OUTLIVES an epoch, because identity is a function of the credential
 	// and a revision that changed something else must not re-spend a
 	// request per seat to re-learn what it already knows.
-	jira jiraIdentities
+	atlassian atlassianIdentities
 
 	// gitlab remembers which account each seat credential authenticates
 	// as. Outside the mutex above because it has its own, and because it
@@ -158,11 +160,14 @@ func (e *Engine) refreshParties(c *Company) {
 	if gh := c.Config.Integrations.GitHub; gh != nil && gh.Enabled {
 		e.notify.github.register(reg, c, e.resolver())
 	}
-	// THE TRACKER'S ARE TOO, and for the same reason: a Jira account id is
-	// what a webhook names a seat by, and the mapping is derived from the
-	// seat's own credential rather than declared anywhere in the org.
-	if j := c.Config.Integrations.Jira; j != nil {
-		e.notify.jira.register(reg, c, e.resolver())
+	// ATLASSIAN'S ARE TOO, and for the same reason: an account id is what
+	// a Jira webhook and a Confluence page event both name a seat by, and
+	// the mapping is derived from the seat's own credential rather than
+	// declared anywhere in the org. One call covers both products — the
+	// resolver knows which of them it has resolved, and registering only
+	// the tracker's is how the wiki's namespace stayed empty.
+	if c.Config.Integrations.Jira != nil || c.Config.Integrations.Confluence != nil {
+		e.notify.atlassian.register(reg, c, e.resolver())
 	}
 
 	e.notify.mu.Lock()
@@ -275,7 +280,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		}
 	}
 	if cf := c.Config.Integrations.Confluence; cf != nil {
-		parts, err := e.startConfluence(c, cf)
+		parts, err := e.startConfluence(ctx, c, cf)
 		if err != nil {
 			// Same posture as every other surface: the company runs
 			// WITHOUT its knowledge base rather than not at all.

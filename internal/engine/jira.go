@@ -3,11 +3,9 @@ package engine
 import (
 	"context"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
-	"sync"
 
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -20,129 +18,12 @@ import (
 // engine never transitions an issue or posts a comment on a seat's behalf —
 // it only decides which seats an event concerns and tells them.
 //
-// # Seat identity is the whole integration, and it is DERIVED
+// # Seat identity is the whole integration, and it lives next door
 //
 // A Jira webhook names people by account id, and nothing in the org model
-// says which account a seat holds. Without that mapping every event names a
-// stranger, the routing gate drops every target, and the integration is
-// silently inert.
-//
-// So the engine asks: it calls /myself with the seat's OWN credential and
-// registers whatever account answers. A declared account id beside the token
-// would be cheaper and is the wrong shape — a declaration that disagrees
-// with the credential is a misroute nothing can detect.
-
-// jiraIdentities remembers which account each seat credential authenticates
-// as.
-//
-// KEYED ON THE CREDENTIAL, which is what makes an apply free: identity is a
-// function of the credential, credentials change rarely, and a config
-// revision that touched something else must not spend one request per seat
-// to re-learn what it already knows. A rotated token is a cache miss and
-// costs exactly one request, which is correct — it may well be a different
-// account.
-//
-// The EMAIL is part of the key, not just the token: Jira Cloud authenticates
-// base64(email:token), so the same token under a different address is a
-// different credential and may well resolve to a different account.
-type jiraIdentities struct {
-	mu     sync.Mutex
-	byCred map[jira.Credential]string
-}
-
-// resolve fills in the accounts behind any credentials not already known.
-//
-// CONCURRENTLY, bounded by the number of distinct credentials. Sequentially
-// this is one round trip per seat on the boot path, which on a company of
-// thirty seats against a slow instance is thirty timeouts end to end.
-//
-// A seat whose lookup FAILS is left unresolved rather than failing the boot:
-// the instance may be briefly down, and the next apply retries. What that
-// costs is that seat's inbound routing until then, which is the honest
-// consequence and is reported per seat.
-func (j *jiraIdentities) resolve(ctx context.Context, url string, deploy jira.Deployment, creds []jira.Credential) {
-	j.mu.Lock()
-	if j.byCred == nil {
-		j.byCred = map[jira.Credential]string{}
-	}
-	var missing []jira.Credential
-	for _, cred := range creds {
-		if _, known := j.byCred[cred]; !known {
-			missing = append(missing, cred)
-		}
-	}
-	j.mu.Unlock()
-	if len(missing) == 0 {
-		return
-	}
-
-	var wg sync.WaitGroup
-	found := make([]string, len(missing))
-	for i, cred := range missing {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			client, err := jira.NewClient(jira.ClientOptions{
-				URL: url, Email: cred.Email, Token: cred.Token, Deployment: deploy,
-			})
-			if err != nil {
-				log.WarnContext(ctx, "jira_seat_client_failed", "error", err.Error())
-				return
-			}
-			account, err := client.Me(ctx)
-			if err != nil {
-				log.WarnContext(ctx, "jira_seat_identity_unresolved", "error", err.Error(),
-					"detail", "this seat receives no tracker events until "+
-						"the next apply re-resolves it")
-				return
-			}
-			found[i] = account
-		}()
-	}
-	wg.Wait()
-
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	for i, account := range found {
-		if account != "" {
-			j.byCred[missing[i]] = account
-		}
-	}
-}
-
-// register binds each resolved seat to its account in the given registry.
-//
-// NO I/O. It takes the registry rather than reading the live one because an
-// apply builds a NEW registry from the new company, and a config-derived
-// binding has to be rebuilt into it at that moment.
-func (j *jiraIdentities) register(reg *notify.Registry, c *Company, env *config.Resolver) int {
-	j.mu.Lock()
-	known := maps.Clone(j.byCred)
-	j.mu.Unlock()
-
-	var registered int
-	for seat := range c.Org.AllRoles() {
-		cred := jira.CredentialOf(seat, env.Value)
-		if !cred.Held() {
-			continue
-		}
-		account := known[cred]
-		if account == "" {
-			continue
-		}
-		if err := reg.Register(jira.Backend, account, seat.Handle()); err != nil {
-			// Two seats sharing one account, or a seat that is not in
-			// this org. Both are faults an operator has to fix, and both
-			// are silent otherwise: that account's events go to whichever
-			// seat won.
-			log.Warn("jira_seat_identity_refused", "seat", seat.Handle(),
-				"account", account, "error", err.Error())
-			continue
-		}
-		registered++
-	}
-	return registered
-}
+// says which account a seat holds. The engine ASKS — see atlassian.go, which
+// resolves that mapping for both Atlassian products, because one account id
+// serves both and the two answers differ only on Data Center.
 
 // startJira builds the tracker's parser and resolves its seat identities.
 func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*jira.Parser, error) {
@@ -189,8 +70,9 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 				"its assignee and anyone mentioned and nobody else")
 	}
 
-	e.notify.jira.resolve(ctx, base, deploy, jiraSeatCredentials(c, env))
-	registered := e.notify.jira.register(e.Registry(), c, env)
+	e.notify.atlassian.resolve(ctx, atlassian.ProductJira,
+		productSite{base: base, deploy: deploy}, atlassianSeatCredentials(c, env))
+	registered := e.notify.atlassian.register(e.Registry(), c, env)[atlassian.ProductJira]
 	if registered == 0 {
 		// Configured with no seat identity is a company mid-setup —
 		// `crewlet jira provision` has not run — or an instance that
@@ -273,31 +155,6 @@ func jiraShareableURL(cfg *config.Jira, env *config.Resolver) string {
 		SiteURL: strings.TrimSpace(env.Value(cfg.SiteURL)),
 	}
 	return resolved.ShareableBaseURL()
-}
-
-// jiraSeatCredentials are the distinct credentials the company's agent seats
-// hold.
-//
-// DISTINCT because several seats may legitimately share one — a company
-// mid-migration, or one that has not provisioned per-seat accounts yet — and
-// resolving the same credential once per seat would spend N requests to
-// learn one answer.
-func jiraSeatCredentials(c *Company, env *config.Resolver) []jira.Credential {
-	held := map[jira.Credential]bool{}
-	for seat := range c.Org.AllRoles() {
-		if cred := jira.CredentialOf(seat, env.Value); cred.Held() {
-			held[cred] = true
-		}
-	}
-	// Sorted so a boot's log lines are diffable against the next one's.
-	creds := slices.Collect(maps.Keys(held))
-	slices.SortFunc(creds, func(a, b jira.Credential) int {
-		if a.Token != b.Token {
-			return strings.Compare(a.Token, b.Token)
-		}
-		return strings.Compare(a.Email, b.Email)
-	})
-	return creds
 }
 
 // jiraPrompt is the tracker's trigger builder. A value, held by nothing.

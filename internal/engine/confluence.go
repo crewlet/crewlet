@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -26,29 +27,6 @@ import (
 // So the org credential is optional for routing (a page's mentions are in
 // the payload) and REQUIRED for search, and the two are reported separately.
 
-// confluenceSeatEnvs are the mcp_env servers a seat's own Confluence
-// credential can live under, in the order they are tried.
-//
-// The same two the tracker reads, because it is the same Atlassian identity
-// and the community MCP server covers both products under one entry.
-var confluenceSeatEnvs = []string{"atlassian", "confluence"}
-
-// confluenceCredentialKeys and confluenceEmailKeys are the spellings a
-// seat's credential arrives under.
-//
-// A seat WITH one searches as itself and Confluence enforces its own page
-// ACLs; a seat without one falls back to the org account, and an unscoped
-// search is then refused — see [knowledge.Permitted].
-var (
-	confluenceCredentialKeys = []string{
-		"CONFLUENCE_API_TOKEN", "CONFLUENCE_PERSONAL_TOKEN",
-		"CONFLUENCE_TOKEN", "ATLASSIAN_API_TOKEN",
-	}
-	confluenceEmailKeys = []string{
-		"CONFLUENCE_USERNAME", "CONFLUENCE_EMAIL", "ATLASSIAN_EMAIL",
-	}
-)
-
 // confluenceParts is what the knowledge base contributes to a company.
 type confluenceParts struct {
 	parser   *confluence.Parser
@@ -61,7 +39,7 @@ type confluenceParts struct {
 }
 
 // startConfluence builds the knowledge base's parser and searcher.
-func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluenceParts, error) {
+func (e *Engine) startConfluence(ctx context.Context, c *Company, cfg *config.Confluence) (confluenceParts, error) {
 	if cfg == nil {
 		return confluenceParts{}, nil
 	}
@@ -126,9 +104,25 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 			SkillsSpace: skillsSpace, SiteURL: site,
 		})
 	}
+	// SEAT IDENTITIES, resolved and registered here rather than only for
+	// the tracker. A Confluence page event names its actor and its
+	// mentions by Atlassian account id, and until this ran the wiki's
+	// party namespace was empty for every agent seat — so a page
+	// mentioning an agent resolved to nobody, the subscription ledger was
+	// never written, an agent was never suppressed as the actor of its own
+	// edit, and every page event fell through to the space lead.
+	e.notify.atlassian.resolve(ctx, atlassian.ProductConfluence,
+		productSite{base: base}, atlassianSeatCredentials(c, env))
+	registered := e.notify.atlassian.register(e.Registry(), c, env)[atlassian.ProductConfluence]
+	if registered == 0 {
+		log.Warn("confluence_has_no_seat_identities", "url", base,
+			"detail", "every page event will name a stranger, and every page "+
+				"change will fall through to its space's lead")
+	}
+
 	log.Info("confluence_wired", "url", base, "site", site,
 		"spaces_with_leads", len(leads), "skills_space", skillsSpace,
-		"org_token", orgClient != nil)
+		"seat_identities", registered, "org_token", orgClient != nil)
 	return parts, nil
 }
 
@@ -145,7 +139,7 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 //
 // The tracker beside this one is reconciled for the first reason, and this
 // package needed the same edge from the moment it had a lead map.
-func (e *Engine) reconcileConfluence(c *Company) {
+func (e *Engine) reconcileConfluence(ctx context.Context, c *Company) {
 	cfg := c.Config.Integrations.Confluence
 	if cfg == nil {
 		return
@@ -159,7 +153,7 @@ func (e *Engine) reconcileConfluence(c *Company) {
 		return
 	}
 
-	parts, err := e.startConfluence(c, cfg)
+	parts, err := e.startConfluence(ctx, c, cfg)
 	if err != nil || parts.parser == nil {
 		// THE PREVIOUS WIRING KEEPS RUNNING. A revision whose Confluence
 		// block is broken must not leave the company with no knowledge
@@ -191,31 +185,20 @@ func seatConfluenceClient(env *config.Resolver, base string) confluence.SeatClie
 		if seat == nil || seat.IsHuman() {
 			return nil, false
 		}
-		var token, email string
-		for _, name := range confluenceSeatEnvs {
-			block := seat.MCPEnv[name]
-			for _, key := range confluenceCredentialKeys {
-				if value := strings.TrimSpace(env.Value(block[key])); value != "" {
-					token = value
-					break
-				}
-			}
-			if token == "" {
-				continue
-			}
-			for _, key := range confluenceEmailKeys {
-				if value := strings.TrimSpace(env.Value(block[key])); value != "" {
-					email = value
-					break
-				}
-			}
-			break
-		}
-		if token == "" {
+		// THE SHARED GRAMMAR, not a copy. This scan used to be written
+		// out here and had drifted from the tracker's: no Authorization
+		// key, no Bearer strip, and it chose the mcp_env block by NAME
+		// ORDER rather than by which block holds a token — so a company
+		// with both an `atlassian` and a `confluence` entry could have
+		// its credential found for Jira and not for the wiki, silently,
+		// because a seat whose credential was not found looks exactly
+		// like a seat that has none.
+		cred := atlassian.CredentialOf(seat, env.Value)
+		if !cred.Held() {
 			return nil, false
 		}
 		client, err := confluence.NewClient(confluence.ClientOptions{
-			URL: base, Email: email, Token: token,
+			URL: base, Email: cred.Email, Token: cred.Token,
 		})
 		if err != nil {
 			log.Warn("confluence_seat_client_failed", "seat", seat.Handle(),

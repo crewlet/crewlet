@@ -51,7 +51,7 @@ func PlanFor(o *org.Organization, cfg *config.Mattermost) (*provision.Plan, erro
 			plan.Note("%s: mattermost.bot_token is %s rather than a whole "+
 				"${VAR} reference, so there is nowhere to mint a token — "+
 				"point it at a variable, or manage this bot by hand",
-				handle, describeShape(seat.Mattermost.BotToken))
+				handle, provision.DescribeShape(seat.Mattermost.BotToken))
 			continue
 		}
 		plan.Add(provision.Seat{
@@ -60,15 +60,6 @@ func PlanFor(o *org.Organization, cfg *config.Mattermost) (*provision.Plan, erro
 		})
 	}
 	return plan, nil
-}
-
-// describeShape says what is wrong with a value without repeating it. The
-// report is pasted into tickets.
-func describeShape(value string) string {
-	if len(provision.ReferencedVars(value)) == 0 {
-		return "a literal"
-	}
-	return "a reference embedded in other text"
 }
 
 // BotUsername is a seat's bot username.

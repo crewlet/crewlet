@@ -82,7 +82,7 @@ func PlanFor(o *org.Organization, cfg *config.GitLab) (*provision.Plan, error) {
 			plan.Note("%s: mcp_env.gitlab.%s is %s rather than a whole ${VAR} "+
 				"reference, so there is nowhere to mint a token — point it "+
 				"at a variable, or manage this seat's credential by hand",
-				handle, key, describeShape(stripScheme(value)))
+				handle, key, provision.DescribeShape(stripScheme(value)))
 			continue
 		}
 		plan.Add(provision.Seat{
@@ -146,16 +146,4 @@ func Username(p *config.GitLabProvisioning, handle string) string {
 		prefix = "crewlet"
 	}
 	return prefix + "-" + handle
-}
-
-// describeShape says what is wrong with a value without repeating it.
-//
-// The two cases have different fixes — a literal needs a variable, a
-// composite needs the variable to be the whole value — so collapsing them
-// into "not a reference" would leave an operator to work out which.
-func describeShape(value string) string {
-	if len(provision.ReferencedVars(value)) == 0 {
-		return "a literal"
-	}
-	return "a reference embedded in other text"
 }

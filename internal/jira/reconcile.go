@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
@@ -17,15 +18,18 @@ import (
 //
 // # What Jira lets a provisioner do, and what it does not
 //
-// The chat backend and the tracker this build already serves can CREATE an
-// account and mint its credential, so their reconciles are about converging
-// a fleet of accounts. Jira cannot: a Cloud API token is issued by the
-// person it belongs to at Atlassian's own account site, and a Data Center
-// personal access token can only be minted for the calling user. A run that
-// pretended otherwise would print instructions dressed as actions.
+// This used to say Jira issues no credential on a provisioner's behalf. That
+// is true of a USER account — a Cloud API token is issued by the person it
+// belongs to at Atlassian's own account site, and a Data Center personal
+// access token can only be minted for the calling user — and it is false of a
+// SERVICE account on Cloud, which `crewlet atlassian provision` creates and
+// mints through the organization admin API. See [atlassian] and
+// decisions/706-atlassian-service-accounts.md.
 //
-// So this reconcile does the three things Jira genuinely allows, and each of
-// them answers a question that is otherwise invisible until an issue reaches
+// What survives the correction is DATA CENTER, where there is no organization
+// admin API at all. So this reconcile is what a Data Center company gets, and
+// it does the three things Jira genuinely allows there — each of them
+// answering a question that is otherwise invisible until an issue reaches
 // nobody:
 //
 //   - WHICH ACCOUNT each seat's credential authenticates as. That mapping is
@@ -219,10 +223,10 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 			Handle:  seat.Handle(),
 			Project: org.NormalizeScope(seat.JiraProject),
 		}
-		cred := CredentialOf(seat, opts.Value)
+		cred := atlassian.CredentialOf(seat, opts.Value)
 		if !cred.Held() {
 			out[i].Reason = "no credential under mcp_env." +
-				strings.Join(SeatEnvs, " or mcp_env.") +
+				strings.Join(atlassian.SeatEnvs, " or mcp_env.") +
 				" — this seat receives no Jira events at all"
 			continue
 		}

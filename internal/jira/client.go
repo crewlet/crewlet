@@ -2,14 +2,12 @@ package jira
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
+
+	"github.com/crewlet/crewlet/internal/atlassian"
 )
 
 // The REST client.
@@ -57,39 +55,28 @@ func (d Deployment) APIPath() string {
 	return "/rest/api/3"
 }
 
-// cloudHosts are the domains only Atlassian Cloud answers on.
-var cloudHosts = []string{".atlassian.net", ".atlassian.com", ".jira.com"}
-
 // DeploymentOf derives the deployment from a base address.
+//
+// The host list is [atlassian.CloudHosts], shared with the knowledge base,
+// because the two had drifted: this one carried .atlassian.com and
+// Confluence's did not, so the same Cloud gateway address was Cloud to the
+// tracker and Data Center to the wiki — which selects a different REST
+// version and a different identity field on one product only.
 func DeploymentOf(base string) Deployment {
-	parsed, err := url.Parse(strings.TrimSpace(base))
-	if err != nil {
-		return DataCenter
-	}
-	host := strings.ToLower(parsed.Hostname())
-	for _, suffix := range cloudHosts {
-		if strings.HasSuffix(host, suffix) {
-			return Cloud
-		}
+	if atlassian.IsCloud(base) {
+		return Cloud
 	}
 	return DataCenter
 }
 
-// ClientTimeout bounds one request.
-//
-// The same ten seconds the code host uses, for the same reason: the watcher
-// lookup runs INSIDE the inbound consumer, before a delivery is acked, so a
-// slow instance stalls the fleet's whole notification path rather than one
-// turn. Generous for a single-page read and short enough that a hung
-// instance costs one round of deliveries rather than a redelivery storm.
-const ClientTimeout = 10 * time.Second
+// ClientTimeout bounds one request. Shared with the knowledge base and the
+// provisioner: they talk to the same host, on the same terms.
+const ClientTimeout = atlassian.ClientTimeout
 
 // Client is one authenticated Jira session.
 type Client struct {
-	base   string
-	auth   string
+	t      *atlassian.Transport
 	deploy Deployment
-	http   *http.Client
 }
 
 // ClientOptions configure a [Client].
@@ -126,103 +113,31 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if !deploy.Valid() {
 		deploy = DeploymentOf(base)
 	}
-	client := opts.HTTP
-	if client == nil {
-		client = &http.Client{Timeout: ClientTimeout}
+	t, err := atlassian.NewTransport("jira", base,
+		atlassian.AuthHeader(strings.TrimSpace(opts.Email), token), opts.HTTP)
+	if err != nil {
+		return nil, err
 	}
-	return &Client{
-		base:   base,
-		auth:   authHeader(strings.TrimSpace(opts.Email), token),
-		deploy: deploy,
-		http:   client,
-	}, nil
-}
-
-// authHeader is the one place the two schemes are chosen between.
-//
-// Cloud rejects a bare bearer API token and Data Center rejects Basic with
-// an empty user, so the presence of an email is the whole discriminator —
-// and it is the field an operator already has to set correctly for their
-// deployment. Deriving it from [Deployment] instead would break the real
-// case of a Data Center instance fronted by Atlassian-style auth.
-func authHeader(email, token string) string {
-	if email == "" {
-		return "Bearer " + token
-	}
-	return "Basic " + base64.StdEncoding.EncodeToString([]byte(email+":"+token))
+	return &Client{t: t, deploy: deploy}, nil
 }
 
 // URL is the REST base this client reads.
-func (c *Client) URL() string { return c.base }
+func (c *Client) URL() string { return c.t.Base }
 
 // Deployment is which Jira this client speaks to.
 func (c *Client) Deployment() Deployment { return c.deploy }
 
 // APIError is a refusal from the instance, typed.
 //
-// A caller deciding what a refusal MEANS — 404 is "no such issue", 403 is
-// "this credential cannot see it", 401 is "the credential is wrong" — would
-// otherwise substring-match a message whose wording differs by Jira version
-// and by locale.
-type APIError struct {
-	Method string
-	Path   string
-	Status int
-	Detail string
-}
-
-func (e *APIError) Error() string {
-	msg := fmt.Sprintf("jira: %s %s: %d", e.Method, e.Path, e.Status)
-	if e.Detail != "" {
-		msg += ": " + e.Detail
-	}
-	return msg
-}
+// An alias rather than a type of its own: one Atlassian account reaches Jira,
+// Confluence and the organization admin API, and a caller that has to tell
+// "this credential cannot see it" from "the credential is wrong" should not
+// need three errors.As branches to do it.
+type APIError = atlassian.APIError
 
 // do runs one request against a path already carrying its own prefix.
 func (c *Client) do(ctx context.Context, method, path string, params url.Values, in, out any) error {
-	target := c.base + path
-	if len(params) > 0 {
-		target += "?" + params.Encode()
-	}
-	var payload io.Reader
-	if in != nil {
-		encoded, err := json.Marshal(in)
-		if err != nil {
-			return fmt.Errorf("jira: encode %s: %w", path, err)
-		}
-		payload = strings.NewReader(string(encoded))
-	}
-	req, err := http.NewRequestWithContext(ctx, method, target, payload)
-	if err != nil {
-		return fmt.Errorf("jira: %s: %w", path, err)
-	}
-	req.Header.Set("Authorization", c.auth)
-	req.Header.Set("Accept", "application/json")
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("jira: %s: %w", path, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return &APIError{
-			Method: method, Path: path, Status: resp.StatusCode,
-			Detail: strings.TrimSpace(string(detail)),
-		}
-	}
-	if out == nil {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-		return nil
-	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("jira: decode %s: %w", path, err)
-	}
-	return nil
+	return c.t.Do(ctx, method, path, params, in, out)
 }
 
 // api runs a request against the deployment's versioned REST surface.
