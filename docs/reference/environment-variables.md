@@ -60,34 +60,59 @@ Replace `<ROLE>` with the role name in uppercase (e.g., `SLACK_BOT_TOKEN_ENGINEE
 
 ---
 
-## Jira
+## Atlassian
+
+Conventions used by the [Atlassian organization](../integrations/atlassian.md) — the organization that *contains* the Jira and Confluence sites below, and where an agent's own Atlassian identity comes from. Apart from the operator credential — read from the environment only, and never from the secret store — these are `${VAR}` references in the company YAML, resolved through the [secret store first and the environment behind it](../concepts/secret-store.md). [`crewlet atlassian provision`](cli.md#crewlet-atlassian-provision) mints the per-seat values into whichever sink you name; on Data Center there is nothing to mint and both halves are created by hand.
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
-| `JIRA_URL` | Your Jira instance URL | e.g., `https://company.atlassian.net` |
-| `JIRA_API_TOKEN` | Jira API token (admin/service account) | Atlassian account > API tokens |
-| `JIRA_EMAIL` | Admin email for Cloud Basic Auth | Your Atlassian account email |
-| `JIRA_WEBHOOK_SECRET` | Secret for HMAC verification | Set when creating the Jira webhook |
+| `ATLASSIAN_ORG_API_KEY` | Read directly by `crewlet atlassian provision` as the operator credential (`-admin-token` overrides). An organization API key created **without scopes**: the account-management API refuses a scoped key with `403` whatever scopes it holds, which looks exactly like having no permission at all | admin.atlassian.com > Settings > API keys |
+| `ATLASSIAN_ADMIN_TOKEN` | The second name read for that same key, behind `ATLASSIAN_ORG_API_KEY`. Same credential, same rules | as above |
+| `ATLASSIAN_ORG_ID` | The organization every service account is created in (`integrations.atlassian.org_id`). A company value like any other, so it resolves store-first; the run refuses to start when it resolves empty, because there is no organization to create an account in | admin.atlassian.com > Settings |
+| `ATLASSIAN_TOKEN_<SEAT>` | A seat's own Atlassian API token, referenced from `role.mcp_env` under whichever key that seat's server reads — `JIRA_API_TOKEN`, `CONFLUENCE_API_TOKEN`, `ATLASSIAN_API_TOKEN`, … (e.g. `ATLASSIAN_TOKEN_CTO`) | Minted by `crewlet atlassian provision` on Cloud; created by hand in the admin console on Data Center |
+| `ATLASSIAN_EMAIL_<SEAT>` | The address that token authenticates as (`JIRA_USERNAME`, `CONFLUENCE_USERNAME`, `ATLASSIAN_EMAIL`, …). Half of the credential rather than a label: Cloud authenticates an API token as `Basic base64(email:token)` and rejects the identical token presented as a bearer | Recorded by `crewlet atlassian provision` — **Atlassian assigns it**, so Crewlet never chooses a service account's address |
 
-### Per-Agent Jira Tokens
+**The two operator names are environment-only, and that is enforced rather than conventional.** They are read through the path `GITLAB_ADMIN_TOKEN` and `MATTERMOST_ADMIN_TOKEN` take, which deliberately bypasses the secret store: the key may create billable accounts across the whole organization, the store is replicated to every node holding the keyring, and reading one back from it would imply it may be kept there — in the same table as the seat credentials it exists to mint. See [Secret store § What still has to be in the environment](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
 
-| Variable | Description |
-|----------|-------------|
-| `<ROLE>_JIRA_TOKEN` | Per-agent Jira API token (e.g., `CTO_JIRA_TOKEN`) |
+**The per-seat names are conventions, and the provisioner has none of its own.** It mints into the variables a seat's `mcp_env` already references — a `CREWLET_ATLASSIAN_TOKEN_<seat>` would be a variable nothing reads — so any names work, as long as each half is a whole `${VAR}` reference: a literal, or a reference embedded in a longer string, is reported as a note and skipped. One credential serves both products, which is why the pair is spelled `ATLASSIAN_*` rather than once per product. See [the seat credential contract](../integrations/atlassian.md#the-seat-credential-contract).
+
+Human seats are never provisioned. A person holds their own Atlassian account, named by `contact.atlassian_account_id` — one id covers Jira and Confluence, and the [example org](../../examples/nimbus.company.yaml) references it as `${ATLASSIAN_FOUNDER_ACCOUNT_ID}`.
+
+---
+
+## Jira
+
+Conventions used by the [Jira integration](../integrations/jira.md), resolved [store first, environment second](../concepts/secret-store.md). This block is the **org read account** — the credential that answers "who is watching this issue", which is the one routing input a Jira webhook never carries — and not an agent identity: every agent acts through its own credential, the Atlassian pair above.
+
+| Variable | Description | Where to get it |
+|----------|-------------|-----------------|
+| `JIRA_URL` | The instance address (`integrations.jira.url`) — a Data Center instance or a Cloud site. Mutually exclusive with `cloud_id`, and giving both is refused rather than resolved: the engine reads through the gateway when both are set, so the url would silently become links-only | e.g. `https://example.atlassian.net` |
+| `JIRA_CLOUD_ID` | An Atlassian Cloud site id (`integrations.jira.cloud_id`); the `api.atlassian.com/ex/jira` gateway URL is built from it. It is also the site a Jira licence is granted on, which is why the provisioner reads it from this block rather than from the organization | The URL of admin.atlassian.com |
+| `JIRA_SITE_URL` | The human-readable base for links handed to a person (`integrations.jira.site_url`, and the example's `skill_variables.jira_base_url`). Needed with a cloud id: the API gateway is not a place a browser can go, so a link built from it looks right and opens nothing | Your site's browser address |
+| `JIRA_ADMIN_TOKEN` | The org read account's API token or PAT (`integrations.jira.token`) | Atlassian account > API tokens (Cloud), or a Data Center PAT |
+| `JIRA_ADMIN_EMAIL` | That account's address (`integrations.jira.email`). Setting it switches authentication to `Basic base64(email:token)`, which is what Cloud requires; leaving it unset sends a bearer token, which is what a Data Center PAT wants. The same credential is refused purely on which scheme carried it | The org account's Atlassian address |
+| `JIRA_WEBHOOK_SECRET` | HMAC secret for `POST /webhooks/jira` (`integrations.jira.webhook_secret`). **Data Center only** — Cloud events arrive through the Forge app on `/webhooks/forge`, verified against `integrations.forge_app_id`, and there is no HMAC secret anywhere in that path. A route whose secret is unset has nothing to verify with and answers `503` rather than accepting the delivery | Minted into this variable by `crewlet jira provision` when it resolves empty; set by hand when you create the webhook yourself |
+
+`JIRA_API_TOKEN` is deliberately not the name in that table. That spelling is one of the *keys* a seat's `mcp_env` block carries, where its value is that seat's own `${ATLASSIAN_TOKEN_<SEAT>}` — and one name that means both the org account and an agent is how the wrong credential ends up in the wrong place. Per-agent Jira credentials are the Atlassian pair above; there is no separate per-role Jira token.
 
 ---
 
 ## Confluence
 
+Conventions used by the [Confluence integration](../integrations/confluence.md), on the same terms as Jira. This account is what the tool-skill sync and skill promotion run as, and it is the **fallback** for the query-time `## Relevant knowledge` search: that search runs as the asking seat wherever the seat carries its own credential — which is what lets Confluence enforce its own page permissions — and drops back to this account only for a seat that carries none.
+
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
-| `CONFLUENCE_URL` | Your Confluence instance URL (`integrations.confluence.url`) | e.g., `https://company.atlassian.net/wiki` |
-| `CONFLUENCE_API_TOKEN` | Admin/service API token (`integrations.confluence.token`) | Atlassian account > API tokens |
-| `CONFLUENCE_EMAIL` | Admin email for Cloud Basic Auth (`integrations.confluence.email`) | Your Atlassian account email |
-| `CONFLUENCE_WEBHOOK_SECRET` | HMAC secret for Data Center webhooks (`integrations.confluence.webhook_secret`) | Set when creating the webhook |
+| `CONFLUENCE_URL` | The instance address (`integrations.confluence.url`) — Data Center or a Cloud site, mutually exclusive with `cloud_id` on the same terms as Jira | e.g. `https://example.atlassian.net/wiki` |
+| `CONFLUENCE_CLOUD_ID` | An Atlassian Cloud site id (`integrations.confluence.cloud_id`), behind the `api.atlassian.com/ex/confluence` gateway, and the site a Confluence licence is granted on. A company that gives one product a cloud id and the other a direct URL is refused as half Cloud and half Data Center | The URL of admin.atlassian.com |
+| `CONFLUENCE_SITE_URL` | The human-readable base for page links (`integrations.confluence.site_url`, and the example's `skill_variables.confluence_base_url`) | Your wiki's browser address |
+| `CONFLUENCE_ADMIN_TOKEN` | The org account's API token or PAT (`integrations.confluence.token`) | Atlassian account > API tokens |
+| `CONFLUENCE_ADMIN_EMAIL` | That account's address (`integrations.confluence.email`); present selects Cloud Basic auth, absent selects a bearer token | The org account's Atlassian address |
+| `CONFLUENCE_WEBHOOK_SECRET` | HMAC secret for Data Center webhooks (`integrations.confluence.webhook_secret`), on the same 503-rather-than-accept terms as Jira's. Nothing mints this one: there is no `crewlet confluence provision` — the confluence CLI is `import` and `resync` | Set when creating the webhook |
 
-Per-agent Confluence credentials go through `role.mcp_env` on the `atlassian`
-MCP server (`CONFLUENCE_USERNAME` / `CONFLUENCE_API_TOKEN`), like Jira.
+Per-agent Confluence credentials are the same Atlassian pair — one account, one token, both products — declared in `role.mcp_env` under `CONFLUENCE_USERNAME` / `CONFLUENCE_API_TOKEN` beside the Jira spellings.
+
+The tool-skills space is **not** one of these. `CREWLET_TOOL_SKILLS_SPACE` is a flag default for the import and resync commands only (see [Core](#core)); the space the engine watches comes from `integrations.confluence.skills_space` and from nowhere else.
 
 ---
 
@@ -186,7 +211,7 @@ A Pulsar stream keeps its **leases** on a NATS estate rather than on Pulsar — 
 
 The keyring lives in Tier A (`crewlet.yaml`) and is the sole root of trust — the DB holds only the encrypted document, never the key, and the key is required for **every** config read. Without a keyring, Crewlet keeps the default `${VAR}`-reference behaviour and every env var on this page is resolved from the environment at construction time. See [Configuration § Secrets](../concepts/configuration.md#secrets).
 
-A keyring lets you retire the per-secret env vars on this page (`LLM_API_KEY`, `<ROLE>_JIRA_TOKEN`, `SLACK_BOT_TOKEN_<ROLE>`, `*_WEBHOOK_SECRET`, …) two different ways:
+A keyring lets you retire the per-secret env vars on this page (`LLM_API_KEY`, `ATLASSIAN_TOKEN_<SEAT>`, `SLACK_BOT_TOKEN_<ROLE>`, `*_WEBHOOK_SECRET`, …) two different ways:
 
 - **[Secret store](../concepts/secret-store.md)** *(recommended)* — keep the `${VAR}` references in the config and store the values in the encrypted store (`crewlet secrets set`, or `-secret-store` on a provisioning CLI). The engine consults it **ahead of** the process environment, so a name it answers no longer needs to be exported at all. Rotation is a write of one record, and it reaches every node.
 - **Literal values in the encrypted config** — set them via `PUT /config` or import a `company.yaml` with literals. Simpler, but every rotation writes a new immutable revision that archives the superseded secret, and one credential referenced from two places (a Slack bot token is both `role.integrations.slack.bot_token` and `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`) becomes two literals that must change together.

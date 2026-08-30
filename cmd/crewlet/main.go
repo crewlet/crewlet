@@ -141,7 +141,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runBudgets(rest, stdout, stderr)
 	case "llm":
 		return runLLM(rest, stdout, stderr)
-	case "gitlab", "github", "jira", "slack", "confluence", "mattermost":
+	case "gitlab", "github", "jira", "slack", "confluence", "mattermost", "atlassian":
 		return runIntegration(cmd, rest, stdout, stderr)
 	default:
 		usage(stderr)
@@ -165,6 +165,7 @@ Usage:
   crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
   crewlet github <cmd>        Report a GitHub deployment's seat accounts and hook it
   crewlet jira <cmd>          Report a Jira instance's seat accounts and projects
+  crewlet atlassian <cmd>     Provision one Atlassian service account per seat
   crewlet slack <cmd>         Create, update and install one Slack app per seat
   crewlet confluence <cmd>    Publish authored markdown and tool skills into spaces
   crewlet mattermost <cmd>    Reconcile a Mattermost team, and diagnose one

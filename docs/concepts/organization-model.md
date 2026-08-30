@@ -54,6 +54,13 @@ Role (a SEAT — can live at root level OR inside an OrgUnit)
 │                          the role's Confluence space. Does NOT scope
 │                          knowledge reads — that is the org-wide
 │                          knowledge.confluence_spaces only)
+├── atlassian_products: str[] (integrations.atlassian.products — which
+│                              Atlassian products this seat is LICENSED for.
+│                              Not an identity: absent = every product the
+│                              company configures, [] = none, a list = those.
+│                              Agent seats only; read by `crewlet atlassian
+│                              provision` and reported by the engine's own
+│                              company view, never by a routing decision)
 ├── token_budget: int  (0 = unlimited)
 ├── llm: str           (provider key, default = "default")
 ├── llm_auxiliary: str (optional cheap-model key for reflection /
@@ -74,6 +81,18 @@ Roles can live in two places:
 - **At the root level** (`roles`) — org-wide agents that don't belong to any specific team. They participate in the `manages[]` hierarchy like any other role and are fully visible to task routing; a root-level role can carry its own `integrations.jira.project` identity. Knowledge **read** scope for every agent is the org-wide `org.Organization.ConfluenceSpaces` only.
 
 > Every one of these identities is consulted. Each tracker routes an item that names nobody to the lead of the unit that owns the project, and Confluence does the same for a page change nobody was mentioned in. Neither narrows what an agent can READ: knowledge scope is the org-wide `knowledge.confluence_spaces` only, because letting a unit's identity double as a read scope is how an agent ends up unable to read the page it was told to follow. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
+
+**`integrations.atlassian.products` is the one entry in a seat's integrations block that is not an identity, and the distinction is the point.** `jira_project` and `confluence_space` say *where a seat works* — where activity that names nobody lands, and where the seat files what it produces. `products` says what the seat is **licensed** for, and it exists because an Atlassian product licence is billable and the free service-account allowance an organization gets without Atlassian Guard is small. Collapsing it into "every product the company configures" would buy a documentation seat a Jira licence it never opens, once per seat, per run. `products: [confluence]` is how that seat consumes one licence — and it is also the only thing it can *do*, because the minted token's scopes are derived from this list at mint time, so a writer agent holds no credential that can move a sprint. Narrowing the list on a seat that already has an account re-mints its credential with the smaller scope set, because the provisioner exercises the credential against the products the seat no longer names and a success there proves the token still reaches one. The **licence** is not given back — Atlassian offers no route for that — so the run says which one is still billable.
+
+```yaml
+roles:
+  - name: "Tech Writer"
+    integrations:
+      atlassian:
+        products: [confluence]     # absent = every configured product; [] = none
+```
+
+All three states are real settings and none of them is a default for another. **Absent** takes every product the company configures, which is what a seat working across the org wants. **An explicit empty list** takes none — how a seat that lives entirely in chat is kept out of a provisioning run without deleting its `mcp_env`. **A list** takes exactly those, narrowed to what the company actually configures, so a seat naming Confluence in a company that has none is not licensed into a site that is not there. The block sits on a **role** and never on a unit, because a licence is bought per seat rather than per team; on a **human** seat it is refused by validation, since a person already holds their own Atlassian account — reached by `contact.atlassian_account_id`, one id covering both products — and a product list on one is a licence nobody would ever buy. It is read by [`crewlet atlassian provision`](../integrations/atlassian.md#which-products-a-seat-is-licensed-for), and by the engine's own company view: [`GET /integrations`](../reference/api-endpoints.md#get-integrations) — the dashboard's Integrations room — runs the provisioner's own planner over the org chart to name the seats a run would mint an account for, so a licence the config grants is one an operator can see without running anything. What never reads it is the runtime: no routing, parser, transport or delivery decision consults it, so narrowing a seat's products changes what that seat is licensed to *do* and never what reaches it.
 
 ---
 

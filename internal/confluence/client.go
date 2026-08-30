@@ -12,7 +12,6 @@ package confluence
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -96,7 +96,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}
 	return &Client{
 		base: RESTBase(base),
-		auth: authHeader(strings.TrimSpace(opts.Email), token),
+		auth: atlassian.AuthHeader(strings.TrimSpace(opts.Email), token),
 		http: client,
 	}, nil
 }
@@ -130,53 +130,27 @@ func RESTBase(base string) string {
 	}
 }
 
-// isCloudSite reports an Atlassian-hosted site address.
-func isCloudSite(base string) bool {
-	parsed, err := url.Parse(base)
-	if err != nil {
-		return false
-	}
-	host := strings.ToLower(parsed.Hostname())
-	for _, suffix := range []string{".atlassian.net", ".jira.com"} {
-		if strings.HasSuffix(host, suffix) {
-			return true
-		}
-	}
-	return false
-}
-
-// authHeader chooses between Cloud's Basic scheme and a bearer token.
+// isCloudSite reports an Atlassian-hosted SITE address — one a browser goes
+// to, which is what needs the /wiki prefix.
 //
-// The presence of an EMAIL is the whole discriminator, and it is the field
-// an operator already has to set correctly for their deployment: Cloud
-// rejects a bare bearer API token and Data Center rejects Basic with an
-// empty user — the same credential, refused purely on which header carried
-// it.
-func authHeader(email, token string) string {
-	if email == "" {
-		return "Bearer " + token
-	}
-	return "Basic " + base64.StdEncoding.EncodeToString([]byte(email+":"+token))
+// The api.atlassian.com gateway is Atlassian-hosted too and must NOT match:
+// it already names the product in its path, so /wiki there is a 404 on every
+// call. The case above this one catches it first, so the shared host list is
+// consulted only for the addresses this question is actually about.
+func isCloudSite(base string) bool {
+	return atlassian.IsCloud(base)
 }
 
 // URL is the REST base this client reads.
 func (c *Client) URL() string { return c.base }
 
 // APIError is a refusal from the instance, typed.
-type APIError struct {
-	Method string
-	Path   string
-	Status int
-	Detail string
-}
-
-func (e *APIError) Error() string {
-	msg := fmt.Sprintf("confluence: %s %s: %d", e.Method, e.Path, e.Status)
-	if e.Detail != "" {
-		msg += ": " + e.Detail
-	}
-	return msg
-}
+//
+// An alias rather than a type of its own: one Atlassian account reaches Jira,
+// Confluence and the organization admin API, and a caller that has to tell
+// "this credential cannot see it" from "the credential is wrong" should not
+// need three errors.As branches to do it.
+type APIError = atlassian.APIError
 
 func (c *Client) do(ctx context.Context, method, path string, params url.Values, in, out any) error {
 	target := c.base + APIPath + path
@@ -209,7 +183,8 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 	if resp.StatusCode >= 400 {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return &APIError{
-			Method: method, Path: path, Status: resp.StatusCode,
+			Surface: "confluence",
+			Method:  method, Path: path, Status: resp.StatusCode,
 			Detail: strings.TrimSpace(string(detail)),
 		}
 	}

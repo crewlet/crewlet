@@ -13,11 +13,13 @@ A useful mental model: for each integration there is usually
    GitLab group, an E2B account. Crewlet never creates top-level tenancy for
    you.
 2. **Per-agent identities inside it** — service accounts, bot apps, tokens.
-   For Mattermost, Slack, and GitLab a provisioning CLI creates
-   these idempotently; for Atlassian and GitHub you create them by hand,
-   because neither vendor issues a credential on a provisioner's behalf.
-   Those two still have a CLI — it reports which account each seat's own
-   credential turned out to be, and registers the webhooks.
+   For Mattermost, Slack, GitLab and **Atlassian Cloud** a provisioning CLI
+   creates these idempotently. GitHub and Atlassian **Data Center** are the two
+   exceptions, and for the same reason: neither issues a credential on a
+   provisioner's behalf — GitHub has no API-provisionable service account, and
+   a Data Center personal access token can only be minted for the calling user.
+   Both still have a CLI; it reports which account each hand-made credential
+   turned out to be, and registers the webhooks.
 3. **A webhook back to the engine** — so external activity wakes the right
    agent. Self-registered where the API allows it, manual where it doesn't.
    Mattermost is the exception: it has no usable inbound webhook, so the
@@ -93,32 +95,90 @@ host you run ([GitLab](../integrations/gitlab.md) /
 ### Atlassian (Jira + Confluence Cloud or Data Center)
 
 The managed-SaaS path: Atlassian runs the tracker and the wiki, and agents work
-them through per-agent Atlassian identities. Per-agent setup is manual, since
-Atlassian exposes no service-account-provisioning API a CLI can drive.
+them through per-agent Atlassian identities. Where those identities come from
+depends on which deployment you run, and the split is not cosmetic. On **Cloud**
+an organization API key created *without scopes* lets the account-management
+admin API create a service account, mint its credential and license it into a
+product, so
+[`crewlet atlassian provision`](../integrations/atlassian.md#provisioning) is
+the same shape of command as GitLab's and Mattermost's. On **Data Center** there
+is no organization admin API at all and a personal access token can only be
+minted for the calling user, so per-agent accounts stay hand-made there — the
+command is refused by name rather than degrading, and points at
+[`crewlet jira provision`](../integrations/jira.md#provisioning).
+
+#### Cloud
+
+```bash
+export ATLASSIAN_ORG_API_KEY="..."          # created WITHOUT scopes
+crewlet atlassian provision company.yaml -secret-store
+```
+
+One run gives its own service account to every agent seat whose `mcp_env` names a whole `${VAR}` for BOTH a token key and an address key and that is licensed for at least one configured product — a seat with no Atlassian `mcp_env` is skipped in silence, and one whose credential is half-referenced is taken out of the run with a note. For the rest it, grants each the Jira
+and/or Confluence licence its `role.integrations.atlassian.products` asks for,
+and records the account's Atlassian-assigned address and freshly minted token
+into the `${VAR}`s that seat's `mcp_env` already references. The reconcile is
+stateless and a re-run leaves a working credential alone, so it is safe to run
+again when you add a seat.
 
 What **you** do, by hand:
 
-1. **Create the Atlassian site** (or use your existing one) — Crewlet never
-   creates the tenancy.
-2. **Create per-agent identities**: an Atlassian account (or API token
-   identity) per agent seat, so issues can be assigned to agents and comments
-   attribute correctly. Mint one API token per agent and reference them from
-   `role.mcp_env` (`JIRA_API_TOKEN` / `CONFLUENCE_API_TOKEN` for the
-   `atlassian` MCP server), plus one admin/service token for the engine's
-   org-level lookups (`integrations.jira.token`).
-3. **Webhooks**:
-   - **Cloud** — install the [Crewlet Forge app](https://github.com/crewlet/forge)
-     in your site; it forwards Jira + Confluence events to
-     `POST /webhooks/forge` (signature-verified; needs the `forge` install
-     extra).
-   - **Data Center** — register webhooks directly against
-     `POST /webhooks/jira` / `POST /webhooks/confluence` with an HMAC secret.
-4. **Create the spaces/projects** your units use (`integrations.jira.project`
-   / `integrations.confluence.space` per unit) and an `Onboarding` page per
-   space.
+1. **Create the Atlassian Cloud organization and site** (or use your existing
+   one) — Crewlet never creates the tenancy — and name each product's site on
+   its own block, `integrations.jira.cloud_id` and
+   `integrations.confluence.cloud_id`. A licence is granted on a *site*, and
+   nothing here discovers one. A company that names a `cloud_id` on one product
+   and a `url` on the other is half Cloud and half Data Center, and is refused
+   at validation rather than half-provisioned.
+2. **Create the organization API key with no scopes at all**, at
+   admin.atlassian.com → Settings → API keys, and export it as
+   `ATLASSIAN_ORG_API_KEY` (or pass `-admin-token`). This is the wall every
+   first run hits: the account-management service refuses a *scoped* key with a
+   flat `403` whatever scopes it holds, which is the same answer it gives a key
+   with no permission — so a wrongly-scoped key looks exactly like a correct
+   one. It is the **operator's** credential and is deliberately never read from
+   company config or the secret store; there is no `api_key` field to put it in.
+3. **Grant each agent its project and space permissions.** This is the step
+   that decides whether a licensed agent sees any work at all, and it is yours
+   because Atlassian refuses placement to an API token outright — only a Forge
+   app on a paid plan may put an account into a Jira project role or onto a
+   Confluence space's permission grid. So the run grants the org-level licence
+   and then *reports*, asking as each agent, which contract permissions are
+   **missing**, which forbidden ones this site's own permission scheme granted,
+   and which settings screen changes each — rather than issuing a write that
+   silently does nothing.
+4. **Install the [Crewlet Forge app](https://github.com/crewlet/forge)** in your
+   site. It forwards Jira and Confluence events to `POST /webhooks/forge`,
+   verified against `integrations.forge_app_id`. There is no dynamic webhook an
+   API token may register on Cloud, which is why the provisioner carries no
+   `-public-url` flag at all.
+5. **Create the projects and spaces your units name**
+   (`integrations.jira.project` / `integrations.confluence.space` per unit) and
+   an `Onboarding` page per space — plus the org-level read account
+   (`integrations.jira.token`), which stays a human-made credential because an
+   issue's watchers are the one routing input a webhook never carries.
 
-Details: [Jira](../integrations/jira.md) ·
-[Confluence](../integrations/confluence.md).
+#### Data Center
+
+Steps 1, 4 and 5 above have Data Center equivalents; steps 2 and 3 have none,
+because there is no organization plane to hold a key or a licence. Instead:
+
+1. **Create per-agent identities** — one Atlassian account per agent seat, so
+   issues can be assigned to agents and comments attribute correctly. Mint a
+   personal access token per agent and reference them from `role.mcp_env`
+   (`JIRA_API_TOKEN` / `CONFLUENCE_API_TOKEN` for the `atlassian` MCP server),
+   plus one admin/service token for the engine's org-level lookups
+   (`integrations.jira.token`).
+2. **Register the webhooks** against `POST /webhooks/jira` and
+   `POST /webhooks/confluence` with an HMAC secret — or let
+   `crewlet jira provision -public-url https://engine.example.com` register
+   Jira's and mint the secret into the `${VAR}` `webhook_secret` points at.
+   That command is also the report for which account each hand-made credential
+   turned out to be, and whether every project the org chart names exists and
+   agrees about its lead.
+
+Details: [Atlassian organization](../integrations/atlassian.md) ·
+[Jira](../integrations/jira.md) · [Confluence](../integrations/confluence.md).
 
 > **One knowledge backend per company**: the engine wires exactly one
 > `knowledge.Searcher`. It stays an interface with one implementation, so a

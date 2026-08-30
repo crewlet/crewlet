@@ -60,8 +60,9 @@ How the engine works, one subsystem per page:
 
 Connecting the external surfaces agents work on:
 
-- **[Jira](integrations/jira.md)** — Cloud or Data Center: webhook routing by mention / assignee / watcher / project lead, derived seat account ids, per-role MCP tools, and `crewlet jira provision`
-- **[Confluence](integrations/confluence.md)** — Cloud or Data Center as the knowledge base: live CQL search run as the asking seat, page-change routing, tool-skill pages, and `crewlet confluence import`
+- **[Jira](integrations/jira.md)** — Cloud or Data Center: webhook routing by mention / assignee / watcher / project lead, derived seat account ids, per-role MCP tools, and `crewlet jira provision` — the Data Center path, which reports the seat accounts and registers the webhook rather than creating anything
+- **[Confluence](integrations/confluence.md)** — Cloud or Data Center as the knowledge base: live CQL search run as the asking seat, page-change routing, tool-skill pages, and `crewlet confluence import` for publishing authored markdown into spaces
+- **[Atlassian](integrations/atlassian.md)** — The organization the Jira and Confluence sites live in, and the only thing that provisions per-seat identities: `crewlet atlassian provision` creates one service account per agent seat on Cloud, mints its credential and grants its product licences — then reports the project and space access it cannot grant
 - **[GitLab](integrations/gitlab.md)** — gitlab.com or self-hosted: API-provisioned per-agent service accounts, `crewlet gitlab provision`, webhook routing, per-role MCP tools, sandbox code authoring
 - **[GitHub](integrations/github.md)** — github.com or Enterprise Server: webhook routing by review request / assignment / review verdict / mention, derived seat logins, participant fan-out, organization or per-repository hooks, and `crewlet github provision`
 - **[Slack](integrations/slack.md)** — One app per agent: `crewlet slack provision` builds and installs them from a manifest, per-seat webhook routing with thread follows, a text-carrying working indicator, and the Slack MCP tool server

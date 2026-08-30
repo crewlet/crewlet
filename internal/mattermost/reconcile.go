@@ -32,7 +32,23 @@ type Result struct {
 	// part an operator most needs to see: a bot hears only what it has
 	// joined, so a seat with an empty list is one that will never wake.
 	Joined map[string][]string
-	Notes  []string
+
+	// Recorded counts the values this run wrote to the sink.
+	//
+	// It exists so the report can say what still has to happen for those
+	// values to reach a RUNNING engine — see [provision.TokenSink.NextStep].
+	// Without it the report stopped at "recorded in the encrypted secret
+	// store", which reads as finished while the engine goes on resolving
+	// from the snapshot it built at its last apply.
+	//
+	// A COUNT rather than the names, because the names are variables
+	// holding live credentials and this number's only job is deciding
+	// whether to print that sentence at all: zero is a re-run that changed
+	// nothing, and telling that operator to restart anything is noise they
+	// learn to skip past.
+	Recorded int
+
+	Notes []string
 }
 
 // Options are one reconcile's inputs.
@@ -245,6 +261,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 					seat.Handle, seat.TokenVar, err))
 		}
 		res.Rotated = append(res.Rotated, seat.Handle)
+		res.Recorded++
 		if created {
 			continue
 		}

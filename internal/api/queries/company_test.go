@@ -208,16 +208,144 @@ func TestIntegrationsSaysHowEachSurfaceIsWired(t *testing.T) {
 			t.Errorf("%s is configured and absent from the answer", kind)
 		}
 	}
-	if _, present := byKind["jira"]; present {
-		t.Error("an integration the company does not configure was reported")
+	// An integration the company does not configure is absent, INCLUDING
+	// the two blocks that carry no credential of their own: an operator
+	// reading a row for a surface they never wired up cannot tell a
+	// default from something they forgot they set.
+	for _, kind := range []string{"jira", "atlassian"} {
+		if _, present := byKind[kind]; present {
+			t.Errorf("%s is not in this company's config and was reported anyway", kind)
+		}
 	}
 	// LISTED rather than counted: "which seats reach Mattermost" is the
 	// question that follows "how many", and the answer is already in the
-	// config.
+	// config. By HANDLE, because the chip this renders navigates to a seat
+	// by the value in this list and every other room hands it a handle.
 	seats, _ := byKind["mattermost"]["seats"].([]any)
-	if len(seats) != 1 || seats[0] != "CEO" {
-		t.Errorf("mattermost seats = %v, want the one seat with a bot of its own",
-			byKind["mattermost"]["seats"])
+	if len(seats) != 1 || seats[0] != "ceo" {
+		t.Errorf("mattermost seats = %v, want the handle of the one seat with "+
+			"a bot of its own", byKind["mattermost"]["seats"])
+	}
+}
+
+// atlassianDoc is a Cloud company with an organization to provision into.
+//
+// Three seats, and only one of them is work for a provisioning run — which
+// is the whole point of the row: a seat NESTED IN A UNIT (where a real
+// company puts nearly all of them), a root seat that opted out with an empty
+// product list, and a seat whose credential names a token variable and no
+// address variable, which Cloud cannot authenticate as anybody.
+const atlassianDoc = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+integrations:
+  jira:
+    cloud_id: "11111111-2222-3333-4444-555555555555"
+    site_url: https://acme.example.com
+    token: "${JIRA_ADMIN}"
+  atlassian:
+    org_id: "${ATLASSIAN_ORG_ID}"
+    site_url: https://acme.example.com
+units:
+  - name: Engineering
+    roles:
+      - name: Staff Engineer
+        handle: swe
+        llm: zulu
+        mcp_env:
+          atlassian:
+            JIRA_USERNAME: "${ATLASSIAN_EMAIL_SWE}"
+            JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_SWE}"
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+    integrations:
+      atlassian:
+        products: []
+    mcp_env:
+      atlassian:
+        JIRA_USERNAME: "${ATLASSIAN_EMAIL_CEO}"
+        JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_CEO}"
+  - name: Designer
+    handle: designer
+    llm: zulu
+    mcp_env:
+      atlassian:
+        JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_DESIGNER}"
+`
+
+// THE ORGANIZATION IS A ROW EVEN THOUGH NOTHING ARRIVES ON IT.
+//
+// `integrations.atlassian` is read by `crewlet atlassian provision` and
+// ignored by the engine, so every signal the room is built on — a route, a
+// signing secret, a delivery count — says nothing about it. Left out on
+// those grounds, a block an operator wrote would render exactly like one
+// this build does not know about, and the seat list that answers "which
+// agents get an account" would be nowhere on the screen.
+func TestAnAtlassianOrganizationIsAReportedRow(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(atlassianDoc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	var row map[string]any
+	for _, r := range rows {
+		entry, _ := r.(map[string]any)
+		if entry["key"] == "atlassian" {
+			row = entry
+		}
+	}
+	if row == nil {
+		t.Fatalf("the atlassian organization is configured and absent from the "+
+			"answer, so the block is invisible: %v", body)
+	}
+	if row["enabled"] != true {
+		t.Errorf("enabled = %v, want true — the block's presence is the whole "+
+			"configuration, there is nothing to switch off", row["enabled"])
+	}
+	// NOT AN INBOUND SURFACE. Naming a path here would name a route
+	// webhooks.go does not register; Atlassian's deliveries arrive on the
+	// forge, jira and confluence rows beside this one.
+	if row["inbound_path"] != "" {
+		t.Errorf("inbound_path = %v, want empty — there is no /webhooks/atlassian "+
+			"route to point an operator at", row["inbound_path"])
+	}
+	// Null rather than false: the config holds no Atlassian credential at
+	// all, deliberately. False would send an operator looking for a
+	// signing secret that does not exist on this surface.
+	if value, present := row["secret_present"]; !present || value != nil {
+		t.Errorf("secret_present = %v (present=%v), want null for a surface "+
+			"whose credential never enters the config", value, present)
+	}
+	// The organization and the site, which is what this block names and
+	// what an operator checks against admin.atlassian.com.
+	if row["org_id"] != "${ATLASSIAN_ORG_ID}" {
+		t.Errorf("org_id = %v, want the reference the document carries", row["org_id"])
+	}
+	if row["url"] != "https://acme.example.com" {
+		t.Errorf("url = %v, want the site the block names", row["url"])
+	}
+	// THE SEATS A RUN WOULD TOUCH, which is not the seats carrying the
+	// field: `integrations.atlassian` NARROWS a licence, so CEO's empty
+	// product list is an opt-OUT and Staff Engineer's absent block is
+	// every configured product. Designer names a token variable and no
+	// address variable, which Cloud refuses on the scheme.
+	seats, _ := row["seats"].([]any)
+	if len(seats) != 1 || seats[0] != "swe" {
+		t.Errorf("seats = %v, want just the unit-nested seat a provisioning "+
+			"run can finish — not the seat that opted out, and not the one "+
+			"with no address variable to authenticate as", row["seats"])
 	}
 }
 

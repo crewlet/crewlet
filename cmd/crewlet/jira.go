@@ -12,21 +12,26 @@ import (
 	"github.com/crewlet/crewlet/internal/jira"
 )
 
-// `crewlet jira provision` — the Atlassian tracker's reconcile.
+// `crewlet jira provision` — the tracker's reconcile, and Data Center's
+// provisioner.
 //
-// # It reports far more than it changes, and that is Jira's shape
+// # It reports far more than it changes, and that is Data Center's shape
 //
 // The other vendor commands are mostly WRITES: they create accounts and mint
-// the credentials the seats authenticate with. Jira issues neither — a Cloud
-// API token is created by the person it belongs to, and a Data Center
-// personal access token can only be minted for the calling user — so a
-// command that offered to provision accounts would be printing instructions
-// dressed as actions.
+// the credentials the seats authenticate with. On Atlassian CLOUD so does
+// `crewlet atlassian provision`, which creates a service account per seat
+// through the organization admin API. Data Center has no such API — and a
+// personal access token there can only be minted for the calling user — so
+// this command offers no account creation, because offering it would be
+// printing instructions dressed as actions.
 //
 // What it does instead is answer the three questions that are otherwise
 // invisible until an issue reaches nobody: which account each seat's
 // credential authenticates as, whether every project the org names exists
 // and agrees about its lead, and whether the inbound webhook is registered.
+// The first two are worth running against a Cloud site too — they read the
+// instance and report — which is why this command is not itself refused
+// there.
 
 func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
@@ -102,9 +107,10 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	// THE SINK IS OPENED FOR A REAL RUN ONLY. A dry run reads the instance
-	// and registers nothing, so it has nothing to record — and opening the
-	// secret store to write nothing would prompt for a passphrase on a
-	// command that promised to touch nothing.
+	// and registers nothing, so it has nothing to record — and opening a
+	// sink is not free: the -env-file one CREATES the file at 0600, and the
+	// -secret-store one probes the store's lock and may reach a running
+	// node's API. A command that promised to touch nothing must not.
 	opts := jira.Options{
 		Client: client, Config: cfg, Org: organization,
 		Value:           env.Value,

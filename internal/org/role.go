@@ -487,6 +487,18 @@ type Role struct {
 	JiraProject     string `yaml:"jira_project,omitempty" json:"jira_project,omitempty"`
 	ConfluenceSpace string `yaml:"confluence_space,omitempty" json:"confluence_space,omitempty"`
 
+	// AtlassianProducts narrows which Atlassian products this seat is
+	// provisioned a licence for. Read by `crewlet atlassian provision` and
+	// by nothing at run time.
+	//
+	// NIL AND EMPTY ARE DIFFERENT SETTINGS and the difference is billable:
+	// nil is "every product the company configures", an empty non-nil
+	// slice is "none". The authored block is a pointer for exactly this
+	// reason, and the distinction has to survive the transform — a
+	// normalisation that dropped an empty slice would licence a seat its
+	// author opted out of, once per product, per run.
+	AtlassianProducts []string `yaml:"atlassian_products,omitempty" json:"atlassian_products,omitempty"`
+
 	// Schedules are this seat's own recurring work; each fires a task into
 	// this seat's inbox on its cron expression.
 	Schedules []Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty"`
@@ -540,6 +552,10 @@ func (r *Role) humanForbidden() []string {
 		{"mattermost", !r.Mattermost.IsZero()},
 		{"integrations.jira", r.JiraProject != ""},
 		{"integrations.confluence", r.ConfluenceSpace != ""},
+		// A human holds their own Atlassian account, so a product list on
+		// one is a licence nobody would ever buy — and, unnoticed, a seat
+		// that looks provisioned and never is.
+		{"integrations.atlassian", r.AtlassianProducts != nil},
 		{"mcp_env", len(r.MCPEnv) > 0},
 		{"behavioral_guidelines", len(r.BehavioralGuidelines) > 0},
 	}

@@ -102,9 +102,10 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	// THE SINK IS OPENED FOR A REAL RUN ONLY. A dry run reads GitHub and
-	// registers nothing, so it has nothing to record — and opening the
-	// secret store to write nothing would prompt for a passphrase on a
-	// command that promised to touch nothing.
+	// registers nothing, so it has nothing to record — and opening a sink
+	// is not free: the -env-file one CREATES the file at 0600, and the
+	// -secret-store one probes the store's lock and may reach a running
+	// node's API. A command that promised to touch nothing must not.
 	opts := github.Options{
 		Client: client, Config: cfg, Org: organization,
 		Value:            env.Value,

@@ -282,44 +282,74 @@ func (c *Company) validateProviderKeys() error {
 	slices.Sort(known)
 
 	for i := range c.Roles {
-		role := &c.Roles[i]
-		path := idx("roles", i)
-		// Both written surfaces are checked, and each is reported at the
-		// path the operator typed. Validating the RESOLVED chain instead
-		// would hide half of them: the flat field wins over the mapping,
-		// so a typo inside `llm.plan` under a role that also sets
-		// `llm_plan` never appears in the resolved value at all — and it
-		// is still a typo, still in the file, and still what the operator
-		// will edit next.
-		for _, field := range []struct {
-			path string
-			keys ProviderKeys
-		}{
-			{at(path, "llm"), role.LLM.Default},
-			{at(at(path, "llm"), "plan"), role.LLM.Plan},
-			{at(at(path, "llm"), "execute"), role.LLM.Execute},
-			{at(at(path, "llm"), "review"), role.LLM.Review},
-			{at(at(path, "llm"), "subagent"), role.LLM.Subagent},
-			{at(at(path, "llm"), "auxiliary"), role.LLM.Auxiliary},
-			{at(at(path, "llm"), "judge"), role.LLM.Judge},
-			{at(at(path, "llm"), "sandbox"), role.LLM.Sandbox},
-			{at(path, "llm_plan"), role.LLMPlan},
-			{at(path, "llm_execute"), role.LLMExecute},
-			{at(path, "llm_review"), role.LLMReview},
-			{at(path, "llm_subagent"), role.LLMSubagent},
-			{at(path, "llm_auxiliary"), role.LLMAuxiliary},
-			{at(path, "llm_judge"), role.LLMJudge},
-			{at(path, "llm_sandbox"), role.LLMSandbox},
-		} {
-			for _, key := range field.keys {
-				if _, ok := c.Providers.LLM[key]; !ok {
-					p.add(field.path, ErrUnknownValue,
-						"%q is not a configured provider — providers.llm has %s. "+
-							"A key that misses is not an error at run time: the seat "+
-							"falls back to another model and bills against it, so this "+
-							"is the only place the typo can be seen",
-						key, strings.Join(known, ", "))
-				}
+		p.wrap(c.checkRoleProviderKeys(&c.Roles[i], idx("roles", i), known))
+	}
+	// EVERY UNIT, RECURSIVELY. This walk used to stop at the root-level
+	// roles, which is almost none of them: a company that puts its seats in
+	// departments — the shape the shipped example uses and the docs teach —
+	// had every one of its provider keys unchecked. The typo then resolved
+	// through the runtime's fallback and the seat billed against a model
+	// nobody chose, which is the exact failure this rule exists to catch and
+	// the doc above says is invisible anywhere else.
+	for i := range c.Units {
+		p.wrap(c.checkUnitProviderKeys(&c.Units[i], idx("units", i), known))
+	}
+	return p.err()
+}
+
+// checkUnitProviderKeys walks one unit's seats and its children's.
+//
+// Reported at the AUTHORED path — units[0].children[1].roles[2].llm_plan —
+// because the error's job is to point at a line in a file, and a seat's
+// runtime position says nothing about where it was written.
+func (c *Company) checkUnitProviderKeys(unit *Unit, path string, known []string) error {
+	var p problems
+	for i := range unit.Roles {
+		p.wrap(c.checkRoleProviderKeys(&unit.Roles[i], idx(at(path, "roles"), i), known))
+	}
+	for i := range unit.Children {
+		p.wrap(c.checkUnitProviderKeys(&unit.Children[i], idx(at(path, "children"), i), known))
+	}
+	return p.err()
+}
+
+// checkRoleProviderKeys checks one seat's model keys.
+func (c *Company) checkRoleProviderKeys(role *Role, path string, known []string) error {
+	var p problems
+	// Both written surfaces are checked, and each is reported at the path
+	// the operator typed. Validating the RESOLVED chain instead would hide
+	// half of them: the flat field wins over the mapping, so a typo inside
+	// `llm.plan` under a role that also sets `llm_plan` never appears in
+	// the resolved value at all — and it is still a typo, still in the
+	// file, and still what the operator will edit next.
+	for _, field := range []struct {
+		path string
+		keys ProviderKeys
+	}{
+		{at(path, "llm"), role.LLM.Default},
+		{at(at(path, "llm"), "plan"), role.LLM.Plan},
+		{at(at(path, "llm"), "execute"), role.LLM.Execute},
+		{at(at(path, "llm"), "review"), role.LLM.Review},
+		{at(at(path, "llm"), "subagent"), role.LLM.Subagent},
+		{at(at(path, "llm"), "auxiliary"), role.LLM.Auxiliary},
+		{at(at(path, "llm"), "judge"), role.LLM.Judge},
+		{at(at(path, "llm"), "sandbox"), role.LLM.Sandbox},
+		{at(path, "llm_plan"), role.LLMPlan},
+		{at(path, "llm_execute"), role.LLMExecute},
+		{at(path, "llm_review"), role.LLMReview},
+		{at(path, "llm_subagent"), role.LLMSubagent},
+		{at(path, "llm_auxiliary"), role.LLMAuxiliary},
+		{at(path, "llm_judge"), role.LLMJudge},
+		{at(path, "llm_sandbox"), role.LLMSandbox},
+	} {
+		for _, key := range field.keys {
+			if _, ok := c.Providers.LLM[key]; !ok {
+				p.add(field.path, ErrUnknownValue,
+					"%q is not a configured provider — providers.llm has %s. "+
+						"A key that misses is not an error at run time: the seat "+
+						"falls back to another model and bills against it, so this "+
+						"is the only place the typo can be seen",
+					key, strings.Join(known, ", "))
 			}
 		}
 	}
