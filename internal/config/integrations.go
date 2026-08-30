@@ -24,6 +24,21 @@ import (
 type Integrations struct {
 	Jira       *Jira       `yaml:"jira,omitempty" json:"jira,omitempty" desc:"Jira instance or Cloud site, org read account and webhook secret. Absent = disabled."`
 	Confluence *Confluence `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."`
+	// Atlassian names the ORGANIZATION the two blocks above are sites in.
+	//
+	// NOTHING THAT ROUTES READS IT. No parser, transport or delivery
+	// decision consults this block, because nothing it carries is an
+	// inbound routing input — which is why the organization has no
+	// webhook route of its own while both of its products do.
+	//
+	// What does read it is `crewlet atlassian provision`, and the
+	// engine's own company view: the `integrations` answer reports the
+	// block and runs the provisioner's planner over the org chart to name
+	// the seats a run would mint an account for. A block an operator
+	// wrote that no surface acknowledges is indistinguishable from one
+	// this build does not know about, so "the engine ignores it" is a
+	// claim about ROUTING and never about the whole process.
+	Atlassian  *Atlassian  `yaml:"atlassian,omitempty" json:"atlassian,omitempty" desc:"Atlassian organization for provisioning per-seat service accounts. Read by crewlet atlassian provision and reported by GET /integrations; no routing or delivery decision reads it."`
 	Slack      *Slack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."`
 	Mattermost *Mattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"Mattermost instance and team. Absent = disabled."`
 	GitHub     *GitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"GitHub.com or Enterprise Server, webhook secret and provisioning. Absent = disabled."`
@@ -43,6 +58,12 @@ func (i *Integrations) validate(path string) error {
 	}
 	if i.Confluence != nil {
 		p.wrap(i.Confluence.validate(at(path, "confluence")))
+	}
+	if i.Atlassian != nil {
+		p.wrap(i.Atlassian.validate(at(path, "atlassian"), i))
+	}
+	if i.Slack != nil {
+		p.wrap(i.Slack.validate(at(path, "slack")))
 	}
 	if i.Mattermost != nil {
 		p.wrap(i.Mattermost.validate(at(path, "mattermost")))
@@ -160,6 +181,189 @@ func (j *Jira) validate(path string) error {
 			"required for a Data Center instance — the /webhooks/jira route "+
 				"has nothing to verify a delivery with otherwise, and answers "+
 				"503 to every one")
+	}
+	return probs.err()
+}
+
+// Atlassian is the ORGANIZATION the Jira and Confluence sites belong to.
+//
+// # Why this is a third block rather than two provisioning sub-blocks
+//
+// Atlassian's own model is an organization that CONTAINS sites, and a site
+// that hosts Jira and Confluence. The service accounts an agent gets, the
+// credentials they authenticate with and the product licences they consume
+// are all organization-level and cover both products at once — so putting
+// `provisioning:` on both `jira:` and `confluence:` would duplicate the
+// organization id onto two blocks and invent a disagreement between them
+// that does not exist today.
+//
+// So this block names the ORGANIZATION and nothing else. Where an agent
+// works is still the site blocks' business: the cloud id a licence is
+// granted on comes from `integrations.jira.cloud_id` for Jira and
+// `integrations.confluence.cloud_id` for Confluence, which is also how an
+// organization whose two products live on two sites works correctly rather
+// than by accident.
+//
+// # There is deliberately no credential here
+//
+// The organization API key is the OPERATOR's admin credential, not the
+// company's, and Crewlet never persists one: it carries the right to create
+// billable accounts across the whole organization, and the secret store is
+// replicated to every node holding the keyring. It arrives from
+// `-admin-token`, then $ATLASSIAN_ORG_API_KEY, then $ATLASSIAN_ADMIN_TOKEN —
+// the environment alone, exactly as GitLab's and Mattermost's do.
+type Atlassian struct {
+	// OrgID is the organization id from admin.atlassian.com. `${VAR}`
+	// supported: it is not a secret, but it is the kind of value a
+	// deployment keeps beside its other environment.
+	OrgID string `yaml:"org_id" json:"org_id" js:"required" desc:"Atlassian organization id from admin.atlassian.com; ${VAR} supported."`
+
+	// SiteURL is the human-readable site base the settings links in a
+	// permission report are built from.
+	//
+	// Absent, the provisioner falls back to whichever sibling block names
+	// one — jira.site_url, jira.url, then Confluence's — and asks the
+	// organization only when none of them did. What it never falls back to
+	// is the API gateway: that is not a place a browser can go, so a link
+	// built from it looks right and opens nothing. With no answer at all
+	// the report still names the container; what it cannot do is hand the
+	// operator a link.
+	SiteURL string `yaml:"site_url,omitempty" json:"site_url,omitempty" desc:"Human-readable site base for the settings links a permission report prints. Falls back to the jira/confluence blocks, then to the organization."`
+
+	// DisplayNamePrefix is what a provisioned account is called in the
+	// assignee picker and @mention autocomplete, before the seat's role
+	// name.
+	//
+	// It is also the ONLY thing that marks an account as this company's,
+	// which is why it can never be empty: adoption matches on the display
+	// name, and an empty prefix would match a person.
+	DisplayNamePrefix string `yaml:"display_name_prefix,omitempty" json:"display_name_prefix,omitempty" desc:"Prefix on a provisioned account's display name; default Crewlet. Never empty — it is what marks an account as this company's."`
+
+	// TokenExpiryDays is the lifetime minted onto each agent's token.
+	//
+	// A POINTER because the zero value is a real setting an operator might
+	// mean — and because it is refused rather than honoured: Atlassian
+	// requires an expiry, so a zero would be a credential that is dead
+	// before the run finishes. Absent takes the default.
+	TokenExpiryDays *int `yaml:"token_expiry_days,omitempty" json:"token_expiry_days,omitempty" desc:"Lifetime of a minted agent token, 1-365 days. Default 300. Nothing renews it on a schedule; re-run the provisioner."`
+}
+
+// atlassianDefaultDisplayNamePrefix is what a provisioned account is named
+// under when the company says nothing.
+//
+// It is what an operator reads in the assignee picker beside their
+// colleagues, so it is the product's name rather than a slug.
+const atlassianDefaultDisplayNamePrefix = "Crewlet"
+
+// Prefix is the display-name prefix, applying the default.
+func (a *Atlassian) Prefix() string {
+	if a == nil {
+		return atlassianDefaultDisplayNamePrefix
+	}
+	if prefix := strings.TrimSpace(a.DisplayNamePrefix); prefix != "" {
+		return prefix
+	}
+	return atlassianDefaultDisplayNamePrefix
+}
+
+// ExpiryDays is the minted token's lifetime in days, applying the default.
+func (a *Atlassian) ExpiryDays() int {
+	if a == nil || a.TokenExpiryDays == nil {
+		return atlassianDefaultTokenExpiryDays
+	}
+	return *a.TokenExpiryDays
+}
+
+// atlassianDefaultTokenExpiryDays mirrors atlassian.DefaultTokenExpiryDays.
+//
+// Restated here rather than imported because internal/config imports no
+// vendor package — that is what lets every vendor package import config —
+// and a schema default that pulled one in would invert the whole graph. The
+// vendor package's own test asserts the two agree.
+const atlassianDefaultTokenExpiryDays = 300
+
+// atlassianMaxTokenExpiryDays mirrors atlassian.MaxTokenExpiryDays: the cap
+// Atlassian itself enforces, refused here so an operator learns it from a
+// validation error rather than from a run that fails half way through a
+// company.
+const atlassianMaxTokenExpiryDays = 365
+
+// validate checks the organization block against the sites it provisions
+// into.
+//
+// It takes the whole Integrations block because every rule here is a
+// CROSS-BLOCK one: an organization with no site is an organization with
+// nothing to provision, and a cloud id stated twice is a disagreement the
+// run would resolve silently.
+func (a *Atlassian) validate(path string, in *Integrations) error {
+	var probs problems
+	if strings.TrimSpace(a.OrgID) == "" {
+		probs.add(at(path, "org_id"), ErrMissing,
+			"required — it is the organization `crewlet atlassian provision` "+
+				"creates each seat's service account in, and it is on the "+
+				"Settings page at admin.atlassian.com")
+	}
+	if site := strings.TrimSpace(a.SiteURL); site != "" && !hasHTTPScheme(a.SiteURL) {
+		probs.add(at(path, "site_url"), ErrUnknownValue,
+			"%q must start with http:// or https://", a.SiteURL)
+	}
+	if a.TokenExpiryDays != nil {
+		if days := *a.TokenExpiryDays; days < 1 || days > atlassianMaxTokenExpiryDays {
+			probs.add(at(path, "token_expiry_days"), ErrOutOfRange,
+				"%d is not between 1 and %d — Atlassian will not mint a token "+
+					"that outlives %d days, and one that expires immediately "+
+					"is a credential the agents cannot use",
+				days, atlassianMaxTokenExpiryDays, atlassianMaxTokenExpiryDays)
+		}
+	}
+	if in == nil || (in.Jira == nil && in.Confluence == nil) {
+		probs.add(path, ErrConflict,
+			"an atlassian organization with neither integrations.jira nor "+
+				"integrations.confluence has nothing to provision: a service "+
+				"account's licence is granted on a SITE, and the site is the "+
+				"cloud_id one of those blocks names")
+		return probs.err()
+	}
+	// A cloud id is Atlassian's own identifier for a site, so two blocks
+	// naming DIFFERENT ones is two sites — which is supported, and is why
+	// each product's licence is granted on its own block's id. What is
+	// refused is the shape that cannot be true: a company that gave one
+	// product a cloud id and the other a direct instance URL has half a
+	// Cloud organization, and provisioning would licence one product into
+	// a site the other cannot reach.
+	if in.Jira != nil && in.Confluence != nil {
+		jiraCloud := strings.TrimSpace(in.Jira.CloudID) != ""
+		wikiCloud := strings.TrimSpace(in.Confluence.CloudID) != ""
+		if jiraCloud != wikiCloud {
+			named, missing := "jira", "confluence"
+			if wikiCloud {
+				named, missing = "confluence", "jira"
+			}
+			probs.add(path, ErrConflict,
+				"integrations.%s names a cloud_id and integrations.%s does "+
+					"not, so this company is half Cloud and half Data Center. "+
+					"Service accounts are a Cloud-only capability: give both a "+
+					"cloud_id, or drop this block and provision by hand",
+				named, missing)
+		}
+	}
+	return probs.err()
+}
+
+// validate checks the org-level Slack block.
+//
+// It exists for ONE field, and it exists because the generated JSON Schema
+// already refused what this validator accepted: `typing_status` carries a
+// `js:"enum=..."` tag, so an editor rejected a typo that `crewlet validate`
+// waved through — and the engine then read the unknown value as the default,
+// so an operator who asked for `always` silently got `addressed`. Mattermost
+// has checked the identical field since it was added; this block simply
+// never had a validator to check it in.
+func (s *Slack) validate(path string) error {
+	var probs problems
+	if s.TypingStatus != "" && !oneOf(s.TypingStatus, WorkingStatuses) {
+		probs.add(at(path, "typing_status"), ErrUnknownValue, "%q (want %s)",
+			s.TypingStatus, names(WorkingStatuses))
 	}
 	return probs.err()
 }
@@ -480,7 +684,10 @@ func hasHTTPScheme(url string) bool {
 //     the person who created it, and the API to create one on somebody's
 //     behalf was withdrawn in 2020. So `crewlet github provision` reports
 //     what each seat's own credential authenticates as and registers the
-//     webhooks — the same shape as Jira's, for the same reason.
+//     webhooks. It is the only vendor here that mints nothing at all:
+//     Atlassian Cloud looked like the same case and is not — an
+//     organization admin API creates SERVICE accounts and mints their
+//     credentials, which is what `crewlet atlassian provision` does.
 //
 // The tool server is a separate `shared: false` http MCP entry; each agent
 // supplies its token there as an Authorization header, and that is the same

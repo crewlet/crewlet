@@ -1,5 +1,30 @@
 {
   "$defs": {
+    "Atlassian": {
+      "additionalProperties": false,
+      "properties": {
+        "display_name_prefix": {
+          "description": "Prefix on a provisioned account's display name; default Crewlet. Never empty — it is what marks an account as this company's.",
+          "type": "string"
+        },
+        "org_id": {
+          "description": "Atlassian organization id from admin.atlassian.com; ${VAR} supported.",
+          "type": "string"
+        },
+        "site_url": {
+          "description": "Human-readable site base for the settings links a permission report prints. Falls back to the jira/confluence blocks, then to the organization.",
+          "type": "string"
+        },
+        "token_expiry_days": {
+          "description": "Lifetime of a minted agent token, 1-365 days. Default 300. Nothing renews it on a schedule; re-run the provisioner.",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "org_id"
+      ],
+      "type": "object"
+    },
     "CLIAgent": {
       "additionalProperties": false,
       "properties": {
@@ -427,6 +452,10 @@
     "Integrations": {
       "additionalProperties": false,
       "properties": {
+        "atlassian": {
+          "$ref": "#/$defs/Atlassian",
+          "description": "Atlassian organization for provisioning per-seat service accounts. Read by crewlet atlassian provision and reported by GET /integrations; no routing or delivery decision reads it."
+        },
         "confluence": {
           "$ref": "#/$defs/Confluence",
           "description": "Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."
@@ -1248,9 +1277,30 @@
       ],
       "type": "object"
     },
+    "RoleAtlassian": {
+      "additionalProperties": false,
+      "properties": {
+        "products": {
+          "description": "Products this seat is licensed for. Absent block = all configured; empty list = none.",
+          "items": {
+            "enum": [
+              "jira",
+              "confluence"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
+        "atlassian": {
+          "$ref": "#/$defs/RoleAtlassian",
+          "description": "Which Atlassian products this seat holds a licence for. Read by crewlet atlassian provision."
+        },
         "confluence": {
           "$ref": "#/$defs/SpaceRef",
           "description": "The Confluence space this seat owns."

@@ -67,11 +67,52 @@ func IsCloud(base string) bool {
 // is the field an operator already has to set correctly for their deployment.
 // Deriving it from the address instead would break the real case of a Data
 // Center instance fronted by Atlassian-style auth.
+//
+// # A value that is ALREADY a header is passed through
+//
+// A seat running an HTTP MCP server declares its credential as the header
+// itself — `Authorization: "Basic <base64(email:token)>"` — and [StripScheme]
+// deliberately keeps that value whole, because its payload already carries
+// both halves and re-encoding it would produce a credential that
+// authenticates as nobody. Wrapping it again produced `Bearer Basic …`, which
+// every Atlassian surface refuses: the seat's identity never resolved, so it
+// received no Jira and no Confluence events at all, silently, for as long as
+// the config said so.
+//
+// # An empty token answers empty, not "Bearer "
+//
+// [NewTransport] refuses a blank credential so a client fails at construction
+// rather than at its first request. "Bearer " is not blank, so returning it
+// walked straight past that guard.
 func AuthHeader(email, token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ""
+	}
+	if hasAuthScheme(token) {
+		return token
+	}
 	if email == "" {
 		return "Bearer " + token
 	}
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(email+":"+token))
+}
+
+// authSchemes are the schemes a whole Authorization header can arrive under.
+//
+// Matched case-insensitively because RFC 9110 makes a scheme name
+// case-insensitive and this value is authored by hand in a YAML file.
+var authSchemes = []string{"basic ", "bearer "}
+
+// hasAuthScheme reports a credential that is already a whole header value.
+func hasAuthScheme(token string) bool {
+	lower := strings.ToLower(token)
+	for _, scheme := range authSchemes {
+		if strings.HasPrefix(lower, scheme) {
+			return true
+		}
+	}
+	return false
 }
 
 // APIError is a refusal from Atlassian, typed.
@@ -100,6 +141,37 @@ func (e *APIError) Error() string {
 	}
 	return msg
 }
+
+// TransportError is a request that came back with no usable answer.
+//
+// # It is the opposite fact from an [APIError], not a worse one
+//
+// A refusal is PROOF the server processed the request and declined it:
+// nothing was created, and a caller can say so. This is silence — the request
+// may have landed and had its answer lost on the way back — so anything it
+// would have created may exist, with no id anywhere to reach it by. The two
+// lead to opposite reports, and a caller that could only ask "did it fail"
+// had to guess which.
+//
+// It also covers an answer that arrived and could not be read, because that
+// leaves the caller in the same place: the write happened and this process
+// holds nothing to address it with.
+type TransportError struct {
+	Surface string
+	Method  string
+	Path    string
+	Err     error
+}
+
+// Error names the METHOD as well as the path, exactly as [APIError.Error]
+// does: several of these routes serve three verbs on one path, and "the
+// account listing did not answer" and "the account CREATE did not answer" are
+// the two facts furthest apart in what they cost.
+func (e *TransportError) Error() string {
+	return fmt.Sprintf("%s: %s %s: %v", e.Surface, e.Method, e.Path, e.Err)
+}
+
+func (e *TransportError) Unwrap() error { return e.Err }
 
 // StatusOf reads the HTTP status off an error, or 0 where there is none.
 //
@@ -177,7 +249,7 @@ func (t *Transport) Do(ctx context.Context, method, path string, params url.Valu
 
 	resp, err := t.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("%s: %s: %w", t.Surface, path, err)
+		return &TransportError{Surface: t.Surface, Method: method, Path: path, Err: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -192,7 +264,11 @@ func (t *Transport) Do(ctx context.Context, method, path string, params url.Valu
 		return nil
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("%s: decode %s: %w", t.Surface, path, err)
+		// A TRANSPORT ERROR, not a plain one: the server accepted the
+		// request and this process cannot read what it answered, so a
+		// write has happened that nothing here can address.
+		return &TransportError{Surface: t.Surface, Method: method, Path: path,
+			Err: fmt.Errorf("decode: %w", err)}
 	}
 	return nil
 }

@@ -304,6 +304,69 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"name: Acme\nintegrations:\n  jira: {cloud_id: abc, site_url: acme.example.com, token: t}\n",
 			"integrations.jira.site_url", ErrUnknownValue,
 		},
+		// The ORGANIZATION's rules. Every one of them is a cross-block
+		// rule, because the block names the organization the two site
+		// blocks live in and says nothing about a site itself.
+		{
+			"an atlassian organization with no id to create accounts in",
+			"name: Acme\nintegrations:\n  jira: {cloud_id: abc, token: t}\n  atlassian: {}\n",
+			"integrations.atlassian.org_id", ErrMissing,
+		},
+		{
+			"an atlassian organization with no product to license a seat for",
+			"name: Acme\nintegrations:\n  atlassian: {org_id: o}\n",
+			"integrations.atlassian", ErrConflict,
+		},
+		{
+			"a company half on Cloud and half on Data Centre",
+			"name: Acme\nintegrations:\n  jira: {cloud_id: abc, token: t}\n" +
+				"  confluence: {url: \"https://wiki.example.com\", token: t, webhook_secret: s}\n" +
+				"  atlassian: {org_id: o}\n",
+			"integrations.atlassian", ErrConflict,
+		},
+		{
+			"an atlassian site url that is not a url",
+			"name: Acme\nintegrations:\n  jira: {cloud_id: abc, token: t}\n" +
+				"  atlassian: {org_id: o, site_url: acme.example.com}\n",
+			"integrations.atlassian.site_url", ErrUnknownValue,
+		},
+		{
+			"a credential lifetime Atlassian will not mint",
+			"name: Acme\nintegrations:\n  jira: {cloud_id: abc, token: t}\n" +
+				"  atlassian: {org_id: o, token_expiry_days: 400}\n",
+			"integrations.atlassian.token_expiry_days", ErrOutOfRange,
+		},
+		{
+			"a credential that expires before the run finishes",
+			"name: Acme\nintegrations:\n  jira: {cloud_id: abc, token: t}\n" +
+				"  atlassian: {org_id: o, token_expiry_days: 0}\n",
+			"integrations.atlassian.token_expiry_days", ErrOutOfRange,
+		},
+		{
+			"a seat licensed for a product this build does not serve",
+			"name: Acme\nintegrations:\n  jira: {cloud_id: abc, token: t}\n" +
+				"  atlassian: {org_id: o}\n" +
+				"roles:\n  - {name: SWE, integrations: {atlassian: {products: [bitbucket]}}}\n",
+			"roles[0].integrations.atlassian.products[0]", ErrUnknownValue,
+		},
+		{
+			"a seat naming one product twice",
+			"name: Acme\nintegrations:\n  jira: {cloud_id: abc, token: t}\n" +
+				"  atlassian: {org_id: o}\n" +
+				"roles:\n  - {name: SWE, integrations: {atlassian: {products: [jira, jira]}}}\n",
+			"roles[0].integrations.atlassian.products[1]", ErrConflict,
+		},
+		// THE PARITY HOLE THIS FOUND. `typing_status` carries a schema
+		// enum, so an editor refused a typo that `crewlet validate` waved
+		// through — and the engine then read the unknown value as the
+		// default, so an operator who asked for `always` silently got
+		// `addressed`. Mattermost has checked the identical field since it
+		// was added; this block simply had no validator to check it in.
+		{
+			"a slack working indicator nobody serves",
+			"name: Acme\nintegrations:\n  slack: {typing_status: sometimes}\n",
+			"integrations.slack.typing_status", ErrUnknownValue,
+		},
 		// A per-seat Slack app needs BOTH credentials, and each half fails
 		// silently on its own: without a token the seat receives messages
 		// it cannot answer, without a secret its route answers 503 while
@@ -495,5 +558,70 @@ func TestJiraDataCentreNeedsNoSeparateSiteURL(t *testing.T) {
 	if jira.BaseURL() != "https://jira.example.com" ||
 		jira.ShareableBaseURL() != "https://jira.example.com" {
 		t.Errorf("base = %q, shareable = %q", jira.BaseURL(), jira.ShareableBaseURL())
+	}
+}
+
+// A typo in a seat's model key is invisible and permanent: the runtime's
+// fallback resolves it — per phase, then the role's chain, then "default",
+// then the first provider configured — so the seat boots, thinks, and bills
+// on a model the operator never chose. Validation is the ONLY place it can
+// be seen, which is why the walk has to reach every seat.
+func TestAProviderKeyTypoIsCaughtWhereverTheSeatIsWritten(t *testing.T) {
+	t.Parallel()
+	const providers = "name: Acme\nproviders:\n  llm:\n    main: " +
+		"{type: anthropic, model: claude-sonnet-5, api_keys: [\"${K}\"]}\n"
+
+	for _, tc := range []struct {
+		name string
+		doc  string
+		path string
+	}{
+		{
+			"a root-level seat",
+			providers + "roles:\n  - {name: CEO, llm: main, llm_plan: claude-sonet}\n",
+			"roles[0].llm_plan",
+		},
+		{
+			// THE BUG THIS WALK HAD. It stopped at the root-level roles,
+			// which is almost none of them: a company that puts its seats
+			// in departments — the shape the shipped example uses and the
+			// docs teach — had every one of its provider keys unchecked.
+			"a seat inside a unit",
+			providers + "units:\n  - name: Engineering\n    roles:\n" +
+				"      - {name: SWE, llm: main, llm_execute: claude-sonet}\n",
+			"units[0].roles[0].llm_execute",
+		},
+		{
+			"a seat inside a nested unit",
+			providers + "units:\n  - name: Technology\n    children:\n" +
+				"      - name: Platform\n        roles:\n" +
+				"          - {name: SWE, llm: main, llm_review: claude-sonet}\n",
+			"units[0].children[0].roles[0].llm_review",
+		},
+		{
+			// Both written surfaces are checked, and each is reported at
+			// the path the operator typed: the flat field wins over the
+			// mapping, so a typo inside `llm.plan` under a role that also
+			// sets `llm_plan` never appears in the resolved value at all —
+			// and it is still a typo, still in the file.
+			"the mapping form under a unit-nested seat",
+			providers + "units:\n  - name: Engineering\n    roles:\n" +
+				"      - {name: SWE, llm: {default: main, plan: claude-sonet}}\n",
+			"units[0].roles[0].llm.plan",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseCompany([]byte(tc.doc))
+			if err == nil {
+				t.Fatalf("%s: a typo'd provider key was accepted", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.path) {
+				t.Errorf("error does not report at %s:\n%v", tc.path, err)
+			}
+			if !strings.Contains(err.Error(), "claude-sonet") {
+				t.Errorf("error does not name the key that missed:\n%v", err)
+			}
+		})
 	}
 }

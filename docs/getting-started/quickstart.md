@@ -410,10 +410,26 @@ each), then wire them in:
   [The Site URL](../integrations/mattermost.md#the-site-url). The engine
   needs no public URL; the Mattermost server still needs to know its own.
 - Connect a work-item tracker — [Jira](../integrations/jira.md), or the issue
-  tracker of the code host you already run
+  tracker of the code host you already run. On Atlassian **Cloud**, give each
+  seat its own identity rather than sharing one company account — issues get
+  assigned to an *agent*, and comments attribute to it:
+  ```bash
+  export ATLASSIAN_ORG_API_KEY="..."      # created WITHOUT scopes
+  crewlet atlassian provision company.yaml -secret-store
+  ```
+  That creates one service account per seat, grants its product licences, and
+  mints the token into the `${VAR}`s the seat's `mcp_env` already names. Data
+  Center has no organization admin API, so its accounts stay hand-made and
+  [`crewlet jira provision`](../integrations/jira.md#provisioning) reports them
+  instead — see [Atlassian](../integrations/atlassian.md)
 - Connect a knowledge backend — [Confluence](../integrations/confluence.md) —
   so shared procedures surface in the Plan-phase `## Relevant knowledge`
-  block; publish version-controlled docs with `crewlet confluence import`
+  block; publish version-controlled docs with `crewlet confluence import`. The
+  same `crewlet atlassian provision` run licenses a seat for Confluence as well
+  as Jira — `role.integrations.atlassian.products` narrows which, because a
+  licence is billable — and then reports the space permissions only a person
+  can grant, since Atlassian lets no API token place an account on a space's
+  permission grid
 - Connect a code host — [GitLab](../integrations/gitlab.md) or
   [GitHub](../integrations/github.md) — and enable the
   [code sandbox](../concepts/code-sandbox.md) so engineer roles author real

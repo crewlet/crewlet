@@ -244,9 +244,16 @@ func (g *schemaGen) fieldSchema(t reflect.Type, directives map[string]string) ma
 		applyNumberDirectives(out, directives)
 		return out
 	case reflect.Slice, reflect.Array:
-		return map[string]any{"type": "array", "items": g.fieldSchema(t.Elem(), nil)}
+		// THE DIRECTIVES GO TO THE ELEMENTS, not to the list. A closed set
+		// on a list field can only mean "each entry is one of these" —
+		// there is nothing else a `js:"enum=a|b"` on a `[]T` could say —
+		// and dropping them here produced an unconstrained array with no
+		// error and no warning: the tag was written, the schema shipped
+		// without it, and an editor waved through a value the engine
+		// refuses.
+		return map[string]any{"type": "array", "items": g.fieldSchema(t.Elem(), directives)}
 	case reflect.Map:
-		return map[string]any{"type": "object", "additionalProperties": g.fieldSchema(t.Elem(), nil)}
+		return map[string]any{"type": "object", "additionalProperties": g.fieldSchema(t.Elem(), directives)}
 	case reflect.Struct:
 		return g.ref(t)
 	case reflect.Interface:

@@ -165,6 +165,16 @@ type Result struct {
 	// the URL to click.
 	Pending map[string]string
 
+	// Recorded counts the values this run wrote to the sink — a seat's
+	// signing secret and its bot token are two.
+	//
+	// It exists so the report can say what still has to happen for those
+	// values to reach a RUNNING engine — see [provision.TokenSink.NextStep].
+	// Without it the report stopped at "recorded in the encrypted secret
+	// store", which reads as finished while the engine goes on resolving
+	// from the snapshot it built at its last apply.
+	Recorded int
+
 	// attempted is how many seats the run tried, for the failure summary.
 	attempted int
 
@@ -451,6 +461,7 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 		if err := o.Sink.Record(ctx, seat.SigningVar, record.SigningSecret); err != nil {
 			return fmt.Errorf("slack: %s: record %s: %w", seat.Handle, seat.SigningVar, err)
 		}
+		res.Recorded++
 	}
 	return o.install(ctx, seat, record, res)
 }
@@ -507,6 +518,7 @@ func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, r
 	if err := o.Sink.Record(ctx, seat.TokenVar, installed.BotToken); err != nil {
 		return fmt.Errorf("slack: %s: record %s: %w", seat.Handle, seat.TokenVar, err)
 	}
+	res.Recorded++
 	record.BotUserID = installed.BotUserID
 	record.TeamID = installed.TeamID
 	o.Ledger.Apps[seat.Handle] = record

@@ -302,9 +302,16 @@ export function catClass(category) {
   return "cat-" + (category || "system");
 }
 
-// External integrations a notification can originate from. Each maps to a
-// display label, sprite icon id, and accent colour so the dashboard
+// External integrations a notification can originate from, plus the
+// configured surfaces the Integrations room brands beside them. Each maps to
+// a display label, sprite icon id, and accent colour so the dashboard
 // identifies the source at a glance instead of a generic "notification".
+//
+// A key missing here does not fail — integrationMeta title-cases the slug —
+// which is why every surface the server can send has to be listed rather
+// than only the ones that deliver events: "Atlassian" is what the fallback
+// would have produced for the wrong reason, and the next multi-word key
+// would render as a slug on a card an operator is reading for reassurance.
 export const INTEGRATIONS = {
   slack: { label: "Slack", icon: "message", color: "var(--purple-ink)" },
   mattermost: { label: "Mattermost", icon: "hash", color: "var(--brown-ink)" },
@@ -312,6 +319,13 @@ export const INTEGRATIONS = {
   github: { label: "GitHub", icon: "git", color: "var(--text)" },
   gitlab: { label: "GitLab", icon: "git", color: "var(--orange-ink)" },
   confluence: { label: "Confluence", icon: "book", color: "var(--cyan-ink)" },
+  // The organization Jira and Confluence are sites in, not a third site:
+  // it delivers nothing, and what it names is where each seat's service
+  // account is created. So it takes the container icon rather than a
+  // product one, and a colour of its own — sharing Jira's blue or
+  // Confluence's cyan would read as one of them on a card that sits
+  // directly beside both.
+  atlassian: { label: "Atlassian", icon: "building", color: "var(--accent-ink)" },
   email: { label: "Email", icon: "inbox", color: "var(--amber-ink)" },
 };
 

@@ -402,6 +402,57 @@ test("integrations: a surface with no shared secret is not missing one", async (
   );
 });
 
+// A branded surface is one an operator recognises without reading. The
+// label alone cannot prove that: integrationMeta title-cases an unknown
+// key, so a missing entry still renders the word "Atlassian" — with the
+// generic inbox glyph and the fallback pink, sitting between the Jira and
+// Confluence cards it is the parent of. The icon and the colour are the
+// half of the badge that goes wrong silently, so they are what this reads.
+test("integrations: the Atlassian organization is branded, not title-cased", async () => {
+  await withView(
+    createIntegrationsView,
+    {
+      integrations: {
+        traffic_known: true,
+        traffic_since: null,
+        integrations: [
+          {
+            key: "atlassian",
+            configured: true,
+            enabled: true,
+            // No route of its own: Cloud arrives through the Forge app
+            // and Data Center on the jira and confluence routes, each of
+            // which is its own card.
+            inbound_kind: "webhook",
+            inbound_path: "",
+            org_id: "${ATLASSIAN_ORG_ID}",
+            url: "https://acme.example.com",
+            secret_present: null,
+            secret_usable: null,
+            routes: null,
+            seats: ["swe"],
+            inbound: 0,
+            last_at: null,
+          },
+        ],
+      },
+    },
+    ({ view }) => {
+      const html = view.render(state());
+      assert.match(html, /#i-building/);
+      assert.match(html, /--int-color:var\(--accent-ink\)/);
+      assert.match(html, />\s*Atlassian\s*</);
+      // The row exists to answer "which agents get an account", so the
+      // seat has to reach the chip that navigates to it.
+      assert.match(html, /data-seat="swe"/);
+      // No credential of its own: the organization key is the operator's,
+      // arrives from the environment for one run and is never stored.
+      assert.match(html, /the seat's own token/);
+      assert.doesNotMatch(html, /missing/);
+    },
+  );
+});
+
 test("integrations: counts that cannot be taken are not shown as zero", async () => {
   await withView(
     createIntegrationsView,

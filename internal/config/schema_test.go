@@ -88,6 +88,10 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		// field's tag and not the other would leave two enums that agree
 		// today and drift on the next value.
 		{"GitHubProvisioning", "org_webhook", strs(ContainerWebhookModes)},
+		// The per-seat Atlassian licence list. An editor catching a
+		// misspelled product is the difference between an author fixing it
+		// while typing and a provisioning run refusing the whole company.
+		{"RoleAtlassian", "products", strs(AtlassianProducts)},
 	}
 	for _, tc := range cases {
 		def, ok := defs[tc.def].(map[string]any)
@@ -98,6 +102,14 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		field, ok := props[tc.field].(map[string]any)
 		if !ok {
 			t.Fatalf("%s has no %s", tc.def, tc.field)
+		}
+		// A LIST FIELD CARRIES ITS CLOSED SET ON THE ELEMENTS. There is
+		// nothing else an enum on a `[]T` could mean, and the generator
+		// used to drop it entirely — the tag was written, the schema
+		// shipped without it, and an editor waved through a value the
+		// engine refuses.
+		if items, isList := field["items"].(map[string]any); isList {
+			field = items
 		}
 		raw, ok := field["enum"].([]any)
 		if !ok {
@@ -411,6 +423,55 @@ units:
 		{
 			name: "a jira block naming its instance twice", tier: TierCompany, validatorOnly: true,
 			yaml: "name: Acme\nintegrations:\n  jira: {url: \"https://jira.example.com\", cloud_id: acme-cloud, token: t, webhook_secret: s}\n",
+		},
+		// The ORGANIZATION block, and the per-seat licence list beside it.
+		// A working document first, so a fixture that quietly stops
+		// validating is caught here rather than sitting in the table
+		// proving nothing.
+		{
+			name: "an atlassian organization over a cloud site", tier: TierCompany,
+			yaml: "name: Acme\nintegrations:\n  jira: {cloud_id: acme-cloud, token: \"${T}\"}\n" +
+				"  confluence: {cloud_id: acme-cloud, token: \"${T}\"}\n" +
+				"  atlassian: {org_id: \"${ORG}\", site_url: \"https://acme.atlassian.net\", token_expiry_days: 90}\n" +
+				"roles:\n  - {name: Writer, integrations: {atlassian: {products: [confluence]}}}\n",
+		},
+		// Both of the organization's own rules are CROSS-BLOCK, and a JSON
+		// Schema cannot express either soundly: "this block requires one of
+		// two siblings" and "these two siblings must agree about their
+		// deployment" are relationships between properties of a parent, and
+		// the restructured shape that could state them gives an author a
+		// far worse message than the error does.
+		{
+			name: "an atlassian organization with no site to provision into",
+			tier: TierCompany, validatorOnly: true,
+			yaml: "name: Acme\nintegrations:\n  atlassian: {org_id: acme-org}\n",
+		},
+		{
+			name: "a company half on Cloud and half on Data Centre",
+			tier: TierCompany, validatorOnly: true,
+			yaml: "name: Acme\nintegrations:\n  jira: {cloud_id: acme-cloud, token: t}\n" +
+				"  confluence: {url: \"https://wiki.example.com\", token: t, webhook_secret: s}\n" +
+				"  atlassian: {org_id: acme-org}\n",
+		},
+		// A misspelled product is caught by BOTH layers now, which is what
+		// a closed set on a scalar buys: the schema flags it while the
+		// author is typing and the validator refuses it at load.
+		{
+			name: "a seat licensed for a product this build does not serve",
+			tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nintegrations:\n  jira: {cloud_id: acme-cloud, token: t}\n" +
+				"  atlassian: {org_id: acme-org}\n" +
+				"roles:\n  - {name: SWE, integrations: {atlassian: {products: [bitbucket]}}}\n",
+		},
+		// THE PARITY HOLE THE ORGANIZATION BLOCK EXPOSED. `typing_status`
+		// has carried a schema enum since it was added and had no validator
+		// behind it, so an editor refused what `crewlet validate` waved
+		// through — and the engine then read the unknown value as the
+		// default. Both layers refuse it now.
+		{
+			name: "a slack working indicator nobody serves",
+			tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nintegrations:\n  slack: {typing_status: sometimes}\n",
 		},
 		// The per-seat half: an app with BOTH credentials is a working
 		// config, and one with a single half is a validator rule a JSON

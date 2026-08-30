@@ -142,10 +142,10 @@ Everything else is YAML config, in-memory state, or an external tool.
 
 ```
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
-                          #   budgets, secrets, config, llm, and the six
-                          #   vendor CLIs — gitlab/github/jira/slack
-                          #   `provision`, confluence `import|resync`,
-                          #   mattermost `provision|doctor`
+                          #   budgets, secrets, config, llm, and the seven
+                          #   vendor CLIs — gitlab/github/jira/slack/
+                          #   atlassian `provision`, confluence
+                          #   `import|resync`, mattermost `provision|doctor`
 internal/
 ├── engine/               # The wiring: which concrete thing satisfies which seam
 ├── config/               # The two config tiers → typed structs → JSON Schema
@@ -174,10 +174,14 @@ internal/
 ├── mcp/                  # MCP client and child-process supervision
 ├── tools/                # The registry, and the per-phase tool surfaces
 ├── notify/               # The backend-neutral notification spine
-├── mattermost/ slack/    # The six vendors: client, parser, transport,
-│   jira/ confluence/     #   prompt, provisioning reconcile — each
-│   gitlab/ github/       #   contributing only what is genuinely its own,
-│                         #   which is why Jira has no transport
+├── mattermost/ slack/    # The seven vendor packages: client, parser,
+│   jira/ confluence/     #   transport, prompt, provisioning reconcile —
+│   gitlab/ github/       #   each contributing only what is genuinely its
+│   atlassian/            #   own, which is why Jira has no transport, and
+│                         #   why atlassian/ is not a product at all: it is
+│                         #   the identity and the organization the two
+│                         #   Atlassian product packages above it share —
+│                         #   one account, one credential, one licence plane
 ├── configplane/          # The activation pointer's cadence and postures
 ├── node/                 # The node's own identity, presence and drain
 ├── provision/            # The shared provisioning grammar and its sinks

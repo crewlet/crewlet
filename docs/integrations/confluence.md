@@ -2,7 +2,7 @@
 
 Crewlet integrates with Confluence bidirectionally: agents read and write Confluence pages via MCP tools, and Confluence pushes content change events to agents via webhooks.
 
-> **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. Webhooks differ by deployment: **Cloud** events arrive via the [Crewlet Forge app](https://github.com/crewlet/forge); **Data Center** uses direct webhook registration (see [Webhooks](#webhooks-confluence-pushes-to-agents)).
+> **Prerequisites — on Data Center the wiki side is set up by hand.** Data Center has no organization admin API and mints a personal access token only for the calling user, so the operator creates the site, each agent's Atlassian account and each agent's token, then wires the tokens into `mcp_env` as shown below. On **Cloud** that part is `crewlet atlassian provision`: one service account per agent seat, its credential minted into the `${VAR}` the seat already references, and a Confluence licence granted on the site `integrations.confluence.cloud_id` names — see [Provisioning](#provisioning). What no deployment automates is **space permissions**: Atlassian refuses that write to an API token, so which spaces an agent can read and write in is granted by a person either way, and the provisioner reads back what the agent ended up with rather than pretending to have set it. Webhooks differ by deployment: **Cloud** events arrive via the [Crewlet Forge app](https://github.com/crewlet/forge); **Data Center** uses direct webhook registration (see [Webhooks](#webhooks-confluence-pushes-to-agents)).
 
 ---
 
@@ -14,8 +14,8 @@ The `integrations.confluence` block is **non-tool config** — the admin/service
 integrations:
   confluence:
     url: "${CONFLUENCE_URL}"                        # Confluence instance URL (Cloud or Data Center)
-    token: "${CONFLUENCE_API_TOKEN}"                # API token (admin/service account)
-    email: "${CONFLUENCE_EMAIL}"                    # Cloud only — admin email for Basic Auth
+    token: "${CONFLUENCE_ADMIN_TOKEN}"              # API token (org read account) — do not
+    email: "${CONFLUENCE_ADMIN_EMAIL}"              # reuse a name a seat's mcp_env reads
     webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"  # Data Center: required, HMAC-SHA256
 
 knowledge:
@@ -160,7 +160,7 @@ The query-time search authenticates **as the agent's own Atlassian user**, reusi
 - **Cloud** — `CONFLUENCE_USERNAME` + `CONFLUENCE_API_TOKEN`.
 - **Data Center** — `CONFLUENCE_PERSONAL_TOKEN`.
 
-The credential is read from `mcp_env.atlassian` or `mcp_env.confluence` — Atlassian's own MCP server covers both products, so the documented entry is named `atlassian`.
+The credential is read by the same grammar the routing side uses — `mcp_env.atlassian`, `mcp_env.confluence` or `mcp_env.jira`, taking whichever block actually holds a token, since one Atlassian credential serves both products. Atlassian's own MCP server covers both, so the documented entry is named `atlassian`.
 
 Roles without a per-agent Confluence token fall back to the **org token** (`integrations.confluence.token`), which sees whatever that account sees. That fallback is exactly why an unscoped search is then **refused** rather than run: searching the whole instance on a shared credential is how one seat reads a page its own account never could.
 
@@ -199,6 +199,29 @@ The `## Relevant knowledge` prefetch stays empty — logged, never an error — 
 There is also a cheap **no-I/O pre-gate**: when a search is a guaranteed no-op (no scope AND no per-seat credential), the Plan phase skips the auxiliary model call that would have generated the query. That call is the expensive half, so a gate that had to reach the network to answer would cost more than it saves.
 
 The search needs a Confluence connection and a model for query generation. It needs **no** database and **no** embeddings provider.
+
+---
+
+## Provisioning
+
+```bash
+export ATLASSIAN_ORG_API_KEY="..."      # an organization API key, created WITHOUT scopes
+crewlet atlassian provision company.yaml -secret-store
+```
+
+There is no `crewlet confluence provision`, and that is the shape of the vendor rather than a gap: one Atlassian account is a person — or an agent — in both products at once, authenticates both with one credential and is named by one account id in both payloads. So one command provisions both, [`crewlet atlassian provision`](atlassian.md), and it is **Cloud only** — a Data Center address is refused there by name, because the admin API it needs does not exist. For a seat the run covers (every agent seat, unless its role's `integrations.atlassian.products` narrows it — a licence is billable, and the free service-account allowance an organization gets without Atlassian Guard is small), three things happen on the wiki's side.
+
+**A Confluence licence**, granted on the site `integrations.confluence.cloud_id` names. A service account is created holding none, so without this an agent authenticates perfectly and finds a wiki it cannot read a page of. It is granted only where the run finds one **owed** — where the seat's own credential was refused by Confluence, which is exactly what a licence somebody revoked in the console looks like, so that repair still happens with nothing remembered between runs. Re-sending an idempotent grant every run would look free and is not: it is a write per seat forever, and it makes every licence look freshly granted. That matters because Atlassian applies a licence asynchronously and takes minutes over it, so a space check that fails immediately after a grant is reported as *still starting* rather than as broken — and a space the agent permanently cannot read would then be *still starting* on every run, for ever. Because a steady-state run grants nothing it does not owe, the next run reports that space as the finding it is.
+
+**A credential**, minted into the `${VAR}`s the seat's own `mcp_env` already names — `CONFLUENCE_API_TOKEN` beside `CONFLUENCE_USERNAME`, or the `atlassian` spellings where one entry serves both products — with the scopes this product needs and no others: `read:confluence-content.all`, `write:confluence-content`, `read:confluence-space.summary` and `read:confluence-user`. The last is not incidental: reading a space's permissions means resolving the groups they were granted to, and an agent's own group membership is the only way to tell which of those grants are its own. Scopes are fixed at mint time and cannot be widened afterwards, so a seat that gained Confluence *after* its token was minted holds a Jira-only credential that looks healthy until its first real wiki call. The run detects exactly that by asking each product separately who the credential is, and re-mints.
+
+**A read-back of what the agent can actually do in each space**, asked as the agent rather than about it. Crewlet cannot place an account in a space's permission grid — Atlassian refuses that write to an API token, and only a Forge app on a paid plan may do it — so the run reports the truth instead of faking a write. Per space it names what is **missing** (yours to grant, with the link to `…/wiki/spaces/<KEY>/settings/permissions`, which needs a browsable site base to build — `integrations.atlassian.site_url`, or a sibling block's, and where nothing names one the run asks the organization for its site; failing that the space is named without a link, since the API gateway is not somewhere a browser can go) and what is **excess** — a permission on the forbidden half of the contract that this site's own permission scheme granted. Excess is reported and never revoked: Crewlet did not grant it and has no business taking it back, but an agent that can delete a space is a fact its operator has to know. The contract asks for `read:space`, `create:page`, `update:page`, `create:comment`, `create:attachment` and the blog-post pair, and watches for `administer:space`, `delete:space`, `delete:page`, `delete:comment`, `export:space`, `restrict_content:space` and the `manage_*:space` family.
+
+**The spaces it checks include the org-wide `knowledge.confluence_spaces`, not only the spaces the org chart's units and seats name as their own.** That list is where *every* seat's Plan-phase search runs (see [Scoped spaces](#scoped-spaces)), and a seat that cannot read those spaces gets an empty `## Relevant knowledge` block on every single turn — silently, because an empty block is indistinguishable from a company that has written nothing down. Nothing else in the engine reports that gap: the search is best-effort by design and logs a miss rather than failing a turn. The tracker has no counterpart to include, because there is no org-wide Jira read scope to be missing from.
+
+Confluence has no `mypermissions` endpoint, so this read is the space's own permission grid, filtered to the agent — matching both the grants made to its account by name and the grants made to a **group** it belongs to. Almost every real grant is the second kind, so a check that matched the account id alone would report a perfectly working agent as having no access at all, and send an operator to grant permissions it already held.
+
+The flags, the token sinks, rotation and decommissioning are the same for both products and are documented once, on [Atlassian Organization](atlassian.md#flags).
 
 ---
 
@@ -247,6 +270,37 @@ mentioned and subscribed gets exactly **one** notification (under the mention,
 the stronger reason) — two copies would be two turns for one page change. Only
 the lead fallback is exclusive: it exists for the case where nobody was found
 at all.
+
+#### Which Atlassian account is which seat
+
+Steps 1 and 2 both turn an Atlassian account id into a seat, and nothing in
+the org chart declares which account a seat holds. The engine resolves it by
+**asking**: at boot and on every config apply it calls Confluence's own
+`/user/current` with each seat's OWN credential — the token its MCP server
+already uses, read from `mcp_env.atlassian`, `mcp_env.confluence` or
+`mcp_env.jira`, whichever of them holds a token — and
+registers whatever account answers in the wiki's party namespace. The
+credential grammar is shared with the tracker and documented once, under
+[Seat identity](jira.md#seat-identity).
+
+**Until that shipped, none of it happened here.** Jira's seat identities
+were registered and Confluence's were registered nowhere, so this namespace
+was permanently empty for agent seats: a page mentioning an agent resolved
+to nobody, no seat was ever subscribed by an edit or a mention, an agent was
+never suppressed as the actor of its own edit, and every page event fell
+through to the space lead. Nothing looked broken — a lead-fallback
+notification is indistinguishable from correct routing unless you know what
+should have arrived instead — which is exactly why a company where no seat
+resolves now logs `confluence_has_no_seat_identities` at boot, and a
+credential whose lookup fails logs
+`atlassian_seat_identity_unresolved product=confluence seats=a,b error=…` —
+one line per distinct credential rather than one per seat, and **the seats
+are named**, because one credential can serve several of them and the handle
+that stopped receiving page events is what an operator greps the log for.
+The lookup is made per product even though one account serves both, because
+on Data Center the two endpoints answer *different* things — Jira's `name`
+against Confluence's `userKey` — and registering one product's answer under
+the other's namespace is the misroute this exists to prevent.
 
 "Resolved to a known agent" means the account maps to an **agent seat in the
 org**, not to an agent running on the node that received the webhook — a

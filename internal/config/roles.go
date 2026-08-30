@@ -223,12 +223,70 @@ type RoleIntegrations struct {
 	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: one token covers everything."`
 	Jira       *ProjectRef     `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this seat owns."`
 	Confluence *SpaceRef       `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"The Confluence space this seat owns."`
+	Atlassian  *RoleAtlassian  `yaml:"atlassian,omitempty" json:"atlassian,omitempty" desc:"Which Atlassian products this seat holds a licence for. Read by crewlet atlassian provision."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
 	return r.Slack == nil && r.Mattermost == nil && r.Jira == nil &&
-		r.Confluence == nil
+		r.Confluence == nil && r.Atlassian == nil
+}
+
+// AtlassianProduct is one Atlassian app a seat can hold a licence for.
+type AtlassianProduct string
+
+const (
+	// AtlassianJira is Jira, whichever flavours the site runs.
+	AtlassianJira AtlassianProduct = "jira"
+	// AtlassianConfluence is Confluence.
+	AtlassianConfluence AtlassianProduct = "confluence"
+)
+
+// AtlassianProducts is the closed set, in the order a report reads them.
+var AtlassianProducts = []AtlassianProduct{AtlassianJira, AtlassianConfluence}
+
+// RoleAtlassian narrows which Atlassian products a seat is provisioned into.
+//
+// # It exists because a product licence is BILLABLE
+//
+// A service account with a Confluence licence and a Jira one costs twice what
+// a documentation agent needs, and the free service-account allowance an
+// organization gets without Atlassian Guard is small. So the choice is
+// exposed rather than collapsed into "every product the company configures":
+// `products: [confluence]` is how a writer agent consumes one licence and
+// holds no credential that can move a sprint.
+//
+// # The pointer carries three states and all three are real
+//
+// Absent means every product the company configures — the sensible default
+// for a seat that works across the org. An explicit empty list means NONE,
+// which is how a seat that lives entirely in chat is kept out of a
+// provisioning run without deleting its mcp_env. A list means exactly those.
+// A plain slice could not tell the first from the second.
+type RoleAtlassian struct {
+	Products []AtlassianProduct `yaml:"products" json:"products" js:"enum=jira|confluence" desc:"Products this seat is licensed for. Absent block = all configured; empty list = none."`
+}
+
+// validate checks a seat's product list.
+func (a *RoleAtlassian) validate(path string) error {
+	var p problems
+	seen := make(map[AtlassianProduct]bool, len(a.Products))
+	for i, product := range a.Products {
+		switch {
+		case !oneOf(product, AtlassianProducts):
+			p.add(idx(at(path, "products"), i), ErrUnknownValue, "%q (want %s)",
+				product, names(AtlassianProducts))
+		case seen[product]:
+			// Harmless to the run, and a signal that the author meant to
+			// write the other product — which is a licence they did not
+			// get, on a seat that looks configured for it.
+			p.add(idx(at(path, "products"), i), ErrConflict,
+				"%q is named twice", product)
+		default:
+			seen[product] = true
+		}
+	}
+	return p.err()
 }
 
 // ProjectRef is the tracker project a seat or unit owns. Integration
@@ -327,6 +385,9 @@ func (r *Role) validate(path string) error {
 	if r.Integrations.Mattermost != nil {
 		p.wrap(r.Integrations.Mattermost.validate(at(path, "integrations.mattermost")))
 	}
+	if a := r.Integrations.Atlassian; a != nil {
+		p.wrap(a.validate(at(path, "integrations.atlassian")))
+	}
 	if r.Sandbox != nil {
 		p.wrap(r.Sandbox.validate(at(path, "sandbox")))
 	}
@@ -395,6 +456,17 @@ func (r *Role) Seat() *org.Role {
 	}
 	seat.JiraProject, seat.ConfluenceSpace = identities(
 		r.Integrations.Jira, r.Integrations.Confluence)
+	if a := r.Integrations.Atlassian; a != nil {
+		// NON-NIL EVEN WHEN EMPTY, because the empty list is the setting
+		// "no Atlassian products" and a nil slice downstream is the
+		// setting "every configured product". Collapsing the two here
+		// would licence a seat its author deliberately opted out.
+		products := make([]string, 0, len(a.Products))
+		for _, product := range a.Products {
+			products = append(products, string(product))
+		}
+		seat.AtlassianProducts = products
+	}
 
 	if s := r.Sandbox; s != nil {
 		env := make(map[string]string, len(s.Env))

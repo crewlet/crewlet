@@ -455,6 +455,9 @@ var vendorCommands = map[string][]vendorCommand{
 	"jira": {
 		{"provision", "<company.yaml>", runJiraProvision},
 	},
+	"atlassian": {
+		{"provision", "<company.yaml>", runAtlassianProvision},
+	},
 	"slack": {
 		{"provision", "<company.yaml>", runSlackProvision},
 	},
@@ -611,13 +614,14 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	printChatResult(stdout, res, sink.Describe())
+	printChatResult(stdout, res, sink)
 	return nil
 }
 
 // printChatResult renders what a Mattermost run did.
-func printChatResult(w io.Writer, res *mattermost.Result, where string) {
-	fmt.Fprintf(w, "\nRecorded in %s.\n", where)
+func printChatResult(w io.Writer, res *mattermost.Result, sink provision.TokenSink) {
+	fmt.Fprintf(w, "\nRecorded in %s.\n", sink.Describe())
+	printNextStep(w, res.Recorded, sink)
 	if len(res.Created) > 0 {
 		fmt.Fprintf(w, "Created %d bot(s): %s\n",
 			len(res.Created), strings.Join(res.Created, ", "))

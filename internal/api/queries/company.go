@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -140,6 +142,19 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	seen := s.deliveryTraffic(ctx)
 	in := company.Integrations
 
+	// ONCE for the whole answer. Every row's seat list is a walk of the
+	// org, and Company.Organization builds and normalises a fresh one on
+	// each call — a build per row would rebuild the same chart eight times
+	// to ask eight questions of it.
+	//
+	// The error is DROPPED rather than returned, and the nil it leaves is
+	// the answer: a company that will not resolve into an org is one no
+	// node is running, and every seat list below reads nil as "no seats".
+	// The rest of each row is read straight off the config document and is
+	// still worth sending — refusing the whole screen because the chart is
+	// mid-edit would blank it at exactly the moment it is being read.
+	organization, _ := company.Organization()
+
 	// Nil when no engine is co-located; an empty-but-non-nil list is a real
 	// answer meaning nothing routes, so the two must not collapse.
 	var routed []string
@@ -214,7 +229,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// Every row carries seats, so the view never reads undefined.
 		// An empty list is a real answer — nobody holds credentials of
 		// their own for this surface — and it is not the same as absent.
-		row["seats"] = seatsFor(company, kind)
+		row["seats"] = seatsFor(company, organization, kind)
 		for key, value := range detail {
 			row[key] = value
 		}
@@ -227,7 +242,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	// the inbound route verifies with. A company with seat apps and no
 	// block answers webhooks and sends nothing; one with the block and no
 	// apps refuses every delivery.
-	if seats := slackSeats(company); in.Slack != nil || seats > 0 {
+	if seats := slackSeats(organization); in.Slack != nil || seats > 0 {
 		add("slack", in.Slack != nil, boolPtr(seats > 0), nil)
 	}
 	if in.Mattermost != nil {
@@ -247,6 +262,32 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	if in.Confluence != nil {
 		add("confluence", true, boolPtr(in.Confluence.WebhookSecret != ""),
 			map[string]any{"url": in.Confluence.BaseURL()})
+	}
+	if in.Atlassian != nil {
+		// The ORGANIZATION the two blocks above are sites in, and the one
+		// row here that no delivery ever reaches: it is read by
+		// `crewlet atlassian provision` and ignored by the engine. It is
+		// reported anyway because a block an operator wrote and no surface
+		// acknowledges is indistinguishable from one the build does not
+		// know about — and the provisioner's seat list is the answer to
+		// the question that follows ("which agents get an account").
+		//
+		// secret_present is null because the config holds no Atlassian
+		// credential at all, deliberately: the organization API key is the
+		// OPERATOR's, arrives from the environment for one run, and is
+		// never persisted. What each seat authenticates with afterwards is
+		// its own minted token — which is exactly what a null here says.
+		add("atlassian", true, nil, map[string]any{
+			"org_id": in.Atlassian.OrgID,
+			// The block's OWN site, not a fallback through the sibling
+			// blocks. `crewlet atlassian provision` does fall back, but
+			// it resolves `${VAR}`s first and skips a gateway host while
+			// doing so; repeating that here without a resolver would be a
+			// second derivation free to disagree with the links the run
+			// actually prints. Empty renders no host line at all, which
+			// is what the config field being empty means.
+			"url": in.Atlassian.SiteURL,
+		})
 	}
 	if in.ForgeAppID != "" {
 		// The app id is the JWT AUDIENCE rather than a secret — it is in
@@ -283,6 +324,14 @@ func inboundPath(kind string) string {
 	switch kind {
 	case "mattermost":
 		return "" // one outbound websocket per seat; nothing arrives here
+	case "atlassian":
+		// The organization has no route of its own, and inventing one
+		// would name a path webhooks.go does not register. Atlassian's
+		// events arrive on the rows BESIDE this one: Cloud through the
+		// Forge app on /webhooks/forge, Data Center on /webhooks/jira and
+		// /webhooks/confluence. This block only says where the service
+		// accounts those products authenticate as are created.
+		return ""
 	case "slack":
 		return "/webhooks/slack/{handle}"
 	case "forge":
@@ -406,26 +455,103 @@ func integrationOf(row store.EventRecord) string {
 // What counts as carrying a surface is that seat's OWN field for it: a Slack
 // app, a Mattermost identity, a per-seat project or space. A seat with none
 // of them is served by the company-wide account, not by one of its own.
-func seatsFor(company *config.Company, kind string) []string {
+//
+// # It walks the RESOLVED org, not the config's root-level roles
+//
+// A hand-authored company nests almost every seat under its unit — the
+// shipped example nests all of them — and `Company.Roles` is only the seats
+// declared at the root. Reading that list answered an empty seat line for
+// practically every real company, which reads as "nobody holds a credential
+// of their own here" and is the opposite of the truth.
+//
+// And it returns HANDLES, which is what this doc has always claimed and what
+// the dashboard needs: the chip the Integrations room renders navigates to a
+// seat by the value in this list, and every other room hands it a handle. A
+// role NAME sent here opened a seat page for a seat id that does not exist.
+func seatsFor(company *config.Company, organization *org.Organization, kind string) []string {
+	if kind == "atlassian" {
+		// The one surface where the presence of a seat's field is the
+		// WRONG test. `integrations.atlassian` on a role NARROWS which
+		// products it is licensed for; its absence means every product
+		// the company configures, so reading it the way the branches
+		// below read theirs would report the seats that opted out and
+		// hide every seat that did not.
+		return atlassianSeats(company, organization)
+	}
 	out := []string{}
-	for i := range company.Roles {
-		r := &company.Roles[i]
+	if organization == nil {
+		return out
+	}
+	for seat := range organization.AllRoles() {
 		var carries bool
 		switch kind {
 		case "slack":
-			carries = r.Integrations.Slack != nil
+			carries = !seat.Slack.IsZero()
 		case "mattermost":
-			carries = r.Integrations.Mattermost != nil
+			carries = !seat.Mattermost.IsZero()
 		case "jira":
-			carries = r.Integrations.Jira != nil
+			carries = seat.JiraProject != ""
 		case "confluence":
-			carries = r.Integrations.Confluence != nil
+			carries = seat.ConfluenceSpace != ""
 		}
 		if carries {
-			out = append(out, r.Name)
+			out = append(out, seat.Handle())
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+// atlassianSeats lists the agent seats `crewlet atlassian provision` would
+// mint a service account for.
+//
+// THE PLANNER ITSELF rather than a second reading of the config, and the
+// reason is that the rule is not a field test at all. A seat is in this list
+// when it is an agent, holds a licence for at least one configured product,
+// AND its mcp_env names a whole `${VAR}` for both a token and an address —
+// because Atlassian Cloud authenticates Basic email:token, so a seat with a
+// token variable and no address variable cannot be provisioned. Restating
+// that here would be a screen that disagrees with the run it is describing
+// about which seats the run touches, which is the one thing an operator
+// opens this row to find out.
+//
+// The products come from the BLOCKS being present, which is the same test
+// the rows above are emitted on. The CLI resolves each block's `${VAR}`s
+// first because it has a site to talk to; this has no network to be wrong
+// about, and a block written down is a product the company configures.
+//
+// DEGRADES to empty, like every other config-derived surface here: an org
+// that will not resolve is a company no node is running, and a plan the
+// planner refuses (two seats pointing at one variable) is a config
+// `crewlet atlassian provision` will refuse by name the moment it is run.
+// Neither is a fact this row can state more precisely than "no seats".
+func atlassianSeats(company *config.Company, organization *org.Organization) []string {
+	out := []string{}
+	in := company.Integrations
+	if in.Atlassian == nil || organization == nil {
+		return out
+	}
+	var products []atlassian.Product
+	if in.Jira != nil {
+		products = append(products, atlassian.ProductJira)
+	}
+	if in.Confluence != nil {
+		products = append(products, atlassian.ProductConfluence)
+	}
+	if len(products) == 0 {
+		return out
+	}
+	plan, err := atlassian.PlanFor(organization, in.Atlassian, products)
+	if err != nil {
+		return out
+	}
+	for _, seat := range plan.Seats {
+		// HANDLES, which is what the plan carries and what the chip the
+		// dashboard renders navigates by. Already in handle order — the
+		// plan keeps itself sorted so two runs' reports can be compared
+		// line by line — so nothing is sorted again here.
+		out = append(out, seat.Handle)
+	}
 	return out
 }
 
@@ -433,10 +559,19 @@ func seatsFor(company *config.Company, kind string) []string {
 //
 // Counted as well as listed: the COUNT is what says whether the route can
 // verify anything at all, since a Slack app with no signing secret cannot.
-func slackSeats(company *config.Company) int {
+//
+// The RESOLVED org for the same reason [seatsFor] takes it, and here the
+// consequence is worse than a blank line: this count is also what decides
+// whether the Slack row is emitted at all, so a company whose Slack seats
+// all live inside units had no Slack row on the screen — the one place an
+// operator would look to find out why the route refuses every delivery.
+func slackSeats(organization *org.Organization) int {
+	if organization == nil {
+		return 0
+	}
 	n := 0
-	for i := range company.Roles {
-		if slack := company.Roles[i].Integrations.Slack; slack != nil && slack.SigningSecret != "" {
+	for seat := range organization.AllRoles() {
+		if seat.Slack.SigningSecret != "" {
 			n++
 		}
 	}

@@ -33,7 +33,7 @@ _secrets (a coordination KV bucket, no TTL)
   key_id      which keyring entry sealed it
   updated_at
   updated_by
-  source      "cli" | "api" | "gitlab-provision" | "rekey" | "migrated"
+  source      "cli" | "api" | "provision" | "rekey" | "migrated"
 ```
 
 **Coordination owns the bytes; the engine owns the key.** The bucket holds an envelope whose key it does not have, which is what makes a shared store safe to put credentials in: a peer that can read the bucket learns which names exist and when they changed, not what they are. It is the same cipher, the same keyring and the same bucket family the company config already travels through.
@@ -139,10 +139,17 @@ running node it writes through that node's API and the minted credential is on
 every node at once, and it takes the same `-api URL` flag. Against a stopped
 one it writes the local table, which the engine migrates at its next start.
 
-`crewlet slack provision -secret-store` and
-`crewlet mattermost provision -secret-store` work identically. Slack's own
-app-configuration token pair is the one credential that does **not** go here:
-it is the operator's, not the company's, and it lives in the
+`crewlet slack provision -secret-store`,
+`crewlet mattermost provision -secret-store` and
+`crewlet atlassian provision -secret-store` work identically. The Atlassian
+one records **both halves** of each seat's credential, address before token:
+Atlassian Cloud authenticates an API token as `Basic base64(email:token)`, so
+the account's assigned address is half the credential, and a run that died
+between the two writes leaves a seat that cannot present one rather than a
+seat holding a token nothing can use.
+
+Slack's own app-configuration token pair is the one credential that does
+**not** go here: it is the operator's, not the company's, and it lives in the
 [app ledger](../integrations/slack.md#the-ledger-slack-appsjson) beside the company file.
 
 Where it pays off most is a credential the vendor shows **once**. Every vendor
@@ -243,12 +250,14 @@ to be copied to it, and there is no first-boot step that reads a peer.
 The **environment stays the bootstrap path**, and it is a perfectly good place to keep credentials if your platform already does — a Kubernetes `Secret` projected as env, systemd's `EnvironmentFile=`, Compose's `env_file:`. A node with no keyring, or an empty store, resolves everything from the environment and runs normally. What is no longer true is that a fleet *has* to work that way.
 
 > **Provisioner-minted credentials work fleet-wide too.** `crewlet gitlab
-> provision`, `crewlet slack provision` and the rest MINT credentials, and
-> `-secret-store` against a running node records them where every node reads
-> them. Run it against a **stopped** node and the credential is that node's
-> alone until it starts and migrates — which is fine for a first
-> provisioning run and wrong for a rotation on a live fleet. `-env-file PATH`
-> and `-print` remain for feeding a secret manager instead.
+> provision`, `crewlet slack provision`, `crewlet atlassian provision` and
+> the rest MINT credentials, and `-secret-store` against a running node
+> records them where every node reads them (under `source=provision`,
+> whichever vendor wrote them). Run it against a **stopped** node and the
+> credential is that node's alone until it starts and migrates — which is
+> fine for a first provisioning run and wrong for a rotation on a live
+> fleet. `-env-file PATH` and `-print` remain for feeding a secret manager
+> instead.
 
 ---
 
@@ -259,10 +268,11 @@ Most `${VAR}` resolution funnels through one function, so the store covers it. A
 | Site | Source | Why |
 |---|---|---|
 | `providers.llm.*` / embeddings conventional-key fallback (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) | **Store, then env** | Otherwise `crewlet secrets set OPENAI_API_KEY` would work through a config reference but not through the fallback |
-| Everything a provisioning command reads out of the company document (`integrations.*.url`, `.workspace`, `.token`, `.signing_secret`) | **Store, then env** | The same chain the engine resolves through. A command that saw only the environment read an empty string for every value already rotated into the store — and for the GitLab signing secret, empty is the signal to *mint*, so a re-run replaced a working webhook secret at the vendor. Each command takes `-config` for this |
+| Everything a provisioning command reads out of the company document (`integrations.*.url`, `.workspace`, `.token`, `.signing_secret`, `atlassian.org_id`) | **Store, then env** | The same chain the engine resolves through. A command that saw only the environment read an empty string for every value already rotated into the store — and for the GitLab signing secret, empty is the signal to *mint*, so a re-run replaced a working webhook secret at the vendor. Each command takes `-config` for this |
 | Sandbox launch credential check | **Store, then env** | A seat whose token lives only in the store must not read as unresolved |
 | Tier A bootstrap (`providers.database.dsn`, `secrets.keys[].material`) | **Env/file only** | Root of trust — this is what opens and decrypts the store |
 | Operator provisioning credentials (`GITLAB_ADMIN_TOKEN`, `MATTERMOST_ADMIN_TOKEN`) | **Env only** | Human operator credentials, never persisted by Crewlet **and never read back from the store**: a GitLab admin PAT carries `api` scope over the whole group, and the store is read by every node holding the keyring. Reading one from it would imply it may be kept there |
+| The Atlassian organization API key (`ATLASSIAN_ORG_API_KEY`, then `ATLASSIAN_ADMIN_TOKEN`) | **Env only** | The same rule, and the sharpest case for it. The key is created *without scopes* precisely so the account-management API will answer it, which makes it the credential that can create billable accounts, mint their tokens and grant their licences across the whole organization — and what it mints is the seat credentials the store holds. Keeping the minting key in the same replicated table as everything it minted is the one place it must not be, so `crewlet atlassian provision` reads it from `-admin-token` or the environment and nowhere else |
 | OTLP endpoint / protocol / headers, `CREWLET_SANDBOX_OTEL_RECEIVER_URL` | **Env only** | Deployment-environment settings that belong to the host, not the company; several are read before the store loads |
 | `CREWLET_TOOL_SKILLS_SPACE` | **Env only** | Not secrets — flag defaults for the import/resync commands, read by nothing else |
 | MCP stdio subprocess environment | **Env only, plus declared creds** | Servers read undeclared conventional variables (`PATH`, proxy vars, vendor SDK keys), so the host env is inherited. Store values are **not** poured in — each server gets exactly the credentials its `mcp_env` declares, already resolved. Injecting the whole store would hand every seat's token to every subprocess |
@@ -300,3 +310,4 @@ activate`](../reference/cli.md#crewlet-config-activate).
 - [CLI reference](../reference/cli.md#crewlet-secrets) — every `crewlet secrets` subcommand
 - [Environment variables](../reference/environment-variables.md) — what still has to be in the environment
 - [GitLab](../integrations/gitlab.md#provisioning) — the provisioning CLIs and their sinks
+- [Atlassian](../integrations/atlassian.md#provisioning) — the provisioner that records both halves of a credential, and the operator key that never touches the store

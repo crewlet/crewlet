@@ -194,15 +194,26 @@ service account per seat, memberships, per-agent tokens minted into your config'
 ```bash
 crewlet mattermost provision company.yaml
 crewlet gitlab     provision company.yaml -public-url <url>
+crewlet atlassian  provision company.yaml -env-file .env
 crewlet jira       provision company.yaml -public-url <url> -env-file .env
 crewlet slack      provision company.yaml -public-url <url> -env-file .env
 crewlet github     provision company.yaml -public-url <url> -env-file .env
 ```
 
-What each command can actually do differs by what the vendor allows: Mattermost and
-GitLab create an account per seat and mint its token; Jira and GitHub issue no
-credential on a provisioner's behalf, so those runs report which account each seat's
-own credential authenticates as and register the webhooks.
+What each command can actually do differs by what the vendor allows: Mattermost,
+GitLab and Atlassian **Cloud** create an account per seat and mint its token. On
+Atlassian that rests on a distinction the older refusal missed — a *user* account is
+created only by the person it belongs to, while a *service* account is created,
+given a token and licensed into a product by an organization API key, which the
+admin API accepts only when that key was made **without scopes**. So
+`crewlet atlassian provision` gives every agent seat its own Atlassian identity, and
+it takes no `-public-url`: Cloud events arrive through the
+[Forge app](https://github.com/crewlet/forge), and there is no webhook an API token
+may register. Atlassian **Data Center** has no organization admin API — a personal
+access token can only be minted for the calling user — and GitHub issues no
+credential on a provisioner's behalf at all, so `crewlet jira provision` and
+`crewlet github provision` report which account each seat's own credential
+authenticates as and register the webhooks.
 
 Mattermost takes no URL because nothing has to reach the engine: it holds one
 outbound websocket per agent seat instead of receiving webhooks, so that loop

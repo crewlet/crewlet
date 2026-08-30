@@ -123,7 +123,7 @@ unambiguous.
 Tier B is live-editable, so applying a change is
 `crewlet config import company.yaml --force`, no restart. Full worked
 reference with everything connected:
-[`examples/nimbus.company.yaml`](../../examples/nimbus.company.yaml).
+[`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml).
 
 ---
 
@@ -263,9 +263,10 @@ crewlet schema company -o schema/company.schema.json
 crewlet schema bootstrap -o schema/bootstrap.schema.json
 ```
 
-Both are also checked into [`schema/`](../../schema/) in the repo. They
-are generated artifacts — a test regenerates and compares them, so they
-cannot drift from what the loader accepts.
+Both are also checked into
+[`schema/`](https://github.com/crewlet/crewlet/tree/main/schema) in the
+repo. They are generated artifacts — a test regenerates and compares
+them, so they cannot drift from what the loader accepts.
 
 Wire it into CI to catch a bad config before it reaches the engine:
 
@@ -277,7 +278,7 @@ crewlet validate company.yaml -json || exit 1
 
 ## The `company-architect` skill
 
-[`skills/company-architect/SKILL.md`](../../skills/company-architect/SKILL.md)
+[`skills/company-architect/SKILL.md`](https://github.com/crewlet/crewlet/blob/main/skills/company-architect/SKILL.md)
 is a prompt for an AI assistant. It carries the interview script, the
 invariants that the schema can't express, and the validation loop above.
 
@@ -321,15 +322,26 @@ checkout, fetch it from
 ### What it can't do
 
 It writes config; it doesn't provision. Standing up the Mattermost server
-(or the Slack workspace), the Atlassian site, the GitLab group, and the
-API keys is still your job — [Choosing your stack](choosing-your-stack.md)
+(or the Slack workspace), the Atlassian organization, the GitLab group, and
+the API keys is still your job — [Choosing your stack](choosing-your-stack.md)
 lists what you must create by hand for each. Once those exist,
-[`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision)
-and [`crewlet gitlab provision`](../reference/cli.md#crewlet-gitlab-provision)
-mint the per-seat accounts and tokens into the `${VAR}` references the
-config already declares; Atlassian and GitHub issue no credential on a
-provisioner's behalf, so their commands report which account each
-hand-created credential turned out to be.
+[`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision),
+[`crewlet gitlab provision`](../reference/cli.md#crewlet-gitlab-provision) and
+[`crewlet atlassian provision`](../reference/cli.md#crewlet-atlassian-provision)
+mint the per-seat accounts and tokens into the `${VAR}` references the config
+already declares.
+
+Atlassian is the one that changed. It issues no credential for a **user**
+account — a Cloud API token is created by the person it belongs to, and a Data
+Center personal access token only ever for the calling user — but that was
+never the whole story: a Cloud **service** account is created, credentialed and
+licensed by the organization admin API, given an organization API key made
+*without* scopes. So Atlassian Cloud now provisions like GitLab. Atlassian Data
+Center and GitHub do not, and their commands report which account each
+hand-made credential turned out to be instead. Even on Cloud, *placing* an
+agent in a Jira project or on a Confluence space stays yours: Atlassian refuses
+that to an API token, so the run grants the org-level licence and then reports
+the access each agent actually ended up with.
 
 ---
 

@@ -113,9 +113,9 @@ When in doubt, ask: "If I stopped right now, would a reader of this diff conside
 
 ```
 cmd/crewlet/          # The one binary. run / validate / schema / migrate /
-                      #   budgets / secrets / config / llm, and the six vendor CLIs
-                      #   (gitlab, github, jira, slack, confluence,
-                      #   mattermost).
+                      #   budgets / secrets / config / llm, and the seven
+                      #   vendor CLIs (gitlab, github, jira, atlassian, slack,
+                      #   confluence, mattermost).
                       #   Every command the switch dispatches must appear in
                       #   usage() — nothing connects them, and a test asserts it
 internal/             # Everything else. No package here is importable from
@@ -134,7 +134,9 @@ schema/               # GENERATED JSON Schema for both config tiers. Emitted by
                       #   `crewlet schema <tier>`; a test regenerates and
                       #   compares, so never hand-edit — change the Go models
 skills/               # FOUNDER-facing authoring skills for an AI assistant
-scripts/              # The two vendor dev-loop bootstraps (bash)
+scripts/              # The two vendor dev-loop bootstraps (bash) — GitLab
+                      #   and Mattermost, the two vendors docker-compose.yml
+                      #   stands up locally
 ```
 
 ### The packages, and the one thing each is for
@@ -202,7 +204,8 @@ scripts/              # The two vendor dev-loop bootstraps (bash)
 | `tracing` | The OpenTelemetry wiring: ONE TracerProvider, built from the standard `OTEL_*` environment (never a Tier A block), and the conversion between OTel's `context.Context` carrier and the `trace_id`/`span_id`/`parent_span_id` the event envelope has always had. The provider is installed UNCONDITIONALLY and only the exporter is optional, so ids reach the event store whether or not a collector exists — and its own `init` installs a working one, because OTel's built-in default is a no-op that passes the parent's span context through and would silently reinstate the bug this package removed |
 | `notify` | The backend-neutral notification spine — conversation keys, digest coalescing, party resolution, the rate valve. Built before any vendor sat on it, because a spine built after its first vendor has that vendor welded into it |
 | `maintenance` | The retention sweep for the tables that answer "recently" rather than "ever" — the delivery dedupe, the notification valve, fire claims, channel membership, per-node config status. Every one of their migrations says they are swept and ships the index a range delete needs — a table with a documented retention and no sweep grows for the life of the deployment. A fleet singleton, because N nodes scanning the same rows is waste rather than corruption |
-| `mattermost`, `slack`, `gitlab`, `github`, `jira`, `confluence` | The vendors. Each contributes only what is genuinely its own: a client, a parser, a transport, a prompt, a provisioning reconcile — and no more, which is why Jira has no transport (an agent writes through its own MCP tools) and why its reconcile and GitHub's report rather than mint (neither vendor issues a credential on a provisioner's behalf) |
+| `atlassian` | The ORGANIZATION and the IDENTITY under `jira` and `confluence`: one seat-credential grammar (which `mcp_env` block holds the token — the one that HOLDS one, never the first by name order — which spellings it can be under, and that on Cloud the address is half the credential), one cloud-host list, one transport. Every one of those had been written twice and had already drifted. It also owns the ADMIN plane, which is where "Atlassian issues no credential on a provisioner's behalf" turned out to be half a truth: an organization API key created WITHOUT scopes creates SERVICE accounts, mints their tokens and grants their product licences, so `crewlet atlassian provision` mints exactly as GitLab's and Mattermost's runs do. Cloud only — that API does not exist on Data Center, and a Data Center address is refused there by name |
+| `mattermost`, `slack`, `gitlab`, `github`, `jira`, `confluence` | The vendors. Each contributes only what is genuinely its own: a client, a parser, a transport, a prompt, a provisioning reconcile — and no more, which is why Jira has no transport (an agent writes through its own MCP tools) and why its reconcile and GitHub's report rather than mint: GitHub issues no credential on a provisioner's behalf at all, and Jira's refusal holds for Data Center and for any USER account — a Cloud company's service accounts are `atlassian`'s to make |
 | `fleetsecrets` | The company's credential store: this package owns the KEY, coordination owns the BYTES. Also the one-way migration off `store`'s own table, which copies before it deletes and never overwrites a name the fleet already holds |
 | `logging`, `secrets`, `provision`, `envref`, `envfile`, `redact`, `workkey` | The small shared grammars. Each imports nothing from the rest of the engine, which is what lets `config` itself depend on them |
 | `version` | What the binary calls itself: the tag goreleaser stamps at link time, falling back to the module's own build info and then to `dev`, so a binary built outside the release path names itself honestly rather than claiming to be a release it is not. Its tests cover the package and nothing else now: four cases over the stamp/build-info/`dev` fallback. They used to be ten times its code and to assert the RELEASE SURFACE instead — the ldflags stamp, the pure-Go build, the image's `${TARGETPLATFORM}` copy, the catch-all notes category, the pre-release flags, the single tag trigger and every Dependabot entry — because each of those fails silently and has no other symptom |
@@ -291,7 +294,7 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 4. **Task Engine** — there is none: task state lives in the PM tool, and the engine mirrors nothing
 5. **Decision Framework** — DACI behavioral guidance (via chat channels, no dedicated engine)
 6. **Knowledge System** — query-time knowledge-base search for shared docs (Confluence CQL — single-homed, one per company, behind a seam that keeps it swappable) + per-agent diary
-7. **Communication** — external chat (Mattermost, Slack) + ephemeral A2A channels. The six vendors this build serves are Mattermost, Slack, GitLab, GitHub, Jira and Confluence; every one routes end to end, and no integration block is refused any more
+7. **Communication** — external chat (Mattermost, Slack) + ephemeral A2A channels. The six vendors this build serves are Mattermost, Slack, GitLab, GitHub, Jira and Confluence; every one routes end to end, and no integration block is refused any more. Jira and Confluence are two PRODUCTS of one vendor: the account, the credential grammar and the organization they share are `internal/atlassian`, which on Cloud is also where a seat's Atlassian identity is CREATED rather than pasted in by hand — Data Center has no admin API and stays manual
 8. **Notification Service** — queue-based spine, vendors on top
 9. **Provider Layer** — pluggable LLM and embeddings, with a credential pool and a fallback chain around them
 10. **Store** — the node's own embedded database (Turso, the only driver); coordination lives in the KV layer instead, never here

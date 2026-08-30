@@ -283,13 +283,22 @@ integrations:
   # issue); every agent acts through its OWN Atlassian credential in
   # ``mcp_env.atlassian`` below, never through this one.
   #
-  # UNLIKE GitLab AND MATTERMOST, THERE IS NOTHING TO PROVISION.  Atlassian
-  # issues no API to create user accounts or mint their tokens, so each
-  # seat's account is created by hand in the admin console and its token
-  # pasted into the ${VAR} that seat references.  ``crewlet jira provision``
-  # REPORTS which account each seat's credential turned out to be, and
-  # registers the webhook — it does not create anything.
-  # See docs/integrations/jira.md.
+  # ON CLOUD THERE IS SOMETHING TO PROVISION; ON DATA CENTER THERE IS NOT.
+  # "Atlassian issues no credential on a provisioner's behalf" is half a
+  # truth.  It holds for a USER account — a Cloud API token is created by
+  # the person it belongs to, and a Data Center personal access token can
+  # only be minted for the calling user.  It does not hold for a Cloud
+  # SERVICE account, which an organization API key created WITHOUT scopes
+  # creates, mints a token for, and licenses into a product.
+  # So a Cloud company gets one account per agent seat from
+  # ``crewlet atlassian provision`` (the ``atlassian`` block below), and a
+  # Data Center company still creates each seat's account by hand in the
+  # admin console and pastes its token into the ${VAR} that seat
+  # references.  Either way ``crewlet jira provision`` REPORTS which account
+  # each seat's credential turned out to be and checks that every project
+  # the org chart names exists and agrees about its lead; on Data Center it
+  # also registers the webhook, which on Cloud belongs to the Forge app and
+  # is skipped.  See docs/integrations/jira.md.
   jira:
     url: "${JIRA_URL}"                          # or cloud_id: for an Atlassian Cloud site
     token: "${JIRA_ADMIN_TOKEN}"
@@ -310,6 +319,38 @@ integrations:
     token: "${CONFLUENCE_ADMIN_TOKEN}"
     email: "${CONFLUENCE_ADMIN_EMAIL}"          # Cloud only — switches auth to Basic
     webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"
+
+  # Atlassian — the ORGANIZATION the two blocks above are sites in, read by
+  # ``crewlet atlassian provision`` and reported by ``GET /integrations``;
+  # no routing, parser, transport or delivery decision reads it, which is
+  # why the organization has no webhook route of its own while both product
+  # blocks do.
+  # It names no third address on purpose: a product licence is granted on a
+  # SITE, and the site is the ``cloud_id`` each product block names — which
+  # is also how a company running Jira and Confluence on two sites gets
+  # each agent licensed where it actually works.
+  #
+  # THERE IS DELIBERATELY NO CREDENTIAL HERE.  The organization API key is
+  # the OPERATOR's, not the company's: it can create billable accounts
+  # across the whole organization, so Crewlet never persists one into this
+  # config or into the secret store.  It arrives from ``-admin-token``,
+  # then $ATLASSIAN_ORG_API_KEY, then $ATLASSIAN_ADMIN_TOKEN — the
+  # environment alone, exactly as $GITLAB_ADMIN_TOKEN and
+  # $MATTERMOST_ADMIN_TOKEN do.  Create it at admin.atlassian.com →
+  # Settings → API keys, WITHOUT scopes: the service-account admin API
+  # refuses a scoped key with 403 whatever scopes it holds.
+  #
+  # A run needs a ``cloud_id`` on each product block above.  As shipped
+  # they carry a ``url``, which is the shape that covers both deployments:
+  # a Cloud company switches them to ``cloud_id`` and provisions, a Data
+  # Center company deletes this block and stays with
+  # ``crewlet jira provision``, which is everything Data Center allows.
+  # See docs/integrations/atlassian.md.
+  atlassian:
+    org_id: "${ATLASSIAN_ORG_ID}"               # admin.atlassian.com → Settings; ${VAR} because it is deployment state, not a secret
+    site_url: "${JIRA_SITE_URL}"                # the settings links a permission report ends with — the API gateway is not a place a browser can go
+    display_name_prefix: "Nimbus"               # the ONLY mark that an account is this company's: adoption and -decommission both match on it, so it is never empty (default "Crewlet")
+    token_expiry_days: 300                      # Atlassian's cap is 365 and an expiry is mandatory; nothing renews on a schedule, so re-run with -rotate well inside this
 
   # Chat.  Nimbus runs a self-hosted code host (GitLab) and an Atlassian
   # tracker + wiki, and its chat is Mattermost, running beside GitLab
@@ -491,7 +532,12 @@ roles:
       # scripts/mattermost-dev-bootstrap.sh creates.
       mattermost_user_id: founder
       # ONE id covers Jira and Confluence.  Copy it from her Atlassian
-      # profile URL, or from the report ``crewlet jira provision`` prints.
+      # profile URL or from the user directory at admin.atlassian.com —
+      # NEITHER command prints it.  ``crewlet jira provision`` reports agent
+      # seats only, and ``crewlet atlassian provision`` creates accounts for
+      # agent seats only: a person already holds their own Atlassian
+      # account, which is the same reason a human seat is refused an
+      # ``integrations.atlassian`` products list.
       # An unset ref is a validated-not-created soft note — the engine
       # still boots, and an issue assigned to her still routes by email.
       atlassian_account_id: "${ATLASSIAN_FOUNDER_ACCOUNT_ID}"
@@ -716,16 +762,16 @@ units:
               - "Translate every AI Systems Engineer ADR into a developer-facing doc page; translate every Frontend SWE new page into a screenshot-driven walkthrough"
               - "Build at least three runnable examples per framework feature (``examples/hello-train``, ``examples/hello-serve``, ``examples/hello-finetune``) and keep them in CI so they never bit-rot"
               - "Publish a launch blog post on the website when v0.1 of the framework ships"
-              - "Watch GitLab Issues on every Nimbus project; turn recurring questions into FAQ pages and back-file Jira work items for the actual issues"
+              - "Watch GitLab Issues on every Nimbus project; turn recurring questions into FAQ pages and hand the real defects to Agent PM to file as Jira work items"
               - "Coordinate with PM on launch messaging and positioning"
-              - "Pick up Jira work items assigned to you, transition them through the workflow, and log work time accurately"
-              - "Do not touch ``nimbuscore``, ``nimbusk0s``, ``console``, ``website``, or the framework repo's code beyond docstrings and examples — coordinate via Jira"
+              - "Take doc work from Agent PM in Mattermost and report progress back there — they file and transition the PROD work items on your behalf"
+              - "Do not touch ``nimbuscore``, ``nimbusk0s``, ``console``, ``website``, or the framework repo's code beyond docstrings and examples — coordinate through Agent PM"
             behavioral_guidelines:
               - Every doc page must include a runnable example; if you cannot run it locally, it is not ready to publish.
               - When the AI Systems Engineer ships a new framework feature, draft the doc page within 48 hours and ask them for technical review before merging.
               - Test every Getting Started tutorial yourself against a clean environment before declaring a doc story Done — if a step is missing, the tutorial is wrong.
-              - File a Jira work item against the owning role for every doc-blocker you hit (missing API, confusing error message, undocumented behaviour) rather than papering over it in the docs.
-              - Track the most common GitLab Issues questions in a "FAQ Backlog" page in the PROD project; convert the top items into docs each sprint.
+              - Take every doc-blocker you hit (missing API, confusing error message, undocumented behaviour) to Agent PM to file against the owning role, rather than papering over it in the docs.
+              - Track the most common GitLab Issues questions in a "FAQ Backlog" page in the PROD space; convert the top items into docs each sprint.
               - Use Tavily / web search to keep up with adjacent ecosystem launches (Ray releases, vLLM features, KubeRay updates) and flag relevant developments to the PM and AI Systems Engineer.
             mcp_env:
               atlassian:
@@ -741,6 +787,23 @@ units:
             integrations:
               mattermost:
                 bot_token: "${MATTERMOST_TOKEN_DEVREL}"
+              # Read by ``crewlet atlassian provision``, and reported by
+              # ``GET /integrations`` — never by a routing decision.  An Atlassian
+              # product licence is BILLABLE per account and the free
+              # service-account allowance an organization gets without
+              # Atlassian Guard is small, so the writer seat is licensed for
+              # the wiki alone: one licence instead of two, and a credential
+              # that cannot move a sprint.  Every other seat here omits the
+              # block, which means every product the company configures; an
+              # explicit empty list would mean none.  It sits on a ROLE and
+              # never on a unit — a licence is bought per seat — and a human
+              # seat is refused it outright, since a person already holds
+              # their own Atlassian account.  The Jira spellings stay in
+              # ``mcp_env`` above because they name the SAME one account —
+              # what a product list scopes is the licence, not the variable
+              # an MCP server reads the credential from.
+              atlassian:
+                products: [confluence]
 
   - name: Engineering
     type: department

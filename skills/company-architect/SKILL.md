@@ -6,8 +6,8 @@ description: >
   schedules, integrations) and the Tier A config.yaml bootstrap. Use
   when someone wants to set up, design, extend, or restructure a Crewlet
   AI agent company, add or remove a seat or team, wire in an integration
-  (Jira, Confluence, Mattermost, Slack, GitLab, GitHub, the code
-  sandbox), or
+  (Jira, Confluence and the Atlassian organization behind them,
+  Mattermost, Slack, GitLab, GitHub, the code sandbox), or
   when they hand you a company.yaml to review, fix, or explain.
 ---
 
@@ -144,8 +144,8 @@ reinvent them:
 - [Quickstart](https://docs.crewlet.ai/getting-started/quickstart) — four seats,
   zero integrations, the minimal end-to-end config.
 - [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml) —
-  a complete seven-seat company with Jira + Confluence + GitLab + Mattermost
-  + sandbox.
+  a complete seven-seat company with Jira + Confluence + the Atlassian
+  organization block + GitLab + Mattermost + sandbox.
 
 ## Invariants
 
@@ -165,13 +165,74 @@ supports `${ENV_VAR}`. Put the reference in the YAML and the value in
 even a draft, even one you expect to be deleted.
 
 **Seats you will provision need a *whole-value* `${VAR}`.**
-`crewlet mattermost provision` / `crewlet gitlab provision` mint per-agent
-tokens *into the config's own references*, and that capture contract
-requires the value to be exactly one reference —
-`"${MATTERMOST_TOKEN_CEO}"`, never `"tok-${SUFFIX}"` or a literal. One
-distinct variable per seat. Atlassian and GitHub mint nothing: create
-those accounts and tokens by hand, and their commands report which
-account each credential turned out to be.
+`crewlet mattermost provision` / `crewlet gitlab provision` /
+`crewlet atlassian provision` mint per-agent tokens *into the config's own
+references*, and that capture contract requires the value to be exactly one
+reference — `"${MATTERMOST_TOKEN_CEO}"`, never `"tok-${SUFFIX}"` or a
+literal. One distinct variable per seat — `crewlet atlassian provision`
+refuses two seats that point at one variable before it writes anything,
+because minting into it would leave one of them authenticating as its
+colleague. On Atlassian **Cloud** the seat's *address* is half the
+credential — a token is sent as Basic `email:token` and refused as a bearer
+— so the seat's `mcp_env` block needs a whole `${VAR}` under an address key
+(`ATLASSIAN_EMAIL`, `JIRA_USERNAME`, `CONFLUENCE_USERNAME`, …) as well as
+under a token key, or the seat is skipped with a note. Never invent the
+address itself: Atlassian assigns it when it creates the account, and the
+run records it into that variable. Atlassian **Data Center** and GitHub mint
+nothing — no organization admin API on one, no user credential on a
+provisioner's behalf on the other — so create those accounts and tokens by
+hand, and their commands report which account each credential turned out to
+be.
+
+**`integrations.atlassian` names the organization, not a third site.** Jira
+and Confluence are two products of one Atlassian account, so provisioning
+them is one block naming the organization once — `org_id`, required, from
+admin.atlassian.com → Settings — and nothing about where the work happens:
+a licence is granted on the site each product block's `cloud_id` names,
+which is also how a company running the two products on two sites comes out
+right. The block carries **no credential field** by design: the organization
+API key can create billable accounts across the whole organization, so it is
+the operator's and reaches `crewlet atlassian provision` from `-admin-token`
+or `$ATLASSIAN_ORG_API_KEY`, never from the config or the secret store.
+It is **Cloud only** — a Data Center address is refused by name, because
+there is no organization admin API there to create an account with. Two
+shapes are refused outright: the block with neither `jira` nor `confluence`
+under `integrations`, and a company that gives one product a `cloud_id` and
+the other a direct `url`, which is half Cloud and half Data Center.
+
+**An Atlassian product licence is per seat, and it is billable.**
+`role.integrations.atlassian.products` narrows which products a seat is
+provisioned into, and all three states are real: **absent** means every
+product the company configures — the right default for a seat working
+across the org; **`[]`** means none, which keeps a chat-only seat out of a
+run without deleting its `mcp_env`; **`[confluence]`** is how a writer seat
+consumes one licence instead of two and holds no credential that can move a
+sprint. Put it on a role and never on a unit — a licence is bought per seat
+— and never on a human seat, where it is refused: a person already holds
+their own Atlassian account, reached by `contact.atlassian_account_id`.
+
+```yaml
+integrations:
+  atlassian:
+    org_id: "${ATLASSIAN_ORG_ID}"          # admin.atlassian.com → Settings
+  jira:
+    cloud_id: "${JIRA_CLOUD_ID}"           # the site each Jira licence is granted on
+    token: "${JIRA_ADMIN_TOKEN}"           # the org read account, not a seat's
+    email: "${JIRA_ADMIN_EMAIL}"           # Cloud authenticates Basic email:token
+  confluence:
+    cloud_id: "${CONFLUENCE_CLOUD_ID}"     # the same site, or a second one
+    token: "${CONFLUENCE_ADMIN_TOKEN}"
+    email: "${CONFLUENCE_ADMIN_EMAIL}"
+
+roles:
+  - name: Tech Writer
+    integrations:
+      atlassian: { products: [confluence] }
+    mcp_env:
+      atlassian:
+        CONFLUENCE_USERNAME: "${ATLASSIAN_EMAIL_WRITER}"   # Atlassian assigns the address; the run writes it here
+        CONFLUENCE_API_TOKEN: "${ATLASSIAN_TOKEN_WRITER}"  # minted into this reference
+```
 
 **The knowledge backend is single-homed.** The engine wires exactly one
 `knowledge.Searcher`, and Confluence is the backend behind it. Put the
