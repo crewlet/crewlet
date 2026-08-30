@@ -125,11 +125,22 @@ func runAtlassianProvision(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
+	// NARROWED BEFORE IT IS PRINTED. -handles is passed to the run below,
+	// so a plan printed un-narrowed describes a run that will not happen —
+	// and a -dry-run that lists twelve seats before provisioning one is the
+	// opposite of what the flag promises. Narrowing here also names a handle
+	// that matched no seat, which otherwise printed a full plan, an empty
+	// result and exit 0 while the seat kept its old credential.
+	handles := splitHandles(*only)
+	if notes := narrowPlan(plan, handles); len(notes) > 0 {
+		plan.Notes = append(plan.Notes, notes...)
+	}
+
 	// THE PLAN IS PRINTED EITHER WAY, and it is the SAME plan the run uses.
 	// A --dry-run that re-derived it separately would be a second
 	// implementation that can disagree with the real one about what it was
 	// going to do.
-	printAtlassianPlan(stdout, plan, orgID, sites)
+	printAtlassianPlan(stdout, plan, orgID, sites, cfg.Prefix(), *decommission)
 	if *dryRun {
 		fmt.Fprintln(stdout,
 			"\n-dry-run: nothing was created, minted, licensed or deleted.")
@@ -206,7 +217,7 @@ func runAtlassianProvision(args []string, stdout, stderr io.Writer) error {
 		DisplayNamePrefix: cfg.Prefix(),
 		TokenLifetime:     time.Duration(cfg.ExpiryDays()) * 24 * time.Hour,
 		Rotate:            *rotate, Decommission: *decommission,
-		Only: splitHandles(*only),
+		Only: handles,
 	})
 	if res != nil {
 		printAtlassianResult(stdout, res, sink)
@@ -310,7 +321,42 @@ func atlassianSiteURL(in *config.Integrations, env *config.Resolver) string {
 }
 
 // printAtlassianPlan renders what a run intends to do.
-func printAtlassianPlan(w io.Writer, plan *atlassian.Plan, orgID string, sites map[atlassian.Product]string) {
+// narrowPlan applies -handles to the plan the report prints, and names any
+// handle that matched no seat.
+//
+// A mistyped handle used to print the whole plan and then a result with no
+// Created, Rotated or Kept line at all, and exit 0 — which reads as a healthy
+// no-op run on a seat that is still holding its old credential.
+func narrowPlan(plan *atlassian.Plan, only []string) []string {
+	if len(only) == 0 {
+		return nil
+	}
+	want := make(map[string]bool, len(only))
+	for _, handle := range only {
+		want[handle] = true
+	}
+	kept := plan.Seats[:0]
+	for _, seat := range plan.Seats {
+		if want[seat.Handle] {
+			delete(want, seat.Handle)
+			kept = append(kept, seat)
+		}
+	}
+	plan.Seats = kept
+
+	var notes []string
+	for _, handle := range only {
+		if want[handle] {
+			notes = append(notes, fmt.Sprintf(
+				"-handles named %q, which is not a seat this run can provision — "+
+					"check the spelling against the handles above, and that the "+
+					"seat names an Atlassian credential in mcp_env", handle))
+		}
+	}
+	return notes
+}
+
+func printAtlassianPlan(w io.Writer, plan *atlassian.Plan, orgID string, sites map[atlassian.Product]string, prefix string, sweeping bool) {
 	fmt.Fprintf(w, "Atlassian organization %s.\n", orgID)
 	for _, product := range atlassian.Products {
 		if id := sites[product]; id != "" {
@@ -329,6 +375,21 @@ func printAtlassianPlan(w io.Writer, plan *atlassian.Plan, orgID string, sites m
 				strings.Join(productLabels(seat.Products), "+"),
 				strings.Join(append(append([]string(nil), seat.EmailVars...),
 					seat.TokenVars...), ", "))
+		}
+	}
+	if sweeping {
+		// THE KEEP-SET, because -decommission is the one irreversible verb
+		// here and the plan above does not describe it. Managed is every
+		// agent seat the CHART has, which is deliberately wider than the
+		// seats this run provisions: an account whose name is NOT on this
+		// list and does start with the company's prefix is one the sweep
+		// will delete, and Atlassian has no restore.
+		fmt.Fprintf(w, "\n-decommission will KEEP the %d account name(s) this "+
+			"chart still has, and DELETE every other service account whose "+
+			"display name starts with %q — Atlassian has no restore:\n",
+			len(plan.Managed), prefix)
+		for _, name := range plan.Managed {
+			fmt.Fprintf(w, "  %s\n", name)
 		}
 	}
 	printNotes(w, plan.Notes)

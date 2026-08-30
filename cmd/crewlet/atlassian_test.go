@@ -300,3 +300,94 @@ func TestTheCommandNeedsExactlyOneCompanyDocument(t *testing.T) {
 		t.Error("a run naming two documents was accepted")
 	}
 }
+
+func TestADryRunDescribesTheRunTheFlagsAskedFor(t *testing.T) {
+	t.Parallel()
+	// -handles is passed to the run, so a plan printed un-narrowed
+	// describes a run that will not happen — and a dry run that lists every
+	// seat before provisioning one is the opposite of what the flag
+	// promises. A handle that matched nothing used to print the full plan,
+	// an empty result and exit 0, which reads as a healthy no-op on a seat
+	// still holding its old credential.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "company.yaml")
+	if err := os.WriteFile(path, []byte(twoSeatAtlassianCompany), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	err := run([]string{"atlassian", "provision", path, "-dry-run",
+		"-handles", "agent-one,nobody"}, &out, &errs)
+	if err != nil {
+		t.Fatalf("%v (%s)", err, errs.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "1 seat(s) to provision") {
+		t.Errorf("the plan was not narrowed to -handles:\n%s", got)
+	}
+	if strings.Contains(got, "agent-two") {
+		t.Errorf("a seat the run will not touch is listed:\n%s", got)
+	}
+	if !strings.Contains(got, `named "nobody"`) {
+		t.Errorf("a handle that matched no seat went unreported:\n%s", got)
+	}
+}
+
+func TestADryRunNamesWhatDecommissionWouldDelete(t *testing.T) {
+	t.Parallel()
+	// -decommission is the one irreversible verb here and the seat plan
+	// does not describe it: the dry run printed the same words whether the
+	// real run would delete nothing or every account in the organization.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "company.yaml")
+	if err := os.WriteFile(path, []byte(twoSeatAtlassianCompany), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	if err := run([]string{"atlassian", "provision", path, "-dry-run", "-decommission"},
+		&out, &errs); err != nil {
+		t.Fatalf("%v (%s)", err, errs.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "will KEEP") || !strings.Contains(got, "no restore") {
+		t.Fatalf("the sweep is invisible in a dry run:\n%s", got)
+	}
+	// The keep-set is every AGENT SEAT the chart has, not the seats this
+	// run provisions — that difference is the whole safety property.
+	for _, name := range []string{"crewlet agent one", "crewlet agent two"} {
+		if !strings.Contains(got, name) {
+			t.Errorf("the keep-set omits %q:\n%s", name, got)
+		}
+	}
+	// And a run without the flag says nothing about it.
+	var plain bytes.Buffer
+	if err := run([]string{"atlassian", "provision", path, "-dry-run"}, &plain, &errs); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plain.String(), "will KEEP") {
+		t.Error("the keep-set printed for a run that is not sweeping")
+	}
+}
+
+// twoSeatAtlassianCompany is the smallest chart with two provisionable
+// Atlassian seats, for the narrowing and sweep-preview cases.
+const twoSeatAtlassianCompany = `name: Acme
+integrations:
+  atlassian:
+    org_id: org-1
+  jira:
+    cloud_id: cloud-1
+    token: "org-read-token"
+roles:
+  - name: Agent One
+    goal: one
+    mcp_env:
+      atlassian:
+        JIRA_USERNAME: "${ATLASSIAN_EMAIL_ONE}"
+        JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_ONE}"
+  - name: Agent Two
+    goal: two
+    mcp_env:
+      atlassian:
+        JIRA_USERNAME: "${ATLASSIAN_EMAIL_TWO}"
+        JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_TWO}"
+`
