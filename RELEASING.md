@@ -154,9 +154,10 @@ on the tag that publishes.
 
 ## What CI already guards
 
-[`ci.yml`](.github/workflows/ci.yml) runs the build, the race suite, both store
-drivers, the end-to-end gates and the linter on every pull request. The release
-surface itself is guarded only by what the release pipeline does when it runs:
+[`ci.yml`](.github/workflows/ci.yml) runs the build, the race suite, the
+end-to-end gates, a cross-compile of every release target and the linter on
+every pull request. The release surface itself is guarded only by what the
+release pipeline does when it runs:
 
 - **`goreleaser check`** runs first in both release jobs, so a malformed or
   unknown field in `.goreleaser.yaml` is reported as a config error rather than
