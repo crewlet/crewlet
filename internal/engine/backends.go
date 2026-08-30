@@ -68,6 +68,19 @@ type Backends struct {
 	conn *nats.Conn
 }
 
+// Conn exposes the broker connection this node's coordination store rides.
+//
+// For the ONE subsystem that has to talk to the broker outside the queue
+// contract and outside coordination: the backup, which snapshots the streams
+// themselves. The estate it copies is not addressable any other way — on the
+// default topology the broker is embedded here and binds no socket — so a
+// backup that could not reach this connection could not exist.
+//
+// Nil when this process has no broker. The caller takes no ownership: closing
+// it is [Backends.Close]'s job, and closing it from underneath an embedded
+// server would take the stream down with the leases.
+func (b *Backends) Conn() *nats.Conn { return b.conn }
+
 // Close releases both slots, in the reverse order of acquisition.
 //
 // THE ORDER IS THE POINT and each step depends on the one before:

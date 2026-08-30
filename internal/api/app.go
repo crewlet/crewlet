@@ -45,6 +45,11 @@ type App struct {
 	// that route reports rather than hides.
 	budgets budgetResetter
 
+	// backup takes a copy of this node's durable state. Nil on a process
+	// holding neither a store nor a broker, which that route reports
+	// rather than hides.
+	backup backupTaker
+
 	// configured flips once a company revision is active. Atomic because
 	// the config refresher sets it from its own goroutine while every
 	// health probe reads it.
@@ -111,6 +116,11 @@ type Options struct {
 	// method that clears one would put it a typo away from every screen
 	// that renders spend.
 	Budgets budgetResetter
+
+	// Backup copies this node's durable state to a path an operator
+	// names. Nil where there is nothing to copy — a process running
+	// neither a store nor a broker — which the route reports as such.
+	Backup backupTaker
 
 	// Assets overrides the embedded dashboard tree. Nil serves the one
 	// compiled into the binary, which is what every deployment does; a
@@ -194,6 +204,7 @@ func New(opts Options) *App {
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 	a.budgets = opts.Budgets
+	a.backup = opts.Backup
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(a.serveHealth))
@@ -206,6 +217,10 @@ func New(opts Options) *App {
 	// anonymous-read posture never opens it: clearing a company's spend
 	// ceiling is not a read, whatever a laptop deployment allows.
 	mux.Handle("POST /budgets/reset", http.HandlerFunc(a.serveBudgetReset))
+	// Also a POST, and for the same reason: copying every credential and
+	// every seat's memory to a path the caller names is not a read,
+	// whatever the anonymous-read posture allows.
+	mux.Handle("POST /backup", http.HandlerFunc(a.serveBackup))
 	mux.Handle("/ws/stream", stream.Handler(a.guard, a.stream, a.answer))
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
