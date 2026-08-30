@@ -3,10 +3,11 @@ package tools
 import (
 	"context"
 	"fmt"
-	"go.opentelemetry.io/otel/attribute"
 	"maps"
 	"slices"
 	"sync"
+
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -256,7 +257,7 @@ func (s *Surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 	// it could not have — and a span opened inside invoke would miss both.
 	ctx, span := tracing.Start(ctx, "tools", "tool.call",
 		attribute.String("crewlet.tool", call.Name),
-		attribute.String("crewlet.phase", string(s.Phase())))
+		attribute.String("crewlet.phase", s.Phase()))
 	defer span.End()
 
 	s.mu.Lock()

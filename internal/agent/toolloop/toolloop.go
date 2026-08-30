@@ -32,9 +32,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go.opentelemetry.io/otel/attribute"
 	"strings"
 	"sync"
+
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -364,7 +365,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// and which credential answered is on the completion, and reaches
 		// the record through the phase event.
 		roundCtx, roundSpan := tracing.Start(ctx, "agent.toolloop", "llm.round",
-			attribute.String("crewlet.phase", string(cfg.Surface.Phase())),
+			attribute.String("crewlet.phase", cfg.Surface.Phase()),
 			attribute.Int("crewlet.round", roundsUsed))
 		completion, err := cfg.Provider.Complete(roundCtx, llm.Request{
 			Messages:   msgs,

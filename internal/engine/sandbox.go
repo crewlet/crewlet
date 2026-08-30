@@ -3,9 +3,10 @@ package engine
 import (
 	"context"
 	"fmt"
-	"go.opentelemetry.io/otel/attribute"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/google/uuid"
 

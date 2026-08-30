@@ -3,11 +3,12 @@ package engine
 import (
 	"context"
 	"fmt"
-	"go.opentelemetry.io/otel/attribute"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger"

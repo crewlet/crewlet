@@ -164,7 +164,7 @@ func Open(ctx context.Context, cfg Config) (*Queue, error) {
 	if cfg.URL != "" {
 		return newQueueOn(ctx, cfg, nil, false)
 	}
-	e, err := startEmbedded(cfg)
+	e, err := startEmbedded(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("start embedded nats: %w", err)
 	}

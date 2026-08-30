@@ -51,7 +51,7 @@ func openForTest(t *testing.T, cfg Config) *Queue {
 	if cfg.NakDelay == 0 {
 		cfg.NakDelay = 25 * time.Millisecond
 	}
-	srv, err := StartServer(cfg)
+	srv, err := StartServer(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("StartServer: %v", err)
 	}

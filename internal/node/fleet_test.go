@@ -77,7 +77,7 @@ func substrates() []substrate {
 		{
 			name: "embedded",
 			build: func(t *testing.T) (func(*testing.T) queue.EventQueue, coord.Backend) {
-				srv, err := jetstream.StartServer(jetstream.Config{
+				srv, err := jetstream.StartServer(t.Context(), jetstream.Config{
 					FetchWait: 25 * time.Millisecond,
 					NakDelay:  25 * time.Millisecond,
 					AckWait:   2 * time.Second,

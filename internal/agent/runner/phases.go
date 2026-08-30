@@ -3,10 +3,11 @@ package runner
 import (
 	"context"
 	"fmt"
-	"go.opentelemetry.io/otel/attribute"
 	"slices"
 	"strings"
 	"sync"
+
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/extension"

@@ -287,7 +287,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 		return &Backends{Queue: q}, q.Conn(), nil
 	}
 
-	server, err := jetstream.StartServer(cfg)
+	server, err := jetstream.StartServer(ctx, cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("engine: stream: %w", err)
 	}
@@ -429,7 +429,7 @@ func openCoordinationEstate(ctx context.Context, b *config.Bootstrap, out *Backe
 	var conn *nats.Conn
 	var err error
 	if estate.Embedded() {
-		server, serr := jetstream.StartServer(jetstream.Config{
+		server, serr := jetstream.StartServer(ctx, jetstream.Config{
 			StoreDir:    estate.StoreDir,
 			ClusterName: estate.Cluster.Name,
 			ClusterURLs: estate.Cluster.Peers,

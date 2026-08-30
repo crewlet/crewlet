@@ -659,15 +659,15 @@ func runEngine(args []string, stderr io.Writer) error {
 		return err
 	}
 	defer func() {
-		if err := flushTraces(ctx); err != nil {
+		if flushErr := flushTraces(ctx); flushErr != nil {
 			// Losing telemetry is not worth failing a shutdown that has
 			// otherwise succeeded — the drain has already released the
 			// seats and closed the backends by the time this runs.
-			log.Warn("trace_flush_failed", "error", err)
+			log.WarnContext(ctx, "trace_flush_failed", "error", flushErr)
 		}
 	}()
 
-	log.Info("engine_starting", "version", version.String(), "company", company.Name)
+	log.InfoContext(ctx, "engine_starting", "version", version.String(), "company", company.Name)
 	e, err := engine.New(ctx, engine.Options{Bootstrap: boot, Company: company})
 	if err != nil {
 		return err
@@ -778,7 +778,7 @@ func runEngine(args []string, stderr io.Writer) error {
 	// runtime's kill grace, or the operator's second interrupt that the
 	// stop() above just re-armed. Both already have one and can see
 	// things this process cannot.
-	log.Info("engine_draining")
+	log.InfoContext(ctx, "engine_draining")
 	e.Stop(context.WithoutCancel(ctx))
 	return nil
 }

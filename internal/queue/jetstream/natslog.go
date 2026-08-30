@@ -52,9 +52,9 @@ type natsLogger struct{ log *slog.Logger }
 // The debug flag is read ONCE, here, because that is when the server is
 // built. `crewlet run` configures logging from its flags before it brings
 // the stream up, so the value is the operator's, not the package default.
-func newNATSLogger() (natsLogger, bool) {
+func newNATSLogger(ctx context.Context) (natsLogger, bool) {
 	log := logging.Get("queue.nats.server")
-	return natsLogger{log: log}, log.Enabled(context.Background(), slog.LevelDebug)
+	return natsLogger{log: log}, log.Enabled(ctx, slog.LevelDebug)
 }
 
 // The event name is the same for every line and the severity rides on the
