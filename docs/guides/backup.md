@@ -86,10 +86,15 @@ Three properties worth knowing:
 
 It is a copy of a **moment**, not an instant — the engine keeps working
 throughout, and the pieces are separated by however long the copy took. The
-skew's direction is the safe one: the store is copied first, so a restored
-node's own record is never *newer* than the fleet state beside it. The
-reverse — a ledger that has written off work whose local record is missing —
-loses work rather than repeating it.
+store is copied **first**, deliberately, which leaves it slightly older than
+the stream estate. That is the safe direction because nothing in the store
+decides whether work runs again: the completion ledger, the delivery dedupe
+and the fire claims all live in coordination and travel with the streams. So
+the cost is a bounded gap in one seat's own memory and audit, and no change
+to what the fleet does next. The reverse order would leave the ledger not yet
+recording work whose episode the store already holds — the trigger is still
+unacked in its mailbox, so it runs again and the duplicate reaches whoever
+the seat was talking to.
 
 ### Where to put it, and how often
 

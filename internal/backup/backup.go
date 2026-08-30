@@ -34,12 +34,24 @@
 //
 // A moment, not an instant. The engine is not stopped, the store copy and
 // each stream snapshot are taken one after another, and work continues
-// throughout — so the pieces are separated by the time the copy took. The
-// skew is bounded and its direction is the safe one: the store is copied
-// FIRST, so what a restored node knows about its own past is never newer than
-// the fleet state it is restored beside. The reverse — a coordination ledger
-// that has written off work whose local record is missing — is the one that
-// loses work rather than repeating it. See docs/guides/backup.md.
+// throughout — so the pieces are separated by however long the copy took.
+//
+// THE STORE IS COPIED FIRST, and the order is the decision. It leaves the
+// store OLDER than the stream estate, and the reason that is the safe
+// direction is that nothing in the store decides whether work runs again:
+// the completion ledger, the delivery dedupe and the fire claims all moved
+// to coordination (migrations 0010–0013), and they travel with the streams.
+// So an older store costs a bounded gap in one seat's own memory and audit —
+// a few episodes and conversation rows that the ledger already counts as
+// done — and changes nothing about what the fleet will do next.
+//
+// The reverse order costs more. A stream estate older than the store is a
+// ledger that has NOT recorded work whose episode the store already holds:
+// the trigger is still unacked in its mailbox, so it is redelivered and run
+// again, and the duplicate reaches whoever the seat was talking to. Between
+// a small gap in a seat's memory and a repeated post to somebody's issue
+// tracker, the gap is the cheaper failure and the one that stays inside the
+// company. See docs/guides/backup.md.
 package backup
 
 import (
