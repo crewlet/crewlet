@@ -49,6 +49,7 @@ its `ci.yml` step together, and read both. `make check` is:
 
 ```bash
 gofmt -l .               # formatting — prints the files that need it
+go mod tidy -diff        # go.mod / go.sum are already what tidy would write
 go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
@@ -63,6 +64,16 @@ is a data race until proven otherwise — so CI runs the *whole* suite under it
 and so does `make test`. `-count=1` is the other half: without it a cached
 PASS recorded before the change answers for the change. `make test-norace`
 skips the detector when you want the faster loop, and says so.
+
+`go mod tidy -diff` gates the half of tidiness nothing else notices. An
+*under*-tidy module already fails loudly — a missing requirement or `go.sum`
+entry stops `go build ./...` in every job — but the opposite direction is
+silent: a `require` left behind when its last import was deleted, a stale
+`go.sum` line or a wrong `// indirect` marker each build, test and
+cross-compile green, then land as unrelated churn in whichever pull request
+next runs `make tidy`, on top of whatever that one was for. `-diff` prints the
+patch and exits non-zero *without* writing the files, so neither CI nor
+`make check` rewrites the tree it is judging — run `make tidy` to apply it.
 
 One thing `make check` does not cover, because it needs a service CI starts
 for itself — it prints it when it passes, rather than letting a green run

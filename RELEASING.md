@@ -103,7 +103,7 @@ checksummed.
 
    ```bash
    go test ./... -race
-   gofmt -l . && go vet ./... && golangci-lint run
+   gofmt -l . && go mod tidy -diff && go vet ./... && golangci-lint run
    ```
 
 4. **Rehearse the release itself** if anything about the release surface

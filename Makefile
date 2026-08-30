@@ -60,7 +60,7 @@ COMPANY ?=
 .DEFAULT_GOAL := help
 
 .PHONY: help build crewlet install fmt tidy schema \
-        check fmt-check vet lint test test-norace test-cross test-e2e \
+        check fmt-check tidy-check vet lint test test-norace test-cross test-e2e \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -99,7 +99,7 @@ clean: ## remove the build output (./crewlet and dist/)
 
 ##@ Gates — `make check` is all of them
 
-check: fmt-check vet lint build test test-cross ## every gate CI runs on a PR
+check: fmt-check tidy-check vet lint build test test-cross ## every gate CI runs on a PR
 	@echo
 	@echo "All local gates passed. One thing this did NOT cover, because it"
 	@echo "needs a service CI starts for itself:"
@@ -113,6 +113,26 @@ fmt-check: ## fail if anything needs gofmt (ci: build + vet)
 	    echo "run: make fmt"; } >&2; \
 	  exit 1; \
 	fi
+
+# `go mod tidy` has to be a no-op before a push, and only half of that is
+# covered elsewhere. An UNDER-tidy module is caught for free by anything that
+# compiles: a missing requirement or go.sum entry stops `go build ./...`. The
+# opposite direction is caught by nothing -- a `require` left behind when its
+# last import was deleted, a stale go.sum line or a wrong `// indirect` marker
+# build green, test green and cross-compile green, then land as unrelated
+# churn in whichever pull request next runs `make tidy`.
+#
+# -diff rather than `tidy` followed by `git diff`: it prints the patch and
+# exits non-zero WITHOUT writing the files, so a gate never rewrites the tree
+# it is judging -- and `make check` stays safe to run on a dirty checkout.
+# `make tidy` is what applies what this prints.
+tidy-check: ## fail if go.mod / go.sum are not tidy (ci: build + vet)
+	@$(GO) mod tidy -diff || { \
+	  { echo "go.mod / go.sum are not tidy: the diff above is what"; \
+	    echo "'go mod tidy' would write."; \
+	    echo "run: make tidy"; } >&2; \
+	  exit 1; \
+	}
 
 vet: ## run go vet (ci: build + vet)
 	$(GO) vet ./...

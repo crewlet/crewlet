@@ -300,9 +300,9 @@ dev setup, conventions, and the checks CI runs:
 
 ```bash
 make build    # go build ./...
-make check    # every gate CI runs: gofmt, vet, golangci-lint, build,
-              #   the race suite, and a cross-compile of every
-              #   release target
+make check    # every gate CI runs: gofmt, go mod tidy -diff, vet,
+              #   golangci-lint, build, the race suite, and a
+              #   cross-compile of every release target
 make help     # everything else
 ```
 

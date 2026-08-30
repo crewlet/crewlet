@@ -37,6 +37,27 @@ jobs:
             echo "::error::gofmt needed:"; echo "$unformatted"; exit 1
           fi
 
+      # `go mod tidy` has to be a no-op on a pull request, and only half of
+      # that is covered without this step. An UNDER-tidy module already fails
+      # loudly everywhere: a missing requirement or go.sum entry stops
+      # `go build ./...` in this job and in every other one. The opposite
+      # direction is caught by NOTHING -- a `require` left behind when its
+      # last import was deleted, a stale go.sum line, a wrong `// indirect`
+      # marker: each of those builds green, tests green and cross-compiles
+      # green, then lands as unrelated churn in whichever pull request next
+      # happens to run tidy, on top of whatever that one was actually for.
+      #
+      # -diff rather than `go mod tidy` followed by `git diff`: it prints the
+      # patch and exits non-zero WITHOUT writing the files. So this reports
+      # the drift instead of quietly repairing it, and no later step in this
+      # job can be handed a go.mod the commit does not contain.
+      - name: go mod tidy
+        run: |
+          if ! go mod tidy -diff; then
+            echo "::error::go.mod / go.sum are not tidy. The diff above is what 'go mod tidy' would write -- run: make tidy"
+            exit 1
+          fi
+
   test:
     name: test (race)
     runs-on: ubuntu-latest

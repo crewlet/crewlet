@@ -210,6 +210,7 @@ scripts/              # The two vendor dev-loop bootstraps (bash)
 ## Pre-commit Checks
 Before committing, ALWAYS run and fix any issues from **`make check`**, which is every gate CI runs on a pull request, in one target:
 - `gofmt -l .` — prints the files that need formatting; the output must be empty
+- `go mod tidy -diff` — go.mod / go.sum must already be what `go mod tidy` would write. It prints the patch and exits non-zero rather than writing it; `make tidy` applies it. This catches the half the build cannot: an UNDER-tidy module already fails `go build ./...`, but a leftover `require`, a stale `go.sum` line or a wrong `// indirect` marker compiles green and lands as churn in someone else's pull request
 - `go vet ./...`
 - `golangci-lint run` — what CI's lint job runs
 - `go build ./...`
