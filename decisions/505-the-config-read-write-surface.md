@@ -101,7 +101,7 @@ answered that with a route apiece: `identity`, `embeddings`, `turn-engine`,
 `learning`, `budgets`, `integrations/{kind}`. None were ported, and the
 decision here is that none will be.
 
-`PATCH /config` is the general narrower form. It is an RFC 7386 merge patch
+`PATCH /config` is the general narrower form. It is an RFC 7396 merge patch
 whose shape IS the shape of the document, so one route covers every section and
 a section added to the config needs nothing added here — where a list of
 per-section routes is a list that falls behind the models, silently, because

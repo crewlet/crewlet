@@ -7,7 +7,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// JSON Merge Patch (RFC 7386) over the company document.
+// JSON Merge Patch (RFC 7396) over the company document.
+//
+// 7396 rather than the 7386 this cited until now: same authors, same month,
+// and 7386 is obsoleted by it. The correction is to 7386's pseudo-code, whose
+// mangled indentation renders `return Target` as though it sat inside the
+// loop — so the obsolete one reads as specifying an algorithm that stops
+// after the first member.
 //
 // # Why a merge patch rather than a smaller PUT
 //
@@ -27,14 +33,14 @@ import (
 //
 // # Arrays replace, and that is the rule rather than an omission
 //
-// RFC 7386 has no way to address a list element, so `roles: [...]` in a patch
+// RFC 7396 has no way to address a list element, so `roles: [...]` in a patch
 // replaces the whole roster. That is exactly the edit the per-entity routes
 // exist for — `PUT /config/roles/{handle}` changes one seat — and inventing a
 // list syntax here would give two answers to one question.
 //
 // # `null` deletes
 //
-// Also RFC 7386, and the reason this is a merge patch rather than an ad-hoc
+// Also RFC 7396, and the reason this is a merge patch rather than an ad-hoc
 // deep merge: without it there is no way to REMOVE a section, and a config
 // surface that can only add is one an operator eventually edits by hand.
 
@@ -49,7 +55,7 @@ func mergePatch(target, patch any) any {
 	}
 	into, ok := target.(map[string]any)
 	if !ok {
-		// The target is a scalar, a list, or absent. RFC 7386 says to
+		// The target is a scalar, a list, or absent. RFC 7396 says to
 		// treat it as an empty object and let the patch build one.
 		into = map[string]any{}
 	}
@@ -85,7 +91,7 @@ func applyMergePatch(document, patch []byte) ([]byte, error) {
 	}
 	if _, ok := overlay.(map[string]any); !ok {
 		// A top-level scalar or list would REPLACE the whole company
-		// under RFC 7386, which is never what a caller meant on this
+		// under RFC 7396, which is never what a caller meant on this
 		// route — and `PUT /config` is how you say that deliberately.
 		return nil, fmt.Errorf(
 			"a patch must be an object naming the sections to change, not %T",
