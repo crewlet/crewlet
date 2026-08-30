@@ -393,6 +393,38 @@ func TestAZeroConversationRetentionTakesTheDefault(t *testing.T) {
 	}
 }
 
+// stubDiary remembers the clock it was swept on.
+type stubDiary struct {
+	nows []time.Time
+}
+
+func (d *stubDiary) Expire(_ context.Context, now time.Time) (int64, error) {
+	d.nows = append(d.nows, now)
+	return 3, nil
+}
+
+// The diary sweep hands the tick's own clock through, not a cutoff: each
+// short-term entry carries its deadline in the row, so there is no horizon
+// to derive one from, and a sweep that invented one would delete on the
+// wrong clock.
+func TestTheDiarySweepRunsOnNowNotACutoff(t *testing.T) {
+	d := &stubDiary{}
+	jobs := maintenance.LearningJobs(d)
+	if len(jobs) != 1 || jobs[0].Name != "agent_diary" {
+		t.Fatalf("jobs = %+v, want one agent_diary job", jobs)
+	}
+	if jobs[0].Horizon != 0 {
+		t.Fatalf("Horizon = %v, want 0: each entry carries its own deadline", jobs[0].Horizon)
+	}
+	n, err := jobs[0].Run(context.Background(), base, base.Add(-time.Hour))
+	if err != nil || n != 3 {
+		t.Fatalf("Run = (%d, %v), want (3, nil)", n, err)
+	}
+	if len(d.nows) != 1 || !d.nows[0].Equal(base) {
+		t.Fatalf("Expire saw %v, want the tick's now %v", d.nows, base)
+	}
+}
+
 // A missing store contributes no job rather than one that fails every tick:
 // a deployment without one is real, and its in-memory twins prune inline.
 func TestAbsentLedgersContributeNoJobs(t *testing.T) {
@@ -407,5 +439,8 @@ func TestAbsentLedgersContributeNoJobs(t *testing.T) {
 	}
 	if jobs := maintenance.ScheduleJobs(nil); len(jobs) != 0 {
 		t.Fatalf("a nil schedule ledger produced %d jobs", len(jobs))
+	}
+	if jobs := maintenance.LearningJobs(nil); len(jobs) != 0 {
+		t.Fatalf("a nil diary produced %d jobs", len(jobs))
 	}
 }

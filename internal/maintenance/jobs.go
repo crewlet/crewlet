@@ -107,6 +107,38 @@ func StoreJobs(db *store.DB) []Job {
 	}
 }
 
+// DiaryStore is the slice of the learning diary this sweep calls. Declared
+// here, by the consumer, like every other one-method seam in this tree.
+type DiaryStore interface {
+	// Expire deletes short-term entries whose deadline has passed,
+	// reporting how many went.
+	Expire(ctx context.Context, now time.Time) (int64, error)
+}
+
+// LearningJobs is the sweep for the learning subsystem's diary.
+//
+// No Horizon: every short-term entry carries its own deadline (`ttl_until`,
+// stamped at write), so the job needs now rather than a cutoff, and long-term
+// entries — NULL deadline — are never touched. The read path already filters
+// expired rows out of recall, but reads cannot delete: without this job every
+// expired short-term memory stays a row the per-agent vector scan pays for on
+// every Plan phase, for the life of the deployment.
+//
+// This is the exact failure the package doc names — Diary.Expire existed,
+// diary.go's comments described the background sweep, and nothing anywhere
+// called it.
+func LearningJobs(d DiaryStore) []Job {
+	if d == nil {
+		return nil
+	}
+	return []Job{{
+		Name: "agent_diary",
+		Run: func(ctx context.Context, now, _ time.Time) (int64, error) {
+			return d.Expire(ctx, now)
+		},
+	}}
+}
+
 // ChannelJobs is the sweep for agent-to-agent channels: close what nobody
 // answered, then delete what has been closed long enough.
 //
