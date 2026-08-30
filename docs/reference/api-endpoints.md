@@ -69,6 +69,7 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `GET` | `/sandbox-runs` | Every detached [sandbox](../concepts/code-sandbox.md) run the engine still holds, read from the durable run record in the [coordination store](../concepts/coordination.md) (see [below](#get-sandbox-runs)) |
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and which scopes are being refused (see [below](#get-budgets)) |
 | `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
+| `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
 | `GET` | `/conversations` | What a seat already said in each thread / issue / pull request it works — the same [conversation-session](../concepts/conversation-sessions.md) rows the engine renders into that conversation's next turn. `?handle=` lists them; `?handle=&key=` returns one conversation's entries. `available: false` means this node cannot see the ledger, never that the seat has said nothing |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
@@ -970,6 +971,65 @@ Two refusals, both deliberate:
   attached answers `{"error":"no_coordination_store"}` rather than 404: the
   route exists on this build, and a 404 sends an operator looking for a
   version mismatch that is not there.
+
+### `POST /backup`
+
+Copies this node's durable state — its store file, and every JetStream stream
+and coordination bucket — into `?dir=`, a directory **on the engine's host**.
+
+```bash
+curl -X POST -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  "http://localhost:8080/backup?dir=/var/backups/crewlet/2026-08-30T18-00"
+```
+
+```json
+{
+  "taken_at": "2026-08-30T18:00:00Z",
+  "finished_at": "2026-08-30T18:00:01.412Z",
+  "node_id": "node-0",
+  "engine_version": "v0.1.0",
+  "store": {
+    "file": "store.db", "source": "/data/company.db",
+    "bytes": 258048, "migrations": ["0001_events.sql", "…"]
+  },
+  "streams": [
+    {"name": "CREWLET_AGENT", "file": "streams/CREWLET_AGENT.snapshot",
+     "bytes": 1087, "messages": 5, "config": {…}, "state": {…}}
+  ]
+}
+```
+
+The answer is the **manifest**, which is also written into the directory as
+`manifest.json` — and its presence there is what marks the backup complete. A
+failure anywhere leaves the directory without one, because a backup missing an
+estate is unrestorable rather than partial.
+
+This route exists for the same reason the budget reset does, twice over. The
+store is locked to the engine's process and the driver refuses a second
+process on a database file, so nothing outside can read it; the embedded
+broker binds no socket, so nothing outside can reach the stream estate either.
+`crewlet backup` is a client of this route.
+
+It is **synchronous and can take a while** — the duration is a property of the
+data, not of this handler. That is deliberate: a job outliving its request
+would need somewhere durable to record itself, and the only place is the store
+being copied. The work is safe to be cut off, since the store copy is renamed
+into place only after it verifies and the manifest is written last, so a
+client that gives up leaves an unfinished directory rather than a false one.
+
+Three refusals, each pointing somewhere different:
+
+- **401 without a token.** `allow_anonymous_read` is on by default and opens
+  the read surface; this writes every credential the company holds to a path
+  the caller chooses, so it is never eligible.
+- **400 for a destination this node cannot use** — relative, already occupied,
+  or a path the database engine mishandles. The reason is returned in `detail`
+  rather than only logged, unlike every other route here, because it is the
+  caller's own command to fix.
+- **503 with no state to copy.** A process running neither a store nor a
+  broker answers `{"error":"nothing_to_back_up"}` rather than 404: the route
+  exists on this build, and a 404 sends an operator looking for a version
+  mismatch that is not there.
 
 ### `GET /integrations`
 

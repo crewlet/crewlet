@@ -181,6 +181,8 @@ internal/
 ├── configplane/          # The activation pointer's cadence and postures
 ├── node/                 # The node's own identity, presence and drain
 ├── provision/            # The shared provisioning grammar and its sinks
+├── backup/               # A verified copy of both estates, taken from inside
+│                         #   the engine — the only place either is reachable
 ├── maintenance/          # The retention sweep, behind one singleton duty
 ├── tokens/               # Token accounting shared by the meter and the API
 ├── hostbox/ procgroup/   # The local sandbox host, and process-tree teardown

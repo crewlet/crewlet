@@ -71,7 +71,7 @@ Connecting the external surfaces agents work on:
 
 - **[Tools & MCP](guides/tools-and-mcp.md)** — Built-in tools, MCP integration, the two-value tool-origin grammar the dashboard groups on, and how you extend a binary that loads no plugins
 - **[Deployment](guides/deployment.md)** — The single host, the compose profiles, the stream beyond one host (an embedded cluster or an external NATS one, with its auth and TLS), the event store, tracing, logging (levels, the three formats, colour)
-- **[Backups & Restore](guides/backup.md)** — What durable state a deployment holds and where, the cold-backup runbook, restore ordering and its hazards (epoch rewind, node identity), and which losses are survivable without a backup
+- **[Backups & Restore](guides/backup.md)** — `crewlet backup` against a running node, what the directory it writes contains and what the copy is a copy *of*, the cold runbook behind it, restore ordering and its hazards (epoch rewind, node identity), and which losses are survivable without a backup
 - **[Running a Fleet](guides/fleet.md)** — When to run more than one node, node roles, seat placement, draining and rolling upgrades
 - **[Running One Agent Somewhere Else](guides/satellite-nodes.md)** — Put a single seat on a host that can reach what it needs — an internal API, a licensed binary, a GPU, a lab network — without moving the company: what a satellite is, what moves with the seat (its MCP servers above all), what the node still needs outbound, and what a pin costs when the host is down
 - **[Configure via API](guides/configure-via-api.md)** — End-to-end curl recipes for bootstrapping a company through `/config/*`

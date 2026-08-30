@@ -14,6 +14,7 @@ subcommand below is served by it.
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
 | `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node — the counter is the fleet's, not this file's |
 | `crewlet budgets reset [config]` | Zero token usage on a running node — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
+| `crewlet backup -dir PATH [config]` | Copy a running node's store **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load Tier B YAML, activate as a new `company_config` revision |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -440,6 +441,45 @@ silently re-arm a company somebody had stopped on purpose. It **names the
 scopes it cleared**, because a count alone leaves you unable to tell "reset
 the seat I meant" from "reset a scope that was already empty", and a scoped
 reset names only its own scope.
+
+---
+
+## `crewlet backup`
+
+```
+crewlet backup [<config.yaml>] -dir <absolute path> [-url URL] [-token TOKEN] [-wait DURATION]
+```
+
+Copies a running node's two durable estates — its store file and every
+JetStream stream and coordination bucket — into one directory, and verifies
+the store copy before calling it a backup.
+
+**It writes to the engine's host, not yours.** `-dir` is resolved where the
+node runs; nothing is downloaded. A relative path is refused rather than
+guessed at, and a destination that already holds something is refused rather
+than merged, so each run gets a directory of its own.
+
+Like [`budgets`](#crewlet-budgets), this goes through the node rather than
+opening files, and here the reason is doubled. The store is locked to the
+engine's process for the life of the handle and the driver does not support a
+second process on a database file — so no outside tool can read it, and
+copying it anyway is a torn copy, because committed data lives in the file and
+its `-wal` together. The stream estate is worse: on the default topology the
+broker is embedded in the engine and **binds no socket**, so there is no
+address to give the `nats` CLI. The one process that can reach both is the
+engine, and this asks it to.
+
+The report names what it captured, per estate. A node that holds only one of
+them — an ingress-only node has neither — says so rather than presenting a
+partial copy as a backup.
+
+`-wait` (default 30 minutes) bounds how long the command waits for the answer,
+not the copy: the engine finishes what it started, so a wait that expires
+leaves a good backup this command has already called a failure. It is set far
+past any plausible duration for that reason.
+
+See [Backups & Restore](../guides/backup.md) for what the directory contains,
+what the copy is a copy *of*, and how a restore uses it.
 
 ---
 

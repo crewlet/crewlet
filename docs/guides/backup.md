@@ -4,11 +4,30 @@ What durable state a Crewlet deployment holds, where each piece lives, how to
 back all of it up so a later restore actually works, and which losses are
 survivable without one.
 
-The short version: **there is no online backup yet.** The engine owns its
-store file exclusively while it runs, the embedded broker listens on no
-socket, and no `crewlet backup` command exists — so a complete backup today is
-a **cold** backup: drain, stop, copy, start. Everything below is the detail
-that makes that copy restorable.
+The short version: **`crewlet backup` takes a verified copy of a running
+node**, without stopping it. It goes through the engine because it has to —
+the store file is locked to that process and the embedded broker binds no
+socket, so nothing outside the engine can read either estate. The cold
+runbook further down remains the belt to that braces.
+
+```bash
+crewlet backup -dir /var/backups/crewlet/2026-08-30T18-00
+```
+
+```
+Backup written to /var/backups/crewlet/2026-08-30T18-00 on node-0 in 1.412s
+
+WHAT                     FILE                                  SIZE       CONTENTS
+store                    store.db                              252.0 KiB  14 migrations
+stream CREWLET_AGENT     streams/CREWLET_AGENT.snapshot        1.1 KiB    5 messages
+bucket crewlet_budgets   streams/KV_crewlet_budgets.snapshot   512 B      3 messages
+…
+```
+
+The path is on the **engine's host**, not yours — this writes files where the
+node runs and downloads nothing. Run it against a node with `seats` or
+`workers` in its roles: an ingress-only node holds neither estate and says so
+rather than writing a backup of nothing.
 
 ## What state exists, and where
 
@@ -33,7 +52,65 @@ Classify before you size the job:
   budget counters, and each detached sandbox-run record, which is the only
   thing that knows a billed box exists.
 
+## What `crewlet backup` produces
+
+One directory, and the **manifest is the claim**: a directory holding
+`manifest.json` is a complete backup, one without it is the debris of a run
+that did not finish. Nothing else in the directory says so, which is exactly
+why the manifest is written last.
+
+```
+2026-08-30T18-00/
+├── manifest.json                          what was captured, from which node
+├── store.db                               the store, one self-contained file
+└── streams/
+    ├── CREWLET_AGENT.snapshot             a mailbox stream
+    ├── KV_crewlet_secrets.snapshot        a coordination bucket
+    └── …                                  one per stream and bucket found
+```
+
+Three properties worth knowing:
+
+- **The store copy is taken with `VACUUM INTO` and then verified** — reopened,
+  integrity-checked, and its schema recorded — before it is renamed into
+  place. A copy that will not open is a failed backup rather than a surprise
+  on the worst day of the deployment's life. It is also self-contained: no
+  `-wal` travels with it.
+- **Streams are enumerated, not listed.** A namespace stream is created on
+  first publish and a coordination bucket's name depends on a configurable
+  prefix, so what gets captured is what is actually there.
+- **Every estate or none.** A failure anywhere leaves the directory without a
+  manifest. A backup missing an estate is not a partial backup, it is an
+  unrestorable one: the store alone loses every lease, ledger and credential;
+  the streams alone lose every seat's memory.
+
+It is a copy of a **moment**, not an instant — the engine keeps working
+throughout, and the pieces are separated by however long the copy took. The
+skew's direction is the safe one: the store is copied first, so a restored
+node's own record is never *newer* than the fleet state beside it. The
+reverse — a ledger that has written off work whose local record is missing —
+loses work rather than repeating it.
+
+### Where to put it, and how often
+
+The backup lands on the engine's host, which is not a backup until it leaves
+that host: ship the directory to object storage or another machine as a
+second step. Schedule it the way you schedule anything else against a node
+(cron, a systemd timer, your orchestrator) — one directory per run, named by
+timestamp, since a destination that already holds something is refused rather
+than merged.
+
+Two rules carry over from the cold runbook and are worth repeating because
+this path makes them easier to forget: the directory holds every credential
+the company has, so treat it exactly as you treat the secret store; and the
+**keyring must not travel with it**, or the sealing is undone.
+
 ## The cold backup runbook
+
+Still the belt to the online path's braces, and the one whose restore
+exercises no recovery code at all. Use it when you want a copy that involves
+no running engine — before a risky upgrade, or when taking the deployment
+down anyway.
 
 1. **Drain and stop every node** — SIGTERM or Ctrl+C once, and let the drain
    converge; see [graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown).
@@ -56,6 +133,18 @@ survives a restart and there is nothing to back up. Set it before backups are
 worth discussing at all.
 
 ## Restoring
+
+Restore is an operator procedure against a **stopped** fleet, not a command:
+every hazard below is about ordering and identity, and a tool that hid them
+behind one verb would be hiding exactly what has to be got right. What
+`crewlet backup` produces is what these steps move.
+
+The store half is a file copy: put `store.db` from the backup at the node's
+`store.path`, with no `-wal` beside it — the copy is self-contained, and a
+stale sidecar from the old database is the one thing that would corrupt it.
+The stream half is restored into a broker with `nats stream restore` per
+snapshot for an external cluster; for the embedded topology, restore into a
+fresh `stream.store_dir` on a node started for that purpose. Then:
 
 - **Restore whole estates together, then cold-start the whole fleet.** The
   fencing epochs and the activation pointer must never move backwards while
@@ -93,7 +182,11 @@ worth discussing at all.
 - **Do not copy the store file while the engine runs.** A live WAL database
   copied mid-write is a torn copy; the engine's exclusive lock and the
   driver's one-process rule exist precisely because there is no safe second
-  opener.
+  opener. `crewlet backup` is the supported way to copy a running node,
+  and it works by asking the engine to copy its own database.
+- **Do not treat a directory without a `manifest.json` as a backup.** It is
+  an attempt that did not finish, and the manifest's absence is the only
+  thing that says so.
 - **Do not point `sqlite3`, Litestream, or any other SQLite tooling at the
   live file.** The file format is SQLite's, but the live coordination is not:
   the store's engine does not support mixed-tool multi-process access.
@@ -103,7 +196,7 @@ worth discussing at all.
   above.
 - **Do not back the keyring up beside the data it seals.**
 
-## Filesystem snapshots — the one online option
+## Filesystem snapshots — the other online option
 
 An **atomic** volume or filesystem snapshot (LVM, ZFS, btrfs, EBS) that
 captures the store file, its `-wal`, and `stream.store_dir` at one instant is
@@ -113,7 +206,8 @@ mailboxes. A non-atomic copy of a live tree is **not** this, and gets no such
 guarantee.
 
 Treat snapshots as defense in depth rather than the copy you must be able to
-trust: crash recovery is the least-proven surface of a pre-1.0 database
-engine, and the store's own vendor recommends keeping independent backups.
-The cold runbook above is the one whose restore exercises no recovery code at
-all.
+trust: restoring one is a crash recovery, which is the least-proven surface of
+a pre-1.0 database engine, and the store's own vendor recommends keeping
+independent backups. `crewlet backup` is the copy to trust — it is verified at
+the moment it is taken — and the cold runbook is the one whose restore
+exercises no recovery code at all.
