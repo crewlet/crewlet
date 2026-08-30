@@ -344,6 +344,16 @@ func openPool(path string, busy time.Duration,
 			// WAL, so a dashboard read never blocks the engine's write
 			// and vice versa.
 			"PRAGMA journal_mode = WAL",
+			// FULL is the driver's own default (measured at v0.8.0-pre.7:
+			// `PRAGMA synchronous` answers 2 on a fresh connection), pinned
+			// here so a driver bump cannot weaken commit durability
+			// silently. The obvious alternative — NORMAL, mainline
+			// SQLite's usual WAL pairing — trades the last commits before
+			// a power cut for one fsync per checkpoint instead of per
+			// commit, and this store is the seat's only memory: what it
+			// writes has no other copy, and its commit rate (a handful per
+			// second on a busy node) never earns the discount.
+			"PRAGMA synchronous = FULL",
 			// SQLite defaults foreign keys OFF, which makes a declared
 			// constraint look enforced right up until the day it
 			// matters. synthesized_skill_versions declares one so that
