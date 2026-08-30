@@ -131,18 +131,20 @@ func (c *Company) Validate() error {
 	// An UNRESOLVED REDACTION MASK, first, because it is the one fault here
 	// that comes from this process rather than from the document's author.
 	// A credential still holding the marker means a config read was edited
-	// and sent back, and the mask could not be matched to what it hid — the
-	// caller reshaped a list of keys, so position no longer says which
-	// credential is which. Storing it silently would hand a provider the
-	// literal "__redacted__" as an API key, and the failure would surface
-	// hours later as an authentication error naming nothing about where it
-	// came from.
+	// and sent back, and the mask could not be matched to what it hid: a
+	// member that is NEW or RENAMED has no prior value of its own, and a
+	// list of bare credentials that changed length no longer says by
+	// position which one is which. Storing it silently would hand a
+	// provider the literal "__redacted__" as an API key, and the failure
+	// would surface hours later as an authentication error naming nothing
+	// about where it came from.
 	for _, path := range c.UnresolvedMasks() {
 		p.add(path, ErrUnknownValue,
 			"still holds the redaction marker %q — a masked credential could "+
-				"not be matched to the value it hid, which happens when a list "+
-				"of credentials changes length between the read and the write. "+
-				"Write the real value here, or leave the list's shape alone",
+				"not be matched to the value it hid. Either this member is new "+
+				"or was renamed, so there is no prior value to restore, or a "+
+				"list of bare credentials changed length. Write the real value "+
+				"here",
 			Redacted)
 	}
 

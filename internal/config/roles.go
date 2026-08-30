@@ -415,6 +415,14 @@ func (r *Role) Seat() *org.Role {
 	return seat
 }
 
+// IdentityKey is the seat's address inside its list — the derived handle, so
+// it is the same identity `PUT /config/roles/{handle}` addresses and the same
+// one the agent id is built from.
+//
+// A VALUE receiver, because the redaction walker holds the prior document by
+// value and cannot take an address inside it.
+func (r Role) IdentityKey() string { return r.Seat().Handle() }
+
 // identities extracts the tracker project and wiki space a seat or unit
 // owns. References are left VERBATIM and resolved at use time, like every
 // other Tier B value.
@@ -476,6 +484,10 @@ type Unit struct {
 	// wake the whole company.
 	Schedules []org.Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty" desc:"Recurring work owned by this unit."`
 }
+
+// IdentityKey is the unit's name, which is what every `manages:`, `lead:` and
+// `unit:` reference addresses it by.
+func (u Unit) IdentityKey() string { return u.Name }
 
 // UnitIntegrations is a unit's integration identity. Chat at the unit level
 // is the vendor-neutral channel field, so it is deliberately not here.

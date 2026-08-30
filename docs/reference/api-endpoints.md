@@ -114,13 +114,16 @@ each operator-gated for the same reason the prefix is.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/config` | Replace the active revision. Body JSON or `Content-Type: application/yaml`. Requires a revision summary — an `X-Summary` header, **or** a top-level `_summary` key in the body. Optional `If-Match: <revision_id>` for optimistic concurrency (`If-Match: none` for the unconfigured case). |
+| `PUT` | `/config` | Replace the active revision. Body JSON or `Content-Type: application/yaml`. Requires a revision summary — an `X-Summary` header, **or** a top-level `_summary` key in the body. Conditional via `If-Match` / `If-None-Match` — see [below](#conditional-requests) |
+| `OPTIONS` | `/config` | `204` with `Allow` and `Accept-Patch: application/merge-patch+json` |
 | `PATCH` | `/config` | Merge one or more sections into the active revision — see [below](#patch-config--the-narrower-write) |
 | `POST` | `/config/revisions/{id}/revert` | Create a new active revision whose payload equals revision `{id}` |
 
 #### `PATCH /config` — the narrower write
 
-A [JSON Merge Patch (RFC 7386)](https://www.rfc-editor.org/rfc/rfc7386): send only the sections you are changing, in the shape the document already has.
+A [JSON Merge Patch (RFC 7396)](https://www.rfc-editor.org/rfc/rfc7396): send only the sections you are changing, in the shape the document already has.
+
+The registered media type is `application/merge-patch+json`; plain `application/json` and an absent `Content-Type` are accepted too, since every example here sends one of those. **Any other patch format is `415`** with an `Accept-Patch` header naming what would have worked — notably `application/json-patch+json`, an [RFC 6902](https://www.rfc-editor.org/rfc/rfc6902) list of operations, which is a different format this surface does not serve. Editing one list member is what the [per-entity routes](#per-entity-read-and-write) are for; `decisions/505` records why a format that *can* address a list member does not replace them.
 
 ```bash
 curl -X PATCH https://engine.example.com/config \
@@ -130,23 +133,41 @@ curl -X PATCH https://engine.example.com/config \
 
 - **Deep merge.** `{"providers": {"llm": {"main": {"model": "claude-opus-5"}}}}` changes that model and leaves the provider's type, its keys and every other provider alone.
 - **`null` deletes.** `{"integrations": {"gitlab": null}}` removes the section — without it a config surface can only add.
-- **Arrays replace.** RFC 7386 cannot address a list element, so `roles: [...]` in a patch replaces the whole roster. Editing one seat is what [`PUT /config/roles/{handle}`](#per-entity-write) is for; inventing a list syntax here would give two answers to one question.
+- **Arrays replace.** RFC 7396 cannot address a list element, so `roles: [...]` in a patch replaces the whole roster. Editing one seat is what [`PUT /config/roles/{handle}`](#per-entity-read-and-write) is for; inventing a list syntax here would give two answers to one question.
 - **Unknown keys are refused**, not ignored. A patch is the edit least visible in a diff, so a typo that silently changes nothing is the worst outcome available — the caller believes they changed something.
 - **Validated as the whole document it produces.** A section that is fine alone is still refused when it leaves the company invalid.
 - Same summary rule and same `If-Match` as `PUT /config`, and a **409** when nothing is active: a patch is defined against a document, and building a company out of one section is not what this route is for.
 
 **`If-Match` matters more here than on the full write.** A `PUT` carries the caller's whole intended document; a `PATCH` is merged against whatever is active at that instant. See [Concurrent writes](#concurrent-writes) for what the engine does and does not guarantee.
 
-#### Per-entity write
+#### Conditional requests
 
-Four collections, `PUT` only:
+`GET /config` and every entity `GET` return an **`ETag`** — the active revision id, quoted. It is the token the write side takes, so a read-modify-write needs no second request to find it.
+
+| Header | On | Meaning |
+|--------|-----|---------|
+| `If-None-Match: <etag>` | `GET` | `304 Not Modified` when the document has not moved |
+| `If-Match: <etag>` | writes | Proceed only against that revision; `409 revision_advanced` otherwise |
+| `If-Match: *` | writes | Proceed only if *something* is active; `412` on an unconfigured node |
+| `If-None-Match: *` | writes | Proceed only if **nothing** is active — the create-only precondition; `412 already_configured` otherwise |
+
+The bare revision id is accepted wherever an `ETag` is, unquoted, because this surface shipped that form before it had entity tags. `If-Match: none` is the pre-tag spelling of `If-None-Match: *` and still works; prefer the standard one.
+
+Independently of any header, every write names the revision it derived from as the new revision's parent, and the activation is a compare-and-set on that parent — so a lost update is refused **whether or not** the caller sent a precondition. See [Concurrent writes](#concurrent-writes).
+
+#### Per-entity read and write
+
+Four collections, `GET` and `PUT`:
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/config/{kind}/{id}` | One entity, redacted, with an `ETag`. **The body is the entity itself**, so it goes straight back into the `PUT` |
 | `PUT` | `/config/roles/{handle}` | Replace one seat, wherever it lives — root-level or inside a unit, at any depth |
 | `PUT` | `/config/units/{name}` | Replace one org unit |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider |
 | `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry |
+
+Any other method is `405` with an `Allow` header naming `GET, PUT`. There is no `DELETE` — removal is a full-document edit, for the reasons below.
 
 Why these exist beside the whole-document write: `PUT /config` makes every edit
 a company-wide one. A founder renaming one seat's goal sends back a document
@@ -170,9 +191,19 @@ Three rules follow from that:
   intent to add one, and creating through this route would grow the company
   without the caller ever seeing the document they changed. Add through
   `PUT /config`, which shows the whole thing.
-- **The id in the path is the identity.** A body that renames the entity is
-  stored as-is under that path's id; the URL is the address, not a rename
-  request.
+- **The id in the path is the identity, and a `PUT` never renames.** A body
+  whose own identity disagrees with the path is `400 identity_mismatch`, not a
+  move: nothing that points at the old identity travels with the splice. A
+  seat's durable id is a UUIDv5 over (company name, handle), so a renamed
+  handle strands that seat's diary, onboarding marker and counterparty
+  profiles behind an id nothing derives any more; a unit's or an MCP server's
+  name is referenced by every `manages:`, `lead:`, `unit:` and per-seat
+  credential block that names it. For a role the check is on the **derived**
+  handle, so a body that omits `handle` and changes `name` is refused too —
+  that is a rename, just an accidental one. Send the identity back unchanged
+  (changing a seat's display name while keeping its handle is an ordinary
+  edit); rename through `PUT /config`, where what has to move with it is
+  visible.
 - **The same summary and `If-Match` rules apply**, and a node with no
   active revision answers `409 no_active_revision` — there is nothing to splice
   into, and building a company out of one seat is not what this route is for.

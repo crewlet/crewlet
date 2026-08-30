@@ -68,6 +68,23 @@ there is far more often a typo than an intent to add a seat, and adding
 through this route would grow the company without the caller ever seeing the
 document they changed.
 
+**It never renames**, and that one is load-bearing in a way the shape of the
+route hides. A body whose own identity disagrees with the path is a 400. The
+id here is not a label: a seat's durable id is a UUIDv5 over (company name,
+handle), so a handle that changes under an operator re-derives the agent id
+and strands that seat's diary, its onboarding marker and its counterparty
+profiles behind an id nothing derives any more — its inbox subject with them.
+A unit's or an MCP server's name is referenced by every `manages:`, `lead:`,
+`unit:` and per-seat credential block naming it. None of that travels with a
+splice, and the URL is left addressing something that is gone.
+
+For a role the comparison is on the DERIVED handle, not the declared one,
+because a body that omits `handle` derives it from `name` — which made
+editing a seat's display name a rename nobody asked for, and it shipped that
+way. Refused rather than coerced back to the path's id: keeping the old
+identity silently would land every other edit in the body and leave the caller
+believing the rename took, which is the same surprise one revision later.
+
 Four collections rather than a general grammar, because these are the four the
 dashboard's Config room edits. The room was written against them and shipped
 calling a `config_entities` query nothing answered — every list came back
@@ -84,7 +101,7 @@ answered that with a route apiece: `identity`, `embeddings`, `turn-engine`,
 `learning`, `budgets`, `integrations/{kind}`. None were ported, and the
 decision here is that none will be.
 
-`PATCH /config` is the general narrower form. It is an RFC 7386 merge patch
+`PATCH /config` is the general narrower form. It is an RFC 7396 merge patch
 whose shape IS the shape of the document, so one route covers every section and
 a section added to the config needs nothing added here — where a list of
 per-section routes is a list that falls behind the models, silently, because
@@ -99,6 +116,108 @@ zero the company. What a merge patch genuinely cannot express is a *blind*
 replace: "make section X exactly this, without my having to know what is in
 it". That is the lost-update pattern the compare-and-set below exists to
 remove, scoped to one section. Not having it is the point.
+
+## Why not a patch format that CAN address a list member
+
+The argument above — arrays replace, so editing one seat needs a route — is an
+argument about RFC 7396 specifically, and it does not survive the obvious
+reply: *then use a patch format that addresses list members.* Two exist, and
+this record did not evaluate either, so it does so here.
+
+**RFC 6902 (JSON Patch)** addresses array elements, but positionally only. RFC
+6901 §4 admits digits and the append sentinel `-` and nothing else — "if an
+array is referenced with a non-numeric token, an error condition will be
+raised." Its `test` op supplies the guard a positional path needs, and a failed
+op aborts the whole document, so a stale index fails rather than corrupting.
+
+**Strategic merge patch** (Kubernetes) is the format built for exactly this: a
+`patchMergeKey` tells the server to merge a list by a member's key rather than
+replacing it. It is not a standard, it needs schema metadata published to
+clients, it grew four in-band directives to express deletion, ordering,
+primitive lists and unions, and Kubernetes has since superseded it with
+server-side apply.
+
+**Neither replaces the entity routes, and the reason is not about formats.**
+A patch document addresses by STRUCTURE. This config addresses a seat by
+IDENTITY, and the two are deliberately different namespaces. In the shipped
+Nimbus example the eight seats sit at eight different structural paths —
+`/roles/0`, `/units/0/children/0/roles/0`, `/units/2/children/0/roles/2` — and
+every one of them is `PUT /config/roles/{handle}`, because `eachRole` walks the
+whole tree and a handle is unique across it. A seat's durable id is a UUIDv5
+over (company name, handle); WHERE it sits in the chart is not part of who it
+is, and an operator editing "the CTO" does not know or care which unit chain
+it hangs from. JSON Patch would make the caller write the chain and re-derive
+it whenever the chart is reorganised; strategic merge patch would let the
+caller key each LEVEL by name but still walk `units → children → roles` to
+reach the seat. Both turn a flat namespace into a structural one, which is the
+capability the entity route exists to provide rather than an ergonomic
+preference.
+
+**What the comparison genuinely costs us**, recorded because it is the half an
+argument like this usually omits:
+
+- `llm-providers` is a MAP, so `PATCH /config` already addresses one provider
+  by key today, deep-merging it. That route earns its place on replace
+  semantics and on being uniform with the other three, not on addressability —
+  it is the one of the four a redesign could drop.
+- A patch sends only the fields it changes, so it never sends a mask back and
+  needs no mask restore at all. The entity routes re-send a whole entity, which
+  is why `RestoreRedacted` exists — and that mechanism is where a reorder was
+  found handing each seat its neighbour's credentials. A narrower write is a
+  smaller attack surface for that entire class of fault.
+- One route covers every future collection; four routes are four, and a fifth
+  collection needs a fifth.
+
+The call is to keep both, for the reason above rather than the one this record
+originally gave: the entity routes provide identity addressing over a nested
+document, which no patch format provides at any price, and `PATCH /config`
+covers everything whose shape IS its address.
+
+## The surface answers to HTTP's own vocabulary
+
+Four gaps between what this surface did and what a caller who knows HTTP would
+expect, each closed against the specification rather than against taste.
+
+**An entity path serves GET.** The four paths took a write and answered 405 to
+a read, so the entity a caller was expected to send back had to be fetched from
+`/query/config_entities` — a different URI space, answering a `{kind, id,
+entity}` envelope that `PUT` does not accept. The published loop bridged the
+two with `jq '.entity'`. A URI that can be written and not read is not a
+resource, and the read half living somewhere else is what made the round trip
+need a translation step. `GET /config/{kind}/{id}` now answers the entity
+itself, redacted, so `GET | PUT` round-trips. The query keeps its envelope:
+there the kind and id are the answer to a question, not the resource.
+
+**Reads carry an entity-tag.** `If-Match` was accepted long before anything
+emitted a validator, so the only way to learn the token was to read a DIFFERENT
+resource — `/config/revisions`. A conditional request whose precondition cannot
+be discovered from the representation it guards is a feature nobody uses
+correctly. The tag is the revision id, quoted, and strong (RFC 9110 §8.8.3): a
+revision is immutable, so there is nothing weak about the correspondence.
+`If-None-Match` on a read is a 304.
+
+**The preconditions mean what RFC 9110 §13.1 says.** `If-Match: *` was compared
+to the revision id as a literal, so the wildcard could never equal it and the
+ordinary way to say "only if something is there" answered 409. `If-Match: none`
+is the mirror: this record's own documentation named it as the unconfigured
+case and nothing implemented it, so it fell into the no-revision branch and
+answered 412 on exactly the node it was meant to permit. `*` and the standard
+`If-None-Match: *` now behave as specified, and `none` is honoured as the
+pre-tag spelling because the documentation promised it.
+
+**A patch format this resource does not speak is refused as a format.** RFC
+5789 makes the patch document negotiable — 415 for one the server cannot read,
+`Accept-Patch` for what it can. An RFC 6902 document is a LIST of operations,
+and a merge patch that is not an object replaces the target outright, so one
+arriving here was refused as a MALFORMED MERGE PATCH: the caller was told their
+shape was wrong when their format was. `OPTIONS /config` advertises
+`application/merge-patch+json`, an unsupported type is 415 carrying the same
+header, and `application/json` and an absent type stay acceptable because every
+example this project has published sends one of those.
+
+The bare revision id is still accepted wherever an entity-tag is. Breaking
+every script that reads an id out of a write response, to add two quotes, would
+be a cost with nothing on the other side.
 
 ## The masked document must be able to come back
 

@@ -97,6 +97,10 @@ type MCPServer struct {
 	RequestTimeoutSeconds float64 `yaml:"request_timeout_seconds,omitempty" json:"request_timeout_seconds,omitempty" js:"min=0" desc:"Cap on one tool call."`
 }
 
+// IdentityKey is the server's name — the key seats declare credentials under,
+// so its own `env` belongs to it rather than to its slot.
+func (m MCPServer) IdentityKey() string { return m.Name }
+
 // MCP timeout defaults. Startup is generous because a cold package fetch is
 // the slow case for a healthy server; the request default matches the
 // protocol SDK's own read timeout, so a stdio server and an http one have

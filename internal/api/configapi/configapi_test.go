@@ -112,6 +112,12 @@ func (s *surface) service() *configapi.Service { return s.svc }
 // activeDocument is the stored revision as a node applying it would see it:
 // unsealed and UNREDACTED, which is the only view that can prove a mask was
 // resolved rather than stored.
+// companyJSONDoc is the smallest document PUT /config accepts, for the cases
+// that write to a node with nothing on it yet.
+const companyJSONDoc = `{"name":"Acme","providers":{"llm":{"zulu":` +
+	`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["k"]}}},` +
+	`"roles":[{"name":"CEO","handle":"ceo","llm":"zulu"}]}`
+
 func (s *surface) activeDocument(t *testing.T) string {
 	t.Helper()
 	revision, found, err := s.configs.Active(t.Context())
@@ -1039,4 +1045,157 @@ func (n *nudgeRecorder) Publish(_ context.Context, topic string, ev *events.Even
 	n.topics = append(n.topics, topic)
 	n.sent = append(n.sent, ev)
 	return nil
+}
+
+// THE READ CARRIES THE TOKEN THE WRITE NEEDS.
+//
+// `If-Match` was supported long before anything emitted a validator, so the
+// only way to learn the revision id a conditional write takes was to read a
+// DIFFERENT resource — /config/revisions. A conditional request whose
+// precondition cannot be discovered from the representation it guards is a
+// feature nobody can use correctly. RFC 9110 §8.8.3.
+func TestTheDocumentReadCarriesAnEntityTag(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc, nil)
+
+	res := s.do(t, http.MethodGet, "/config", "", nil)
+	tag := res.Header().Get("ETag")
+	if tag == "" {
+		t.Fatal("GET /config carries no ETag, so If-Match cannot be discovered from it")
+	}
+	if !strings.HasPrefix(tag, `"`) || !strings.HasSuffix(tag, `"`) {
+		t.Errorf("ETag %s is not quoted, which RFC 9110 §8.8.3 requires", tag)
+	}
+	// AND IT IS ACCEPTED BACK. A tag a caller cannot return is decoration.
+	put := s.do(t, http.MethodPut, "/config", s.activeDocument(t),
+		map[string]string{"X-Summary": "conditional write", "If-Match": tag})
+	if put.Code != http.StatusCreated {
+		t.Fatalf("PUT with the tag the read gave = %d, want 201: %s",
+			put.Code, put.Body.String())
+	}
+	// The tag moved with the document, so the stale one is now refused.
+	stale := s.do(t, http.MethodPut, "/config", s.activeDocument(t),
+		map[string]string{"X-Summary": "stale write", "If-Match": tag})
+	if stale.Code != http.StatusConflict {
+		t.Errorf("PUT with a superseded tag = %d, want 409", stale.Code)
+	}
+}
+
+// AN UNCHANGED DOCUMENT IS NOT RE-SENT. RFC 9110 §13.1.2.
+func TestAnUnchangedDocumentAnswers304(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc, nil)
+
+	first := s.do(t, http.MethodGet, "/config", "", nil)
+	again := s.do(t, http.MethodGet, "/config", "",
+		map[string]string{"If-None-Match": first.Header().Get("ETag")})
+	if again.Code != http.StatusNotModified {
+		t.Fatalf("GET with the tag it just gave = %d, want 304", again.Code)
+	}
+	if again.Body.Len() != 0 {
+		t.Errorf("a 304 carried a body of %d bytes", again.Body.Len())
+	}
+}
+
+// THE PRECONDITIONS MEAN WHAT RFC 9110 §13.1 SAYS THEY MEAN.
+//
+// `If-Match: *` answered 409 — it was compared to the revision id as a
+// literal, so the wildcard could never equal it — when the spec makes it
+// "any current representation", the ordinary way to say "only if something is
+// there". `If-Match: none` is the reverse: this surface DOCUMENTED it as the
+// unconfigured case and never implemented it, so it fell through to the
+// no-revision branch and answered 412 on exactly the node it was meant to
+// permit.
+func TestThePreconditionsFollowTheSpec(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, header, value string
+		configured          bool
+		want                int
+	}{
+		{"a wildcard matches a configured node", "If-Match", "*", true, http.StatusCreated},
+		{"a wildcard refuses an unconfigured one", "If-Match", "*", false, http.StatusPreconditionFailed},
+		{"none is the unconfigured case", "If-Match", "none", false, http.StatusCreated},
+		{"none refuses a configured node", "If-Match", "none", true, http.StatusPreconditionFailed},
+		{"if-none-match:* is create-only", "If-None-Match", "*", false, http.StatusCreated},
+		{"if-none-match:* refuses an existing document", "If-None-Match", "*", true, http.StatusPreconditionFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t, nil)
+			body := companyJSONDoc
+			if tc.configured {
+				s.seed(t, companyDoc, nil)
+				body = s.activeDocument(t)
+			}
+			res := s.do(t, http.MethodPut, "/config", body,
+				map[string]string{"X-Summary": "precondition", tc.header: tc.value})
+			if res.Code != tc.want {
+				t.Fatalf("%s: %s = %d, want %d: %s",
+					tc.name, tc.header+": "+tc.value, res.Code, tc.want, res.Body.String())
+			}
+		})
+	}
+}
+
+// A PATCH FORMAT THIS RESOURCE DOES NOT SPEAK IS REFUSED AS A FORMAT.
+//
+// RFC 5789 §2.2 gives 415 for an unsupported patch document and §3.1 makes
+// Accept-Patch how a server says what it does speak. An RFC 6902 document is
+// a LIST of operations, and a merge patch that is not an object replaces the
+// target outright — so it used to come back as a malformed merge patch, which
+// told the caller their shape was wrong rather than their format.
+func TestAnUnsupportedPatchFormatIsRefusedWithAcceptPatch(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc, nil)
+
+	res := s.do(t, http.MethodPatch, "/config",
+		`[{"op":"replace","path":"/name","value":"Renamed"}]`,
+		map[string]string{"X-Summary": "json patch", "Content-Type": "application/json-patch+json"})
+	if res.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("PATCH with a JSON Patch document = %d, want 415: %s",
+			res.Code, res.Body.String())
+	}
+	if got := res.Header().Get("Accept-Patch"); got != "application/merge-patch+json" {
+		t.Errorf("Accept-Patch = %q, which does not name what would have worked", got)
+	}
+	// AND THE ONES IT DOES SPEAK STILL WORK, including the registered type
+	// and the bare application/json every published example sends.
+	for _, mediaType := range []string{
+		"application/merge-patch+json", "application/json", "",
+	} {
+		headers := map[string]string{"X-Summary": "merge patch"}
+		if mediaType != "" {
+			headers["Content-Type"] = mediaType
+		}
+		ok := s.do(t, http.MethodPatch, "/config", `{"mission":"ship it"}`, headers)
+		if ok.Code != http.StatusCreated {
+			t.Errorf("PATCH with Content-Type %q = %d, want 201: %s",
+				mediaType, ok.Code, ok.Body.String())
+		}
+	}
+}
+
+// AND THE RESOURCE SAYS SO WHEN ASKED. RFC 5789 §3.1: Accept-Patch "SHOULD
+// appear in the OPTIONS response for any resource that supports PATCH".
+func TestOptionsAdvertisesWhatThePatchRouteTakes(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc, nil)
+
+	res := s.do(t, http.MethodOptions, "/config", "", nil)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS /config = %d, want 204", res.Code)
+	}
+	if got := res.Header().Get("Accept-Patch"); got != "application/merge-patch+json" {
+		t.Errorf("Accept-Patch = %q", got)
+	}
+	for _, verb := range []string{"GET", "PUT", "PATCH", "OPTIONS"} {
+		if !strings.Contains(res.Header().Get("Allow"), verb) {
+			t.Errorf("Allow = %q, missing %s", res.Header().Get("Allow"), verb)
+		}
+	}
 }

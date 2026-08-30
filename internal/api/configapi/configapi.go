@@ -21,6 +21,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -126,6 +127,10 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("GET /config", s.getActive)
 	mux.HandleFunc("PUT /config", s.put)
+	// WHAT THIS RESOURCE TAKES, asked rather than guessed. RFC 5789 §3.1:
+	// a patch format is negotiated, not assumed, and Accept-Patch is where
+	// a server says which ones it speaks.
+	mux.HandleFunc("OPTIONS /config", s.optionsDocument)
 	// THE NARROWER WRITE. See merge.go for why one patch route covers
 	// every section rather than one route per section.
 	mux.HandleFunc("PATCH /config", s.patch)
@@ -139,6 +144,13 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	// never meant to serve is worse than four explicit lines. See
 	// entities.go for what a write does.
 	for _, kind := range EntityKinds() {
+		// THE READ AND THE WRITE ON ONE URI. The entity was addressable
+		// for writing long before it was readable here, so the documented
+		// loop fetched from /query/config_entities — a different URI
+		// space, answering a {kind, id, entity} envelope that PUT does
+		// not accept. GET here answers the entity itself, so `GET | PUT`
+		// round-trips with nothing in between.
+		mux.HandleFunc("GET /config/"+kind+"/{id}", s.getEntity(kind))
 		mux.HandleFunc("PUT /config/"+kind+"/{id}", s.putEntity(kind))
 	}
 }
@@ -151,15 +163,72 @@ func (s *Service) Routes(mux *http.ServeMux) {
 // deployment before its first import has no configuration, and reporting that
 // as a failure would make a working new install look broken.
 func (s *Service) getActive(w http.ResponseWriter, r *http.Request) {
-	company, err := s.Document(r.Context())
+	company, revision, err := s.documentOf(r.Context())
 	switch {
 	case errors.Is(err, ErrNoActiveRevision):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_active_revision"})
 	case err != nil:
 		s.fail(w, "read the active revision", err)
 	default:
+		if serveConditional(w, r, revision) {
+			return
+		}
 		s.writeDocument(w, r, company)
 	}
+}
+
+// serveConditional stamps the entity-tag and answers 304 when the caller
+// already has this revision. It reports whether it answered.
+//
+// The tag is the revision id, because that is exactly what changes when the
+// document changes — and it is the same token If-Match takes, which is the
+// point: before this, the only way to learn the id a conditional write needs
+// was to read a DIFFERENT resource (/config/revisions), so the read a caller
+// naturally pairs a write with did not carry it.
+func serveConditional(w http.ResponseWriter, r *http.Request, revision store.Revision) bool {
+	tag := etagOf(revision)
+	w.Header().Set("ETag", tag)
+	if matchesTag(r.Header.Get("If-None-Match"), tag, true) {
+		// RFC 9110 §13.1.2: on GET, a matching If-None-Match is 304 with
+		// no content rather than a refusal.
+		w.WriteHeader(http.StatusNotModified)
+		return true
+	}
+	return false
+}
+
+// etagOf renders a revision as a strong entity-tag.
+//
+// STRONG, and quoted as RFC 9110 §8.8.3 requires: a revision is immutable and
+// its payload is byte-identical every time, so there is nothing weak about
+// the correspondence.
+func etagOf(revision store.Revision) string { return `"` + revision.ID + `"` }
+
+// matchesTag reports whether a precondition header selects this tag.
+//
+// `*` means "any current representation", so it matches whenever there is
+// one. A list is comma-separated and any member matching is a match. A bare
+// revision id — unquoted, which is not a legal entity-tag — is accepted
+// because this surface documented and shipped that form before it had tags,
+// and breaking every script that reads a revision id out of a write response
+// to add two quotes would be a cost with nothing on the other side.
+func matchesTag(header, tag string, wildcardMatchesExisting bool) bool {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return false
+	}
+	if header == "*" {
+		return wildcardMatchesExisting
+	}
+	bare := strings.Trim(tag, `"`)
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		candidate = strings.TrimPrefix(candidate, "W/")
+		if candidate == tag || candidate == bare {
+			return true
+		}
+	}
+	return false
 }
 
 // writeDocument answers in the format the caller asked for.
@@ -180,6 +249,56 @@ func (s *Service) writeDocument(w http.ResponseWriter, r *http.Request, company 
 	w.Header().Set("Content-Type", "application/yaml")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+// patchMediaTypes are the patch document formats this resource accepts.
+//
+// The registered type for RFC 7396 is application/merge-patch+json. Plain
+// application/json and an absent type are accepted too: every example this
+// project has published sends one of those, and refusing them would break
+// working callers to make a point about a header.
+//
+// What this DOES refuse is a patch format that is not this one —
+// application/json-patch+json above all, whose document is a LIST of
+// operations. A merge patch that is not an object replaces the target
+// outright, so an RFC 6902 document arriving here does not mean what its
+// author intended; it used to be refused as a malformed merge patch, which
+// told them the shape was wrong rather than that the format was.
+var patchMediaTypes = []string{"application/merge-patch+json", "application/json"}
+
+// acceptPatch is the Accept-Patch value, RFC 5789 §3.1.
+const acceptPatch = "application/merge-patch+json"
+
+// optionsDocument answers OPTIONS /config.
+func (s *Service) optionsDocument(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Allow", "GET, HEAD, OPTIONS, PATCH, PUT")
+	w.Header().Set("Accept-Patch", acceptPatch)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// checkPatchMediaType refuses a patch document this resource cannot read,
+// and reports whether the request may go on.
+func (s *Service) checkPatchMediaType(w http.ResponseWriter, r *http.Request) bool {
+	header := r.Header.Get("Content-Type")
+	if header == "" {
+		return true
+	}
+	media := strings.TrimSpace(strings.Split(header, ";")[0])
+	if media == "" || slices.Contains(patchMediaTypes, strings.ToLower(media)) {
+		return true
+	}
+	// 415 WITH Accept-Patch, which is the pair RFC 5789 §2.2 names: the
+	// refusal has to say what would have worked.
+	w.Header().Set("Accept-Patch", acceptPatch)
+	writeJSON(w, http.StatusUnsupportedMediaType, map[string]any{
+		"error": "unsupported_patch_media_type", "accept_patch": acceptPatch,
+		"you_sent": media,
+		"hint": "PATCH /config takes a JSON Merge Patch (RFC 7396) — an object " +
+			"shaped like the document. A JSON Patch (RFC 6902) list of " +
+			"operations is a different format this surface does not serve; " +
+			"editing one seat is PUT /config/roles/{handle}",
+	})
+	return false
 }
 
 // listRevisions serves GET /config/revisions — metadata only, newest first.
@@ -352,6 +471,9 @@ var errEmptyPatch = errors.New("the patch is empty")
 // nothing to merge onto, and building a company out of one section is not
 // what this route is for — `PUT /config` shows the whole thing.
 func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
+	if !s.checkPatchMediaType(w, r) {
+		return
+	}
 	body, err := readBody(w, r)
 	if err != nil {
 		refuseBody(w, err)
@@ -510,9 +632,14 @@ func (s *Service) store(w http.ResponseWriter, r *http.Request, company *config.
 	operator, _ := auth.OperatorFrom(r.Context())
 	at := s.now()
 	// STORED FIRST, then pointed at. A crash between the two leaves a
-	// revision nothing points at — inert, and re-activatable through the
-	// activate route — while the other order would point the fleet at a
-	// revision no node can read.
+	// revision nothing points at — inert, and recoverable with `crewlet
+	// config activate <id>` — while the other order would point the fleet
+	// at a revision no node can read.
+	//
+	// A COMMAND rather than a route: this surface serves no activate, and
+	// the nearest thing it does serve, POST /config/revisions/{id}/revert,
+	// stores a NEW revision carrying the old payload rather than pointing
+	// back at the orphan.
 	id, err := s.configs.InsertActive(r.Context(), store.Revision{
 		ParentID: parent, Source: "api", CreatedBy: operator,
 		Summary: summary, Payload: payload, CreatedAt: at,
@@ -599,20 +726,57 @@ func (s *Service) nudge(ctx context.Context, revisionID, summary, operator strin
 // turns it into a 409 the loser can see, and the document they need to re-read
 // is named in the answer.
 func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, active store.Revision, found bool) bool {
-	expected := r.Header.Get("If-Match")
+	// IF-NONE-MATCH FIRST, because `*` on a write is the create-only
+	// precondition (RFC 9110 §13.1.2) — "store this only if the company
+	// has not been configured yet" — and it is the standard spelling of
+	// what this surface documented as `If-Match: none`.
+	if none := r.Header.Get("If-None-Match"); none != "" {
+		if !found {
+			return true
+		}
+		if matchesTag(none, etagOf(active), true) {
+			writeJSON(w, http.StatusPreconditionFailed, map[string]any{
+				"error": "already_configured", "current_revision_id": active.ID,
+				"hint": "If-None-Match asked for this write to land only on a " +
+					"config that is not there; one is active",
+			})
+			return false
+		}
+		return true
+	}
+
+	expected := strings.TrimSpace(r.Header.Get("If-Match"))
 	switch {
 	case expected == "":
 		// Unconditional, and permitted: a first import has nothing to
 		// match against, and a script that owns the config outright has
 		// no race to lose.
 		return true
+	case expected == "none":
+		// THE PRE-TAG SPELLING of If-None-Match: *, documented and
+		// shipped before this surface had entity-tags, and never
+		// implemented — it fell into the branch below and answered 412
+		// on exactly the unconfigured node it was meant to permit.
+		// Honoured rather than dropped, because the documentation
+		// promised it and a script written against that promise is not
+		// wrong.
+		if found {
+			writeJSON(w, http.StatusPreconditionFailed, map[string]any{
+				"error": "already_configured", "current_revision_id": active.ID,
+				"hint": "If-Match: none asked for this write to land only on an " +
+					"unconfigured node; a revision is active",
+			})
+			return false
+		}
+		return true
 	case !found:
 		writeJSON(w, http.StatusPreconditionFailed, map[string]string{
 			"error": "no_active_revision",
-			"hint":  "there is no revision to match against; retry without If-Match",
+			"hint": "there is no revision to match against; retry without " +
+				"If-Match, or send If-None-Match: * to require that",
 		})
 		return false
-	case expected != active.ID:
+	case !matchesTag(expected, etagOf(active), true):
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error": "revision_advanced", "current_revision_id": active.ID,
 			"your_base": expected,

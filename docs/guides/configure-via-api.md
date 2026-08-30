@@ -116,15 +116,21 @@ document `GET /config` serves, sliced:
 # What the collection holds
 curl -s "$CREWLET_URL/query/config_entities?kind=roles" -H "$AUTH" | jq
 
-# One entity
-curl -s "$CREWLET_URL/query/config_entities?kind=roles&id=ceo" -H "$AUTH" | jq '.entity' > ceo.json
+# One entity. The response IS the entity, so it goes straight back.
+curl -s -D headers.txt "$CREWLET_URL/config/roles/ceo" -H "$AUTH" > ceo.json
 
-# Edit ceo.json, then send it back
+# Edit ceo.json, then send it back — quoting the ETag the read returned, so a
+# concurrent activation is refused rather than silently overwritten.
 curl -X PUT $CREWLET_URL/config/roles/ceo \
   -H "$AUTH" -H "Content-Type: application/json" \
+  -H "If-Match: $(awk -F'"' '/^[Ee][Tt]ag:/ {print $2}' headers.txt)" \
   -H "X-Summary: give the CEO a quarterly goal" \
   -d @ceo.json
 ```
+
+The `config_entities` query still lists a collection and still answers a
+`{kind, id, entity}` envelope — it is what the dashboard reads. For one entity
+prefer `GET /config/{kind}/{id}`, whose body is exactly what `PUT` takes.
 
 The response is `201 Created` with the new `revision_id` and `epoch`, exactly
 as a full PUT would be: the write changed one entity and created one revision.
@@ -146,9 +152,16 @@ consequences worth knowing before you script against it:
   than an intent to add a seat, and adding through this route would grow the
   company without you ever seeing the document you changed. Add through
   `PUT /config`.
-- **The path is the identity.** `PUT /config/roles/ceo` replaces whatever is
-  at `ceo`; a body carrying a different handle does not move it. Renaming is a
-  full-document edit.
+- **The path is the identity, and a `PUT` never renames.** `PUT
+  /config/roles/ceo` replaces whatever is at `ceo`; a body carrying a
+  different handle is `400 identity_mismatch` rather than a move. The handle
+  is effectively permanent — the seat's durable id derives from it, so a
+  rename orphans that seat's diary, its onboarding marker and its counterparty
+  profiles — and nothing that references the old name travels with the splice.
+  The check is on the **derived** handle, so `{"name": "Chief Executive"}`
+  with no `handle` is refused too: an omitted handle is derived from the name,
+  which makes a display-name edit a rename by accident. Keep `handle` in the
+  body and change whatever else you like. Renaming is a full-document edit.
 - **`PUT` is the only verb.** There is no `DELETE /config/roles/ceo`; the path
   answers `405`. Removal is a full-document edit for the same reason creation
   is, only more so — deleting a seat also strands its mailbox and its in-flight
