@@ -64,6 +64,11 @@ type atlassianProduct = atlassian.Product
 // The EMAIL is part of the key, not just the token: Cloud authenticates
 // base64(email:token), so the same token under a different address is a
 // different credential and may resolve to a different account.
+//
+// The SITE is not in the key, and is handled by emptying the product's cache
+// when the address changes — see [atlassianIdentities.resolve]. Keying on it
+// would answer correctly and never forget: every instance a company has ever
+// pointed at would keep its entries for the life of the process.
 type identityKey struct {
 	cred    atlassian.Credential
 	product atlassianProduct
@@ -72,9 +77,14 @@ type identityKey struct {
 // atlassianIdentities remembers which account each seat credential
 // authenticates as, per product.
 type atlassianIdentities struct {
-	mu       sync.Mutex
-	byCred   map[identityKey]string
-	resolved map[atlassianProduct]bool
+	mu     sync.Mutex
+	byCred map[identityKey]string
+	// sites is where each product was last resolved, and its keys are the
+	// products that HAVE been resolved. One map rather than a set beside
+	// it, because the two would be updated in different places and the
+	// pair that disagrees registers a product against an address nobody
+	// checked.
+	sites map[atlassianProduct]productSite
 }
 
 // productSite is where one product is reached, as the engine resolved it.
@@ -98,9 +108,21 @@ func (a *atlassianIdentities) resolve(ctx context.Context, product atlassianProd
 	a.mu.Lock()
 	if a.byCred == nil {
 		a.byCred = map[identityKey]string{}
-		a.resolved = map[atlassianProduct]bool{}
+		a.sites = map[atlassianProduct]productSite{}
 	}
-	a.resolved[product] = true
+	// A CHANGED ADDRESS EMPTIES THIS PRODUCT'S CACHE. An account id is a
+	// fact about one instance: the same credential against a different site
+	// is a different account, and on Data Center it is a different SHAPE of
+	// identifier entirely. An apply that repointed integrations.jira at a
+	// new instance would otherwise re-register every seat under the old
+	// one's ids, and every webhook from the new instance would name a
+	// stranger — with nothing failing and nothing logged.
+	if was, known := a.sites[product]; known && was != where {
+		maps.DeleteFunc(a.byCred, func(key identityKey, _ string) bool {
+			return key.product == product
+		})
+	}
+	a.sites[product] = where
 	var missing []seatCredential
 	for _, cred := range creds {
 		if _, known := a.byCred[identityKey{cred.cred, product}]; !known {
@@ -125,7 +147,7 @@ func (a *atlassianIdentities) resolve(ctx context.Context, product atlassianProd
 				// finds nothing — which is the exact diagnosis the line
 				// exists to provide. One credential can serve several
 				// seats, so it is a list.
-				log.Warn("atlassian_seat_identity_unresolved",
+				log.WarnContext(ctx, "atlassian_seat_identity_unresolved",
 					"product", string(product),
 					"seats", strings.Join(cred.handles, ","),
 					"error", err.Error(),
@@ -187,7 +209,7 @@ func identityOf(ctx context.Context, product atlassianProduct, where productSite
 func (a *atlassianIdentities) register(reg *notify.Registry, c *Company, env *config.Resolver) map[atlassianProduct]int {
 	a.mu.Lock()
 	known := maps.Clone(a.byCred)
-	products := slices.Collect(maps.Keys(a.resolved))
+	products := slices.Collect(maps.Keys(a.sites))
 	a.mu.Unlock()
 
 	registered := map[atlassianProduct]int{}
@@ -219,6 +241,49 @@ func (a *atlassianIdentities) register(reg *notify.Registry, c *Company, env *co
 		}
 	}
 	return registered
+}
+
+// retain forgets the products a company no longer configures.
+//
+// The cache survives an apply on purpose — identity is a function of the
+// credential, and a revision that changed something else must not spend a
+// request per seat to re-learn what it already knows. It must NOT survive the
+// product being removed: an operator who dropped integrations.confluence would
+// go on having every seat registered in the wiki's party namespace from
+// accounts nothing has checked since, so a stray page event would still route
+// to an agent whose access there was deliberately taken away.
+//
+// Called on every apply with the products the NEW company has, from the one
+// place that sees the whole company — including the apply that leaves it with
+// no Atlassian product at all, which is exactly the case a check guarding the
+// register call would skip.
+func (a *atlassianIdentities) retain(products []atlassianProduct) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for product := range a.sites {
+		if slices.Contains(products, product) {
+			continue
+		}
+		delete(a.sites, product)
+		maps.DeleteFunc(a.byCred, func(key identityKey, _ string) bool {
+			return key.product == product
+		})
+	}
+}
+
+// atlassianProductsOf is the Atlassian products a company configures.
+//
+// The BLOCK's presence, not its enabled flag: neither product has one, and a
+// block that is present is a product the engine resolves identities for.
+func atlassianProductsOf(in config.Integrations) []atlassianProduct {
+	var out []atlassianProduct
+	if in.Jira != nil {
+		out = append(out, atlassian.ProductJira)
+	}
+	if in.Confluence != nil {
+		out = append(out, atlassian.ProductConfluence)
+	}
+	return out
 }
 
 // backendOf is the party-registry namespace a product's account ids live in.

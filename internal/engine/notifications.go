@@ -166,7 +166,14 @@ func (e *Engine) refreshParties(c *Company) {
 	// declared anywhere in the org. One call covers both products — the
 	// resolver knows which of them it has resolved, and registering only
 	// the tracker's is how the wiki's namespace stayed empty.
-	if c.Config.Integrations.Jira != nil || c.Config.Integrations.Confluence != nil {
+	//
+	// UNCONDITIONALLY FIRST, because the apply that removes the last
+	// Atlassian block is exactly the one this guard would skip — and the
+	// one where a stale identity keeps routing events to a seat whose
+	// access was deliberately taken away.
+	products := atlassianProductsOf(c.Config.Integrations)
+	e.notify.atlassian.retain(products)
+	if len(products) > 0 {
 		e.notify.atlassian.register(reg, c, e.resolver())
 	}
 
