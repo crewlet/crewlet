@@ -268,3 +268,49 @@ func TestShutdownFlushesUnderACancelledContext(t *testing.T) {
 		t.Errorf("shutdown under a cancelled context: %v", err)
 	}
 }
+
+// The two OTLP endpoint variables mean different things, and treating the base
+// as a full URL is what produced `/v1/traces/v1/traces` at a collector when an
+// operator followed the deployment guide.
+func TestTheEndpointVariablesKeepTheirSpecMeanings(t *testing.T) {
+	for _, tc := range []struct{ name, base, signal, want string }{
+		{"base gets the signal path", "http://localhost:4318", "",
+			"http://localhost:4318/v1/traces"},
+		{"a trailing slash does not double up", "http://localhost:4318/", "",
+			"http://localhost:4318/v1/traces"},
+		{"the signal variable is used verbatim", "http://localhost:4318",
+			"https://collector.example.com/otlp/v1/traces",
+			"https://collector.example.com/otlp/v1/traces"},
+		{"neither set exports nothing", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tracesEndpoint(Options{Env: envOf(map[string]string{
+				EndpointVar:       tc.base,
+				TracesEndpointVar: tc.signal,
+			})})
+			if got != tc.want {
+				t.Errorf("tracesEndpoint = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A collector that is not reachable must not fail the boot: the exporter
+// connects lazily and retries, and refusing to start a company because a
+// telemetry backend is down would make tracing a liability.
+func TestAnUnreachableCollectorDoesNotFailTheBoot(t *testing.T) {
+	shutdown, err := Configure(context.Background(), Options{Env: envOf(map[string]string{
+		// Nothing listens here, and nothing should try until a span ends.
+		EndpointVar: "http://127.0.0.1:1",
+	})})
+	if err != nil {
+		t.Fatalf("an unreachable collector failed the boot: %v", err)
+	}
+	t.Cleanup(func() { _ = shutdown(context.Background()) })
+
+	ctx, span := Start(context.Background(), "test", "op")
+	span.End()
+	if len(TraceOf(ctx).TraceID) != 32 {
+		t.Error("ids stopped working when the collector was unreachable")
+	}
+}

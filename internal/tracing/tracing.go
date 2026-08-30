@@ -84,7 +84,40 @@ const (
 	// SamplerArgVar is the head-sampling ratio, 0..1. The sampler itself is
 	// always parent-based — see [sampler].
 	SamplerArgVar = "OTEL_TRACES_SAMPLER_ARG"
+
+	// TracesEndpointVar is the SIGNAL-SPECIFIC endpoint, used verbatim when
+	// set. The spec gives the two variables different meanings and this is
+	// the half that already names a path — see [tracesEndpoint].
+	TracesEndpointVar = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
 )
+
+// tracesEndpoint resolves the URL spans are POSTed to.
+//
+// # The two variables mean different things, and conflating them doubles the path
+//
+// The OTLP spec is explicit: OTEL_EXPORTER_OTLP_ENDPOINT is a BASE and the
+// exporter appends the signal path to it, while
+// OTEL_EXPORTER_OTLP_TRACES_ENDPOINT is the full URL and is used as given.
+// The SDK's WithEndpointURL implements the second meaning only — handed a
+// path-less base it targets "/" rather than "/v1/traces" — so the base has to
+// be completed here.
+//
+// This is the same rule [sandbox.OtelReceiver] already follows when it
+// forwards (it appends "/v1/"+signal to the trimmed upstream), which is what
+// keeps one setting correct for both halves. It is also why the deployment
+// guide's example had to change: it told operators to set the BASE variable
+// to a URL ending in /v1/traces, which the receiver turned into
+// /v1/traces/v1/traces at the collector.
+func tracesEndpoint(opts Options) string {
+	if signal := opts.env(TracesEndpointVar); signal != "" {
+		return signal
+	}
+	base := strings.TrimRight(opts.env(EndpointVar), "/")
+	if base == "" {
+		return ""
+	}
+	return base + "/v1/traces"
+}
 
 // The protocols this build can speak, and the closed set a typo is checked
 // against so an unknown value names the two that work.
@@ -111,6 +144,30 @@ const exportTimeout = 5 * time.Second
 // than one export attempt so a single in-flight batch can finish, and far
 // short of anything a supervisor's SIGKILL timer would notice.
 const flushGrace = 8 * time.Second
+
+// A REAL PROVIDER FROM THE START, installed by this package's own init for
+// exactly the reason internal/logging's init installs os.Stderr: the default
+// must be the working one, not a state a caller has to remember to leave.
+//
+// This is not tidiness. OTel's built-in default TracerProvider is a no-op that
+// returns a NON-RECORDING span carrying the PARENT's span context straight
+// through — so with nothing installed, Start mints no new span id and
+// [TraceOf] hands back the id of the span above it. That is precisely the bug
+// this whole change removes (a turn publishing its trigger's span id as its
+// own), and it would have come back silently in every process that did not
+// call [Configure] — the e2e gate caught it doing exactly that.
+//
+// The default exports nothing and starts no goroutines: a TracerProvider with
+// no span processor has nothing to flush and nothing to stop, so it is safe to
+// install in a package init and safe never to shut down. [Configure] replaces
+// it with the configured one.
+func init() {
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{}, propagation.Baggage{},
+	))
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample()))))
+}
 
 // Shutdown flushes buffered spans and releases the exporter.
 //
@@ -169,7 +226,7 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 		sdktrace.WithSampler(sampler(opts)),
 	}
 
-	endpoint := opts.env(EndpointVar)
+	endpoint := tracesEndpoint(opts)
 	var exporter sdktrace.SpanExporter
 	if endpoint != "" {
 		if exporter, err = newExporter(ctx, opts, endpoint); err != nil {
