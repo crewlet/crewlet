@@ -143,6 +143,32 @@ Three placements were not obvious:
   over a four-key pool yields up to twelve nested spans per round and tells a
   reader nothing they can act on.
 
+### Each phase event carries its own phase span
+
+The dashboard's trace view builds a tree from the stored events' `span_id` and
+`parent_span_id`, so which span an event names decides what that tree looks
+like. Three states, in order:
+
+| | what an event named | the tree |
+|---|---|---|
+| before | the TRIGGER's span | every turn collapsed onto its wake |
+| turn span only | the turn's span | one flat node per turn |
+| now | the PHASE's span, parent the turn's | trigger → turn → {plan, execute, review} |
+
+Getting there needed `runPhase` to hand its context back, because the
+`agent_phase_completed` publishes happen in the phase wrappers *after* it
+returns. The span has ended by then, which is fine — an event recording a phase
+belongs to that phase's span, and a span id is a label rather than a lifetime.
+It is returned under its own name rather than shadowing the caller's `ctx`, so
+work the caller does after the phase is not attributed to a closed span.
+
+The emitter falls back to the turn's trace when no span is open, and that
+fallback is the whole reason it is a function rather than a `TraceOf` call:
+`TraceOf` mints a fresh root for the no-span case, which is right for a
+publisher that would otherwise have no trace and wrong for one that already
+belongs to a turn — an event published from a detached goroutine would leave
+its turn's trace and start a second one nobody looks at.
+
 ### A suspend ends its span; a resume opens a new one
 
 A suspend is a **return** ([402](402-suspend-resume.md)), not an error. The

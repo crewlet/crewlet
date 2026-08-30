@@ -671,8 +671,13 @@ func TestATurnsEventsJoinTheTriggersTrace(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no turn events were stored; this test asserted nothing")
 	}
-	if len(spans) == 0 {
-		t.Error("every turn event shared one span id")
+	// More than one, because each phase publishes under its OWN phase span
+	// and the turn event under the turn's. One id across the whole turn is
+	// what the dashboard's tree collapses to a single node, and it is what
+	// this looked like before phase events stopped inheriting a fixed trace.
+	if len(spans) < 2 {
+		t.Errorf("turn events carry %d distinct span id(s); the trace tree "+
+			"cannot separate the phases from the turn", len(spans))
 	}
 	if !sawTurnParent {
 		t.Errorf("nothing hung off the trigger's span %q — the turn did not "+

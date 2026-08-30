@@ -149,3 +149,15 @@ func Fail(span trace.Span, err error) {
 	span.RecordError(err)
 	span.SetStatus(codes.Error, err.Error())
 }
+
+// Active reports whether ctx carries a usable span context.
+//
+// It exists for one shape: a caller that wants the ACTIVE span's ids when
+// there is one, and a known fallback rather than a fresh root when there is
+// not. [TraceOf] mints a root for the no-span case, which is right for a
+// publisher that would otherwise have no trace at all and wrong for one that
+// already belongs to a turn — an event published from a detached goroutine
+// would leave its turn's trace and start a second one nobody looks at.
+func Active(ctx context.Context) bool {
+	return trace.SpanContextFromContext(ctx).IsValid()
+}

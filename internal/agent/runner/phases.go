@@ -226,7 +226,7 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 		ConversationHistory: r.cfg.Conversation,
 	})
 
-	res, err := r.runPhase(ctx, phaseRun{
+	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Plan, surface: surface, system: system, user: user,
 		rounds: r.cfg.Caps.PlanRounds, ceiling: r.cfg.Caps.PlanCeiling, iteration: round,
 		terminateAfter: []string{SubmitPlanTool},
@@ -254,7 +254,7 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 		payload = planPayload{Decision: string(turn.PlanDirect), Reasoning: res.Text}
 	}
 
-	r.emitter().completed(ctx, phaseRecord{
+	r.emitter().completed(phaseCtx, phaseRecord{
 		Phase: phase.Plan, Iteration: round, System: system, User: user,
 		Result: res.Result, Exhausted: res.Exhausted,
 		Decision: payload.Decision, Rescued: !submitted,
@@ -316,7 +316,7 @@ func (r *Runner) Execute(ctx context.Context, round int, p turn.Plan, history []
 		ConversationHistory: r.cfg.Conversation,
 	})
 
-	res, err := r.runPhase(ctx, phaseRun{
+	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface, system: system, user: user,
 		rounds: r.cfg.Caps.ExecuteRounds, ceiling: r.cfg.Caps.ExecuteCeiling, iteration: round,
 		allowSuspend: true,
@@ -330,7 +330,7 @@ func (r *Runner) Execute(ctx context.Context, round int, p turn.Plan, history []
 	}
 
 	missing := missingTools(surface, snapshot)
-	r.emitter().completed(ctx, phaseRecord{
+	r.emitter().completed(phaseCtx, phaseRecord{
 		Phase: phase.Execute, Iteration: round, System: system, User: user,
 		Result: res.Result, Exhausted: res.Exhausted,
 		// Execute reaches no structured verdict and never rescues — it has
@@ -373,7 +373,7 @@ func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Exec
 		EarlierIterations: ledger.RenderIterations(history, r.cfg.SkipNames),
 	})
 
-	res, err := r.runPhase(ctx, phaseRun{
+	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Review, surface: surface, system: system, user: r.cfg.Task,
 		rounds: r.cfg.Caps.ReviewRounds, iteration: round,
 		terminateAfter: []string{SubmitReviewTool},
@@ -396,11 +396,11 @@ func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Exec
 				"success criteria against what Execute actually did, and call " +
 				SubmitReviewTool + ".",
 		}
-		r.emitter().completed(ctx, reviewRecord(round, system, r.cfg.Task, res,
+		r.emitter().completed(phaseCtx, reviewRecord(round, system, r.cfg.Task, res,
 			string(rescue.Decision), rescue.Notes, true, surface))
 		return rescue, nil
 	}
-	r.emitter().completed(ctx, reviewRecord(round, system, r.cfg.Task, res,
+	r.emitter().completed(phaseCtx, reviewRecord(round, system, r.cfg.Task, res,
 		payload.Decision, payload.Notes, false, surface))
 	return turn.Review{
 		Decision:      phase.Decision(payload.Decision),
@@ -483,7 +483,19 @@ type phaseRun struct {
 	allowSuspend bool
 }
 
-func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error) {
+// runPhase returns the PHASE'S CONTEXT as well as its result.
+//
+// The caller needs it to publish agent_phase_completed under this phase's span
+// rather than the turn's, which is what turns the dashboard's trace tree from
+// a flat list under one turn node into trigger -> turn -> {plan, execute,
+// review}. The span has ENDED by then, and that is fine: an event recording a
+// phase belongs to that phase's span, and a span id is a label rather than a
+// lifetime.
+//
+// It is returned under its own name rather than shadowing the caller's ctx on
+// purpose — work the caller does AFTER the phase must not be attributed to a
+// span that is closed.
+func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, phaseResult, error) {
 	ph, surface := in.phase, in.surface
 	// ONE SPAN PER PHASE, wrapping the WHOLE extension loop below rather
 	// than each toolloop.Run inside it: an extended Execute is one phase
@@ -510,7 +522,9 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error)
 	// left showing an in-flight call with no response and no reason.
 	emit := r.emitter()
 	progress := &toolloop.Progress{}
-	fail := func(err error) (phaseResult, error) {
+	// Returns the phase context too, so `return fail(err)` stays a single
+	// line now that runPhase hands its context back.
+	fail := func(err error) (context.Context, phaseResult, error) {
 		// The span carries the failure too. The event below is the record
 		// of WHAT broke; the span is what makes the broken phase findable
 		// in a trace beside the calls that led to it.
@@ -520,7 +534,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error)
 			Result: progress.Snapshot(), Available: surface.Active(),
 			Failed: true, Err: err,
 		})
-		return phaseResult{}, err
+		return ctx, phaseResult{}, err
 	}
 
 	members, err := r.cfg.Models.Chain(r.cfg.Seat.Role, ph)
@@ -600,7 +614,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error)
 			span.SetAttributes(
 				attribute.Int("crewlet.rounds", out.Rounds),
 				attribute.Bool("crewlet.suspended", out.Suspended))
-			return out, nil
+			return ctx, out, nil
 		}
 		granted, decision := extension.Consider(ctx, r.cfg.Judge, policy, extension.Request{
 			Phase: ph, Task: r.cfg.Task, Calls: calls(surface),
@@ -609,7 +623,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (phaseResult, error)
 		if granted <= 0 {
 			log.InfoContext(ctx, "phase_not_extended", "phase", ph, "iteration", iteration,
 				"rounds_used", out.Rounds, "reason", decision.Reason)
-			return out, nil
+			return ctx, out, nil
 		}
 		log.InfoContext(ctx, "phase_extended", "phase", ph, "iteration", iteration,
 			"granted", granted, "rounds_used", out.Rounds, "reason", decision.Reason)
