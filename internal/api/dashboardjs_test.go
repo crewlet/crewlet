@@ -308,6 +308,19 @@ func TestTheShellLoadsFromTheBinary(t *testing.T) {
 	}
 }
 
+func TestTheFaviconServesFromTheBinary(t *testing.T) {
+	t.Parallel()
+	// /favicon.ico is asked for UNPROMPTED — by browsers on a bare origin
+	// hit, by bookmark managers, by anything that never parses the shell —
+	// so no graph walk from /dashboard can prove it serves. The route
+	// existed and answered 404 for every one of those requests, because the
+	// file it reads (dashboard/favicon.ico) was simply absent from the tree:
+	// the serving tests passed on a MapFS that had it, and nothing checked
+	// the real one.
+	a := newApp(t, api.Options{})
+	mustFetch(t, a, "/favicon.ico", "image/x-icon")
+}
+
 // mustFetch gets one asset from the server and returns its bytes, failing with
 // the reason a browser would have given.
 func mustFetch(t *testing.T, a *api.App, url, wantType string) []byte {
