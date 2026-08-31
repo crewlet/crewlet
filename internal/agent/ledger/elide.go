@@ -165,6 +165,19 @@ func marshal(v map[string]any) string {
 // exists so such a value costs a scruffy line rather than the whole record.
 func goString(v any) string { return fmt.Sprintf("%v", v) }
 
+// elideTail is elide from the other end: the LAST limit runes, marked.
+//
+// For content whose payoff is at the end — a round's produced text, where the
+// draft follows the thinking that produced it. A head-preserving cut on that
+// keeps the reasoning and drops the deliverable.
+func elideTail(text string, limit int) string {
+	if limit <= 0 || utf8.RuneCountInString(text) <= limit {
+		return text
+	}
+	runes := []rune(text)
+	return "…" + strings.TrimLeft(string(runes[len(runes)-limit:]), " \t\n\r")
+}
+
 // Elide trims text to limit runes with a visible ellipsis.
 //
 // Exported for callers outside this package that need the same marked,

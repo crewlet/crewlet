@@ -44,6 +44,24 @@ const (
 	// round can log dozens of calls; 12 covers the recon a normal round does
 	// while keeping one block skimmable.
 	MaxReadCalls = 12
+
+	// RenderedArtifactLimit bounds a PRIOR round's produced text as it is
+	// RENDERED into the next round's block. The Iteration record keeps it
+	// whole; this is a display bound, and that difference is the point of
+	// the paragraph above.
+	//
+	// It needs one because Execution.Text is every assistant message of that
+	// round's tool loop concatenated, thinking included — so its size is the
+	// round cap times the phase's max_tokens, PER ITERATION, and the block
+	// accumulates one of those per self_iterate and is re-sent on every round
+	// of all three phases that follow. That product, not the single value, is
+	// what a bound has to answer.
+	//
+	// 4000 runes is twice what the deleted write-time cut allowed and holds a
+	// full draft; the TAIL is kept, because a round's deliverable is what it
+	// ended with rather than what it opened by thinking. Marked, like every
+	// other cut in this package.
+	RenderedArtifactLimit = 4000
 )
 
 func itoa(n int) string { return strconv.Itoa(n) }

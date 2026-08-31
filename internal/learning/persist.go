@@ -396,6 +396,18 @@ func (d *PersistDecider) write(
 		},
 		CreatedAt: now,
 	}
+	if len(content) > MaxContentChars {
+		// SKIPPED, and said out loud. The tool path refuses an over-long
+		// note so the model can tighten it; there is nobody to ask here, so
+		// the honest move is to drop the row rather than store a note whose
+		// tail the seat will never read back — and to log it, because a
+		// classifier that keeps producing documents is a prompt to fix.
+		log.WarnContext(ctx, "persist_decider_note_oversized",
+			"turn_id", t.Event.TurnID, "agent_handle", t.Event.AgentHandle,
+			"chars", len(content), "max", MaxContentChars,
+			"detail", "the note was dropped rather than stored half-written")
+		return DiaryEntry{}, nil
+	}
 	if err := d.diary.Write(ctx, entry); err != nil {
 		return DiaryEntry{}, fmt.Errorf("learning: persist %s for %s: %w",
 			kind, t.Event.AgentHandle, err)

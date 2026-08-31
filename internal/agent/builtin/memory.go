@@ -80,11 +80,11 @@ const maxEpisodeLimit = 25
 
 // diaryNoteMax bounds one written note.
 //
-// A note is meant to be re-read in a later turn's prompt, so its cost is paid
-// on every turn that recalls it, not once. Two thousand characters is a long
-// paragraph and a short page — past that the model is writing a document, and
-// a document belongs in the knowledge base where colleagues can read it too.
-const diaryNoteMax = 2000
+// The store's own rule, not a second opinion about it: [learning.MaxContentChars]
+// is where it is stated, because the post-turn PersistDecider writes into the
+// same table and the two used to disagree — this path refused an over-long note
+// while that one stored it whole.
+const diaryNoteMax = learning.MaxContentChars
 
 // --- use_skill ------------------------------------------------------------ //
 

@@ -413,6 +413,29 @@ func TestATrimmedHistorySaysHowMuchItDropped(t *testing.T) {
 	}
 }
 
+// A prior round's produced text is kept WHOLE in the record and TAIL-elided
+// when rendered — the deliverable is what the round ended with, not what it
+// opened by thinking, and Execution.Text is the whole tool loop concatenated.
+func TestAPriorRoundsOutputIsTailElidedNotHeadCut(t *testing.T) {
+	t.Parallel()
+	produced := "<think>" + strings.Repeat("reasoning ", 2000) + "</think>\nTHE DRAFT ENDS HERE."
+	got := RenderIterations([]Iteration{{Iteration: 1, ExecuteText: produced}}, nil)
+	if !strings.Contains(got, "THE DRAFT ENDS HERE.") {
+		t.Error("the deliverable at the end of the round was cut away")
+	}
+	if strings.Count(got, "reasoning reasoning") > RenderedArtifactLimit {
+		t.Error("the block was not bounded at all")
+	}
+	if !strings.Contains(got, "…") {
+		t.Error("the cut is silent")
+	}
+	// And the record itself is untouched: this is a render bound.
+	whole := RenderIterations([]Iteration{{Iteration: 1, ExecuteText: "short"}}, nil)
+	if !strings.Contains(whole, "Produced: short") {
+		t.Errorf("a short round was altered: %q", whole)
+	}
+}
+
 func TestNoHistoryRendersNothing(t *testing.T) {
 	t.Parallel()
 	if got := RenderHistory(nil, HistoryOptions{}); got != "" {

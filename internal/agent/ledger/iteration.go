@@ -187,7 +187,11 @@ func RenderIterations(records []Iteration, skip []string) string {
 			lines = append(lines, group.label, FormatCalls(group.calls, opts))
 		}
 		if rec.ExecuteText != "" {
-			lines = append(lines, "Produced: "+rec.ExecuteText)
+			// TAIL-ELIDED at render, whole in the record. See
+			// RenderedArtifactLimit: this text is a whole tool loop's
+			// assistant output, one per iteration, re-sent on every round
+			// of every later phase — and its deliverable is at the end.
+			lines = append(lines, "Produced: "+elideTail(rec.ExecuteText, RenderedArtifactLimit))
 		}
 		if rec.CompletedWork != "" {
 			lines = append(lines, "Reviewer, on what already landed: "+rec.CompletedWork)
