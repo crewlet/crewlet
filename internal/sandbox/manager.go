@@ -54,9 +54,17 @@ type ManagerOptions struct {
 	// DefaultTimeout is the box TTL. Zero takes [DefaultBoxTimeout].
 	DefaultTimeout time.Duration
 
-	// DefaultPauseTTL bounds a paused box. Zero takes [DefaultPauseTTL];
-	// pass a negative value to disable pausing engine-wide.
-	DefaultPauseTTL time.Duration
+	// DefaultPauseTTL bounds a paused box. Nil takes [DefaultPauseTTL];
+	// an explicit zero disables pausing engine-wide.
+	//
+	// A POINTER for the same reason [SpecInput.PauseTTL] is one: "say
+	// nothing" and "never pause" are different instructions and a single
+	// zero cannot carry both. It was a plain Duration whose zero took the
+	// default, which silently overrode every company that configured 0 —
+	// and there was an undocumented back door where a NEGATIVE value meant
+	// "disable", which the config layer refuses outright and so nothing
+	// could ever reach.
+	DefaultPauseTTL *time.Duration
 
 	// DefaultMaxTurns caps the agentic rounds of a coding run on a seat
 	// that names none. Zero is uncapped, which is the default: the right
@@ -111,7 +119,6 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		codingAgent: opts.DefaultCodingAgent,
 		template:    opts.DefaultTemplate,
 		timeout:     opts.DefaultTimeout,
-		pauseTTL:    opts.DefaultPauseTTL,
 		maxTurns:    max(opts.DefaultMaxTurns, 0),
 		setup:       slices.Clone(opts.DefaultSetup),
 		telemetry:   opts.Telemetry,
@@ -122,7 +129,12 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	if m.timeout == 0 {
 		m.timeout = DefaultBoxTimeout
 	}
-	if m.pauseTTL == 0 {
+	// NIL IS THE ONLY THING THAT TAKES THE DEFAULT. An explicit zero is a
+	// setting — never pause — and reading it as "unset" is what silently
+	// billed for every paused box in a company that asked for none.
+	if opts.DefaultPauseTTL != nil {
+		m.pauseTTL = *opts.DefaultPauseTTL
+	} else {
 		m.pauseTTL = DefaultPauseTTL
 	}
 	// Checked here rather than at the first turn: a default naming a runner
@@ -208,6 +220,10 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 	if spec.MaxTurns < 0 {
 		spec.MaxTurns = 0
 	}
+	// CLAMPED, not a second meaning. A negative can only reach here from an
+	// embedder building a SpecInput by hand — config refuses one at both
+	// layers — and "never pause" is the honest reading of a TTL that has
+	// already elapsed.
 	if spec.PauseTTLSec < 0 {
 		spec.PauseTTLSec = 0
 	}

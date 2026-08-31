@@ -1397,7 +1397,7 @@
           "type": "integer"
         },
         "default_pause_ttl_seconds": {
-          "description": "Paused-box TTL before reap and re-seed. 0 = never pause.",
+          "description": "Paused-box TTL before reap and re-seed. Unset = 1800s; 0 = never pause.",
           "minimum": 0,
           "type": "number"
         },

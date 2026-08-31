@@ -67,7 +67,7 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 		DefaultCodingAgent: string(spec.DefaultCodingAgent),
 		DefaultTemplate:    spec.Template,
 		DefaultTimeout:     seconds(spec.Timeout()),
-		DefaultPauseTTL:    seconds(spec.PauseTTL()),
+		DefaultPauseTTL:    secondsPtr(spec.PauseTTL()),
 		DefaultMaxTurns:    spec.DefaultMaxTurns,
 		DefaultSetup:       setupSteps(spec.Setup),
 		Telemetry:          otel,
@@ -159,6 +159,21 @@ func setupSteps(steps []config.SandboxSetupStep) []sandbox.SetupStep {
 }
 
 func seconds(v float64) time.Duration { return time.Duration(v * float64(time.Second)) }
+
+// secondsPtr carries an OPTIONAL number of seconds through as a duration,
+// keeping nil distinct from zero.
+//
+// The distinction is the whole point at the two call sites that need it: a
+// pause TTL of 0 means "never pause" and an absent one means "take the
+// engine default", and every layer that collapsed the two re-applied a
+// default over a setting an operator had deliberately chosen.
+func secondsPtr(v *float64) *time.Duration {
+	if v == nil {
+		return nil
+	}
+	d := seconds(*v)
+	return &d
+}
 
 // sandboxAccountant charges a collected coding run against the shared counter.
 //
