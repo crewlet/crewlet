@@ -1,6 +1,7 @@
 package config
 
 import (
+	"iter"
 	"regexp"
 	"slices"
 	"strings"
@@ -265,6 +266,12 @@ type Knowledge struct {
 // NOTHING still runs, and from inside resolution a name that misses and a name
 // that was never written are the same absence.
 //
+// Applied to EVERY seat in the document, at any depth. Nearly all of a real
+// company's roles live inside units, which nest arbitrarily — so a rule that
+// walked the root `roles:` list alone left the typo invisible exactly where
+// it is most likely to be written. The walk is [Company.eachRole] rather than
+// a loop here, so the next whole-document rule about seats inherits it.
+//
 // Skipped entirely when providers.llm is empty. A company with no models is a
 // documented authoring state — an org chart written before the credentials
 // exist — and it fails at the first turn, where the failure is actionable.
@@ -281,9 +288,7 @@ func (c *Company) validateProviderKeys() error {
 	}
 	slices.Sort(known)
 
-	for i := range c.Roles {
-		role := &c.Roles[i]
-		path := idx("roles", i)
+	for role, path := range c.eachRole() {
 		// Both written surfaces are checked, and each is reported at the
 		// path the operator typed. Validating the RESOLVED chain instead
 		// would hide half of them: the flat field wins over the mapping,
@@ -324,4 +329,43 @@ func (c *Company) validateProviderKeys() error {
 		}
 	}
 	return p.err()
+}
+
+// eachRole yields every seat in the document, with the path the operator
+// typed to reach it.
+//
+// THE TRAVERSAL, not just one rule's use of it. A whole-document rule about
+// seats has to visit units, which nest to any depth — and the one that did
+// not walked c.Roles alone, so a unit role naming a provider that does not
+// exist validated clean and the typo stayed invisible and permanent. Every
+// later rule of this shape inherits the walk rather than re-deriving it.
+//
+// A range-over-func rather than a slice, because a validation walk stops at
+// nothing and a caller that breaks early should not have paid to flatten the
+// whole tree first.
+func (c *Company) eachRole() iter.Seq2[*Role, string] {
+	return func(yield func(*Role, string) bool) {
+		for i := range c.Roles {
+			if !yield(&c.Roles[i], idx("roles", i)) {
+				return
+			}
+		}
+		var walk func(units []Unit, path string) bool
+		walk = func(units []Unit, path string) bool {
+			for i := range units {
+				unit := &units[i]
+				here := idx(path, i)
+				for j := range unit.Roles {
+					if !yield(&unit.Roles[j], idx(at(here, "roles"), j)) {
+						return false
+					}
+				}
+				if !walk(unit.Children, at(here, "children")) {
+					return false
+				}
+			}
+			return true
+		}
+		walk(c.Units, "units")
+	}
 }

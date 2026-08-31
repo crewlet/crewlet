@@ -121,3 +121,97 @@ roles:
 		t.Errorf("an org chart authored before its providers was rejected: %v", err)
 	}
 }
+
+// A SEAT IS A SEAT WHEREVER IT IS WRITTEN, and most of them are written
+// inside units.
+//
+// The rule walked the root `roles:` list only, so a typo in any unit role —
+// which is where a real company keeps nearly all of its seats — validated
+// clean. The seat then booted, thought and billed on whatever the fallback
+// resolved to, and this is the only place the typo can ever be seen.
+func TestAProviderTypoIsCaughtAtEveryDepthOfTheOrgChart(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		doc  string
+		path string
+	}{
+		{
+			name: "a root role",
+			doc:  "roles:\n  - name: CEO\n    llm: claude-sonet\n",
+			path: "roles[0].llm",
+		},
+		{
+			name: "a role in a unit",
+			doc: "units:\n  - name: Engineering\n    roles:\n" +
+				"      - name: Dev\n        llm: claude-sonet\n",
+			path: "units[0].roles[0].llm",
+		},
+		{
+			name: "a role in a nested child unit",
+			doc: "units:\n  - name: Engineering\n    children:\n" +
+				"      - name: Backend\n        roles:\n" +
+				"          - name: Dev\n            llm_plan: claude-sonet\n",
+			path: "units[0].children[0].roles[0].llm_plan",
+		},
+		{
+			name: "a role two children deep",
+			doc: "units:\n  - name: Technology\n    children:\n" +
+				"      - name: Engineering\n        children:\n" +
+				"          - name: Backend\n            roles:\n" +
+				"              - name: Dev\n                llm_review: claude-sonet\n",
+			path: "units[0].children[0].children[0].roles[0].llm_review",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateOrgDoc(t, tc.doc)
+			if err == nil {
+				t.Fatal("a provider key that names no configured model was accepted; " +
+					"the seat will fall back to another model and bill against it")
+			}
+			// Reported at the path the OPERATOR typed, which is the only
+			// thing that makes the error actionable in a nested chart.
+			if !strings.Contains(err.Error(), tc.path) {
+				t.Errorf("error %q does not name the path %q", err, tc.path)
+			}
+		})
+	}
+}
+
+// And a correct key at depth still validates, so the case above is the rule
+// firing rather than the walk refusing every unit role it now reaches.
+func TestAConfiguredKeyValidatesAtEveryDepth(t *testing.T) {
+	t.Parallel()
+	doc := "units:\n  - name: Engineering\n    roles:\n" +
+		"      - name: Dev\n        llm: fast\n    children:\n" +
+		"      - name: Backend\n        roles:\n" +
+		"          - name: Junior\n            llm_plan: default\n"
+	if err := validateOrgDoc(t, doc); err != nil {
+		t.Fatalf("a document naming only configured providers was refused: %v", err)
+	}
+}
+
+// validateOrgDoc parses a whole org body — roles and/or units — against the
+// same provider map the rest of this file uses.
+func validateOrgDoc(t *testing.T, orgBody string) error {
+	t.Helper()
+	doc := `
+name: Acme
+providers:
+  llm:
+    default:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${ANTHROPIC_API_KEY}"]
+    fast:
+      type: anthropic
+      model: claude-haiku-4-5
+      api_keys: ["${ANTHROPIC_API_KEY}"]
+` + orgBody
+	c, err := config.ParseCompany([]byte(doc))
+	if err != nil {
+		return err
+	}
+	return c.Validate()
+}
