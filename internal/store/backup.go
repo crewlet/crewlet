@@ -190,8 +190,19 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	// without this check the next step would CREATE the missing file as an
 	// empty database and then report the confusing news that it carries no
 	// schema. This is the check that says what actually happened.
+	// TWO FAILURES, reported separately. Folded into one branch, an
+	// unreadable destination — a permission change, a vanished mount, a
+	// full filesystem — was reported as "the driver wrote nothing", which
+	// sends an operator to the database rather than to the disk, and the
+	// errno that names the actual fix was dropped. It was also the one
+	// unwrapped error on a path where everything else carries %w.
 	written, err := os.Stat(part)
-	if err != nil || written.Size() == 0 {
+	if err != nil {
+		_ = removeDatabaseFiles(part)
+		return BackupInfo{}, fmt.Errorf(
+			"store: backup: cannot read the copy written to %s: %w", part, err)
+	}
+	if written.Size() == 0 {
 		_ = removeDatabaseFiles(part)
 		return BackupInfo{}, fmt.Errorf("store: backup: the engine reported a successful "+
 			"copy of %s but %s holds no database, so nothing was backed up", d.path, part)
