@@ -403,3 +403,39 @@ func TestAChangedServerSpecIsRestartedByAnApply(t *testing.T) {
 			"child, so the apply reported a change it did not make", got)
 	}
 }
+
+// A SHARED SERVER A REVISION REMOVED IS RETIRED, not merely forgotten.
+//
+// The apply-time reconcile is driven by the specs the CURRENT config names,
+// so a deleted server is never visited: its tools leave the catalogue with
+// the new epoch's registry, but the CHILD — holding the company's
+// credentials — keeps running until the engine stops. A rename runs two.
+func TestASharedServerARevisionRemovedIsStopped(t *testing.T) {
+	t.Parallel()
+	with := mcpCompany(true, "PATH")
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, with)})
+
+	if !slices.Contains(e.Company().Tools.Names(), "tracker_probe") {
+		t.Fatal("the boot epoch never started the shared server")
+	}
+
+	// The same document with the whole mcp_servers block gone — the
+	// gesture an operator makes to take a leaking integration offline.
+	without := with[:strings.Index(with, "mcp_servers:")] +
+		with[strings.Index(with, "roles:"):]
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, without)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// The catalogue losing the tool is the half that already worked.
+	if names := e.Company().Tools.Names(); slices.Contains(names, "tracker_probe") {
+		t.Errorf("the applied epoch still advertises the removed server: %v", names)
+	}
+	// The child being GONE is the half that did not. Servers() is the
+	// bridge's own record of what it is still running.
+	if running := e.SharedServers(); slices.Contains(running, "tracker") {
+		t.Errorf("the removed server is still running: %v\n"+
+			"its process holds the company's credentials and would survive "+
+			"until the engine stops", running)
+	}
+}

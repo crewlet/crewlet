@@ -86,6 +86,39 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 		}
 		specs = append(specs, spec)
 	}
+	// RETIRED FIRST, because Reconcile is driven by the specs the CURRENT
+	// config names and therefore never visits a server the revision
+	// DELETED. Left alone, that child — holding the company's credentials
+	// — runs until the engine stops, and a RENAME runs two of them. Both
+	// contradict this function's own contract: an apply that removes a
+	// shared server is supposed to take effect on the next turn.
+	//
+	// Before startAll rather than after, so a rename frees the name and
+	// the tools it published before the replacement files its own.
+	// e.mcp holds only shared servers — a seat's children live on their
+	// own bridge — so every absentee here is genuinely one this revision
+	// dropped.
+	desired := make(map[string]struct{}, len(specs))
+	for _, spec := range specs {
+		desired[spec.Name] = struct{}{}
+	}
+	for _, name := range e.mcp.Servers() {
+		if _, keep := desired[name]; keep {
+			continue
+		}
+		// The Change is discarded rather than filed: c.Tools is the epoch's
+		// BRAND-NEW registry, which has not been told about any shared
+		// server yet, so there is nothing here to unregister. What startAll
+		// files below is the surviving servers' catalogue.
+		if _, err := e.mcp.Stop(ctx, name); err != nil {
+			log.WarnContext(ctx, "mcp_server_retire_failed", "server", name, "error", err,
+				"detail", "its tools are gone from the catalogue; the child may have "+
+					"survived and is reaped when the engine stops")
+			continue
+		}
+		log.InfoContext(ctx, "mcp_server_retired", "server", name,
+			"detail", "the revision no longer declares this shared server")
+	}
 	// RECONCILED, not added. This runs on every apply against a bridge
 	// whose children are already up — and the epoch it is filling is a
 	// brand-new registry that has to be told about them again. Add refuses
@@ -143,6 +176,19 @@ func (e *Engine) startSeatServers(ctx context.Context, c *Company, handle string
 	startAll(ctx, reg, specs, bridge.Add)
 	e.setSeatBridge(ctx, handle, bridge, reg)
 	return reg
+}
+
+// SharedServers names the company-wide MCP children this node is running.
+//
+// The BRIDGE's own record rather than the config's, which is the whole point:
+// what a revision declares and what this process has running are different
+// facts, and only the second one says whether a server a revision removed was
+// actually stopped.
+func (e *Engine) SharedServers() []string {
+	if e.mcp == nil {
+		return nil
+	}
+	return e.mcp.Servers()
 }
 
 // ToolsFor is the surface one seat's turns run against on this node.

@@ -272,6 +272,16 @@ it is already serving. The comparison is over *resolved* values, so a rotated
 credential reads as a changed spec — see
 [Rotation](control-plane.md#rotation).
 
+A server the revision **removed** is stopped rather than merely dropped from
+the catalogue, and that is a separate step because the reconcile above is
+driven by the specs the *current* config names — so it never visits a name
+that is gone. Without it the child kept running until the engine stopped,
+holding the company's credentials, and a *rename* ran two of them. Retiring
+happens before the reconcile, so a rename frees the name and the tools it
+published before the replacement files its own. Taking a leaking integration
+offline by deleting its `mcp_servers` entry therefore takes effect on the next
+turn, which is what the rest of this section already promised.
+
 **Per-role children are not on this path.** They belong to a seat's *lease*
 rather than to the epoch: the apply-time reconcile skips every non-shared
 server, and a role's `mcp_env` — which carries the per-agent Slack/GitHub
