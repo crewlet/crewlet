@@ -166,12 +166,23 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 		log.WarnContext(ctx, "cli_agent_output_truncated", "binary", in.binary,
 			"stream", s.stream, "dropped_bytes", s.dropped, "limit_bytes", maxOutput)
 	}
-	if res.timedOut {
+	// GATED ON THE CONTEXT ENDING, not on the deadline specifically.
+	// cmd.Cancel and WaitDelay fire on cancellation exactly as they do on a
+	// timeout, so both leave the same survivor — but the reap only ran for
+	// the timeout. On the one path where nothing else comes back for it,
+	// shutdown, a forking Node or Bun subtree holding this seat's workspace
+	// and sockets outlived the engine: os/exec's WaitDelay kill reaches the
+	// immediate process, never the group.
+	//
+	// res.timedOut keeps its narrower meaning — cliagent.go classifies a
+	// deadline as KindTimeout and a cancellation is not one.
+	if err := callCtx.Err(); err != nil {
 		// The group was signalled by Cancel and given WaitDelay to go;
 		// anything still alive after Wait returned is a survivor that
 		// ignored SIGTERM, and it holds a concurrency slot until killed.
-		if err := procgroup.Kill(pgid); err != nil && !errors.Is(err, errors.ErrUnsupported) {
-			log.WarnContext(ctx, "cli_agent_group_kill_failed", "pgid", pgid, "error", err)
+		if killErr := procgroup.Kill(pgid); killErr != nil && !errors.Is(killErr, errors.ErrUnsupported) {
+			log.WarnContext(ctx, "cli_agent_group_kill_failed",
+				"pgid", pgid, "reason", err, "error", killErr)
 		}
 	}
 
