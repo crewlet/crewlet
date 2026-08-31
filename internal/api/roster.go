@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -30,7 +31,7 @@ import (
 // Human seats are left out. They have no turn, no phase and no spend, and the
 // agent screen is about what is running; the org tree below carries them, which
 // is where a reader looks for who to talk to.
-func roster(company func() *config.Company, runtime NodeRuntime) []map[string]any {
+func roster(ctx context.Context, company func() *config.Company, runtime NodeRuntime) []map[string]any {
 	if company == nil {
 		return nil
 	}
@@ -50,14 +51,18 @@ func roster(company func() *config.Company, runtime NodeRuntime) []map[string]an
 	// not "offline", and the difference is the whole first impression a
 	// booted company gives.
 	//
-	// Only this node's, because that is all a process can answer without
-	// a coordination read, and Snapshot is documented to make none. On a
-	// fleet a peer's seat therefore reads as offline here; the fleet view
-	// answers "who holds what" from the lease table, which is the one
-	// place that knows.
+	// Only this node's, because that is all a process can answer about
+	// which seats it is RUNNING. On a fleet a peer's seat therefore reads
+	// as offline here; the fleet view answers "who holds what" from the
+	// lease table, which is the one place that knows.
+	//
+	// Snapshot does reach the coordination plane — for the posture, which
+	// this caller does not use — so it takes a context and the read is
+	// bounded. The claim that it made no coordination read was already
+	// untrue when it was written.
 	held := map[string]bool{}
 	if runtime != nil {
-		for _, handle := range runtime.Snapshot().Seats {
+		for _, handle := range runtime.Snapshot(ctx).Seats {
 			held[handle] = true
 		}
 	}

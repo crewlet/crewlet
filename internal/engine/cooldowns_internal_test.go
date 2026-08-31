@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 )
 
@@ -133,4 +134,32 @@ roles:
 		t.Fatalf("parse: %v", err)
 	}
 	return c
+}
+
+// A POSTURE READ IS BOUNDED, because it is on the liveness and readiness
+// path.
+//
+// The view behind it is two coordination round trips, one of which iterates
+// the fleet's keys — which the NATS client's default per-API timeout does not
+// cover — so a wedged broker turned /health and /ready into hangs. An
+// orchestrator reading a hung probe as "not answering" reaches the same
+// conclusion as "not ready", except it takes the caller's whole patience to
+// get there and the operator learns nothing from it.
+func TestAPostureReadIsBounded(t *testing.T) {
+	t.Parallel()
+	if posturePollBudget <= 0 {
+		t.Fatal("the posture read carries no budget")
+	}
+	// Inside a typical 5s liveness timeout, so a slow plane degrades to
+	// the fail-open answer rather than to a probe timeout.
+	if posturePollBudget >= 5*time.Second {
+		t.Errorf("posturePollBudget = %v, which is not inside a 5s liveness timeout",
+			posturePollBudget)
+	}
+	// And well inside the reconcile cadence, so a probe can never outlive
+	// the tick that would correct what it reports.
+	if posturePollBudget >= configplane.ReconcileInterval {
+		t.Errorf("posturePollBudget = %v, want well inside the %v reconcile tick",
+			posturePollBudget, configplane.ReconcileInterval)
+	}
 }

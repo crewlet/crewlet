@@ -145,7 +145,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	var routed []string
 	known := s.Routed != nil
 	if known {
-		routed = s.Routed()
+		routed = s.Routed(ctx)
 		known = routed != nil
 	}
 	// The same shape for what could VERIFY a delivery, and read the same
@@ -153,7 +153,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	var verifiable []string
 	verifiableKnown := s.Verifiable != nil
 	if verifiableKnown {
-		verifiable = s.Verifiable()
+		verifiable = s.Verifiable(ctx)
 		verifiableKnown = verifiable != nil
 	}
 

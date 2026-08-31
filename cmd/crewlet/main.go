@@ -1124,7 +1124,7 @@ func (r engineRuntime) Tools() []api.ToolInfo {
 	return out
 }
 
-func (r engineRuntime) Snapshot() api.RuntimeState {
+func (r engineRuntime) Snapshot(ctx context.Context) api.RuntimeState {
 	host := r.engine.Node().Host()
 	state := api.RuntimeState{
 		InFlight:     r.engine.Backends().Queue.InFlightCount(),
@@ -1153,7 +1153,7 @@ func (r engineRuntime) Snapshot() api.RuntimeState {
 		// place an operator can see why a node left rotation, since
 		// /ready answers a bare 503 either way and "draining" and
 		// "cannot apply epoch 41" call for opposite responses.
-		state.Posture = string(r.reconciler.Posture(context.Background()))
+		state.Posture = string(r.reconciler.Posture(ctx))
 		state.AppliedEpoch = r.reconciler.Applied()
 	}
 	return state

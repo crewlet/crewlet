@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -90,7 +91,7 @@ type Readiness struct {
 var divergedPostures = map[string]struct{}{"shed": {}, "stuck": {}}
 
 // health builds the body every health surface shares.
-func (a *App) health() Health {
+func (a *App) health(ctx context.Context) Health {
 	configured := a.Configured()
 	body := Health{
 		Status:     StatusOK,
@@ -109,7 +110,7 @@ func (a *App) health() Health {
 		return body
 	}
 
-	state := a.runtime.Snapshot()
+	state := a.runtime.Snapshot(ctx)
 	body.InFlight = &state.InFlight
 	body.ShuttingDown = &state.ShuttingDown
 	body.Posture = state.Posture
@@ -133,6 +134,15 @@ func (a *App) health() Health {
 	return body
 }
 
+// tickReadBudget bounds a read done for a push tick rather than a request.
+//
+// The dashboard's shared tick and its roster re-send have no request context
+// to inherit, and what they call reaches the coordination plane. Five seconds
+// is far longer than the read needs and far shorter than the tick's own
+// cadence, so a wedged plane costs one stale push rather than a goroutine per
+// tick for the life of the process.
+const tickReadBudget = 5 * time.Second
+
 // readiness answers whether traffic should come here.
 //
 // Distinct from health on purpose. Liveness answers "is this process alive" and
@@ -143,11 +153,11 @@ func (a *App) health() Health {
 // Also not ready before the first config revision applies: an unconfigured node
 // cannot verify a webhook signature, and taking it out of rotation is how a
 // fleet avoids answering with a node that would only reject the delivery.
-func (a *App) readiness() (Readiness, int) {
+func (a *App) readiness(ctx context.Context) (Readiness, int) {
 	configured := a.Configured()
 	body := Readiness{Node: a.nodeID, Configured: configured, Posture: "serve"}
 	if a.runtime != nil {
-		state := a.runtime.Snapshot()
+		state := a.runtime.Snapshot(ctx)
 		body.Draining = state.ShuttingDown
 		if state.Posture != "" {
 			body.Posture = state.Posture
@@ -162,8 +172,16 @@ func (a *App) readiness() (Readiness, int) {
 }
 
 // streamHealth is the shared tick's view of the same facts.
+//
+// A CONTEXT OF ITS OWN, and this is one of the few places that is right: the
+// push tick is a timer, not a request, so there is nothing to inherit. It is
+// bounded rather than Background alone, because the posture read underneath
+// reaches the coordination plane and a push tick must not outlive the
+// interval that will fire the next one.
 func (a *App) streamHealth() stream.Health {
-	full := a.health()
+	ctx, cancel := context.WithTimeout(context.Background(), tickReadBudget)
+	defer cancel()
+	full := a.health(ctx)
 	return stream.Health{
 		Status:       full.Status,
 		InFlight:     full.InFlight,

@@ -226,6 +226,21 @@ func (r *Reconciler) Applied() int64 { return r.snapshot().applied }
 // the readiness probe and a cached posture is a node that reports healthy
 // through the whole window in which it stopped being so.
 func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
+	// BOUNDED, because this is on the liveness and readiness path. The view
+	// below is two coordination round trips, one of which iterates the
+	// fleet's keys — which the NATS client's default per-API timeout does
+	// not cover — so a wedged broker turned a probe into a hang. An
+	// orchestrator reading a hung /ready as "not answering" is the same
+	// outcome as reading it as "not ready", except it takes the whole probe
+	// timeout to get there and the operator learns nothing.
+	//
+	// posturePollBudget is an eighth of the reconcile cadence and inside a
+	// typical 5s liveness timeout, so a slow plane degrades to the
+	// fail-open PostureServe answer below — which this function's own
+	// comment already promises for a plane it cannot read.
+	ctx, cancel := context.WithTimeout(ctx, posturePollBudget)
+	defer cancel()
+
 	view, err := r.view(ctx)
 	if err != nil {
 		// FAILS TO SERVE, not to stuck. A store this node cannot read is
@@ -239,6 +254,19 @@ func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 	}
 	return r.decide(configplane.DecidePosture(view))
 }
+
+// posturePollBudget bounds one posture read.
+//
+// AN EIGHTH of the reconcile cadence, so a probe can never outlive the tick
+// that would have corrected what it is reporting, and comfortably inside the
+// 5-second liveness timeout an orchestrator defaults to. What it buys is that
+// a broker which has stopped answering makes /health and /ready slow by two
+// seconds rather than by their caller's entire patience.
+//
+// Failing this read is SAFE by construction: the caller already treats an
+// unreadable plane as PostureServe, on the reasoning that the safe answer to
+// "am I behind?" is the one that keeps a working company working.
+const posturePollBudget = configplane.ReconcileInterval / 8
 
 // decide records a posture for the admission gate and returns it.
 //

@@ -719,7 +719,7 @@ func TestIntegrationsTellsRoutedFromMerelyConfigured(t *testing.T) {
 		Company: func() *config.Company { return cfg },
 		// The engine names gitlab and nothing else, so mattermost is the
 		// configured-but-unrouted side of the comparison.
-		Routed: func() []string { return []string{"gitlab"} },
+		Routed: func(context.Context) []string { return []string{"gitlab"} },
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -763,7 +763,7 @@ integrations:
 		Company: func() *config.Company { return cfg },
 		// The engine resolved gitlab's secret and not jira's — which is
 		// exactly what an unset ${VAR} on one of them looks like.
-		Verifiable: func() []string { return []string{"gitlab"} },
+		Verifiable: func(context.Context) []string { return []string{"gitlab"} },
 	}, "integrations", nil))
 
 	byKind := map[string]map[string]any{}
@@ -855,7 +855,7 @@ func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
-		Routed:  func() []string { return []string{} },
+		Routed:  func(context.Context) []string { return []string{} },
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -897,7 +897,7 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	}
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
-		Routed:  func() []string { return []string{"gitlab"} },
+		Routed:  func(context.Context) []string { return []string{"gitlab"} },
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)

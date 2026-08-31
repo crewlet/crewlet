@@ -161,9 +161,15 @@ func New(opts Options) *App {
 		Handles: opts.Sources.RoleHandles,
 		// The three config-derived surfaces, read live for the same
 		// reason Handles is: an apply replaces the company.
-		Roster: func() []map[string]any { return roster(opts.Sources.Company, opts.Runtime) },
-		Org:    func() map[string]any { return orgTree(opts.Sources.Company) },
-		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },
+		// A CONTEXT OF ITS OWN, like streamHealth's and for the same
+		// reason: the roster push is a tick, not a request.
+		Roster: func() []map[string]any {
+			ctx, cancel := context.WithTimeout(context.Background(), tickReadBudget)
+			defer cancel()
+			return roster(ctx, opts.Sources.Company, opts.Runtime)
+		},
+		Org:   func() map[string]any { return orgTree(opts.Sources.Company) },
+		Tools: func() []map[string]any { return toolRows(opts.Runtime) },
 		// The CONFIGURED rows only. The dispatch ledger is a store read
 		// and the snapshot makes none; the screen fetches that half
 		// itself through the `schedules` question.
@@ -184,7 +190,7 @@ func New(opts Options) *App {
 	// disagreeing with nobody noticing.
 	sources := opts.Sources
 	if sources.Health == nil {
-		sources.Health = func() any { return a.health() }
+		sources.Health = func(ctx context.Context) any { return a.health(ctx) }
 	}
 	if sources.State == nil {
 		sources.State = state
@@ -193,12 +199,14 @@ func New(opts Options) *App {
 	// a standalone API, which is the honest answer rather than a confident
 	// empty list.
 	if sources.Routed == nil && opts.Runtime != nil {
-		sources.Routed = func() []string { return opts.Runtime.Snapshot().RoutedSources }
+		sources.Routed = func(ctx context.Context) []string {
+			return opts.Runtime.Snapshot(ctx).RoutedSources
+		}
 	}
 	// And only a co-located engine knows what its ${VAR}s resolved to.
 	if sources.Verifiable == nil && opts.Runtime != nil {
-		sources.Verifiable = func() []string {
-			return opts.Runtime.Snapshot().VerifiableSources
+		sources.Verifiable = func(ctx context.Context) []string {
+			return opts.Runtime.Snapshot(ctx).VerifiableSources
 		}
 	}
 	a.queries = queries.NewRegistry()
@@ -335,15 +343,15 @@ func (a *App) Start(ctx context.Context) { a.stream.StartHealthTicks(ctx) }
 // Stop ends the tick and disconnects every client.
 func (a *App) Stop() { a.stream.Stop() }
 
-func (a *App) serveHealth(w http.ResponseWriter, _ *http.Request) {
+func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	// ALWAYS 200 while the process is alive, INCLUDING through a drain: an
 	// orchestrator watching liveness must not SIGKILL a node that is
 	// finishing its in-flight turns. /ready is what steers traffic.
-	writeJSON(w, http.StatusOK, a.health())
+	writeJSON(w, http.StatusOK, a.health(r.Context()))
 }
 
-func (a *App) serveReady(w http.ResponseWriter, _ *http.Request) {
-	body, status := a.readiness()
+func (a *App) serveReady(w http.ResponseWriter, r *http.Request) {
+	body, status := a.readiness(r.Context())
 	writeJSON(w, status, body)
 }
 
