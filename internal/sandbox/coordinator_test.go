@@ -939,3 +939,37 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 		t.Fatal("a coordinator with no queue, store or manager was accepted")
 	}
 }
+
+// A BOX IS RECLAIMED EVEN WHEN THE CALLER'S CONTEXT IS ALREADY DEAD.
+//
+// teardown is reached from settleFailed and resumeAndSettle — right after a
+// failure — and from the queue handler a drain cancels, so the context that
+// got here is very often the cancellation being undone. Inheriting it makes
+// both calls no-ops in two different bad ways: on a remote provider the box
+// runs out its TTL, billed, with the row's record of it already cleared so
+// nothing will ever collect it; on the local one Kill's wait for the process
+// group is what stops removeBox racing the dying wrapper's writes.
+//
+// The two siblings — reclaim() and Manager.discard() — already detach, with
+// comments saying why. This one did not.
+func TestAFailedRunsBoxIsReclaimedOnADeadContext(t *testing.T) {
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	if run.SandboxID == "" {
+		t.Fatal("the fixture launched no box to reclaim")
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	rig.coordinator.settleFailed(ctx, run)
+
+	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
+		t.Fatalf("killed %v, want the failed run's box %q: it will run to its "+
+			"TTL with nothing left to collect it", killed, run.SandboxID)
+	}
+	// And the row's record of it is cleared, so nothing later thinks there
+	// is still a box to talk to.
+	if after := rig.get("t1"); after.SandboxID != "" {
+		t.Errorf("the row still names sandbox %q after teardown", after.SandboxID)
+	}
+}

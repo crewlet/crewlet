@@ -225,7 +225,14 @@ func (p *FakeProvider) Connect(ctx context.Context, sandboxID string) (Sandbox, 
 }
 
 // Kill records the id and forgets the box.
+// Kill HONOURS ctx, like every real provider: E2B's is an HTTP call and the
+// local one waits on a process group, so both fail on a dead context. A fake
+// that reaped regardless would make every teardown-detach guard untestable —
+// the box would come back reclaimed whether or not the caller detached.
 func (p *FakeProvider) Kill(ctx context.Context, sandboxID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.Killed = append(p.Killed, sandboxID)
