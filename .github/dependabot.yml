@@ -56,6 +56,17 @@ updates:
   # A bump lands with a rebuilt bundle or it does not land at all: ci.yml's
   # `dashboard` job rebuilds and diffs static/dashboard, so a version bump that
   # changes the output fails until the output is committed with it.
+  #
+  # KEEP THAT MANIFEST INSTALLABLE BY DEPENDABOT, which runs its own node,
+  # older than the one CI builds on. That is why package.json declares no
+  # `engines` and no `devEngines`: those constrain Dependabot's install too,
+  # `devEngines.runtime` refusing outright (`onFail` defaults to `error`) and
+  # `engines` doing the same once an .npmrc sets engine-strict. A bump that
+  # cannot install is a bump that never opens, and nothing reports it — this
+  # entry just keeps looking like a surface with nothing to update.
+  # dependabot-core#13722 is the devEngines case, #12535 / #13741 the
+  # engine-strict one. ci.yml installs `latest`; no node version is pinned
+  # anywhere in the tree, so there is nothing here to keep in step.
   - package-ecosystem: npm
     directory: "/dashboard"
     schedule:

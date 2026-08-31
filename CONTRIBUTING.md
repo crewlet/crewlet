@@ -7,11 +7,13 @@ need to get a development environment running and land a change.
 
 Prerequisites: **Go 1.27+** and
 **[golangci-lint](https://golangci-lint.run/welcome/install/)**, which
-`make check` runs and CI's own job downloads for itself. **Node 24+** (npm
-ships with it) for the dashboard — its build output is committed, so building
-and running the ENGINE needs neither, but changing the dashboard or running
-`internal/e2e`'s client replay does. **Docker** only for the vendor loops
-below; the engine itself needs no services.
+`make check` runs and CI's own job downloads for itself. **A current Node**
+(npm ships with it) for the dashboard — its build output is committed, so
+building and running the ENGINE needs neither, but changing the dashboard or
+running `internal/e2e`'s client replay does. Nothing in the tree pins a node
+version; CI installs the latest — see *Which node* under
+[A skip is not a pass](#a-skip-is-not-a-pass). **Docker** only for the vendor
+loops below; the engine itself needs no services.
 
 Take golangci-lint as a **prebuilt release**, not via `go install ...@latest`:
 that builds it with the linter module's own minimum Go rather than the newest,
@@ -144,6 +146,41 @@ without it** — a green run has simply not exercised them.
   compiles, embeds, serves and passes every Go test while running code nobody
   wrote — the same failure mode `go mod tidy -diff` and the generated
   `schema/` are gated against.
+
+  **Which node.** CI installs `latest` — the newest Node release, resolved by
+  setup-node when the job runs — in both the `dashboard` job and the `gates`
+  job, which must always answer this the same way because what `gates` runs
+  under plain node is what `dashboard` built.
+
+  **Nothing in this repository names a node version**, and that is a decision
+  rather than an oversight. A pin earns its keep by being maintained, and
+  nothing here would maintain one: Dependabot moves the versions in
+  `dependencies`, `devDependencies` and a `uses:` ref, and it bumps neither
+  `engines.node`
+  ([dependabot-core#11243](https://github.com/dependabot/dependabot-core/issues/11243),
+  open) nor a workflow's `with:`. A number nobody moves does not hold a
+  version steady — it just goes quietly out of date while looking deliberate.
+
+  The cost is worth knowing before you hit it: a new Node major reaches CI
+  with no commit behind it, so the `dashboard` job can go red on a day nobody
+  changed anything. If that happens, the fix is `lts/*` in `ci.yml` — the
+  current LTS, which lags the newest major and is the same zero-maintenance
+  trade — not a hand-maintained number.
+
+  **Do not add `engines` or `devEngines` to `dashboard/package.json`**, however
+  reasonable it looks. Those fields also apply inside **Dependabot's** sandbox,
+  which runs its own older node: `devEngines.runtime` refuses outright
+  (`onFail` defaults to `error`) and `engines` does too once an `.npmrc` sets
+  `engine-strict`. A bump that cannot install is a bump that never opens —
+  silently, leaving the npm entry in `.github/dependabot.yml` looking exactly
+  like a surface with nothing to update. That is
+  [#13722](https://github.com/dependabot/dependabot-core/issues/13722) for
+  `devEngines` (open; the proposed fix has to *strip* the field before corepack
+  sees it) and
+  [#12535](https://github.com/dependabot/dependabot-core/issues/12535) /
+  [#13741](https://github.com/dependabot/dependabot-core/issues/13741) for
+  `engine-strict`. The dashboard's dependencies are bytes the engine binary
+  embeds; keeping them watched is worth more than a version check.
 
 - **`TURSO_GO_CACHE_DIR`** is where the store driver's native library lives,
   and it is the one environment variable a store test can be defeated by.
