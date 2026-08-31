@@ -236,3 +236,59 @@ func TestTheWireKeysAreTheOnesTheClientReads(t *testing.T) {
 		}
 	}
 }
+
+// A WHOLE-SECOND STAMP IS NOT "AFTER" A FRACTIONAL ONE IN THE SAME SECOND.
+//
+// These stamps are RFC3339Nano, which TRIMS trailing zeros — so a whole
+// second has no fractional part and its 'Z' (0x5A) sorts after the '.'
+// (0x2E) of every fractional stamp in that second. Compared as bytes,
+// 03:04:05Z ordered after 03:04:05.9Z, which is backwards. The comparison's
+// own comment asserted the opposite premise and used it to justify never
+// parsing.
+func TestTheWatermarkOrdersByInstantNotByBytes(t *testing.T) {
+	t.Parallel()
+	const (
+		fractional = "2026-01-02T03:04:05.9Z"
+		wholeSec   = "2026-01-02T03:04:05Z"
+	)
+	// The byte comparison this replaces would put the whole second last.
+	if !(wholeSec > fractional) {
+		t.Fatal("the fixture no longer reproduces the byte ordering")
+	}
+
+	got := tokens.Aggregate([]tokens.Record{
+		{EventID: "a", Timestamp: wholeSec, TurnID: "t1", TotalTokens: 1},
+		{EventID: "b", Timestamp: fractional, TurnID: "t1", TotalTokens: 1},
+	}, tokens.Options{})
+
+	if got.AggregatedThrough != fractional {
+		t.Errorf("AggregatedThrough = %q, want the later instant %q",
+			got.AggregatedThrough, fractional)
+	}
+	if len(got.ByTurn) != 1 {
+		t.Fatalf("turns = %d, want 1", len(got.ByTurn))
+	}
+	turn := got.ByTurn[0]
+	if turn.StartedAt != wholeSec {
+		t.Errorf("StartedAt = %q, want the earlier instant %q", turn.StartedAt, wholeSec)
+	}
+	if turn.EndedAt != fractional {
+		t.Errorf("EndedAt = %q, want the later instant %q", turn.EndedAt, fractional)
+	}
+}
+
+// AND ORDINARY STAMPS STILL ORDER, so the fix is a correction rather than a
+// change of basis.
+func TestOrdinaryStampsStillOrder(t *testing.T) {
+	t.Parallel()
+	got := tokens.Aggregate([]tokens.Record{
+		{EventID: "a", Timestamp: "2026-01-02T03:04:05Z", TurnID: "t1"},
+		{EventID: "b", Timestamp: "2026-01-02T09:00:00Z", TurnID: "t1"},
+	}, tokens.Options{})
+	if got.AggregatedThrough != "2026-01-02T09:00:00Z" {
+		t.Errorf("AggregatedThrough = %q", got.AggregatedThrough)
+	}
+	if got.ByTurn[0].StartedAt != "2026-01-02T03:04:05Z" {
+		t.Errorf("StartedAt = %q", got.ByTurn[0].StartedAt)
+	}
+}

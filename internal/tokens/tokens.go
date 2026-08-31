@@ -18,6 +18,7 @@ package tokens
 import (
 	"cmp"
 	"slices"
+	"time"
 )
 
 // DefaultRecentTurns caps the per-turn table.
@@ -205,7 +206,7 @@ func Aggregate(records []Record, opts Options) Rollup {
 		model := orUnknown(r.Model)
 		role := orUnknown(r.AgentRole)
 
-		if r.Timestamp > out.AggregatedThrough {
+		if laterStamp(r.Timestamp, out.AggregatedThrough) {
 			out.AggregatedThrough = r.Timestamp
 		}
 
@@ -251,10 +252,10 @@ func Aggregate(records []Record, opts Options) Rollup {
 			turn.AgentID = r.AgentID
 		}
 		if r.Timestamp != "" {
-			if turn.StartedAt == "" || r.Timestamp < turn.StartedAt {
+			if turn.StartedAt == "" || laterStamp(turn.StartedAt, r.Timestamp) {
 				turn.StartedAt = r.Timestamp
 			}
-			if turn.EndedAt == "" || r.Timestamp > turn.EndedAt {
+			if turn.EndedAt == "" || laterStamp(r.Timestamp, turn.EndedAt) {
 				turn.EndedAt = r.Timestamp
 			}
 		}
@@ -338,4 +339,33 @@ func byTokensThen[T any](rows []T, key func(T) (int, string)) {
 		}
 		return cmp.Compare(an, bn)
 	})
+}
+
+// laterStamp reports whether a is after b, by INSTANT rather than by bytes.
+//
+// These stamps are RFC3339Nano, which trims trailing zeros — so a whole-second
+// stamp has no fractional part at all and its 'Z' (0x5A) sorts after the '.'
+// (0x2E) of every fractional stamp in the same second. Compared as strings,
+// 03:04:05Z therefore ordered AFTER 03:04:05.9Z.
+//
+// The load-bearing comment on this comparison stated the opposite premise —
+// that RFC3339Nano sorts lexicographically — and used it to justify never
+// parsing. What it costs is bounded by the sub-second gap, so it is a display
+// defect rather than corruption: a watermark one phase stale, or a TurnRow
+// whose start and end are inverted. It is still wrong, and it disagreed with
+// livestate's own stamp comparison one package over.
+//
+// Falls back to a byte comparison when either side does not parse, which is
+// what livestate's stamp does and for the same reason: an unparseable stamp
+// still has to order somewhere deterministic.
+func laterStamp(a, b string) bool {
+	if a == b {
+		return false
+	}
+	at, aok := time.Parse(time.RFC3339Nano, a)
+	bt, bok := time.Parse(time.RFC3339Nano, b)
+	if aok == nil && bok == nil {
+		return at.After(bt)
+	}
+	return a > b
 }
