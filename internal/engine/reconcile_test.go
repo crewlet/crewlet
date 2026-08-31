@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -977,4 +978,71 @@ func (b *blindPlane) Target(ctx context.Context) (coord.Activation, bool, error)
 		return coord.Activation{}, false, errors.New("the control plane is unreachable")
 	}
 	return b.planeBackend.Target(ctx)
+}
+
+// THE PROGRESS TRIPLE IS READ FROM OTHER GOROUTINES THAN THE ONE THAT
+// WRITES IT, and nothing in this suite used to do both at once.
+//
+// The tick writes applied, target and attempts. Posture reads all three —
+// from the seat heartbeat via SetPosture, from the readiness probe, and from
+// every runtime-state HTTP handler. Only `applied` was atomic, with a comment
+// naming this exact hazard; the other two sat bare beside it and were a plain
+// data race that -race could not see because no test drove the two paths
+// together.
+func TestPostureIsSafeToReadWhileTheReconcilerTicks(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	p.activate(t, grownCompanyDoc)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	// Several readers, because one racing goroutine finds a race far less
+	// reliably than a handful hammering the same fields.
+	for range 4 {
+		wg.Go(func() {
+			for ctx.Err() == nil {
+				p.recon.Posture(ctx)
+				p.recon.Applied()
+				p.recon.Admits()
+			}
+		})
+	}
+	// And the writer, ticking against a moving target so the attempt
+	// counter and the target epoch both change under the readers.
+	wg.Go(func() {
+		defer cancel()
+		for range 40 {
+			_ = p.recon.Tick(ctx)
+			p.activate(t, grownCompanyDoc)
+		}
+	})
+	wg.Wait()
+}
+
+// AND THE TRIPLE IS NEVER TORN. Three separate atomics would silence the
+// race detector and still let a reader see an applied epoch from one moment
+// beside an attempt count from another — "converged, but still retrying",
+// which is not a state this node was ever in.
+func TestTheProgressTripleIsReadAsOneMoment(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	epoch := p.activate(t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if p.recon.Applied() != epoch {
+		t.Fatalf("applied = %d, want %d", p.recon.Applied(), epoch)
+	}
+	// A node that has reached its target reports ok, and a successful apply
+	// resets the attempt budget — so the status derived from the counter
+	// must agree with the epoch beside it.
+	row := p.fleetRow(t)
+	if row.Status != string(configplane.StatusOK) {
+		t.Errorf("status = %q for a node that reached its target", row.Status)
+	}
+	if row.Epoch != epoch {
+		t.Errorf("reported epoch = %d, want %d", row.Epoch, epoch)
+	}
 }
