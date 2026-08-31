@@ -277,7 +277,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// A resumed Execute loop can exhaust its rounds like any other,
 		// and it is the phase most likely to: it comes back mid-task with
 		// its budget already partly spent.
-		Judge: e.judgeFor(company, in.Turn.Handle()),
+		Judge:     e.judgeFor(company, in.Turn.Handle()),
+		Remaining: e.remainingFor(company, in.Turn.Handle()),
+		// THE SKILL REGISTRY, which this call site omitted. With nil
+		// Skills the runner's guardFor returns nil, so the load-before-use
+		// gate was disarmed for every resumed turn: a seat could call a
+		// tool whose required skill it had never loaded, on the one path
+		// where nobody would notice — and the two RunnerFor sites must
+		// agree or a turn changes shape by being resumed.
+		Skills: e.skills,
 		// NO onboarding on a resume. The pass is a seat's FIRST turn, and
 		// this turn already ran its first phase — running it here would
 		// spend the resumed turn's opening on orientation for a seat that
