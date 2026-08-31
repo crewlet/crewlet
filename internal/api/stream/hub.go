@@ -19,6 +19,20 @@ import (
 
 var log = logging.Get("api.stream")
 
+// writeTimeout bounds ONE frame written to a client.
+//
+// A TCP peer that vanishes without a FIN — a closed laptop, a dropped NAT
+// entry, a mobile handoff — leaves a Write blocked until the kernel gives up,
+// which is minutes with default keepalives. Until then the socket's goroutine,
+// its queue and its hub registration stay live, so a page nobody is reading
+// holds a slot on every broadcast.
+//
+// THIRTY SECONDS, and it is deliberately generous: [QueueDepth] below decides
+// that a slow tab must not be disconnected, so this exists to tell GONE from
+// SLOW and nothing else. A tighter deadline would sever a mobile tab
+// mid-snapshot and contradict that decision.
+const writeTimeout = 30 * time.Second
+
 // QueueDepth is how many envelopes one client may have waiting.
 //
 // Drop-OLDEST past it, never block. A slow tab must not stall the publish path

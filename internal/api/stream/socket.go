@@ -188,7 +188,25 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 				log.ErrorContext(ctx, "stream_encode_failed", "kind", env.Kind, "error", err)
 				continue
 			}
-			if err := conn.Write(ctx, websocket.MessageText, raw); err != nil {
+			// A DEADLINE PER WRITE. A TCP peer that has vanished
+			// without a FIN — a laptop lid closed, a NAT entry
+			// dropped, a mobile network handing off — leaves this
+			// Write blocked until the kernel gives up, which is
+			// minutes with default keepalives. Until then the
+			// goroutine, the client's queue and the hub registration
+			// all stay live, so a page nobody is reading holds a slot
+			// on every broadcast.
+			//
+			// THIRTY SECONDS, not a few: QueueDepth above decides
+			// deliberately that a slow tab must not be disconnected
+			// ("a visible failure for a reader who did nothing
+			// wrong"), so this deadline is here to tell GONE from
+			// SLOW and nothing else. A tighter one would sever a
+			// mobile tab mid-snapshot and contradict that decision.
+			writeCtx, cancelWrite := context.WithTimeout(ctx, writeTimeout)
+			err = conn.Write(writeCtx, websocket.MessageText, raw)
+			cancelWrite()
+			if err != nil {
 				return
 			}
 		}
