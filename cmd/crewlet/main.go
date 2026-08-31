@@ -291,9 +291,17 @@ func (t Tier) Valid() bool {
 //
 // A filename is a convention an operator can break and routinely does — and
 // the one thing this must get right is the case where they named the file
-// something else. The two tiers share no top-level key at all, which is what
-// makes the test cheap and unambiguous: `name` and `agents` belong to a
-// company, `node`, `stream`, `store` and `coordination` to a bootstrap.
+// something else. The vocabularies come from the CONFIG STRUCTS themselves
+// (config.CompanyKeys / config.BootstrapKeys), reduced to the keys unique to
+// one tier.
+//
+// Restated by hand here, the list had drifted exactly as a restated list
+// does: it counted `agents`, which appears nowhere in this tree, the schema,
+// the examples or the docs, while omitting `roles`, `units`, `mcp_servers`,
+// `turn_engine` and `scheduling`. A document carrying only `units:` therefore
+// scored nothing on either side and was reported undecidable — the commonest
+// authoring shape, and the one a `crewlet validate -json` fix loop is most
+// often pointed at.
 //
 // An UNDECIDABLE document is an error naming -tier, never a guess. Guessing
 // wrong reports every field of the file as invalid, and an operator reading
@@ -310,11 +318,12 @@ func detectTier(raw []byte) (Tier, error) {
 	}
 	company := 0
 	bootstrap := 0
+	companyKeys, bootstrapKeys := config.CompanyKeys(), config.BootstrapKeys()
 	for key := range doc {
-		switch key {
-		case "name", "agents", "providers", "integrations", "knowledge", "learning":
+		switch {
+		case slices.Contains(companyKeys, key):
 			company++
-		case "node", "stream", "store", "coordination", "api", "secrets", "logging":
+		case slices.Contains(bootstrapKeys, key):
 			bootstrap++
 		}
 	}
