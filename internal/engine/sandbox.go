@@ -272,7 +272,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	r, err := company.RunnerFor(in.Turn.Handle(), RunnerInput{
 		Task:      resumeTask(in),
 		Publisher: e.backends.Queue,
-		Turn:      tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth),
+		Turn:      tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth, in.Run.DelegationChain),
 		Budget:    e.meterFor(company, in.Turn.Handle()),
 		// A resumed Execute loop can exhaust its rounds like any other,
 		// and it is the phase most likely to: it comes back mid-task with

@@ -584,3 +584,41 @@ func TestASingleEventIsNotRecordedAsAMerge(t *testing.T) {
 		t.Errorf("%d observations for one event, want none", seen)
 	}
 }
+
+// THE TRIGGER'S DELEGATION REACHES THE TURN THAT RUNS FOR IT.
+//
+// The regression this exists for: the Request literal in Dispatch set neither
+// Depth nor DelegationChain, so every turn on the inbox path ran at depth 0.
+// turn.CheckDepth compared a constant zero against the limit and could never
+// fire, and turn_engine.delegation_depth_limit — the one guard against two
+// agents asking each other the same question until a budget runs out — bounded
+// nothing at all.
+func TestTheTriggersDelegationReachesTheTurn(t *testing.T) {
+	t.Parallel()
+	var got engine.Request
+	d := &engine.Dispatcher{
+		Conditions: func(string) inbox.Conditions {
+			return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true}
+		},
+		Turn: func(_ context.Context, req engine.Request) (turn.Result, error) {
+			got = req
+			return turn.Result{Decision: phase.Done}, nil
+		},
+	}
+	e := newEngine(t, engine.Options{Dispatch: d})
+
+	ask := ev("a2a_request")
+	ask.DelegationDepth = 2
+	ask.DelegationChain = []string{"ceo", "cto"}
+	if res := e.Dispatch(context.Background(), "ceo", []*events.Event{ask}); res.Outcome != queue.OutcomeAck {
+		t.Fatalf("dispatch = %+v", res)
+	}
+
+	if got.Depth != 2 {
+		t.Errorf("the turn ran at depth %d, want the trigger's 2 — the cap is "+
+			"measured against this and bounds nothing at zero", got.Depth)
+	}
+	if len(got.DelegationChain) != 2 {
+		t.Errorf("the turn carries chain %v, want the trigger's", got.DelegationChain)
+	}
+}

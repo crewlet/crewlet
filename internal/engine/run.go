@@ -776,7 +776,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		},
 		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{}),
 		Publisher:    e.backends.Queue,
-		Turn:         tel.runnerTurn(company, req.WorkKey, req.Depth),
+		Turn:         tel.runnerTurn(company, req.WorkKey, req.Depth, req.DelegationChain),
 		Markers:      e.markers(),
 		Latch:        e.onboarded,
 		// Read off the PINNED epoch, so a revision that raises a ceiling
@@ -813,7 +813,13 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		log.InfoContext(ctx, "onboarding_pass_ran", "handle", req.Handle)
 	}
 
-	res, err := turn.Run(ctx, r, company.TurnSettings(), turn.Input{TurnID: req.WorkKey})
+	// THE DEPTH REACHES THE GUARD. turn.Run checks it against
+	// delegation_depth_limit before anything runs, and this argument was
+	// omitted — so the check ran against a constant zero and the limit
+	// bounded nothing.
+	res, err := turn.Run(ctx, r, company.TurnSettings(), turn.Input{
+		TurnID: req.WorkKey, Depth: req.Depth,
+	})
 	// The moment the turn returns, and before its frame unwinds: the runner
 	// holds the suspended conversation only until then, and a row without
 	// one is a detached run nothing can ever resume.

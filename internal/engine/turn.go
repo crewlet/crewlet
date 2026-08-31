@@ -99,6 +99,12 @@ type Request struct {
 	// Carried so a sub-agent spawn or an A2A ask can refuse past the cap
 	// rather than discovering the loop at runtime.
 	Depth int
+
+	// DelegationChain is who asked whom to get here. Provenance rather
+	// than a gate — "alice → bob → alice" is exactly what happened — and
+	// it travels so an ask this turn makes names the whole path instead of
+	// only its immediate asker.
+	DelegationChain []string
 }
 
 // Dispatch runs one partition.
@@ -168,10 +174,19 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	// have two parents, and inventing a root to hold them would put a node
 	// above the webhook that actually happened.
 	ctx = tracing.WithRemote(ctx, triggerTrace(routing.Events))
+	depth, chain := delegationOf(routing.Events)
 	req := Request{
 		Handle: handle, Events: routing.Events,
 		WorkKey: routing.WorkKey, Coalesce: routing.Coalesce,
 		ConversationKey: conversationKeyOf(routing.Events),
+		// READ OFF THE TRIGGER, and it was read off nothing: this field
+		// was set at no site on the inbox path, so every turn ran at
+		// depth 0, turn.CheckDepth could never fire, and
+		// turn_engine.delegation_depth_limit bounded nothing at all. The
+		// one guard against two agents asking each other the same
+		// question until a budget runs out was inert.
+		Depth:           depth,
+		DelegationChain: chain,
 	}
 	d.noteCoalesced(ctx, handle, req.ConversationKey, routing)
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
@@ -376,6 +391,26 @@ func DescribeTrigger(evs []*events.Event) string {
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// delegationOf is the delegation this partition inherits.
+//
+// THE DEEPEST of the batch, not the first. A coalesced partition can hold
+// triggers that arrived by different routes, and the cap exists to bound a
+// chain — so a batch containing one deep ask is as deep as that ask, and
+// taking the first event's depth would let a shallow trigger arriving
+// alongside it reset the count.
+//
+// The chain comes from the same event as the depth, so the provenance and the
+// number it justifies cannot disagree.
+func delegationOf(evs []*events.Event) (int, []string) {
+	depth, chain := 0, []string(nil)
+	for _, ev := range evs {
+		if ev != nil && ev.DelegationDepth > depth {
+			depth, chain = ev.DelegationDepth, ev.DelegationChain
+		}
+	}
+	return depth, chain
 }
 
 // noteCoalesced records a partition merged into one digest trigger.
