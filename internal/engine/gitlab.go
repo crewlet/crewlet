@@ -244,13 +244,24 @@ func (e *Engine) startGitLab(ctx context.Context, c *Company, cfg *config.GitLab
 // assignees.
 func (e *Engine) reconcileGitLab(ctx context.Context, c *Company) {
 	cfg := c.Config.Integrations.GitLab
-	if cfg == nil || !cfg.Enabled {
-		return
-	}
 	e.notify.mu.Lock()
 	svc := e.notify.service
 	e.notify.mu.Unlock()
 	if svc == nil {
+		return
+	}
+	// RETIRED when the revision no longer declares it. Every reconciler
+	// here converged only toward "configured", so setting `integrations.gitlab.enabled: false` — the
+	// gesture an operator makes after a credential leak — applied
+	// cleanly, changed nothing, and left the boot-time parser routing
+	// deliveries under the credential being revoked, while RoutedSources
+	// went on listing it as reachable.
+	if cfg == nil || !cfg.Enabled {
+		if svc.Unregister(gitlab.Backend) {
+			log.InfoContext(ctx, "gitlab_retired",
+				"detail", "the revision no longer enables gitlab; its deliveries "+
+					"are refused at the webhook route and route to no seat")
+		}
 		return
 	}
 	parser, err := e.startGitLab(ctx, c, cfg)

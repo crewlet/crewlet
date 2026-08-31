@@ -239,13 +239,24 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 // author and assignees.
 func (e *Engine) reconcileGitHub(ctx context.Context, c *Company) {
 	cfg := c.Config.Integrations.GitHub
-	if cfg == nil || !cfg.Enabled {
-		return
-	}
 	e.notify.mu.Lock()
 	svc := e.notify.service
 	e.notify.mu.Unlock()
 	if svc == nil {
+		return
+	}
+	// RETIRED when the revision no longer declares it. Every reconciler
+	// here converged only toward "configured", so setting `integrations.github.enabled: false` — the
+	// gesture an operator makes after a credential leak — applied
+	// cleanly, changed nothing, and left the boot-time parser routing
+	// deliveries under the credential being revoked, while RoutedSources
+	// went on listing it as reachable.
+	if cfg == nil || !cfg.Enabled {
+		if svc.Unregister(github.Backend) {
+			log.InfoContext(ctx, "github_retired",
+				"detail", "the revision no longer enables github; its deliveries "+
+					"are refused at the webhook route and route to no seat")
+		}
 		return
 	}
 	parser, err := e.startGitHub(ctx, c, cfg)

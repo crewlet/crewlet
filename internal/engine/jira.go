@@ -218,13 +218,24 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 // that skipped it would keep routing a renamed project to its old lead.
 func (e *Engine) reconcileJira(ctx context.Context, c *Company) {
 	cfg := c.Config.Integrations.Jira
-	if cfg == nil {
-		return
-	}
 	e.notify.mu.Lock()
 	svc := e.notify.service
 	e.notify.mu.Unlock()
 	if svc == nil {
+		return
+	}
+	// RETIRED when the revision no longer declares it. Every reconciler
+	// here converged only toward "configured", so removing the `integrations.jira` block — the
+	// gesture an operator makes after a credential leak — applied
+	// cleanly, changed nothing, and left the boot-time parser routing
+	// deliveries under the credential being revoked, while RoutedSources
+	// went on listing it as reachable.
+	if cfg == nil {
+		if svc.Unregister(jira.Backend) {
+			log.InfoContext(ctx, "jira_retired",
+				"detail", "the revision no longer declares jira; its deliveries "+
+					"route to no seat")
+		}
 		return
 	}
 	parser, err := e.startJira(ctx, c, cfg)

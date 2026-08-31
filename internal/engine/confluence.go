@@ -147,15 +147,32 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 // package needed the same edge from the moment it had a lead map.
 func (e *Engine) reconcileConfluence(c *Company) {
 	cfg := c.Config.Integrations.Confluence
-	if cfg == nil {
-		return
-	}
 	e.notify.mu.Lock()
 	svc, running := e.notify.service, e.notify.confluence.parser != nil
 	e.notify.mu.Unlock()
 	if svc == nil || !running {
 		// Not started, or started without a knowledge base. Boot owns
 		// that case; re-running it here would race the boot path.
+		return
+	}
+	// RETIRED when the revision no longer declares it, like the other
+	// three reconcilers — each converged only toward "configured", so
+	// removing the block applied cleanly and left the boot-time parser
+	// routing page activity under the credential being revoked.
+	//
+	// Confluence needs one step the others do not: the SEARCHER goes as
+	// well. It is what the Plan-phase knowledge prefetch reads through, so
+	// leaving it would have every seat go on searching a wiki the company
+	// has removed, using the same credential.
+	if cfg == nil {
+		e.notify.mu.Lock()
+		e.notify.confluence = confluenceParts{}
+		e.notify.mu.Unlock()
+		if svc.Unregister(confluence.Backend) {
+			log.Info("confluence_retired",
+				"detail", "the revision no longer declares confluence; page "+
+					"activity routes to no seat and knowledge search is off")
+		}
 		return
 	}
 
