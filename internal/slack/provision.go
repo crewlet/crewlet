@@ -363,7 +363,10 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 	if err != nil {
 		return err
 	}
-	fingerprint := Fingerprint(manifest)
+	fingerprint, err := Fingerprint(manifest)
+	if err != nil {
+		return fmt.Errorf("slack: %s: %w", seat.Handle, err)
+	}
 	record := o.Ledger.Apps[seat.Handle]
 
 	// A LEDGER ENTRY THAT NAMES A DEAD APP IS WORSE THAN NO ENTRY: the

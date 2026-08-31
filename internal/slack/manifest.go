@@ -172,12 +172,19 @@ func AuthorizeURL(clientID, base, handle string) string {
 // seven agents re-running provisioning issues seven of them back to back —
 // so a re-run that pushes an unchanged manifest spends minutes waiting out
 // 429s to achieve nothing.
-func Fingerprint(manifest map[string]any) string {
+// It RETURNS THE ERROR rather than an empty string. "" is the fingerprint of
+// a hand-adopted app — one an operator created in the console, whose ledger
+// entry carries no recorded hash — so an encode failure that answered ""
+// compared equal to it and the seat was reported KEPT while nothing had been
+// pushed. Unreachable today, since Manifest builds only marshalable types,
+// but the invariant was written nowhere and every call site already returns
+// an error.
+func Fingerprint(manifest map[string]any) (string, error) {
 	// json.Marshal sorts map keys, so the encoding is stable across runs
 	// and across Go versions — which is the whole requirement.
 	encoded, err := json.Marshal(manifest)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("slack: encode manifest for fingerprint: %w", err)
 	}
-	return digest(encoded)
+	return digest(encoded), nil
 }

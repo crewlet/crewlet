@@ -116,7 +116,11 @@ func (a *Admin) RotateConfigToken(ctx context.Context, refresh string) (ConfigTo
 
 // ValidateManifest checks a manifest without creating or changing anything.
 func (a *Admin) ValidateManifest(ctx context.Context, configToken string, manifest map[string]any, appID string) error {
-	body := map[string]any{"manifest": encodeManifest(manifest)}
+	encoded, err := encodeManifest(manifest)
+	if err != nil {
+		return err
+	}
+	body := map[string]any{"manifest": encoded}
 	if appID != "" {
 		body["app_id"] = appID
 	}
@@ -133,8 +137,12 @@ func (a *Admin) CreateApp(ctx context.Context, configToken string, manifest map[
 			SigningSecret string `json:"signing_secret"`
 		} `json:"credentials"`
 	}
+	encoded, err := encodeManifest(manifest)
+	if err != nil {
+		return AppCredentials{}, err
+	}
 	if err := a.retrying(ctx, "apps.manifest.create", configToken,
-		map[string]any{"manifest": encodeManifest(manifest)}, &out); err != nil {
+		map[string]any{"manifest": encoded}, &out); err != nil {
 		return AppCredentials{}, err
 	}
 	return AppCredentials{
@@ -150,8 +158,12 @@ func (a *Admin) UpdateApp(ctx context.Context, configToken, appID string, manife
 	if appID == "" {
 		return fmt.Errorf("slack: apps.manifest.update: no app id")
 	}
+	encoded, err := encodeManifest(manifest)
+	if err != nil {
+		return err
+	}
 	return a.retrying(ctx, "apps.manifest.update", configToken, map[string]any{
-		"app_id": appID, "manifest": encodeManifest(manifest),
+		"app_id": appID, "manifest": encoded,
 	}, nil)
 }
 
@@ -241,12 +253,17 @@ func (a *Admin) retrying(ctx context.Context, method, token string, body, out an
 
 // encodeManifest renders a manifest the way the manifest methods take it: as
 // a JSON-encoded STRING in the `manifest` field, not as a nested object.
-func encodeManifest(manifest map[string]any) string {
+// It RETURNS THE ERROR rather than "{}". apps.manifest.update REPLACES an
+// app's manifest, so pushing an empty object would strip every scope, event
+// subscription and redirect URL from a live app — and the call would report
+// success. Unreachable today, since Manifest builds only marshalable types,
+// but "unreachable" is not a reason to encode the worst possible fallback.
+func encodeManifest(manifest map[string]any) (string, error) {
 	encoded, err := json.Marshal(manifest)
 	if err != nil {
-		return "{}"
+		return "", fmt.Errorf("slack: encode manifest: %w", err)
 	}
-	return string(encoded)
+	return string(encoded), nil
 }
 
 func digest(b []byte) string {
