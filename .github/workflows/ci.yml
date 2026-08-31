@@ -76,9 +76,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # `latest` is the newest Node release, resolved by setup-node at run
+      # time, and NOTHING IN THE TREE NAMES A VERSION — deliberately, because
+      # nothing would ever move one if it did. Dependabot reads `dependencies`
+      # and `uses:` refs; it bumps neither `engines.node` (dependabot-core
+      # #11243, open) nor a workflow's `with:`. A pin here would not stay put,
+      # it would just go quietly out of date, and the dashboard's toolchain
+      # tracks current Node anyway.
+      #
+      # The cost is real and worth knowing: a new Node major lands here with
+      # no commit, so this job can go red on a day nobody changed anything.
+      # When that happens the fix is `lts/*` (the current LTS, which lags a
+      # major behind), not a hand-maintained number.
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: latest
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
       # `npm ci` rather than `npm install`: the lockfile is the pin, and a
@@ -133,9 +145,14 @@ jobs:
       # committed, so nothing has to be built here. Both halves of the wire
       # protocol are checked against each other here and nowhere else, so a
       # missing node fails rather than skips.
+      #
+      # `latest` for the same reason as the `dashboard` job above, and it has
+      # to be the SAME answer: what this job runs under plain node IS that
+      # job's build output. No npm and no install here — this only needs a
+      # node.
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: latest
       - run: go test ./internal/e2e/... -race -count=1 -v
 
   # THERE IS NO SEPARATE "stores" JOB ANY MORE. One existed, running the store
