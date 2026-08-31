@@ -88,10 +88,17 @@ type Observation struct {
 	// new, which is itself a fact the two timestamps distinguish.
 	Traits map[string]any
 
-	// WorkKey identifies the unit of work this observation came from.
-	// Empty means uncounted: the interaction is recorded but the counter
-	// does not move, because without a key a redelivery is
-	// indistinguishable from a second interaction.
+	// WorkKey identifies the unit of work this observation came from, and
+	// is what the redelivery guard remembers: an observation carrying the
+	// key of the immediately preceding one does not move the counter.
+	//
+	// Empty means UNGUARDED, not uncounted. Without a key a redelivery is
+	// indistinguishable from a second interaction, and the two errors are
+	// not symmetric — suppressing real interactions makes a seat believe
+	// it has never met someone it works with daily — so an unkeyed
+	// observation counts. What it must not do is overwrite the remembered
+	// key: that would disarm the guard for the NEXT observation too. See
+	// TestUnkeyedObservationsAlwaysCount.
 	WorkKey string
 
 	At time.Time
@@ -146,10 +153,28 @@ func (c *Counterparties) Record(ctx context.Context, o Observation) (bool, error
 		}
 		count := existing.InteractionCount
 		workKey := existing.LastWorkKey
+		// An UNKEYED observation counts — see
+		// TestUnkeyedObservationsAlwaysCount for why that asymmetry is
+		// deliberate — but it must not TOUCH the guard. Assigning
+		// o.WorkKey unconditionally wrote "" into last_work_key, which
+		// disarmed the dedupe for the next observation as well: the
+		// redelivery of a keyed interaction that arrived after an unkeyed
+		// one compared its real key against "", differed, and counted a
+		// second time. So the column keeps the last KEYED unit of work,
+		// which is the only thing it can usefully remember.
 		if o.WorkKey == "" || o.WorkKey != existing.LastWorkKey {
 			count++
 			counted = true
-			workKey = o.WorkKey
+			// ONLY A REAL KEY MOVES THE GUARD. Assigning o.WorkKey
+			// unconditionally wrote "" into last_work_key, which disarmed
+			// the dedupe for the next observation as well: a redelivery
+			// arriving after an unkeyed observation compared its real key
+			// against "", differed, and counted a second time. The column
+			// keeps the last KEYED unit of work, which is the only thing
+			// it can usefully remember.
+			if o.WorkKey != "" {
+				workKey = o.WorkKey
+			}
 		}
 		name := o.Subject.Name
 		if name == "" {

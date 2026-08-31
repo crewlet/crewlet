@@ -356,3 +356,38 @@ func TestSubjectPredicates(t *testing.T) {
 		}
 	}
 }
+
+// AN UNKEYED OBSERVATION MUST NOT DISARM THE GUARD.
+//
+// Unkeyed observations count (see TestUnkeyedObservationsAlwaysCount), but the
+// remembered key is what the redelivery guard compares against — and writing
+// "" into it left the NEXT observation with nothing to match. A redelivery of
+// a keyed interaction arriving after an unkeyed one then compared its real key
+// against "", differed, and counted a second time: exactly the double count
+// the guard exists to prevent, reachable through an ordinary interleaving.
+func TestAnUnkeyedObservationDoesNotDisarmTheRedeliveryGuard(t *testing.T) {
+	t.Parallel()
+	c := counterparties(t)
+	bob := learning.Subject{Handle: "bob"}
+
+	mustRecord(t, c, learning.Observation{
+		Observer: "ceo", Subject: bob, At: base, WorkKey: "wk-1",
+	})
+	// An unkeyed observation lands in between — a chat message with no
+	// work item behind it, which is the ordinary case.
+	mustRecord(t, c, learning.Observation{Observer: "ceo", Subject: bob, At: base})
+
+	// Now the redelivery of wk-1. It must still be recognised.
+	if mustRecord(t, c, learning.Observation{
+		Observer: "ceo", Subject: bob, At: base, WorkKey: "wk-1",
+	}) {
+		t.Error("a redelivery of the last keyed interaction was counted again: " +
+			"the unkeyed observation in between overwrote the remembered key")
+	}
+	if p := mustGet(t, c, "ceo", bob); p.InteractionCount != 2 {
+		t.Errorf("interactions = %d, want 2 (one keyed, one unkeyed)", p.InteractionCount)
+	}
+	if p := mustGet(t, c, "ceo", bob); p.LastWorkKey != "wk-1" {
+		t.Errorf("last work key = %q, want the last KEYED unit of work", p.LastWorkKey)
+	}
+}
