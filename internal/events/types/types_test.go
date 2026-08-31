@@ -34,6 +34,7 @@ func catalogue() []events.Payload {
 		MessageSent{}, ExternalNotification{}, TurnTriggerSkipped{},
 		NotificationsCoalesced{}, NotificationSkipped{},
 		// a2a.go
+		A2ARequest{}, A2AMessage{},
 		A2AChannelOpened{}, A2AMessageSent{}, A2AMessageDelivered{},
 		A2AChannelClosed{},
 		// knowledge.go
@@ -69,8 +70,10 @@ func catalogue() []events.Payload {
 var wireTypes = []string{
 	"a2a_channel_closed",
 	"a2a_channel_opened",
+	"a2a_message",
 	"a2a_message_delivered",
 	"a2a_message_sent",
+	"a2a_request",
 	"agent_phase_completed",
 	"agent_phase_started",
 	"agent_reassigned",

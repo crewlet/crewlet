@@ -188,6 +188,20 @@ type (
 	// Summarizer provides a summary needing nothing but the payload.
 	Summarizer interface{ Summary() string }
 
+	// Briefer provides the ASK a wake carries — everything the seat woken
+	// by this event has to act on.
+	//
+	// Deliberately NOT Summarizer, and the split is the whole point. A
+	// summary is one line for a dashboard row and is free to drop the body
+	// under it; a brief is the body. Reading a summary where a brief was
+	// meant hands a model "Message from alice: deploy" and silently drops
+	// the message — which is what this engine did for every trigger type
+	// until the wake payloads started stating their ask here.
+	//
+	// Only a type that WAKES A SEAT needs to implement it; see
+	// [github.com/crewlet/crewlet/internal/agent/inbox.LedgeredTypes].
+	Briefer interface{ Brief() string }
+
 	// ActorSummarizer provides a summary that leads with the actor. The
 	// RESOLVED actor is passed in, so a payload never has to know how the
 	// chain reaches it.
@@ -452,6 +466,23 @@ func RegisteredTypes() []string {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 	return slices.Sorted(maps.Keys(registry))
+}
+
+// PayloadFor returns a zero payload of the named type, reporting whether this
+// build knows it.
+//
+// For asking what a type IS rather than what an event holds: which optional
+// interfaces it implements, what its zero rendering looks like. A guard that
+// every turn-running type can state its ask ([Briefer]) needs exactly this, and
+// building it from a hand-kept list of concrete types instead would prove only
+// that the list agrees with itself — the failure mode a new wake type
+// introduces is being absent from that list, not present and wrong.
+func PayloadFor(t string) (Payload, bool) {
+	make, ok := lookup(t)
+	if !ok {
+		return nil, false
+	}
+	return make(), true
 }
 
 // DataAs decodes an event's typed body into *T, reporting whether the event

@@ -366,19 +366,35 @@ func conversationKeyOf(evs []*events.Event) string {
 // one conversation and its opening message is what the rest are replies to. A
 // digest that led with the newest would hand the seat a follow-up with no idea
 // what it follows.
+//
+// THE BRIEF, NEVER THE SUMMARY. This function is the only thing standing
+// between a wake and the string a model is asked to act on, and the two
+// interfaces answer different questions: [events.Briefer] is the ask,
+// [events.Summarizer] is one line for a dashboard row. Reading the summary
+// here handed every turn in the company a stub: "Message from alice: deploy"
+// for a notification whose body was the actual request, "(a2a_request)" for a
+// colleague's question, "(task_assigned)" for a schedule's task text. The type
+// name remains only as the last resort it was always meant to be.
+//
+// TWO SOURCES, TYPED FIRST. Every wake type that runs a turn now states its
+// ask through Briefer, so the free-form bag below is not where any producer in
+// this build writes one. It is kept, and kept SECOND, because a rolling
+// upgrade puts two builds on one stream: a wake minted by a peer that predates
+// the typed payloads carries its body under "content" in the bag, and this
+// build decoding that event finds an empty typed payload. Reading the bag
+// after the brief is what stops such a wake reaching a seat as its type name.
 func DescribeTrigger(evs []*events.Event) string {
 	var parts []string
 	for _, ev := range evs {
 		if ev == nil {
 			continue
 		}
-		// The free-form bag first, for the wakes that carry no typed
-		// payload. The A2A wakes are the ones that matter: their bodies
-		// live under "content" because the service that mints them owns
-		// their shape, and reading only "text" rendered a colleague's
-		// question as the bare string "(a2a_request)" — an answering
-		// seat ran a whole turn against a blank ask, and answered by
-		// inventing one.
+		if brief, ok := ev.Data.(events.Briefer); ok {
+			if b := strings.TrimSpace(brief.Brief()); b != "" {
+				parts = append(parts, b)
+				continue
+			}
+		}
 		if body := payloadBody(ev); body != "" {
 			parts = append(parts, body)
 			continue
@@ -423,10 +439,15 @@ func delegationOf(evs []*events.Event) (int, []string) {
 // payloadBodyKeys are the untyped payload fields that carry a trigger's text,
 // in the order they are tried.
 //
-// A SHORT, CLOSED LIST rather than a scan: a wake with no typed payload has
-// no schema, so this is the only place that knows how to read one, and every
-// name here has a producer. "text" is the generic escape hatch; "content" is
-// what internal/a2a stamps on both of its wakes.
+// A SHORT, CLOSED LIST rather than a scan: a wake with no typed payload has no
+// schema, so this is the only place that knows how to read one.
+//
+// NO PRODUCER IN THIS BUILD writes either key any more — internal/a2a stamped
+// "content" on both its wakes until they became typed payloads, and nothing
+// ever wrote "text". The list survives as the ROLLING-UPGRADE path: a wake
+// minted by a peer that predates those types still carries its body here, and
+// this build would otherwise hand it to a seat as its type name. Keep both
+// names for as long as a node running that older build can still be publishing.
 var payloadBodyKeys = []string{"text", "content"}
 
 // payloadBody is a trigger's text from its untyped payload, or empty.
