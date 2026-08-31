@@ -49,6 +49,12 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		"agent_diary_long",
 		"chat_thread_follows",
 		"conversation_sessions",
+		// Added the same way the diary was: the table shipped with a
+		// memsync entry that republishes every row to every peer on
+		// every cycle, and no horizon anywhere — so it grew with the
+		// deployment's AGE rather than its size, and this list not
+		// naming it was the only place that showed.
+		"counterparty_profiles",
 		"events",
 		"scheduled_runs",
 	}
@@ -73,6 +79,7 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"a2a_channels":          maintenance.ChannelRetention,
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
 		"chat_thread_follows":   maintenance.FollowRetention,
+		"counterparty_profiles": maintenance.CounterpartyRetention,
 	} {
 		if horizon <= maintenance.Interval {
 			t.Errorf("%s retention (%v) is not longer than the %v tick",

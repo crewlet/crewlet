@@ -391,3 +391,56 @@ func TestAnUnkeyedObservationDoesNotDisarmTheRedeliveryGuard(t *testing.T) {
 		t.Errorf("last work key = %q, want the last KEYED unit of work", p.LastWorkKey)
 	}
 }
+
+// PROFILES ARE SWEPT, and before this the table had no horizon at all: one
+// row per distinct human or seat a seat has ever messaged, republished to
+// every peer for each held seat on every memory-sync cycle, growing for the
+// life of the deployment.
+func TestStaleCounterpartyProfilesArePurged(t *testing.T) {
+	t.Parallel()
+	c := counterparties(t)
+	old := learning.Subject{Handle: "long-gone"}
+	recent := learning.Subject{Handle: "still-here"}
+
+	mustRecord(t, c, learning.Observation{
+		Observer: "ceo", Subject: old, At: base, WorkKey: "wk-old",
+	})
+	mustRecord(t, c, learning.Observation{
+		Observer: "ceo", Subject: recent, At: base.Add(200 * 24 * time.Hour), WorkKey: "wk-new",
+	})
+
+	cutoff := base.Add(100 * 24 * time.Hour)
+	dropped, err := c.Purge(context.Background(), cutoff)
+	if err != nil {
+		t.Fatalf("Purge: %v", err)
+	}
+	if dropped != 1 {
+		t.Fatalf("purged %d, want the one profile past the cutoff", dropped)
+	}
+	if _, ok, _ := c.Get(context.Background(), "ceo", old); ok {
+		t.Error("a profile with no interaction since the cutoff survived")
+	}
+	// And the live one is untouched, so the sweep is a horizon rather than
+	// a table truncation.
+	if _, ok, _ := c.Get(context.Background(), "ceo", recent); !ok {
+		t.Error("a profile interacted with after the cutoff was purged")
+	}
+}
+
+// AND A SWEEP WITH NOTHING TO DO REPORTS ZERO rather than erroring, which is
+// what the maintenance worker logs every tick on a healthy company.
+func TestAPurgeWithNothingStaleDropsNothing(t *testing.T) {
+	t.Parallel()
+	c := counterparties(t)
+	mustRecord(t, c, learning.Observation{
+		Observer: "ceo", Subject: learning.Subject{Handle: "bob"},
+		At: base, WorkKey: "wk-1",
+	})
+	dropped, err := c.Purge(context.Background(), base.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("Purge: %v", err)
+	}
+	if dropped != 0 {
+		t.Errorf("purged %d, want 0", dropped)
+	}
+}

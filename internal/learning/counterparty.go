@@ -212,6 +212,39 @@ func (c *Counterparties) Record(ctx context.Context, o Observation) (bool, error
 
 // Get returns one profile, and false when the observer has never met the
 // subject.
+// Purge drops profiles nobody has interacted with since cutoff, reporting how
+// many went.
+//
+// A RETENTION AT ALL, which this table had none of: one row per distinct
+// human or seat a seat has ever messaged, republished to every peer for every
+// held seat on each memory-sync cycle, growing for the life of the
+// deployment. Every other table with a documented horizon ships a sweep; this
+// one was `wholeEachCycle` in memsync with no cap, no TTL and no maintenance
+// entry.
+//
+// Keyed on last_updated_at rather than last_corroborated_at: this drops a
+// profile nobody has INTERACTED with, and last_updated_at moves on every
+// upsert including the no-ops, so it is the true last-contact stamp.
+// Corroboration measures trait CHANGE, which a long steady relationship can
+// go a year without.
+//
+// Losing one is cheap and self-healing: the next interaction re-creates the
+// row and the seat re-learns from what it observes. What it costs is the
+// interaction count, which is a cadence signal rather than a fact.
+func (c *Counterparties) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := c.db.SQL().ExecContext(ctx,
+		`DELETE FROM counterparty_profiles WHERE last_updated_at < ?`,
+		store.EncodeTime(cutoff))
+	if err != nil {
+		return 0, fmt.Errorf("learning: purge counterparty profiles: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("learning: purge counterparty profiles: %w", err)
+	}
+	return n, nil
+}
+
 func (c *Counterparties) Get(ctx context.Context, observer string, subject Subject) (Profile, bool, error) {
 	p, err := c.load(ctx, c.db.SQL(), observer, subject)
 	if err == sql.ErrNoRows { //nolint:errorlint // exact sentinel from load

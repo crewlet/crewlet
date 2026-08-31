@@ -60,6 +60,14 @@ type table struct {
 	// as the seat learns, a skill's state and use count move, an
 	// onboarding marker flips. Those hold a handful of rows per seat, so
 	// carrying all of them every cycle costs nothing and misses nothing.
+	//
+	// "A handful" is a claim about each table's BOUND, so each has one.
+	// synthesized_skills is capped per agent by the curator's archive
+	// horizon; agent_onboarding_markers is one row per seat by
+	// construction; counterparty_profiles is one row per person a seat has
+	// messaged and is swept at maintenance.CounterpartyRetention — it had
+	// no bound at all, which made it the one table here whose cost grew
+	// with the deployment's age rather than with its size.
 	wholeEachCycle bool
 }
 
