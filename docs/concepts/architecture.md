@@ -483,14 +483,22 @@ flowchart TB
     KV -.-> N3
 ```
 
-**Placement is deliberately dumb.** Every node greedily claims up to
-`ceil(seats / live nodes)`, live nodes being the `node:*` presence leases of
-nodes that actually run seats. No membership service, no gossip, no
-coordinator — every node computes the same number from the same table and
-stops. Two nodes racing for the last seat is resolved by the lease, not by the
-arithmetic. It converges in **both** directions, because claiming alone only
-converges for a fleet that shrinks. A `preferred` hint *orders* the attempt and
-never gates it, so a rolling deploy tends to land seats back where their MCP
+**The presence lease is the membership service.** Every node claims `node:{ID}`
+on the same heartbeat as its seats, carrying its roles, its labels and its
+status. Reading `node:*` back is the whole of fleet discovery — no gossip, no
+coordinator, no registry to configure — which is why adding a node is starting
+a process and removing one is stopping it. Dropping that row is the first thing
+a drain does.
+
+**Placement is deliberately dumb.** Every node greedily claims up to a fair
+share — `ceil(seats / live nodes)`, live nodes being the presence leases of
+nodes that actually run seats, and summed **per placement group** rather than
+computed once fleet-wide, because one global ratio strands the seats that are
+pinned somewhere. Every node computes the same number from the same table and
+stops there; two nodes racing for the last seat is settled by the lease, not by
+the arithmetic. It converges in **both** directions, because claiming alone
+only converges for a fleet that shrinks. A `preferred` hint *orders* the attempt
+and never gates it, so a rolling deploy tends to land seats back where their MCP
 children are already warm — and a seat whose preferred node is gone is still
 taken by somebody.
 
@@ -503,7 +511,11 @@ express alone, and it is why [`internal/node`](seat-ownership.md) exists.
 
 **Every ownership question is three-valued.** Held, definitively not held, and
 **unknown** — and treating unknown as loss tears a healthy company down over a
-two-second store blip. See [Coordination](coordination.md#the-three-valued-answer).
+two-second store blip. Unknown is bounded rather than trusted, on two different
+clocks: a seat stops *admitting* work once its last successful renew is older
+than the heartbeat interval, and is only given up once that renew is older than
+the lease TTL. Stop taking new work early, hand the seat over late. See
+[Coordination](coordination.md#the-three-valued-answer).
 
 **One config, agreed by pointer.** An activation is a compare-and-set on an
 append-only pointer whose own revision *is* the epoch, so two operators
@@ -535,7 +547,7 @@ here.
 | Routing a delivery to a seat | `internal/notify` | [Event system](event-system.md) |
 | Subjects, streams, delivery semantics | `internal/queue`, `internal/events` | [Event system](event-system.md) |
 | Inbox batching and coalescing | `internal/agent/inbox` | [Event system](event-system.md#inbox-batching--coalescing) |
-| Seat leases, placement, the watchdog | `internal/seat`, `internal/node` | [Seat ownership](seat-ownership.md) |
+| Seat leases, placement, acquire and release | `internal/seat`, `internal/node` | [Seat ownership](seat-ownership.md) |
 | Leases, buckets, the three-valued answer | `internal/coord` | [Coordination](coordination.md) |
 | The activation pointer and node postures | `internal/configplane` | [Control plane](control-plane.md) |
 | Plan → Execute → Review, sub-agents | `internal/agent/turn`, `runner`, `toolloop` | [Turn engine](turn-engine.md) · [Agent runtime](agent-runtime.md) |
