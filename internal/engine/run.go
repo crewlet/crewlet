@@ -831,6 +831,11 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// events already put the seat into `working`, and returning without this
 	// leaves it there until the seat happens to take another turn.
 	e.publishTurnCompleted(ctx, tel, req.WorkKey, r.Spend(), res, err)
+	// AND, if a colleague asked for this turn, the answer they are waiting
+	// for. Here because this is the one frame holding both the result and
+	// the trigger; after the completion event because the reply wakes
+	// another seat and the record of this turn should exist first.
+	e.answerColleague(ctx, company, req, res)
 	return res, err
 }
 

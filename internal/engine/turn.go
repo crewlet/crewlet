@@ -372,8 +372,15 @@ func DescribeTrigger(evs []*events.Event) string {
 		if ev == nil {
 			continue
 		}
-		if text, _ := ev.Payload["text"].(string); text != "" {
-			parts = append(parts, text)
+		// The free-form bag first, for the wakes that carry no typed
+		// payload. The A2A wakes are the ones that matter: their bodies
+		// live under "content" because the service that mints them owns
+		// their shape, and reading only "text" rendered a colleague's
+		// question as the bare string "(a2a_request)" — an answering
+		// seat ran a whole turn against a blank ask, and answered by
+		// inventing one.
+		if body := payloadBody(ev); body != "" {
+			parts = append(parts, body)
 			continue
 		}
 		if summary, ok := ev.Data.(events.Summarizer); ok {
@@ -411,6 +418,25 @@ func delegationOf(evs []*events.Event) (int, []string) {
 		}
 	}
 	return depth, chain
+}
+
+// payloadBodyKeys are the untyped payload fields that carry a trigger's text,
+// in the order they are tried.
+//
+// A SHORT, CLOSED LIST rather than a scan: a wake with no typed payload has
+// no schema, so this is the only place that knows how to read one, and every
+// name here has a producer. "text" is the generic escape hatch; "content" is
+// what internal/a2a stamps on both of its wakes.
+var payloadBodyKeys = []string{"text", "content"}
+
+// payloadBody is a trigger's text from its untyped payload, or empty.
+func payloadBody(ev *events.Event) string {
+	for _, key := range payloadBodyKeys {
+		if s, _ := ev.Payload[key].(string); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // noteCoalesced records a partition merged into one digest trigger.

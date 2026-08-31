@@ -21,6 +21,9 @@ roles:
   - name: CEO
     handle: ceo
     llm: zulu
+  - name: CTO
+    handle: cto
+    llm: zulu
 `
 
 func watchdogEngine(t *testing.T) *Engine {

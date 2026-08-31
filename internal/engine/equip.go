@@ -138,7 +138,25 @@ func (e *Engine) sandboxLauncher() builtin.SandboxLauncher {
 // see. It used to be the node's own database, which is why a cross-node ask
 // woke its target and then dropped the reply as "no such channel".
 func (e *Engine) a2aFor(c *Company) builtin.Asker {
-	if e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
+	svc := e.a2aService(c)
+	if svc == nil {
+		// A typed nil in an interface is not nil, and the tool checks
+		// its Asker for nil to decide whether to register at all.
+		return nil
+	}
+	return svc
+}
+
+// a2aService is the concrete service, for the two callers that need
+// different halves of it: the ask tool takes it as a [builtin.Asker], and the
+// answer leg needs Reply and Close, which that interface does not carry.
+//
+// Built per call rather than held on the epoch: it is a struct over the
+// coordination store and the queue with no state of its own, so two of them
+// are the same service, and holding one would only add a field that has to be
+// rebuilt on every apply for no reason.
+func (e *Engine) a2aService(c *Company) *a2a.Service {
+	if c == nil || e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
 		return nil
 	}
 	svc, err := a2a.New(a2a.NewCoordStore(e.backends.Fleet), e.backends.Queue,
