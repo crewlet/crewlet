@@ -454,13 +454,17 @@ func (r *Reconciler) record(ctx context.Context, target coord.Activation,
 
 // publishApplied puts one node's outcome into the audit event log.
 //
-// THE WHOLE ERROR. It used to be cut to the coordination record's own bound,
-// which is a bound for a different reason: that record is re-read by every
-// peer on every reconcile tick, so its size is paid continuously. This one is
-// written once, and it is the durable copy — the place an operator looks days
-// later to find out why a revision did not apply on one node. Cutting the
-// permanent record to the size of the polled one leaves the failure's cause,
-// which sits at the end of a wrapped chain, in neither.
+// TWO DIFFERENT BOUNDS, and the difference is the point. The coordination
+// record is cut to [coord.MaxApplyErrorLength] (2000 bytes) because every peer
+// re-reads it on every reconcile tick, so its size is paid continuously. This
+// event is written once and kept for the event store's retention horizon — it
+// is the durable copy an operator reads days later — so it carries up to
+// [events.MaxDiagnosticBytes] (64 KiB), thirty times more, marked when it cuts.
+//
+// It is bounded at all only so that it can be PUBLISHED: an event over the
+// queue's payload ceiling is refused, and the publisher below logs and moves
+// on, so an unbounded failure text would cost the operator the whole record
+// rather than its tail.
 func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation,
 	status configplane.ApplyStatus, applied []string, message string,
 ) {

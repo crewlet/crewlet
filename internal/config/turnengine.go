@@ -253,17 +253,21 @@ type ConversationSession struct {
 	// switch.
 	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Record and replay per-conversation history (default on)."`
 
-	// MaxEntries is what is KEPT per conversation, trimmed at write time,
-	// and is the ONE bound on this ledger.
+	// MaxEntries is what is KEPT per conversation, trimmed at write time.
 	//
-	// There is no injected-side pair. Two knobs (injected_max_entries,
-	// injected_max_chars) used to sit here bounding what reached the
-	// prompt; neither was ever threaded to a caller, so both validated,
-	// defaulted and documented a truncation that did not happen. What a
-	// turn is shown is now the whole recorded conversation by design — the
-	// block is the only thing telling a seat what it already said on this
-	// thread, and a cut version of it is how a seat repeats a reply it
-	// cannot see it already gave.
+	// It is not the only bound, and the split is deliberate: this one bounds
+	// the RECORD, and [ledger.InjectedMaxChars] bounds what one prompt
+	// SHOWS, by dropping whole entries oldest-first and saying how many.
+	// Neither ever cuts inside an entry — the stored row is the only copy of
+	// that turn, and a half-recorded reply reads as the whole of what the
+	// seat said.
+	//
+	// There is no injected-side CONFIG pair. Two knobs (injected_max_entries,
+	// injected_max_chars) used to sit here; neither was ever threaded to a
+	// caller, so both validated, defaulted and documented a truncation that
+	// did not happen. The render bound that replaced them is a constant with
+	// its reasoning at the definition rather than a knob nobody had cause to
+	// set.
 	// Larger than what any prompt injects, so the dashboard can show a
 	// conversation's history beyond what a single turn carried. The trim
 	// is what bounds a DM, whose conversation key is the whole channel and

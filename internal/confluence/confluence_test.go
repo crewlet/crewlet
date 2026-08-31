@@ -447,6 +447,39 @@ func parser(t *testing.T, mutate func(*confluence.ParserOptions)) *confluence.Pa
 	return confluence.NewParser(opts)
 }
 
+// A notification carries an EXCERPT of a changed page, and it has to say so.
+// The bound is one of the few here that earns its place — the page is
+// re-readable through the seat's own tools and most recipients read this and
+// drop it — but it used to be applied by a helper that also cut at the first
+// newline or ". " BEFORE any limit, so a page arrived decapitated to its
+// opening sentence, silently, whatever the budget.
+func TestAPageExcerptSaysItIsAnExcerpt(t *testing.T) {
+	t.Parallel()
+	long := "<p>" + strings.Repeat("the deploy runbook step four is wrong. ", 60) + "</p>"
+	got := route(t, parser(t, nil), pageEvent("page_updated", "ENG", long, acctWriter))
+	if len(got) == 0 {
+		t.Fatal("the page change routed to nobody")
+	}
+	if !strings.Contains(got[0].Body, "Excerpt") {
+		t.Errorf("a cut page excerpt does not say it was cut:\n%s", got[0].Body)
+	}
+
+	// A SHORT page is carried whole and says nothing — and, critically, more
+	// than its first sentence: the old helper stopped at the first ". "
+	// regardless of length.
+	short := "<p>First sentence. Second sentence. Third.</p>"
+	got = route(t, parser(t, nil), pageEvent("page_updated", "ENG", short, acctWriter))
+	if len(got) == 0 {
+		t.Fatal("the short page change routed to nobody")
+	}
+	if !strings.Contains(got[0].Body, "Third.") {
+		t.Errorf("a short page was decapitated at its first sentence: %q", got[0].Body)
+	}
+	if strings.Contains(got[0].Body, "Excerpt") {
+		t.Errorf("a whole page claimed to be an excerpt: %q", got[0].Body)
+	}
+}
+
 func pageEvent(event, space, storage, actor string) types.RawWebhook {
 	return types.RawWebhook{Body: map[string]any{
 		"event": event,

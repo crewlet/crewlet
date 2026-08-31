@@ -82,11 +82,13 @@ re-read by every peer on every posture decision and rendered on the dashboard's
 **Fleet** screen, so one node returning a megabyte of Go error would be paid for
 by every reader on every tick.
 
-The **`config_revision_applied` event** carries the failure text in full. It is
-written once and kept for the event store's retention horizon, so it is the copy
-an operator reads days later to find out why a revision did not apply — and the
-cause of a wrapped error chain sits at its end, which is exactly what a 2 000-byte
-cut removes.
+The **`config_revision_applied` event** carries up to 64 KiB of it — thirty
+times more, and marked when it cuts. It is written once and kept for the event
+store's retention horizon, so it is the copy an operator reads days later to
+find out why a revision did not apply, and a 2 000-byte cut removes exactly the
+end of a wrapped chain where the cause sits. It is bounded at all only so the
+event can be published: one over the queue's payload ceiling is refused and
+dropped, which would cost the operator the whole record rather than its tail.
 
 ---
 

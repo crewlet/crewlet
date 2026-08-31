@@ -203,9 +203,10 @@ the agent's own plan, reasoning, or the results it gathered.
 turn_engine:
   conversation_session:
     enabled: true            # the feature gate — a live kill switch
-    max_entries: 20          # kept per conversation, trimmed at write time —
-                             #   and the only bound; the whole kept
-                             #   conversation reaches the prompt
+    max_entries: 20          # kept per conversation, trimmed at write time.
+                             #   What ONE PROMPT shows is bounded separately,
+                             #   at render, by ledger.InjectedMaxChars — see
+                             #   Cost above
     retention_days: 30       # matches the event store's own horizon
 ```
 

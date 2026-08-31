@@ -115,7 +115,7 @@ func ListServerTools(merged []Entry, available map[string]struct{}) *MetaTool {
 		}
 		lines := make([]string, len(tools))
 		for i, t := range tools {
-			lines[i] = catalogueLine(t.Name, t.Description)
+			lines[i] = CatalogueLine(t.Name, t.Description)
 		}
 		return Result{Output: fmt.Sprintf(
 			"Tools on MCP server '%s' (%d total). Call activate_tool(name=...) to "+
@@ -269,18 +269,24 @@ func orNone(names []string) string {
 	return strings.Join(names, ", ")
 }
 
-// catalogueLine renders one "- name: description" entry, description WHOLE.
+// CatalogueLine renders one "- name: description" catalogue entry with the
+// description WHOLE.
 //
-// Continuation lines are indented under the bullet rather than dropped: the
-// one-entry-per-bullet shape is what a model reads a listing as, and keeping
-// only the first line paid for that shape with the description's content —
-// a vendor's argument rules and preconditions live below its opening sentence,
-// and this listing is the only place they are ever shown.
+// Continuation lines are indented under the bullet rather than dropped. The
+// shape a model reads a catalogue as is one entry per bullet, and keeping only
+// the first line was paying for that shape with the description's content: a
+// tool whose usage rules, argument meanings or "call X first" precondition sit
+// below its opening sentence was advertised without them, and the model then
+// called it wrong. Vendor-authored MCP descriptions are routinely several
+// paragraphs, and a catalogue is the only place they are ever shown.
 //
-// A duplicate of tools.CatalogueLine, which this package cannot import
-// (internal/tools imports internal/mcp). See the note on this file's own
-// callers in [ListServerTools].
-func catalogueLine(name, description string) string {
+// HERE, in the deepest package that needs it, because four callers render this
+// same line — the tool registry's catalogue, both list_mcp_server_tools
+// listings, and a sub-agent's surface — and a model sees more than one of them
+// in a single turn. Two renderers is how one of them starts cutting again;
+// internal/tools re-exports this rather than keeping a copy, since it already
+// imports this package and the dependency cannot run the other way.
+func CatalogueLine(name, description string) string {
 	description = strings.TrimSpace(description)
 	if description == "" {
 		return "- " + name
