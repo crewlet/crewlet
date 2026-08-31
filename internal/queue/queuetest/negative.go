@@ -2,6 +2,7 @@ package queuetest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -82,7 +83,9 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		// must not be an envelope field — those are reserved and
 		// silently dropped, which produced a 214-byte "oversized"
 		// event the first time this was written.
-		ev.Extra = map[string]any{"blob": strings.Repeat("x", queue.MaxPayloadBytes)}
+		ev.Extra = map[string]json.RawMessage{
+			"blob": json.RawMessage(`"` + strings.Repeat("x", queue.MaxPayloadBytes) + `"`),
+		}
 
 		err := q.Publish(ctx, topic, ev)
 		if err == nil {
