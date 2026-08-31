@@ -1,34 +1,39 @@
 /**
- * Model activity — every phase the models ran, round by round.
+ * Model activity — a FLEET MONITOR, not a reader.
  *
- * This is the screen the previous dashboard did not have. Its transcript lived
- * inside one seat's page, capped at fifty rows with no pager, no filter and no
- * search, while the events behind it sat in the store addressable by id. So
- * the two questions people actually ask about an agent company — *what is my
- * money being spent on* and *what did the model actually do* — had no screen.
+ * This screen showed every running phase as an expanded transcript. With one
+ * agent that was pleasant; with seven it was a race — seven seats each
+ * republishing streamed prose five times a second, in cards that grew as they
+ * wrote, so nothing on the page held still long enough to read. Scale is the
+ * whole design constraint here and a transcript does not have it: reading what
+ * a model actually said is a ONE-AGENT activity, and it belongs on that
+ * agent's own page, where exactly one turn is in focus.
  *
- * Live phases and finished ones are ONE list here, keyed identically
- * (`turn|phase|iteration`), so a phase that completes updates in place rather
- * than disappearing from the top of the list and reappearing further down.
+ * So this is rows. One fixed-height row per phase, the same shape running or
+ * finished, sorted on a key that does not move — a live row updates its cells
+ * (rounds, tokens, elapsed) and NOTHING reflows, because a number changing
+ * inside a fixed row cannot change the layout around it. That property is why
+ * the table survives fifty seats when a list of cards did not survive seven.
+ *
+ * The transcript is one click away, on the seat.
  */
 
 import { useCallback, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { TurnCard } from "~/components/TurnCard.tsx";
-import { PhaseCard } from "~/components/PhaseCard.tsx";
-import { Badge, Button, Chip, Empty, Segmented, Select, Skeleton } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Badge, Button, Chip, Empty, PhaseTag, Select, Skeleton } from "~/ui/primitives.tsx";
+import { DataTable, type Column } from "~/ui/DataTable.tsx";
 import { useAgents, useClient } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { plural } from "~/lib/format.ts";
-import { href } from "~/app/router.tsx";
+import { fmtCount, fmtDuration, plural, relTime } from "~/lib/format.ts";
+import { useNow } from "~/lib/clock.ts";
+import { href, useNavigator } from "~/app/router.tsx";
 import {
+  decisionLabel,
   fromLiveCall,
   fromPhaseEvent,
-  groupTurns,
   mergePhases,
   type PhaseRecord,
 } from "~/lib/phases.ts";
@@ -36,9 +41,8 @@ import type { EventRecord } from "~/protocol/index.ts";
 
 const PAGE = 60;
 
-// Stable identities for the settled list. Named rather than inline so the
+// Stable identity for the settled list. Named rather than inline so the
 // hook's dependencies do not change identity on every render.
-const turnKey = (g: { turnId: string }) => g.turnId;
 const phaseRecordKey = (r: PhaseRecord) => r.key;
 const PHASES = ["plan", "execute", "review", "auxiliary"] as const;
 
@@ -47,7 +51,6 @@ export function ModelActivity() {
   const agents = useAgents();
   const [phase, setPhase] = useParam("phase", "");
   const [role, setRole] = useParam("role", "");
-  const [grouping, setGrouping] = useParam("by", "turn", "section");
   const [onlyFailed, setOnlyFailed] = useParam("failed", "");
 
   const [older, setOlder] = useState<EventRecord[]>([]);
@@ -98,15 +101,9 @@ export function ModelActivity() {
   // anywhere published a round.
   const running = useMemo(() => filtered.filter((r) => r.live), [filtered]);
   const done = useMemo(() => filtered.filter((r) => !r.live), [filtered]);
-  const turns = useMemo(() => groupTurns(filtered), [filtered]);
-  const runningTurns = useMemo(() => groupTurns(running), [running]);
-  const doneTurns = useMemo(() => groupTurns(done), [done]);
-
   // The settled list does not splice new rows in under a reader — see
   // lib/settled.ts.
-  const settledTurns = useSettled(doneTurns, turnKey);
-  const settledPhases = useSettled(done, phaseRecordKey);
-  const settled = grouping === "turn" ? settledTurns : settledPhases;
+  const settled = useSettled(done, phaseRecordKey);
 
   const loadOlder = useCallback(async () => {
     setPaging(true);
@@ -143,6 +140,95 @@ export function ModelActivity() {
     [agents],
   );
 
+  const nav = useNavigator();
+  const now = useNow();
+
+  // A row goes to the seat, because that is where a transcript is readable:
+  // one turn in focus instead of seven competing for the page.
+  const openSeat = useCallback(
+    (r: PhaseRecord) => nav.to(["seats", r.role], { tab: "model" }),
+    [nav],
+  );
+
+  // Defined here rather than at module scope because two cells need `now` to
+  // render an elapsed time, and memoised so the table's own sort does not see
+  // a new column set on every push.
+  const columns = useMemo<Column<PhaseRecord>[]>(
+    () => [
+      {
+        key: "seat",
+        header: "Seat",
+        cell: (r) => (
+          <span className="row gap-2">
+            {r.live && <span className="dot info" />}
+            <span className="truncate">{r.role || "—"}</span>
+          </span>
+        ),
+        sortValue: (r) => r.role,
+      },
+      {
+        key: "phase",
+        header: "Phase",
+        shrink: true,
+        cell: (r) => <PhaseTag phase={r.phase} />,
+        sortValue: (r) => r.phase,
+      },
+      {
+        key: "outcome",
+        header: "Outcome",
+        cell: (r) =>
+          r.failed ? (
+            <Badge tone="critical">{r.errorKind || "failed"}</Badge>
+          ) : r.live ? (
+            <span className="t-caption">running</span>
+          ) : r.decision ? (
+            <span className="truncate t-caption">{decisionLabel(r.phase, r.decision)}</span>
+          ) : (
+            <span className="t-caption">done</span>
+          ),
+        sortValue: (r) => (r.failed ? 0 : r.live ? 1 : 2),
+      },
+      {
+        key: "model",
+        header: "Model",
+        cell: (r) => <span className="mono t-caption truncate">{r.model || "—"}</span>,
+        sortValue: (r) => r.model,
+      },
+      {
+        key: "rounds",
+        header: "Rounds",
+        align: "right",
+        shrink: true,
+        cell: (r) => Math.max(r.roundsUsed, r.roundNum + 1) || "—",
+        sortValue: (r) => Math.max(r.roundsUsed, r.roundNum + 1),
+      },
+      {
+        key: "tokens",
+        header: "Tokens",
+        align: "right",
+        shrink: true,
+        cell: (r) => (r.totalTokens ? fmtCount(r.totalTokens) : "—"),
+        sortValue: (r) => r.totalTokens,
+      },
+      {
+        key: "when",
+        header: "When",
+        align: "right",
+        shrink: true,
+        // Elapsed while it runs, and when it landed once it has. Two
+        // different questions, and a running phase has no "when" yet.
+        cell: (r) =>
+          r.live ? (
+            <span className="t-num">{fmtDuration(Math.max(0, now - Date.parse(r.at)))}</span>
+          ) : (
+            <span className="t-caption">{relTime(r.at, now)}</span>
+          ),
+        sortValue: (r) => Date.parse(r.at) || 0,
+      },
+    ],
+    [now],
+  );
+
   const liveCount = live.filter((r) => r.live).length;
   const failedCount = merged.filter((r) => r.failed).length;
   const filtering = !!(role || phase || onlyFailed);
@@ -151,7 +237,7 @@ export function ModelActivity() {
     <>
       <ScreenHead
         title="Model activity"
-        sub="Every phase the models ran, round by round. A phase that finishes updates in place rather than moving."
+        sub="Every phase the models ran, one row each. Open a row for the transcript on that seat — reading what a model said is a one-agent job, and this page has to stay readable with fifty of them running."
         badges={
           <>
             {liveCount > 0 && (
@@ -173,9 +259,7 @@ export function ModelActivity() {
                 {failedCount} failed
               </Badge>
             )}
-            <Badge outline>
-              {plural(filtered.length, "phase")} · {plural(turns.length, "turn")}
-            </Badge>
+            <Badge outline>{plural(filtered.length, "phase")} loaded</Badge>
           </>
         }
       />
@@ -187,15 +271,6 @@ export function ModelActivity() {
           the match is exact on both sides of the wire, so a typed prefix
           silently returned nothing while looking like a search that missed. */}
       <div className="toolbar">
-        <Segmented
-          ariaLabel="Grouping"
-          value={grouping}
-          onChange={setGrouping}
-          options={[
-            { value: "turn", label: "By turn" },
-            { value: "phase", label: "Flat" },
-          ]}
-        />
         <Select
           value={role}
           onChange={setRole}
@@ -239,20 +314,25 @@ export function ModelActivity() {
         />
       )}
 
-      {/* LIVE, in its own region. Everything that changes on a timescale of
-          milliseconds lives here, so its churn cannot reflow the settled
-          transcript below it. */}
+      {/* RUNNING. Fixed-height rows, sorted on the seat handle — a key that
+          does not move — so a live row updates its cells and nothing around
+          it reflows. Seven seats republishing five times a second turned the
+          card list this replaces into a race; a number changing inside a row
+          of settled height cannot move the page at all. */}
       {running.length > 0 && (
-        <section className="col gap-1 live-region">
+        <section className="col gap-1">
           <div className="t-label">
             Running now
-            <span className="faint"> · updates as each round is written</span>
+            <span className="faint"> · {plural(running.length, "phase")} mid-flight</span>
           </div>
-          <div className="col gap-2">
-            {grouping === "turn"
-              ? runningTurns.map((g) => <TurnCard key={g.turnId} group={g} defaultOpen showRole />)
-              : running.map((rec) => <PhaseCard key={rec.key} record={rec} defaultOpen showRole />)}
-          </div>
+          <DataTable
+            rows={running}
+            columns={columns}
+            rowKey={phaseRecordKey}
+            onRowClick={openSeat}
+            isFailed={(r) => r.failed}
+            defaultSort={{ key: "seat", dir: "asc" }}
+          />
         </section>
       )}
 
@@ -260,31 +340,25 @@ export function ModelActivity() {
           moves when the reader asks it to. */}
       {settled.pending > 0 && (
         <button className="new-rows" onClick={settled.flush}>
-          <Icon name="arrowUpRight" size="xs" />
-          {plural(settled.pending, grouping === "turn" ? "new turn" : "new phase")} finished while
-          you were reading — show
+          {plural(settled.pending, "new phase")} finished while you were reading — show
         </button>
       )}
 
-      <div className="col gap-2">
-        {grouping === "turn"
-          ? (settled.items as typeof doneTurns).map((g, i) => (
-              <TurnCard
-                key={g.turnId}
-                group={g}
-                defaultOpen={i === 0 && !running.length}
-                showRole
-              />
-            ))
-          : (settled.items as PhaseRecord[]).map((rec, i) => (
-              <PhaseCard
-                key={rec.key}
-                record={rec}
-                defaultOpen={i === 0 && !running.length}
-                showRole
-              />
-            ))}
-      </div>
+      {settled.items.length > 0 && (
+        <section className="col gap-1">
+          <div className="t-label">
+            Recent phases
+            <span className="faint"> · newest first · open a row for its transcript</span>
+          </div>
+          <DataTable
+            rows={settled.items}
+            columns={columns}
+            rowKey={phaseRecordKey}
+            onRowClick={openSeat}
+            isFailed={(r) => r.failed}
+          />
+        </section>
+      )}
 
       {/* A bare row, not a Panel: one button did not need card chrome. The
           spend rollup that used to sit BELOW this is gone — it was Spend's

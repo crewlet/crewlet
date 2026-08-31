@@ -145,7 +145,7 @@ meets their company first and the engine last.
 | **Work** | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
 | | Conversations | `#/conversations?lens=&handle=&key=` | the conversation ledger, and the `a2a_channels` record |
 | | Schedules | `#/schedules` | `schedules` — what fires, when it next fires, how it last went |
-| **Intelligence** | Model activity | `#/model?by=&role=&phase=&failed=` | `phases` — every phase the models ran, round by round |
+| **Intelligence** | Model activity | `#/model?role=&phase=&failed=` | `phases` — one row per phase across the fleet; the transcript is on the seat |
 | | Event log | `#/activity?category=&actor=&q=&failed=` | the live feed, then `events` for older pages |
 | | Knowledge | `#/knowledge?q=` | `knowledge` — the company's own live search |
 | **Cost** | Spend & budgets | `#/spend?window=` | the pushed spend rollup, the `tokens` query for other windows, and `budgets` |
@@ -301,12 +301,36 @@ rules fix it, and each one names a specific mechanism:
    `tsKey`, and every comparator is three-way: one returning −1 for equal
    operands makes equal rows trade places on each render.
 
+## A monitor is not a reader
+
+`#/model` showed every running phase as an expanded transcript. With one agent
+that was pleasant. With seven it was a race: seven seats each republishing
+streamed prose five times a second, in cards that grew as they wrote, so
+nothing held still long enough to read. Adding streaming made a bad shape
+worse rather than causing it.
+
+**Reading what a model said is a one-agent activity.** It needs one turn in
+focus, and it belongs on that agent's own page. A fleet screen has the
+opposite job — *which seats are working, which are stuck, what is this
+costing* — and that job is rows.
+
+So the screen is a table. One fixed-height row per phase, the same shape
+running or finished, sorted on the seat handle, which does not move. A live
+row updates its cells — rounds, tokens, elapsed — and **nothing reflows**,
+because a number changing inside a row of settled height cannot move the
+layout around it. That single property is why the table holds at fifty seats
+where a list of cards did not hold at seven. The transcript is one click away,
+on the seat.
+
+The rules below still apply to the seat screen, where the transcript now
+lives.
+
 ## A live screen that stays readable
 
-The complaint that `#/model` was "crowded" turned out not to be density: it
-was MOTION. Rows arrived while somebody was reading one, and splicing a phase
-in at the top pushes everything below it down by a card — mid-sentence, every
-few seconds on a busy company. Streaming would have made it worse.
+The first read of "crowded" was density; the second was MOTION. Rows arrived
+while somebody was reading one, and splicing a phase in at the top pushes
+everything below it down by a card — mid-sentence, every few seconds on a busy
+company.
 
 Two rules, and they are the same rule the round ledger already follows —
 **the page moves only when the reader is not reading**:

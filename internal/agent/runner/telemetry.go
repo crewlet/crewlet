@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"unicode/utf8"
 )
 
 // The turn engine's telemetry: what a phase tells the rest of the company
@@ -549,13 +550,44 @@ func partialRound(p *toolloop.Partial) map[string]any {
 	}
 	out := map[string]any{
 		"round":     p.Round,
-		"reasoning": p.Reasoning,
-		"content":   p.Content,
+		"reasoning": tail(p.Reasoning),
+		"content":   tail(p.Content),
 	}
 	if len(p.Abandoned) > 0 {
 		out["abandoned"] = roundNarration(p.Abandoned)
 	}
 	return out
+}
+
+// partialTail bounds how much of a round in flight goes on the wire.
+//
+// The whole accumulated text is republished five times a second — deltas
+// cannot be sent instead, because the socket hub drops the OLDEST frame when a
+// client falls behind and a consumer that had missed one would splice the
+// remaining fragments into nonsense. Republishing the accumulation is
+// therefore the correct shape for a lossy channel, and it is also quadratic in
+// the length of the round: a thirteen-thousand-character reasoning block costs
+// a seat about four megabytes over its life, times every open dashboard.
+//
+// The tail is what a reader is actually watching — text appears at the END —
+// and the full text arrives moments later on the round's own narration, which
+// is authoritative anyway. Four thousand characters is roughly two screens at
+// this type size, so nothing a reader could have been mid-way through is cut.
+const partialTail = 4000
+
+// tail is the last partialTail characters, marked when it elides.
+func tail(text string) string {
+	if len(text) <= partialTail {
+		return text
+	}
+	// Cut on a RUNE boundary: slicing a UTF-8 string by bytes can split a
+	// multi-byte character, and the replacement glyph would be the last
+	// thing on screen every time the cut landed mid-character.
+	cut := text[len(text)-partialTail:]
+	for len(cut) > 0 && !utf8.RuneStart(cut[0]) {
+		cut = cut[1:]
+	}
+	return "…" + cut
 }
 
 // encodeArgs renders a call's arguments as JSON text, falling back to nothing
