@@ -76,30 +76,25 @@ func (j *jiraIdentities) resolve(ctx context.Context, url string, deploy jira.De
 		return
 	}
 
-	var wg sync.WaitGroup
 	found := make([]string, len(missing))
-	for i, cred := range missing {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			client, err := jira.NewClient(jira.ClientOptions{
-				URL: url, Email: cred.Email, Token: cred.Token, Deployment: deploy,
-			})
-			if err != nil {
-				log.WarnContext(ctx, "jira_seat_client_failed", "error", err.Error())
-				return
-			}
-			account, err := client.Me(ctx)
-			if err != nil {
-				log.WarnContext(ctx, "jira_seat_identity_unresolved", "error", err.Error(),
-					"detail", "this seat receives no tracker events until "+
-						"the next apply re-resolves it")
-				return
-			}
-			found[i] = account
-		}()
-	}
-	wg.Wait()
+	resolveConcurrently(len(missing), func(i int) {
+		cred := missing[i]
+		client, err := jira.NewClient(jira.ClientOptions{
+			URL: url, Email: cred.Email, Token: cred.Token, Deployment: deploy,
+		})
+		if err != nil {
+			log.WarnContext(ctx, "jira_seat_client_failed", "error", err.Error())
+			return
+		}
+		account, err := client.Me(ctx)
+		if err != nil {
+			log.WarnContext(ctx, "jira_seat_identity_unresolved", "error", err.Error(),
+				"detail", "this seat receives no tracker events until "+
+					"the next apply re-resolves it")
+			return
+		}
+		found[i] = account
+	})
 
 	j.mu.Lock()
 	defer j.mu.Unlock()

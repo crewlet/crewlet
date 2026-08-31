@@ -49,9 +49,11 @@ type githubIdentities struct {
 
 // resolve fills in the accounts behind any credentials not already known.
 //
-// CONCURRENTLY, bounded by the number of distinct credentials. Sequentially
-// this is one round trip per seat on the boot path, which on a company of
-// thirty seats is thirty timeouts end to end against a degraded API.
+// CONCURRENTLY and bounded — see [identityLookups]. Sequentially this is one
+// round trip per seat on the boot path, which on a company of thirty seats is
+// thirty timeouts end to end against a degraded API; unbounded it is thirty
+// simultaneous connections to one vendor, which is the shape an abuse
+// detector is built to notice.
 //
 // A seat whose lookup FAILS is left unresolved rather than failing the boot:
 // GitHub may be briefly down or rate-limiting, and the next apply retries.
@@ -73,30 +75,25 @@ func (g *githubIdentities) resolve(ctx context.Context, api, web string, tokens 
 		return
 	}
 
-	var wg sync.WaitGroup
 	found := make([]string, len(missing))
-	for i, token := range missing {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			client, err := github.NewClient(github.ClientOptions{
-				APIBase: api, WebBase: web, Token: token,
-			})
-			if err != nil {
-				log.WarnContext(ctx, "github_seat_client_failed", "error", err.Error())
-				return
-			}
-			login, err := client.Me(ctx)
-			if err != nil {
-				log.WarnContext(ctx, "github_seat_identity_unresolved", "error", err.Error(),
-					"detail", "this seat receives no code-host events until "+
-						"the next apply re-resolves it")
-				return
-			}
-			found[i] = login
-		}()
-	}
-	wg.Wait()
+	resolveConcurrently(len(missing), func(i int) {
+		token := missing[i]
+		client, err := github.NewClient(github.ClientOptions{
+			APIBase: api, WebBase: web, Token: token,
+		})
+		if err != nil {
+			log.WarnContext(ctx, "github_seat_client_failed", "error", err.Error())
+			return
+		}
+		login, err := client.Me(ctx)
+		if err != nil {
+			log.WarnContext(ctx, "github_seat_identity_unresolved", "error", err.Error(),
+				"detail", "this seat receives no code-host events until "+
+					"the next apply re-resolves it")
+			return
+		}
+		found[i] = login
+	})
 
 	g.mu.Lock()
 	defer g.mu.Unlock()

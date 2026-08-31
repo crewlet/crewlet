@@ -76,28 +76,23 @@ func (g *gitlabIdentities) resolve(ctx context.Context, url string, tokens []str
 		return
 	}
 
-	var wg sync.WaitGroup
 	found := make([]string, len(missing))
-	for i, token := range missing {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			client, err := gitlab.NewClient(gitlab.ClientOptions{URL: url, Token: token})
-			if err != nil {
-				log.WarnContext(ctx, "gitlab_seat_client_failed", "error", err.Error())
-				return
-			}
-			username, err := client.Me(ctx)
-			if err != nil {
-				log.WarnContext(ctx, "gitlab_seat_identity_unresolved", "error", err.Error(),
-					"detail", "this seat receives no code-host events until "+
-						"the next apply re-resolves it")
-				return
-			}
-			found[i] = username
-		}()
-	}
-	wg.Wait()
+	resolveConcurrently(len(missing), func(i int) {
+		token := missing[i]
+		client, err := gitlab.NewClient(gitlab.ClientOptions{URL: url, Token: token})
+		if err != nil {
+			log.WarnContext(ctx, "gitlab_seat_client_failed", "error", err.Error())
+			return
+		}
+		username, err := client.Me(ctx)
+		if err != nil {
+			log.WarnContext(ctx, "gitlab_seat_identity_unresolved", "error", err.Error(),
+				"detail", "this seat receives no code-host events until "+
+					"the next apply re-resolves it")
+			return
+		}
+		found[i] = username
+	})
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
