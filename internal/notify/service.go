@@ -410,10 +410,12 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		ContextRequiresRecon: prompt.RequiresRecon(r.Inbound),
 	}
 	// The conversation key rides on the event so the inbox coalescer can
-	// partition by it without re-deriving a vendor's rule. Stamped here,
+	// partition by it without re-deriving a vendor's rule. Derived here,
 	// where the vendor's prompt is already in hand.
+	conversation := ""
 	if key := prompt.ConversationKey(meta, r.Subject); key != "" {
-		meta[KeyField] = Namespaced(r.Source, key)
+		conversation = Namespaced(r.Source, key)
+		meta[KeyField] = conversation
 	}
 
 	// The SAME trace the webhook edge started, so a delivery and the turn
@@ -422,6 +424,16 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		TraceID: ev.TraceID, ParentSpanID: ev.SpanID,
 	})
 	wake.Source = "notify." + r.Source
+	// AND ONTO THE ENVELOPE, which is what the inbox actually partitions
+	// on. The metadata map above travels INSIDE the typed payload, and the
+	// partition function sees only an *events.Event — it reads the
+	// envelope's own bag (see [Stamp] and [KeyOf]). While the key was
+	// written to the metadata copy alone, every partition fell back to the
+	// event's own id, so ten comments on one thread woke a seat ten times
+	// and ran ten turns instead of the one digest turn the design
+	// describes. Both copies are kept: the metadata one is what a prompt
+	// renders from, this one is what the broker groups on.
+	Stamp(wake, conversation)
 	if err := s.queue.Publish(ctx, topics.AgentInbox(party.Handle), wake); err != nil {
 		return fmt.Errorf("notify: wake %s: %w", party.Handle, err)
 	}

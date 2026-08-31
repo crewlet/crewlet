@@ -253,6 +253,61 @@ func TestADeliveryWakesTheSeatItNames(t *testing.T) {
 	}
 }
 
+// THE ENVELOPE CARRIES THE CONVERSATION KEY, not only the payload's metadata.
+//
+// The regression this exists for, and why the assertion above was not enough:
+// the key was written ONLY into the notification's Metadata map, which travels
+// inside the typed payload. The inbox partitions on the ENVELOPE's own bag —
+// node.conversationKey and notify.KeyOf both read ev.Payload — so every wake
+// fell back to a key of its own event id, every partition was a singleton, and
+// ten comments on one thread woke a seat ten times and ran ten turns instead
+// of the one digest turn the design describes. Both copies are load-bearing:
+// the metadata one is what a prompt renders from, this one is what the broker
+// groups on.
+func TestTheWakeEnvelopeCarriesTheConversationKey(t *testing.T) {
+	h := newService(t, nil)
+	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "please look")}
+
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+
+	woken := h.inbox(t, "engineering-lead")
+	if len(woken) != 1 {
+		t.Fatalf("the seat was woken %d times", len(woken))
+	}
+	if got := notify.KeyOf(woken[0]); got != "tracker:u-1" {
+		t.Errorf("the partition function reads %q, want the vendor's key", got)
+	}
+}
+
+// TWO DELIVERIES IN ONE CONVERSATION PARTITION TOGETHER, which is the whole
+// point of carrying the key: the inbox groups by it, so a busy thread becomes
+// one digest turn rather than one turn per message.
+func TestTwoDeliveriesInOneConversationShareAPartition(t *testing.T) {
+	h := newService(t, nil)
+	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "first")}
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "second")}
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+
+	woken := h.inbox(t, "engineering-lead")
+	if len(woken) != 2 {
+		t.Fatalf("the seat was woken %d times, want twice", len(woken))
+	}
+	first, second := notify.KeyOf(woken[0]), notify.KeyOf(woken[1])
+	if first != second {
+		t.Errorf("two events in one conversation keyed %q and %q", first, second)
+	}
+	if !notify.Derived(first) {
+		t.Errorf("key %q is the per-event fallback, so nothing can coalesce", first)
+	}
+}
+
 // Most webhooks concern nobody here. Recording a skip for each would bury
 // the ones that matter.
 // And a self-contained trigger does NOT ask for recon: the vendor decides
