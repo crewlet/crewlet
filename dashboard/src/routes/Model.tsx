@@ -27,7 +27,7 @@ import { DataTable, type Column } from "~/ui/DataTable.tsx";
 import { useAgents, useClient } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtCount, fmtDuration, plural, relTime } from "~/lib/format.ts";
+import { fmtCount, fmtElapsed, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import {
@@ -217,9 +217,14 @@ export function ModelActivity() {
         shrink: true,
         // Elapsed while it runs, and when it landed once it has. Two
         // different questions, and a running phase has no "when" yet.
+        //
+        // Measured from startedAt, which never moves. Against `at` — which
+        // advances on every published round, several times a second while a
+        // round streams — the answer was always about zero, so a phase nine
+        // rounds deep read "0 ms".
         cell: (r) =>
           r.live ? (
-            <span className="t-num">{fmtDuration(Math.max(0, now - Date.parse(r.at)))}</span>
+            <span className="t-num">{fmtElapsed(now - tsKey(r.startedAt))}</span>
           ) : (
             <span className="t-caption">{relTime(r.at, now)}</span>
           ),

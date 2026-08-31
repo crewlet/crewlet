@@ -226,9 +226,6 @@
   border-radius: var(--r-sm);
   padding: var(--space-1) var(--space-2);
 }
-.tail-end {
-  height: 1px;
-}
 
 /* PROSE. The model's reasoning and its speech are natural language, and were
    set in the monospace `.code` block that tool JSON uses — 11px, tight
@@ -605,6 +602,33 @@
 .new-rows:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* HEADER SPACING. A turn head, the phase head nested inside it and the
+   "Rounds" label were stacked with nothing between them, so three rows of
+   chrome read as one dense block. Each gets air above what it labels. */
+.turn-card > .turn-body {
+  padding-top: var(--space-2);
+}
+.turn-body .phase-card + .phase-card {
+  margin-top: var(--space-2);
+}
+.phase-card > .phase-body {
+  padding-top: var(--space-2);
+}
+.phase-head,
+.turn-head {
+  padding-block: var(--space-2);
+}
+
+/* A failed tool's alert sat on its own line above the name: it was an inline
+   SVG inside a truncating single-line span, so it was the thing that wrapped.
+   The head is a row, and the mark is a non-shrinking item in it. */
+.disclosure-head > svg {
+  flex: none;
+}
+.tool-row .disclosure-head {
+  gap: var(--space-2);
 }
 
 /* A phase whose text is arriving right now. The ring is what the seat page

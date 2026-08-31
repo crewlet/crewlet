@@ -104,6 +104,8 @@ export interface PhaseRecord {
   trigger: { type?: string; summary?: string; actor?: string; integration?: string } | null;
   /** When the phase finished, or when the live call last moved. */
   at: string;
+  /** When a live call BEGAN. Never moves — `at` does, on every round. */
+  startedAt: string;
   /** The event id, when this came from the store — for a deep link. */
   eventId: string;
 }
@@ -278,6 +280,7 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     codingAgent: "",
     trigger: (call.trigger as PhaseRecord["trigger"]) ?? null,
     at: call.updated_at,
+    startedAt: call.started_at || call.updated_at,
     eventId: "",
   };
 }
@@ -327,6 +330,8 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     codingAgent: String(p.coding_agent ?? ""),
     trigger: (p.trigger as PhaseRecord["trigger"]) ?? null,
     at: ev.timestamp,
+    // A finished phase has one instant that matters — when it landed.
+    startedAt: ev.timestamp,
     eventId: ev.id,
   };
 }
@@ -362,6 +367,8 @@ export interface TurnGroup {
   phases: PhaseRecord[];
   /** The newest instant in the group — what the group is ordered by. */
   at: string;
+  /** When the turn's OLDEST phase began. Never moves; `at` does. */
+  startedAt: string;
   live: boolean;
   failed: boolean;
   totalTokens: number;
@@ -385,11 +392,18 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
         return tsKey(a.at) - tsKey(b.at);
       });
       const at = ordered.reduce((max, r) => (tsKey(r.at) > tsKey(max) ? r.at : max), "");
+      // The EARLIEST start across the turn's phases. A turn is "running for"
+      // as long as its first phase has been going, not its newest round.
+      const startedAt = ordered.reduce(
+        (min, r) => (min === "" || tsKey(r.startedAt) < tsKey(min) ? r.startedAt : min),
+        "",
+      );
       return {
         turnId,
         role: ordered[0]?.role ?? "",
         phases: ordered,
         at,
+        startedAt,
         live: ordered.some((r) => r.live),
         failed: ordered.some((r) => r.failed),
         totalTokens: ordered.reduce((n, r) => n + r.totalTokens, 0),

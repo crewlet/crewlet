@@ -74,6 +74,7 @@ func beginCall(env Envelope, payload map[string]any) *LiveCall {
 		RoundNarration: []any{},
 		RoundNum:       -1,
 		InProgress:     true,
+		StartedAt:      env.Timestamp,
 		UpdatedAt:      env.Timestamp,
 	}
 }
@@ -149,6 +150,15 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		trigger = map[string]any{}
 	}
 
+	// CARRIED, never restamped: the call started when it started, and a
+	// round landing is not a new beginning. A progress round that arrives
+	// before its own phase_started (different subjects, no ordering) opens
+	// the clock instead.
+	startedAt := env.Timestamp
+	if cur != nil && cur.sameCall(turnID, phase, iteration) && cur.StartedAt != "" {
+		startedAt = cur.StartedAt
+	}
+
 	agent.liveCall = &LiveCall{
 		TurnID:         turnID,
 		Phase:          phase,
@@ -167,6 +177,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		RoundNum:       roundNum,
 		Rounds:         roundNum + 1,
 		InProgress:     true,
+		StartedAt:      startedAt,
 		UpdatedAt:      env.Timestamp,
 	}
 	return role

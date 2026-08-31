@@ -176,6 +176,8 @@ export interface LiveCall {
   failed?: boolean;
   error?: ErrorInfo | null;
   updated_at: string;
+  /** When the call began. Unlike `updated_at`, it never moves. */
+  started_at?: string;
 }
 
 /** A live token meter. Process-lifetime — never comparable to a spend rollup. */

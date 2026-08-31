@@ -457,3 +457,43 @@ func TestAPhaseStartStillSeedsADifferentCall(t *testing.T) {
 		t.Errorf("response = %q, want a fresh placeholder for a new phase", call.Response)
 	}
 }
+
+func TestALiveCallRemembersWhenItStarted(t *testing.T) {
+	t.Parallel()
+	// UpdatedAt advances on every published round — several times a second
+	// while a round streams — so "how long has this been running" measured
+	// against it is always about zero, and a phase nine rounds deep read as
+	// having just begun.
+	s := livestate.New()
+	s.Apply(env("agent_phase_started", planCall(), at("2026-06-14T12:00:00+00:00")))
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{"round_num": 0}),
+		streamOnly, at("2026-06-14T12:00:20+00:00")))
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{"round_num": 1}),
+		streamOnly, at("2026-06-14T12:00:40+00:00")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call == nil {
+		t.Fatal("no live call")
+	}
+	if call.StartedAt != "2026-06-14T12:00:00+00:00" {
+		t.Errorf("started_at = %q, want the phase's own start", call.StartedAt)
+	}
+	if call.UpdatedAt == call.StartedAt {
+		t.Error("updated_at did not advance; the two fields answer different questions")
+	}
+}
+
+func TestAnOpeningRoundThatBeatsItsPhaseStartOpensTheClock(t *testing.T) {
+	t.Parallel()
+	// The round and the start travel on different subjects. When the round
+	// lands first there is no start to carry forward, so it opens one rather
+	// than leaving the elapsed time unmeasurable.
+	s := livestate.New()
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{"round_num": 0}),
+		streamOnly, at("2026-06-14T12:00:05+00:00")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call == nil || call.StartedAt == "" {
+		t.Fatalf("live call = %+v, want a start time", call)
+	}
+}

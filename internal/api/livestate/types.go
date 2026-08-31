@@ -120,6 +120,12 @@ type LiveCall struct {
 	Error  *ErrorInfo `json:"error,omitempty"`
 
 	UpdatedAt string `json:"updated_at"`
+	// StartedAt is when this call began, and it NEVER moves. UpdatedAt
+	// advances on every published round — several times a second while a
+	// round streams — so "how long has this been running" measured against
+	// it is always about zero. They are different questions and need
+	// different fields.
+	StartedAt string `json:"started_at"`
 }
 
 // Meter is a seat's or the org's live token budget.

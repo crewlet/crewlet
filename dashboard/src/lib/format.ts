@@ -142,6 +142,27 @@ export function fmtDuration(ms: number | null | undefined): string {
   return `${h}h ${m % 60}m`;
 }
 
+/**
+ * How long something has been running, for a clock that reruns every second.
+ *
+ * Distinct from [fmtDuration], which measures a FINISHED span and is free to
+ * be precise: sub-second milliseconds and a tenth of a second are meaningful
+ * for a call that took 340 ms. On a live counter they are noise — the number
+ * churns through "0 ms", "1.4 s", "1.9 s" and reads as a glitch rather than a
+ * clock. Whole seconds from the first tick, and never below zero, because a
+ * seat's clock and the browser's disagree by a few hundred milliseconds and a
+ * "-1 s" or an "in 1s" is the one reading that is certainly wrong.
+ */
+export function fmtElapsed(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
 /** Elapsed between two ISO stamps, or null when either is missing. */
 export function elapsedMs(from?: string | null, to?: string | null): number | null {
   const a = tsKey(from);

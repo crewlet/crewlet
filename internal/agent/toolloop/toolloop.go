@@ -400,6 +400,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	var narration []Narration
 	var inTokens, outTokens int
 	var model string
+	// served distinguishes the model a COMPLETION named from the configured
+	// placeholder a streamed round shows before one exists.
+	var served bool
 	terminators := make(map[string]struct{}, len(cfg.TerminateAfter))
 	for _, name := range cfg.TerminateAfter {
 		terminators[name] = struct{}{}
@@ -462,6 +465,17 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		roundCtx, roundSpan := tracing.Start(ctx, "agent.toolloop", "llm.round",
 			attribute.String("crewlet.phase", cfg.Surface.Phase()),
 			attribute.Int("crewlet.round", roundsUsed))
+		// The CONFIGURED identity, as a placeholder, so a streamed round
+		// is not attributed to no model at all. Streaming publishes while
+		// the call is still open, and `model` is only latched from the
+		// completion once it returns — so every frame of a streamed round
+		// reported an empty model, and a running row showed a dash where
+		// its model should be. Overwritten below by the model that
+		// actually served the call, which is the billable fact.
+		if model == "" {
+			model = cfg.Provider.Model()
+		}
+
 		// One partial per round, replaced by the round's real narration
 		// the moment the model finishes.
 		var onDelta func(llm.Delta)
@@ -531,12 +545,17 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			attribute.Int("crewlet.cache_read_tokens", completion.CacheRead),
 			attribute.Int("crewlet.tool_calls", len(completion.ToolCalls)))
 		roundSpan.End()
-		if model == "" {
+		if !served && completion.Model != "" {
 			// The completion names the model that actually served this
 			// round, which is what the per-model token breakdown is built
 			// from; the provider's own name is its CONFIGURED identity and
 			// only stands in for a backend that filled nothing in.
-			model = completion.Model
+			//
+			// It OVERRIDES the placeholder set before the call, and latches
+			// on the first completion that names one — so a streamed round
+			// has something to show while it writes, and the billable fact
+			// still wins the moment it exists.
+			model, served = completion.Model, true
 		}
 		if model == "" {
 			model = cfg.Provider.Model()

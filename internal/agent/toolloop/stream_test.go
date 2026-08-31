@@ -144,3 +144,38 @@ func (p *streamingProvider) Complete(_ context.Context, req llm.Request) (*llm.C
 	out := p.final
 	return &out, nil
 }
+
+// A streamed round publishes WHILE the call is open, and the model that served
+// it is only known once the call returns — so every frame of a streamed round
+// reported an empty model and a running row showed a dash where its model
+// should be. The configured name stands in until the real one exists.
+func TestAStreamedRoundNamesAModelBeforeTheCallReturns(t *testing.T) {
+	t.Parallel()
+	p := &streamingProvider{
+		fragments: []llm.Delta{{Content: "think"}},
+		final:     llm.Completion{Content: "done", Model: "served-model"},
+	}
+	var duringCall []string
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{}, MaxRounds: 2,
+		StreamPartials: true, PartialInterval: time.Nanosecond,
+		OnProgress: func(live toolloop.Result) {
+			if live.Partial != nil {
+				duringCall = append(duringCall, live.Model)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, m := range duringCall {
+		if m == "" {
+			t.Fatalf("a streamed round published with no model: %#v", duringCall)
+		}
+	}
+	// And the model that ACTUALLY served still wins — it is the billable
+	// fact and what the per-model breakdown is built from.
+	if res.Model != "served-model" {
+		t.Errorf("model = %q, want the one the completion named", res.Model)
+	}
+}

@@ -16,7 +16,7 @@ import { useState } from "react";
 import { Badge, PhaseTag, cx } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { PhaseCard } from "./PhaseCard.tsx";
-import { fmtCount, fmtDateTime, fmtDuration, relTime, tsKey } from "~/lib/format.ts";
+import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href } from "~/app/router.tsx";
 import type { TurnGroup } from "~/lib/phases.ts";
@@ -81,8 +81,15 @@ export function TurnCard({
             {fmtDuration(span)}
           </span>
         )}
-        <time className="phase-meta" dateTime={group.at} title={fmtDateTime(group.at)}>
-          {relTime(group.at, now)}
+        {/* Running for HOW LONG, or landed WHEN — measured from a start
+            that does not move. Against `at`, which advances on every
+            streamed frame, a live turn read "just now" forever. */}
+        <time
+          className="phase-meta"
+          dateTime={group.live ? group.startedAt : group.at}
+          title={fmtDateTime(group.live ? group.startedAt : group.at)}
+        >
+          {group.live ? fmtElapsed(now - tsKey(group.startedAt)) : relTime(group.at, now)}
         </time>
       </header>
 

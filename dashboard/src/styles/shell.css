@@ -17,12 +17,16 @@
   border-right: 1px solid var(--border-subtle);
 }
 
+/* The brand had no vertical padding at all — a two-line lockup inside a fixed
+   52px box, so it sat against the top edge — and its 12px inset put the mark
+   4px left of where every nav label starts. The left inset now MATCHES the
+   nav: the group's own 8px plus each item's 8px. */
 .brand {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  height: var(--topbar-h);
-  padding: 0 var(--space-3);
+  min-height: var(--topbar-h);
+  padding: var(--space-4) calc(var(--space-2) * 2) var(--space-3);
   flex: none;
 }
 .brand img {

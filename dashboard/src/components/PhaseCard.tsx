@@ -36,7 +36,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge, Button, PhaseTag, cx } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
-import { fmtCount, fmtDateTime, relTime } from "~/lib/format.ts";
+import { fmtCount, fmtDateTime, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import { decisionLabel, ledgerOf, type PhaseRecord, type Round } from "~/lib/phases.ts";
 import { staleness } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -49,6 +49,7 @@ function Disclosure({
   defaultOpen,
   mono,
   tone,
+  mark,
 }: {
   label: ReactNode;
   count?: ReactNode;
@@ -56,12 +57,15 @@ function Disclosure({
   defaultOpen?: boolean;
   mono?: boolean;
   tone?: "reasoning";
+  /** A status mark, rendered as its OWN item in the head's row. */
+  mark?: ReactNode;
 }) {
   const [open, setOpen] = useState(!!defaultOpen);
   return (
     <div className={cx("disclosure", tone && `tone-${tone}`)}>
       <button className="disclosure-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <Icon name={open ? "chevronDown" : "chevronRight"} size="xs" />
+        {mark}
         <span className={cx("truncate", mono && "mono")}>{label}</span>
         {count != null && <span className="count-chip">{count}</span>}
       </button>
@@ -85,12 +89,13 @@ function ToolRow({
     <div className={cx("tool-row", failed && "failed")}>
       <Disclosure
         mono
-        label={
-          <>
-            {failed && <Icon name="alert" size="xs" style={{ color: "var(--critical-ink)" }} />}
-            {name}
-          </>
+        // A SIBLING of the name, not part of it. Inside the label it sat in
+        // a truncating single-line span and was the thing that wrapped, so a
+        // failed call showed its alert on its own line above the tool.
+        mark={
+          failed ? <Icon name="alert" size="xs" style={{ color: "var(--critical-ink)" }} /> : null
         }
+        label={name}
       >
         <div className="col gap-1">
           <div className="t-label">Arguments</div>
@@ -114,13 +119,15 @@ function ToolRow({
  * by where they last left the scroll.
  */
 function useTail(active: boolean, depth: number) {
-  const end = useRef<HTMLDivElement | null>(null);
+  // A ref to the SCROLLER itself, not to a marker inside it. The scroller is
+  // conditionally a scroller — it only bounds its height while the phase is
+  // live — so resolving it by `closest()` at mount found whatever happened to
+  // exist then, and the listener outlived the element it was attached to.
+  const box = useRef<HTMLDivElement | null>(null);
   const following = useRef(true);
 
   useEffect(() => {
-    const node = end.current;
-    if (!node) return;
-    const scroller = node.closest(".tail-scroll") as HTMLElement | null;
+    const scroller = box.current;
     if (!scroller) return;
     const onScroll = () => {
       const slack = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
@@ -128,16 +135,20 @@ function useTail(active: boolean, depth: number) {
     };
     scroller.addEventListener("scroll", onScroll, { passive: true });
     return () => scroller.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [active]);
 
   useEffect(() => {
     if (!active || !following.current) return;
-    // `auto` rather than `smooth`: rounds can land in bursts, and queued
-    // smooth scrolls fight each other into a visible stutter.
-    end.current?.scrollIntoView({ block: "end", behavior: "auto" });
+    const scroller = box.current;
+    if (!scroller) return;
+    // scrollTop, NEVER scrollIntoView. scrollIntoView scrolls every
+    // scrollable ancestor, so following the newest round also dragged the
+    // whole page — which is what made a reader lose the stream every time a
+    // round landed. Setting scrollTop moves this box and nothing else.
+    scroller.scrollTop = scroller.scrollHeight;
   }, [active, depth]);
 
-  return end;
+  return box;
 }
 
 /** One round: thinking, speech, then the calls that round asked for. */
@@ -279,8 +290,15 @@ export function PhaseCard({
         <span className="phase-meta t-num" title="total tokens">
           {record.totalTokens ? fmtCount(record.totalTokens) : "—"}
         </span>
-        <time className="phase-meta" dateTime={record.at} title={fmtDateTime(record.at)}>
-          {relTime(record.at, now)}
+        {/* Running for HOW LONG, or landed WHEN. A live phase measured
+            against `at` — which moves on every streamed frame — flickered
+            between "just now" and "in 1s" as the two clocks crossed. */}
+        <time
+          className="phase-meta"
+          dateTime={record.live ? record.startedAt : record.at}
+          title={fmtDateTime(record.live ? record.startedAt : record.at)}
+        >
+          {record.live ? fmtElapsed(now - tsKey(record.startedAt)) : relTime(record.at, now)}
         </time>
       </header>
 
@@ -311,7 +329,7 @@ export function PhaseCard({
                   what the model thought, said and called, in order
                 </span>
               </div>
-              <div className={cx("tail-scroll", record.live && "tailing")}>
+              <div ref={tailRef} className={cx("tail-scroll", record.live && "tailing")}>
                 <ol className="round-ledger">
                   {ledger.map((r, i) => (
                     <RoundBlock
@@ -321,7 +339,6 @@ export function PhaseCard({
                     />
                   ))}
                 </ol>
-                <div ref={tailRef} className="tail-end" />
               </div>
             </section>
           )}

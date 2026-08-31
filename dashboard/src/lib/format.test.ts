@@ -24,6 +24,7 @@ import {
   splitConversationKey,
   truncate,
   tsKey,
+  fmtElapsed,
 } from "./format.ts";
 
 describe("timestamps", () => {
@@ -169,5 +170,34 @@ describe("counts and their nouns", () => {
 
   test("a large count is grouped", () => {
     expect(plural(12000, "event")).toBe(`${(12000).toLocaleString()} events`);
+  });
+});
+
+describe("a live counter reads as a clock, not as a glitch", () => {
+  test("whole seconds — never milliseconds or tenths", () => {
+    // The live row churned through "0 ms", "1.4 s", "1.9 s" once a second.
+    expect(fmtElapsed(0)).toBe("0s");
+    expect(fmtElapsed(340)).toBe("0s");
+    expect(fmtElapsed(1400)).toBe("1s");
+    expect(fmtElapsed(1900)).toBe("1s");
+    expect(fmtElapsed(59_000)).toBe("59s");
+  });
+
+  test("a clock skew never shows a negative or a future", () => {
+    // A seat's clock and the browser's disagree by a few hundred
+    // milliseconds, and "in 1s" for something already running is the one
+    // reading that is certainly wrong.
+    expect(fmtElapsed(-800)).toBe("0s");
+  });
+
+  test("minutes and hours", () => {
+    expect(fmtElapsed(72_000)).toBe("1m 12s");
+    expect(fmtElapsed(3_800_000)).toBe("1h 3m");
+  });
+
+  test("a missing span is a dash, not a zero", () => {
+    expect(fmtElapsed(null)).toBe("—");
+    expect(fmtElapsed(undefined)).toBe("—");
+    expect(fmtElapsed(NaN)).toBe("—");
   });
 });
