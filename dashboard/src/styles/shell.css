@@ -21,12 +21,16 @@
    52px box, so it sat against the top edge — and its 12px inset put the mark
    4px left of where every nav label starts. The left inset now MATCHES the
    nav: the group's own 8px plus each item's 8px. */
+/* ONE inset for the whole rail, so the mark, the group labels and the item
+   text all start on the same vertical line. It is composed rather than
+   repeated: the rail pads by --nav-gutter and each row pads by its own
+   --space-2, and the brand adds the two because it has no row of its own. */
 .brand {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   min-height: var(--topbar-h);
-  padding: var(--space-4) calc(var(--space-2) * 2) var(--space-3);
+  padding: var(--space-4) calc(var(--nav-gutter) + var(--space-2)) var(--space-3);
   flex: none;
 }
 .brand img {
@@ -52,7 +56,7 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-2) var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--nav-gutter) var(--space-4);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -121,7 +125,9 @@
 
 .sidebar-foot {
   flex: none;
-  padding: var(--space-2);
+  /* Same gutter as the rail above it, so the status pill and the theme
+     buttons line up with the nav rather than sitting further out. */
+  padding: var(--space-2) var(--nav-gutter);
   border-top: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;

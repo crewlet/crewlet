@@ -115,6 +115,9 @@
   --r-full: 999px;
 
   /* ---- Layout ---------------------------------------------------------- */
+  /* The rail's own inset. Each nav row adds its --space-2 on top, so text
+     and icons settle at --nav-gutter + 8px from the sidebar's edge. */
+  --nav-gutter: var(--space-3);
   --sidebar-w: 236px;
   --sidebar-w-collapsed: 60px;
   --topbar-h: 52px;

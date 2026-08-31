@@ -118,7 +118,7 @@ function ToolRow({
  * phase look frozen. So "am I still tailing?" is a piece of reader state, set
  * by where they last left the scroll.
  */
-function useTail(active: boolean, depth: number) {
+function useTail(active: boolean) {
   // A ref to the SCROLLER itself, not to a marker inside it. The scroller is
   // conditionally a scroller — it only bounds its height while the phase is
   // live — so resolving it by `closest()` at mount found whatever happened to
@@ -128,25 +128,41 @@ function useTail(active: boolean, depth: number) {
 
   useEffect(() => {
     const scroller = box.current;
-    if (!scroller) return;
+    if (!scroller || !active) return;
+
     const onScroll = () => {
       const slack = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
       following.current = slack < 48;
     };
     scroller.addEventListener("scroll", onScroll, { passive: true });
-    return () => scroller.removeEventListener("scroll", onScroll);
-  }, [active]);
 
-  useEffect(() => {
-    if (!active || !following.current) return;
-    const scroller = box.current;
-    if (!scroller) return;
     // scrollTop, NEVER scrollIntoView. scrollIntoView scrolls every
     // scrollable ancestor, so following the newest round also dragged the
-    // whole page — which is what made a reader lose the stream every time a
-    // round landed. Setting scrollTop moves this box and nothing else.
-    scroller.scrollTop = scroller.scrollHeight;
-  }, [active, depth]);
+    // whole page. Setting scrollTop moves this box and nothing else.
+    const stick = () => {
+      if (!following.current) return;
+      scroller.scrollTop = scroller.scrollHeight;
+    };
+    stick();
+
+    // DRIVEN BY LAYOUT, not by a number derived from the data. Deriving it
+    // meant naming in advance which field's growth counts, and the first
+    // attempt counted the round's `content` — so a phase streaming a long
+    // THINKING block grew for a minute without the effect ever re-running,
+    // and the box sat still while text poured into it. A size observer fires
+    // for every reason the content can get taller: a fragment landing, a new
+    // round, a disclosure opening, the window narrowing and text rewrapping.
+    // Guarded because jsdom has no ResizeObserver: the box then simply does
+    // not follow, which is the same as a phase that is not live.
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(stick);
+    if (observer) {
+      for (const child of Array.from(scroller.children)) observer.observe(child);
+    }
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      observer?.disconnect();
+    };
+  }, [active]);
 
   return box;
 }
@@ -223,12 +239,7 @@ export function PhaseCard({
   const stale = record.live ? staleness(record.at, now) : "";
   // The last round is the live one while the phase runs: rounds only append,
   // so "newest" and "last" are the same row and stay the same row.
-  // Follows the round count AND the streamed length, so the newest text stays
-  // in view while it is being written, not only when a whole round lands.
-  const tailRef = useTail(
-    open && record.live,
-    ledger.length + (ledger[ledger.length - 1]?.content.length ?? 0),
-  );
+  const tailRef = useTail(open && record.live);
 
   return (
     <article
