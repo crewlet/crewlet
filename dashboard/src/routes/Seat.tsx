@@ -48,7 +48,7 @@ import {
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 
-type Tab = "overview" | "model" | "memory" | "threads" | "cost" | "access";
+type Tab = "overview" | "model" | "memory" | "cost" | "access";
 
 const seatTurnKey = (g: { turnId: string }) => g.turnId;
 
@@ -80,7 +80,6 @@ export function SeatScreen({ handle }: { handle: string }) {
     { enabled: tab === "overview" || tab === "model" },
   );
   const memory = useQuery("agent_memory", { id: handle }, { enabled: tab === "memory" });
-  const threads = useQuery("conversations", { handle }, { enabled: tab === "threads" });
   const spend = useQuery(
     "tokens",
     { agent_role: seat?.name ?? "", since_days: 7, recent_turns: 50 },
@@ -199,7 +198,6 @@ export function SeatScreen({ handle }: { handle: string }) {
           { value: "overview", label: "Overview", icon: "user" },
           { value: "model", label: "Model activity", icon: "brain" },
           { value: "memory", label: "Memory", icon: "database" },
-          { value: "threads", label: "Conversations", icon: "message" },
           { value: "cost", label: "Cost", icon: "coin" },
           { value: "access", label: "Access", icon: "key" },
         ]}
@@ -547,12 +545,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       header: "Conversation",
                       cell: (e) =>
                         e.conversation_key ? (
-                          <a
-                            className="mono t-caption"
-                            href={href(["conversations"], { key: e.conversation_key })}
-                          >
-                            {e.conversation_key}
-                          </a>
+                          <span className="mono t-caption">{e.conversation_key}</span>
                         ) : (
                           <span className="faint">—</span>
                         ),
@@ -624,77 +617,6 @@ export function SeatScreen({ handle }: { handle: string }) {
               </Panel>
             </div>
           </QueryState>
-        </>
-      )}
-
-      {tab === "threads" && (
-        <>
-          {threads.loading && <Skeleton rows={4} />}
-          {threads.data && threads.data.available === false ? (
-            <div className="banner neutral">
-              <Icon name="database" size="sm" />
-              <span>
-                This node holds no conversation ledger, so it cannot say which threads this seat is
-                carrying. The ledger is written by the node that ran the turn.
-              </span>
-            </div>
-          ) : (
-            <QueryState
-              error={threads.error}
-              loading={threads.loading}
-              empty={
-                threads.data?.conversations?.length
-                  ? undefined
-                  : {
-                      title: "No conversations recorded",
-                      hint: "A conversation is recorded when this seat completes a turn that served one — a Slack thread, a Jira issue, a pull request.",
-                    }
-              }
-            >
-              <Panel padding="none">
-                <DataTable
-                  rows={threads.data?.conversations ?? []}
-                  rowKey={(c) => c.key}
-                  defaultSort={{ key: "last", dir: "desc" }}
-                  onRowClick={(c) => nav.to(["conversations"], { handle, key: c.key })}
-                  columns={[
-                    {
-                      key: "source",
-                      header: "Surface",
-                      shrink: true,
-                      sortValue: (c) => splitConversationKey(c.key).source,
-                      cell: (c) => (
-                        <Badge outline>{splitConversationKey(c.key).source || "—"}</Badge>
-                      ),
-                    },
-                    {
-                      key: "key",
-                      header: "Conversation",
-                      sortValue: (c) => c.key,
-                      cell: (c) => (
-                        <code className="inline">{splitConversationKey(c.key).local}</code>
-                      ),
-                    },
-                    {
-                      key: "turns",
-                      header: "Turns",
-                      align: "right",
-                      shrink: true,
-                      sortValue: (c) => c.turns,
-                      cell: (c) => c.turns,
-                    },
-                    {
-                      key: "last",
-                      header: "Last",
-                      shrink: true,
-                      sortValue: (c) => c.last_at,
-                      cell: (c) => <span className="t-caption">{relTime(c.last_at, now)}</span>,
-                    },
-                  ]}
-                />
-              </Panel>
-            </QueryState>
-          )}
         </>
       )}
 

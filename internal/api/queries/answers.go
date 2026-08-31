@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/config"
@@ -72,9 +71,6 @@ type Sources struct {
 	// the org — with an empty history, because "no ledger" and "nothing
 	// has fired" are told apart by the answer's own shape.
 	Runs ScheduleRuns
-
-	// Conversations is what each seat already said in each thread it works.
-	Conversations ledgerstore.Conversations
 
 	// Diary, Episodes and Skills are a seat's memory. Skills is the half
 	// that had no query at all: learning.Skills.List exists and is tested,
@@ -219,9 +215,6 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Sandbox != nil {
 		r.Register("sandbox_runs", s.sandboxRuns)
-	}
-	if s.Conversations != nil {
-		r.Register("conversations", s.conversations)
 	}
 	if s.Diary != nil || s.Episodes != nil || s.Skills != nil {
 		r.Register("agent_memory", s.agentMemory)

@@ -461,13 +461,13 @@ export function PhaseCard({
               {record.providerKey ? ` · provider ${record.providerKey}` : ""}
             </span>
             <span className="spacer" />
+            {/* The key, not a link. It named a thread on a screen that no
+                longer views threads — and it is still worth showing, because
+                it says WHICH external conversation this turn served. */}
             {record.conversationKey && (
-              <a
-                className="t-caption"
-                href={href(["conversations"], { key: record.conversationKey })}
-              >
+              <span className="t-caption mono" title="the conversation this turn served">
                 {record.conversationKey}
-              </a>
+              </span>
             )}
             {record.eventId && (
               <a className="t-caption" href={href(["events", record.eventId])}>

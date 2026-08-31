@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
@@ -76,19 +75,18 @@ func everySeam(t *testing.T) queries.Sources {
 	surface, _ := configSurface(t, companyDoc)
 	cfg := company(t)
 	return queries.Sources{
-		State:         &livestate.LiveState{},
-		Events:        &store.EventLog{},
-		Health:        func() any { return nil },
-		Company:       func() *config.Company { return cfg },
-		Coord:         coordmemory.New(),
-		Plane:         coordmemory.NewFleet(),
-		Runs:          fakeRuns{},
-		Conversations: ledgerstore.NewMemoryConversations(),
-		Diary:         &learning.Diary{},
-		Episodes:      &learning.Episodes{},
-		Budget:        coordmemory.NewFleet(),
-		Sandbox:       memorySandbox{},
-		Config:        surface,
+		State:    &livestate.LiveState{},
+		Events:   &store.EventLog{},
+		Health:   func() any { return nil },
+		Company:  func() *config.Company { return cfg },
+		Coord:    coordmemory.New(),
+		Plane:    coordmemory.NewFleet(),
+		Runs:     fakeRuns{},
+		Diary:    &learning.Diary{},
+		Episodes: &learning.Episodes{},
+		Budget:   coordmemory.NewFleet(),
+		Sandbox:  memorySandbox{},
+		Config:   surface,
 	}
 }
 

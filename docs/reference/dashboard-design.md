@@ -141,9 +141,9 @@ meets their company first and the engine last.
 | — | **Overview** | `#/` | what needs a person · what the company is doing · what it has cost. The snapshot's `agents` / `events` / `sandboxes` / `org` / `tokens` / `budget`, plus the `stream` query |
 | **Company** | People | `#/people?group=&q=` | every seat and what it is doing — grouped by state, by unit, or flat |
 | | Org chart | `#/org?lens=chart\|directory\|charter` | the hierarchy, the directory, and the company's own mission, vision and policies |
-| | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · conversations · cost · access |
+| | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access |
 | **Work** | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
-| | Conversations | `#/conversations?lens=&handle=&key=` | the conversation ledger, and the `a2a_channels` record |
+| | Agent-to-agent | `#/conversations` | `a2a_channels` — who asked whom, how many messages, and when |
 | | Schedules | `#/schedules` | `schedules` — what fires, when it next fires, how it last went |
 | **Intelligence** | Model activity | `#/model?role=&phase=&failed=` | `phases` — one row per phase across the fleet; the transcript is on the seat |
 | | Event log | `#/activity?category=&actor=&q=&failed=` | the live feed, then `events` for older pages |

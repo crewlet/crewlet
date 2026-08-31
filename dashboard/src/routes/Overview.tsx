@@ -379,9 +379,9 @@ export function Overview() {
               path: ["model"],
             },
             {
-              icon: "message" as const,
-              title: "Conversations",
-              body: "The threads each seat is carrying across Slack, Jira and GitHub, plus the agent-to-agent channels they opened.",
+              icon: "link" as const,
+              title: "Agent-to-agent",
+              body: "The private channels seats opened with each other: one ask, one answer, then closed.",
               path: ["conversations"],
             },
             {

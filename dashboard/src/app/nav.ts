@@ -85,10 +85,10 @@ export const NAV: NavGroup[] = [
       },
       {
         key: "conversations",
-        label: "Conversations",
-        icon: "message",
+        label: "Agent-to-agent",
+        icon: "link",
         path: ["conversations"],
-        hint: "Threads a seat is carrying, and agent-to-agent channels",
+        hint: "The private channels seats opened with each other",
       },
       {
         key: "schedules",

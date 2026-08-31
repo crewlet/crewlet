@@ -26,7 +26,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -910,13 +909,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// company: an apply replaces it, and a screen bound to the
 			// one this process booted on would describe a company that
 			// is no longer running.
-			Company:       func() *config.Company { return companyConfig(e) },
-			Coord:         e.Backends().Coord,
-			Plane:         e.Backends().Fleet,
-			Runs:          sqlledger.New(e.Backends().Store.SQL()),
-			Conversations: ledgerstore.NewConversations(e.Backends().Store),
-			Diary:         learning.NewDiary(e.Backends().Store),
-			Episodes:      learning.NewEpisodes(e.Backends().Store),
+			Company:  func() *config.Company { return companyConfig(e) },
+			Coord:    e.Backends().Coord,
+			Plane:    e.Backends().Fleet,
+			Runs:     sqlledger.New(e.Backends().Store.SQL()),
+			Diary:    learning.NewDiary(e.Backends().Store),
+			Episodes: learning.NewEpisodes(e.Backends().Store),
 			// The skills a seat drafted for ITSELF. They were written,
 			// versioned and loadable by the agent, and reachable by no
 			// screen — so the operator paying for the learning loop

@@ -50,8 +50,9 @@ deletes a coding CLI's own sessions before and after every call, precisely so
 that one task's context cannot leak into the next through a channel nobody can
 see. This ledger is the inverse shape of what that rule rejects: engine-owned
 rather than tool-private, scoped to one conversation rather than leaking
-across tasks, rendered into the prompt as a visible block, and readable by a
-person on the seat page's **Threads** tab.
+across tasks, and rendered into the prompt as a visible block — so the context
+it adds is stated in the turn that uses it, where a person reading that turn
+can see it, rather than applied out of sight.
 
 ---
 
@@ -219,10 +220,10 @@ and the [maintenance worker](scaling.md) sweeps past `retention_days`.
 
 **Failure never stops a turn.** A write that fails is swallowed — it happens on
 a completed turn's tail, where there is nothing left to tell. A read that fails
-*raises*, and each caller decides: the turn engine renders no history (exactly
-the pre-ledger prompt), the API reports that it could not see the ledger.
-Swallowing it in the store would make "unreadable" and "nothing said yet" one
-answer, and an operator screen would draw a database outage as a silent seat.
+*raises*, and the caller decides: the turn engine renders no history (exactly
+the pre-ledger prompt) and logs that it could not read it. Swallowing it in the
+store would make "unreadable" and "nothing said yet" one answer, and a seat
+would run without its history with nothing anywhere to say why.
 
 Without a database the engine wires the in-memory twin, so a single node still
 gets the feature; a seat that moves between nodes simply arrives with no
@@ -232,19 +233,21 @@ history, which is the same fail-open answer.
 
 ## Reading it
 
-The seat page's **Threads** tab lists every conversation a seat has worked and
-expands each into its entries — the same rows the prompt is built from, shown
-verbatim. Also available over the API:
+**There is no read surface, deliberately.** The ledger is prompt context: the
+engine renders it into the next turn of the same conversation and nothing else
+consumes it.
 
-```bash
-curl -s 'localhost:8000/conversations?handle=eng'
-curl -s 'localhost:8000/conversations?handle=eng&key=jira:POC-7'
-```
+A dashboard tab and a `/conversations` endpoint did exist, and both were
+removed. They were a viewer for somebody ELSE's threads — a Slack channel, a
+Jira issue — reconstructed from what the engine happened to record about them,
+always a worse version of the thread than the surface it lives on, and a
+conversations screen in this product is meant to be Crewlet's own messaging
+when there is one to show. Keeping a half-view until then would have promised
+a chat system the engine does not have.
 
-`available: false` means this node cannot see the ledger — never that the seat
-has said nothing. The tab keeps that distinction at both levels: the list of
-conversations and each expanded conversation's entries are separate reads, and
-either failing says so rather than drawing an empty thread.
+The entries reach a person through the prompt they shape, and through the
+`conversation_key` shown on a phase, which names the external thread a turn
+served so a reader can go to it.
 
 ---
 

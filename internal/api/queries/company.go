@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -445,89 +444,6 @@ func slackSeats(company *config.Company) int {
 }
 
 func boolPtr(v bool) *bool { return &v }
-
-// conversations answers what a seat already said — the threads it holds
-// context for, or one thread's entries.
-//
-// Served because a context source an operator cannot read is an invisible
-// second memory. This one is engine-owned, so it can be shown instead.
-func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
-	handle := p.String("handle")
-	if handle == "" {
-		return nil, fmt.Errorf("%w: conversations needs a handle", ErrBadParams)
-	}
-	// `available` is present on EVERY answer, and it is the whole reason a
-	// reader can trust an empty list. The ledger is written by whichever node
-	// ran the turn, so on a fleet a node can legitimately hold none of a
-	// seat's threads — and "this seat has said nothing" and "this node does
-	// not have the record" are different facts a screen must be able to tell
-	// apart. Without it the client gated its whole tab on a key that was
-	// never sent, so the tab said "no conversation ledger on this node" even
-	// when the answer carried threads.
-	if key := p.String("key"); key != "" {
-		entries, err := s.Conversations.History(ctx, handle, key, ConversationEntryLimit)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{
-			"handle":        handle,
-			"key":           key,
-			"conversations": []any{},
-			// ledger.Session is passed through: unlike the learning
-			// types it carries its own json tags, because the prompt
-			// builder and the store already share this shape.
-			"entries":   entriesOrEmpty(entries),
-			"available": true,
-		}, nil
-	}
-	threads, err := s.Conversations.Threads(ctx, handle, ConversationListLimit)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]map[string]any, 0, len(threads))
-	for _, thread := range threads {
-		out = append(out, map[string]any{
-			// `key`, and `turns` for the count. The previous shape named
-			// them `conversation_key` and `entries` — the second of which
-			// collided with the answer's own `entries` list, so one word
-			// meant a count in one place and a list in another.
-			"key":     thread.Key,
-			"turns":   thread.Entries,
-			"last_at": isoOrEmpty(thread.LastAt),
-		})
-	}
-	return map[string]any{
-		"handle":        handle,
-		"conversations": out,
-		"entries":       []any{},
-		"available":     true,
-	}, nil
-}
-
-// entriesOrEmpty guarantees a list rather than `null`.
-//
-// A nil slice marshals as `null`, and every consumer here reads `.length` off
-// it — the same shape mismatch that made the Trace screen report "not found"
-// for every trace it was given.
-func entriesOrEmpty(sessions []ledger.Session) []ledger.Session {
-	if sessions == nil {
-		return []ledger.Session{}
-	}
-	return sessions
-}
-
-// The two conversation windows.
-const (
-	// ConversationListLimit bounds the threads one seat's page lists. A
-	// seat working a busy chat surface accumulates a thread per channel,
-	// and the page shows them as a sidebar.
-	ConversationListLimit = 50
-
-	// ConversationEntryLimit bounds one thread's entries. It matches the
-	// window a turn itself is given, so what an operator reads is what the
-	// next turn will read.
-	ConversationEntryLimit = 50
-)
 
 // agentMemory answers a seat's memory: its diary and its episodes.
 //

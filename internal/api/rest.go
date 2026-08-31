@@ -50,7 +50,6 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/fleet", what: "fleet"},
 	{method: "GET", pattern: "/sandbox-runs", what: "sandbox_runs"},
 	{method: "GET", pattern: "/budgets", what: "budgets"},
-	{method: "GET", pattern: "/conversations", what: "conversations"},
 	{method: "GET", pattern: "/integrations", what: "integrations"},
 }
 
