@@ -24,7 +24,13 @@
  * read. It is what `rounds()` below groups on, and rounds only ever append.
  */
 
-import type { EventRecord, LiveCall, PromptMessage, ToolExecution } from "~/protocol/index.ts";
+import type {
+  EventRecord,
+  LiveCall,
+  PartialRound,
+  PromptMessage,
+  ToolExecution,
+} from "~/protocol/index.ts";
 import { tsKey } from "./format.ts";
 
 export interface ToolCall {
@@ -50,6 +56,10 @@ export interface Round {
   /** The model's prose for this round. */
   content: string;
   tools: ToolCall[];
+  /** Still being written: this text is arriving, not committed. */
+  streaming: boolean;
+  /** Attempts a provider gave up on partway through, oldest first. */
+  abandoned: Narration[];
 }
 
 export interface PhaseRecord {
@@ -73,6 +83,8 @@ export interface PhaseRecord {
   /** Per-round model turns. Empty on a phase recorded before the engine
       sent them — see `ledgerOf`. */
   narration: Narration[];
+  /** The round being written right now. Live phases only. */
+  partial: PartialRound | null;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
@@ -149,12 +161,16 @@ export function narrations(raw: unknown): Narration[] {
  * this display depends on: nothing above the insertion point can move, so a
  * reader's eye stays where they left it while a turn runs underneath.
  */
-export function rounds(calls: ToolCall[], narration: Narration[] = []): Round[] {
+export function rounds(
+  calls: ToolCall[],
+  narration: Narration[] = [],
+  partial?: PartialRound | null,
+): Round[] {
   const byRound = new Map<number, Round>();
   const at = (round: number): Round => {
     let r = byRound.get(round);
     if (!r) {
-      r = { round, reasoning: "", content: "", tools: [] };
+      r = { round, reasoning: "", content: "", tools: [], streaming: false, abandoned: [] };
       byRound.set(round, r);
     }
     return r;
@@ -168,6 +184,15 @@ export function rounds(calls: ToolCall[], narration: Narration[] = []): Round[] 
     r.content = n.content;
   }
   for (const call of calls) at(call.round).tools.push(call);
+  // The round in flight. The engine clears it the instant that round's real
+  // narration exists, so the two can never describe one round at once.
+  if (partial && typeof partial.round === "number") {
+    const r = at(partial.round);
+    r.streaming = true;
+    r.reasoning = partial.reasoning ?? "";
+    r.content = partial.content ?? "";
+    r.abandoned = narrations(partial.abandoned);
+  }
   return [...byRound.values()].sort((a, b) => a.round - b.round);
 }
 
@@ -182,12 +207,17 @@ export function rounds(calls: ToolCall[], narration: Narration[] = []): Round[] 
  * response in one trailing pseudo-round, which is what the reader used to
  * get, and every round that DOES have narration renders properly.
  */
-export function ledgerOf(record: { tools: ToolCall[]; narration: Narration[]; response: string }): {
+export function ledgerOf(record: {
+  tools: ToolCall[];
+  narration: Narration[];
+  partial?: PartialRound | null;
+  response: string;
+}): {
   ledger: Round[];
   legacy: { thinking: string; answer: string } | null;
 } {
-  const ledger = rounds(record.tools, record.narration);
-  if (record.narration.length > 0) return { ledger, legacy: null };
+  const ledger = rounds(record.tools, record.narration, record.partial);
+  if (record.narration.length > 0 || record.partial) return { ledger, legacy: null };
   const legacy = splitThinking(record.response);
   if (!legacy.thinking && !legacy.answer.trim()) return { ledger, legacy: null };
   return { ledger, legacy };
@@ -229,6 +259,7 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     response: call.response ?? "",
     tools: toolCalls(call.tool_executions),
     narration: narrations(call.round_narration),
+    partial: call.partial_round ?? null,
     inputTokens: call.input_tokens,
     outputTokens: call.output_tokens,
     totalTokens: call.total_tokens,
@@ -275,6 +306,9 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     response: String(p.response ?? ""),
     tools: toolCalls(p.tool_executions),
     narration: narrations(p.round_narration),
+    // A finished phase never has one: the engine clears it the moment the
+    // round commits, so the durable event carries no half sentence.
+    partial: null,
     inputTokens: num(p.input_tokens),
     outputTokens: num(p.output_tokens),
     totalTokens: num(p.total_tokens),

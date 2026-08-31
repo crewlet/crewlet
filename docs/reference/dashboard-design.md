@@ -255,9 +255,21 @@ rules fix it, and each one names a specific mechanism:
 5. **A running phase tails; a finished one flows.** While live the ledger is
    bounded and follows the newest round, but only while the reader is
    already at the bottom — following regardless yanks them off whatever
-   they stopped to read. Note the engine has no token streaming: a phase
-   publishes twice per tool-loop round, so a round is the finest thing
-   there is to tail.
+   they stopped to read.
+
+   The engine STREAMS: a round's text arrives while the model is writing
+   it, coalesced to five frames a second, and the round in flight rides
+   `partial_round` on the live-only progress event. It is never merged
+   into `round_narration` — arriving text and committed text are different
+   facts — and the moment the round commits, its narration replaces the
+   fragment. An endpoint that cannot stream is negotiated down to the
+   unary call once per process, so nothing regresses; the text then
+   appears a round at a time, as it used to.
+
+   A provider that dies mid-answer keeps what it wrote, dimmed and
+   labelled, with the retry below it. Erasing text somebody has already
+   read looks like a glitch, and "this model wrote four hundred characters
+   and then died" is the useful fact about a flaky provider.
 6. **A round's number is the PHASE's, not one loop invocation's.** The tool
    loop counts from 1 each time it is entered, and an extended phase enters
    it again — so an unshifted second invocation made the phase read as
@@ -288,6 +300,32 @@ rules fix it, and each one names a specific mechanism:
    compares `'Z'` (0x5A) against `'.'` (0x2E). Every list sorts through
    `tsKey`, and every comparator is three-way: one returning −1 for equal
    operands makes equal rows trade places on each render.
+
+## A live screen that stays readable
+
+The complaint that `#/model` was "crowded" turned out not to be density: it
+was MOTION. Rows arrived while somebody was reading one, and splicing a phase
+in at the top pushes everything below it down by a card — mid-sentence, every
+few seconds on a busy company. Streaming would have made it worse.
+
+Two rules, and they are the same rule the round ledger already follows —
+**the page moves only when the reader is not reading**:
+
+- **Running and settled are different lists.** A live phase changes every
+  couple of hundred milliseconds; a finished one never changes again.
+  Rendering them as one list let the churn of the first reflow the second.
+  The live region is bounded and visibly bordered, which is the promise that
+  motion stops at that edge.
+- **The settled list does not splice rows in under a reader.** At the top of
+  the scroller new rows merge straight in — that is somebody watching the
+  feed, and holding rows back from them would look broken. Scrolled down,
+  they are counted and offered: *"3 new turns finished while you were
+  reading — show"*. Keyed on identity, never position, so a row that UPDATES
+  in place — a round landing, a phase completing — is never held back.
+
+The seat screen makes the same split, where it answers a second question:
+which of these turns is happening right now, readable at a glance from the
+accent ring rather than only by finding a badge.
 
 ## One filter bar, and a control that means what it looks like
 

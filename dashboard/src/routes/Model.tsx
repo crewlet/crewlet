@@ -19,7 +19,9 @@ import { QueryState } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { Badge, Button, Chip, Empty, Segmented, Select, Skeleton } from "~/ui/primitives.tsx";
+import { Icon } from "~/ui/Icon.tsx";
 import { useAgents, useClient } from "~/lib/store-hooks.ts";
+import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { plural } from "~/lib/format.ts";
 import { href } from "~/app/router.tsx";
@@ -33,6 +35,11 @@ import {
 import type { EventRecord } from "~/protocol/index.ts";
 
 const PAGE = 60;
+
+// Stable identities for the settled list. Named rather than inline so the
+// hook's dependencies do not change identity on every render.
+const turnKey = (g: { turnId: string }) => g.turnId;
+const phaseRecordKey = (r: PhaseRecord) => r.key;
 const PHASES = ["plan", "execute", "review", "auxiliary"] as const;
 
 export function ModelActivity() {
@@ -83,7 +90,23 @@ export function ModelActivity() {
     [merged, phase, onlyFailed],
   );
 
+  // RUNNING AND SETTLED ARE DIFFERENT LISTS, and that split is the whole
+  // point of this layout. A live phase changes every couple of hundred
+  // milliseconds; a finished one never changes again. As one list, the churn
+  // of the first reflowed the second — so a reader working through a
+  // completed transcript had it shoved down the page every time any seat
+  // anywhere published a round.
+  const running = useMemo(() => filtered.filter((r) => r.live), [filtered]);
+  const done = useMemo(() => filtered.filter((r) => !r.live), [filtered]);
   const turns = useMemo(() => groupTurns(filtered), [filtered]);
+  const runningTurns = useMemo(() => groupTurns(running), [running]);
+  const doneTurns = useMemo(() => groupTurns(done), [done]);
+
+  // The settled list does not splice new rows in under a reader — see
+  // lib/settled.ts.
+  const settledTurns = useSettled(doneTurns, turnKey);
+  const settledPhases = useSettled(done, phaseRecordKey);
+  const settled = grouping === "turn" ? settledTurns : settledPhases;
 
   const loadOlder = useCallback(async () => {
     setPaging(true);
@@ -216,13 +239,50 @@ export function ModelActivity() {
         />
       )}
 
+      {/* LIVE, in its own region. Everything that changes on a timescale of
+          milliseconds lives here, so its churn cannot reflow the settled
+          transcript below it. */}
+      {running.length > 0 && (
+        <section className="col gap-1 live-region">
+          <div className="t-label">
+            Running now
+            <span className="faint"> · updates as each round is written</span>
+          </div>
+          <div className="col gap-2">
+            {grouping === "turn"
+              ? runningTurns.map((g) => <TurnCard key={g.turnId} group={g} defaultOpen showRole />)
+              : running.map((rec) => <PhaseCard key={rec.key} record={rec} defaultOpen showRole />)}
+          </div>
+        </section>
+      )}
+
+      {/* SETTLED. A finished phase never changes again, so this list only
+          moves when the reader asks it to. */}
+      {settled.pending > 0 && (
+        <button className="new-rows" onClick={settled.flush}>
+          <Icon name="arrowUpRight" size="xs" />
+          {plural(settled.pending, grouping === "turn" ? "new turn" : "new phase")} finished while
+          you were reading — show
+        </button>
+      )}
+
       <div className="col gap-2">
         {grouping === "turn"
-          ? turns.map((g, i) => (
-              <TurnCard key={g.turnId} group={g} defaultOpen={i === 0} showRole />
+          ? (settled.items as typeof doneTurns).map((g, i) => (
+              <TurnCard
+                key={g.turnId}
+                group={g}
+                defaultOpen={i === 0 && !running.length}
+                showRole
+              />
             ))
-          : filtered.map((rec, i) => (
-              <PhaseCard key={rec.key} record={rec} defaultOpen={i === 0} showRole />
+          : (settled.items as PhaseRecord[]).map((rec, i) => (
+              <PhaseCard
+                key={rec.key}
+                record={rec}
+                defaultOpen={i === 0 && !running.length}
+                showRole
+              />
             ))}
       </div>
 

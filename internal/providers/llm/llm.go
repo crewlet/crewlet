@@ -139,7 +139,72 @@ type Request struct {
 	// the turn engine's corrective re-prompt sets when a phase must end in
 	// a tool call and the model answered with prose.
 	ToolChoice string
+
+	// OnDelta, when set, asks the backend to stream and calls this as text
+	// arrives. Nil — the common case — takes the ordinary unary path.
+	//
+	// A REQUEST FIELD rather than a second method on [Provider], because
+	// streaming is a property of one call and not of a backend: thirteen
+	// call sites in this engine want an answer, and exactly one wants to
+	// watch it being written. A `Stream` method would make every backend
+	// implement something twelve of its callers must remember not to use,
+	// and a capability interface asserted at the call site would make
+	// "does this stream?" a fact the caller discovers by type switch.
+	//
+	// Called SYNCHRONOUSLY on the goroutine running the request, in order,
+	// so a slow callback slows the read loop — coalesce in the callback,
+	// do not fan out from it. A backend that cannot stream never calls it
+	// and returns the same Completion it always would; nothing above here
+	// may treat the absence of deltas as an error.
+	OnDelta func(Delta)
 }
+
+// Delta is a fragment of a completion as it is being written.
+//
+// It carries what ARRIVED, never the accumulation so far: a consumer appends,
+// and appending is the only reading that stays correct when a fragment is
+// dropped or replayed. The authoritative text is still the [Completion] the
+// call returns — a delta stream is a view of a call in progress, not a second
+// source of truth to reconcile against.
+type Delta struct {
+	// Content and Reasoning are the text this fragment appended.
+	Content   string
+	Reasoning string
+
+	// Restart says the attempt streamed so far was ABANDONED — its
+	// credential or its provider failed partway through — and what follows
+	// is a fresh attempt at the same request.
+	//
+	// It exists because a failover is invisible from inside a delta stream:
+	// without it the consumer concatenates two half-answers from two models
+	// into one incoherent paragraph. Whether to erase the abandoned text or
+	// keep it is the CONSUMER's decision, which is exactly why the signal
+	// says what happened rather than what to do about it.
+	Restart bool
+
+	// Model names the backend that is answering now. Set on a Restart, so a
+	// consumer can say which model gave up and which took over.
+	Model string
+}
+
+// Send delivers one fragment, and is a no-op when nothing asked to stream or
+// the fragment is empty.
+//
+// A method on the request so every backend spells the nil check and the
+// empty check the same way. Written out at four call sites, one of them
+// forgot the empty check and published a frame per keep-alive.
+func (r Request) Send(d Delta) {
+	if r.OnDelta == nil {
+		return
+	}
+	if !d.Restart && d.Content == "" && d.Reasoning == "" {
+		return
+	}
+	r.OnDelta(d)
+}
+
+// Streaming reports whether this request asked to be streamed.
+func (r Request) Streaming() bool { return r.OnDelta != nil }
 
 // TemperatureOr is the request's temperature, or fallback when it named none.
 //

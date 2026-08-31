@@ -132,9 +132,27 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 		}
 	}
 
+	// A member that streamed before it failed has already shown its text to
+	// whoever is watching. The next member's fragments must not simply
+	// continue it — two half-answers from two models read as one incoherent
+	// paragraph — so a failover announces itself, and the consumer decides
+	// what to do with the abandoned attempt.
+	streamed := false
+	inner := req
+	if req.Streaming() {
+		inner.OnDelta = func(d llm.Delta) {
+			streamed = true
+			req.OnDelta(d)
+		}
+	}
+
 	var last error
 	for i, m := range c.members {
-		completion, err := m.Provider.Complete(ctx, req)
+		if streamed {
+			req.Send(llm.Delta{Restart: true, Model: m.Provider.Model()})
+			streamed = false
+		}
+		completion, err := m.Provider.Complete(ctx, inner)
 		if err == nil {
 			if completion.Model == "" {
 				// A member that filled nothing in — a third-party

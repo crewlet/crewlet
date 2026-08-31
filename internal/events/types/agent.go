@@ -445,7 +445,18 @@ type AgentTurnProgress struct {
 	// this event in storage terms — nothing persists it — and it is what
 	// lets the live view append a round rather than redraw one blob.
 	RoundNarration []RoundNarration `json:"round_narration,omitempty"`
-	A2AContext     map[string]any   `json:"a2a_context,omitempty"`
+	// PartialRound is the round being written RIGHT NOW: `round`,
+	// `reasoning`, `content`, and `abandoned` for attempts a provider gave
+	// up on partway through.
+	//
+	// SEPARATE from RoundNarration on purpose — a reader must be able to
+	// tell text that is still arriving from text the model has committed
+	// to, and merging them would make an in-flight fragment
+	// indistinguishable from a finished round. It appears only while a
+	// round is open, and only on this live-only event: nothing persists a
+	// half-written sentence.
+	PartialRound map[string]any `json:"partial_round,omitempty"`
+	A2AContext   map[string]any `json:"a2a_context,omitempty"`
 }
 
 // EventType is the "agent_turn_progress" wire type. Live only — nothing

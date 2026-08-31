@@ -319,3 +319,52 @@ describe("a phase recorded before narration existed still renders", () => {
     expect(ledgerOf({ tools: [], narration: [], response: "" }).legacy).toBeNull();
   });
 });
+
+describe("a round being written is not a round that is finished", () => {
+  test("the partial becomes the newest round, marked streaming", () => {
+    const ledger = rounds(
+      toolCalls([{ name: "search", round: 1 }]),
+      narrations([{ round: 1, content: "looked it up" }]),
+      { round: 2, reasoning: "still think", content: "half a sen" },
+    );
+    expect(ledger.map((r) => r.round)).toEqual([1, 2]);
+    expect(ledger[0]!.streaming).toBe(false);
+    expect(ledger[1]).toMatchObject({ streaming: true, content: "half a sen" });
+  });
+
+  test("an abandoned attempt is kept beside the retry, not erased", () => {
+    // A reader has already seen that text; making it vanish reads as a
+    // glitch, and "this model wrote some of an answer then died" is the
+    // useful fact about a flaky provider.
+    const ledger = rounds([], [], {
+      round: 1,
+      content: "second try",
+      abandoned: [{ round: 1, content: "first try died here" }],
+    });
+    expect(ledger[0]!.content).toBe("second try");
+    expect(ledger[0]!.abandoned.map((a) => a.content)).toEqual(["first try died here"]);
+  });
+
+  test("a live phase with only a partial is not treated as a legacy record", () => {
+    // Otherwise the joined `response` fallback would render alongside it and
+    // the same words would appear twice.
+    const { ledger, legacy } = ledgerOf({
+      tools: [],
+      narration: [],
+      partial: { round: 1, content: "writing" },
+      response: "writing",
+    });
+    expect(legacy).toBeNull();
+    expect(ledger).toHaveLength(1);
+  });
+
+  test("a finished phase has no partial at all", () => {
+    const { ledger } = ledgerOf({
+      tools: toolCalls([{ name: "a", round: 1 }]),
+      narration: narrations([{ round: 1, content: "done" }]),
+      partial: null,
+      response: "done",
+    });
+    expect(ledger.every((r) => !r.streaming)).toBe(true);
+  });
+});

@@ -413,6 +413,19 @@ from an extended-thinking model rides in that string wrapped in
 `internal/events/types`, shared with the
 [auxiliary-LLM telemetry](agent-learning.md)).
 
+**A round is published while it is being written.** `llm.Request.OnDelta`
+asks a backend to stream; the tool loop accumulates the fragments into the
+round in flight and republishes at most five times a second, which is below
+the rate at which appearing text stops reading as live and well inside what
+the socket hub can carry. The fragment rides `partial_round` on
+`agent_turn_progress` — live-only, so nothing persists a half-written
+sentence — and is cleared the instant the round commits, because from then on
+its narration is authoritative. Streaming is opt-in per CALL, not a property
+of a backend: twelve of the engine's thirteen provider call sites want an
+answer rather than a running commentary. An endpoint that accepts a streaming
+request and answers without streaming is negotiated down to the unary call,
+once per process.
+
 **`response` is a join, so the split travels beside it.** That string is
 every round's assistant turn joined with a blank line, and the join cannot
 be undone — its parts are separated by a blank line and prose contains

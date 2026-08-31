@@ -122,6 +122,19 @@ export interface PromptMessage {
   content?: string;
 }
 
+/**
+ * A round in flight. Never merged into `round_narration` — arriving text and
+ * committed text are different facts, and a reader has to be able to tell
+ * them apart. `abandoned` holds attempts a provider gave up on partway
+ * through, oldest first.
+ */
+export interface PartialRound {
+  round?: number;
+  reasoning?: string;
+  content?: string;
+  abandoned?: RoundNarration[] | null;
+}
+
 /** One round's model turn, as the engine recorded it. */
 export interface RoundNarration {
   round?: number;
@@ -155,6 +168,8 @@ export interface LiveCall {
    * before it sent them.
    */
   round_narration?: RoundNarration[] | null;
+  /** The round being written right now; absent when no round is open. */
+  partial_round?: PartialRound | null;
   round_num: number;
   rounds: number;
   in_progress: boolean;

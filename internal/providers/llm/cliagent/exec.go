@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -48,6 +49,47 @@ type invocation struct {
 	dir     string
 	env     []string
 	timeout time.Duration
+
+	// onLine, when set, receives each COMPLETE line of stdout as the child
+	// writes it, before the call returns. Nil takes the ordinary path where
+	// stdout is only read after the process exits.
+	//
+	// Called from the goroutine os/exec runs the output copier on — one
+	// goroutine, in order, and cmd.Wait does not return until it has
+	// finished, so it never runs concurrently with the caller's own use of
+	// the result.
+	onLine func(string)
+}
+
+// lineTee forwards complete lines to a callback while passing every byte
+// through to the real sink.
+//
+// A CLI's stdout arrives in whatever chunks the pipe hands over, which split
+// mid-line, so a consumer that wants JSONL events has to reassemble them. The
+// tail after the last newline is deliberately NOT delivered: a partial JSON
+// object is not parseable, and the buffered copy is what the extractor reads
+// once the process exits, so nothing is lost by waiting.
+type lineTee struct {
+	sink io.Writer
+	on   func(string)
+	buf  []byte
+}
+
+func (t *lineTee) Write(b []byte) (int, error) {
+	n, err := t.sink.Write(b)
+	if n > 0 {
+		t.buf = append(t.buf, b[:n]...)
+		for {
+			i := bytes.IndexByte(t.buf, '\n')
+			if i < 0 {
+				break
+			}
+			line := string(t.buf[:i])
+			t.buf = t.buf[i+1:]
+			t.on(line)
+		}
+	}
+	return n, err
 }
 
 // rawResult is what a child produced.
@@ -78,7 +120,10 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	var stdout, stderr cappedBuffer
 	stdout.limit = maxOutput
 	stderr.limit = maxOutput
-	cmd.Stdout = &stdout
+	cmd.Stdout = io.Writer(&stdout)
+	if in.onLine != nil {
+		cmd.Stdout = &lineTee{sink: &stdout, on: in.onLine}
+	}
 	cmd.Stderr = &stderr
 	procgroup.Set(cmd)
 

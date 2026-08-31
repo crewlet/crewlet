@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
@@ -127,6 +128,11 @@ type Provider struct {
 	reasoning   bool
 	budget      int64
 	owned       *http.Client
+
+	// noStream latches once this endpoint has answered a streaming request
+	// without streaming. Atomic because one Provider serves every seat
+	// concurrently, and this is written from whichever one discovers it.
+	noStream atomic.Bool
 }
 
 var _ llm.Provider = (*Provider)(nil)
@@ -237,16 +243,98 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 
+	// Per-call local, never a provider field: ONE Provider serves every
+	// concurrent caller.
+	attempt := 0
+	streaming := req.Streaming() && !p.noStream.Load()
 	msg, err := credential.Rotate(ctx, p.pool,
 		credential.Identity{Provider: providerName, Model: p.model},
 		p.classify,
 		func(key string) (*sdk.Message, error) {
-			return p.client.Messages.New(ctx, params, option.WithAPIKey(key))
+			opt := option.WithAPIKey(key)
+			if !streaming {
+				return p.client.Messages.New(ctx, params, opt)
+			}
+			// A ROTATION IS A RESTART: the previous key may have died
+			// after streaming half an answer, and appending this attempt
+			// to that one would show two half-answers as one.
+			attempt++
+			if attempt > 1 {
+				req.Send(llm.Delta{Restart: true, Model: p.model})
+			}
+			msg, sErr := p.streamOnce(ctx, req, params, opt)
+			if errors.Is(sErr, errNoStream) {
+				// This endpoint answered the streaming request without
+				// streaming. "OpenAI-compatible" and "Anthropic-compatible"
+				// are de-facto standards with real variance — a local shim
+				// or a proxy may implement the unary route only — so the
+				// capability is NEGOTIATED rather than assumed or pushed
+				// onto the operator as a config field they would have to
+				// know to set. Latched, so it costs one call per process
+				// and never repeats.
+				p.noStream.Store(true)
+				log.WarnContext(ctx, "provider_does_not_stream",
+					"provider", providerName, "model", p.model,
+					"hint", "the endpoint answered a streaming request without streaming; "+
+						"live phase text will appear per round instead of as it is written")
+				return p.client.Messages.New(ctx, params, opt)
+			}
+			return msg, sErr
 		})
 	if err != nil {
 		return nil, err
 	}
 	return p.completion(msg), nil
+}
+
+// errNoStream reports an endpoint that accepted a streaming request and
+// answered without streaming.
+var errNoStream = errors.New("endpoint did not stream")
+
+// streamOnce runs one streamed attempt, forwarding fragments as they land.
+//
+// The SDK accumulates into exactly the [sdk.Message] the unary path returns —
+// signatures on thinking blocks included, which must survive verbatim or the
+// next round is rejected — so [Provider.completion] reads one shape however
+// the response arrived, rather than growing a second interpretation.
+func (p *Provider) streamOnce(
+	ctx context.Context, req llm.Request,
+	params sdk.MessageNewParams, opt option.RequestOption,
+) (*sdk.Message, error) {
+	stream := p.client.Messages.NewStreaming(ctx, params, opt)
+	defer func() { _ = stream.Close() }()
+
+	var msg sdk.Message
+	events := 0
+	for stream.Next() {
+		events++
+		event := stream.Current()
+		if err := msg.Accumulate(event); err != nil {
+			return nil, err
+		}
+		switch d := event.Delta; d.Type {
+		case "text_delta":
+			req.Send(llm.Delta{Content: d.Text})
+		case "thinking_delta":
+			req.Send(llm.Delta{Reasoning: d.Thinking})
+		}
+		// input_json_delta and signature_delta are accumulated and not
+		// shown: half a JSON argument is not readable, and a signature is
+		// a token for the provider rather than anything for a person.
+	}
+	if err := stream.Err(); err != nil {
+		// A stream that dies MID-BODY is a failure of the call, not a
+		// short answer: handing back what accumulated would give the loop
+		// a truncated response as though the model had finished.
+		return nil, err
+	}
+	if events == 0 {
+		// Not an error of the call — the endpoint simply does not do this.
+		// Distinguished from a failure so the caller can fall back rather
+		// than fail a phase over a capability.
+		return nil, errNoStream
+	}
+	return &msg, nil
 }
 
 // classify turns an SDK failure into the contract's error. The errors.As on

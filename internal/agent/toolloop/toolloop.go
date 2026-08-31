@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 
@@ -238,6 +239,14 @@ type Result struct {
 	// reads, and the envelope evolves additive-only.
 	Narration []Narration
 
+	// Partial is the round being written RIGHT NOW, present only on a live
+	// snapshot and never on a finished Result. It is deliberately separate
+	// from Narration: a consumer must be able to tell text that is still
+	// arriving from text the model has committed to, and appending it to
+	// Narration would make an in-flight fragment indistinguishable from a
+	// finished round in every downstream reader.
+	Partial *Partial
+
 	// Messages is the conversation as the loop left it, including
 	// everything it appended.
 	Messages []llm.Message
@@ -255,6 +264,40 @@ type Result struct {
 	PendingToolCallID string
 	PendingToolName   string
 	SuspendPayload    map[string]any
+}
+
+// partialInterval bounds how often a round in flight republishes.
+//
+// 200ms. Below the ~250ms at which appearing text stops reading as live, and
+// it caps a running seat at five frames a second against a socket hub that
+// broadcasts one frame per progress event, throttles nothing itself, and
+// drops the oldest once 512 are queued for a client. A frame per token would
+// spend that entire queue on a single paragraph and evict the seat's own
+// earlier rounds on the way.
+const partialInterval = 200 * time.Millisecond
+
+// Partial is a round in the middle of being written.
+//
+// Abandoned holds attempts that a provider or credential gave up on partway
+// through, oldest first. They are KEPT rather than erased because a reader has
+// already seen that text: making it vanish reads as a glitch, and "this model
+// wrote four hundred characters and then died" is exactly what an operator
+// debugging a flaky provider needs. They live only as long as the round does —
+// once it completes, the authoritative narration replaces the whole thing.
+type Partial struct {
+	Round     int
+	Reasoning string
+	Content   string
+	Abandoned []Narration
+}
+
+func (p *Partial) clone() *Partial {
+	if p == nil {
+		return nil
+	}
+	dup := *p
+	dup.Abandoned = append([]Narration(nil), p.Abandoned...)
+	return &dup
 }
 
 // Config is one loop run.
@@ -297,6 +340,22 @@ type Config struct {
 	// spent. A non-nil error ends the loop immediately and is returned
 	// unwrapped so the caller can recognise its own sentinel.
 	Fence func() error
+
+	// PartialInterval bounds how often a round in flight republishes.
+	// Zero takes [partialInterval]; a caller sets it only to make the
+	// coalescing deterministic, which is the one honest reason to vary it.
+	PartialInterval time.Duration
+
+	// StreamPartials asks the provider to stream, so a round's text reaches
+	// OnProgress WHILE it is being written rather than only once it is
+	// finished. Off leaves the provider call unary and unchanged.
+	//
+	// A round used to publish exactly twice — after the model answered, and
+	// after its tools ran — so a phase composing a long reasoning block sat
+	// visibly frozen for the whole provider call. This does not change what
+	// a round MEANS: the partial is a view of a call in progress, and the
+	// authoritative narration still comes from the completed round.
+	StreamPartials bool
 
 	// OnProgress receives the live view twice per round: once the model
 	// has spoken and again once its tools have returned. Failures are the
@@ -347,6 +406,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 	forcedRetries := 0
 
+	var partial *Partial
 	publish := func(rounds int) {
 		if cfg.Progress != nil {
 			cfg.Progress.record(msgs, execs, narration, inTokens, outTokens, rounds, model)
@@ -358,6 +418,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				OutputTokens: outTokens,
 				Executions:   append([]Execution(nil), execs...),
 				Narration:    append([]Narration(nil), narration...),
+				Partial:      partial.clone(),
 				RoundsUsed:   rounds,
 				Model:        model,
 				Messages:     append([]llm.Message(nil), msgs...),
@@ -401,10 +462,62 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		roundCtx, roundSpan := tracing.Start(ctx, "agent.toolloop", "llm.round",
 			attribute.String("crewlet.phase", cfg.Surface.Phase()),
 			attribute.Int("crewlet.round", roundsUsed))
+		// One partial per round, replaced by the round's real narration
+		// the moment the model finishes.
+		var onDelta func(llm.Delta)
+		every := cfg.PartialInterval
+		if every <= 0 {
+			every = partialInterval
+		}
+		if cfg.StreamPartials && cfg.OnProgress != nil {
+			partial = &Partial{Round: roundsUsed}
+			// ZERO, so the FIRST fragment publishes immediately. Seeding
+			// this to now swallows it for a whole interval, which means a
+			// short round shows nothing at all and a long one begins with
+			// a fifth of a second of apparent stillness — the exact
+			// symptom streaming exists to remove.
+			var last time.Time
+			onDelta = func(d llm.Delta) {
+				if d.Restart {
+					// The attempt so far was abandoned. Kept rather than
+					// erased — see [Partial] — and the replacement starts
+					// from empty so two half-answers never concatenate.
+					if partial.Content != "" || partial.Reasoning != "" {
+						partial.Abandoned = append(partial.Abandoned, Narration{
+							Round:     partial.Round,
+							Reasoning: partial.Reasoning,
+							Content:   partial.Content,
+						})
+					}
+					partial.Reasoning, partial.Content = "", ""
+					publish(roundsUsed)
+					last = time.Now()
+					return
+				}
+				partial.Reasoning += d.Reasoning
+				partial.Content += d.Content
+				// COALESCED on the clock, not on every fragment. The
+				// socket hub broadcasts one frame per progress event with
+				// no throttling of its own and drops the oldest past 512
+				// queued, so a frame per token would spend a running
+				// seat's whole queue on one paragraph. See partialInterval.
+				//
+				// A tail shorter than one interval is not published, and
+				// nothing is lost by that: the round commits immediately
+				// after and its narration carries the whole text.
+				if time.Since(last) < every {
+					return
+				}
+				last = time.Now()
+				publish(roundsUsed)
+			}
+		}
+
 		completion, err := cfg.Provider.Complete(roundCtx, llm.Request{
 			Messages:   msgs,
 			Tools:      tools,
 			ToolChoice: choice,
+			OnDelta:    onDelta,
 		})
 		if err != nil {
 			tracing.Fail(roundSpan, err)
@@ -454,6 +567,11 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// does NOT match AgentTurnProgress.RoundNum, which is zero-based and
 		// is a different field about a different thing: how many rounds have
 		// happened, not which one this is.)
+		// The round is committed: its narration is authoritative now, and
+		// the partial (with any abandoned attempts) goes. Cleared BEFORE
+		// the publish below so the live view never shows a finished round
+		// and a fragment of the same round at once.
+		partial = nil
 		if narrated(completion.ReasoningContent, completion.Content) {
 			narration = append(narration, Narration{
 				Round:     roundsUsed,

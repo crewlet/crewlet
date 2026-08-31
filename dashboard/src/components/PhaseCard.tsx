@@ -143,6 +143,7 @@ function useTail(active: boolean, depth: number) {
 /** One round: thinking, speech, then the calls that round asked for. */
 function RoundBlock({ round, live }: { round: Round; live: boolean }) {
   const said = round.content.trim();
+  const thinking = round.reasoning.trim();
   // Marked on the ROUND, not just on the row inside it: "which round went
   // wrong" is the question a reader brings to a stuck turn, and the answer
   // used to be an icon inside a collapsed row they had to open to find.
@@ -153,16 +154,34 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
         <span className="round-node t-num">{round.round}</span>
       </div>
       <div className="round-body">
-        {round.reasoning.trim() && (
-          <Disclosure
-            label="Thinking"
-            count={`${round.reasoning.trim().length} chars`}
-            tone="reasoning"
-          >
-            <p className="prose muted">{round.reasoning.trim()}</p>
-          </Disclosure>
-        )}
-        {said && <p className="prose">{said}</p>}
+        {/* An attempt a provider gave up on partway through. KEPT, not
+            erased: a reader has already seen this text, and making it vanish
+            reads as a glitch — while "this model wrote four hundred
+            characters and then died" is exactly what an operator debugging a
+            flaky provider needs. */}
+        {round.abandoned.map((a, i) => (
+          <div key={i} className="abandoned">
+            <div className="t-caption">
+              <Icon name="alert" size="xs" /> this attempt was abandoned mid-answer and retried
+            </div>
+            {a.reasoning.trim() && <p className="prose muted">{a.reasoning.trim()}</p>}
+            {a.content.trim() && <p className="prose muted">{a.content.trim()}</p>}
+          </div>
+        ))}
+        {thinking &&
+          (round.streaming ? (
+            // Open while it streams: a collapsed disclosure whose only sign
+            // of life is a character count is not "watching it think".
+            <div className="col gap-1">
+              <div className="t-label">Thinking</div>
+              <p className="prose muted stream">{thinking}</p>
+            </div>
+          ) : (
+            <Disclosure label="Thinking" count={`${thinking.length} chars`} tone="reasoning">
+              <p className="prose muted">{thinking}</p>
+            </Disclosure>
+          ))}
+        {said && <p className={cx("prose", round.streaming && "stream")}>{said}</p>}
         {round.tools.length > 0 && (
           <div className="round-tools">
             {round.tools.map((t, i) => (
@@ -189,13 +208,26 @@ export function PhaseCard({
   const [open, setOpen] = useState(!!defaultOpen);
   const now = useNow();
   const { ledger, legacy } = ledgerOf(record);
+  const streaming = ledger.some((r) => r.streaming);
   const stale = record.live ? staleness(record.at, now) : "";
   // The last round is the live one while the phase runs: rounds only append,
   // so "newest" and "last" are the same row and stay the same row.
-  const tailRef = useTail(open && record.live, ledger.length);
+  // Follows the round count AND the streamed length, so the newest text stays
+  // in view while it is being written, not only when a whole round lands.
+  const tailRef = useTail(
+    open && record.live,
+    ledger.length + (ledger[ledger.length - 1]?.content.length ?? 0),
+  );
 
   return (
-    <article className={cx("phase-card", record.failed && "failed", record.live && "live")}>
+    <article
+      className={cx(
+        "phase-card",
+        record.failed && "failed",
+        record.live && "live",
+        streaming && "streaming",
+      )}
+    >
       <header className="phase-head" onClick={() => setOpen((v) => !v)}>
         <Icon name={open ? "chevronDown" : "chevronRight"} size="xs" />
         <PhaseTag phase={record.phase} />

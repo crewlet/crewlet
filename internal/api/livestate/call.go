@@ -26,6 +26,12 @@ func (c *LiveCall) clone() *LiveCall {
 	dup.PromptMessages = append([]any(nil), c.PromptMessages...)
 	dup.ToolExecutions = append([]any(nil), c.ToolExecutions...)
 	dup.RoundNarration = append([]any(nil), c.RoundNarration...)
+	if c.PartialRound != nil {
+		dup.PartialRound = make(map[string]any, len(c.PartialRound))
+		for k, v := range c.PartialRound {
+			dup.PartialRound[k] = v
+		}
+	}
 	return &dup
 }
 
@@ -157,6 +163,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		TotalTokens:    num(payload, "total_tokens"),
 		ToolExecutions: list(payload, "tool_executions"),
 		RoundNarration: list(payload, "round_narration"),
+		PartialRound:   mapping(payload, "partial_round"),
 		RoundNum:       roundNum,
 		Rounds:         roundNum + 1,
 		InProgress:     true,

@@ -10,6 +10,7 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
+import { useSettled } from "~/lib/settled.ts";
 import {
   Avatar,
   Badge,
@@ -29,7 +30,14 @@ import { Icon } from "~/ui/Icon.tsx";
 import { useAgents, useOrg, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, statusLine, afkReason, runState } from "~/lib/seats.ts";
-import { fmtCount, fmtDateTime, fmtDuration, relTime, splitConversationKey } from "~/lib/format.ts";
+import {
+  fmtCount,
+  fmtDateTime,
+  fmtDuration,
+  plural,
+  relTime,
+  splitConversationKey,
+} from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import {
   fromLiveCall,
@@ -41,6 +49,8 @@ import {
 import type { EventRecord } from "~/protocol/index.ts";
 
 type Tab = "overview" | "model" | "memory" | "threads" | "cost" | "access";
+
+const seatTurnKey = (g: { turnId: string }) => g.turnId;
 
 export function SeatScreen({ handle }: { handle: string }) {
   const nav = useNavigator();
@@ -86,6 +96,9 @@ export function SeatScreen({ handle }: { handle: string }) {
   }, [history.data, agent]);
 
   const turns = useMemo(() => groupTurns(phases), [phases]);
+  const liveTurns = useMemo(() => turns.filter((g) => g.live), [turns]);
+  const doneTurns = useMemo(() => turns.filter((g) => !g.live), [turns]);
+  const settled = useSettled(doneTurns, seatTurnKey);
 
   if (!seat) {
     return (
@@ -392,9 +405,33 @@ export function SeatScreen({ handle }: { handle: string }) {
                   }
             }
           >
+            {/* The same split the Model screen makes, for the same reason:
+                a running turn changes every couple of hundred milliseconds,
+                and letting that churn sit inside the settled history reflowed
+                whatever the reader was working through. Here it also answers
+                "which of these is happening right now", which used to be
+                readable only off a badge. */}
+            {liveTurns.length > 0 && (
+              <section className="col gap-1 live-region">
+                <div className="t-label">
+                  Running now
+                  <span className="faint"> · updates as each round is written</span>
+                </div>
+                <div className="col gap-2">
+                  {liveTurns.map((g) => (
+                    <TurnCard key={g.turnId} group={g} defaultOpen />
+                  ))}
+                </div>
+              </section>
+            )}
+            {settled.pending > 0 && (
+              <button className="new-rows" onClick={settled.flush}>
+                {plural(settled.pending, "new turn")} finished while you were reading — show
+              </button>
+            )}
             <div className="col gap-2">
-              {turns.map((g, i) => (
-                <TurnCard key={g.turnId} group={g} defaultOpen={i === 0} />
+              {settled.items.map((g, i) => (
+                <TurnCard key={g.turnId} group={g} defaultOpen={i === 0 && !liveTurns.length} />
               ))}
             </div>
           </QueryState>

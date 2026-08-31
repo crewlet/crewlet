@@ -104,6 +104,10 @@ type LiveCall struct {
 	// can put a round's thinking beside the calls it asked for instead of
 	// re-splitting the joined Response and getting it wrong.
 	RoundNarration []any `json:"round_narration"`
+	// PartialRound is the round being written right now, absent when no
+	// round is open. Never merged into RoundNarration: a reader has to be
+	// able to tell arriving text from committed text.
+	PartialRound map[string]any `json:"partial_round,omitempty"`
 
 	RoundNum   int  `json:"round_num"`
 	Rounds     int  `json:"rounds"`

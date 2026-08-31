@@ -355,7 +355,7 @@ projection, and the two are different sources on purpose: the store holds what
 completed, memory holds what is happening. A screen renders both with one
 renderer, so each history row carries the same fields a live one does —
 `turn_id`, `phase`, `iteration`, `model`, `response`, `tool_executions`,
-`round_narration`,
+`round_narration`, `partial_round`,
 `total_tokens`, `cost_usd` — plus the envelope's `timestamp` and `failed`.
 
 An unreadable or absent event log costs the history and nothing else: the

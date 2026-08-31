@@ -567,3 +567,97 @@
   background: var(--caution-soft);
   color: var(--caution-ink);
 }
+
+/* ---- A live screen that stays readable ---------------------------------- */
+
+/* Everything that changes on a timescale of milliseconds is confined here,
+   so its churn cannot reflow the settled transcript below it. The border is
+   doing real work: it is the visible promise that motion stops at this
+   edge. */
+.live-region {
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
+  padding: var(--space-3);
+}
+
+/* The pill that holds finished rows back. Splicing them in at the top pushed
+   the page down by a card mid-sentence, which on a busy company happens every
+   few seconds — the same complaint as a chat that scrolls while you read
+   history. */
+.new-rows {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: var(--fs-2xs);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.new-rows:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* A phase whose text is arriving right now. The ring is what the seat page
+   needed: a running turn that looks different from a finished one at a
+   glance, rather than only by reading its badge. */
+.phase-card.streaming {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.turn-card.live {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+/* Text that is being written. The transition is on COLOR only — never on
+   height: animating the height of a growing block makes every append a
+   reflow the reader can feel, which is the opposite of the point. */
+.prose.stream {
+  transition: color var(--dur-slow) var(--ease);
+}
+.prose.stream::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: caret 1.1s steps(1) infinite;
+}
+@keyframes caret {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* An attempt a provider gave up on. Dimmed and ruled off rather than deleted
+   — a reader has already read it, and making it vanish reads as a glitch. */
+.abandoned {
+  border-left: 2px solid color-mix(in srgb, var(--critical) 45%, transparent);
+  padding-left: var(--space-3);
+  opacity: 0.65;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prose.stream::after {
+    animation: none;
+  }
+}

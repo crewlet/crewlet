@@ -284,6 +284,7 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		RoundNum:       res.RoundsUsed - 1,
 		ToolExecutions: toolExecutions(res.Executions),
 		RoundNarration: roundNarration(res.Narration),
+		PartialRound:   partialRound(res.Partial),
 	}, e.traceFor(ctx)))
 }
 
@@ -532,6 +533,27 @@ func roundNarration(narr []toolloop.Narration) []types.RoundNarration {
 			"reasoning": n.Reasoning,
 			"content":   n.Content,
 		})
+	}
+	return out
+}
+
+// partialRound renders the round currently being written, or nil.
+//
+// Nil rather than an empty object when there is nothing in flight, so
+// `omitempty` drops the key entirely: a consumer reads "absent" as "no round
+// is open", and an empty object would read as "a round is open and has said
+// nothing", which is a different fact.
+func partialRound(p *toolloop.Partial) map[string]any {
+	if p == nil {
+		return nil
+	}
+	out := map[string]any{
+		"round":     p.Round,
+		"reasoning": p.Reasoning,
+		"content":   p.Content,
+	}
+	if len(p.Abandoned) > 0 {
+		out["abandoned"] = roundNarration(p.Abandoned)
 	}
 	return out
 }

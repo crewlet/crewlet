@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	sdk "github.com/openai/openai-go/v3"
@@ -121,6 +122,11 @@ type Provider struct {
 	reasoning   bool
 	effort      shared.ReasoningEffort
 	owned       *http.Client
+
+	// noStream latches once this endpoint has answered a streaming request
+	// without streaming. Atomic: one Provider serves every seat
+	// concurrently, and this is written by whichever one discovers it.
+	noStream atomic.Bool
 }
 
 var _ llm.Provider = (*Provider)(nil)
@@ -215,6 +221,20 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 
+	streaming := req.Streaming() && !p.noStream.Load()
+	if streaming {
+		// Ask for usage in the stream. Without it the final chunk carries
+		// no token counts, and the budget — which is charged from this
+		// completion before the round's tools run — would meter every
+		// streamed call as free.
+		params.StreamOptions.IncludeUsage = param.NewOpt(true)
+	}
+
+	// Per-call locals, never provider fields: ONE Provider serves every
+	// concurrent caller, so a field here would be a data race between two
+	// seats streaming at once.
+	attempt := 0
+	var streamed string
 	resp, err := credential.Rotate(ctx, p.pool,
 		credential.Identity{Provider: p.name, Model: p.model},
 		p.classify,
@@ -223,13 +243,109 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			// serves the whole pool, and a per-request option is applied
 			// after the client's own, so it wins over the OPENAI_API_KEY
 			// the SDK loads from the environment at construction.
-			return p.client.Chat.Completions.New(ctx, params, option.WithAPIKey(key))
+			opt := option.WithAPIKey(key)
+			if !streaming {
+				return p.client.Chat.Completions.New(ctx, params, opt)
+			}
+			// A ROTATION IS A RESTART. The previous key may have died
+			// after streaming half an answer, and without saying so the
+			// consumer would append this attempt to that one and show two
+			// half-answers as one paragraph.
+			attempt++
+			if attempt > 1 {
+				req.Send(llm.Delta{Restart: true, Model: p.model})
+			}
+			out, reasoning, sErr := p.streamOnce(ctx, req, params, opt)
+			if errors.Is(sErr, errNoStream) {
+				// This endpoint accepted `stream: true` and answered
+				// without streaming. "OpenAI-compatible" is a de-facto
+				// standard with real variance — a local shim or a proxy
+				// may implement the unary route only — so the capability
+				// is NEGOTIATED rather than assumed, or pushed onto the
+				// operator as a config field they would have to know to
+				// set. Latched: one call per process, never repeated.
+				p.noStream.Store(true)
+				log.WarnContext(ctx, "provider_does_not_stream",
+					"provider", p.name, "model", p.model,
+					"hint", "the endpoint answered a streaming request without streaming; "+
+						"live phase text will appear per round instead of as it is written")
+				plain := params
+				plain.StreamOptions = sdk.ChatCompletionStreamOptionsParam{}
+				return p.client.Chat.Completions.New(ctx, plain, opt)
+			}
+			streamed = reasoning
+			return out, sErr
 		})
 	if err != nil {
 		return nil, err
 	}
-	return p.completion(resp)
+	out, err := p.completion(resp)
+	if err != nil {
+		return nil, err
+	}
+	// The assembled message carries no `reasoning_content` — it is not in
+	// the schema, so the SDK's accumulator does not keep it — and the
+	// streamed text is the only record of it.
+	if streamed != "" {
+		out.ReasoningContent = streamed
+	}
+	return out, nil
 }
+
+// streamOnce runs one streamed attempt, forwarding fragments as they land and
+// returning the same accumulated shape the unary path returns.
+//
+// The SDK's accumulator rebuilds exactly the [sdk.ChatCompletion] that
+// [Provider.completion] already consumes, so the two paths converge on one
+// interpretation of a response rather than growing a second.
+//
+// REASONING IS ACCUMULATED HERE rather than left to the accumulator, because
+// `reasoning_content` is not in the OpenAI schema — it is the convention the
+// reasoning hosts adopted — so the accumulator neither knows nor keeps it, and
+// the assembled message's raw JSON has no trace of it. See [reasoningText].
+func (p *Provider) streamOnce(
+	ctx context.Context, req llm.Request,
+	params sdk.ChatCompletionNewParams, opt option.RequestOption,
+) (*sdk.ChatCompletion, string, error) {
+	stream := p.client.Chat.Completions.NewStreaming(ctx, params, opt)
+	defer func() { _ = stream.Close() }()
+
+	var acc sdk.ChatCompletionAccumulator
+	var reasoning strings.Builder
+	events := 0
+	for stream.Next() {
+		events++
+		chunk := stream.Current()
+		acc.AddChunk(chunk)
+		if len(chunk.Choices) == 0 {
+			// A usage-only or keep-alive chunk. Accumulated, not shown.
+			continue
+		}
+		delta := chunk.Choices[0].Delta
+		thought := reasoningText(delta.RawJSON())
+		reasoning.WriteString(thought)
+		req.Send(llm.Delta{Content: delta.Content, Reasoning: thought})
+	}
+	if err := stream.Err(); err != nil {
+		// Classified by the caller exactly as a unary failure is. A stream
+		// that dies MID-BODY is a failure of the call, not a short answer:
+		// returning what accumulated would hand the loop a truncated
+		// response as though the model had finished.
+		return nil, "", err
+	}
+	if events == 0 {
+		// Not a failure of the call — the endpoint simply does not do
+		// this. Distinguished so the caller can fall back rather than fail
+		// a phase over a capability.
+		return nil, "", errNoStream
+	}
+	out := acc.ChatCompletion
+	return &out, reasoning.String(), nil
+}
+
+// errNoStream reports an endpoint that accepted a streaming request and
+// answered without streaming.
+var errNoStream = errors.New("endpoint did not stream")
 
 // classify turns an SDK failure into the contract's error.
 func (p *Provider) classify(err error) *llm.Error {

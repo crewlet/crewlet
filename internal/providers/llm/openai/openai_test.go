@@ -967,3 +967,79 @@ func TestNameLabelsAnOpenAICompatibleEndpoint(t *testing.T) {
 		t.Fatalf("String() = %q", p.String())
 	}
 }
+
+// --- streaming --------------------------------------------------------------
+
+func TestAStreamedCallForwardsFragmentsAndStillAnswers(t *testing.T) {
+	t.Parallel()
+	_, url := serve(t, func(w http.ResponseWriter, _ int) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, chunk := range []string{
+			`{"id":"1","object":"chat.completion.chunk","created":1,"model":"gpt-test",` +
+				`"choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"}}]}`,
+			`{"id":"1","object":"chat.completion.chunk","created":1,"model":"gpt-test",` +
+				`"choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":"stop"}]}`,
+			`{"id":"1","object":"chat.completion.chunk","created":1,"model":"gpt-test",` +
+				`"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`,
+		} {
+			_, _ = io.WriteString(w, "data: "+chunk+"\n\n")
+		}
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	})
+
+	var got []string
+	p := newProvider(t, url, nil)
+	out, err := p.Complete(t.Context(), llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+		OnDelta:  func(d llm.Delta) { got = append(got, d.Content) },
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if len(got) != 2 || got[0] != "Hel" || got[1] != "lo" {
+		t.Errorf("fragments = %#v, want each piece as it arrived", got)
+	}
+	// The accumulated answer is the SAME shape the unary path returns —
+	// one interpretation of a response, not two.
+	if out.Content != "Hello" {
+		t.Errorf("content = %q, want the assembled answer", out.Content)
+	}
+	// Usage must survive, or the budget meters every streamed call as free.
+	if out.InputTokens != 10 || out.OutputTokens != 5 {
+		t.Errorf("tokens = %d/%d, want 10/5 from the usage chunk",
+			out.InputTokens, out.OutputTokens)
+	}
+}
+
+func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
+	t.Parallel()
+	// "OpenAI-compatible" is a de-facto standard with real variance: a local
+	// shim or a proxy may accept `stream: true` and answer with a plain JSON
+	// body. Failing the phase over that would regress every such deployment
+	// the moment streaming was switched on.
+	api, url := serve(t, func(w http.ResponseWriter, _ int) {
+		writeJSON(w, http.StatusOK, okCompletion("Hello"))
+	})
+
+	p := newProvider(t, url, nil)
+	req := llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+		OnDelta:  func(llm.Delta) {},
+	}
+	out, err := p.Complete(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if out.Content != "Hello" {
+		t.Errorf("content = %q, want the unary answer", out.Content)
+	}
+	before := api.count()
+
+	// LATCHED: the capability is discovered once, not re-probed per call.
+	if _, err = p.Complete(t.Context(), req); err != nil {
+		t.Fatalf("second Complete: %v", err)
+	}
+	if extra := api.count() - before; extra != 1 {
+		t.Errorf("the second call cost %d requests, want 1 — the probe repeats", extra)
+	}
+}

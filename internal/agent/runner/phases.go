@@ -608,6 +608,9 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			// one is read after the loop returns nothing, the other while
 			// it is still running.
 			Progress: progress,
+			// The live view is the only reason to stream, so it is on
+			// exactly when something is listening.
+			StreamPartials: true,
 			OnProgress: func(live toolloop.Result) {
 				emit.progress(ctx, ph, iteration, offsetRounds(live, prior))
 			},
