@@ -71,6 +71,31 @@ const MaxBackfill = 15 * time.Minute
 // than any single backfill window yields while staying trivially small.
 const dedupeRing = 512
 
+// PingInterval is how often a seat's socket asks its server to answer.
+//
+// THIRTY SECONDS. What this detects is a connection that is up as far as TCP
+// can tell and dead above it — an L7 half-open, where a load balancer tore
+// down the upstream side while still answering keepalives — which nothing
+// else in this package can see: coder/websocket answers a server's pings
+// internally without returning from Read, so a quiet channel and a dead
+// server are identical from here.
+//
+// The value trades detection latency against traffic. Thirty seconds is well
+// inside the idle timeout of every proxy that sits in front of a Mattermost
+// instance (60s is the common default, and a ping also keeps that timer from
+// firing), and it costs two tiny frames per seat per interval. TCP keepalives
+// alone would take about eleven minutes on a genuinely dead path and never
+// resolve an L7 half-open at all.
+const PingInterval = 30 * time.Second
+
+// PongTimeout is how long a seat waits for the answer.
+//
+// TEN SECONDS is generous for a frame the server answers from its read loop,
+// and short enough that a dead socket is replaced well inside the next ping.
+// Being wrong here is cheap and self-correcting: a false positive costs one
+// reconnect and a backfill, whose duplicates the dedupe ring absorbs.
+const PongTimeout = 10 * time.Second
+
 // reconnectJitter is the proportional spread added to each delay.
 //
 // Every seat drops at the same instant when the server restarts, so an
@@ -92,6 +117,19 @@ type Socket interface {
 	// Read returns the next event payload. It blocks, and an error ends
 	// the connection — the fleet reconnects.
 	Read(ctx context.Context) (map[string]any, error)
+
+	// Ping asks the peer to answer, returning when it has or when ctx is
+	// done.
+	//
+	// The seam needs it because NOTHING ELSE can tell a dead server from a
+	// quiet one. coder/websocket answers a server's pings itself, without
+	// returning from Read, so this side has no signal at all: TCP
+	// keepalives rescue a genuinely dead path in ~11 minutes, and an L7
+	// half-open — a load balancer that terminated the connection upstream
+	// while still answering keepalives — never resolves, leaving the seat
+	// deaf indefinitely with no log line.
+	Ping(ctx context.Context) error
+
 	Close() error
 }
 
@@ -101,6 +139,11 @@ type FleetOptions struct {
 
 	// Connect opens a socket; nil takes the real websocket dialer.
 	Connect Connector
+
+	// PingInterval and PongTimeout override the heartbeat. Zero takes the
+	// package defaults.
+	PingInterval time.Duration
+	PongTimeout  time.Duration
 
 	// Backfill is how far a reconnect replays. Zero takes [MaxBackfill].
 	Backfill time.Duration
@@ -124,6 +167,12 @@ type Fleet struct {
 	backoff   []time.Duration
 	now       func() time.Time
 
+	// pingEvery and pongWithin are the heartbeat's cadence and patience.
+	// Fields rather than constants so a test can drive the loop without
+	// waiting out a real interval.
+	pingEvery  time.Duration
+	pongWithin time.Duration
+
 	mu    sync.Mutex
 	seats map[string]*seatSocket
 }
@@ -134,12 +183,14 @@ func NewFleet(opts FleetOptions) (*Fleet, error) {
 		return nil, fmt.Errorf("mattermost: the fleet needs a publisher")
 	}
 	f := &Fleet{
-		publisher: opts.Publisher,
-		connect:   opts.Connect,
-		backfill:  opts.Backfill,
-		backoff:   opts.Backoff,
-		now:       opts.Now,
-		seats:     map[string]*seatSocket{},
+		publisher:  opts.Publisher,
+		connect:    opts.Connect,
+		backfill:   opts.Backfill,
+		backoff:    opts.Backoff,
+		now:        opts.Now,
+		pingEvery:  opts.PingInterval,
+		pongWithin: opts.PongTimeout,
+		seats:      map[string]*seatSocket{},
 	}
 	if f.connect == nil {
 		f.connect = dialWebsocket
@@ -152,6 +203,12 @@ func NewFleet(opts FleetOptions) (*Fleet, error) {
 	}
 	if f.now == nil {
 		f.now = time.Now
+	}
+	if f.pingEvery <= 0 {
+		f.pingEvery = PingInterval
+	}
+	if f.pongWithin <= 0 {
+		f.pongWithin = PongTimeout
 	}
 	return f, nil
 }
@@ -271,8 +328,31 @@ func (f *Fleet) delay(attempt int) time.Duration {
 	return base + time.Duration(rand.Float64()*reconnectJitter*float64(base))
 }
 
-// pump reads one connection until it fails.
+// pump reads one connection until it fails, with a heartbeat under it.
+//
+// THE HEARTBEAT IS THE ONLY LIVENESS SIGNAL THIS SIDE HAS. Nothing in this
+// package pinged, and coder/websocket answers a server's pings internally
+// without returning from Read — so a quiet channel and a dead server look
+// identical from here. TCP keepalives rescue a genuinely dead path in about
+// eleven minutes; an L7 half-open, where a load balancer has torn down the
+// upstream connection but still answers keepalives, never resolves at all,
+// and the seat is deaf until something else restarts it.
+//
+// An idle READ deadline is deliberately NOT the instrument: control frames do
+// not surface through Read, so a merely-quiet channel would trip it and force
+// a spurious backfill on every idle seat.
+//
+// A failed ping closes the socket, which ends Read and drops into the
+// existing reconnect-and-replay path — so recovery needs no new machinery.
 func (f *Fleet) pump(ctx context.Context, s *seatSocket, socket Socket) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var beat sync.WaitGroup
+	beat.Go(func() { f.heartbeat(ctx, s, socket) })
+	defer beat.Wait()
+	defer cancel()
+
 	for {
 		body, err := socket.Read(ctx)
 		if err != nil {
@@ -283,6 +363,38 @@ func (f *Fleet) pump(ctx context.Context, s *seatSocket, socket Socket) {
 			return
 		}
 		f.deliver(ctx, s, body, false)
+	}
+}
+
+// heartbeat pings until the peer stops answering or the pump ends.
+func (f *Fleet) heartbeat(ctx context.Context, s *seatSocket, socket Socket) {
+	ticker := time.NewTicker(f.pingEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		pingCtx, cancel := context.WithTimeout(ctx, f.pongWithin)
+		err := socket.Ping(pingCtx)
+		cancel()
+		if err == nil {
+			continue
+		}
+		if ctx.Err() != nil {
+			// The pump is ending anyway; a ping cut short by that is
+			// not a dead peer.
+			return
+		}
+		log.WarnContext(ctx, "mattermost_heartbeat_failed", "handle", s.seat.Handle,
+			"error", err.Error(),
+			"detail", "the server stopped answering; reconnecting and replaying")
+		// Closing is what ends Read. Cancelling the pump's context alone
+		// would leave the connection open and the server still believing
+		// this seat is attached.
+		_ = socket.Close()
+		return
 	}
 }
 
@@ -547,6 +659,13 @@ type wsSocket struct{ conn *websocket.Conn }
 func (s *wsSocket) Close() error {
 	return s.conn.Close(websocket.StatusNormalClosure, "")
 }
+
+// Ping sends a websocket PING and waits for the PONG.
+//
+// The library handles the round trip, including matching the payload, so a
+// returned nil means the peer answered rather than merely that a write
+// succeeded — which is the distinction that makes this worth doing at all.
+func (s *wsSocket) Ping(ctx context.Context) error { return s.conn.Ping(ctx) }
 
 // Read returns the next POST event, skipping everything else.
 //
