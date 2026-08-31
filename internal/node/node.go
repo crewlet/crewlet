@@ -271,6 +271,24 @@ func (n *Node) Stop(ctx context.Context) {
 // print a hundred lines.
 const drainLogInterval = 10 * time.Second
 
+// seatReleaseBudget bounds the give-back at the end of a drain.
+//
+// ONE HEARTBEAT INTERVAL — SeatLeaseTTL/3, 15 s at the shipped 45 s TTL —
+// which is the largest budget that is still strictly inside the lease it is
+// racing. Giving a lease back is a handful of coordination writes, so this is
+// a guard against a store that has stopped answering rather than a real
+// allowance; past it the seat lapses on its TTL, which is the same outcome as
+// not trying, only later.
+//
+// A budget rather than the caller's context, because the caller's is very
+// often already expired by the time the wait above ends — Drain's own doc
+// invites a deadline — and a release that inherits it does nothing at all,
+// leaving every seat dark for a full TTL instead of being taken over at once.
+// Derived from the TTL rather than written as a duration, for the reason
+// HeartbeatRatio gives: a deployment that shortens its lease must not end up
+// with a release budget longer than the lease it is inside.
+const seatReleaseBudget = seat.SeatLeaseTTL / seat.HeartbeatRatio
+
 // Drain performs this node's graceful departure and returns once its seats
 // are handed back.
 //
@@ -293,6 +311,12 @@ const drainLogInterval = 10 * time.Second
 // whatever supervises the process — a container runtime's kill grace, an
 // operator's second interrupt — which already has one and can see things this
 // process cannot. Callers that want a bound pass a ctx with a deadline.
+//
+// THAT DEADLINE BOUNDS THE WAIT ALONE. The release below runs on a budget of
+// its own, because handing an expired context to the step whose entire
+// purpose is giving the leases back is how every seat lapses on a full TTL —
+// the exact cost step 3 exists to avoid, paid precisely when a caller took
+// this doc's advice and passed a deadline.
 //
 // Drain does not stop the node. A drained node still renews presence-free and
 // can be told to claim again (the config-plane shed-then-converge path);
@@ -336,7 +360,10 @@ func (n *Node) Drain(ctx context.Context) {
 		n.log.Info("drain_in_progress", "in_flight", remaining)
 	}
 
-	n.host.ReleaseAll(ctx, seat.ReasonDrain)
+	releaseCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx), seatReleaseBudget)
+	defer cancel()
+	n.host.ReleaseAll(releaseCtx, seat.ReasonDrain)
 	n.log.Info("drain_complete", "still_held", len(n.host.Held()))
 }
 

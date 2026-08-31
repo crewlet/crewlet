@@ -589,8 +589,16 @@ func (h *Host) Stop(ctx context.Context) {
 	}
 	h.wg.Wait()
 
-	h.ReleaseAll(ctx, ReasonDrain)
-	h.releaseNodePresence(ctx)
+	// A BUDGET OF ITS OWN, for the reason Node.Drain gives: Stop is reached
+	// on a shutdown path whose context is routinely already cancelled, and
+	// a give-back that inherits it releases nothing — every seat then sits
+	// dark for a full TTL instead of being taken over at once, and this
+	// node's presence lingers so peers keep reserving capacity for it.
+	releaseCtx, cancel2 := context.WithTimeout(
+		context.WithoutCancel(ctx), SeatLeaseTTL/HeartbeatRatio)
+	defer cancel2()
+	h.ReleaseAll(releaseCtx, ReasonDrain)
+	h.releaseNodePresence(releaseCtx)
 
 	stranded := h.Unproven()
 	if len(stranded) > 0 {
