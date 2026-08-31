@@ -17,6 +17,39 @@ import (
 // config" can disagree, and the moment they do, which answer an operator gets
 // depends on which transport their browser happened to use.
 
+// The two halves of a diff, named so a handler can say WHICH one is missing.
+//
+// "The revision you asked about" and "the one you asked to compare it with"
+// are different mistakes, and answering a single not_found makes the caller
+// check both.
+const (
+	sideTarget  = "not_found"
+	sideAgainst = "against_not_found"
+)
+
+// missingRevision is a revision lookup that found nothing, carrying which
+// side of the diff it was.
+//
+// A TYPED ERROR rather than a message the handler re-reads. The handler used
+// to substring-match the error text against the URL's path value, which is
+// wrong whenever one id CONTAINS the other: `?against=r-7-typo` on revision
+// `r-7` matched, so the caller was told the revision they asked about was
+// missing when it exists and the one they named does not. `against` is
+// unvalidated, so producing that pair takes nothing but a typo.
+//
+// It unwraps to [store.ErrNoRevision], so every existing errors.Is check
+// keeps working and only the handler that needs the side asks for it.
+type missingRevision struct {
+	side string
+	id   string
+}
+
+func (e *missingRevision) Error() string {
+	return fmt.Sprintf("%s: %s", store.ErrNoRevision, e.id)
+}
+
+func (e *missingRevision) Unwrap() error { return store.ErrNoRevision }
+
 // ErrNoActiveRevision reports a company nobody has configured yet.
 //
 // A real state and distinct from a failure: a deployment before its first
@@ -80,7 +113,7 @@ func (s *Service) Diff(ctx context.Context, revisionID, against string) (map[str
 		return nil, err
 	}
 	if !found {
-		return nil, fmt.Errorf("%w: %s", store.ErrNoRevision, revisionID)
+		return nil, &missingRevision{side: sideTarget, id: revisionID}
 	}
 	base, err := s.baseFor(ctx, against)
 	if err != nil {
@@ -118,7 +151,7 @@ func (s *Service) baseFor(ctx context.Context, against string) (store.Revision, 
 		return store.Revision{}, err
 	}
 	if !found {
-		return store.Revision{}, fmt.Errorf("%w: %s", store.ErrNoRevision, against)
+		return store.Revision{}, &missingRevision{side: sideAgainst, id: against}
 	}
 	return base, nil
 }

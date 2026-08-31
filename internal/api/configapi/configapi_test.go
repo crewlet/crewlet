@@ -802,6 +802,46 @@ func TestADiffAgainstSomethingMissingSaysWhichSide(t *testing.T) {
 	}
 }
 
+// AND IT SAYS SO WHEN ONE ID CONTAINS THE OTHER, which the version this
+// replaces could not.
+//
+// The side used to be guessed by substring-matching the error's TEXT against
+// the request's path value, so an `against` that merely contains the target's
+// id reported the TARGET as missing — a revision that exists — and sent the
+// operator to check the one thing that was fine. `against` is unvalidated, so
+// producing the pair takes nothing but a typo on the end of a real id.
+func TestADiffNamesTheMissingSideEvenWhenOneIDContainsTheOther(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	id := s.seed(t, companyDoc, nil)
+
+	res := s.do(t, http.MethodGet,
+		"/config/revisions/"+id+"/diff?against="+id+"-typo", "", nil)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want 404", res.Code)
+	}
+	if got := decode(t, res)["error"]; got != "against_not_found" {
+		t.Errorf("error = %v, want against_not_found: the revision in the path "+
+			"exists and the one named by ?against does not", got)
+	}
+}
+
+// And the other direction still reports the target, so the case above is the
+// side being READ rather than the answer having flipped.
+func TestADiffOfAMissingRevisionSaysSo(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	id := s.seed(t, companyDoc, nil)
+
+	res := s.do(t, http.MethodGet, "/config/revisions/nope/diff?against="+id, "", nil)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("got %d, want 404", res.Code)
+	}
+	if got := decode(t, res)["error"]; got != "not_found" {
+		t.Errorf("error = %v, want not_found", got)
+	}
+}
+
 func TestADiffAgainstTheActiveOfAnUnconfiguredNode(t *testing.T) {
 	t.Parallel()
 	// There is no active revision to compare against, which is a different

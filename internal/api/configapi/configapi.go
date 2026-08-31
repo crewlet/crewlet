@@ -351,21 +351,31 @@ func (s *Service) diff(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrNoActiveRevision):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_active_revision"})
 	case errors.Is(err, store.ErrNoRevision):
-		// WHICH side is missing. "The revision you asked about" and "the
-		// one you asked to compare it with" are different mistakes, and a
-		// single not_found makes the caller check both.
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": missingSide(err, r)})
+		// WHICH side is missing, read off the error rather than guessed
+		// from the request — see [missingRevision].
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": missingSide(err)})
 	default:
 		s.fail(w, "diff revisions", err)
 	}
 }
 
 // missingSide names which half of a diff could not be found.
-func missingSide(err error, r *http.Request) string {
-	if strings.Contains(err.Error(), r.PathValue("id")) {
-		return "not_found"
+//
+// It reads the side off the error. The version this replaces compared the
+// error's TEXT against the request's path value, which is wrong whenever one
+// id contains the other — and `against` is unvalidated, so
+// `?against=r-7-typo` on revision `r-7` reported the target as missing when
+// it exists and the base does not.
+//
+// A revision error from anywhere else is reported as the target's, which is
+// the honest default: every other producer of store.ErrNoRevision on this
+// path is looking up the id in the URL.
+func missingSide(err error) string {
+	var missing *missingRevision
+	if errors.As(err, &missing) {
+		return missing.side
 	}
-	return "against_not_found"
+	return sideTarget
 }
 
 // --- writes ----------------------------------------------------------------
