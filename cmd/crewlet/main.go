@@ -708,6 +708,14 @@ func runEngine(args []string, stderr io.Writer) error {
 		return string(reconciler.Posture(ctx))
 	})
 
+	// AND THE GATE THAT ACTS ON IT. Reporting the posture is not applying
+	// it: without this the inbound edge, the scheduler and every seat's
+	// own inbox admitted work whatever this node had concluded, so a
+	// `shed` reached the dashboard and the readiness probe and changed
+	// nothing else. Set beside the reporter and before Start, so the
+	// refusal is live from the first delivery this node could take.
+	e.SetAdmits(reconciler.Admits)
+
 	// MERGED: one process is both engine and API, sharing one broker and
 	// one store. The API half is what makes the node reachable at all —
 	// every inbound webhook arrives through it — so an engine that ran
@@ -1100,6 +1108,9 @@ func (r engineRuntime) Snapshot() api.RuntimeState {
 		// a list of what the document names would claim more than this
 		// process can do.
 		VerifiableSources: r.engine.VerifiableSources(),
+		// The watchdog's own reading, so a node degrading towards its
+		// self-terminate threshold is visible before it hits it.
+		StallLag: r.engine.StallLag(),
 	}
 	if r.reconciler != nil {
 		// Read live, on every probe, rather than cached: a cached

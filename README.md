@@ -232,6 +232,11 @@ flowchart LR
     API --> DB
 ```
 
+That is the glance; **[Architecture](docs/concepts/architecture.md)** draws the
+same engine at six zoom levels — the process boundary, one node's interior, the
+path a trigger takes across a fleet, the path a turn takes, where every table
+and bucket lives, and what changes when a second node appears.
+
 Agents are callback-driven: messages on an agent's inbox topic invoke its handler,
 and events that piled up while it was busy are batched into a single digest turn.
 Config lives in two tiers — an ops-owned bootstrap file on disk, and a versioned,

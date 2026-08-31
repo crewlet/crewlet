@@ -53,6 +53,23 @@ type Reconciler struct {
 	attempts int
 	target   int64
 
+	// decided is the last posture this reconciler computed, for the one
+	// reader that cannot afford to compute its own.
+	//
+	// The heartbeat and the readiness probe call [Reconciler.Posture]
+	// directly: they run on their own cadence and can pay its two
+	// coordination reads. ADMISSION cannot — it is consulted once per
+	// inbound delivery and once per scheduler tick, and a control-plane
+	// read there would put a network round trip in front of every
+	// webhook. So the value the loop already computes is cached here and
+	// [Reconciler.Admits] reads that, which is also the model the design
+	// describes: the refusal runs on the delivery path while the posture
+	// moves on the reconcile loop.
+	//
+	// Zero means "nothing decided yet", which ADMITS. A node that has not
+	// completed one pass is not evidence that it is behind.
+	decided atomic.Pointer[configplane.Posture]
+
 	// nudged carries an activation from the broadcast subscription to the
 	// loop. Buffered at ONE and written non-blocking: a storm of
 	// activations must collapse into a single early wake, not into a queue
@@ -181,9 +198,33 @@ func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 		// of rotation on a database blip.
 		log.WarnContext(ctx, "posture_unknown", "error", err,
 			"detail", "cannot read the control plane; assuming this node is current")
-		return configplane.PostureServe
+		return r.decide(configplane.PostureServe)
 	}
-	return configplane.DecidePosture(view)
+	return r.decide(configplane.DecidePosture(view))
+}
+
+// decide records a posture for the admission gate and returns it.
+//
+// Every path out of [Reconciler.Posture] goes through here, the fail-open one
+// included: a node that cannot read the plane reports serve, and serve is the
+// answer admission must see too. Recording only the successful reads would
+// leave a node that shed once and then lost the plane refusing work for as
+// long as the outage lasted, on evidence it could no longer check.
+func (r *Reconciler) decide(p configplane.Posture) configplane.Posture {
+	r.decided.Store(&p)
+	return p
+}
+
+// Admits reports whether this node should take new inbound work.
+//
+// It reads the posture the reconcile loop last decided rather than computing
+// a fresh one — see [Reconciler.decided] — and fails OPEN in both uncertain
+// directions: no decision yet admits, and Posture already reports serve when
+// it cannot read the plane. Only a posture that positively concluded shed or
+// stuck refuses, which is exactly the set /ready fails on.
+func (r *Reconciler) Admits() bool {
+	p := r.decided.Load()
+	return p == nil || p.ServesTraffic()
 }
 
 // view assembles what the posture rule needs.
@@ -492,6 +533,18 @@ func (r *Reconciler) Run(ctx context.Context) {
 		}
 		if err := r.Tick(ctx); err != nil {
 			log.WarnContext(ctx, "reconcile_tick_failed", "error", err)
+		}
+		// RE-DECIDE AFTER EVERY TICK, so the admission gate moves on this
+		// loop rather than on whichever other caller happens to ask. The
+		// heartbeat also refreshes it, but only on a node that holds a
+		// lease — and an ingress-only node that never claims one is
+		// precisely the node whose admission this gates.
+		//
+		// Then converge the ingress consumer on the answer: a seat's
+		// mailbox is resumed by its own lease admission, and the inbound
+		// topic has no lease to do it. See [Engine.resumeInbound].
+		if r.Posture(ctx).ServesTraffic() {
+			r.engine.resumeInbound(ctx)
 		}
 		// A full jittered interval after every tick, nudged or not: an
 		// activation storm must not become an apply storm.

@@ -54,21 +54,43 @@ The hierarchy is informational + delegation-routing, not a special upward escala
 ## High-Level Architecture
 
 ```mermaid
-flowchart TD
-    EXT["<b>External surfaces</b><br/>Slack / Mattermost · Jira / Confluence · GitHub / GitLab"]
-    subgraph proc["crewlet run — one process by default"]
+flowchart TB
+    EXT["<b>External surfaces</b><br/>Slack · Mattermost · Jira · Confluence · GitHub · GitLab"]
+    SUPPLY["<b>What a turn consumes</b><br/>an LLM API, or a coding CLI on your own subscription<br/>embeddings · MCP servers · a code sandbox"]
+
+    subgraph proc["<b>crewlet run</b> — one process by default; node.roles picks the groups"]
         direction TB
-        API["<b>API + dashboard</b><br/>webhook routes · REST · /config/* · live event stream"]
-        ENG["<b>Engine</b><br/>Agent handlers (one turn engine per seat)<br/>Notification SVC (inbound routing + outbound sends)<br/>A2A service (agent-to-agent channels)<br/>———<br/>Organization model — hierarchy, roles, DACI decisions<br/>Provider layer — LLM · embeddings · sandbox<br/>Tool registry — builtins · per-role MCP · A2A"]
-        API --- ENG
+        API["<b>ingress — API + dashboard</b><br/>webhook routes · REST · /config · /secrets<br/>/ws/stream · OTLP ingest · /health · /ready"]
+        SEAT["<b>seats — the agents</b><br/>Seat host: leases, mailboxes, MCP children<br/>Turn engine: Plan → Execute → Review, one per running turn<br/>Tool registry: builtins · per-role MCP · a2a_ask<br/>Provider chain: fallback models over a credential pool"]
+        DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · retention sweep · skill curator"]
+        CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · reflection · observability edge"]
     end
-    STREAM["<b>Event stream</b><br/><i>embedded by default</i><br/>crewlet.agent.*.inbox<br/>crewlet.notifications<br/>crewlet.config.*"]
-    DB["<b>Store</b><br/><i>one local file</i><br/>company_config · agent_diary<br/>episodes · …"]
-    EXT -->|webhooks| API
-    ENG -->|"MCP tools, called as each agent itself"| EXT
-    ENG --> STREAM
-    ENG --> DB
+
+    STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream by default</i><br/>crewlet.agent.HANDLE.inbox · .control<br/>crewlet.notifications.inbound · crewlet.events.*<br/>crewlet.config.* · crewlet.memory.* · dlq.*")]
+    KV[("<b>Coordination KV</b><br/><i>rides the stream's own connection</i><br/>seat · node · worker leases with a fencing epoch<br/>activation pointer · per-node status<br/>ledgers · counters · the company's secrets")]
+    DB[("<b>Store</b><br/><i>one local file, owned exclusively</i><br/>crewlet_events · agent_diary · episodes<br/>company_config · conversation_sessions · …")]
+
+    EXT -->|"webhooks / websocket"| API
+    API -->|"verify · claim once per fleet · publish"| STREAM
+    CORE -->|"resolve the seat, wake it"| STREAM
+    STREAM -->|"one durable consumer per seat"| SEAT
+    SEAT -->|"tool calls, made as each agent"| SUPPLY
+    SUPPLY -->|"the agent's own credentials"| EXT
+    SEAT -->|"events, and the next wake"| STREAM
+    DUTY --> STREAM
+    SEAT -->|"ownership, budgets, ledgers"| KV
+    CORE --> KV
+    DUTY --> KV
+    SEAT -->|"audit rows, memory, revisions"| DB
+    CORE --> DB
+    API --> DB
 ```
+
+That is the whole engine at a glance; **[Architecture](architecture.md)** draws
+it at six zoom levels — what sits outside the boundary, what runs inside one
+node, the hop-by-hop path a trigger takes across a fleet, what a turn does,
+where every table and bucket lives, and what changes when a second node
+appears.
 
 **Infrastructure**: none to operate. The stream is a NATS JetStream server the process embeds, and the store is a local file it creates. Outgrowing one node moves only the stream: the embedded servers join one cluster, or every node dials one external NATS (see [Running a Fleet](../guides/fleet.md)). It is the same client code either way — embedded versus external is a connection choice, not a second backend — and the store stays each node's own file. OpenTelemetry for distributed tracing.
 

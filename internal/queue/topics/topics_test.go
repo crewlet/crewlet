@@ -74,7 +74,6 @@ func TestAgentSubjectsAreTheDocumentedJoin(t *testing.T) {
 	}
 	for _, tc := range []struct{ prefix, subject string }{
 		{topics.NotificationsPrefix, topics.NotificationsInbound},
-		{topics.NotificationsPrefix, topics.NotificationsOutbound},
 		{topics.ConfigPrefix, topics.ConfigRevisionActivated},
 		{topics.ConfigPrefix, topics.ConfigRevisionApplied},
 	} {
@@ -109,7 +108,6 @@ func TestTheWildcardCoversTheDomainItNames(t *testing.T) {
 		{topics.AgentInboxPrefix + ">", topics.Event("task_created"), false},
 
 		{topics.NotificationsPrefix + ">", topics.NotificationsInbound, true},
-		{topics.NotificationsPrefix + ">", topics.NotificationsOutbound, true},
 		{topics.NotificationsPrefix + ">", topics.Event("task_created"), false},
 
 		{topics.ConfigPrefix + ">", topics.ConfigRevisionActivated, true},
@@ -287,7 +285,7 @@ func TestDeadLetterIsInjectiveOverArbitraryPairs(t *testing.T) {
 	}
 	subjects = append(subjects,
 		topics.Event("task_created"), topics.Event("task_failed"),
-		topics.NotificationsInbound, topics.NotificationsOutbound,
+		topics.NotificationsInbound,
 		topics.ConfigRevisionActivated, topics.ConfigRevisionApplied,
 	)
 

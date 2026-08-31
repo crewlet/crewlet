@@ -96,7 +96,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 }
 
 // runnerTurn is the identity handed to the phase runner.
-func (t turnTelemetry) runnerTurn(company *Company, workKey string, depth int) runner.Turn {
+func (t turnTelemetry) runnerTurn(company *Company, workKey string, depth int, chain []string) runner.Turn {
 	return runner.Turn{
 		ID: workKey, AgentID: t.agentID, Trigger: t.trigger,
 		ConversationKey: t.convKey, Trace: t.trace,
@@ -109,6 +109,11 @@ func (t turnTelemetry) runnerTurn(company *Company, workKey string, depth int) r
 			Seat:  company.Org.AgentSeatByHandle(t.handle),
 			Org:   company.Org,
 			Depth: depth,
+			// The path that got here, so an ask this turn makes carries
+			// the whole provenance rather than only its immediate asker.
+			// It was set on the sandbox-resume path alone, so every
+			// ordinary turn's ask reported a one-element chain.
+			Chain: chain,
 		},
 	}
 }

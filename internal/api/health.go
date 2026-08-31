@@ -62,6 +62,13 @@ type Health struct {
 	AppliedEpoch    *int64   `json:"applied_epoch,omitempty"`
 	EngineStartedAt string   `json:"engine_started_at,omitempty"`
 	Seats           []string `json:"seats,omitempty"`
+
+	// StallLagSeconds is how far behind this node's watched duty is,
+	// present only when it is behind at all. It is the number that climbs
+	// towards the seat lease TTL, at which the watchdog ends the process —
+	// so an operator watching a node degrade sees it here before the
+	// restart rather than only afterwards in the exit code.
+	StallLagSeconds *float64 `json:"stall_lag_seconds,omitempty"`
 }
 
 // Readiness is what /ready answers.
@@ -108,6 +115,13 @@ func (a *App) health() Health {
 	body.Posture = state.Posture
 	body.AppliedEpoch = &state.AppliedEpoch
 	body.EngineStartedAt = state.StartedAt
+	if state.StallLag > 0 {
+		// Only when there is something to say. A field that is always
+		// present and always 0 trains a reader to skip it, which is the
+		// one line of this body that must be read when it appears.
+		lag := state.StallLag.Seconds()
+		body.StallLagSeconds = &lag
+	}
 	body.Seats = state.Seats
 
 	switch {

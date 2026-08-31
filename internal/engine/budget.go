@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
@@ -52,6 +53,67 @@ func (m *meter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, e
 		}, nil
 	}
 	return toolloop.SpendOutcome{OK: true, Used: got.OrgUsed, Limit: m.orgLimit}, nil
+}
+
+// Remaining is this seat's headroom, in tokens.
+//
+// THREE-VALUED, and the third value is the whole reason this is not an int.
+// [subagent.Config.ParentRemaining] reads ZERO AS UNCAPPED, so a counter that
+// answered 0 for "I could not reach the store" would hand a fan-out no ceiling
+// at all — the fail-OPEN direction, on the one path where money leaves the
+// building per token. The error travels, and the caller refuses the spawn.
+//
+// The TIGHTER of the two headrooms, because a charge is checked against both:
+// a seat with room under its own cap but none under the company's has no room.
+// A limit of 0 is unlimited for that scope, matching the config; both
+// unlimited answers zero with a nil error, which is the same "no ceiling" a
+// company that set no budget already has.
+func (m *meter) Remaining(ctx context.Context) (int, error) {
+	headroom, capped := 0, false
+	for _, scope := range []struct {
+		key   string
+		limit int
+	}{
+		{coord.OrgScope, m.orgLimit},
+		{m.agentScope, m.agentLimit},
+	} {
+		if scope.limit <= 0 {
+			continue
+		}
+		used, err := m.budgets.Used(ctx, scope.key)
+		if err != nil {
+			return 0, fmt.Errorf("engine: budget headroom for %s: %w", scope.key, err)
+		}
+		// TRACKED WITH A FLAG, not by testing headroom against zero: a
+		// scope that has spent its whole allowance HAS zero headroom, and
+		// reading that as "not set yet" would let the other scope's room
+		// overwrite it — turning an exhausted company into an uncapped
+		// one at exactly the moment the cap matters.
+		if left := max(scope.limit-used, 0); !capped || left < headroom {
+			headroom, capped = left, true
+		}
+	}
+	return headroom, nil
+}
+
+// remainingFor is the seat's headroom reader, or nil.
+//
+// Nil where meterFor is nil and for the same reason: with no ceiling anywhere
+// there is nothing to read, and the spawner treats that as uncapped — which is
+// exactly what the seat itself is.
+func (e *Engine) remainingFor(c *Company, handle string) runner.Remaining {
+	m := e.meterFor(c, handle)
+	if m == nil {
+		return nil
+	}
+	// meterFor's contract is the interface; the concrete type is what
+	// carries the headroom read. A meter it did not build is a
+	// programming error rather than a runtime one.
+	concrete, ok := m.(*meter)
+	if !ok {
+		return nil
+	}
+	return concrete
 }
 
 // meterFor builds the meter for one seat's turn, or nil.

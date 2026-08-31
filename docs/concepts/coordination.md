@@ -39,6 +39,7 @@ So every call returns `(value, error)`, never a bare bool — and **each contrac
 flowchart LR
     subgraph COORD["coordination store — shared by the fleet"]
         L[("leases<br/>seats · duties · presence")]
+        E[("epochs<br/>the fencing counter")]
         C[("config<br/>activation pointer")]
         S[("status<br/>one key per node")]
         LG[("ledger<br/>turn completions")]
@@ -49,6 +50,7 @@ flowchart LR
         CH[("channels<br/>agent-to-agent asks")]
         F[("fires<br/>scheduled dispatch claims")]
         SR[("sandbox runs<br/>detached coding jobs")]
+        SEC[("secrets<br/>the company's sealed credentials")]
     end
     subgraph NODE["node — its own database"]
         DB[("events · episodes · diary<br/>conversations<br/>company payload · secrets")]
@@ -61,6 +63,7 @@ flowchart LR
 | Slot | Answers | Documented in |
 |---|---|---|
 | `leases` | Which node runs which seat, which node holds which duty, and which nodes are alive at all | [Seat Ownership](seat-ownership.md#the-lease) |
+| `epochs` | The monotonic fencing counter each resource's tokens are minted from. Its own bucket because it is the one thing here that must never expire — see the retention table below | [Seat Ownership](seat-ownership.md#the-lease) |
 | `config` | Which company revision is current. The key's own revision is the fencing epoch | [Control Plane](control-plane.md) |
 | `status` | What each node managed to apply, and when it last said so | [Control Plane](control-plane.md) |
 | `ledger` | Has this trigger already been worked — read before a turn, written after one | [The completion ledger](seat-ownership.md#the-completion-ledger) |
@@ -102,12 +105,14 @@ A single node shares nothing, because there is no peer to tell. Cooldowns stay i
 
 ## Retention is a bucket's age
 
-Every slot above except `leases`, `config`, `budgets`, `channels` and `sandbox runs` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write.
+Every slot above except `epochs`, `config`, `budgets`, `channels`, `sandbox runs` and `secrets` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write. `leases` is in that group and is the load-bearing case: a lease does not expire because something deletes it, it expires because the bucket's age *is* the lease TTL — which is exactly what makes a dead node's seat reclaimable with nobody around to release it.
 
 That is a constraint rather than a preference. On the default embedded backend a per-key TTL is *create-only*: an update clears it, leaving the key immortal. A rate window that is incremented four times would therefore never expire — the one key in the system guaranteed to be written more than once. So each retention is fixed when its bucket is created, which is why they are **separate buckets** rather than prefixes in one:
 
 | Bucket | Age | Sized from |
 |---|---|---|
+| `leases` | the lease TTL (45 s by default) | The expiry **is** the mechanism: a renew rewrites the key and restarts the clock, so a node that stops renewing stops holding, and its seats become claimable without anything having to notice it died |
+| `epochs` | none | The fencing counter, and a fence that restarts is not a fence — a deleted key would hand the next owner a token a zombie is still writing under. It is a separate bucket from `leases` for exactly this: the two want opposite retentions |
 | `rate` | a few multiples of the window | A closed window must age out, and must never outlive its successor |
 | `claims` | 5 minutes | A vendor's redelivery and an operator's replay, not the vendor's full retry schedule |
 | `ledger` | 7 days | Must outlast the queue's redelivery horizon **and** the scheduler's catchup ceiling — expiring a completion a tick could still evaluate lets that fire run twice |

@@ -35,6 +35,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if c == nil {
 		return fmt.Errorf("engine: cannot equip a nil epoch")
 	}
+	e.tuneBatching(c)
 	// THE COMPANY'S OWN NUMBERS, not the builtins' defaults. Each of these
 	// was validated, schema'd and documented and read by nobody, so setting
 	// one produced a revision and changed nothing an operator could observe.
@@ -137,7 +138,25 @@ func (e *Engine) sandboxLauncher() builtin.SandboxLauncher {
 // see. It used to be the node's own database, which is why a cross-node ask
 // woke its target and then dropped the reply as "no such channel".
 func (e *Engine) a2aFor(c *Company) builtin.Asker {
-	if e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
+	svc := e.a2aService(c)
+	if svc == nil {
+		// A typed nil in an interface is not nil, and the tool checks
+		// its Asker for nil to decide whether to register at all.
+		return nil
+	}
+	return svc
+}
+
+// a2aService is the concrete service, for the two callers that need
+// different halves of it: the ask tool takes it as a [builtin.Asker], and the
+// answer leg needs Reply and Close, which that interface does not carry.
+//
+// Built per call rather than held on the epoch: it is a struct over the
+// coordination store and the queue with no state of its own, so two of them
+// are the same service, and holding one would only add a field that has to be
+// rebuilt on every apply for no reason.
+func (e *Engine) a2aService(c *Company) *a2a.Service {
+	if c == nil || e.backends == nil || e.backends.Fleet == nil || e.backends.Queue == nil {
 		return nil
 	}
 	svc, err := a2a.New(a2a.NewCoordStore(e.backends.Fleet), e.backends.Queue,
@@ -182,4 +201,26 @@ func (e *Engine) telemetry() builtin.Telemetry {
 		return nil
 	}
 	return e.backends.Queue
+}
+
+// tuneBatching writes the company's inbox coalescing knobs into the value
+// every seat attachment on this node already holds.
+//
+// IN PLACE rather than rebuilt, because that is what [queue.BatchOptions] is
+// for: it guards its own fields precisely so an apply lands on the next batch
+// with no re-subscription. A fresh value per attach would leave every seat
+// claimed before the apply reading the old window for as long as it held its
+// seat.
+//
+// Same history as the numbers above it: notification_coalesce_window_seconds
+// and notification_coalesce_max_batch were declared, defaulted, schema'd,
+// validated and documented, and node.Config.BatchOptions was never set — so
+// every seat took queue.DefaultBatchOptions and setting either knob produced a
+// revision that changed nothing an operator could observe.
+func (e *Engine) tuneBatching(c *Company) {
+	if e.batch == nil || c == nil || c.Config == nil {
+		return
+	}
+	e.batch.Set(c.Config.NotificationCoalesceWindowSeconds,
+		c.Config.NotificationCoalesceMaxBatch)
 }

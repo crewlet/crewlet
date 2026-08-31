@@ -74,15 +74,20 @@ const (
 	// EventsWildcard matches every engine event, for broadcast streams.
 	EventsWildcard = EventsPrefix + ">"
 
-	// NotificationsPrefix prefixes the notification work queues. A stream
-	// topology needs the DOMAIN, not the leaves — without a name for it a
+	// NotificationsPrefix prefixes the notification work queue. A stream
+	// topology needs the DOMAIN, not the leaf — without a name for it a
 	// backend hand-writes "crewlet.notifications.>" and the grammar has
 	// two definitions again.
+	//
+	// There is exactly one leaf, and no outbound counterpart. Nothing the
+	// engine sends outward is queued: an agent writes through its OWN MCP
+	// tools inside its turn, and the chat working-indicator is a transport
+	// call on the node already running that seat. A queued outbound step
+	// would put a hop between a seat and a message it is holding the
+	// context for, and hand the send to a node that never ran the turn.
 	NotificationsPrefix = "crewlet.notifications."
 	// NotificationsInbound carries raw inbound webhook envelopes.
 	NotificationsInbound = NotificationsPrefix + "inbound"
-	// NotificationsOutbound carries outbound notification requests.
-	NotificationsOutbound = NotificationsPrefix + "outbound"
 
 	// ConfigPrefix prefixes the control-plane subjects, for the same
 	// reason NotificationsPrefix exists.

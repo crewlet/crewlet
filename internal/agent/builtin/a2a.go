@@ -126,7 +126,15 @@ func (t *a2aAsk) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[s
 		// rather than discovering the loop at runtime — an A2A ask is a
 		// delegation, and an unbounded one is how two agents ask each
 		// other the same question until a budget runs out.
-		DelegationDepth: turn.Depth + 1,
+		//
+		// THIS TURN'S OWN DEPTH, unincremented: a2a.Service.Open adds the
+		// hop, because it is the chokepoint every ask goes through.
+		// Adding one here too charged two per hop against a limit of
+		// three, so the FIRST reply a colleague sent back could not be
+		// answered — a two-message exchange died as an engine guard
+		// breach. The config field says it plainly: a turn triggered by
+		// another agent inherits its depth plus one.
+		DelegationDepth: turn.Depth,
 		DelegationChain: append(append([]string(nil), turn.Chain...), seat.Handle()),
 		ParentTurnID:    turn.ID,
 	})

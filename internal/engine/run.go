@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -72,6 +73,40 @@ type Engine struct {
 	// dispatch turns one inbox partition into one turn. Held so a test can
 	// substitute its own without standing up a broker.
 	dispatch *Dispatcher
+
+	// watchdog ends this process when the seat host's heartbeat stops
+	// turning past the lease TTL.
+	//
+	// On the ENGINE rather than inside the seat host, for the reason
+	// [seat.Watchdog.Stop] gives: the engine is what knows a shutdown has
+	// begun, and disarming has to happen BEFORE the drain. Teardown
+	// legitimately blocks for a long time — reaping MCP process trees,
+	// joining goroutines, tearing sandboxes down — and a watchdog still
+	// armed through it would shoot a node in the middle of the seat
+	// release that makes a drain graceful.
+	//
+	// It was never constructed at all: seat.NewWatchdog had no caller
+	// outside its own test, so a node that wedged neither worked nor died,
+	// held a peer's mail unacked, and was never restarted by an
+	// orchestrator watching for liveness.
+	watchdog *seat.Watchdog
+
+	// batch is the inbox coalescing window and cap, shared with every seat
+	// attachment on this node.
+	//
+	// ONE VALUE, held on the ENGINE and mutated in place, because that is
+	// what [queue.BatchOptions] is built for: it guards its own fields so a
+	// hot reload takes effect on the next batch with no re-subscription.
+	// The alternative — a fresh value per attach — would leave a seat
+	// claimed before an apply reading the old window forever, and only a
+	// seat that happened to move nodes would ever pick up a change.
+	//
+	// It was nothing at all: node.Config.BatchOptions was never set, so
+	// every seat took queue.DefaultBatchOptions and the two company knobs
+	// that configure this — notification_coalesce_window_seconds and
+	// notification_coalesce_max_batch — were declared, defaulted,
+	// validated, documented, and read by nothing.
+	batch *queue.BatchOptions
 
 	// sandbox is this node's code-work machinery: the coordinator holding
 	// the busy set, the waiter polling detached runs, and the durable row
@@ -231,15 +266,6 @@ type Options struct {
 	// cannot start a detached run is never waiting on one.
 	AwaitingSandbox func(handle string) bool
 
-	// Admits gates INBOUND work on the config posture, supplied by
-	// whoever holds the control plane — the engine does not, because the
-	// posture is a fleet question and the reconciler owns it.
-	//
-	// Nil admits everything, which is the single-node case and the case
-	// before a control plane exists. A shedding node PARKS a delivery
-	// rather than routing it against a company it is not sure of.
-	Admits func() bool
-
 	// SandboxPollInterval overrides the completion poll's cadence. Zero
 	// takes the production value, which is sized against coding jobs that
 	// run for minutes; a test shrinks it so a run settles in a second
@@ -303,6 +329,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		mcp:         mcp.NewBridge(nil),
 		sandboxOtel: otel,
 		startedAt:   time.Now().UTC(),
+		// Built before equip, which is what writes the company's own
+		// numbers into it, and before node.New, which hands the same
+		// value to every seat attachment.
+		batch: queue.DefaultBatchOptions(),
 	}
 	fail := func(err error) (*Engine, error) {
 		if ownsBackends {
@@ -402,6 +432,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// absent key and node.New is what turns it into the default, so
 		// the number lives in one place — see node.DefaultMaxConcurrent.
 		MaxConcurrent: opts.Bootstrap.Node.MaxConcurrent,
+		// The company's own coalescing knobs, live: this is the value an
+		// apply writes through, and every seat attachment reads it.
+		BatchOptions: e.batch,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("engine: node: %w", err))
@@ -421,6 +454,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		}); err != nil {
 		return fail(fmt.Errorf("engine: seat memory: %w", err))
 	}
+	// ARMED HERE, STARTED IN Start. The watchdog stands down permanently
+	// the first time no watched duty is live, and the host is not live
+	// until node.Start runs it — so building it here and starting it there
+	// is the only ordering that watches anything at all.
+	e.watchdog = seat.NewWatchdog()
+	e.watchdog.Watch("seat-host", n.Host())
 	e.node = n
 	e.dispatch = e.buildDispatcher(opts, backends)
 	// LAST, because its fleet-singleton duty is claimed under the node's
@@ -447,7 +486,6 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// The two background passes, after the node exists: both are fleet
 	// singletons claimed under its own incarnation.
 	e.startLearningBackground(ctx)
-	e.notify.admits = opts.Admits
 	if err := e.startNotifications(ctx, e.Company()); err != nil {
 		return fail(fmt.Errorf("engine: %w", err))
 	}
@@ -528,6 +566,27 @@ func (e *Engine) Start(ctx context.Context) error {
 	if err := e.node.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("engine: start: %w", err)
 	}
+	// AFTER the host is running, and detached from the caller's context
+	// like the host itself. Before it, every watched duty reads as not
+	// live and the watchdog stands down for the life of the process —
+	// which is the one failure mode a suicide timer must not have: it
+	// looks exactly like a healthy armed one. [Engine.Stop] disarms it.
+	//
+	// The precondition is CHECKED rather than commented, because getting
+	// it wrong is silent by construction: a watchdog that stood down and
+	// one that is watching are indistinguishable from outside the package,
+	// and the difference only shows up as a node that wedges and is never
+	// restarted.
+	if e.watchdog != nil {
+		if _, live := e.node.Host().Beat(); !live {
+			log.WarnContext(ctx, "watchdog_not_armed",
+				"detail", "the seat host is not running yet, so the watchdog would "+
+					"stand down permanently; this node will not end itself if it wedges",
+				"hint", "start the watchdog after node.Start, not before")
+		} else {
+			e.watchdog.Start(context.WithoutCancel(ctx))
+		}
+	}
 	company := e.Company()
 	log.InfoContext(ctx, "engine_started", "company", company.Config.Name,
 		"seats", len(company.Seats()))
@@ -540,6 +599,15 @@ func (e *Engine) Start(ctx context.Context) error {
 // cleanly and one that redelivers half-finished turns: it stops claiming, hands
 // back every seat, and waits for in-flight handlers before anything closes.
 func (e *Engine) Stop(ctx context.Context) {
+	// FIRST, before anything blocks. The drain below reaps MCP process
+	// trees, joins goroutines and waits on in-flight turns indefinitely —
+	// all legitimate, all slow, and all of it would look to an armed
+	// watchdog exactly like the wedge it exists to end. Exiting through
+	// the middle of a drain abandons the seat release that makes it
+	// graceful, and costs every peer a full TTL of dark seats.
+	if e.watchdog != nil {
+		e.watchdog.Stop()
+	}
 	e.node.Drain(ctx)
 	// After the drain: the waiter's keepalive is what stops a running box
 	// being reaped, so stopping it first would start the orphan clock on
@@ -565,6 +633,19 @@ func (e *Engine) Stop(ctx context.Context) {
 		e.backends.Close(ctx)
 	}
 	log.InfoContext(ctx, "engine_stopped")
+}
+
+// StallLag is how far behind the worst live watched duty is.
+//
+// The early-warning half of the watchdog: it fires at the lease TTL, and
+// this is the number climbing towards it. Zero means nothing to report —
+// either the duty is turning normally or nothing is being watched — which is
+// the same reading a health surface wants for both.
+func (e *Engine) StallLag() time.Duration {
+	if e.watchdog == nil {
+		return 0
+	}
+	return e.watchdog.Lag()
 }
 
 // Node exposes this process's participation in the fleet, for the operator
@@ -608,7 +689,12 @@ func (e *Engine) conditionsFor(awaiting func(string) bool) func(string) inbox.Co
 			// outliving the reason for it.
 			TurnEngineReady: e.Company().Models != nil,
 			AwaitingSandbox: awaiting != nil && awaiting(handle),
-			AdmitsTriggers:  true,
+			// The SAME gate the inbound edge and the scheduler read, so
+			// a shedding node refuses at every trigger admission rather
+			// than only at the one that happened to be wired. It was a
+			// hardcoded true, which made a seat's own inbox the one
+			// path a shed could never reach.
+			AdmitsTriggers: e.admits(),
 		}
 	}
 }
@@ -690,12 +776,20 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		},
 		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{}),
 		Publisher:    e.backends.Queue,
-		Turn:         tel.runnerTurn(company, req.WorkKey, req.Depth),
+		Turn:         tel.runnerTurn(company, req.WorkKey, req.Depth, req.DelegationChain),
 		Markers:      e.markers(),
 		Latch:        e.onboarded,
 		// Read off the PINNED epoch, so a revision that raises a ceiling
 		// mid-turn cannot move the limit a round is judged against.
 		Budget: e.meterFor(company, req.Handle),
+		// The round-cap extension judge, from the same pinned epoch. It
+		// was never supplied, so every exhaustion rescued with "no_judge"
+		// and the extension mechanism was inert.
+		Judge: e.judgeFor(company, req.Handle),
+		// The seat's headroom, for a sub-agent spawn. Three-valued on
+		// purpose: nil is "no ceiling configured", and a FAILED read
+		// refuses the spawn rather than granting it no ceiling.
+		Remaining: e.remainingFor(company, req.Handle),
 	})
 	if err != nil {
 		// No turn-completed event: nothing started, so nothing ended. A
@@ -723,7 +817,13 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		log.InfoContext(ctx, "onboarding_pass_ran", "handle", req.Handle)
 	}
 
-	res, err := turn.Run(ctx, r, company.TurnSettings(), turn.Input{TurnID: req.WorkKey})
+	// THE DEPTH REACHES THE GUARD. turn.Run checks it against
+	// delegation_depth_limit before anything runs, and this argument was
+	// omitted — so the check ran against a constant zero and the limit
+	// bounded nothing.
+	res, err := turn.Run(ctx, r, company.TurnSettings(), turn.Input{
+		TurnID: req.WorkKey, Depth: req.Depth,
+	})
 	// The moment the turn returns, and before its frame unwinds: the runner
 	// holds the suspended conversation only until then, and a row without
 	// one is a detached run nothing can ever resume.
@@ -735,6 +835,11 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// events already put the seat into `working`, and returning without this
 	// leaves it there until the seat happens to take another turn.
 	e.publishTurnCompleted(ctx, tel, req.WorkKey, r.Spend(), res, err)
+	// AND, if a colleague asked for this turn, the answer they are waiting
+	// for. Here because this is the one frame holding both the result and
+	// the trigger; after the completion event because the reply wakes
+	// another seat and the record of this turn should exist first.
+	e.answerColleague(ctx, company, req, res)
 	return res, err
 }
 
@@ -791,6 +896,35 @@ func (e *Engine) StartedAt() time.Time { return e.startedAt }
 //
 // The context is the beat's, already bounded — see [seat.Config].Status.
 func (e *Engine) SetPosture(fn func(context.Context) string) { e.posture.Store(&fn) }
+
+// SetAdmits supplies the gate that decides whether this node takes new
+// inbound work.
+//
+// # Why this is a setter, and why it is not the same wire as SetPosture
+//
+// A setter for the reason SetPosture is one: the posture belongs to the
+// reconciler, which is built AFTER the engine because it needs an engine to
+// converge against. It was an OPTION, which meant nothing could ever fill it
+// — the one production call site of [New] runs before the reconciler exists —
+// so the gate was nil on every node, [notify.Service] admitted every
+// delivery, the scheduler fired on every tick, and a node that had decided it
+// was shedding kept taking work. [configplane.Posture.ServesTraffic] was
+// written for this gate and had no caller at all.
+//
+// Separate from the posture reporter because the two are read on different
+// paths at different rates: the reporter is called per heartbeat and pays a
+// live control-plane read, while this is called per delivery and must not.
+// See [Reconciler.Admits] for which value it answers from.
+//
+// Nil admits everything, which is the single-node case and the case before a
+// control plane exists. A shedding node DEFERS a delivery — back to the
+// broker, consumer quiesced — rather than routing it against a company it is
+// not sure of.
+func (e *Engine) SetAdmits(fn func() bool) {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	e.notify.admits = fn
+}
 
 // SetOnApplied registers a hook run after every config apply publishes its
 // epoch, for surfaces that render the COMPANY rather than its activity.
