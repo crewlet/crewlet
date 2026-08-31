@@ -18,22 +18,11 @@ import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
-import {
-  Badge,
-  Button,
-  Chip,
-  Empty,
-  Panel,
-  SearchInput,
-  Segmented,
-  Skeleton,
-  Stat,
-  StatRow,
-} from "~/ui/primitives.tsx";
-import { BarList, phaseColor } from "~/ui/charts.tsx";
-import { useAgents, useClient, useTokens } from "~/lib/store-hooks.ts";
+import { Badge, Button, Chip, Empty, Segmented, Select, Skeleton } from "~/ui/primitives.tsx";
+import { useAgents, useClient } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtCount, plural } from "~/lib/format.ts";
+import { plural } from "~/lib/format.ts";
+import { href } from "~/app/router.tsx";
 import {
   fromLiveCall,
   fromPhaseEvent,
@@ -49,7 +38,6 @@ const PHASES = ["plan", "execute", "review", "auxiliary"] as const;
 export function ModelActivity() {
   const { socket } = useClient();
   const agents = useAgents();
-  const tokens = useTokens();
   const [phase, setPhase] = useParam("phase", "");
   const [role, setRole] = useParam("role", "");
   const [grouping, setGrouping] = useParam("by", "turn", "section");
@@ -133,21 +121,14 @@ export function ModelActivity() {
   );
 
   const liveCount = live.filter((r) => r.live).length;
-  const phaseSpend = (tokens?.by_phase ?? [])
-    .map((p) => ({
-      label: p.phase,
-      value: p.total_tokens,
-      display: fmtCount(p.total_tokens),
-      color: phaseColor(p.phase),
-      sub: `${p.calls.toLocaleString()} calls · ${fmtCount(Math.round(p.total_tokens / Math.max(1, p.calls)))} avg`,
-    }))
-    .sort((a, b) => b.value - a.value);
+  const failedCount = merged.filter((r) => r.failed).length;
+  const filtering = !!(role || phase || onlyFailed);
 
   return (
     <>
       <ScreenHead
         title="Model activity"
-        sub="Every phase the models ran. Rounds are shown in the order the engine recorded them, and a phase that finishes updates in place rather than moving."
+        sub="Every phase the models ran, round by round. A phase that finishes updates in place rather than moving."
         badges={
           <>
             {liveCount > 0 && (
@@ -155,49 +136,33 @@ export function ModelActivity() {
                 {liveCount} running
               </Badge>
             )}
-            <Badge outline>{plural(filtered.length, "phase")} loaded</Badge>
+            {/* The count IS the control. It used to be a stat tile that said
+                "4 failed" and did nothing, next to a separate chip that did
+                the filtering — so a reader who saw the number had to go find
+                the unrelated pill that acted on it. */}
+            {failedCount > 0 && (
+              <Badge
+                tone="critical"
+                onClick={() => setOnlyFailed(onlyFailed ? "" : "1")}
+                pressed={!!onlyFailed}
+                title={onlyFailed ? "show every phase" : "show only failed phases"}
+              >
+                {failedCount} failed
+              </Badge>
+            )}
+            <Badge outline>
+              {plural(filtered.length, "phase")} · {plural(turns.length, "turn")}
+            </Badge>
           </>
         }
       />
 
-      <Panel padding="none">
-        <StatRow cols={4}>
-          <Stat
-            icon="zap"
-            label="Running now"
-            value={liveCount}
-            sub={
-              liveCount
-                ? live
-                    .filter((r) => r.live)
-                    .map((r) => r.role)
-                    .join(", ")
-                : "no phase is mid-flight"
-            }
-          />
-          <Stat
-            icon="layers"
-            label="Turns loaded"
-            value={turns.length}
-            sub={`${filtered.length} phases across them`}
-          />
-          <Stat
-            icon="coin"
-            label={tokens ? `Tokens · ${tokens.since_days}d` : "Tokens"}
-            value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
-            sub={
-              tokens ? `${tokens.totals.calls.toLocaleString()} model calls` : "nothing recorded"
-            }
-          />
-          <Stat
-            icon="alert"
-            label="Failed phases"
-            value={merged.filter((r) => r.failed).length}
-            sub="in the window loaded here"
-          />
-        </StatRow>
-      </Panel>
-
+      {/* ONE row of controls. This screen had eighteen: a segmented control, a
+          free-text box, a chip per seat, a chip per phase and a failures chip
+          — fifteen of them near-identical pills in two different active
+          idioms. The seat filter is a picker rather than a text box because
+          the match is exact on both sides of the wire, so a typed prefix
+          silently returned nothing while looking like a search that missed. */}
       <div className="toolbar">
         <Segmented
           ariaLabel="Grouping"
@@ -208,32 +173,32 @@ export function ModelActivity() {
             { value: "phase", label: "Flat" },
           ]}
         />
-        <div style={{ maxWidth: 200 }}>
-          <SearchInput
-            value={role}
-            onChange={setRole}
-            ariaLabel="Filter by seat"
-            placeholder="Seat"
-          />
-        </div>
-        {roles.length > 0 && roles.length <= 10 && (
-          <div className="row wrap gap-1">
-            {roles.map((r) => (
-              <Chip key={r} on={role === r} onClick={() => setRole(role === r ? "" : r)}>
-                {r}
-              </Chip>
-            ))}
-          </div>
-        )}
+        <Select
+          value={role}
+          onChange={setRole}
+          options={roles}
+          ariaLabel="Filter by seat"
+          anyLabel="Any seat"
+        />
         <span className="spacer" />
         {PHASES.map((p) => (
           <Chip key={p} on={phase === p} onClick={() => setPhase(phase === p ? "" : p)}>
             {p}
           </Chip>
         ))}
-        <Chip on={!!onlyFailed} onClick={() => setOnlyFailed(onlyFailed ? "" : "1")}>
-          Failures
-        </Chip>
+        {filtering && (
+          <Button
+            size="sm"
+            icon="x"
+            onClick={() => {
+              setRole("");
+              setPhase("");
+              setOnlyFailed("");
+            }}
+          >
+            Clear
+          </Button>
+        )}
       </div>
 
       {loading && !merged.length && <Skeleton rows={5} height={44} />}
@@ -242,8 +207,12 @@ export function ModelActivity() {
       {!loading && !filtered.length && !error && (
         <Empty
           icon="brain"
-          title="No model activity in the record"
-          hint="A phase is recorded when it completes. If seats are idle and no schedule has fired, there is nothing here yet."
+          title={filtering ? "Nothing matches these filters" : "No model activity in the record"}
+          hint={
+            filtering
+              ? "Clear them to see every phase the engine has kept."
+              : "A phase is recorded when it completes. If seats are idle and no schedule has fired, there is nothing here yet."
+          }
         />
       )}
 
@@ -257,31 +226,29 @@ export function ModelActivity() {
             ))}
       </div>
 
-      <Panel padding="tight">
-        <div className="row">
-          {pageError ? (
-            <QueryState error={pageError} loading={false} />
-          ) : exhausted ? (
-            <span className="t-caption">That is the beginning of the retained record.</span>
-          ) : (
-            <>
-              <Button size="sm" onClick={() => void loadOlder()} disabled={paging}>
-                {paging ? "Loading…" : `Load ${PAGE} older phases`}
-              </Button>
-              <span className="spacer" />
-              <span className="t-caption">the event store keeps 30 days</span>
-            </>
-          )}
-        </div>
-      </Panel>
-
-      <Panel
-        title="Where the tokens go"
-        icon="coin"
-        subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
-      >
-        <BarList data={phaseSpend} emptyLabel="No model calls have been recorded in this window." />
-      </Panel>
+      {/* A bare row, not a Panel: one button did not need card chrome. The
+          spend rollup that used to sit BELOW this is gone — it was Spend's
+          panel on Spend's data, and every "load older" click pushed it
+          another sixty cards down a single scroller, so nobody ever reached
+          it. A link goes where the screen does. */}
+      <div className="row gap-2">
+        {pageError ? (
+          <QueryState error={pageError} loading={false} />
+        ) : exhausted ? (
+          <span className="t-caption">That is the beginning of the retained record.</span>
+        ) : (
+          <>
+            <Button size="sm" onClick={() => void loadOlder()} disabled={paging}>
+              {paging ? "Loading…" : `Load ${PAGE} older phases`}
+            </Button>
+            <span className="t-caption">the event store keeps 30 days</span>
+          </>
+        )}
+        <span className="spacer" />
+        <a className="t-caption" href={href(["spend"])}>
+          where the tokens go →
+        </a>
+      </div>
     </>
   );
 }

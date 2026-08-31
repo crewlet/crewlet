@@ -378,3 +378,82 @@ func TestAFailedPhaseStillClosesItselfToStragglers(t *testing.T) {
 		t.Errorf("live call = %+v: a straggler seeded a row on a failed phase", call)
 	}
 }
+
+func TestADiscardedStragglerDoesNotLeaveTheSeatLookingBusy(t *testing.T) {
+	t.Parallel()
+	// The seat state used to be set BEFORE the discard guards, so a
+	// straggler that was about to be thrown away still flipped the seat to
+	// "working" — and then the guard returned "", so nothing was pushed and
+	// nothing ever corrected it. The seat sat rendering as working with no
+	// live call to show, until some later round happened to arrive.
+	s := livestate.New()
+	s.Apply(env("agent_phase_started", planCall()))
+	s.Apply(env("agent_phase_completed", planCall(), at("2026-06-14T12:00:05+00:00")))
+	s.Apply(env("reflection_completed", map[string]any{"role": "Lead"},
+		at("2026-06-14T12:00:06+00:00")))
+
+	if got := overlayOf(t, s, "Lead"); got.State != "idle" {
+		t.Fatalf("state = %q before the straggler, want idle", got.State)
+	}
+
+	s.Apply(env("agent_turn_progress",
+		with(planCall(), map[string]any{"round_num": 3, "response": "late"}),
+		streamOnly, at("2026-06-14T12:00:04+00:00")))
+
+	got := overlayOf(t, s, "Lead")
+	if got.State == "working" && got.LiveCall == nil {
+		t.Error("a discarded straggler left the seat working with no call to show for it")
+	}
+	if got.State != "idle" {
+		t.Errorf("state = %q, want the seat left as the reflection found it", got.State)
+	}
+}
+
+func TestAnOpeningRoundThatBeatsItsPhaseStartIsNotBlanked(t *testing.T) {
+	t.Parallel()
+	// agent_phase_started and agent_turn_progress travel on DIFFERENT
+	// subjects and reach the API through one wildcard subscription, so the
+	// first round can land first. The seed used to be unconditional: it
+	// replaced a call that already had a model, a response and tool calls
+	// with an empty placeholder, and the reorder guard could not catch it
+	// because applyProgress never advances the state clock.
+	s := livestate.New()
+	s.Apply(env("agent_turn_progress",
+		with(planCall(), map[string]any{
+			"round_num": 0, "response": "already thinking", "model": "gpt-x",
+		}),
+		streamOnly, at("2026-06-14T12:00:01+00:00")))
+	s.Apply(env("agent_phase_started", planCall(), at("2026-06-14T12:00:00+00:00")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call == nil {
+		t.Fatal("the phase start cleared the call its own round had already seeded")
+	}
+	if call.Response != "already thinking" {
+		t.Errorf("response = %q — a late phase start blanked the round that beat it", call.Response)
+	}
+	if call.Model != "gpt-x" {
+		t.Errorf("model = %q, want the round's own", call.Model)
+	}
+}
+
+func TestAPhaseStartStillSeedsADifferentCall(t *testing.T) {
+	t.Parallel()
+	// The counterfactual: the guard is keyed on the CALL, so a genuinely
+	// new phase still replaces whatever the seat was showing.
+	s := livestate.New()
+	s.Apply(env("agent_turn_progress",
+		with(planCall(), map[string]any{"round_num": 0, "response": "plan work"}),
+		streamOnly))
+	s.Apply(env("agent_phase_started",
+		with(planCall(), map[string]any{"phase": "execute"}),
+		at("2026-06-14T12:00:02+00:00")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call == nil || call.Phase != "execute" {
+		t.Fatalf("live call = %+v, want the new execute phase", call)
+	}
+	if call.Response != "" {
+		t.Errorf("response = %q, want a fresh placeholder for a new phase", call.Response)
+	}
+}

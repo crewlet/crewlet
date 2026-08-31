@@ -215,7 +215,7 @@ where the answer is.
 ## The transcript is stable, and reads in order
 
 The sharpest complaint about the screen this replaces was that the LLM calls
-jumped around, were hard to follow, and did not say much worth reading. Seven
+jumped around, were hard to follow, and did not say much worth reading. Ten
 rules fix it, and each one names a specific mechanism:
 
 1. **One identity.** A phase is keyed `turn_id|phase|iteration`, live and
@@ -258,16 +258,68 @@ rules fix it, and each one names a specific mechanism:
    they stopped to read. Note the engine has no token streaming: a phase
    publishes twice per tool-loop round, so a round is the finest thing
    there is to tail.
-6. **Open/closed is latched.** Once a reader opens a phase or a turn it stays
+6. **A round's number is the PHASE's, not one loop invocation's.** The tool
+   loop counts from 1 each time it is entered, and an extended phase enters
+   it again — so an unshifted second invocation made the phase read as
+   running backwards. The live projection drops a round numbered below the
+   one it holds, so the whole extension vanished from the screen; the ledger
+   merged extension round 1 into original round 1; and the completed record,
+   which assigned the last invocation wholesale, lost every tool call and
+   every round of narration from before the extension — on exactly the long,
+   hard phases that get extended.
+7. **A discarded round changes nothing.** The seat's state used to be set
+   before the two guards that decide whether to keep the round, so a
+   straggler arriving after its own phase completed flipped the seat to
+   "working" and was then thrown away — with nothing pushed to correct it,
+   the seat sat rendering as busy with no call to show. A round about to be
+   discarded must not move the seat either.
+8. **A phase start does not blank a call its own first round already
+   seeded.** `agent_phase_started` and `agent_turn_progress` travel on
+   different subjects, so the opening round can land first; the seed was
+   unconditional and replaced a call that already had a model, a response
+   and tool calls with an empty placeholder.
+9. **Open/closed is latched.** Once a reader opens a phase or a turn it stays
    open. The previous surface derived it — open while live, closed once
    finished — so a transcript vanished at exactly the moment it became
    complete, and a new failure elsewhere silently re-opened a different card
    and shoved everything below it down the page.
-7. **Time is compared as an instant.** Go's `RFC3339Nano` trims trailing
+10. **Time is compared as an instant.** Go's `RFC3339Nano` trims trailing
    zeros, so `…:07Z` sorts *after* `…:07.42Z` on a raw string compare — it
    compares `'Z'` (0x5A) against `'.'` (0x2E). Every list sorts through
    `tsKey`, and every comparator is three-way: one returning −1 for equal
    operands makes equal rows trade places on each render.
+
+## One filter bar, and a control that means what it looks like
+
+The Model screen collected eighteen controls in one sticky row — a segmented
+control, a free-text box, a chip per seat, a chip per phase and a failures
+chip — fifteen of them near-identical pills in two different active idioms.
+Above them sat four `--fs-2xl` numerals, a step LARGER than the screen title,
+so the loudest thing on a transcript page was a token count. Below the list
+sat a copy of Spend's own panel, which every "load older" click pushed
+another sixty cards further down a single scroller.
+
+What replaced it:
+
+- **The counts moved into the header badges**, and the failure count became
+  the control that filters to failures. It used to be an inert tile reading
+  "4 failed" beside an unrelated chip that did the filtering, so a reader who
+  saw the number had to go find the pill that acted on it. `Badge` renders as
+  a real `<button>` with `aria-pressed` when given an action — a `<span>`
+  with a click handler is neither focusable nor announced, and looks
+  identical to the inert badges next to it.
+- **The seat filter became a picker.** It was a text box, but the match is
+  exact on both sides of the wire — the server query and the in-memory
+  filter both compare for equality — so typing a prefix returned nothing
+  while looking exactly like a search that found no matches. `Select` is a
+  native `<select>`: keyboard navigation, type-ahead and the platform's own
+  overlay come free, and a hand-built listbox would have to earn all three
+  back. It also scales past the ten seats at which the chip row silently
+  disappeared.
+- **The spend panel is a link.** It was Spend's panel on Spend's data at
+  Spend's window; the screens are split by question, and duplicating one
+  screen's answer at the bottom of another is how the two come to disagree.
+
 
 The header carries the same facts in the same order whether a phase is live or
 finished — phase, decision, model, rounds, tokens, age — so the row does not

@@ -83,10 +83,6 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	if id := str(payload, "agent_id"); id != "" {
 		agent.runtimeID = id
 	}
-	if agent.state != "working" {
-		agent.state = "working"
-		agent.afkReason = ""
-	}
 
 	turnID := str(payload, "turn_id")
 	phase := str(payload, "phase")
@@ -120,6 +116,17 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		return ""
 	}
 
+	// Moved BELOW both guards. It used to run first, so a straggler that
+	// lost the cross-topic race — a progress round arriving after its phase
+	// had already completed — flipped the seat to "working" and then
+	// returned "" at the guard. Nothing was pushed, so nothing ever
+	// corrected it: the seat sat rendering as working, with no live call to
+	// show, until the next real round. A round this function is about to
+	// discard must not move the seat either.
+	if agent.state != "working" {
+		agent.state = "working"
+		agent.afkReason = ""
+	}
 	if phase != "" {
 		agent.currentPhase = phase
 	}

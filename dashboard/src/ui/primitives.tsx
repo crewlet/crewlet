@@ -123,6 +123,8 @@ export function Badge({
   outline,
   mono,
   title,
+  onClick,
+  pressed,
 }: {
   children: ReactNode;
   tone?: Tone;
@@ -131,15 +133,46 @@ export function Badge({
   outline?: boolean;
   mono?: boolean;
   title?: string;
+  /** Makes the badge a real button — see the note below. */
+  onClick?: () => void;
+  /** For a badge that toggles a filter, whether that filter is on. */
+  pressed?: boolean;
 }) {
-  return (
-    <span
-      className={cx("badge", tone !== "neutral" && tone, outline && "outline", mono && "mono")}
-      title={title}
-    >
+  const className = cx(
+    "badge",
+    tone !== "neutral" && tone,
+    outline && "outline",
+    mono && "mono",
+    onClick && "actionable",
+    pressed && "pressed",
+  );
+  const inner = (
+    <>
       {dot && <i className={cx("dot", tone !== "neutral" && tone)} />}
       {icon && <Icon name={icon} size="xs" />}
       {children}
+    </>
+  );
+  // A BUTTON when it acts, a span when it does not. A count that filters the
+  // list has to be reachable by keyboard and announce its pressed state; a
+  // span with a click handler is neither, and looks identical to the inert
+  // badges beside it.
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        className={className}
+        title={title}
+        onClick={onClick}
+        aria-pressed={!!pressed}
+      >
+        {inner}
+      </button>
+    );
+  }
+  return (
+    <span className={className} title={title}>
+      {inner}
     </span>
   );
 }
@@ -264,6 +297,49 @@ export function SearchInput({
         aria-label={ariaLabel}
         onChange={(e) => onChange(e.target.value)}
       />
+    </div>
+  );
+}
+
+/**
+ * A picker over a known set of values.
+ *
+ * Exists because the alternatives were both wrong for a bounded set. A free
+ * text box that filters on EXACT equality — which is what a role filter does,
+ * on the server and in memory alike — silently returns nothing the moment
+ * somebody types a prefix, while looking exactly like a search that found no
+ * matches. And a row of chips is one control per option, so it only works
+ * while the set is small and quietly disappears when it is not.
+ */
+export function Select({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+  anyLabel = "Any",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+  ariaLabel: string;
+  anyLabel?: string;
+}) {
+  return (
+    <div className={cx("picker", value && "on")}>
+      <select
+        className="input"
+        value={value}
+        aria-label={ariaLabel}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">{anyLabel}</option>
+        {options.map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
+      <Icon name="chevronDown" size="xs" />
     </div>
   );
 }

@@ -98,13 +98,17 @@ const (
 )
 
 // eventState maps an event type to the coarse seat state it implies.
+//
+// agent_turn_progress is deliberately ABSENT even though it plainly implies
+// "working": Apply handles that type on its own branch and returns before
+// applyState is ever reached, so an entry here would be read by nothing.
+// applyProgress sets the state itself, after its discard guards.
 var eventState = map[string]string{
 	"agent_spawned":         "idle",
 	"task_started":          "working",
 	"task_completed":        "idle",
 	"task_failed":           "idle",
 	"agent_terminated":      "terminated",
-	"agent_turn_progress":   "working",
 	"agent_phase_started":   "working",
 	"agent_phase_completed": "working",
 	"reflection_completed":  "idle",
@@ -574,7 +578,17 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		agent.lastError = nil
 		agent.currentPhase = str(payload, "phase")
 		agent.currentIteration = num(payload, "iteration")
-		agent.liveCall = beginCall(env, payload)
+		// Only if a round of this same call has not already arrived.
+		// phase_started and agent_turn_progress travel on DIFFERENT
+		// subjects, so the opening round can land first; this assignment
+		// used to be unconditional and replaced a call that already had a
+		// model, a response and tool calls with an empty placeholder. The
+		// reorder guard cannot catch it — applyProgress never advances
+		// stateTS — so the check belongs here.
+		if !agent.liveCall.sameCall(str(payload, "turn_id"),
+			str(payload, "phase"), num(payload, "iteration")) {
+			agent.liveCall = beginCall(env, payload)
+		}
 
 	case env.Type == "agent_phase_completed":
 		agent.state = "working"

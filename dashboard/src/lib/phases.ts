@@ -24,7 +24,7 @@
  * read. It is what `rounds()` below groups on, and rounds only ever append.
  */
 
-import type { EventRecord, LiveCall, ToolExecution } from "~/protocol/index.ts";
+import type { EventRecord, LiveCall, PromptMessage, ToolExecution } from "~/protocol/index.ts";
 import { tsKey } from "./format.ts";
 
 export interface ToolCall {
@@ -193,6 +193,15 @@ export function ledgerOf(record: { tools: ToolCall[]; narration: Narration[]; re
   return { ledger, legacy };
 }
 
+/** The content of the first message with this role, or "". */
+function promptRole(messages: PromptMessage[] | null | undefined, role: string): string {
+  if (!Array.isArray(messages)) return "";
+  for (const m of messages) {
+    if (m && m.role === role && typeof m.content === "string") return m.content;
+  }
+  return "";
+}
+
 export function phaseKey(turnId: string, phase: string, iteration: number): string {
   return `${turnId}|${phase}|${iteration}`;
 }
@@ -211,8 +220,12 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     failed: !!call.failed,
     error: call.error?.message ?? "",
     errorKind: call.error?.kind ?? "",
-    systemPrompt: "",
-    userPrompt: call.prompt ?? "",
+    // Read off `prompt_messages`, which the engine has always sent and
+    // nothing read. Hardcoding "" here meant a RUNNING phase could never
+    // show the system prompt it was given — the one moment an operator
+    // most wants to know what the model was actually told.
+    systemPrompt: promptRole(call.prompt_messages, "system"),
+    userPrompt: call.prompt ?? promptRole(call.prompt_messages, "user"),
     response: call.response ?? "",
     tools: toolCalls(call.tool_executions),
     narration: narrations(call.round_narration),

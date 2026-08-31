@@ -190,14 +190,19 @@
     transform: scale(1.9);
   }
 }
-.waiting {
+.waiting-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: var(--r-full);
+  background: var(--accent);
   animation: waiting-fade 1.6s ease-in-out infinite;
 }
 /* A live indicator that will not stop is exactly the thing this setting is
    for, so both of them stop rather than merely slow down. */
 @media (prefers-reduced-motion: reduce) {
   .round.live .round-node::before,
-  .waiting {
+  .waiting-dot {
     animation: none;
   }
 }

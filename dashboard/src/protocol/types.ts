@@ -116,6 +116,12 @@ export interface ToolExecution {
   server?: string;
 }
 
+/** One message of the prompt a phase was given. */
+export interface PromptMessage {
+  role?: string;
+  content?: string;
+}
+
 /** One round's model turn, as the engine recorded it. */
 export interface RoundNarration {
   round?: number;
@@ -131,7 +137,12 @@ export interface LiveCall {
   model: string;
   trigger: Record<string, unknown> | null;
   prompt: string;
-  prompt_messages: unknown[] | null;
+  /**
+   * The conversation as the phase was given it: the system and user
+   * messages only. Typed rather than `unknown[]` — it was untyped, so the
+   * live view could not read the system prompt off it and hardcoded "".
+   */
+  prompt_messages: PromptMessage[] | null;
   response: string;
   input_tokens: number;
   output_tokens: number;

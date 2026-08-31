@@ -175,6 +175,25 @@
    is what lets the status hues be light enough to read as marks on a dark
    ground without dragging their own label under 4.5:1 with them. */
 
+/* A badge that ACTS. Same shape as the inert ones so the row still reads as
+   one set, plus a hover and a pressed state so it is discoverable as a
+   control rather than looking like a label that happens to respond. */
+.badge.actionable {
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.badge.actionable:hover {
+  border-color: currentColor;
+}
+.badge.actionable.pressed {
+  background: currentColor;
+}
+.badge.actionable.pressed > * {
+  mix-blend-mode: luminosity;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -544,6 +563,41 @@ a.brand:hover {
 }
 .search-input > .input {
   padding-left: calc(var(--space-2) * 2 + 14px);
+}
+
+/* Select — a picker over a bounded set. Native <select> on purpose: it gets
+   keyboard nav, type-ahead and the platform's own overlay for free, and a
+   hand-built listbox would have to earn all three back. */
+/* `.picker`, NOT `.select` — that class is already the bare-element control
+   above, and reusing it put its width:100% and its own border on this
+   wrapper, so the picker stretched the whole toolbar and drew two boxes. */
+.picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  width: auto;
+  flex: 0 1 auto;
+}
+.picker > svg {
+  position: absolute;
+  right: var(--space-2);
+  color: var(--text-faint);
+  pointer-events: none;
+}
+.picker > .input {
+  appearance: none;
+  width: auto;
+  min-width: 132px;
+  max-width: 220px;
+  padding-right: calc(var(--space-2) * 2 + 8px);
+  cursor: pointer;
+}
+/* An active filter is stated by the control itself, so a reader scanning the
+   bar can see WHICH dimensions are narrowing the list without reading values. */
+.picker.on > .input {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* Segmented control — lenses, tabs, ranges. One implementation; the system

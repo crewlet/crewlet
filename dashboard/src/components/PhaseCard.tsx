@@ -170,9 +170,6 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
             ))}
           </div>
         )}
-        {live && !round.reasoning.trim() && !said && round.tools.length === 0 && (
-          <p className="prose muted waiting">waiting for the model…</p>
-        )}
       </div>
     </li>
   );
@@ -323,9 +320,18 @@ export function PhaseCard({
             </>
           )}
 
+          {/* The only genuinely empty state. A ROUND is never empty —
+              `narrations()` drops an entry blank in both fields and a round
+              built from a tool call has tools — so a per-round placeholder
+              was unsatisfiable. A PHASE with no rounds yet is real: the
+              provider call has not returned, and until the engine streams
+              tokens there is nothing else to show for it. */}
           {record.live && !ledger.length && !legacy && (
-            <div className="t-caption">
-              The model has not answered yet. This row updates as each round lands.
+            <div className="row gap-2">
+              <span className="waiting-dot" aria-hidden="true" />
+              <span className="t-caption">
+                The model is composing its first round. Nothing is published until it answers.
+              </span>
             </div>
           )}
 
