@@ -123,6 +123,10 @@ func (s Sources) a2aChannels(ctx context.Context, _ Params) (any, error) {
 		// BEST EFFORT, and it says so. This is a read for a screen, and a
 		// coordination blip must not turn it into a failure the reader has
 		// to interpret — but it must not look like an empty company either.
+		// The error is not swallowed: it becomes the answer's own `note`,
+		// which is what a reader needs to tell "nothing opened" from
+		// "nobody could look".
+		//nolint:nilerr // Deliberate: see the paragraph above.
 		return map[string]any{
 			"channels": []any{}, "available": false,
 			"note": err.Error(),
