@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 )
 
 // MaxInFlightQueries bounds how many queries one socket may have running.
@@ -86,7 +87,11 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			// header 401 (refused) or 426 (accepted, wrong protocol).
 			// That pairing is load-bearing for the dashboard's token
 			// gate — see `_probeRefusal` in static/dashboard/js/socket.js.
-			http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+			// Real JSON, not http.Error: that sets text/plain AND
+			// nosniff, so a JSON literal handed to it is the one
+			// combination guaranteed to stop a strict client parsing
+			// the body it is being sent.
+			httpjson.Fail(w, http.StatusUnauthorized, "invalid_token")
 			return
 		}
 

@@ -26,13 +26,13 @@
 package secretsapi
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -201,8 +201,11 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var overflow *http.MaxBytesError
 		if errors.As(err, &overflow) {
-			writeJSON(w, http.StatusRequestEntityTooLarge,
-				map[string]string{"error": "value_too_large"})
+			// The SHARED spelling. This route used to answer
+			// `value_too_large` where configapi answered
+			// `body_too_large` for the same 413.
+			httpjson.Fail(w, http.StatusRequestEntityTooLarge,
+				httpjson.CodeBodyTooLarge)
 			return
 		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unreadable_body"})
@@ -339,15 +342,7 @@ func (s *Service) fail(w http.ResponseWriter, what string, err error) {
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
 }
 
-// writeJSON is the one response writer for this surface.
+// writeJSON is [httpjson.Write] under this package's own name.
 func writeJSON(w http.ResponseWriter, status int, body any) {
-	raw, err := json.Marshal(body)
-	if err != nil {
-		log.Error("secret_encode_failed", "error", err)
-		http.Error(w, `{"error":"encode_failed"}`, http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(raw)
+	httpjson.Write(w, status, body)
 }

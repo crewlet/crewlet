@@ -37,6 +37,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -522,16 +523,9 @@ func headerOr(req *http.Request, name, fallback string) string {
 // statusOK is the answer five of the six routes give.
 var statusOK = map[string]string{"status": "ok"}
 
+// writeJSON is [httpjson.Write] under this package's own name.
 func writeJSON(w http.ResponseWriter, status int, body any) {
-	raw, err := json.Marshal(body)
-	if err != nil {
-		log.Error("webhook_encode_failed", "error", err)
-		http.Error(w, `{"error":"encode_failed"}`, http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(raw)
+	httpjson.Write(w, status, body)
 }
 
 func unavailable(w http.ResponseWriter, reason string, retryAfter time.Duration) {

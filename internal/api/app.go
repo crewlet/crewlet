@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
@@ -347,19 +347,11 @@ func (a *App) serveReady(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, status, body)
 }
 
-// writeJSON is the one response writer, so every route spells a body the same
-// way — including the status, which has to be written before the body or the
-// header is already gone.
+// writeJSON is [httpjson.Write] under this package's own name, kept so the
+// route bodies read the same as they always did. The rule it used to state —
+// status before body, or the header is already gone — lives with the writer.
 func writeJSON(w http.ResponseWriter, status int, body any) {
-	raw, err := json.Marshal(body)
-	if err != nil {
-		log.Error("api_encode_failed", "error", err)
-		http.Error(w, `{"error":"encode_failed"}`, http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(raw)
+	httpjson.Write(w, status, body)
 }
 
 // Queries exposes the read surface, for a caller that wants to know what this
