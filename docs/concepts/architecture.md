@@ -124,7 +124,7 @@ flowchart TB
 
         subgraph workers["<b>workers</b> — company-wide singletons, each on a worker:DUTY lease"]
             SCHED["<b>worker:scheduler</b><br/>role- and unit-scoped cron"]
-            WAIT["<b>worker:sandbox-waiter</b><br/>polls detached runs, resumes turns"]
+            WAIT["<b>worker:sandbox-waiter</b><br/>polls detached runs, resumes turns<br/><i>the same tick is the box keepalive</i>"]
             SWEEP["<b>worker:maintenance</b><br/>the retention sweep"]
             CURATE["<b>worker:skill-curator</b><br/>every learning background pass:<br/>skill ageing, episode compaction, clustering"]
         end
@@ -190,6 +190,31 @@ and two children of one template publish identical tool names: in a single
 registry one would shadow the other and every seat would call whichever won,
 acting in the tracker or the chat backend as somebody else. So a claimed seat
 gets its own cloned registry and its own bridge.
+
+**One model call has three layers of failure handling, each owning exactly one
+decision.** The backend *classifies* and does nothing else — it never retries.
+The credential pool decides whether the **key** is at fault: a rate-limit or
+auth failure benches that key for a cooldown and the next call leases another,
+least-in-flight. The fallback chain decides whether the **model** is worth
+abandoning and moves to the next one in the role's chain. That is why the same
+429 produces three different behaviours at three different altitudes, and why
+cooldowns are fleet state rather than per-process: a limit belongs to the key at
+the vendor, so four nodes should not each pay their own 429 to learn it.
+
+**The observability edge is two routes, not one, and the split is deliberate.**
+The same event forks. It is written to this node's `crewlet_events` **inline, in
+the publishing goroutine**, through a publish listener with no consumer group —
+so no two nodes can ever write one row. And it is read back off the broker by an
+**ephemeral broadcast** subscription on `crewlet.events.>` that feeds the live
+projection — so a dashboard tab attached to node B shows turns that ran on node
+A. Swap either mechanism for the other and you lose the guarantee the other one
+was providing.
+
+**Embedded and standalone are one wiring with one seam.** The API half runs in
+the engine's process by default and can run as its own; what differs is not the
+routes but what the process can *see*, and that is a single interface. A nil
+runtime is a real answer — "there is no engine here" — rather than a missing
+one, so the engine-only fields are simply absent instead of zero.
 
 **The HTTP surface binds before the engine starts.** A seat is not claimed until
 its per-role MCP children are up — one subprocess per server per seat, each a
@@ -516,6 +541,15 @@ clocks: a seat stops *admitting* work once its last successful renew is older
 than the heartbeat interval, and is only given up once that renew is older than
 the lease TTL. Stop taking new work early, hand the seat over late. See
 [Coordination](coordination.md#the-three-valued-answer).
+
+**`/health` and `/ready` answer different questions.** `/health` stays 200
+through a drain — an orchestrator that killed a node for reporting unhealthy
+mid-drain would destroy the turns the drain exists to finish — and it is where
+the posture is visible. `/ready` steers traffic, and fails on `shed` and `stuck`
+**only**: `wait` and `isolated` stay ready on purpose, because failing readiness
+on ordinary rollout lag makes the fastest node the cause of a fleet-wide outage,
+and stepping out of rotation when *no* peer has the epoch is not shedding, it is
+stopping.
 
 **One config, agreed by pointer.** An activation is a compare-and-set on an
 append-only pointer whose own revision *is* the epoch, so two operators
