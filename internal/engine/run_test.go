@@ -428,3 +428,30 @@ func TestCancellingTheStartContextDoesNotStopTheEngine(t *testing.T) {
 			"its heartbeat died with the start context")
 	}
 }
+
+// THE POSTURE GATE REACHES A SEAT'S OWN INBOX.
+//
+// The regression this exists for: conditionsFor asserted AdmitsTriggers as a
+// hardcoded true, so a seat's own mailbox was the one trigger path a shed
+// could never reach — the screening's "config posture refuses new work" branch
+// existed and was unreachable. Both halves are checked, because a gate that is
+// always closed is as broken as one that is always open.
+func TestThePostureGateReachesTriggerAdmission(t *testing.T) {
+	t.Parallel()
+	d := &engine.Dispatcher{}
+	e := newEngine(t, engine.Options{Dispatch: d})
+
+	if !d.Conditions("ceo").AdmitsTriggers {
+		t.Fatal("a node with no posture reporter refused its own seat's triggers")
+	}
+
+	e.SetAdmits(func() bool { return false })
+	if d.Conditions("ceo").AdmitsTriggers {
+		t.Error("a shedding node still admitted its own seat's triggers")
+	}
+
+	e.SetAdmits(func() bool { return true })
+	if !d.Conditions("ceo").AdmitsTriggers {
+		t.Error("a node that converged back never reopened trigger admission")
+	}
+}

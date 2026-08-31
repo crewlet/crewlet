@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -831,4 +832,149 @@ func TestAnActivationNudgeWakesTheLoop(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+// --- the admission gate ---------------------------------------------------
+
+// A NODE THAT HAS DECIDED NOTHING ADMITS WORK.
+//
+// The gate is consulted from the first delivery a node could take, which is
+// before its first reconcile pass has necessarily run. Refusing on "I have not
+// looked yet" would make every node deaf for its first interval — a cold start
+// that answers no webhooks is strictly worse than one that answers them
+// against the config it booted with.
+func TestANodeThatHasDecidedNothingAdmitsWork(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	if !p.recon.Admits() {
+		t.Error("a reconciler that has never decided a posture refused work")
+	}
+}
+
+// A CURRENT NODE ADMITS WORK, which is the ordinary case and the one a
+// regression here would take out first.
+func TestACurrentNodeAdmitsWork(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	p.activate(t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureServe {
+		t.Fatalf("posture = %q, want serve", got)
+	}
+	if !p.recon.Admits() {
+		t.Error("a node serving the current epoch refused work")
+	}
+}
+
+// LAG ALONE DOES NOT CLOSE THE GATE.
+//
+// Every successful rollout produces lag, so a `wait` that refused work would
+// make the first node to apply the cause of a fleet-wide outage — the same
+// reason wait stays ready at /ready.
+func TestOrdinaryLagStillAdmitsWork(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	p.activate(t, grownCompanyDoc)
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureWait {
+		t.Fatalf("posture = %q, want wait", got)
+	}
+	if !p.recon.Admits() {
+		t.Error("a node with ordinary propagation lag refused work")
+	}
+}
+
+// A SHEDDING NODE ACTUALLY REFUSES.
+//
+// The regression this exists for: the posture was computed, published on the
+// presence heartbeat and reported by /ready, and NOTHING acted on it. The gate
+// was an engine option no production call site could fill, so a node that had
+// concluded it was shedding kept taking every delivery, firing every schedule
+// and running every turn against a company it had already decided it did not
+// have. configplane.Posture.ServesTraffic was written for this and had no
+// caller at all.
+func TestAShedingNodeRefusesNewWork(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	// Confirmed lag — this node tried the epoch and failed — plus a
+	// healthy peer that has it, which together are what shed means.
+	p.activatePayload(t, "broken", brokenRevision)
+	_ = p.recon.Tick(t.Context())
+	target, _, err := p.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.fleet.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-b", Epoch: target.Epoch, Status: string(configplane.StatusOK),
+		UpdatedAt: pinnedNow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureShed {
+		t.Fatalf("posture = %q, want shed", got)
+	}
+	if p.recon.Admits() {
+		t.Error("a shedding node still admitted work")
+	}
+}
+
+// AN UNREADABLE CONTROL PLANE REOPENS THE GATE.
+//
+// Posture fails OPEN — a plane it cannot read reports serve — and admission
+// has to follow it there. Recording only the reads that succeeded would leave
+// a node that shed once and then lost the plane refusing work for the whole
+// outage, on evidence it could no longer check.
+func TestAnUnreadableControlPlaneReopensTheGate(t *testing.T) {
+	t.Parallel()
+	var blind atomic.Bool
+	p := newPlane(t, func(o *engine.ReconcilerOptions) {
+		o.Fleet = &blindPlane{planeBackend: o.Fleet, blind: &blind}
+	})
+	p.activatePayload(t, "broken", brokenRevision)
+	_ = p.recon.Tick(t.Context())
+	target, _, err := p.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.fleet.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-b", Epoch: target.Epoch, Status: string(configplane.StatusOK),
+		UpdatedAt: pinnedNow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureShed {
+		t.Fatalf("posture = %q, want shed — the premise", got)
+	}
+	if p.recon.Admits() {
+		t.Fatal("a shedding node still admitted work — the premise")
+	}
+
+	blind.Store(true)
+	if got := p.recon.Posture(t.Context()); got != configplane.PostureServe {
+		t.Fatalf("posture = %q, want serve", got)
+	}
+	if !p.recon.Admits() {
+		t.Error("the gate stayed shut on a posture that had failed open to serve")
+	}
+}
+
+// blindPlane is a control plane that stops answering on command — a broker
+// that was reachable and is not any more, which is the state the fail-open
+// rule exists for.
+//
+// EMBEDDED THROUGH AN ALIAS, because coord.Plane declares a Fleet() method of
+// its own and embedding the interface directly names the field "Fleet".
+type planeBackend = coord.Plane
+
+type blindPlane struct {
+	planeBackend
+	blind *atomic.Bool
+}
+
+func (b *blindPlane) Target(ctx context.Context) (coord.Activation, bool, error) {
+	if b.blind.Load() {
+		return coord.Activation{}, false, errors.New("the control plane is unreachable")
+	}
+	return b.planeBackend.Target(ctx)
 }

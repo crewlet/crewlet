@@ -73,6 +73,23 @@ type Engine struct {
 	// substitute its own without standing up a broker.
 	dispatch *Dispatcher
 
+	// batch is the inbox coalescing window and cap, shared with every seat
+	// attachment on this node.
+	//
+	// ONE VALUE, held on the ENGINE and mutated in place, because that is
+	// what [queue.BatchOptions] is built for: it guards its own fields so a
+	// hot reload takes effect on the next batch with no re-subscription.
+	// The alternative — a fresh value per attach — would leave a seat
+	// claimed before an apply reading the old window forever, and only a
+	// seat that happened to move nodes would ever pick up a change.
+	//
+	// It was nothing at all: node.Config.BatchOptions was never set, so
+	// every seat took queue.DefaultBatchOptions and the two company knobs
+	// that configure this — notification_coalesce_window_seconds and
+	// notification_coalesce_max_batch — were declared, defaulted,
+	// validated, documented, and read by nothing.
+	batch *queue.BatchOptions
+
 	// sandbox is this node's code-work machinery: the coordinator holding
 	// the busy set, the waiter polling detached runs, and the durable row
 	// store behind both. On the ENGINE rather than on an epoch, because
@@ -231,15 +248,6 @@ type Options struct {
 	// cannot start a detached run is never waiting on one.
 	AwaitingSandbox func(handle string) bool
 
-	// Admits gates INBOUND work on the config posture, supplied by
-	// whoever holds the control plane — the engine does not, because the
-	// posture is a fleet question and the reconciler owns it.
-	//
-	// Nil admits everything, which is the single-node case and the case
-	// before a control plane exists. A shedding node PARKS a delivery
-	// rather than routing it against a company it is not sure of.
-	Admits func() bool
-
 	// SandboxPollInterval overrides the completion poll's cadence. Zero
 	// takes the production value, which is sized against coding jobs that
 	// run for minutes; a test shrinks it so a run settles in a second
@@ -303,6 +311,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		mcp:         mcp.NewBridge(nil),
 		sandboxOtel: otel,
 		startedAt:   time.Now().UTC(),
+		// Built before equip, which is what writes the company's own
+		// numbers into it, and before node.New, which hands the same
+		// value to every seat attachment.
+		batch: queue.DefaultBatchOptions(),
 	}
 	fail := func(err error) (*Engine, error) {
 		if ownsBackends {
@@ -402,6 +414,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// absent key and node.New is what turns it into the default, so
 		// the number lives in one place — see node.DefaultMaxConcurrent.
 		MaxConcurrent: opts.Bootstrap.Node.MaxConcurrent,
+		// The company's own coalescing knobs, live: this is the value an
+		// apply writes through, and every seat attachment reads it.
+		BatchOptions: e.batch,
 	})
 	if err != nil {
 		return fail(fmt.Errorf("engine: node: %w", err))
@@ -447,7 +462,6 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// The two background passes, after the node exists: both are fleet
 	// singletons claimed under its own incarnation.
 	e.startLearningBackground(ctx)
-	e.notify.admits = opts.Admits
 	if err := e.startNotifications(ctx, e.Company()); err != nil {
 		return fail(fmt.Errorf("engine: %w", err))
 	}
@@ -608,7 +622,12 @@ func (e *Engine) conditionsFor(awaiting func(string) bool) func(string) inbox.Co
 			// outliving the reason for it.
 			TurnEngineReady: e.Company().Models != nil,
 			AwaitingSandbox: awaiting != nil && awaiting(handle),
-			AdmitsTriggers:  true,
+			// The SAME gate the inbound edge and the scheduler read, so
+			// a shedding node refuses at every trigger admission rather
+			// than only at the one that happened to be wired. It was a
+			// hardcoded true, which made a seat's own inbox the one
+			// path a shed could never reach.
+			AdmitsTriggers: e.admits(),
 		}
 	}
 }
@@ -791,6 +810,35 @@ func (e *Engine) StartedAt() time.Time { return e.startedAt }
 //
 // The context is the beat's, already bounded — see [seat.Config].Status.
 func (e *Engine) SetPosture(fn func(context.Context) string) { e.posture.Store(&fn) }
+
+// SetAdmits supplies the gate that decides whether this node takes new
+// inbound work.
+//
+// # Why this is a setter, and why it is not the same wire as SetPosture
+//
+// A setter for the reason SetPosture is one: the posture belongs to the
+// reconciler, which is built AFTER the engine because it needs an engine to
+// converge against. It was an OPTION, which meant nothing could ever fill it
+// — the one production call site of [New] runs before the reconciler exists —
+// so the gate was nil on every node, [notify.Service] admitted every
+// delivery, the scheduler fired on every tick, and a node that had decided it
+// was shedding kept taking work. [configplane.Posture.ServesTraffic] was
+// written for this gate and had no caller at all.
+//
+// Separate from the posture reporter because the two are read on different
+// paths at different rates: the reporter is called per heartbeat and pays a
+// live control-plane read, while this is called per delivery and must not.
+// See [Reconciler.Admits] for which value it answers from.
+//
+// Nil admits everything, which is the single-node case and the case before a
+// control plane exists. A shedding node DEFERS a delivery — back to the
+// broker, consumer quiesced — rather than routing it against a company it is
+// not sure of.
+func (e *Engine) SetAdmits(fn func() bool) {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	e.notify.admits = fn
+}
 
 // SetOnApplied registers a hook run after every config apply publishes its
 // epoch, for surfaces that render the COMPANY rather than its activity.

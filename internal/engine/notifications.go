@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/slack"
 )
 
@@ -503,6 +506,42 @@ func (e *Engine) admits() bool {
 	gate := e.notify.admits
 	e.notify.mu.Unlock()
 	return gate == nil || gate()
+}
+
+// resumeInbound restarts the inbound consumer once the posture admits work
+// again.
+//
+// A deferral has two halves — the delivery goes back to the broker AND the
+// attachment quiesces — and the second half needs somebody to undo it. A
+// SEAT's mailbox has one: its own lease admission, which resumes the consumer
+// on the next successful renew (see seat.Host.noteAdmission). The ingress
+// topic has no lease and no seat, so without this a node that shed one webhook
+// would accept deliveries and read none of them for the life of the process,
+// while reporting a perfectly healthy config.
+//
+// A CONVERGENCE RATHER THAN AN EDGE, deliberately. The refusal runs on the
+// delivery path while the posture moves on the reconcile loop, so a recovery
+// edge can fire just before the shed's last in-flight delivery quiesces a
+// consumer nothing would then restart. Converging on "if I admit work, I am
+// consuming" cannot lose that race, and Unquiesce on an attachment that is
+// not quiesced reports false and does nothing — so the tick that changes
+// nothing costs one local call.
+func (e *Engine) resumeInbound(ctx context.Context) {
+	if e.backends == nil || e.backends.Queue == nil {
+		return
+	}
+	resumed, err := e.backends.Queue.Unquiesce(ctx,
+		topics.NotificationsInbound, notify.InboundGroup)
+	switch {
+	case err != nil && !errors.Is(err, queue.ErrNotLive):
+		// Not fatal and not retried here: the next tick asks again, and
+		// a queue that cannot be resumed is not delivering anything for
+		// this to race with.
+		log.WarnContext(ctx, "inbound_resume_failed", "error", err)
+	case resumed:
+		log.InfoContext(ctx, "inbound_resumed",
+			"detail", "the config posture admits work again")
+	}
 }
 
 // stopNotifications takes the inbound edge down.
