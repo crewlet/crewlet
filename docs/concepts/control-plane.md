@@ -76,7 +76,17 @@ Each node **re-stamps its key every tick**, not only when it converges, and the 
 
 **The bucket's own age is that bound**, set to four reconcile intervals when the store is opened. Nothing sweeps it, because there is nothing to sweep: a node that stops reporting stops renewing, and the broker expires the key on its own. That is also why the value is a bucket-wide constant rather than a per-write TTL — see [Coordination § Retention is a bucket's age](coordination.md#retention-is-a-buckets-age).
 
-A node's recorded failure text is **truncated** at 2 000 characters. The whole fleet's status is read on every posture decision and rendered on the dashboard's **Fleet** screen, so one node returning a megabyte of Go error would be paid for by every reader on every tick.
+A node's **coordination record** of a failure is truncated at 2 000 bytes (not
+characters — the cut is applied to bytes, on a rune boundary). That record is
+re-read by every peer on every posture decision and rendered on the dashboard's
+**Fleet** screen, so one node returning a megabyte of Go error would be paid for
+by every reader on every tick.
+
+The **`config_revision_applied` event** carries the failure text in full. It is
+written once and kept for the event store's retention horizon, so it is the copy
+an operator reads days later to find out why a revision did not apply — and the
+cause of a wrapped error chain sits at its end, which is exactly what a 2 000-byte
+cut removes.
 
 ---
 

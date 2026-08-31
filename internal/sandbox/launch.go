@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -247,7 +248,14 @@ func summarise(brief string) string {
 	if len(line) <= briefSummaryLimit {
 		return line
 	}
-	return strings.TrimSpace(line[:briefSummaryLimit]) + "…"
+	// Never through a rune: a byte slice splits whatever multi-byte
+	// character straddles the cut, and this label reaches the event store
+	// and a dashboard row as JSON.
+	cut := briefSummaryLimit
+	for cut > 0 && !utf8.RuneStart(line[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(line[:cut]) + "…"
 }
 
 // buildBrief assembles what the coding agent is actually told.

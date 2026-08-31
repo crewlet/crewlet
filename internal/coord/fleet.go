@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"time"
+	"unicode/utf8"
 )
 
 // The FLEET-SHARED state, beyond ownership.
@@ -337,11 +338,21 @@ type Activation struct {
 const MaxApplyErrorLength = 2000
 
 // TruncateApplyError applies [MaxApplyErrorLength].
+//
+// NEVER THROUGH A RUNE. A plain byte slice splits whatever multi-byte
+// character straddles the cut and yields invalid UTF-8, which the KV's JSON
+// encoding then replaces with U+FFFD — so a driver error carrying a non-ASCII
+// path or an accented message reached the fleet view garbled rather than
+// merely shortened.
 func TruncateApplyError(detail string) string {
 	if len(detail) <= MaxApplyErrorLength {
 		return detail
 	}
-	return detail[:MaxApplyErrorLength] + "…"
+	cut := MaxApplyErrorLength
+	for cut > 0 && !utf8.RuneStart(detail[cut]) {
+		cut--
+	}
+	return detail[:cut] + "…"
 }
 
 // NodeApply is one node's last word about an epoch.

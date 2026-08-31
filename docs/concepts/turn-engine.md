@@ -140,20 +140,21 @@ The block rides the **user** message in Plan and Execute, never the system promp
 
 One principle decides every budget: **elide payloads, never structure.**
 
-A *payload* — a message body, page HTML, a diff — is unbounded, gets re-authored from the plan next round, and can never answer "did this already fire". Carrying it only buries the two lines that can. *Structure* — the plan's steps, the draft under review, the reviewer's correction — is bounded in practice and is exactly what the next round must act on, so it is cut only as a guard against pathological output, never as routine trimming.
+A *payload* is a tool **argument** — a message body, page HTML, a diff. It is unbounded, gets re-authored from the plan next round, and can never answer "did this already fire", so carrying it whole only buries the two lines that can.
 
-The budgets are guards, not a diet. Prompt caching keys on the system+tools prefix, which the ledger never touches, so a larger block costs little; the reason to bound it at all is that an unbounded one eats the turn's own `PhaseBudget` and drowns the signal.
+*Structure* is everything else: the plan's steps, the draft under review, the reviewer's correction, the trigger, the reply that was sent. It is exactly what the next round must act on, and it is carried **verbatim**.
+
+It used not to be. Six further limits sat beside the two below, cutting each of those at 400–2000 runes — the principle above applied to the half it excludes. A reviewer's correction trimmed mid-instruction loses the engine-critical part of the only carrier it has, and unlike a chat message or an issue comment there is no surface to go back and re-read: on the cross-turn ledger the cut was applied at **write** time, so the stored row was the only copy.
+
+What is left bounds arguments and the read-call list, and both say when they cut. Prompt caching keys on the system+tools prefix, which the ledger never touches, so a larger block costs little.
 
 | Budget | Value | Anchored on |
 |---|---|---|
-| `LEDGER_VALUE_LIMIT` | 200 | A Confluence/GitHub URL with query params runs ~180 chars, so the whole discriminator survives while bodies are cut by an order of magnitude |
-| `LEDGER_BLOB_LIMIT` | 800 | ~12 identifier-shaped arguments — more than any real delivery tool takes |
-| `LEDGER_PLAN_SUMMARY_LIMIT` | 1200 | A realistic 6-step plan renders ~850 chars; 1200 covers ~8 |
-| `LEDGER_ARTIFACT_LIMIT` | 2000 | Matches `internal/agent/runner/phases.go`'s own `execute_summary[:2000]` — same content, same question |
-| `LEDGER_NOTE_LIMIT` | 2000 | `notes` is the correction and the ledger is its only carrier, so it gets the artifact's budget |
-| `LEDGER_MAX_READ_CALLS` | 12 | The recon a normal round does; only reads are ever dropped |
+| `ValueLimit` | 200 | A Confluence/GitHub URL with query params runs ~180 chars, so the whole discriminator survives while bodies are cut by an order of magnitude |
+| `BlobLimit` | 800 | ~12 identifier-shaped arguments — more than any real delivery tool takes |
+| `MaxReadCalls` | 12 | The recon a normal round does; only reads are ever dropped, and the line says how many |
 
-Arguments use **per-value** elision, never a cap on the serialised blob. `json.dumps` preserves key order, so capping the object would drop whichever keys sort last — and the discriminating argument (`channel`, `key`, `page_id`) is usually the *shortest* one. A line that kept a 400-char message body but lost `channel` would look precise while hiding which of two deliveries actually fired. When even fully elided values exceed `LEDGER_BLOB_LIMIT`, the backstop drops **whole keys** — shortest-value-first, so identifiers survive — and appends `+N more` rather than cutting mid-serialisation. The same priority governs the read-line cap: only reads are ever omitted, never a write.
+Arguments use **per-value** elision, never a cap on the serialised blob. `json.Marshal` sorts map keys, so capping the object would drop whichever keys sort last — and the discriminating argument (`channel`, `key`, `page_id`) is usually the *shortest* one. A line that kept a 400-char message body but lost `channel` would look precise while hiding which of two deliveries actually fired. When even fully elided values exceed `BlobLimit`, the backstop drops **whole keys** — shortest-value-first, so identifiers survive — and appends `+N more` rather than cutting mid-serialisation. The same priority governs the read-line cap: only reads are ever omitted, never a write.
 
 **The ledger survives a sandbox suspend.** A detached `run_sandbox` ends the turn and the completion runs a *new* `run_turn`, so the records are serialised into the run record's `execute_state` and rehydrated onto the resumed `TurnContext`. Without that round-trip, a turn that self-iterated before suspending would forget those rounds and re-fire their deliveries after the resume. Records written before the ledger existed decode to an empty record rather than raising, so an in-flight run started by an older engine still resumes.
 
@@ -165,7 +166,7 @@ Everything above is scoped to a single turn. The cross-turn counterpart —
 what this seat already said in *this Slack thread / issue / pull request*,
 carried into that conversation's next turn — is
 [Conversation Sessions](conversation-sessions.md). It inherits this section's
-doctrine wholesale (elide payloads never structure, writes never dropped,
+doctrine wholesale (elide arguments never structure, writes never dropped,
 reads marked so they are re-run rather than trusted) and rides the same user
 message, immediately above `Task:`. Plan and Execute receive it; Review does
 not, because Review judges *this* turn's delivery and the ledger above already

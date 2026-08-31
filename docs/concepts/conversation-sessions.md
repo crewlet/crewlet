@@ -169,10 +169,17 @@ never promised.
 ## Cost
 
 The block is re-sent on every round of every phase, and Anthropic bills cache
-reads at full token value, so its cost multiplies by rounds used. That product
-is what `injected_max_chars` bounds. The default (~1.5k tokens) is the order of
-one iteration of the prior-work ledger; the `prompt.size` telemetry event
-records the delta fleet-wide.
+reads at full token value, so its cost multiplies by rounds used. What bounds
+that product is `max_entries`, at **write** time — the injected block is the
+whole recorded conversation.
+
+There is no injected-side budget. Two knobs (`injected_max_entries`,
+`injected_max_chars`) used to be documented here; neither was ever threaded to
+a caller, so both validated, defaulted and described a truncation that did not
+happen. Rather than wire a cut into the one block that tells a seat what it
+already said on this thread — which is how a seat repeats a reply it cannot
+see it already gave — the bound stays on what is *kept*. The `prompt.size`
+telemetry event records the delta fleet-wide.
 
 Against that: the re-recon it displaces costs a `list_mcp_server_tools` round,
 an `activate_tool` round and the read itself, in Plan **and again** in Execute,
@@ -187,9 +194,9 @@ the agent's own plan, reasoning, or the results it gathered.
 turn_engine:
   conversation_session:
     enabled: true            # the feature gate — a live kill switch
-    max_entries: 20          # kept per conversation, trimmed at write time
-    injected_max_entries: 5  # how many reach the prompt: newest N, rendered oldest-first
-    injected_max_chars: 6000 # byte budget; oldest entries drop first
+    max_entries: 20          # kept per conversation, trimmed at write time —
+                             #   and the only bound; the whole kept
+                             #   conversation reaches the prompt
     retention_days: 30       # matches the event store's own horizon
 ```
 
@@ -217,6 +224,11 @@ table (not a hypertable), so dedupe is a plain unique index and an ordinary
 Bounded twice: `max_entries` trims on write (a chat DM keys on the whole
 channel rather than a thread, so its ledger never stops receiving entries),
 and the [maintenance worker](scaling.md) sweeps past `retention_days`.
+
+Every field of a recorded entry is stored **verbatim** apart from the tool
+arguments, which the [ledger budgets](turn-engine.md#prior-work-ledger-across-self_iterate-rounds)
+elide. This row is the store's only record of the turn, so a field cut at write
+time is not a shortened rendering — it is the only copy.
 
 **Failure never stops a turn.** A write that fails is swallowed — it happens on
 a completed turn's tail, where there is nothing left to tell. A read that fails
