@@ -270,29 +270,30 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 
 	company := e.Company()
 	tel := e.describeResume(ctx, company, in)
-	r, err := company.RunnerFor(in.Turn.Handle(), RunnerInput{
-		Task:      resumeTask(in),
-		Publisher: e.backends.Queue,
-		Turn:      tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth, in.Run.DelegationChain),
-		Budget:    e.meterFor(company, in.Turn.Handle()),
-		// A resumed Execute loop can exhaust its rounds like any other,
-		// and it is the phase most likely to: it comes back mid-task with
-		// its budget already partly spent.
-		Judge:     e.judgeFor(company, in.Turn.Handle()),
-		Remaining: e.remainingFor(company, in.Turn.Handle()),
-		// THE SKILL REGISTRY, which this call site omitted. With nil
-		// Skills the runner's guardFor returns nil, so the load-before-use
-		// gate was disarmed for every resumed turn: a seat could call a
-		// tool whose required skill it had never loaded, on the one path
-		// where nobody would notice — and the two RunnerFor sites must
-		// agree or a turn changes shape by being resumed.
-		Skills: e.skills,
-		// NO onboarding on a resume. The pass is a seat's FIRST turn, and
-		// this turn already ran its first phase — running it here would
-		// spend the resumed turn's opening on orientation for a seat that
-		// is mid-task.
-		Resume: &runner.Resume{State: in.State, Answer: in.Answer},
-	})
+	r, err := company.RunnerFor(in.Turn.Handle(),
+		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
+			Task:      resumeTask(in),
+			Publisher: e.backends.Queue,
+			Turn:      tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth, in.Run.DelegationChain),
+			Budget:    e.meterFor(company, in.Turn.Handle()),
+			// A resumed Execute loop can exhaust its rounds like any other,
+			// and it is the phase most likely to: it comes back mid-task with
+			// its budget already partly spent.
+			Judge:     e.judgeFor(company, in.Turn.Handle()),
+			Remaining: e.remainingFor(company, in.Turn.Handle()),
+			// THE SKILL REGISTRY, which this call site omitted. With nil
+			// Skills the runner's guardFor returns nil, so the load-before-use
+			// gate was disarmed for every resumed turn: a seat could call a
+			// tool whose required skill it had never loaded, on the one path
+			// where nobody would notice — and the two RunnerFor sites must
+			// agree or a turn changes shape by being resumed.
+			Skills: e.skills,
+			// NO onboarding on a resume. The pass is a seat's FIRST turn, and
+			// this turn already ran its first phase — running it here would
+			// spend the resumed turn's opening on orientation for a seat that
+			// is mid-task.
+			Resume: &runner.Resume{State: in.State, Answer: in.Answer},
+		})
 	if err != nil {
 		return err
 	}
@@ -793,9 +794,9 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 	// were up would run its first turn with a surface missing exactly the
 	// tools it acts through.
 	company := e.Company()
-	if reg := e.startSeatServers(ctx, company, handle); reg != nil {
-		company.setSeatTools(handle, reg)
-	}
+	// startSeatServers files the registry alongside the bridge, so the two
+	// cannot disagree about which children this seat has.
+	e.startSeatServers(ctx, company, handle)
 
 	// THE SEAT'S MEMORY, before it can take a turn. Its diary, episodes,
 	// counterparties and skills were written on whichever nodes ran it
@@ -848,9 +849,8 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// that seat's identity, so a child left running would let this node go
 	// on acting as a seat a peer has taken over — and the surface goes
 	// with them, so nothing here can serve a turn through a dead client.
-	company := e.Company()
+	// stopSeatServers drops the registry with the bridge, in one step.
 	e.stopSeatServers(ctx, handle)
-	company.dropSeatTools(handle)
 
 	// A LAST PUBLISH, then forget the seat. The publish is what makes a
 	// graceful handoff lossless: whatever this node learned since its last

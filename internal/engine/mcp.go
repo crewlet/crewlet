@@ -136,13 +136,83 @@ func (e *Engine) startSeatServers(ctx context.Context, c *Company, handle string
 	// publish the same names, and a shared bridge would hand the second
 	// seat nothing while the first served both.
 	bridge := mcp.NewBridge(nil)
-	e.setSeatBridge(ctx, handle, bridge)
 
 	// CLONED, not shared: the seat's own tools must not reach a peer seat,
 	// and the epoch's registry is read by every other seat on this node.
 	reg := c.Tools.Clone()
 	startAll(ctx, reg, specs, bridge.Add)
+	e.setSeatBridge(ctx, handle, bridge, reg)
 	return reg
+}
+
+// ToolsFor is the surface one seat's turns run against on this node.
+//
+// On the [Engine] rather than the [Company] because the answer depends on
+// which seats THIS node holds: a fleet claims a slice of the company each,
+// and only the node holding a seat's lease has its per-role children.
+func (e *Engine) ToolsFor(handle string) *tools.Registry {
+	return e.seatRegistry(e.Company(), handle)
+}
+
+// seatRegistry is [Engine.ToolsFor] for a caller that already holds the
+// epoch, so the surface and the company a turn is built from are the same
+// pair rather than two reads an apply can land between.
+//
+// The seat's own registry when this node has claimed it and started its
+// per-role children, and the epoch's shared one otherwise. Never nil for a
+// live epoch: a seat with no per-role children still has the builtins, and
+// answering nil would fail the turn rather than run it with the tools it
+// does have.
+func (e *Engine) seatRegistry(c *Company, handle string) *tools.Registry {
+	e.mcpMu.Lock()
+	reg := e.seatTools[handle]
+	e.mcpMu.Unlock()
+	if reg != nil {
+		return reg
+	}
+	if c == nil {
+		return nil
+	}
+	return c.Tools
+}
+
+// refileSeatTools rebuilds every held seat's registry against a new epoch.
+//
+// An apply replaces the [Company], and with it the builtins and the shared
+// MCP surface every seat registry was cloned from. The per-role CHILDREN are
+// not replaced — they belong to the seat's lease, and restarting them on an
+// apply would hand the company a credential re-handshake for every seat on
+// every revision — so what goes stale is the registry, not the processes.
+// Left alone it serves the previous revision's builtins and knobs to turns
+// running under the new one.
+//
+// Rebuilt rather than carried forward, and rebuilt rather than restarted:
+// clone the NEW epoch's surface, then re-file the live bridge's existing
+// catalogue into it. The children never learn an apply happened.
+//
+// Called AFTER the pointer moves, like the mailbox and scheduler steps and
+// for the same reason: an apply that is refused later must not have swapped
+// the seat surfaces of an epoch that never became current.
+func (e *Engine) refileSeatTools(ctx context.Context, c *Company) {
+	if c == nil || c.Tools == nil {
+		return
+	}
+	e.mcpMu.Lock()
+	defer e.mcpMu.Unlock()
+	for handle, bridge := range e.seatMCP {
+		if bridge == nil {
+			continue
+		}
+		reg := c.Tools.Clone()
+		for _, registration := range bridge.Registrations() {
+			if err := reg.RegisterMCP(registration); err != nil {
+				log.WarnContext(ctx, "mcp_tool_refused", "seat", handle,
+					"tool", registration.Tool.Name(), "error", err)
+				continue
+			}
+		}
+		e.seatTools[handle] = reg
+	}
 }
 
 // startAll brings a set of servers up CONCURRENTLY and files what they
@@ -181,17 +251,27 @@ func startAll(ctx context.Context, reg *tools.Registry, specs []mcp.Spec,
 	}
 }
 
-// setSeatBridge installs a seat's bridge, stopping any predecessor.
+// setSeatBridge installs a seat's bridge and the registry filed from it,
+// stopping any predecessor.
 //
 // A predecessor is not hypothetical: a failed acquire releases the same seat,
 // and a re-claim arrives while the previous teardown may not have run.
-func (e *Engine) setSeatBridge(ctx context.Context, handle string, bridge *mcp.Bridge) {
+//
+// BOTH under one lock, because a registry advertising the tools of a bridge
+// this node no longer runs offers the model entries that can only fail.
+func (e *Engine) setSeatBridge(ctx context.Context, handle string, bridge *mcp.Bridge,
+	reg *tools.Registry,
+) {
 	e.mcpMu.Lock()
 	previous, existed := e.seatMCP[handle]
 	if e.seatMCP == nil {
 		e.seatMCP = make(map[string]*mcp.Bridge)
 	}
+	if e.seatTools == nil {
+		e.seatTools = make(map[string]*tools.Registry)
+	}
 	e.seatMCP[handle] = bridge
+	e.seatTools[handle] = reg
 	e.mcpMu.Unlock()
 	if existed && previous != nil {
 		// Detached from the map first, so nothing can reach it while it
@@ -205,16 +285,19 @@ func (e *Engine) setSeatBridge(ctx context.Context, handle string, bridge *mcp.B
 	}
 }
 
-// takeSeatBridge removes and returns a seat's bridge.
+// takeSeatBridge removes and returns a seat's bridge, forgetting its
+// registry with it — a surface naming children this node has stopped is
+// worse than the shared one it falls back to.
 func (e *Engine) takeSeatBridge(handle string) *mcp.Bridge {
 	e.mcpMu.Lock()
 	defer e.mcpMu.Unlock()
 	bridge := e.seatMCP[handle]
 	delete(e.seatMCP, handle)
+	delete(e.seatTools, handle)
 	return bridge
 }
 
-// takeAllSeatBridges empties the map, for shutdown.
+// takeAllSeatBridges empties both maps, for shutdown.
 func (e *Engine) takeAllSeatBridges() []*mcp.Bridge {
 	e.mcpMu.Lock()
 	defer e.mcpMu.Unlock()
@@ -223,6 +306,7 @@ func (e *Engine) takeAllSeatBridges() []*mcp.Bridge {
 		out = append(out, b)
 	}
 	clear(e.seatMCP)
+	clear(e.seatTools)
 	return out
 }
 
