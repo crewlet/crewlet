@@ -320,7 +320,7 @@ func (r *Runner) Execute(ctx context.Context, round int, p turn.Plan, history []
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface, system: system, user: user,
 		rounds: r.cfg.Caps.ExecuteRounds, ceiling: r.cfg.Caps.ExecuteCeiling, iteration: round,
-		allowSuspend: true,
+		allowSuspend: true, planSummary: p.Summary,
 	})
 	if err != nil {
 		return turn.Execution{}, turn.Surface{}, err
@@ -377,7 +377,7 @@ func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Exec
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Review, surface: surface, system: system, user: r.cfg.Task,
 		rounds: r.cfg.Caps.ReviewRounds, iteration: round,
-		terminateAfter: []string{SubmitReviewTool},
+		terminateAfter: []string{SubmitReviewTool}, planSummary: p.Summary,
 	})
 	if err != nil {
 		return turn.Review{}, err
@@ -482,6 +482,16 @@ type phaseRun struct {
 	// partial conversation cannot resume one, so a suspend elsewhere would
 	// silently abandon a turn.
 	allowSuspend bool
+
+	// planSummary is what the turn set out to do, for the extension judge.
+	//
+	// Empty for Plan, which is the phase that produces it. The judge's
+	// question is whether a phase is progressing, and progress is only
+	// meaningful against an intention: a tool log with no plan beside it
+	// makes "reading the same page twice" and "re-reading a page the plan
+	// says to compare" the same evidence. Declared on extension.Request
+	// since that type existed and populated by nobody.
+	planSummary string
 }
 
 // runPhase returns the PHASE'S CONTEXT as well as its result.
@@ -618,8 +628,8 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			return ctx, out, nil
 		}
 		granted, decision := extension.Consider(ctx, r.cfg.Judge, policy, extension.Request{
-			Phase: ph, Task: r.cfg.Task, Calls: calls(surface),
-			LastText: res.Text, RoundsUsed: out.Rounds,
+			Phase: ph, Task: r.cfg.Task, PlanSummary: in.planSummary,
+			Calls: calls(surface), LastText: res.Text, RoundsUsed: out.Rounds,
 		})
 		if granted <= 0 {
 			log.InfoContext(ctx, "phase_not_extended", "phase", ph, "iteration", iteration,

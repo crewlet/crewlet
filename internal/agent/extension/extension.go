@@ -147,15 +147,26 @@ func (p Policy) Grant(d Decision, used int) int {
 // FinishHint is the closing line of the nudge, and it is phase-specific
 // because the phases END differently.
 //
-// Plan exits by calling its submission tool; Execute exits by returning text
-// with no tool calls. A phase told the wrong way to finish spends its granted
-// rounds trying to exit through a door it does not have, which is the exact
-// failure the extension was granted to avoid.
+// Plan exits by calling its submission tool; Onboarding exits by calling
+// mark_onboarded; Execute and Review exit by returning text with no tool
+// calls. A phase told the wrong way to finish spends its granted rounds
+// trying to exit through a door it does not have, which is the exact failure
+// the extension was granted to avoid.
+//
+// ONBOARDING IS NOT THE DEFAULT, and the difference is not cosmetic. Told to
+// stop calling tools, an extended onboarding pass never reaches
+// mark_onboarded — so the marker is never stamped, the seat stays
+// un-onboarded, and the pass re-runs on every turn that seat ever takes. A
+// silent, permanent, per-turn cost, caused by one missing case.
 func FinishHint(ph phase.Phase) string {
 	switch ph {
 	case phase.Plan:
 		return "If you cannot finish in this window, call `submit_plan` with " +
 			"whatever you have so far — a partial plan is better than no plan."
+	case phase.Onboarding:
+		return "If you cannot finish in this window, call `mark_onboarded` " +
+			"anyway after persisting what you have read — an onboarding pass " +
+			"that never marks itself done runs again on every turn you take."
 	default:
 		return "If you cannot finish in this window, stop calling tools and " +
 			"return a short plain-text summary of what is done and what is " +
