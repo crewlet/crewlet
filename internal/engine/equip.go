@@ -35,6 +35,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if c == nil {
 		return fmt.Errorf("engine: cannot equip a nil epoch")
 	}
+	e.tuneBatching(c)
 	// THE COMPANY'S OWN NUMBERS, not the builtins' defaults. Each of these
 	// was validated, schema'd and documented and read by nobody, so setting
 	// one produced a revision and changed nothing an operator could observe.
@@ -182,4 +183,26 @@ func (e *Engine) telemetry() builtin.Telemetry {
 		return nil
 	}
 	return e.backends.Queue
+}
+
+// tuneBatching writes the company's inbox coalescing knobs into the value
+// every seat attachment on this node already holds.
+//
+// IN PLACE rather than rebuilt, because that is what [queue.BatchOptions] is
+// for: it guards its own fields precisely so an apply lands on the next batch
+// with no re-subscription. A fresh value per attach would leave every seat
+// claimed before the apply reading the old window for as long as it held its
+// seat.
+//
+// Same history as the numbers above it: notification_coalesce_window_seconds
+// and notification_coalesce_max_batch were declared, defaulted, schema'd,
+// validated and documented, and node.Config.BatchOptions was never set — so
+// every seat took queue.DefaultBatchOptions and setting either knob produced a
+// revision that changed nothing an operator could observe.
+func (e *Engine) tuneBatching(c *Company) {
+	if e.batch == nil || c == nil || c.Config == nil {
+		return
+	}
+	e.batch.Set(c.Config.NotificationCoalesceWindowSeconds,
+		c.Config.NotificationCoalesceMaxBatch)
 }
