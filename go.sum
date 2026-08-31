@@ -2,8 +2,8 @@ github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.0 h1:4gRPBpN1f6xt88yi4WR26m7X
 github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.0/go.mod h1:G7QVLxw1j1JVyrO1MA95S8m8HStaaleDZYTcfGgjB2o=
 github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 h1:fhqpLE3UEXi9lPaBRpQ6XuRW0nU7hgg4zlmZZa+a9q4=
 github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0/go.mod h1:7dCRMLwisfRH3dBupKeNCioWYUZ4SS09Z14H+7i8ZoY=
-github.com/anthropics/anthropic-sdk-go v1.67.0 h1:tTsVSR+YD6R+1EPoMyZ9im7YKEjJpYGZk5klcDi9HRg=
-github.com/anthropics/anthropic-sdk-go v1.67.0/go.mod h1:3EfIfmFqxH6rbiLcIP4tPFyXL/IHakx2wDG4OU+TIEI=
+github.com/anthropics/anthropic-sdk-go v1.68.0 h1:FikM/c545Fw+6lp0iQ48hnfn1wK4SxBjkYoGrGMwMhY=
+github.com/anthropics/anthropic-sdk-go v1.68.0/go.mod h1:3EfIfmFqxH6rbiLcIP4tPFyXL/IHakx2wDG4OU+TIEI=
 github.com/antithesishq/antithesis-sdk-go v0.7.2-default-no-op h1:p2zFsAzvhIpFya8AIOHIbWf7NGvO34QpLGclyf7nXj8=
 github.com/antithesishq/antithesis-sdk-go v0.7.2-default-no-op/go.mod h1:FQyySiasQQM8735Ddel3MRojmy4dA1IqCeyJ5jmPMbI=
 github.com/aws/aws-sdk-go-v2 v1.43.6 h1:RrmFcqCBxkJuf7g1axVo5krB4jM/AO8r5e5oujrgdoQ=
