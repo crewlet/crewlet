@@ -229,3 +229,68 @@ func procState(pid int) (state string, exists bool) {
 	}
 	return fields[0], true
 }
+
+// AND A TREE LEFT BY A SERVER THAT NEVER CAME UP IS REAPED TOO.
+//
+// This is the path where a package runner's grandchild is MOST likely to have
+// survived — the server did not start, so nothing about it worked — and it
+// was the one path the reap could not act on: the group pid was captured
+// after a successful handshake, so on the failure path it was zero.
+// procgroup.Kill(0) is refused by design and returns nil, so the reap logged
+// server_tree_reaped with pgid=0 and signalled nothing at all.
+func TestATreeLeftByAFailedStartIsReaped(t *testing.T) {
+	t.Parallel()
+	log, rec := recorder()
+	spec := helperSpec(t, "runner", "spawn-grandchild-mute", nil)
+	spec.StartupTimeout = 500 * time.Millisecond
+
+	// The connect MUST fail — that is the path under test.
+	c, err := connect(t.Context(), spec, log)
+	if err == nil {
+		_ = c.stop(t.Context())
+		t.Fatal("a server that never speaks must fail the connect")
+	}
+	if !strings.Contains(err.Error(), "did not connect within") {
+		t.Fatalf("error %q does not name the startup deadline", err)
+	}
+
+	if !rec.has("server_tree_reaped") {
+		t.Fatal("a failed start left its tree unsignalled")
+	}
+	// pgid=0 is the exact shape of the bug: the reap ran, reported success
+	// and signalled nothing, because the group id was only ever assigned
+	// after a handshake that never happened.
+	if rec.hasAttr("server_tree_reaped", "pgid", 0) {
+		t.Fatal("the reap signalled process group 0, which procgroup refuses: " +
+			"the group id was never captured on the failure path")
+	}
+	assertProcessGone(t, waitForGrandchildPIDIn(t, rec))
+}
+
+// waitForGrandchildPIDIn reads the pid off the recorded stderr.
+//
+// The client-side tail is unreachable on a FAILED start — connect returns no
+// client — so the grandchild's announcement is read from the pump's own log
+// records instead. Polled, because the pump is a goroutine and the line may
+// not have been read at the moment connect returned.
+func waitForGrandchildPIDIn(t *testing.T, rec *logRecorder) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, record := range rec.find("server_stderr") {
+			line, _ := record.Attrs["line"].(string)
+			rest, ok := strings.CutPrefix(line, "GRANDCHILD ")
+			if !ok {
+				continue
+			}
+			pid, err := strconv.Atoi(strings.TrimSpace(rest))
+			if err != nil {
+				t.Fatalf("unreadable grandchild pid %q: %v", rest, err)
+			}
+			return pid
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the grandchild never announced itself on the inherited stderr")
+	return 0
+}
