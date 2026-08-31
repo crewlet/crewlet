@@ -355,6 +355,7 @@ projection, and the two are different sources on purpose: the store holds what
 completed, memory holds what is happening. A screen renders both with one
 renderer, so each history row carries the same fields a live one does —
 `turn_id`, `phase`, `iteration`, `model`, `response`, `tool_executions`,
+`round_narration`,
 `total_tokens`, `cost_usd` — plus the envelope's `timestamp` and `failed`.
 
 An unreadable or absent event log costs the history and nothing else: the
@@ -621,7 +622,7 @@ It is deliberately never persisted: replaying a live meter from history
 would show a dead process's counters as the current ones.
 
 Each agent's `live_call` is `null` between turns, or
-`{ turn_id, phase, iteration, model, response, tool_executions, rounds,
+`{ turn_id, phase, iteration, model, response, tool_executions, round_narration, rounds,
 in_progress }` while an LLM call is under way.  A call whose phase
 failed keeps `in_progress: false` plus `failed: true` and an `error`
 object, so the dashboard renders the failure instead of an answer that

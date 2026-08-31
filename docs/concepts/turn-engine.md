@@ -411,11 +411,23 @@ finished turn — not a second assembly of it that can disagree. Reasoning
 from an extended-thinking model rides in that string wrapped in
 `<think>...</think>` (the wire format is
 `internal/events/types`, shared with the
-[auxiliary-LLM telemetry](agent-learning.md)); the dashboard splits that
-prefix off and renders it as a collapsed **Reasoning** disclosure above
-the model's answer — collapsed because it is long, it is not the answer,
-and a reader scanning a turn for what it DID should not have to scroll
-past what it considered. The three builders of that field used to be three
+[auxiliary-LLM telemetry](agent-learning.md)).
+
+**`response` is a join, so the split travels beside it.** That string is
+every round's assistant turn joined with a blank line, and the join cannot
+be undone — its parts are separated by a blank line and prose contains
+blank lines. A reader that split it on the leading `<think>` tag therefore
+showed the FIRST round's thinking as "the reasoning" and every later
+round's thinking as "the answer", tags and all. So both events also carry
+`round_narration`: one `{round, reasoning, content}` per round, recorded
+where the round's assistant message is appended, which is the last frame
+that knows which round the turn belongs to. Its `round` matches
+`tool_executions[].round`, and that shared number is the whole contract —
+it is what lets a consumer interleave the two lists into one ledger of
+"what it thought, what it said, what it called" without a second ordering
+rule. The reasoning stays collapsed by default: it is long, it is not the
+answer, and a reader scanning a turn for what it DID should not have to
+scroll past what it considered. The three builders of that field used to be three
 hand-written assemblies, and the live one omitted reasoning entirely: a
 thinking model's live row streamed tool calls against an empty response
 and only grew its reasoning once the phase was over.

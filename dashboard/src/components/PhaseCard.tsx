@@ -1,8 +1,8 @@
 /**
  * One phase of one turn, rendered as a stable round ledger.
  *
- * Four rules, each of which fixes a specific way the previous surface moved
- * under the reader:
+ * Five rules, each of which fixes a specific way the previous surface either
+ * moved under the reader or told them something untrue:
  *
  *  1. **Identity is `turn|phase|iteration`** (see lib/phases.ts), so a phase
  *     that finishes updates IN PLACE instead of being removed and re-inserted
@@ -12,21 +12,32 @@
  *     while it was live and closed the instant it completed — hiding the
  *     transcript at exactly the moment it became complete — and slammed the
  *     whole turn card shut when its last phase finished, for the same reason.
- *  3. **Tool calls are grouped by their own `round`,** which only appends.
- *     Nothing above the insertion point can move. The previous surface
- *     distributed them across inter-paragraph slots with arithmetic whose
- *     divisor grew every round, so every earlier badge was re-placed each time
- *     a new tool ran.
- *  4. **The header says the same things in the same places, always** — phase,
+ *  3. **Each round is one block: what the model thought, what it said, then
+ *     the tools it called** — in that order, which is the order they happened.
+ *     Rounds only append, so nothing above the insertion point can move.
+ *
+ *     The engine sends `round_narration` for exactly this. Before it did, the
+ *     only text was `response`, the JOIN of every round's turn, and a join
+ *     cannot be undone: this card split it on a leading `<think>` tag, so
+ *     round 1's thinking rendered as "the reasoning" and every later round's
+ *     thinking rendered as "the model output", tags and all. A reader saw the
+ *     model deliberating about which tool to try, labelled as its answer, in a
+ *     block detached from the tool calls that deliberation was about.
+ *
+ *  4. **The model's words are set as prose, not as code.** Its reasoning and
+ *     its speech are natural language and get a proportional face, a real
+ *     line height and a bounded measure. Monospace stays where it means
+ *     something: tool arguments and tool results, which are JSON.
+ *  5. **The header says the same things in the same places, always** — phase,
  *     model, rounds, tokens, decision — so a live phase and a finished one are
  *     the same shape and the row does not change height when it completes.
  */
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge, Button, PhaseTag, cx } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { fmtCount, fmtDateTime, relTime } from "~/lib/format.ts";
-import { decisionLabel, rounds, splitThinking, type PhaseRecord } from "~/lib/phases.ts";
+import { decisionLabel, ledgerOf, type PhaseRecord, type Round } from "~/lib/phases.ts";
 import { staleness } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href } from "~/app/router.tsx";
@@ -37,16 +48,18 @@ function Disclosure({
   children,
   defaultOpen,
   mono,
+  tone,
 }: {
   label: ReactNode;
   count?: ReactNode;
   children: ReactNode;
   defaultOpen?: boolean;
   mono?: boolean;
+  tone?: "reasoning";
 }) {
   const [open, setOpen] = useState(!!defaultOpen);
   return (
-    <div className="disclosure">
+    <div className={cx("disclosure", tone && `tone-${tone}`)}>
       <button className="disclosure-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <Icon name={open ? "chevronDown" : "chevronRight"} size="xs" />
         <span className={cx("truncate", mono && "mono")}>{label}</span>
@@ -90,6 +103,81 @@ function ToolRow({
   );
 }
 
+/**
+ * Keep the newest round in view while a phase runs — but ONLY while the reader
+ * is already at the bottom.
+ *
+ * That condition is the whole feature. A ledger that scrolls itself whatever
+ * the reader is doing yanks them off the round they stopped to read, which is
+ * worse than not following at all; one that never follows makes a running
+ * phase look frozen. So "am I still tailing?" is a piece of reader state, set
+ * by where they last left the scroll.
+ */
+function useTail(active: boolean, depth: number) {
+  const end = useRef<HTMLDivElement | null>(null);
+  const following = useRef(true);
+
+  useEffect(() => {
+    const node = end.current;
+    if (!node) return;
+    const scroller = node.closest(".tail-scroll") as HTMLElement | null;
+    if (!scroller) return;
+    const onScroll = () => {
+      const slack = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      following.current = slack < 48;
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => scroller.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    if (!active || !following.current) return;
+    // `auto` rather than `smooth`: rounds can land in bursts, and queued
+    // smooth scrolls fight each other into a visible stutter.
+    end.current?.scrollIntoView({ block: "end", behavior: "auto" });
+  }, [active, depth]);
+
+  return end;
+}
+
+/** One round: thinking, speech, then the calls that round asked for. */
+function RoundBlock({ round, live }: { round: Round; live: boolean }) {
+  const said = round.content.trim();
+  // Marked on the ROUND, not just on the row inside it: "which round went
+  // wrong" is the question a reader brings to a stuck turn, and the answer
+  // used to be an icon inside a collapsed row they had to open to find.
+  const errored = round.tools.some((t) => t.failed);
+  return (
+    <li className={cx("round", errored && "errored", live && "live")}>
+      <div className="round-rail" aria-hidden="true">
+        <span className="round-node t-num">{round.round}</span>
+      </div>
+      <div className="round-body">
+        {round.reasoning.trim() && (
+          <Disclosure
+            label="Thinking"
+            count={`${round.reasoning.trim().length} chars`}
+            tone="reasoning"
+          >
+            <p className="prose muted">{round.reasoning.trim()}</p>
+          </Disclosure>
+        )}
+        {said && <p className="prose">{said}</p>}
+        {round.tools.length > 0 && (
+          <div className="round-tools">
+            {round.tools.map((t, i) => (
+              <ToolRow key={`${t.name}-${i}`} {...t} />
+            ))}
+          </div>
+        )}
+        {live && !round.reasoning.trim() && !said && round.tools.length === 0 && (
+          <p className="prose muted waiting">waiting for the model…</p>
+        )}
+      </div>
+    </li>
+  );
+}
+
 export function PhaseCard({
   record,
   defaultOpen,
@@ -103,9 +191,11 @@ export function PhaseCard({
   // completing is not a reason to hide it.
   const [open, setOpen] = useState(!!defaultOpen);
   const now = useNow();
-  const ledger = rounds(record.tools);
-  const { thinking, answer } = splitThinking(record.response);
+  const { ledger, legacy } = ledgerOf(record);
   const stale = record.live ? staleness(record.at, now) : "";
+  // The last round is the live one while the phase runs: rounds only append,
+  // so "newest" and "last" are the same row and stay the same row.
+  const tailRef = useTail(open && record.live, ledger.length);
 
   return (
     <article className={cx("phase-card", record.failed && "failed", record.live && "live")}>
@@ -180,43 +270,60 @@ export function PhaseCard({
             </div>
           )}
 
-          {/* The round ledger. Rounds append; nothing above an insertion can
-              move, which is the whole point. */}
+          {/* The transcript. One block per round — thought, speech, calls —
+              in the order they happened. Rounds append, so nothing above an
+              insertion can move, which is the whole point. */}
           {ledger.length > 0 && (
             <section className="col gap-1">
               <div className="t-label">
-                Tool rounds
-                <span className="faint"> · in the order the engine recorded them</span>
+                Rounds
+                <span className="faint">
+                  {" · "}
+                  what the model thought, said and called, in order
+                </span>
               </div>
-              <ol className="round-ledger">
-                {ledger.map((r) => (
-                  <li key={r.round} className="round">
-                    <div className="round-mark t-num">{r.round + 1}</div>
-                    <div className="round-tools">
-                      {r.tools.map((t, i) => (
-                        <ToolRow key={`${t.name}-${i}`} {...t} />
-                      ))}
-                    </div>
-                  </li>
-                ))}
-              </ol>
+              <div className={cx("tail-scroll", record.live && "tailing")}>
+                <ol className="round-ledger">
+                  {ledger.map((r, i) => (
+                    <RoundBlock
+                      key={r.round}
+                      round={r}
+                      live={record.live && i === ledger.length - 1}
+                    />
+                  ))}
+                </ol>
+                <div ref={tailRef} className="tail-end" />
+              </div>
             </section>
           )}
 
-          {thinking && (
-            <Disclosure label="Reasoning" count={`${thinking.length} chars`}>
-              <pre className="code">{thinking}</pre>
-            </Disclosure>
+          {/* A phase recorded before the engine sent per-round narration. The
+              join cannot be undone, so it is shown whole rather than guessed
+              apart — see `ledgerOf`. */}
+          {legacy && (
+            <>
+              {legacy.thinking && (
+                <Disclosure
+                  label="Thinking"
+                  count={`${legacy.thinking.length} chars`}
+                  tone="reasoning"
+                >
+                  <p className="prose muted">{legacy.thinking}</p>
+                </Disclosure>
+              )}
+              {legacy.answer.trim() && (
+                <section className="col gap-1">
+                  <div className="t-label">
+                    Transcript
+                    <span className="faint"> · recorded before rounds were kept apart</span>
+                  </div>
+                  <p className="prose">{legacy.answer.trim()}</p>
+                </section>
+              )}
+            </>
           )}
 
-          {answer.trim() && (
-            <section className="col gap-1">
-              <div className="t-label">Model output</div>
-              <pre className="code">{answer.trim()}</pre>
-            </section>
-          )}
-
-          {record.live && !answer.trim() && !ledger.length && (
+          {record.live && !ledger.length && !legacy && (
             <div className="t-caption">
               The model has not answered yet. This row updates as each round lands.
             </div>

@@ -36,8 +36,19 @@ export interface ToolCall {
   failed: boolean;
 }
 
+/** One round's model turn: what it reasoned, and what it said out loud. */
+export interface Narration {
+  round: number;
+  reasoning: string;
+  content: string;
+}
+
 export interface Round {
   round: number;
+  /** The model's thinking for this round, when it emitted any separately. */
+  reasoning: string;
+  /** The model's prose for this round. */
+  content: string;
   tools: ToolCall[];
 }
 
@@ -59,6 +70,9 @@ export interface PhaseRecord {
   userPrompt: string;
   response: string;
   tools: ToolCall[];
+  /** Per-round model turns. Empty on a phase recorded before the engine
+      sent them — see `ledgerOf`. */
+  narration: Narration[];
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
@@ -104,13 +118,28 @@ export function toolCalls(raw: unknown): ToolCall[] {
     return {
       name: String(rec.name ?? rec.tool ?? "tool"),
       // A producer that never set `round` still gets a stable ledger: the
-      // array's own order is the sequence, and it only appends.
-      round: typeof rec.round === "number" ? rec.round : i,
+      // array's own order is the sequence, and it only appends. ONE-BASED,
+      // because the engine's own `round` is (it is `roundsUsed`), and a
+      // fallback numbering from 0 would put two producers' rounds on
+      // different scales in the same list.
+      round: typeof rec.round === "number" ? rec.round : i + 1,
       args: str(rec.arguments ?? rec.args),
       result: str(rec.result ?? rec.output ?? rec.error),
       failed: rec.success === false || rec.failed === true || Boolean(rec.error),
     };
   });
+}
+
+/** Normalise the loose `round_narration` list into something typed. */
+export function narrations(raw: unknown): Narration[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Record<string, unknown>[])
+    .map((rec, i) => ({
+      round: typeof rec.round === "number" ? rec.round : i + 1,
+      reasoning: typeof rec.reasoning === "string" ? rec.reasoning : "",
+      content: typeof rec.content === "string" ? rec.content : "",
+    }))
+    .filter((n) => n.reasoning.trim() !== "" || n.content.trim() !== "");
 }
 
 /**
@@ -120,12 +149,48 @@ export function toolCalls(raw: unknown): ToolCall[] {
  * this display depends on: nothing above the insertion point can move, so a
  * reader's eye stays where they left it while a turn runs underneath.
  */
-export function rounds(calls: ToolCall[]): Round[] {
-  const byRound = new Map<number, ToolCall[]>();
-  for (const call of calls) byRound.set(call.round, [...(byRound.get(call.round) ?? []), call]);
-  return [...byRound.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([round, tools]) => ({ round, tools }));
+export function rounds(calls: ToolCall[], narration: Narration[] = []): Round[] {
+  const byRound = new Map<number, Round>();
+  const at = (round: number): Round => {
+    let r = byRound.get(round);
+    if (!r) {
+      r = { round, reasoning: "", content: "", tools: [] };
+      byRound.set(round, r);
+    }
+    return r;
+  };
+  // Narration first, so a round that only THOUGHT still gets a slot: the
+  // final round of a phase calls no tools, and it is the one holding the
+  // answer.
+  for (const n of narration) {
+    const r = at(n.round);
+    r.reasoning = n.reasoning;
+    r.content = n.content;
+  }
+  for (const call of calls) at(call.round).tools.push(call);
+  return [...byRound.values()].sort((a, b) => a.round - b.round);
+}
+
+/**
+ * The phase's rounds, however this build's engine described them.
+ *
+ * A phase recorded before the engine sent `round_narration` has only the
+ * joined `response`, and those events are already in the store — an applied
+ * write is history, not source, so they have to keep rendering. The join
+ * cannot be undone (its parts are separated by a blank line and prose
+ * contains blank lines), so the fallback does not try: it puts the whole
+ * response in one trailing pseudo-round, which is what the reader used to
+ * get, and every round that DOES have narration renders properly.
+ */
+export function ledgerOf(record: { tools: ToolCall[]; narration: Narration[]; response: string }): {
+  ledger: Round[];
+  legacy: { thinking: string; answer: string } | null;
+} {
+  const ledger = rounds(record.tools, record.narration);
+  if (record.narration.length > 0) return { ledger, legacy: null };
+  const legacy = splitThinking(record.response);
+  if (!legacy.thinking && !legacy.answer.trim()) return { ledger, legacy: null };
+  return { ledger, legacy };
 }
 
 export function phaseKey(turnId: string, phase: string, iteration: number): string {
@@ -150,6 +215,7 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     userPrompt: call.prompt ?? "",
     response: call.response ?? "",
     tools: toolCalls(call.tool_executions),
+    narration: narrations(call.round_narration),
     inputTokens: call.input_tokens,
     outputTokens: call.output_tokens,
     totalTokens: call.total_tokens,
@@ -195,6 +261,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     userPrompt: String(p.user_prompt ?? ""),
     response: String(p.response ?? ""),
     tools: toolCalls(p.tool_executions),
+    narration: narrations(p.round_narration),
     inputTokens: num(p.input_tokens),
     outputTokens: num(p.output_tokens),
     totalTokens: num(p.total_tokens),

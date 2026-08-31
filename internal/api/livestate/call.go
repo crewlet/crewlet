@@ -25,6 +25,7 @@ func (c *LiveCall) clone() *LiveCall {
 	}
 	dup.PromptMessages = append([]any(nil), c.PromptMessages...)
 	dup.ToolExecutions = append([]any(nil), c.ToolExecutions...)
+	dup.RoundNarration = append([]any(nil), c.RoundNarration...)
 	return &dup
 }
 
@@ -64,6 +65,7 @@ func beginCall(env Envelope, payload map[string]any) *LiveCall {
 		Trigger:        mapping(payload, "trigger"),
 		PromptMessages: []any{},
 		ToolExecutions: []any{},
+		RoundNarration: []any{},
 		RoundNum:       -1,
 		InProgress:     true,
 		UpdatedAt:      env.Timestamp,
@@ -147,6 +149,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		OutputTokens:   num(payload, "output_tokens"),
 		TotalTokens:    num(payload, "total_tokens"),
 		ToolExecutions: list(payload, "tool_executions"),
+		RoundNarration: list(payload, "round_narration"),
 		RoundNum:       roundNum,
 		Rounds:         roundNum + 1,
 		InProgress:     true,
@@ -192,6 +195,12 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	}
 	if tools := list(payload, "tool_executions"); len(tools) > 0 {
 		call.ToolExecutions = tools
+	}
+	// Frozen with the rest: a phase that died mid-round is exactly when the
+	// model's last words matter, and dropping them here would leave the
+	// failed row showing tool calls with nothing that asked for them.
+	if narration := list(payload, "round_narration"); len(narration) > 0 {
+		call.RoundNarration = narration
 	}
 }
 

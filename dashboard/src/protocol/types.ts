@@ -116,6 +116,13 @@ export interface ToolExecution {
   server?: string;
 }
 
+/** One round's model turn, as the engine recorded it. */
+export interface RoundNarration {
+  round?: number;
+  reasoning?: string;
+  content?: string;
+}
+
 /** The in-flight LLM call: the latest progress round, or a phase-start seed. */
 export interface LiveCall {
   turn_id: string;
@@ -130,6 +137,13 @@ export interface LiveCall {
   output_tokens: number;
   total_tokens: number;
   tool_executions: ToolExecution[] | null;
+  /**
+   * Per-round model turns — `{round, reasoning, content}` — where `round`
+   * matches `tool_executions[].round`, which is what lets the two lists
+   * interleave into one ledger. Absent on a phase this engine recorded
+   * before it sent them.
+   */
+  round_narration?: RoundNarration[] | null;
   round_num: number;
   rounds: number;
   in_progress: boolean;

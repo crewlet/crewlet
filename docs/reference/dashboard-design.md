@@ -212,11 +212,11 @@ where the answer is.
 
 ---
 
-## The transcript is stable
+## The transcript is stable, and reads in order
 
 The sharpest complaint about the screen this replaces was that the LLM calls
-jumped around and were hard to follow. Four rules fix it, and each one names a
-specific mechanism:
+jumped around, were hard to follow, and did not say much worth reading. Seven
+rules fix it, and each one names a specific mechanism:
 
 1. **One identity.** A phase is keyed `turn_id|phase|iteration`, live and
    finished alike. They used to differ — the live row was keyed
@@ -225,19 +225,45 @@ specific mechanism:
    the entrance animation replayed, the row relocated from the end of the list
    into its chronological slot, and its expanded state was lost with the key it
    was filed under. Now a live phase *becomes* a finished phase in place.
-2. **Rounds, not paragraph arithmetic.** Tool calls group by their own
-   `tool_executions[].round`, which only ever appends — so nothing above an
-   insertion point can move. The previous surface distributed badges across
-   inter-paragraph slots with `floor(j × slots / tools.length)`; both the
-   divisor and the slot count grow every round, so every earlier badge was
-   re-placed each time a new tool ran. `round` was on the wire the whole time
-   and never read.
-3. **Open/closed is latched.** Once a reader opens a phase or a turn it stays
+2. **One block per round: thought, speech, then calls.** A round groups
+   `round_narration[]` and `tool_executions[]` on the `round` they share,
+   and rounds only ever append — so nothing above an insertion point can
+   move. The previous surface distributed badges across inter-paragraph
+   slots with `floor(j × slots / tools.length)`; both the divisor and the
+   slot count grow every round, so every earlier badge was re-placed each
+   time a new tool ran. `round` was on the wire the whole time and never
+   read.
+
+   The model's *words* had the same problem one level up. `response` is the
+   JOIN of every round's turn, and a join cannot be undone — its parts are
+   separated by a blank line and prose contains blank lines — so splitting
+   it on the leading `<think>` tag showed round 1's thinking as "the
+   reasoning" and every later round's thinking as "the model output", tags
+   and all. The engine now sends the split it already knows, at the point
+   the round's assistant message is appended. A phase recorded before that
+   has only the joined string and is shown whole rather than guessed apart.
+3. **The model's words are prose; JSON is monospace.** Reasoning and speech
+   get a proportional face, real leading and a bounded measure. Monospace
+   stays where it carries meaning — tool arguments and tool results.
+4. **Grouping is structural; colour is semantic.** Rounds are separated by a
+   numbered rail and a two-step alternating tint, not by a hue apiece: a
+   colour per round would read as meaning something and mean nothing, which
+   is the same objection as a colour per agent and worse at nine rounds. A
+   round's node takes colour for exactly three states — normal, contains a
+   failed call, in flight — because "which round went wrong" and "where is
+   it now" are the two questions a reader brings to a running turn.
+5. **A running phase tails; a finished one flows.** While live the ledger is
+   bounded and follows the newest round, but only while the reader is
+   already at the bottom — following regardless yanks them off whatever
+   they stopped to read. Note the engine has no token streaming: a phase
+   publishes twice per tool-loop round, so a round is the finest thing
+   there is to tail.
+6. **Open/closed is latched.** Once a reader opens a phase or a turn it stays
    open. The previous surface derived it — open while live, closed once
    finished — so a transcript vanished at exactly the moment it became
    complete, and a new failure elsewhere silently re-opened a different card
    and shoved everything below it down the page.
-4. **Time is compared as an instant.** Go's `RFC3339Nano` trims trailing
+7. **Time is compared as an instant.** Go's `RFC3339Nano` trims trailing
    zeros, so `…:07Z` sorts *after* `…:07.42Z` on a raw string compare — it
    compares `'Z'` (0x5A) against `'.'` (0x2E). Every list sorts through
    `tsKey`, and every comparator is three-way: one returning −1 for equal

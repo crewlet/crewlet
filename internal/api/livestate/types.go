@@ -100,6 +100,10 @@ type LiveCall struct {
 	TotalTokens  int `json:"total_tokens"`
 
 	ToolExecutions []any `json:"tool_executions"`
+	// RoundNarration is what the model said in each round, so the live view
+	// can put a round's thinking beside the calls it asked for instead of
+	// re-splitting the joined Response and getting it wrong.
+	RoundNarration []any `json:"round_narration"`
 
 	RoundNum   int  `json:"round_num"`
 	Rounds     int  `json:"rounds"`

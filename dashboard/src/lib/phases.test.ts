@@ -15,6 +15,8 @@ import {
   groupTurns,
   mergePhases,
   phaseKey,
+  ledgerOf,
+  narrations,
   rounds,
   splitThinking,
   toolCalls,
@@ -179,9 +181,11 @@ describe("the round ledger", () => {
   });
 
   test("a producer that never set a round still gets a stable ledger", () => {
-    // The array's own order is the sequence, and it only appends.
+    // The array's own order is the sequence, and it only appends. ONE-BASED,
+    // matching the engine's own `round` (which is `roundsUsed`) — numbering a
+    // fallback from 0 would put two producers on different scales in one list.
     const ledger = rounds(toolCalls([{ name: "a" }, { name: "b" }]));
-    expect(ledger.map((r) => r.round)).toEqual([0, 1]);
+    expect(ledger.map((r) => r.round)).toEqual([1, 2]);
   });
 
   test("a failure is read from any of the three ways the engine spells it", () => {
@@ -222,5 +226,96 @@ describe("presentation rules", () => {
       payload: undefined,
     } as never);
     expect(record).toBeNull();
+  });
+});
+
+describe("narration is kept beside the round that produced it", () => {
+  test("a round's thinking, speech and calls land in one block", () => {
+    // The bug this replaces: `response` is the JOIN of every round's turn,
+    // and a join cannot be undone — the parts are separated by a blank line
+    // and prose contains blank lines. Splitting it on the leading <think>
+    // tag showed round 1's thinking as "the reasoning" and every later
+    // round's thinking as "the model output", tags and all.
+    const ledger = rounds(
+      toolCalls([
+        { name: "search", round: 1 },
+        { name: "read", round: 2 },
+      ]),
+      narrations([
+        { round: 1, reasoning: "which tool?", content: "looking it up" },
+        { round: 2, reasoning: "now I know", content: "done" },
+      ]),
+    );
+    expect(ledger.map((r) => r.round)).toEqual([1, 2]);
+    expect(ledger[0]).toMatchObject({ reasoning: "which tool?", content: "looking it up" });
+    expect(ledger[0]!.tools.map((t) => t.name)).toEqual(["search"]);
+    expect(ledger[1]).toMatchObject({ reasoning: "now I know", content: "done" });
+  });
+
+  test("the final round has no tools and still gets a block", () => {
+    // It is the round holding the answer. Grouping on tool calls alone drops
+    // it entirely, which is how the answer went missing from the ledger.
+    const ledger = rounds(
+      toolCalls([{ name: "search", round: 1 }]),
+      narrations([{ round: 2, content: "here is what I found" }]),
+    );
+    expect(ledger.map((r) => r.round)).toEqual([1, 2]);
+    expect(ledger[1]!.content).toBe("here is what I found");
+    expect(ledger[1]!.tools).toEqual([]);
+  });
+
+  test("a round that only called tools narrates nothing", () => {
+    const ledger = rounds(
+      toolCalls([{ name: "search", round: 1 }]),
+      narrations([{ round: 1, reasoning: "   ", content: "" }]),
+    );
+    expect(ledger[0]!.reasoning).toBe("");
+    expect(ledger[0]!.content).toBe("");
+  });
+
+  test("rounds only ever append, so nothing above an insertion moves", () => {
+    const before = rounds(
+      toolCalls([{ name: "a", round: 1 }]),
+      narrations([{ round: 1, content: "first" }]),
+    );
+    const after = rounds(
+      toolCalls([
+        { name: "a", round: 1 },
+        { name: "b", round: 2 },
+      ]),
+      narrations([
+        { round: 1, content: "first" },
+        { round: 2, content: "second" },
+      ]),
+    );
+    expect(after[0]).toEqual(before[0]);
+  });
+});
+
+describe("a phase recorded before narration existed still renders", () => {
+  // Those events are already in the store, and an applied write is history
+  // rather than source: they have to keep rendering.
+  const legacyRecord = {
+    tools: toolCalls([{ name: "search", round: 1 }]),
+    narration: [],
+    response: "<think>pondering</think>\nthe answer",
+  };
+
+  test("the joined response is shown whole rather than guessed apart", () => {
+    const { ledger, legacy } = ledgerOf(legacyRecord);
+    expect(ledger.map((r) => r.round)).toEqual([1]);
+    expect(legacy).toEqual({ thinking: "pondering", answer: "the answer" });
+  });
+
+  test("narration, when present, wins outright", () => {
+    const { legacy } = ledgerOf({
+      ...legacyRecord,
+      narration: narrations([{ round: 1, content: "proper" }]),
+    });
+    expect(legacy).toBeNull();
+  });
+
+  test("a phase with neither offers no empty transcript block", () => {
+    expect(ledgerOf({ tools: [], narration: [], response: "" }).legacy).toBeNull();
   });
 });

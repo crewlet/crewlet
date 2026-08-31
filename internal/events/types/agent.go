@@ -87,6 +87,26 @@ type PromptMessage struct {
 // need every reader recompiled before that thing can be seen.
 type ToolExecution = map[string]any
 
+// RoundNarration records one round's model turn: `round`, `reasoning` and
+// `content`.
+//
+// It exists because `response` is the JOIN of every round's turn, and a join
+// cannot be undone: the parts are separated by a blank line and prose contains
+// blank lines, so a consumer handed only the blob cannot say which round said
+// what. A dashboard splitting it on the leading `<think>` tag showed the first
+// round's thinking as "the reasoning" and every later round's thinking as
+// "the answer", tags and all.
+//
+// Both are published rather than one replacing the other: `response` is what
+// every existing consumer and every already-stored event reads, and this
+// envelope evolves ADDITIVE-ONLY because a rolling upgrade puts two builds on
+// one stream. The duplicated text is small beside the prompts these same
+// events already carry.
+//
+// An open map for the same reason [ToolExecution] is one — a producer that
+// starts recording one more thing must not need every reader recompiled.
+type RoundNarration = map[string]any
+
 // AgentTurnCompleted is the single-phase summary a dashboard reads at turn end.
 type AgentTurnCompleted struct {
 	Agent    string `json:"agent_id"`
@@ -290,16 +310,20 @@ type AgentPhaseCompleted struct {
 	Trigger     Trigger `json:"trigger"`
 	// The prompt and response are VERBATIM, not truncated: this telemetry is
 	// what shows the operator what the model actually saw. Only Error is capped.
-	SystemPrompt    string          `json:"system_prompt"`
-	UserPrompt      string          `json:"user_prompt"`
-	Response        string          `json:"response"`
-	ToolExecutions  []ToolExecution `json:"tool_executions,omitempty"`
-	InputTokens     int             `json:"input_tokens"`
-	OutputTokens    int             `json:"output_tokens"`
-	TotalTokens     int             `json:"total_tokens"`
-	RoundsUsed      int             `json:"rounds_used"`
-	ExhaustedRounds bool            `json:"exhausted_rounds"`
-	Decision        string          `json:"decision"`
+	SystemPrompt   string          `json:"system_prompt"`
+	UserPrompt     string          `json:"user_prompt"`
+	Response       string          `json:"response"`
+	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
+	// RoundNarration is Response split back into the rounds that produced
+	// it, so a reader can put a round's thinking beside the calls it asked
+	// for. See [RoundNarration].
+	RoundNarration  []RoundNarration `json:"round_narration,omitempty"`
+	InputTokens     int              `json:"input_tokens"`
+	OutputTokens    int              `json:"output_tokens"`
+	TotalTokens     int              `json:"total_tokens"`
+	RoundsUsed      int              `json:"rounds_used"`
+	ExhaustedRounds bool             `json:"exhausted_rounds"`
+	Decision        string           `json:"decision"`
 	// RescueFired is true when the phase's submit tool was not called on the
 	// first run of the loop, prompting a constrained rescue call. Plan and
 	// Review can rescue; Execute and sub-agent phases never set this.
@@ -417,7 +441,11 @@ type AgentTurnProgress struct {
 	// is -1 rather than 0.
 	RoundNum       int             `json:"round_num"`
 	ToolExecutions []ToolExecution `json:"tool_executions,omitempty"`
-	A2AContext     map[string]any  `json:"a2a_context,omitempty"`
+	// RoundNarration is what the model said in each round so far. Free on
+	// this event in storage terms — nothing persists it — and it is what
+	// lets the live view append a round rather than redraw one blob.
+	RoundNarration []RoundNarration `json:"round_narration,omitempty"`
+	A2AContext     map[string]any   `json:"a2a_context,omitempty"`
 }
 
 // EventType is the "agent_turn_progress" wire type. Live only — nothing

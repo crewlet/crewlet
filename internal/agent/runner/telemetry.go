@@ -283,6 +283,7 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		// from ever disagreeing about which round this is.
 		RoundNum:       res.RoundsUsed - 1,
 		ToolExecutions: toolExecutions(res.Executions),
+		RoundNarration: roundNarration(res.Narration),
 	}, e.traceFor(ctx)))
 }
 
@@ -415,6 +416,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		UserPrompt:      rec.User,
 		Response:        rec.Result.Text,
 		ToolExecutions:  toolExecutions(rec.Result.Executions),
+		RoundNarration:  roundNarration(rec.Result.Narration),
 		InputTokens:     rec.Result.InputTokens,
 		OutputTokens:    rec.Result.OutputTokens,
 		TotalTokens:     rec.Result.InputTokens + rec.Result.OutputTokens,
@@ -509,6 +511,27 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 			row["error"] = ex.Output
 		}
 		out = append(out, row)
+	}
+	return out
+}
+
+// roundNarration renders the loop's per-round model turns in the wire shape
+// consumers read: round, reasoning, content.
+//
+// The round number matches the one on that round's tool executions, which is
+// the whole contract — it is what lets a reader interleave the two lists into
+// one chronological ledger without a second ordering rule.
+func roundNarration(narr []toolloop.Narration) []types.RoundNarration {
+	if len(narr) == 0 {
+		return nil
+	}
+	out := make([]types.RoundNarration, 0, len(narr))
+	for _, n := range narr {
+		out = append(out, types.RoundNarration{
+			"round":     n.Round,
+			"reasoning": n.Reasoning,
+			"content":   n.Content,
+		})
 	}
 	return out
 }

@@ -76,8 +76,16 @@
   min-width: 0;
 }
 
-/* The round ledger. A numbered rail down the left, rounds appended below —
-   so nothing above an insertion point can move. */
+/* The round ledger: one block per round, appended below the last, so nothing
+   above an insertion point can move.
+
+   GROUPING IS STRUCTURAL, NOT CHROMATIC. A hue per round would read as
+   meaning something and mean nothing — the same objection as a colour per
+   agent, and worse at nine rounds. So a round is separated by a continuous
+   rail with a numbered node, plus an alternating surface tint that is two
+   steps rather than N. Colour inside a round is reserved for what it can
+   actually distinguish: thinking from speech, and a failed call from a
+   successful one. */
 .round-ledger {
   list-style: none;
   margin: 0;
@@ -89,39 +97,164 @@
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
   gap: var(--space-2);
-  padding-bottom: var(--space-1);
+  padding: var(--space-2) var(--space-2) var(--space-2) 0;
+  border-radius: var(--r-sm);
 }
-.round-mark {
+/* Two steps, alternating — enough to separate adjacent blocks, not enough to
+   claim a meaning. Mixed against the accent rather than taken from a grey
+   ramp so the band survives dark mode, where two adjacent surface steps are
+   nearly the same colour. */
+.round:nth-child(even) {
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.round-rail {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+.round-node {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 18px;
   width: 18px;
-  margin-top: 3px;
+  flex: none;
+  margin-top: 2px;
   border-radius: var(--r-full);
   background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
   color: var(--text-muted);
   font-size: 10px;
   font-weight: var(--fw-medium);
+  position: relative;
 }
-/* The rail that makes a sequence read as one: drawn from the mark down, and
-   absent on the last round so the ledger has an end. */
-.round:not(:last-child) .round-mark::after {
+/* Drawn from the node down, and absent on the last round so the ledger has a
+   visible end rather than trailing into nothing. */
+.round:not(:last-child) .round-rail::after {
   content: "";
   position: absolute;
-  width: 1px;
-  height: calc(100% - 18px);
-  margin-top: 100%;
+  left: calc(50% - 1px);
+  top: 24px;
+  bottom: calc(-1 * var(--space-2) - 2px);
+  width: 2px;
+  border-radius: 1px;
   background: var(--border-subtle);
 }
-.round-mark {
-  position: relative;
+.round-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
 }
 .round-tools {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+/* A round that CALLED SOMETHING THAT FAILED. The one other colour a round
+   carries, and it is earned: scanning nine rounds for where it went wrong is
+   the actual question a reader brings to a stuck turn, and the answer was
+   previously a small icon inside a collapsed row. Three node states in total
+   — normal, failed, live — not one per round. */
+.round.errored .round-node {
+  border-color: color-mix(in srgb, var(--critical) 55%, transparent);
+  background: var(--critical-soft);
+  color: var(--critical-ink);
+}
+
+/* The round in flight. The accent is doing real work here — it is the one
+   place a reader looks to answer "where is it now". */
+.round.live .round-node {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.round.live .round-node::before {
+  content: "";
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--accent);
+  animation: round-pulse 1.8s ease-out infinite;
+}
+@keyframes round-pulse {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.9);
+  }
+}
+.waiting {
+  animation: waiting-fade 1.6s ease-in-out infinite;
+}
+/* A live indicator that will not stop is exactly the thing this setting is
+   for, so both of them stop rather than merely slow down. */
+@media (prefers-reduced-motion: reduce) {
+  .round.live .round-node::before,
+  .waiting {
+    animation: none;
+  }
+}
+@keyframes waiting-fade {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* Tailing. A running phase's ledger is bounded and scrolls itself; a finished
+   one is a document and simply flows, because there is nothing to follow. */
+.tail-scroll.tailing {
+  max-height: 620px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  padding: var(--space-1) var(--space-2);
+}
+.tail-end {
+  height: 1px;
+}
+
+/* PROSE. The model's reasoning and its speech are natural language, and were
+   set in the monospace `.code` block that tool JSON uses — 11px, tight
+   leading, unbounded measure. That is a wall of text nobody reads. Here they
+   get a proportional face, real leading and a bounded measure, while
+   monospace stays where it means something. `pre-wrap` keeps the model's own
+   paragraph breaks, which are load-bearing in a long answer. */
+.prose {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-relaxed);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 78ch;
+}
+.prose.muted {
+  color: var(--text-secondary);
+}
+
+/* Thinking is an ASIDE, not content: it is what the model considered, not
+   what it decided. Marked by a rule down its edge so a reader can skip the
+   whole block by its shape rather than by reading it. */
+.disclosure.tone-reasoning .disclosure-body {
+  border-left: 2px solid var(--border-strong);
+  padding-left: var(--space-3);
+  margin-left: 2px;
+}
+.disclosure.tone-reasoning .disclosure-head {
+  color: var(--text-muted);
 }
 
 .tool-row {

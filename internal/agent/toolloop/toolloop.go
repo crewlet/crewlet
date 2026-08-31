@@ -107,6 +107,30 @@ type Execution struct {
 	Failed bool
 }
 
+// Narration is one round's model turn — what it reasoned and what it said —
+// KEPT ATTACHED TO ITS ROUND.
+//
+// [Result.Text] joins every round's turn into one string, which is the right
+// shape for a transcript and the wrong one for a reader: the join is lossy
+// about WHICH round said what, so a consumer handed only the blob cannot put a
+// round's thinking next to the tools that thinking asked for. It also can only
+// be un-joined by guessing — the parts are separated by a blank line, and
+// prose contains blank lines — and the reasoning of every round after the
+// first ends up rendered as though it were the phase's answer.
+//
+// So the split is recorded where it is still known, at the point the round's
+// assistant message is appended, rather than reconstructed downstream. The
+// round number is recorded rather than inferred from position for the same
+// reason [Execution] carries one: a resumed phase starts with a conversation
+// that already contains assistant turns, so the k-th message is not round k.
+type Narration struct {
+	Round int
+	// Reasoning is the model's thinking, when it emitted any separately.
+	Reasoning string
+	// Content is the visible prose of that turn.
+	Content string
+}
+
 // SpendOutcome is the shared counter's answer to a spend.
 //
 // It carries the REFUSING SCOPE rather than just a boolean, because the
@@ -163,6 +187,7 @@ type Progress struct {
 	mu           sync.Mutex
 	messages     []llm.Message
 	executions   []Execution
+	narration    []Narration
 	inputTokens  int
 	outputTokens int
 	roundsUsed   int
@@ -182,17 +207,19 @@ func (p *Progress) Snapshot() Result {
 		InputTokens:  p.inputTokens,
 		OutputTokens: p.outputTokens,
 		Executions:   append([]Execution(nil), p.executions...),
+		Narration:    append([]Narration(nil), p.narration...),
 		RoundsUsed:   p.roundsUsed,
 		Model:        p.model,
 		Messages:     append([]llm.Message(nil), p.messages...),
 	}
 }
 
-func (p *Progress) record(msgs []llm.Message, execs []Execution, in, out, rounds int, model string) {
+func (p *Progress) record(msgs []llm.Message, execs []Execution, narr []Narration, in, out, rounds int, model string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.messages = append([]llm.Message(nil), msgs...)
 	p.executions = append([]Execution(nil), execs...)
+	p.narration = append([]Narration(nil), narr...)
 	p.inputTokens, p.outputTokens = in, out
 	p.roundsUsed, p.model = rounds, model
 }
@@ -205,6 +232,11 @@ type Result struct {
 	Executions   []Execution
 	RoundsUsed   int
 	Model        string
+
+	// Narration is per-round what Text is in aggregate. Both are published:
+	// Text is what every existing consumer and every already-stored event
+	// reads, and the envelope evolves additive-only.
+	Narration []Narration
 
 	// Messages is the conversation as the loop left it, including
 	// everything it appended.
@@ -306,6 +338,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 
 	msgs := append([]llm.Message(nil), cfg.Messages...)
 	var execs []Execution
+	var narration []Narration
 	var inTokens, outTokens int
 	var model string
 	terminators := make(map[string]struct{}, len(cfg.TerminateAfter))
@@ -316,7 +349,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 
 	publish := func(rounds int) {
 		if cfg.Progress != nil {
-			cfg.Progress.record(msgs, execs, inTokens, outTokens, rounds, model)
+			cfg.Progress.record(msgs, execs, narration, inTokens, outTokens, rounds, model)
 		}
 		if cfg.OnProgress != nil {
 			cfg.OnProgress(Result{
@@ -324,6 +357,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				InputTokens:  inTokens,
 				OutputTokens: outTokens,
 				Executions:   append([]Execution(nil), execs...),
+				Narration:    append([]Narration(nil), narration...),
 				RoundsUsed:   rounds,
 				Model:        model,
 				Messages:     append([]llm.Message(nil), msgs...),
@@ -412,6 +446,21 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			ThinkingBlocks:   completion.ThinkingBlocks,
 			ToolCalls:        completion.ToolCalls,
 		})
+		// Recorded HERE, beside the message it describes, because this is
+		// the last frame that knows which round the turn belongs to. The
+		// round is `roundsUsed` — ONE-BASED, matching [Execution.Round] — so a
+		// round's narration and the calls it asked for carry the same number
+		// and a reader can put them together without a second rule. (Note it
+		// does NOT match AgentTurnProgress.RoundNum, which is zero-based and
+		// is a different field about a different thing: how many rounds have
+		// happened, not which one this is.)
+		if narrated(completion.ReasoningContent, completion.Content) {
+			narration = append(narration, Narration{
+				Round:     roundsUsed,
+				Reasoning: strings.TrimSpace(completion.ReasoningContent),
+				Content:   strings.TrimSpace(completion.Content),
+			})
+		}
 
 		// The model has spoken: publish before the tools run, so its
 		// reasoning and prose reach the live view now rather than after
@@ -450,6 +499,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				InputTokens:       inTokens,
 				OutputTokens:      outTokens,
 				Executions:        execs,
+				Narration:         narration,
 				RoundsUsed:        roundsUsed,
 				Model:             model,
 				Messages:          msgs,
@@ -471,6 +521,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		InputTokens:     inTokens,
 		OutputTokens:    outTokens,
 		Executions:      execs,
+		Narration:       narration,
 		RoundsUsed:      roundsUsed,
 		Model:           model,
 		Messages:        msgs,
@@ -608,6 +659,13 @@ func forcedToolCorrective(tools []llm.ToolDef) string {
 // the same text — they were assembled separately once, so a reasoning model
 // streamed its tool calls against an empty response and its thinking appeared
 // only when the phase ended.
+// narrated reports whether a round's turn said anything worth recording. A
+// round that only emitted tool calls has no narration, and an empty entry
+// would render as a blank paragraph above its own tools.
+func narrated(reasoning, content string) bool {
+	return strings.TrimSpace(reasoning) != "" || strings.TrimSpace(content) != ""
+}
+
 func assistantText(msgs []llm.Message) string {
 	var parts []string
 	for _, m := range msgs {
