@@ -25,7 +25,10 @@ import (
 // is all this codebase should have. They matter beyond convenience: a listing
 // never selects the payload column, so a dimension that is not a tag cannot be
 // filtered on at all once the event is history.
-func Tags(ev *events.Event) map[string]string { return tagsFrom(body(ev)) }
+func Tags(ev *events.Event) map[string]string {
+	_, fields := body(ev)
+	return tagsFrom(fields)
+}
 
 // taggedKeys map a WIRE field name onto the tag it becomes.
 //
@@ -103,19 +106,30 @@ func tagsFrom(body map[string]any) map[string]string {
 // Marshalled ONCE per event and threaded through, because this is on the
 // publish path of every event the engine produces: the first version of this
 // file serialized three times to answer three questions about one event.
-func body(ev *events.Event) map[string]any {
+//
+// It returns the BYTES as well as the map, because the bytes are what the
+// store row needs and this function already had them. Discarding them and
+// having the caller re-encode the map made the "marshalled once" above false
+// for the one caller that matters — every persisted event was serialized
+// twice on the publishing goroutine, the second time from a map that had just
+// been decoded from the first.
+//
+// It also makes the stored payload byte-identical to what was published,
+// which is what a reader opening a row expects and what the doc above already
+// implies.
+func body(ev *events.Event) ([]byte, map[string]any) {
 	if ev == nil {
-		return nil
+		return nil, nil
 	}
 	raw, err := json.Marshal(ev)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	var out map[string]any
 	if json.Unmarshal(raw, &out) != nil {
-		return nil
+		return nil, nil
 	}
-	return out
+	return raw, out
 }
 
 // Record renders an event as a store row, reporting false for a type that is
@@ -132,12 +146,8 @@ func Record(ev *events.Event) (store.EventRecord, bool) {
 	// the envelope's trace ids and delegation chain beside the body, and
 	// re-assembling them from columns would be a second serialization of
 	// something the event already knows how to write.
-	fields := body(ev)
+	raw, fields := body(ev)
 	if fields == nil {
-		return store.EventRecord{}, false
-	}
-	raw, err := json.Marshal(fields)
-	if err != nil {
 		return store.EventRecord{}, false
 	}
 	at := ev.Timestamp
@@ -149,6 +159,12 @@ func Record(ev *events.Event) (store.EventRecord, bool) {
 		at = time.Now().UTC()
 	}
 	return store.EventRecord{
+		// SET HERE, from the bytes body already produced. The store
+		// derives it when a caller does not, and this is the one
+		// production caller — so leaving it nil made that fallback the
+		// only branch ever taken, re-decoding the engine's largest
+		// payload on the publishing goroutine of every LLM call.
+		Spend:        store.SpendFor(ev.Type, raw),
 		ID:           ev.ID.String(),
 		Type:         ev.Type,
 		Source:       ev.Source,
@@ -200,6 +216,12 @@ func Envelope(ev *events.Event) (livestate.Envelope, bool) {
 		SpanID:       ev.SpanID,
 		ParentSpanID: ev.ParentSpanID,
 		Topic:        topics.Event(ev.Type),
-		Payload:      body(ev),
+		Payload:      payloadOf(ev),
 	}, true
+}
+
+// payloadOf is the projection's half of [body], which wants the map alone.
+func payloadOf(ev *events.Event) map[string]any {
+	_, fields := body(ev)
+	return fields
 }
