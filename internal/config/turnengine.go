@@ -40,6 +40,16 @@ type TurnEngine struct {
 
 	// SubagentBatchTimeoutSeconds bounds a whole batch; each child also
 	// has its own timeout.
+	//
+	// FIVE TIMES the per-child cap, because the batch cap is the PARENT of
+	// every child's and at most SubagentMaxParallel run at once. At the
+	// old default it equalled one child's, which — with MaxParallel 3 —
+	// meant any batch wider than three had its tail return neverStarted
+	// before calling a model, while this field's own purpose is to stop
+	// twenty of them each finishing just inside their own cap. 600 s
+	// covers a 15-task batch at MaxParallel 3 in the worst case and sits
+	// far inside JetStream's 30-minute ackWait, so a batch cannot outlive
+	// the delivery that started it.
 	SubagentBatchTimeoutSeconds float64 `yaml:"subagent_batch_timeout_seconds,omitempty" json:"subagent_batch_timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on a whole batched spawn."`
 
 	// SubagentMinPerChildTokens floors the per-child slice. If the total
@@ -121,7 +131,7 @@ func DefaultTurnEngine() TurnEngine {
 		SubagentTimeoutSeconds:      120,
 		SubagentBudgetFraction:      0.2,
 		SubagentMaxParallel:         3,
-		SubagentBatchTimeoutSeconds: 120,
+		SubagentBatchTimeoutSeconds: 600,
 		SubagentMinPerChildTokens:   500,
 		ExecutorAlwaysOnTools:       []string{"load_tool_skill"},
 		DelegationDepthLimit:        3,
@@ -231,6 +241,26 @@ func (t *TurnEngine) validate(path string) error {
 				"must be at least %s (%d), got %d — set them equal to disable "+
 					"extensions for this phase", c.baseName, c.base, c.value)
 		}
+	}
+
+	// A BATCH BUDGET BELOW ONE CHILD'S IS A CONTRADICTION, for the same
+	// reason a ceiling below its base is. batchCtx is the PARENT of every
+	// childCtx, and at most SubagentMaxParallel run at once — so with the
+	// batch cap at or under one child's, any batch wider than one wave has
+	// its tail return neverStarted before it ever calls a model. The
+	// field's own doc ("stop twenty of them each finishing just inside
+	// their own cap") is only meaningful if the batch budget exceeds one
+	// child's.
+	//
+	// Equality stays legal and means "one wave only", which is the same
+	// escape hatch equal ceilings give above.
+	if t.SubagentBatchTimeoutSeconds < t.SubagentTimeoutSeconds {
+		p.add(at(path, "subagent_batch_timeout_seconds"), ErrOutOfRange,
+			"must be at least subagent_timeout_seconds (%v), got %v — the batch "+
+				"cap is the parent of every child's, so a smaller one makes "+
+				"every child past the first wave time out before it starts. "+
+				"Set them equal to allow one wave only",
+			t.SubagentTimeoutSeconds, t.SubagentBatchTimeoutSeconds)
 	}
 
 	p.wrap(t.ConversationSession.validate(at(path, "conversation_session")))
