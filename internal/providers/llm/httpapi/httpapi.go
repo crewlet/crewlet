@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
@@ -44,23 +45,23 @@ var log = logging.Get("providers.llm")
 // — the cli-agent backend caps itself at 4 processes and an HTTP node runs
 // tens of seats, not hundreds — costs at most 32 sockets per provider, and
 // idle ones are still reaped by the transport's 90-second IdleConnTimeout.
-const idleConnsPerHost = 32
+//
+// The value lives in [httpx.MaxIdleConnsPerHost] now, so the engine has ONE
+// pool size rather than this one and a different implicit 2 everywhere else.
 
 // NewHTTPClient builds the transport an LLM backend talks through.
 //
-// It CLONES http.DefaultTransport rather than building one, so the proxy, TLS
-// and HTTP/2 settings the process was started with survive: a hand-built
-// transport silently drops ProxyFromEnvironment, which is how a deployment
-// behind a corporate proxy stops being able to reach anything, with no error
-// that says so.
+// It delegates to [httpx.Client], which is what makes the pool shared: this
+// function is called once per configured provider, so a transport built here
+// gave each provider a pool of its own and two providers against one endpoint
+// — the ordinary case, a default and an auxiliary model on the same vendor —
+// reused nothing between them.
 //
 // No client-level Timeout is set. The per-call deadline belongs to the SDK's
 // own request option, which is the one that produces a context.DeadlineExceeded
 // this package can classify as KindTimeout rather than as an unknown failure.
 func NewHTTPClient() *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.MaxIdleConnsPerHost = idleConnsPerHost
-	return &http.Client{Transport: transport}
+	return httpx.Client(0)
 }
 
 // FromStatus classifies an API failure that carried an HTTP status.

@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // In-sandbox telemetry, without handing the box a secret.
@@ -192,7 +194,7 @@ func NewOtelReceiver(opts OtelReceiverOptions) (*OtelReceiver, error) {
 	}
 	client := opts.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: OtelForwardTimeout}
+		client = httpx.Client(OtelForwardTimeout)
 	}
 	headers := make(map[string]string, len(opts.UpstreamHeaders))
 	for k, v := range opts.UpstreamHeaders {

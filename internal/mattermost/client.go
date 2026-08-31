@@ -14,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // The REST client.
@@ -144,7 +146,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}
 	c := &Client{base: base, token: opts.Token, http: opts.HTTP, now: opts.Now}
 	if c.http == nil {
-		c.http = &http.Client{Timeout: DefaultTimeout}
+		c.http = httpx.Client(DefaultTimeout)
 	}
 	if c.now == nil {
 		c.now = time.Now

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // The Web API client.
@@ -41,7 +43,7 @@ func NewClient(token string, httpClient *http.Client) (*Client, error) {
 		return nil, fmt.Errorf("slack: no bot token")
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: ClientTimeout}
+		httpClient = httpx.Client(ClientTimeout)
 	}
 	return &Client{token: token, http: httpClient}, nil
 }

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -92,7 +93,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}
 	client := opts.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: ClientTimeout}
+		client = httpx.Client(ClientTimeout)
 	}
 	return &Client{
 		base: RESTBase(base),

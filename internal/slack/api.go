@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // The provisioning half of the Web API.
@@ -81,7 +83,7 @@ type Admin struct{ http *http.Client }
 // NewAdmin builds the provisioning client.
 func NewAdmin(httpClient *http.Client) *Admin {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: ManifestTimeout}
+		httpClient = httpx.Client(ManifestTimeout)
 	}
 	return &Admin{http: httpClient}
 }

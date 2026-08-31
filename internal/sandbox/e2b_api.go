@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // The E2B control plane: minting, reclaiming and keeping a box alive.
@@ -72,7 +74,7 @@ func newE2BAPI(apiKey, domain string, client *http.Client) *e2bAPI {
 	domain = strings.TrimSuffix(strings.TrimPrefix(
 		strings.TrimPrefix(domain, "https://"), "http://"), "/")
 	if client == nil {
-		client = &http.Client{Timeout: E2BClientTimeout}
+		client = httpx.Client(E2BClientTimeout)
 	}
 	return &e2bAPI{
 		base:   "https://api." + domain,

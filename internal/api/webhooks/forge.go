@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/httpx"
+
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -151,7 +153,7 @@ type JWKS struct {
 // "how old is this", and only one of them is the one a test can pin.
 func NewJWKS(url string, client *http.Client, now func() time.Time) *JWKS {
 	if client == nil {
-		client = &http.Client{Timeout: jwksFetchTimeout}
+		client = httpx.Client(jwksFetchTimeout)
 	}
 	if now == nil {
 		now = time.Now
