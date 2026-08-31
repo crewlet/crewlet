@@ -781,11 +781,16 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		Recon: func(ctx context.Context, planSummary string) string {
 			return fetcher.AfterPlan(ctx, prefetchReq, planSummary)
 		},
-		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{}),
-		Publisher:    e.backends.Queue,
-		Turn:         tel.runnerTurn(company, req.WorkKey, req.Depth, req.DelegationChain),
-		Markers:      e.markers(),
-		Latch:        e.onboarded,
+		// BOUNDED AT RENDER, never at write. The stored row is the only copy
+		// of the turn; what a prompt shows is a display decision, and this
+		// one drops whole entries oldest-first and says how many.
+		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{
+			MaxChars: ledger.InjectedMaxChars,
+		}),
+		Publisher: e.backends.Queue,
+		Turn:      tel.runnerTurn(company, req.WorkKey, req.Depth, req.DelegationChain),
+		Markers:   e.markers(),
+		Latch:     e.onboarded,
 		// Read off the PINNED epoch, so a revision that raises a ceiling
 		// mid-turn cannot move the limit a round is judged against.
 		Budget: e.meterFor(company, req.Handle),

@@ -372,7 +372,7 @@ func firstLine(s string, limit int) string {
 	if limit <= 0 || len(line) <= limit {
 		return line
 	}
-	cut := limit - len("…")
+	cut := max(limit-len("…"), 0)
 	for cut > 0 && !utf8.RuneStart(line[cut]) {
 		cut--
 	}

@@ -74,8 +74,10 @@ func (t *refineSkill) Parameters() map[string]any {
 					"current body in its entirety",
 			},
 			"reason": map[string]any{
-				"type":        "string",
-				"description": "Why it needed correcting — read by a person later",
+				"type": "string",
+				"description": fmt.Sprintf(
+					"Why it needed correcting — read by a person later. At most "+
+						"%d characters — longer is refused, not shortened.", diaryNoteMax),
 			},
 		},
 		"required": []any{"skill_name", "content"},
@@ -97,6 +99,7 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 
 	name := strings.TrimSpace(argString(args, "skill_name"))
 	content := strings.TrimSpace(argString(args, "content"))
+	reason := strings.TrimSpace(argString(args, "reason"))
 	switch {
 	case name == "":
 		return failed("refine_skill needs a `skill_name`."), nil
@@ -104,6 +107,15 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 		return failed("refine_skill needs `content`: the FULL corrected " +
 			"procedure. It replaces the current body, so a partial edit " +
 			"would delete the rest of the skill."), nil
+	case len(reason) > diaryNoteMax:
+		// REFUSED, not clipped — the same rule the body cap below states,
+		// and checked HERE, beside it, before any store work: a refusal
+		// after the skill has been loaded costs a round for an argument
+		// the model could have fixed up front.
+		return failed(fmt.Sprintf(
+			"That `reason` is %d characters and is capped at %d. Say what "+
+				"practice superseded the old text, in a sentence.",
+			len(reason), diaryNoteMax)), nil
 	case t.bodyMax > 0 && len(content) > t.bodyMax:
 		// REFUSED, not truncated. A skill is a procedure the seat will
 		// follow, and half a procedure is worse than the one it already
@@ -129,16 +141,6 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 			"You have no synthesized skill called %q, so there is nothing to "+
 				"refine. Skills are distilled from your own completed turns.",
 			clip(name))), nil
-	}
-
-	// REFUSED, not clipped — the same rule the body cap above states, and
-	// the reason is the refinement's only explanation of itself.
-	reason := strings.TrimSpace(argString(args, "reason"))
-	if len(reason) > diaryNoteMax {
-		return failed(fmt.Sprintf(
-			"That reason is %d characters and is capped at %d. Say what "+
-				"practice superseded the old text, in a sentence.",
-			len(reason), diaryNoteMax)), nil
 	}
 
 	rev := sk.Revision()

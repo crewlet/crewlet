@@ -310,14 +310,15 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			}
 		}
 		if detail != "" {
-			// THE WHOLE STDERR. It reaches a model as the tool message for
-			// a run that produced nothing else, so this string is the only
-			// account of what went wrong — and a 500-byte cut kept the
-			// exception while dropping the line naming the file, the
-			// missing dependency or the failing test underneath it. The
-			// transcript beside it is tailed with a marker; this is not a
-			// log, it is the diagnosis.
-			result.Error = detail
+			// TAILED, exactly like the transcript above, and for the same
+			// reason: paths.Err() is a file the coding agent wrote and
+			// nothing bounds it, so a run that looped printing errors
+			// produces one the event store cannot carry. It used to be cut
+			// to 500 bytes from the HEAD with no marker, which was wrong
+			// in all three ways — too small to hold the line naming the
+			// failing file, taken from the end that says least about a
+			// crash, and silent about having cut at all.
+			result.Error = tail(detail, MaxTranscript)
 		}
 	}
 

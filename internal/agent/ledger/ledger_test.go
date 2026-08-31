@@ -383,6 +383,36 @@ func TestBuildSessionKeepsStructureWholeAndElidesOnlyArguments(t *testing.T) {
 	}
 }
 
+// The RENDER is bounded, the RECORD is not — and the drop is reported. A
+// silently shortened history reads as the whole conversation, and a seat that
+// believes it has seen everything it said will not go and look for the rest.
+func TestATrimmedHistorySaysHowMuchItDropped(t *testing.T) {
+	t.Parallel()
+	entries := make([]Session, 6)
+	for i := range entries {
+		entries[i] = Session{TurnID: itoa(i), Reply: strings.Repeat("z", 5000)}
+	}
+	got := RenderHistory(entries, HistoryOptions{MaxChars: InjectedMaxChars})
+	if len(got) > InjectedMaxChars+500 {
+		t.Errorf("the rendered block is %d bytes, past its bound", len(got))
+	}
+	if !strings.Contains(got, "are not shown") {
+		t.Errorf("entries were dropped silently:\n%s", got[:200])
+	}
+	// WHOLE ENTRIES. A cut inside one would leave a half-recorded reply
+	// reading as the whole of what the seat said.
+	if strings.Count(got, strings.Repeat("z", 5000)) < 1 {
+		t.Errorf("an entry was cut rather than dropped:\n%s", got[:200])
+	}
+	// The newest always survives, however long: a block trimmed to nothing
+	// tells the next turn this conversation has no history.
+	solo := RenderHistory([]Session{{Reply: strings.Repeat("d", InjectedMaxChars*2)}},
+		HistoryOptions{MaxChars: InjectedMaxChars})
+	if !strings.Contains(solo, strings.Repeat("d", InjectedMaxChars*2)) {
+		t.Error("the only entry was dropped, so the turn reads as having no history")
+	}
+}
+
 func TestNoHistoryRendersNothing(t *testing.T) {
 	t.Parallel()
 	if got := RenderHistory(nil, HistoryOptions{}); got != "" {

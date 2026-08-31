@@ -157,14 +157,18 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	}
 	switch {
 	case err != nil:
-		summary.Error = err.Error()
+		// Bounded only so the event is publishable at all; see
+		// events.MaxDiagnosticBytes. An event refused by the queue is
+		// logged and dropped, so an unbounded failure text costs the
+		// operator the whole record rather than its tail.
+		summary.Error = events.ClipDiagnostic(err.Error())
 		summary.ErrorKind = "error"
 	case res.Breach != nil:
 		// A guard breach is not an error — the turn ran and was stopped by
 		// a rule. Naming the RULE is the whole value: "depth" and "stall"
 		// send an operator to different places, and a bare "failed" sends
 		// them to neither.
-		summary.Error = res.Breach.Detail
+		summary.Error = events.ClipDiagnostic(res.Breach.Detail)
 		summary.ErrorKind = string(res.Breach.Kind)
 	}
 	e.publishEvent(ctx, events.New(summary, t.trace), t.role)

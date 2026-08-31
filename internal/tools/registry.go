@@ -330,10 +330,6 @@ func (r *Registry) Catalogue() string {
 	return strings.Join(lines, "\n")
 }
 
-// firstLine trims a description to its first line.
-//
-// A tool description can be a paragraph, and a catalogue is a list: a
-// multi-line entry breaks the one-tool-per-line shape the planner reads it as.
 // CatalogueLine renders one "- name: description" catalogue entry with the
 // description WHOLE.
 //

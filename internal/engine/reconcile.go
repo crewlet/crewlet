@@ -471,7 +471,7 @@ func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation
 		RevisionID:        target.RevisionID,
 		Status:            applyStatus(status),
 		AppliedSubsystems: applied,
-		Error:             message,
+		Error:             events.ClipDiagnostic(message),
 	}, tracing.TraceOf(ctx))
 	ev.Timestamp = r.now()
 	// The NODE, not a seat. Every other field of the payload describes the

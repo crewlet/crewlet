@@ -167,8 +167,12 @@ func goString(v any) string { return fmt.Sprintf("%v", v) }
 
 // Elide trims text to limit runes with a visible ellipsis.
 //
-// Exported for callers outside this package that need the SAME budget applied
-// the same way — the reviewer's copy of the draft is the ledger's artifact
-// answering the same question, and two trimming functions would eventually
-// disagree about where a limit falls.
+// Exported for callers outside this package that need the same marked,
+// rune-safe trim — today the sub-agent runner, bounding the error text it
+// reports back to its parent. Two trimming functions would eventually
+// disagree about where a limit falls and whether the cut is marked.
+//
+// NOT for content. Every caller here bounds a string whose length is set by
+// something outside the engine; the draft, the plan and the reviewer's notes
+// are carried whole (see budgets.go).
 func Elide(text string, limit int) string { return elide(text, limit) }

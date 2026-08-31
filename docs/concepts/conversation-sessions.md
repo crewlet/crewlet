@@ -169,16 +169,25 @@ never promised.
 ## Cost
 
 The block is re-sent on every round of every phase, and Anthropic bills cache
-reads at full token value, so its cost multiplies by rounds used. What bounds
-that product is `max_entries`, at **write** time — the injected block is the
-whole recorded conversation.
+reads at full token value, so its cost multiplies by rounds used. Two things
+bound that product, and which one applies where is the whole design:
 
-There is no injected-side budget. Two knobs (`injected_max_entries`,
-`injected_max_chars`) used to be documented here; neither was ever threaded to
-a caller, so both validated, defaulted and described a truncation that did not
-happen. Rather than wire a cut into the one block that tells a seat what it
-already said on this thread — which is how a seat repeats a reply it cannot
-see it already gave — the bound stays on what is *kept*. The `prompt.size`
+- **`max_entries`, at write time** — how many turns of a conversation are kept
+  at all. A chat DM keys on the whole channel, so its ledger never stops
+  receiving entries.
+- **`ledger.InjectedMaxChars` (24 000 bytes), at render time** — how much
+  reaches one prompt. It drops **whole entries**, oldest first, and says how
+  many it dropped; the newest always survives however long it is. An entry
+  carries the seat's own reply, which is unbounded — a turn that produced a
+  document puts that document in the row — so without this a busy conversation
+  eventually exceeds the model's context and the turn cannot run at all.
+
+Never a cut *inside* an entry, and never at write time. The stored row is the
+only copy of that turn, and a half-recorded reply reads as the whole of what
+the seat said — which is how a seat repeats a reply it cannot see it already
+gave. Two config knobs (`injected_max_entries`, `injected_max_chars`) used to
+be documented here; neither was ever threaded to a caller, so both validated,
+defaulted and described a truncation that did not happen. The `prompt.size`
 telemetry event records the delta fleet-wide.
 
 Against that: the re-recon it displaces costs a `list_mcp_server_tools` round,
@@ -226,9 +235,10 @@ channel rather than a thread, so its ledger never stops receiving entries),
 and the [maintenance worker](scaling.md) sweeps past `retention_days`.
 
 Every field of a recorded entry is stored **verbatim** apart from the tool
-arguments, which the [ledger budgets](turn-engine.md#prior-work-ledger-across-self_iterate-rounds)
+arguments and results, which the [ledger budgets](turn-engine.md#prior-work-ledger-across-self_iterate-rounds)
 elide. This row is the store's only record of the turn, so a field cut at write
-time is not a shortened rendering — it is the only copy.
+time is not a shortened rendering — it is the only copy. Bounding what a
+*prompt* shows is a separate decision, made at render time; see Cost above.
 
 **Failure never stops a turn.** A write that fails is swallowed — it happens on
 a completed turn's tail, where there is nothing left to tell. A read that fails

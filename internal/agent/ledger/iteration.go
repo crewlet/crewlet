@@ -83,11 +83,14 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 		}
 		outcome := "success"
 		if call.Failed {
-			// THE ERROR VERBATIM. It is not an argument payload — it is
-			// what the next round has to fix, and a cut at the argument
-			// budget lands mid-message on exactly the long errors that
-			// need reading (a stack, a validation list, an API's reason).
-			outcome = "error: " + call.Result
+			// ELIDED, like the arguments beside it. Call.Result is the
+			// tool's own output, which is a PAYLOAD by this package's
+			// definition — authored outside the engine and unbounded, so a
+			// failed HTTP call can put a whole error document on one
+			// ledger line, re-sent on every round of every later phase.
+			// The cut is marked, and the full text is on the phase event
+			// this line summarises.
+			outcome = "error: " + elide(call.Result, opts.ValueLimit)
 		}
 		marker := ""
 		if isRead {

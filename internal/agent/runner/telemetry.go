@@ -453,14 +453,14 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		Failed:          rec.Failed,
 	}
 	if rec.Err != nil {
-		// VERBATIM, like the prompts and the response beside it. A cut at
-		// 2000 characters landed on exactly the errors worth reading — an
-		// exhausted provider chain naming what each attempt refused, a
-		// decode failure quoting the document — and an operator holding
-		// the first half of a wrapped chain cannot see the cause at its
-		// end. The envelope's own ceiling (queue.MaxPayloadBytes) bounds
-		// this, and it refuses rather than shortening.
-		ev.Error = rec.Err.Error()
+		// The 2000-character cut this used to carry landed on exactly the
+		// errors worth reading: an exhausted provider chain naming what
+		// each attempt refused, a wrapped chain whose cause is at its end.
+		// What is left is a DELIVERY GUARANTEE, not a content budget —
+		// an event over the queue's ceiling is refused and this publisher
+		// logs and moves on, so an unbounded error would reach the
+		// operator not shortened but ABSENT. See events.MaxDiagnosticBytes.
+		ev.Error = events.ClipDiagnostic(rec.Err.Error())
 		ev.ErrorKind = classifyError(rec.Err)
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))

@@ -591,8 +591,10 @@ func (t *markOnboarded) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"notes": map[string]any{
-				"type":        "string",
-				"description": "Optional: what you learned while orienting",
+				"type": "string",
+				"description": fmt.Sprintf(
+					"Optional: what you learned while orienting. At most %d "+
+						"characters — longer is refused, not shortened.", diaryNoteMax),
 			},
 		},
 	}

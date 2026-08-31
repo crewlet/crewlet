@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -528,4 +529,42 @@ func NewTrace() TraceContext {
 		TraceID: hex.EncodeToString(buf[:16]),
 		SpanID:  hex.EncodeToString(buf[16:]),
 	}
+}
+
+// MaxDiagnosticBytes bounds ONE free-text diagnostic field on an event.
+//
+// Not a content budget — the prompts, responses, artifacts and tool results
+// events carry are verbatim, deliberately. This is a delivery guarantee for
+// the one field whose length is set by something outside the engine: an
+// error string. A provider chain that exhausted can carry every attempt's
+// body, and a decode failure can carry the whole undecodable document.
+//
+// The failure it prevents is worse than a cut. An event over the queue's
+// [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes] (8 MiB) is
+// REFUSED, and every telemetry publisher logs the refusal and moves on — so
+// an unbounded error does not arrive shortened, it does not arrive at all,
+// and the operator diagnosing the incident sees no event rather than a long
+// one. 64 KiB is two orders of magnitude past any message written to be read
+// and two orders below the ceiling, so the field can never be what pushes an
+// event over it.
+const MaxDiagnosticBytes = 64 << 10
+
+// ClipDiagnostic applies [MaxDiagnosticBytes], marking the cut.
+//
+// The HEAD is kept. A wrapped Go error reads outermost-first, so the head
+// names the operation that failed; and in the pathological case this bound
+// exists for — a decode failure quoting a document — the head is the message
+// and the tail is the document.
+//
+// Never through a rune: a byte slice splits whatever multi-byte character
+// straddles the cut, and a JSON encoder replaces the result with U+FFFD.
+func ClipDiagnostic(text string) string {
+	if len(text) <= MaxDiagnosticBytes {
+		return text
+	}
+	cut := MaxDiagnosticBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "\n…[diagnostic truncated at 64 KiB so the event could be published]"
 }

@@ -314,7 +314,7 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 		}
 	}
 	policy := d.conversationPolicy()
-	if d.Conversations == nil || req.ConversationKey == "" || !policy.Enabled.Or(true) {
+	if d.Conversations == nil || req.ConversationKey == "" || !policy.Records() {
 		return
 	}
 	entry := ledger.BuildSession(ledger.SessionInput{
@@ -338,14 +338,15 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 }
 
 func (d *Dispatcher) history(ctx context.Context, handle, conversation string) ([]ledger.Session, error) {
-	if d.Conversations == nil || conversation == "" || !d.conversationPolicy().Enabled.Or(true) {
+	policy := d.conversationPolicy()
+	if d.Conversations == nil || conversation == "" || !policy.Records() {
 		return nil, nil
 	}
-	// UNLIMITED on the read. What the prompt shows is the whole recorded
-	// conversation: the two knobs that used to bound it (injected_max_entries,
-	// injected_max_chars) were never threaded to any caller, and rather than
-	// wiring a truncation of the one block that tells a seat what it already
-	// said, they are gone. What bounds this is maxEntries at write time.
+	// UNLIMITED on the READ. What is recorded is read back whole; the block
+	// a turn is given is bounded at render time by dropping whole entries
+	// (ledger.InjectedMaxChars), which is where a bound belongs — the two
+	// config knobs that used to claim this job were never threaded to any
+	// caller and cut nothing.
 	return d.Conversations.History(ctx, handle, conversation, 0)
 }
 
