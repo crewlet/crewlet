@@ -99,11 +99,6 @@ const (
 	// pool, and an agent whose diary has grown to hundreds of rows would
 	// otherwise pay for all of them on every completed turn.
 	dedupPoolLimit = 50
-
-	// dedupEntryChars truncates one rendered memory. Enough for the model
-	// to recognise an overlap, short enough that a single bloated row
-	// cannot crowd the other forty-nine out of the block.
-	dedupEntryChars = 240
 )
 
 const (
@@ -566,7 +561,7 @@ func renderExistingMemories(memories []DiaryEntry) string {
 		b.WriteString("\n")
 		b.WriteString(strconv.Itoa(n))
 		b.WriteString(". ")
-		b.WriteString(preview(content, dedupEntryChars))
+		b.WriteString(content)
 		// A deadline is rendered so the model can tell "the seat knows
 		// this and the row is still live" from "the seat knew this until
 		// last week" — the second is not a duplicate, it is a fact worth

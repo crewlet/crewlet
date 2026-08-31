@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -455,7 +456,7 @@ func (p *Parser) base(body, page, comment map[string]any, event, space string) (
 		EventType: event,
 		Sender:    firstOf(meta["actor_name"], account),
 		Subject:   subject,
-		Body:      Snippet(text, bodyLimit),
+		Body:      excerpt(text),
 		Metadata:  meta,
 	}, true
 }
@@ -467,6 +468,23 @@ func (p *Parser) base(body, page, comment map[string]any, event, space string) (
 // the whole thing would put a document into every recipient's prompt for an
 // event most of them will read and drop.
 const bodyLimit = 600
+
+// excerpt is the page text a notification carries.
+//
+// A POINTER THAT SAYS SO. The bound above is one of the few cuts here that
+// earns its place — the page is re-readable through the seat's own tools and
+// most recipients will read this and drop it — but it used to be applied by a
+// helper that cut at the first newline or ". " BEFORE any limit, so a page was
+// decapitated to its opening sentence whatever the budget, silently and
+// mid-rune. A seat that could not tell an excerpt from the whole page acts on
+// the opening line as though nothing followed it.
+func excerpt(text string) string {
+	out := knowledge.Snippet(text, bodyLimit)
+	if out == "" || out == strings.Join(strings.Fields(text), " ") {
+		return out
+	}
+	return out + "\n\n(Excerpt — read the page in full with your knowledge-base tools.)"
+}
 
 // link is the address a person opens, or empty when there is no human base.
 func (p *Parser) link(space, pageID string) string {

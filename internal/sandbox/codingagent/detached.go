@@ -23,13 +23,6 @@ var log = logging.Get("sandbox.coding_agent")
 // putting a megabyte of log through the event store per run.
 const MaxTranscript = 100_000
 
-// errorDetailLimit bounds the error text a failed run reports.
-//
-// It reaches a model as a tool message, so it is a diagnosis rather than a
-// log: the first 500 characters of a crash carry the exception and its top
-// frames, and the rest is a stack the model cannot act on.
-const errorDetailLimit = 500
-
 // prPattern matches a pull-request URL, on either of the two hosts this engine
 // integrates with. It is a FALLBACK: a runner whose output names its delivered
 // refs explicitly is preferred, and this scrapes the findings for one when the
@@ -317,7 +310,14 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			}
 		}
 		if detail != "" {
-			result.Error = truncate(detail, errorDetailLimit)
+			// THE WHOLE STDERR. It reaches a model as the tool message for
+			// a run that produced nothing else, so this string is the only
+			// account of what went wrong — and a 500-byte cut kept the
+			// exception while dropping the line naming the file, the
+			// missing dependency or the failing test underneath it. The
+			// transcript beside it is tailed with a marker; this is not a
+			// log, it is the diagnosis.
+			result.Error = detail
 		}
 	}
 
@@ -377,11 +377,4 @@ func tail(text string, n int) string {
 		return text
 	}
 	return "…[earlier output truncated]…\n" + text[len(text)-n:]
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
 }

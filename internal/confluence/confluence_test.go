@@ -283,13 +283,25 @@ func TestTheQueryIsEscapedAndCapped(t *testing.T) {
 	if !strings.Contains(got, `"EN\"G"`) {
 		t.Errorf("the space key was not escaped: %s", got)
 	}
-	// The terms only — "text ~" itself contains an x, which is exactly the
-	// kind of thing an assertion over the whole string gets wrong.
-	long := confluence.BuildCQL(strings.Repeat("x", confluence.MaxQueryChars+50), nil, true)
+	// THE QUERY REACHES THE SERVER WHOLE. A cap here does not make a long
+	// query safe, it makes it a DIFFERENT query — one that returns
+	// plausible pages for terms the seat never asked about, with nothing
+	// saying so. The terms only: "text ~" itself contains an x, which is
+	// exactly the kind of thing an assertion over the whole string gets
+	// wrong.
+	whole := strings.Repeat("x", 250)
+	long := confluence.BuildCQL(whole, nil, true)
 	_, terms, _ := strings.Cut(long, `text ~ "`)
 	terms = strings.TrimSuffix(terms, `"`)
-	if len(terms) != confluence.MaxQueryChars {
-		t.Errorf("a long query was capped to %d characters", len(terms))
+	if terms != whole {
+		t.Errorf("a long query was cut to %d of %d characters", len(terms), len(whole))
+	}
+	// And never mid-rune: a cut inside a multi-byte character would put
+	// invalid UTF-8 inside a quoted CQL literal.
+	cjk := strings.Repeat("日本語", 100)
+	_, cjkTerms, _ := strings.Cut(confluence.BuildCQL(cjk, nil, true), `text ~ "`)
+	if strings.TrimSuffix(cjkTerms, `"`) != cjk {
+		t.Error("a non-ASCII query did not reach the server whole")
 	}
 	// AN EMPTY RESULT IS A REFUSAL, and the caller skips the request.
 	if confluence.BuildCQL("deploy", nil, false) != "" {
