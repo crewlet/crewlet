@@ -93,7 +93,7 @@ flowchart TD
     subgraph enginefail["Engine-driven failure (stall / max-iter / exception / LLM down)"]
         direction TB
         E["TurnGuardBreach (or LLMUnavailable)"]
-        F["Dashboard shows agent as 'afk' with a cause-specific quip.<br/>Founder investigates via the events panel."]
+        F["The dashboard reports the seat as AFK with its cause,<br/>first in the overview's attention queue.<br/>The founder follows it to the seat, the turn, or the log."]
         E --> F
     end
 ```

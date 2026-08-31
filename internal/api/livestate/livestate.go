@@ -98,13 +98,17 @@ const (
 )
 
 // eventState maps an event type to the coarse seat state it implies.
+//
+// agent_turn_progress is deliberately ABSENT even though it plainly implies
+// "working": Apply handles that type on its own branch and returns before
+// applyState is ever reached, so an entry here would be read by nothing.
+// applyProgress sets the state itself, after its discard guards.
 var eventState = map[string]string{
 	"agent_spawned":         "idle",
 	"task_started":          "working",
 	"task_completed":        "idle",
 	"task_failed":           "idle",
 	"agent_terminated":      "terminated",
-	"agent_turn_progress":   "working",
 	"agent_phase_started":   "working",
 	"agent_phase_completed": "working",
 	"reflection_completed":  "idle",
@@ -422,7 +426,7 @@ func (s *LiveState) Budget() OrgBudget {
 // Apply updates the projection from one serialized envelope, reporting what
 // moved so the stream service can push the RESULT of applying it rather than
 // the raw event.
-func (s *LiveState) Apply(env Envelope) Change {
+func (s *LiveState) Apply(env *Envelope) Change {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -431,6 +435,17 @@ func (s *LiveState) Apply(env Envelope) Change {
 		payload = map[string]any{}
 	}
 	var change Change
+
+	// STAMPED HERE, so the frame the client is handed carries it and the
+	// snapshot's own rows cannot disagree. It is the same derivation
+	// recordEvent applies below, from the same function — the two used to be
+	// one call and one omission, and the omission was the live half: a failed
+	// turn arriving while somebody watched rendered exactly like a successful
+	// one, then grew its failure mark on the next reload.
+	//
+	// A pointer receiver for the envelope, and that is the whole reason this
+	// takes one: a value copy would be stamped and thrown away.
+	env.Failed = types.Failed(env.Type, flag(payload, "failed"), false)
 
 	// The live token meters. Stream-only for the same reason the in-flight
 	// call is, and one stronger: these figures describe ONE engine run, so
@@ -443,7 +458,7 @@ func (s *LiveState) Apply(env Envelope) Change {
 	// The in-flight call is stream-only: update it, but never let it into
 	// the persisted-event buffer.
 	if env.Type == "agent_turn_progress" {
-		if role := s.applyProgress(env, payload); role != "" {
+		if role := s.applyProgress(*env, payload); role != "" {
 			change.agentMoved(role)
 		}
 		return change
@@ -459,13 +474,13 @@ func (s *LiveState) Apply(env Envelope) Change {
 	// Detached sandbox lifecycle, then stop: these do not drive the seat
 	// state machine below.
 	if _, ok := sandboxEvents[env.Type]; ok {
-		s.applySandbox(env, payload)
+		s.applySandbox(*env, payload)
 		change.Sandboxes = true
 		return change
 	}
 
 	if env.Type == "agent_phase_completed" {
-		change.Tokens = s.foldSpend(env, payload)
+		change.Tokens = s.foldSpend(*env, payload)
 	}
 
 	role := str(payload, "role", "agent_role")
@@ -478,10 +493,10 @@ func (s *LiveState) Apply(env Envelope) Change {
 	}
 
 	if env.Type == "agent_turn_completed" {
-		s.addTurnTokens(agent, env, payload)
+		s.addTurnTokens(agent, *env, payload)
 		change.agentMoved(role)
 	}
-	if s.applyState(agent, env, payload) {
+	if s.applyState(agent, *env, payload) {
 		change.agentMoved(role)
 	}
 	return change
@@ -563,7 +578,17 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		agent.lastError = nil
 		agent.currentPhase = str(payload, "phase")
 		agent.currentIteration = num(payload, "iteration")
-		agent.liveCall = beginCall(env, payload)
+		// Only if a round of this same call has not already arrived.
+		// phase_started and agent_turn_progress travel on DIFFERENT
+		// subjects, so the opening round can land first; this assignment
+		// used to be unconditional and replaced a call that already had a
+		// model, a response and tool calls with an empty placeholder. The
+		// reorder guard cannot catch it — applyProgress never advances
+		// stateTS — so the check belongs here.
+		if !agent.liveCall.sameCall(str(payload, "turn_id"),
+			str(payload, "phase"), num(payload, "iteration")) {
+			agent.liveCall = beginCall(env, payload)
+		}
 
 	case env.Type == "agent_phase_completed":
 		agent.state = "working"
@@ -625,13 +650,16 @@ func (s *LiveState) ensureAgent(role string) *agentLive {
 	return agent
 }
 
-func (s *LiveState) recordEvent(env Envelope, payload map[string]any) {
+func (s *LiveState) recordEvent(env *Envelope, _ map[string]any) {
 	row := FeedRow{
 		ID: env.ID, Type: env.Type, Timestamp: env.Timestamp,
 		Source: env.Source, Actor: env.Actor, Summary: env.Summary,
 		Category: env.Category, TraceID: env.TraceID, SpanID: env.SpanID,
 		ParentSpanID: env.ParentSpanID, Topic: env.Topic,
-		Failed: types.Failed(env.Type, flag(payload, "failed"), false),
+		// Read off the envelope Apply just stamped, rather than derived a
+		// second time: one derivation is what keeps the live row and the
+		// hydrated one agreeing about the same event.
+		Failed: env.Failed,
 	}
 	s.feed = append(s.feed, row)
 	if len(s.feed) > s.feedLimit {

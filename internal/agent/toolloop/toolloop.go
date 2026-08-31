@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 
@@ -107,6 +108,30 @@ type Execution struct {
 	Failed bool
 }
 
+// Narration is one round's model turn — what it reasoned and what it said —
+// KEPT ATTACHED TO ITS ROUND.
+//
+// [Result.Text] joins every round's turn into one string, which is the right
+// shape for a transcript and the wrong one for a reader: the join is lossy
+// about WHICH round said what, so a consumer handed only the blob cannot put a
+// round's thinking next to the tools that thinking asked for. It also can only
+// be un-joined by guessing — the parts are separated by a blank line, and
+// prose contains blank lines — and the reasoning of every round after the
+// first ends up rendered as though it were the phase's answer.
+//
+// So the split is recorded where it is still known, at the point the round's
+// assistant message is appended, rather than reconstructed downstream. The
+// round number is recorded rather than inferred from position for the same
+// reason [Execution] carries one: a resumed phase starts with a conversation
+// that already contains assistant turns, so the k-th message is not round k.
+type Narration struct {
+	Round int
+	// Reasoning is the model's thinking, when it emitted any separately.
+	Reasoning string
+	// Content is the visible prose of that turn.
+	Content string
+}
+
 // SpendOutcome is the shared counter's answer to a spend.
 //
 // It carries the REFUSING SCOPE rather than just a boolean, because the
@@ -163,6 +188,7 @@ type Progress struct {
 	mu           sync.Mutex
 	messages     []llm.Message
 	executions   []Execution
+	narration    []Narration
 	inputTokens  int
 	outputTokens int
 	roundsUsed   int
@@ -182,17 +208,19 @@ func (p *Progress) Snapshot() Result {
 		InputTokens:  p.inputTokens,
 		OutputTokens: p.outputTokens,
 		Executions:   append([]Execution(nil), p.executions...),
+		Narration:    append([]Narration(nil), p.narration...),
 		RoundsUsed:   p.roundsUsed,
 		Model:        p.model,
 		Messages:     append([]llm.Message(nil), p.messages...),
 	}
 }
 
-func (p *Progress) record(msgs []llm.Message, execs []Execution, in, out, rounds int, model string) {
+func (p *Progress) record(msgs []llm.Message, execs []Execution, narr []Narration, in, out, rounds int, model string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.messages = append([]llm.Message(nil), msgs...)
 	p.executions = append([]Execution(nil), execs...)
+	p.narration = append([]Narration(nil), narr...)
 	p.inputTokens, p.outputTokens = in, out
 	p.roundsUsed, p.model = rounds, model
 }
@@ -205,6 +233,19 @@ type Result struct {
 	Executions   []Execution
 	RoundsUsed   int
 	Model        string
+
+	// Narration is per-round what Text is in aggregate. Both are published:
+	// Text is what every existing consumer and every already-stored event
+	// reads, and the envelope evolves additive-only.
+	Narration []Narration
+
+	// Partial is the round being written RIGHT NOW, present only on a live
+	// snapshot and never on a finished Result. It is deliberately separate
+	// from Narration: a consumer must be able to tell text that is still
+	// arriving from text the model has committed to, and appending it to
+	// Narration would make an in-flight fragment indistinguishable from a
+	// finished round in every downstream reader.
+	Partial *Partial
 
 	// Messages is the conversation as the loop left it, including
 	// everything it appended.
@@ -223,6 +264,40 @@ type Result struct {
 	PendingToolCallID string
 	PendingToolName   string
 	SuspendPayload    map[string]any
+}
+
+// partialInterval bounds how often a round in flight republishes.
+//
+// 200ms. Below the ~250ms at which appearing text stops reading as live, and
+// it caps a running seat at five frames a second against a socket hub that
+// broadcasts one frame per progress event, throttles nothing itself, and
+// drops the oldest once 512 are queued for a client. A frame per token would
+// spend that entire queue on a single paragraph and evict the seat's own
+// earlier rounds on the way.
+const partialInterval = 200 * time.Millisecond
+
+// Partial is a round in the middle of being written.
+//
+// Abandoned holds attempts that a provider or credential gave up on partway
+// through, oldest first. They are KEPT rather than erased because a reader has
+// already seen that text: making it vanish reads as a glitch, and "this model
+// wrote four hundred characters and then died" is exactly what an operator
+// debugging a flaky provider needs. They live only as long as the round does —
+// once it completes, the authoritative narration replaces the whole thing.
+type Partial struct {
+	Round     int
+	Reasoning string
+	Content   string
+	Abandoned []Narration
+}
+
+func (p *Partial) clone() *Partial {
+	if p == nil {
+		return nil
+	}
+	dup := *p
+	dup.Abandoned = append([]Narration(nil), p.Abandoned...)
+	return &dup
 }
 
 // Config is one loop run.
@@ -266,6 +341,22 @@ type Config struct {
 	// unwrapped so the caller can recognise its own sentinel.
 	Fence func() error
 
+	// PartialInterval bounds how often a round in flight republishes.
+	// Zero takes [partialInterval]; a caller sets it only to make the
+	// coalescing deterministic, which is the one honest reason to vary it.
+	PartialInterval time.Duration
+
+	// StreamPartials asks the provider to stream, so a round's text reaches
+	// OnProgress WHILE it is being written rather than only once it is
+	// finished. Off leaves the provider call unary and unchanged.
+	//
+	// A round used to publish exactly twice — after the model answered, and
+	// after its tools ran — so a phase composing a long reasoning block sat
+	// visibly frozen for the whole provider call. This does not change what
+	// a round MEANS: the partial is a view of a call in progress, and the
+	// authoritative narration still comes from the completed round.
+	StreamPartials bool
+
 	// OnProgress receives the live view twice per round: once the model
 	// has spoken and again once its tools have returned. Failures are the
 	// caller's business — telemetry must never fail a phase — so this
@@ -306,17 +397,22 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 
 	msgs := append([]llm.Message(nil), cfg.Messages...)
 	var execs []Execution
+	var narration []Narration
 	var inTokens, outTokens int
 	var model string
+	// served distinguishes the model a COMPLETION named from the configured
+	// placeholder a streamed round shows before one exists.
+	var served bool
 	terminators := make(map[string]struct{}, len(cfg.TerminateAfter))
 	for _, name := range cfg.TerminateAfter {
 		terminators[name] = struct{}{}
 	}
 	forcedRetries := 0
 
+	var partial *Partial
 	publish := func(rounds int) {
 		if cfg.Progress != nil {
-			cfg.Progress.record(msgs, execs, inTokens, outTokens, rounds, model)
+			cfg.Progress.record(msgs, execs, narration, inTokens, outTokens, rounds, model)
 		}
 		if cfg.OnProgress != nil {
 			cfg.OnProgress(Result{
@@ -324,6 +420,8 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				InputTokens:  inTokens,
 				OutputTokens: outTokens,
 				Executions:   append([]Execution(nil), execs...),
+				Narration:    append([]Narration(nil), narration...),
+				Partial:      partial.clone(),
 				RoundsUsed:   rounds,
 				Model:        model,
 				Messages:     append([]llm.Message(nil), msgs...),
@@ -367,10 +465,73 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		roundCtx, roundSpan := tracing.Start(ctx, "agent.toolloop", "llm.round",
 			attribute.String("crewlet.phase", cfg.Surface.Phase()),
 			attribute.Int("crewlet.round", roundsUsed))
+		// The CONFIGURED identity, as a placeholder, so a streamed round
+		// is not attributed to no model at all. Streaming publishes while
+		// the call is still open, and `model` is only latched from the
+		// completion once it returns — so every frame of a streamed round
+		// reported an empty model, and a running row showed a dash where
+		// its model should be. Overwritten below by the model that
+		// actually served the call, which is the billable fact.
+		if model == "" {
+			model = cfg.Provider.Model()
+		}
+
+		// One partial per round, replaced by the round's real narration
+		// the moment the model finishes.
+		var onDelta func(llm.Delta)
+		every := cfg.PartialInterval
+		if every <= 0 {
+			every = partialInterval
+		}
+		if cfg.StreamPartials && cfg.OnProgress != nil {
+			partial = &Partial{Round: roundsUsed}
+			// ZERO, so the FIRST fragment publishes immediately. Seeding
+			// this to now swallows it for a whole interval, which means a
+			// short round shows nothing at all and a long one begins with
+			// a fifth of a second of apparent stillness — the exact
+			// symptom streaming exists to remove.
+			var last time.Time
+			onDelta = func(d llm.Delta) {
+				if d.Restart {
+					// The attempt so far was abandoned. Kept rather than
+					// erased — see [Partial] — and the replacement starts
+					// from empty so two half-answers never concatenate.
+					if partial.Content != "" || partial.Reasoning != "" {
+						partial.Abandoned = append(partial.Abandoned, Narration{
+							Round:     partial.Round,
+							Reasoning: partial.Reasoning,
+							Content:   partial.Content,
+						})
+					}
+					partial.Reasoning, partial.Content = "", ""
+					publish(roundsUsed)
+					last = time.Now()
+					return
+				}
+				partial.Reasoning += d.Reasoning
+				partial.Content += d.Content
+				// COALESCED on the clock, not on every fragment. The
+				// socket hub broadcasts one frame per progress event with
+				// no throttling of its own and drops the oldest past 512
+				// queued, so a frame per token would spend a running
+				// seat's whole queue on one paragraph. See partialInterval.
+				//
+				// A tail shorter than one interval is not published, and
+				// nothing is lost by that: the round commits immediately
+				// after and its narration carries the whole text.
+				if time.Since(last) < every {
+					return
+				}
+				last = time.Now()
+				publish(roundsUsed)
+			}
+		}
+
 		completion, err := cfg.Provider.Complete(roundCtx, llm.Request{
 			Messages:   msgs,
 			Tools:      tools,
 			ToolChoice: choice,
+			OnDelta:    onDelta,
 		})
 		if err != nil {
 			tracing.Fail(roundSpan, err)
@@ -384,12 +545,17 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			attribute.Int("crewlet.cache_read_tokens", completion.CacheRead),
 			attribute.Int("crewlet.tool_calls", len(completion.ToolCalls)))
 		roundSpan.End()
-		if model == "" {
+		if !served && completion.Model != "" {
 			// The completion names the model that actually served this
 			// round, which is what the per-model token breakdown is built
 			// from; the provider's own name is its CONFIGURED identity and
 			// only stands in for a backend that filled nothing in.
-			model = completion.Model
+			//
+			// It OVERRIDES the placeholder set before the call, and latches
+			// on the first completion that names one — so a streamed round
+			// has something to show while it writes, and the billable fact
+			// still wins the moment it exists.
+			model, served = completion.Model, true
 		}
 		if model == "" {
 			model = cfg.Provider.Model()
@@ -412,6 +578,26 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			ThinkingBlocks:   completion.ThinkingBlocks,
 			ToolCalls:        completion.ToolCalls,
 		})
+		// Recorded HERE, beside the message it describes, because this is
+		// the last frame that knows which round the turn belongs to. The
+		// round is `roundsUsed` — ONE-BASED, matching [Execution.Round] — so a
+		// round's narration and the calls it asked for carry the same number
+		// and a reader can put them together without a second rule. (Note it
+		// does NOT match AgentTurnProgress.RoundNum, which is zero-based and
+		// is a different field about a different thing: how many rounds have
+		// happened, not which one this is.)
+		// The round is committed: its narration is authoritative now, and
+		// the partial (with any abandoned attempts) goes. Cleared BEFORE
+		// the publish below so the live view never shows a finished round
+		// and a fragment of the same round at once.
+		partial = nil
+		if narrated(completion.ReasoningContent, completion.Content) {
+			narration = append(narration, Narration{
+				Round:     roundsUsed,
+				Reasoning: strings.TrimSpace(completion.ReasoningContent),
+				Content:   strings.TrimSpace(completion.Content),
+			})
+		}
 
 		// The model has spoken: publish before the tools run, so its
 		// reasoning and prose reach the live view now rather than after
@@ -450,6 +636,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 				InputTokens:       inTokens,
 				OutputTokens:      outTokens,
 				Executions:        execs,
+				Narration:         narration,
 				RoundsUsed:        roundsUsed,
 				Model:             model,
 				Messages:          msgs,
@@ -471,6 +658,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		InputTokens:     inTokens,
 		OutputTokens:    outTokens,
 		Executions:      execs,
+		Narration:       narration,
 		RoundsUsed:      roundsUsed,
 		Model:           model,
 		Messages:        msgs,
@@ -608,6 +796,13 @@ func forcedToolCorrective(tools []llm.ToolDef) string {
 // the same text — they were assembled separately once, so a reasoning model
 // streamed its tool calls against an empty response and its thinking appeared
 // only when the phase ended.
+// narrated reports whether a round's turn said anything worth recording. A
+// round that only emitted tool calls has no narration, and an empty entry
+// would render as a blank paragraph above its own tools.
+func narrated(reasoning, content string) bool {
+	return strings.TrimSpace(reasoning) != "" || strings.TrimSpace(content) != ""
+}
+
 func assistantText(msgs []llm.Message) string {
 	var parts []string
 	for _, m := range msgs {

@@ -273,7 +273,7 @@ Two consequences worth stating plainly:
 - **`seat_placement_is_process_local`** — `coordination.type: local`, so
   the leases never left this process. Every node thinks it owns everything.
 - **`/health`** carries this node's seats, its in-flight count and its
-  config posture; the dashboard's **Fleet** view puts every node's
+  config posture; the dashboard's **Fleet** screen puts every node's
   side by side, with seat ownership and per-node config epoch.
 
 A node whose applied config epoch lags the fleet's is not an error on its

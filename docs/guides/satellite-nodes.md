@@ -148,7 +148,7 @@ crewlet run --roles seats
 
 ## Verify it landed
 
-The **Fleet** view in the dashboard is the direct answer: it reads the
+The **Fleet** screen in the dashboard is the direct answer: it reads the
 lease table, so it gives the same picture from whichever node you happen
 to reach. Look for the satellite in *Nodes* with its roles and labels,
 and for the pinned handle in *Seat ownership* against that node.

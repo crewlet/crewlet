@@ -113,14 +113,20 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 	if got := registryOver(t, queries.Sources{State: state}).Names(); len(got) != 2 {
 		t.Errorf("projection questions = %v", got)
 	}
-	if got := registryOver(t, queries.Sources{Events: db.Events()}).Names(); len(got) != 3 {
+	// event, events, trace, turn, phases — five. `turn` is what made
+	// "everything that happened in this unit of work" askable at all (see
+	// migration 0014), and `phases` is the company-wide phase record with its
+	// payloads, which the event listing deliberately cannot serve.
+	if got := registryOver(t, queries.Sources{Events: db.Events()}).Names(); len(got) != 5 {
 		t.Errorf("event-log questions = %v", got)
 	}
 	full := registryOver(t, queries.Sources{
 		State: state, Events: db.Events(),
 		Health: func() any { return map[string]any{"status": "ok"} },
 	})
-	for _, want := range []string{"agent", "event", "events", "stream", "tokens", "trace"} {
+	for _, want := range []string{
+		"agent", "event", "events", "phases", "stream", "tokens", "trace", "turn",
+	} {
 		found := false
 		for _, got := range full.Names() {
 			if got == want {
@@ -138,7 +144,7 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 func TestAgentAnswersOneSeatsLiveState(t *testing.T) {
 	t.Parallel()
 	state := livestate.New()
-	state.Apply(livestate.Envelope{
+	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "task_started", Timestamp: "2026-06-14T12:00:00Z",
 		Category: "task", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
 	})
@@ -173,7 +179,7 @@ func TestAgentNeedsARole(t *testing.T) {
 func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	t.Parallel()
 	state := livestate.New()
-	state.Apply(livestate.Envelope{
+	state.Apply(&livestate.Envelope{
 		ID: "p1", Type: "agent_phase_completed", Timestamp: "2026-06-14T12:00:00Z",
 		Category: "agent", Payload: map[string]any{
 			"role": "Lead", "phase": "plan", "total_tokens": 12,
@@ -660,25 +666,38 @@ func TestAnAgentAnswerCarriesItsFinishedCalls(t *testing.T) {
 	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
 	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
 
-	history, _ := got["llm_history"].([]map[string]any)
+	history, _ := got["llm_history"].([]store.EventRecord)
 	if len(history) != 2 {
 		t.Fatalf("llm_history = %v, want both finished phases", got["llm_history"])
 	}
-	// The PAYLOAD's fields, under the names the client reads. They are the
-	// same names the live row carries, which is why one renderer draws
-	// both.
+	// EVENT RECORDS, payload nested — the same shape `event`, `trace` and
+	// `turn` answer with. They used to be the payload flattened with an id
+	// and a timestamp merged in, so one client carried two readers for one
+	// kind of thing and a field added to the envelope reached three screens
+	// and not the fourth.
+	if len(history[0].Payload) == 0 {
+		t.Errorf("history row carries no payload: %+v", history[0])
+	}
+	var body map[string]any
+	if err := json.Unmarshal(history[0].Payload, &body); err != nil {
+		t.Fatalf("history payload: %v", err)
+	}
 	for _, key := range []string{"turn_id", "phase", "model", "total_tokens", "response"} {
-		if _, present := history[0][key]; !present {
-			t.Errorf("history row has no %q: %v", key, history[0])
+		if _, present := body[key]; !present {
+			t.Errorf("history payload has no %q: %v", key, body)
 		}
 	}
-	// And the envelope's own two, which the payload cannot carry.
-	if history[0]["timestamp"] == nil || history[0]["timestamp"] == "" {
-		t.Errorf("history row has no timestamp: %v", history[0])
+	if history[0].Time.IsZero() {
+		t.Errorf("history row has no timestamp: %+v", history[0])
 	}
 	// Newest first, which is the order the list renders in.
-	if history[0]["phase"] != "execute" {
-		t.Errorf("first row is %v, want the newest", history[0]["phase"])
+	if body["phase"] != "execute" {
+		t.Errorf("first row is %v, want the newest", body["phase"])
+	}
+	// A page shorter than the cap is the end of the record, and says so by
+	// offering no cursor — a client that got one would page forever.
+	if got["next"] != "" {
+		t.Errorf("next = %v, want no cursor on a short page", got["next"])
 	}
 }
 
@@ -692,7 +711,7 @@ func TestAgentHistoryResolvesFromTheHandle(t *testing.T) {
 
 	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
 	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
-	if history, _ := got["llm_history"].([]map[string]any); len(history) != 2 {
+	if history, _ := got["llm_history"].([]store.EventRecord); len(history) != 2 {
 		t.Fatalf("asking by role found %v", got["llm_history"])
 	}
 }
@@ -708,7 +727,7 @@ func TestAnAgentAnswerSurvivesWithNoEventLog(t *testing.T) {
 	if got["role"] != "Lead" {
 		t.Fatalf("answer = %v", got)
 	}
-	history, ok := got["llm_history"].([]map[string]any)
+	history, ok := got["llm_history"].([]store.EventRecord)
 	if !ok || len(history) != 0 {
 		t.Errorf("llm_history = %v, want an empty list rather than a missing key",
 			got["llm_history"])

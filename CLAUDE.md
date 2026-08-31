@@ -122,12 +122,22 @@ internal/             # Everything else. No package here is importable from
                       #   outside the module, which is deliberate: the engine
                       #   has no stable Go API to keep, only a CLI, a config
                       #   format and a wire protocol
-static/               # Embedded assets — static/dashboard/ is the zero-build
-                      #   ES-module dashboard, served by internal/api and
-                      #   compiled into the binary via embed
-tests/dashboard/js/   # The dashboard's own suites. JavaScript, so they live
-                      #   outside the Go tree and run under plain `node`,
-                      #   driven from internal/api. No package.json, no runner
+dashboard/            # The dashboard's SOURCE: React 19 + TypeScript, built by
+                      #   Vite. `make dashboard` builds it into static/dashboard
+                      #   and THAT IS COMMITTED — `go build ./...` and
+                      #   `go install …@latest` must work with no Node on the
+                      #   machine, and an embed directive cannot run a bundler.
+                      #   CI rebuilds and diffs the tree (`make dashboard-check`),
+                      #   the same idiom as `go mod tidy -diff`
+static/               # Embedded assets — static/dashboard/ is that build
+                      #   output, served by internal/api and compiled into the
+                      #   binary via embed. NEVER hand-edited
+tests/dashboard/js/   # The e2e client replay only: internal/e2e captures a real
+                      #   company's socket frames and pushes them through the
+                      #   dashboard's own protocol module (the second build
+                      #   target, static/dashboard/protocol.js) under plain
+                      #   `node`. The dashboard's OWN suites are Vitest, in
+                      #   dashboard/src, run by `make dashboard-test`
 examples/             # The Nimbus example company — a working two-tier config
 docs/                 # Product documentation, published to docs.crewlet.ai
 schema/               # GENERATED JSON Schema for both config tiers. Emitted by

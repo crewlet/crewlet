@@ -428,3 +428,103 @@ func TestConcurrentCallsAreSafe(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// --- streaming across a failover -------------------------------------------
+
+// streamer emits fragments through whichever door it is told to use, then
+// fails or answers. `raw` models a member that calls OnDelta directly rather
+// than going through Send — which the contract permits, and which the chain
+// must not depend on being avoided.
+type streamer struct {
+	model     string
+	fragments []llm.Delta
+	raw       bool
+	err       error
+}
+
+func (s *streamer) Model() string { return s.model }
+
+func (s *streamer) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
+	for _, d := range s.fragments {
+		if s.raw && req.OnDelta != nil {
+			req.OnDelta(d)
+			continue
+		}
+		req.Send(d)
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &llm.Completion{Content: "done", Model: s.model}, nil
+}
+
+// A member that showed text and then died must announce the restart, or the
+// next member's fragments are appended to an abandoned half-answer and two
+// models read as one incoherent paragraph.
+func TestAMemberThatStreamedBeforeFailingAnnouncesTheRestart(t *testing.T) {
+	t.Parallel()
+	first := &streamer{
+		model: "a", fragments: []llm.Delta{{Content: "half an ans"}},
+		err: &llm.Error{Kind: llm.KindServer, Provider: "p", Model: "a", Err: errFake},
+	}
+	c, err := New([]Member{
+		member("a", first),
+		member("b", &streamer{model: "b", fragments: []llm.Delta{{Content: "a whole one"}}}),
+	}, Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var got []llm.Delta
+	if _, err = c.Complete(t.Context(), llm.Request{
+		OnDelta: func(d llm.Delta) { got = append(got, d) },
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	var restarts int
+	for _, d := range got {
+		if d.Restart {
+			restarts++
+			if d.Model != "b" {
+				t.Errorf("the restart names %q, want the member taking over", d.Model)
+			}
+		}
+	}
+	if restarts != 1 {
+		t.Errorf("restarts = %d, want exactly one — %#v", restarts, got)
+	}
+}
+
+// A member that emitted NOTHING VISIBLE must not cause one. The chain used to
+// forward straight to the caller's callback and mark "streamed" on any
+// fragment at all, so a member that called OnDelta directly with an empty
+// delta — which the contract permits — made the next member announce the
+// restart of an answer nobody had seen.
+func TestAFailoverAfterNoVisibleTextAnnouncesNothing(t *testing.T) {
+	t.Parallel()
+	c, err := New([]Member{
+		member("a", &streamer{
+			model: "a", raw: true, fragments: []llm.Delta{{}},
+			err: &llm.Error{Kind: llm.KindServer, Provider: "p", Model: "a", Err: errFake},
+		}),
+		member("b", &streamer{model: "b", fragments: []llm.Delta{{Content: "hello"}}}),
+	}, Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var got []llm.Delta
+	if _, err = c.Complete(t.Context(), llm.Request{
+		OnDelta: func(d llm.Delta) { got = append(got, d) },
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	for _, d := range got {
+		if d.Restart {
+			t.Errorf("a restart was announced for an answer nobody saw: %#v", got)
+		}
+		if !d.Restart && d.Content == "" && d.Reasoning == "" {
+			t.Errorf("an empty fragment reached the consumer: %#v", got)
+		}
+	}
+}
+
+var errFake = fmt.Errorf("member exploded")

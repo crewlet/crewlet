@@ -443,7 +443,7 @@ The harness lives in:
 | `PlanPrefetchSummary` event | One per turn after the Plan-phase prefetches resolve, recording per-block `hit` (bool) + `bytes` (rendered size) + the `trigger_requires_recon` gate decision. | Published on `crewlet.events.plan_prefetch_summary` once per turn. |
 | `RelevantKnowledgeRefetched` event | Emitted when the [post-Plan re-fetch](#post-plan-re-fetch-thin-triggers) takes its active path (thin trigger + `plan` / `direct`), recording `iteration` / `plan_decision` / `block_bytes` / `selection_count`. | Published on `crewlet.events.relevant_knowledge_refetched`; nothing on non-thin-trigger turns. |
 | `PersistDeciderCompleted.classification` / `ttl_until` | Tier label (`LONG` / `SHORT` / `DOC` / `NOOP`) + TTL on `SHORT` writes | Existing event extended so dashboards can plot the per-agent tier distribution. |
-| `learning_health` SQL view | Per-agent rollup: `total_skills`, `skills_used_at_least_once`, `total_skill_uses`, `most_recent_skill_use`, `avg_uses_per_skill`, `avg_skill_age_days` | Created by `005_skill_use_telemetry.sql`; query directly from psql / a dashboard. |
+| `learning_health` SQL view | Per-agent rollup: `total_skills`, `skills_used_at_least_once`, `total_skill_uses`, `most_recent_skill_use`, `avg_uses_per_skill`, `avg_skill_age_days` | Created by `005_skill_use_telemetry.sql`; query it directly from the store. |
 
 ### Berlot-Attwell threshold
 
@@ -477,7 +477,7 @@ Every telemetry write — `mark_used`, `SkillUsed` publish, `PlanPrefetchSummary
 | `internal/learning/memsync` | Makes that file a cache rather than the only copy: every memory row is published to a compacted changelog on the stream, and a node acquiring a seat replays it into its own store before the mailbox attaches. Without it a seat that moved node would run its next turn having forgotten everything. See [A seat's memory follows it](seat-ownership.md#a-seats-memory-follows-it). |
 | `internal/learning` | The reflect dispatcher and its per-turn workers (`PersistDecider`, `Episodist`, `Profiler`, `SkillUse`, `Synthesizer`, `Refiner`), the background passes behind `Background` (episode `Lifecycle`, the skill curator, clustered synthesis, cross-agent `Promoter`), `Skills` for synthesis and refinement, `Diary`, the onboarding marker store, and the relevant-knowledge prefetch. |
 | `internal/config` | `learning:` block — per-role enable flag, reflection budget, promotion thresholds, lifecycle knobs. See [Configuration](../getting-started/configuration.md). |
-| `internal/api` | `GET /agents/{id}/memory` aggregates personal memories, episodes, counterparty profiles, and synthesized skills for the dashboard's per-agent memory view. See [API endpoints](../reference/api-endpoints.md#get-agentsidmemory). |
+| `internal/api` | `GET /agents/{id}/memory` (and the `agent_memory` query) aggregates the diary, the episodes, the synthesized skills and the counterparty profiles for the seat page's **Memory** tab, projected onto the wire at the API boundary rather than marshalled from the domain types. See [API endpoints](../reference/api-endpoints.md#get-agentsidmemory). |
 
 ---
 

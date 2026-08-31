@@ -162,7 +162,12 @@ func (s *Service) State() *livestate.LiveState { return s.state }
 // derives it; everything else a dashboard shows is a projection, and shipping
 // the projection is what stops each tab keeping its own.
 func (s *Service) Ingest(env livestate.Envelope) {
-	change := s.state.Apply(env)
+	// A pointer, so the `failed` mark Apply derives is on the frame that
+	// goes out below. Without it the live row and the snapshot's own row
+	// disagreed about the same event: a turn that failed while somebody was
+	// watching rendered exactly like one that succeeded, and only grew its
+	// failure mark on the next reload.
+	change := s.state.Apply(&env)
 	now := s.now()
 
 	// The event first. A client dedupes by event id, so a feed row that

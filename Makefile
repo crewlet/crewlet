@@ -8,13 +8,21 @@
 # until the pull request goes red. Nothing asserts the two agree -- keep them
 # in step by hand, and change both in the same commit.
 #
-# The second thing this file is for is the suites that need something the
-# machine may not have. `node` is absent by default and the affected suites
-# SKIP without it — silently, with the run still green. So the targets that
-# need it FAIL saying what to install, which is the same posture CI takes
+# The second thing this file is for is the parts that need something the
+# machine may not have. The dashboard is a React + TypeScript application built
+# by Vite, so its suites and its build need node AND npm; the targets that need
+# them FAIL saying what to install, which is the same posture CI takes
 # (CONTRIBUTING.md, "A skip is not a pass"). Every queue backend certifies
 # itself with no external service: the JetStream suite starts an embedded
 # broker per test.
+#
+# THE BUILT DASHBOARD IS COMMITTED, and that is deliberate rather than lazy:
+# `go build ./...` and `go install …@latest` must work on a clean checkout with
+# no node on the machine, and an embed directive cannot run a bundler. So
+# `make dashboard` is NOT a prerequisite of `build` — it is a target you run
+# when you have changed dashboard/, and `make dashboard-check` is the gate that
+# fails when the committed tree does not match its source. Same idiom as
+# `go mod tidy -diff` and the generated schema/.
 #
 # What is deliberately NOT here: running a company. `crewlet run`,
 # `crewlet validate` and `crewlet config import` act on an operator's YAML in
@@ -60,7 +68,9 @@ COMPANY ?=
 .DEFAULT_GOAL := help
 
 .PHONY: help build crewlet install fmt tidy schema \
+        dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check vet lint test test-norace test-cross test-e2e \
+        require-npm \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
         snapshot clean require-node
@@ -96,10 +106,54 @@ tidy: ## tidy go.mod / go.sum
 clean: ## remove the build output (./crewlet and dist/)
 	rm -f $(BIN)
 	rm -rf dist
+	rm -rf $(UI)/node_modules
+
+##@ Dashboard
+
+# The dashboard's source lives here; its BUILD OUTPUT is committed to
+# static/dashboard, which package static embeds.
+UI := dashboard
+
+# npm ci rather than npm install: the lockfile is the pin, and `install` is
+# allowed to move it. A build whose dependency versions drift is a build whose
+# committed output cannot be reproduced, which is the whole thing
+# dashboard-check depends on.
+$(UI)/node_modules: $(UI)/package-lock.json | require-npm
+	cd $(UI) && npm ci
+	@touch $(UI)/node_modules
+
+dashboard: $(UI)/node_modules ## build the dashboard into static/dashboard (commit the result)
+	cd $(UI) && npm run build
+
+dashboard-dev: $(UI)/node_modules ## run the dashboard dev server against a local engine on :8000
+	cd $(UI) && npm run dev
+
+dashboard-test: $(UI)/node_modules ## the dashboard's own suites (ci: dashboard)
+	cd $(UI) && npm run typecheck && npm test
+
+dashboard-lint: $(UI)/node_modules ## check the dashboard's formatting (ci: dashboard)
+	cd $(UI) && npm run format:check
+
+# THE DRIFT GATE. The committed bundle has to be what this source builds, and
+# nothing else can tell you when it is not: a stale bundle compiles, embeds,
+# serves and passes every Go test — it just runs code nobody wrote.
+#
+# Rebuild, then diff. `git diff --exit-code` prints the drift and fails; it does
+# not repair it, for the same reason `go mod tidy -diff` does not: a gate that
+# rewrites the tree it is judging cannot be trusted about what was committed.
+dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dashboard/ builds (ci: dashboard)
+	cd $(UI) && npm run build
+	@git diff --exit-code -- static/dashboard || { \
+	  { echo; \
+	    echo "static/dashboard is not what dashboard/ builds."; \
+	    echo "The diff above is what a rebuild produced."; \
+	    echo "run: make dashboard && git add static/dashboard"; } >&2; \
+	  exit 1; \
+	}
 
 ##@ Gates — `make check` is all of them
 
-check: fmt-check tidy-check vet lint build test test-cross ## every gate CI runs on a PR
+check: fmt-check tidy-check vet lint build test test-cross dashboard-check dashboard-test ## every gate CI runs on a PR
 	@echo
 	@echo "All local gates passed. One thing this did NOT cover, because it"
 	@echo "needs a service CI starts for itself:"
@@ -213,17 +267,27 @@ test-cross: ## cross-compile every release target (ci: cross-compile the release
 test-e2e: require-node ## the end-to-end gates, verbose (ci: end-to-end gates)
 	$(GOTEST) ./internal/e2e/... -v
 
-# The dashboard's suites run under plain `node`, driven from internal/api, and
-# they SKIP without one — the dashboard has no Go code of its own, so a green
-# run with no node has left a whole subsystem untested. ci.yml installs node
-# rather than tolerating that; here, saying so is the best we can do.
-require-node: ## fail unless node is on PATH (every suite target needs it)
+# internal/e2e replays a real company's socket frames through the dashboard's
+# own protocol module under plain `node`, and it SKIPS without one — so a green
+# run with no node has left the client's half of the wire protocol unchecked.
+# ci.yml installs node rather than tolerating that; here, saying so is the best
+# we can do.
+require-npm: ## fail unless npm is on PATH (every dashboard target needs it)
+	@command -v npm >/dev/null 2>&1 || { \
+	  echo "npm is not on PATH, and the dashboard is built with it."; \
+	  echo "  static/dashboard is COMMITTED, so building the engine needs"; \
+	  echo "  neither node nor npm — but changing dashboard/ does. Install a"; \
+	  echo "  current node (npm ships with it) and re-run."; \
+	  exit 1; \
+	} >&2
+
+require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 	@command -v node >/dev/null 2>&1 || { \
-	  echo "node is not on PATH, and the dashboard's suites need it."; \
-	  echo "  They run under plain node (no package.json, no runner) and SKIP"; \
-	  echo "  without one, so the run would go green having tested none of"; \
-	  echo "  static/dashboard/. Install any node with ES modules, as ci.yml"; \
-	  echo "  does, and re-run."; \
+	  echo "node is not on PATH, and internal/e2e's client replay needs it."; \
+	  echo "  It runs the dashboard's own protocol module over the frames a"; \
+	  echo "  real engine produced, and SKIPS without node — so the run would"; \
+	  echo "  go green having checked neither half of the wire protocol."; \
+	  echo "  Install any current node, as ci.yml does, and re-run."; \
 	  exit 1; \
 	} >&2
 

@@ -215,6 +215,21 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		env:     buildEnv(p.profile, checkout, p.env, p.auth),
 		timeout: p.timeout,
 	}
+	// Streamed only for a JSONL profile, where each event's text IS a
+	// fragment of the answer. The other two output modes are extracted
+	// from the WHOLE of stdout — a fenced block, one JSON document — so
+	// there is no faithful incremental view of them, and forwarding raw
+	// lines would stream a banner and a half-written fence as though they
+	// were what the model said.
+	if req.Streaming() && p.profile.output() == OutputJSONL {
+		in.onLine = func(line string) {
+			doc, ok := decodeObject(strings.TrimSpace(line))
+			if !ok {
+				return
+			}
+			req.Send(llm.Delta{Content: firstString(doc, p.profile.TextPaths)})
+		}
+	}
 	if p.profile.mode() == PromptArgv {
 		in.args = append(in.args, prompt)
 	} else {

@@ -25,6 +25,17 @@ type Envelope struct {
 	ParentSpanID string         `json:"parent_span_id"`
 	Topic        string         `json:"topic"`
 	Payload      map[string]any `json:"payload,omitempty"`
+
+	// Failed says whether the work this event reports failed.
+	//
+	// It carries the SAME derivation FeedRow gets, from the same function,
+	// because the two halves of one list must agree. They did not: the
+	// snapshot's rows carried it and the live `event` push did not, so a
+	// failed turn arriving while a reader watched rendered identically to a
+	// successful one — and then grew its failure mark on the next reload,
+	// when the same row came back through the store. Set by Apply, not by a
+	// producer, so it cannot be forgotten at a call site.
+	Failed bool `json:"failed"`
 }
 
 // FeedRow is one payload-free row of the activity feed.
@@ -89,6 +100,14 @@ type LiveCall struct {
 	TotalTokens  int `json:"total_tokens"`
 
 	ToolExecutions []any `json:"tool_executions"`
+	// RoundNarration is what the model said in each round, so the live view
+	// can put a round's thinking beside the calls it asked for instead of
+	// re-splitting the joined Response and getting it wrong.
+	RoundNarration []any `json:"round_narration"`
+	// PartialRound is the round being written right now, absent when no
+	// round is open. Never merged into RoundNarration: a reader has to be
+	// able to tell arriving text from committed text.
+	PartialRound map[string]any `json:"partial_round,omitempty"`
 
 	RoundNum   int  `json:"round_num"`
 	Rounds     int  `json:"rounds"`
@@ -101,6 +120,12 @@ type LiveCall struct {
 	Error  *ErrorInfo `json:"error,omitempty"`
 
 	UpdatedAt string `json:"updated_at"`
+	// StartedAt is when this call began, and it NEVER moves. UpdatedAt
+	// advances on every published round — several times a second while a
+	// round streams — so "how long has this been running" measured against
+	// it is always about zero. They are different questions and need
+	// different fields.
+	StartedAt string `json:"started_at"`
 }
 
 // Meter is a seat's or the org's live token budget.

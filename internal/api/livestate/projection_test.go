@@ -395,7 +395,7 @@ func TestNumbersSurviveTheWireTheyActuallyArriveOn(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	s := livestate.New()
-	s.Apply(e)
+	s.Apply(&e)
 
 	got := overlayOf(t, s, "Lead")
 	if got.InputTokens != 12 || got.TotalTokens != 15 {
@@ -438,5 +438,45 @@ func TestAnAlternateFieldNameIsUsedOnlyWhenTheFirstIsEmpty(t *testing.T) {
 	}
 	if s2.AgentOverlay("Fallback") != nil {
 		t.Error("both names created a seat")
+	}
+}
+
+// THE LIVE ROW AND THE HYDRATED ROW AGREE ABOUT THE SAME EVENT.
+//
+// `failed` is derived once, in Apply, and stamped onto the envelope the client
+// is handed as well as onto the feed row the snapshot carries. It used to be
+// derived only for the feed row: the live `event` push had no such field, so a
+// turn that failed while somebody was watching rendered exactly like one that
+// succeeded — and then grew its failure mark on the next reload, when the same
+// row came back through the snapshot.
+func TestAFailureIsStampedOnTheFrameAndOnTheFeedRow(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+
+	e := &livestate.Envelope{
+		ID: "e1", Type: "agent_phase_completed", Timestamp: defaultTS,
+		Category: "system", Actor: "Lead",
+		Payload: map[string]any{"role": "Lead", "phase": "plan", "failed": true},
+	}
+	s.Apply(e)
+
+	if !e.Failed {
+		t.Error("the frame the client is handed carries no failure mark")
+	}
+	feed := s.RecentEvents(0)
+	if len(feed) != 1 || !feed[0].Failed {
+		t.Fatalf("the feed row disagrees with the frame: %+v", feed)
+	}
+
+	// And an ordinary event is marked on neither, so the mark still means
+	// something.
+	ok := &livestate.Envelope{
+		ID: "e2", Type: "agent_phase_completed", Timestamp: defaultTS,
+		Category: "system", Actor: "Lead",
+		Payload: map[string]any{"role": "Lead", "phase": "plan"},
+	}
+	s.Apply(ok)
+	if ok.Failed {
+		t.Error("an ordinary event is marked failed")
 	}
 }

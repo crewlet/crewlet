@@ -81,6 +81,6 @@ Connecting the external surfaces agents work on:
 
 - **[CLI](reference/cli.md)** — Command reference
 - **[API Endpoints](reference/api-endpoints.md)** — REST API routes and schemas
-- **[Dashboard Design System](reference/dashboard-design.md)** — The dashboard's rooms and its visual system: what each room answers that no other one does, how a seat is coloured by what it is doing rather than by who it is, tokens measured against the worst surface they can land on, the shared panel recipe, the validated categorical hues, and the rules a change has to keep
+- **[Dashboard Design System](reference/dashboard-design.md)** — The dashboard's screens and its visual system: the one rule (colour carries state, never identity), a palette whose every contrast and separation claim is recomputed from the shipped stylesheet in both themes, what each screen answers that no other one does, the four rules that keep a running turn's transcript from moving under the reader, why the built bundle is committed, and the rules a change has to keep
 - **[Environment Variables](reference/environment-variables.md)** — All configuration env vars
 - **[Design Decisions](reference/design-decisions.md)** — Why certain architectural choices were made

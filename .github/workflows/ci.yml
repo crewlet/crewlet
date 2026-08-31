@@ -58,6 +58,51 @@ jobs:
             exit 1
           fi
 
+  # The dashboard is a React + TypeScript application built by Vite. Its own
+  # ~200 assertions run here — the wire protocol, the router's history rules,
+  # the ordering comparators, and the MEASURED contrast of every colour token
+  # over every surface it can land on, in both themes and for protan and deutan
+  # vision. None of that is checkable by looking at the stylesheet, which is
+  # why it is computed from the file that actually ships.
+  #
+  # `dashboard-check` is the load-bearing one. static/dashboard is COMMITTED —
+  # `go build ./...` and `go install …@latest` must work on a clean checkout
+  # with no node, and an embed directive cannot run a bundler — so a bundle
+  # that has drifted from its source compiles, embeds, serves and passes every
+  # Go test while running code nobody wrote. This rebuilds it and diffs, the
+  # same way `go mod tidy -diff` and the generated schema/ are gated.
+  dashboard:
+    name: dashboard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      # `npm ci` rather than `npm install`: the lockfile is the pin, and a
+      # build whose dependency versions drift is a build whose committed output
+      # cannot be reproduced — which is exactly what the drift gate below
+      # depends on.
+      - run: npm ci
+        working-directory: dashboard
+      - run: npm run format:check
+        working-directory: dashboard
+      - run: npm run typecheck
+        working-directory: dashboard
+      - run: npm test
+        working-directory: dashboard
+      - name: the committed bundle is what this source builds
+        run: |
+          npm --prefix dashboard run build
+          if ! git diff --exit-code -- static/dashboard; then
+            echo "::error::static/dashboard is not what dashboard/ builds."
+            echo "The diff above is what a rebuild produced. Run:"
+            echo "  make dashboard && git add static/dashboard"
+            exit 1
+          fi
+
   test:
     name: test (race)
     runs-on: ubuntu-latest
@@ -67,29 +112,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - name: Ensure node is present
-        # Gate G5 runs the dashboard's ~350 JavaScript assertions against the
-        # tree this binary embeds, under plain `node` — no package.json, no
-        # node_modules, no runner. That is the dashboard's ONLY coverage, and
-        # without node the gate skips and the build stays green, so this step
-        # fails rather than warning.
-        #
-        # The version is recorded rather than pinned: the suites use ES
-        # modules and `node:assert` and nothing else, so a major bump is not
-        # a risk worth a setup action; what IS worth having is the number in
-        # the log, so "it broke on the new image" is a diff rather than a
-        # theory.
-        #
-        # Nothing asserts this step exists. What it buys is a readable log
-        # line: the protection is in the suite itself, where nodeBinary()
-        # fails the run outright when CI is set and node is missing, rather
-        # than skipping.
-        run: |
-          command -v node || {
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends nodejs
-          }
-          echo "node $(node --version)"
       # The race detector is not optional here: the engine's whole
       # concurrency model changed from one cooperative event loop to real
       # parallelism, so every "atomic because asyncio" assumption the
@@ -106,16 +128,14 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       # internal/e2e runs a real engine, a real broker and the real API, then
-      # replays the frames its socket produced through the dashboard's own
-      # store.js. Both halves of the wire protocol are checked against each
-      # other here and nowhere else, so a missing node fails rather than skips.
-      - name: Ensure node is present
-        run: |
-          command -v node || {
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends nodejs
-          }
-          echo "node $(node --version)"
+      # replays the frames its socket produced through the dashboard's OWN
+      # protocol module — the built static/dashboard/protocol.js, which is
+      # committed, so nothing has to be built here. Both halves of the wire
+      # protocol are checked against each other here and nowhere else, so a
+      # missing node fails rather than skips.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
       - run: go test ./internal/e2e/... -race -count=1 -v
 
   # THERE IS NO SEPARATE "stores" JOB ANY MORE. One existed, running the store

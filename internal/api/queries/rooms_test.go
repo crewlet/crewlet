@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -29,7 +29,13 @@ func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 
 // dashboardTree is the room source this sweep reads. Relative, because the
 // package it certifies is the one that serves those rooms.
-const dashboardTree = "../../../static/dashboard/js"
+//
+// THE SOURCE, not the build output. It pointed at `static/dashboard/js` — the
+// hand-written bundle the React rewrite deleted — so WalkDir failed, the skip
+// below fired, and both gates in this file certified nothing for the whole of
+// that rewrite while reporting a pass. That is the exact failure they exist to
+// catch, one level up.
+const dashboardTree = "../../../dashboard/src"
 
 // roomQueries scans the dashboard for every query kind a room asks for.
 //
@@ -38,10 +44,21 @@ const dashboardTree = "../../../static/dashboard/js"
 // answers more than it does.
 func roomQueries(t *testing.T) map[string][]string {
 	t.Helper()
-	calls := regexp.MustCompile(`\bquery\("([a-z_]+)"`)
+	// Both call shapes: the `useQuery` hook a screen renders from, and the
+	// direct `socket.query` a pager or an action uses.
+	//
+	// DIGITS IN THE NAME. The class was `[a-z_]+`, which cannot match
+	// `a2a_channels` — so the one kind whose name carries a number was
+	// invisible to a sweep whose whole job is to notice a missing name.
+	// `\s*` after the paren: a formatter wraps a call whose arguments do not
+	// fit, and `useQuery(\n  "config_diff",` is the same call as the one that
+	// fits on a line. Without it the sweep reported a live reader as missing.
+	calls := regexp.MustCompile(`\b(?:useQuery|query)\(\s*"([a-z0-9_]+)"`)
 	out := map[string][]string{}
 	err := filepath.WalkDir(dashboardTree, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".js") {
+		if err != nil || d.IsDir() ||
+			(!strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx")) ||
+			strings.HasSuffix(path, ".test.ts") || strings.HasSuffix(path, ".test.tsx") {
 			return err
 		}
 		source, err := os.ReadFile(path)
@@ -57,7 +74,12 @@ func roomQueries(t *testing.T) map[string][]string {
 		return nil
 	})
 	if err != nil {
-		t.Skipf("the dashboard tree is not in this checkout: %v", err)
+		// FAILS rather than skips. The dashboard source is committed, so it
+		// is always in a checkout — and a skip here is indistinguishable
+		// from a pass, which is how this gate went quiet the last time the
+		// tree moved.
+		t.Fatalf("the dashboard source at %s could not be read, so this gate "+
+			"certifies nothing: %v", dashboardTree, err)
 	}
 	if len(out) == 0 {
 		t.Fatal("the sweep found no query calls at all, so it certifies nothing")
@@ -76,21 +98,28 @@ func everySeam(t *testing.T) queries.Sources {
 	surface, _ := configSurface(t, companyDoc)
 	cfg := company(t)
 	return queries.Sources{
-		State:         &livestate.LiveState{},
-		Events:        &store.EventLog{},
-		Health:        func() any { return nil },
-		Company:       func() *config.Company { return cfg },
-		Coord:         coordmemory.New(),
-		Plane:         coordmemory.NewFleet(),
-		Runs:          fakeRuns{},
-		Conversations: ledgerstore.NewMemoryConversations(),
-		Diary:         &learning.Diary{},
-		Episodes:      &learning.Episodes{},
-		Budget:        coordmemory.NewFleet(),
-		Sandbox:       memorySandbox{},
-		Config:        surface,
+		State:    &livestate.LiveState{},
+		Events:   &store.EventLog{},
+		Health:   func() any { return nil },
+		Company:  func() *config.Company { return cfg },
+		Coord:    coordmemory.New(),
+		Plane:    coordmemory.NewFleet(),
+		Runs:     fakeRuns{},
+		Diary:    &learning.Diary{},
+		Episodes: &learning.Episodes{},
+		Skills:   &learning.Skills{},
+		Channels: fakeChannels{},
+		Budget:   coordmemory.NewFleet(),
+		Sandbox:  memorySandbox{},
+		Config:   surface,
 	}
 }
+
+// fakeChannels is an A2A channel reader with nothing in it: this sweep is
+// about which names exist, not what they answer.
+type fakeChannels struct{}
+
+func (fakeChannels) OpenChannels(context.Context) ([]coord.Channel, error) { return nil, nil }
 
 // EVERY QUERY A ROOM MAKES IS A QUERY THIS SERVER ANSWERS.
 //

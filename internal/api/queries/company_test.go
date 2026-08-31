@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
@@ -290,75 +288,6 @@ func TestASurfaceWithNoSecretReportsNull(t *testing.T) {
 		if !seen {
 			t.Fatalf("%s was not in the answer", kind)
 		}
-	}
-}
-
-// --- conversations ---------------------------------------------------------
-
-func TestConversationsListsASeatsThreads(t *testing.T) {
-	t.Parallel()
-	ledgerStore := ledgerstore.NewMemoryConversations()
-	write := func(key, reply string, at time.Time) {
-		t.Helper()
-		if err := ledgerStore.Append(t.Context(), "ceo", key,
-			ledger.Session{Reply: reply}, reply, at, 0); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("thread-a", "one", pinned)
-	write("thread-b", "two", pinned.Add(time.Hour))
-
-	body := asMap(t, answer(t, queries.Sources{Conversations: ledgerStore},
-		"conversations", map[string]any{"handle": "ceo"}))
-
-	threads, _ := body["conversations"].([]any)
-	if len(threads) != 2 {
-		t.Fatalf("%d threads, want 2: %v", len(threads), body)
-	}
-	first, _ := threads[0].(map[string]any)
-	if first["conversation_key"] != "thread-b" {
-		t.Errorf("first thread = %v, want the one that moved most recently", first)
-	}
-	// Entries are empty on a LISTING: the sidebar shows keys, and carrying
-	// every entry of every thread would move a seat's whole history to
-	// render a list of names.
-	if entries, _ := body["entries"].([]any); len(entries) != 0 {
-		t.Errorf("the listing carries entries: %v", entries)
-	}
-}
-
-func TestConversationsOpensOneThread(t *testing.T) {
-	t.Parallel()
-	ledgerStore := ledgerstore.NewMemoryConversations()
-	for i, reply := range []string{"first", "second"} {
-		if err := ledgerStore.Append(t.Context(), "ceo", "thread-a",
-			ledger.Session{Reply: reply}, reply,
-			pinned.Add(time.Duration(i)*time.Minute), 0); err != nil {
-			t.Fatal(err)
-		}
-	}
-	body := asMap(t, answer(t, queries.Sources{Conversations: ledgerStore},
-		"conversations", map[string]any{"handle": "ceo", "key": "thread-a"}))
-
-	entries, _ := body["entries"].([]any)
-	if len(entries) != 2 {
-		t.Fatalf("%d entries, want 2: %v", len(entries), body)
-	}
-	// Oldest first, because a conversation reads forwards.
-	first, _ := entries[0].(map[string]any)
-	if first["reply"] != "first" {
-		t.Errorf("entries = %v, want the conversation in order", entries)
-	}
-}
-
-func TestConversationsNeedsASeat(t *testing.T) {
-	t.Parallel()
-	// Answering for "no seat" would be a listing of nothing, which reads
-	// as a seat that has said nothing rather than as a malformed request.
-	r := queries.NewRegistry()
-	queries.Register(r, queries.Sources{Conversations: ledgerstore.NewMemoryConversations()})
-	if _, err := r.Answer(t.Context(), "conversations", nil, "operator"); err == nil {
-		t.Fatal("a conversations query with no handle was answered")
 	}
 }
 

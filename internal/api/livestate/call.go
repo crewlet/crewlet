@@ -25,6 +25,13 @@ func (c *LiveCall) clone() *LiveCall {
 	}
 	dup.PromptMessages = append([]any(nil), c.PromptMessages...)
 	dup.ToolExecutions = append([]any(nil), c.ToolExecutions...)
+	dup.RoundNarration = append([]any(nil), c.RoundNarration...)
+	if c.PartialRound != nil {
+		dup.PartialRound = make(map[string]any, len(c.PartialRound))
+		for k, v := range c.PartialRound {
+			dup.PartialRound[k] = v
+		}
+	}
 	return &dup
 }
 
@@ -64,8 +71,10 @@ func beginCall(env Envelope, payload map[string]any) *LiveCall {
 		Trigger:        mapping(payload, "trigger"),
 		PromptMessages: []any{},
 		ToolExecutions: []any{},
+		RoundNarration: []any{},
 		RoundNum:       -1,
 		InProgress:     true,
+		StartedAt:      env.Timestamp,
 		UpdatedAt:      env.Timestamp,
 	}
 }
@@ -80,10 +89,6 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	agent := s.ensureAgent(role)
 	if id := str(payload, "agent_id"); id != "" {
 		agent.runtimeID = id
-	}
-	if agent.state != "working" {
-		agent.state = "working"
-		agent.afkReason = ""
 	}
 
 	turnID := str(payload, "turn_id")
@@ -118,6 +123,17 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		return ""
 	}
 
+	// Moved BELOW both guards. It used to run first, so a straggler that
+	// lost the cross-topic race — a progress round arriving after its phase
+	// had already completed — flipped the seat to "working" and then
+	// returned "" at the guard. Nothing was pushed, so nothing ever
+	// corrected it: the seat sat rendering as working, with no live call to
+	// show, until the next real round. A round this function is about to
+	// discard must not move the seat either.
+	if agent.state != "working" {
+		agent.state = "working"
+		agent.afkReason = ""
+	}
 	if phase != "" {
 		agent.currentPhase = phase
 	}
@@ -134,6 +150,15 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		trigger = map[string]any{}
 	}
 
+	// CARRIED, never restamped: the call started when it started, and a
+	// round landing is not a new beginning. A progress round that arrives
+	// before its own phase_started (different subjects, no ordering) opens
+	// the clock instead.
+	startedAt := env.Timestamp
+	if cur != nil && cur.sameCall(turnID, phase, iteration) && cur.StartedAt != "" {
+		startedAt = cur.StartedAt
+	}
+
 	agent.liveCall = &LiveCall{
 		TurnID:         turnID,
 		Phase:          phase,
@@ -147,9 +172,12 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		OutputTokens:   num(payload, "output_tokens"),
 		TotalTokens:    num(payload, "total_tokens"),
 		ToolExecutions: list(payload, "tool_executions"),
+		RoundNarration: list(payload, "round_narration"),
+		PartialRound:   mapping(payload, "partial_round"),
 		RoundNum:       roundNum,
 		Rounds:         roundNum + 1,
 		InProgress:     true,
+		StartedAt:      startedAt,
 		UpdatedAt:      env.Timestamp,
 	}
 	return role
@@ -192,6 +220,12 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	}
 	if tools := list(payload, "tool_executions"); len(tools) > 0 {
 		call.ToolExecutions = tools
+	}
+	// Frozen with the rest: a phase that died mid-round is exactly when the
+	// model's last words matter, and dropping them here would leave the
+	// failed row showing tool calls with nothing that asked for them.
+	if narration := list(payload, "round_narration"); len(narration) > 0 {
+		call.RoundNarration = narration
 	}
 }
 

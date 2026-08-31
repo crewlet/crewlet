@@ -1,0 +1,419 @@
+/* ==========================================================================
+   The design system's one source of colour, type, space and motion.
+   ==========================================================================
+
+   THE RULE THIS FILE EXISTS TO ENFORCE: colour carries STATE, never IDENTITY.
+
+   The dashboard this replaces assigned a hue per agent from a hash of the role
+   name, and when that was removed six more categorical maps were left behind —
+   phase, event category, integration brand, memory block, fleet node role,
+   message role, source badge — each drawing from one eight-family palette, and
+   several of them on screen at once. The Activity screen carried eight to ten
+   chromatic families simultaneously, as 10px coloured type. A hash of a name
+   carries no information: rename the seat and its colour changes, which is the
+   proof that it never meant anything.
+
+   So there are exactly four places colour is allowed to mean something:
+
+     1. STATUS   — positive / caution / critical / info. Four, fixed.
+     2. PHASE    — plan / execute / review. Three, fixed, because a phase is the
+                   one recurring categorical dimension a reader tracks across
+                   every screen in the product.
+     3. ACCENT   — one brand violet, spent on the current selection and nothing
+                   else: the active nav row, the primary button, the focus ring.
+     4. VIZ      — five data hues plus a neutral residual, usable ONLY inside a
+                   chart that carries a legend.
+
+   Everything else — a seat, a unit, an event category, an integration, a node,
+   a tool origin — is neutral, and its identity is carried by its NAME, its icon
+   and its position, which are stable and legible and do not run out at eight.
+
+   ORDER OF DEFINITION. Every token gets its value on bare `:root` first. The
+   dark block is `:root:not([data-theme="light"])` under `prefers-color-scheme`,
+   and `:root[data-theme="dark"]` repeats it so an explicit choice wins in both
+   directions. A colour whose ONLY definition is inside a media query is a
+   colour that disappears for somebody. */
+
+:root {
+  color-scheme: light dark;
+
+  /* ---- Type -------------------------------------------------------------
+     Two families, both self-hosted under /static/dashboard/fonts (see
+     fonts.css). The stack behind each is a real fallback, not decoration: the
+     engine is expected to run on closed networks, and it now ships every glyph
+     it needs. */
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* A nine-step scale, and the ONLY sizes in the product. The dashboard this
+     replaces had 194 font-size declarations across 14 literal pixel values, of
+     which eight were off any ramp — so its "scale" was fiction, and so was the
+     density control that resized three of its steps. rem, so a reader's own
+     browser setting still moves the page. */
+  --fs-3xs: 0.6875rem; /* 11px — micro labels, table column heads */
+  --fs-2xs: 0.75rem; /*    12px — dense secondary text, badges */
+  --fs-xs: 0.8125rem; /*   13px — table cells, captions */
+  --fs-sm: 0.875rem; /*    14px — BODY */
+  --fs-md: 1rem; /*        16px — section leads */
+  --fs-lg: 1.125rem; /*    18px — panel titles */
+  --fs-xl: 1.375rem; /*    22px — screen titles */
+  --fs-2xl: 1.75rem; /*    28px — stat values */
+  --fs-3xl: 2.25rem; /*    36px — the one hero number per screen */
+
+  --fw-normal: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  --lh-tight: 1.2;
+  --lh-snug: 1.35;
+  --lh-normal: 1.55;
+  --lh-relaxed: 1.7;
+
+  /* Tracking. Three values, and each has one job: display sizes tighten,
+     body sits at zero, micro-labels open up. The old system declared "one
+     micro-label register" and then overrode it with six different tracking
+     values in six selectors. */
+  --track-tight: -0.02em;
+  --track-normal: 0;
+  --track-wide: 0.04em;
+
+  /* ---- Space ------------------------------------------------------------
+     A 4px base. `--density` scales the ones that set row height and padding,
+     so compact mode is a real change to every surface rather than to three
+     font-size tokens. */
+  --density: 1;
+  --space-0: 0;
+  --space-1: calc(4px * var(--density));
+  --space-2: calc(8px * var(--density));
+  --space-3: calc(12px * var(--density));
+  --space-4: calc(16px * var(--density));
+  --space-5: calc(20px * var(--density));
+  --space-6: calc(24px * var(--density));
+  --space-8: calc(32px * var(--density));
+  --space-10: calc(40px * var(--density));
+  --space-12: calc(48px * var(--density));
+  --space-16: calc(64px * var(--density));
+
+  /* Row heights, so every list in the product lines up with every other. */
+  --row-h: calc(36px * var(--density));
+  --row-h-sm: calc(28px * var(--density));
+  --row-h-lg: calc(48px * var(--density));
+  --control-h: calc(32px * var(--density));
+  --control-h-sm: calc(26px * var(--density));
+
+  /* ---- Radius -----------------------------------------------------------
+     Four steps and a pill. The old system had ten distinct literal radii
+     across 44 declarations. */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-full: 999px;
+
+  /* ---- Layout ---------------------------------------------------------- */
+  /* The rail's own inset. Each nav row adds its --space-2 on top, so text
+     and icons settle at --nav-gutter + 8px from the sidebar's edge. */
+  --nav-gutter: var(--space-3);
+  --sidebar-w: 236px;
+  --sidebar-w-collapsed: 60px;
+  --topbar-h: 52px;
+  /* Prose and forms get a measure. Tables and charts deliberately do not:
+     they are the one content that genuinely wants the whole viewport. */
+  --measure: 76ch;
+  --screen-max: 1560px;
+
+  /* ---- Motion -----------------------------------------------------------
+     Short, and only ever on entrance or on a control's own state. Nothing in
+     this product animates on a data push: a list that re-flows every time a
+     tool-loop round lands is a list nobody can read. */
+  --dur-fast: 90ms;
+  --dur: 140ms;
+  --dur-slow: 240ms;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --z-sticky: 10;
+  --z-drawer: 40;
+  --z-popover: 50;
+  --z-modal: 60;
+  --z-toast: 70;
+
+  /* ---- Colour: the neutral ramp ----------------------------------------
+     Light is the base definition. The ground is not pure white and the panels
+     are: an off-white page with white cards is what gives a light UI depth
+     without a single shadow doing the work. */
+  --bg: #f4f5f7;
+  --bg-sunken: #eceef1;
+  --surface-1: #ffffff;
+  --surface-2: #f7f8fa;
+  --surface-3: #eef0f4;
+  --surface-inset: rgba(15, 20, 35, 0.04);
+  --surface-hover: rgba(15, 20, 35, 0.045);
+  --surface-active: rgba(15, 20, 35, 0.075);
+  --surface-glass: rgba(255, 255, 255, 0.82);
+
+  --border-subtle: rgba(15, 20, 35, 0.07);
+  --border: rgba(15, 20, 35, 0.12);
+  --border-strong: rgba(15, 20, 35, 0.22);
+
+  /* Every step below is measured against the WORST surface it can land on,
+     which in light is --surface-3 (#eef0f4), not the white panel. Six steps
+     of the old ramp fell under 4.5:1 because they were anchored to the panel
+     and then used on a selected row. */
+  --text: #14181f; /*           14.5:1 on the worst surface */
+  --text-secondary: #454c59; /*  7.3:1 */
+  --text-muted: #565d6a; /*      5.9:1 */
+  --text-faint: #767e8c; /*      3.5:1 — DECORATION ONLY, never a fact */
+  --heading: #0a0d13; /*        16.7:1 */
+  --text-on-fill: #ffffff;
+
+  /* ---- Colour: accent ---------------------------------------------------
+     One violet, and it is the mark's own colour, which is what keeps the logo
+     belonging to the page rather than sitting on it. `--accent` is a FILL
+     step (behind white text); `--accent-ink` is the TEXT step (on a surface).
+     They are never interchangeable, and the split is enforced by measurement:
+     an `-ink` step clears 4.5:1 as TEXT on every surface including a hovered
+     row inside a nested panel, while a fill step clears 3:1 as a MARK on the
+     page surfaces a filled control actually sits on. Mixing them is exactly
+     how the screen this replaces shipped role badges at 1.63:1 — an inline
+     `background:` with a hue token in it and the default text colour left on
+     top. Only --accent is ever a fill behind text; a status is a soft tint
+     plus its ink step, never a solid block with a label on it. */
+  --accent: #5b2fd6;
+  --accent-hover: #4d26bd;
+  --accent-ink: #5b2fd6;
+  --accent-soft: rgba(91, 47, 214, 0.1);
+  --accent-line: rgba(91, 47, 214, 0.35);
+
+  --focus: #5b2fd6;
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
+
+  /* ---- Colour: status ---------------------------------------------------
+     Four, fixed, and the meanings never move: green is a good terminal state,
+     amber is "a person is needed", red is failure, blue is neutral
+     information. The old system had green meaning `idle` on a dot and
+     `working` on an avatar, side by side on one screen. */
+  --positive: #1c7a44;
+  --positive-ink: #186b3c;
+  --positive-soft: rgba(28, 122, 68, 0.12);
+  --caution: #856400;
+  --caution-ink: #755800;
+  --caution-soft: rgba(133, 100, 0, 0.13);
+  --critical: #c0271f;
+  --critical-ink: #b0231c;
+  --critical-soft: rgba(192, 39, 31, 0.11);
+  --info: #1a66b5;
+  --info-ink: #175a9f;
+  --info-soft: rgba(26, 102, 181, 0.11);
+
+  /* ---- Colour: phase ----------------------------------------------------
+     Plan / Execute / Review. Three, and they are the only categorical
+     identity outside a chart, because they are what a reader actually tracks
+     across the Model, Seat, Activity and Trace screens. */
+  --phase-plan: #12558f;
+  --phase-plan-ink: #134e83;
+  --phase-execute: #7d54e8;
+  --phase-execute-ink: #6a3fd6;
+  --phase-review: #0f7a5f;
+  --phase-review-ink: #0d6b53;
+
+  /* ---- Colour: data viz -------------------------------------------------
+     FIVE chromatic series in a fixed order, plus a neutral residual bucket,
+     and legal ONLY inside a chart that carries a legend.
+
+     Five rather than eight because eight categorical hues cannot be kept
+     separable — the previous system had eight and its own design doc admitted
+     they were "already doubled up in one order". Five can be, and every chart
+     that would want more wants top-5-plus-other anyway, which is what
+     --viz-other is. It is deliberately exempt from the separation rule: a
+     residual bucket that competed with a real series would be claiming to be
+     one.
+
+     ADJACENT pairs are what a legend reader actually distinguishes, so that is
+     what is measured — under normal, protan and deutan vision — and it is why
+     the order is not a rainbow: each step moves hue AND lightness. Every one
+     also stays ΔE 14 clear of --critical, because red means "this broke"
+     everywhere else in the product and a series that drifts into it is making
+     a claim. */
+  --viz-1: #5b2fd6;
+  --viz-2: #856400;
+  --viz-3: #1a66b5;
+  --viz-4: #0f7a5f;
+  --viz-5: #6b1f52;
+  --viz-other: #7b8291;
+
+  /* ---- Elevation --------------------------------------------------------
+     Three steps. On the dark theme the top hairline does most of the work
+     (light IS elevation on a dark ground); on light the shadow does. */
+  --shadow-1: 0 1px 2px rgba(15, 20, 35, 0.06), 0 1px 1px rgba(15, 20, 35, 0.04);
+  --shadow-2: 0 4px 12px rgba(15, 20, 35, 0.08), 0 1px 3px rgba(15, 20, 35, 0.06);
+  --shadow-3: 0 16px 40px rgba(15, 20, 35, 0.16), 0 2px 8px rgba(15, 20, 35, 0.08);
+  --inset-hairline: none;
+
+  /* Chrome the scrollbars to the theme rather than leaving a bright system
+     gutter down the side of a dark page. */
+  --scrollbar: rgba(15, 20, 35, 0.2);
+  --scrollbar-hover: rgba(15, 20, 35, 0.32);
+}
+
+/* ---- Dark ---------------------------------------------------------------
+   The ground is deliberately NOT #000. An operator reads this page for hours,
+   and pure black behind near-white text is the specific combination that
+   halates — the smear around small bright glyphs anyone with astigmatism sees.
+   Lifting it costs nothing visually and puts the text ramp in a comfort band
+   instead of at the top of the contrast range.
+
+   It is also barely blue. The system this replaces tinted every neutral with
+   rgba(176, 152, 255, …) and the whole product read violet; the accent then had
+   nothing to separate itself from. A near-neutral ground with a single
+   saturated accent is what makes the accent mean "here". */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a0c11;
+    --bg-sunken: #06080b;
+    --surface-1: #101319;
+    --surface-2: #161a22;
+    --surface-3: #1e232d;
+    --surface-inset: rgba(255, 255, 255, 0.035);
+    --surface-hover: rgba(255, 255, 255, 0.045);
+    --surface-active: rgba(255, 255, 255, 0.08);
+    --surface-glass: rgba(16, 19, 25, 0.82);
+
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border: rgba(255, 255, 255, 0.11);
+    --border-strong: rgba(255, 255, 255, 0.2);
+
+    /* Measured against --surface-3 (#1e232d), the worst surface a label lands
+       on: a selected row inside a nested panel. */
+    --text: #e9ebf0; /*           12.4:1 on the worst surface */
+    --text-secondary: #b0b6c2; /*  7.2:1 */
+    --text-muted: #9aa2b0; /*      5.1:1 */
+    --text-faint: #6a7280; /*      3.1:1 — DECORATION ONLY */
+    --heading: #f6f7fa; /*        13.8:1 */
+    --text-on-fill: #ffffff;
+
+    --accent: #8347ff;
+    --accent-hover: #9463ff;
+    --accent-ink: #ab92ff;
+    --accent-soft: rgba(131, 71, 255, 0.18);
+    --accent-line: rgba(160, 130, 255, 0.4);
+
+    --focus: #a084ff;
+
+    --positive: #3fa066;
+    --positive-ink: #74cf92;
+    --positive-soft: rgba(63, 160, 102, 0.16);
+    --caution: #c28d20;
+    --caution-ink: #e2ae50;
+    --caution-soft: rgba(194, 141, 32, 0.16);
+    --critical: #e05a5a;
+    --critical-ink: #ff8f8b;
+    --critical-soft: rgba(224, 90, 90, 0.16);
+    --info: #4590d8;
+    --info-ink: #7fb8f2;
+    --info-soft: rgba(69, 144, 216, 0.16);
+
+    --phase-plan: #2f7ec4;
+    --phase-plan-ink: #7fb8f2;
+    --phase-execute: #b3a0ff;
+    --phase-execute-ink: #c3b3ff;
+    --phase-review: #3fa688;
+    --phase-review-ink: #5cc39c;
+
+    --viz-1: #9d80ff;
+    --viz-2: #c28d20;
+    --viz-3: #3f86d4;
+    --viz-4: #3fa066;
+    --viz-5: #e084c4;
+    --viz-other: #737b8a;
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --shadow-2: 0 6px 18px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+    --shadow-3: 0 24px 56px rgba(0, 0, 0, 0.62), 0 2px 10px rgba(0, 0, 0, 0.5);
+    /* On a dark ground a panel is lifted by the light along its top edge, not
+       by a shadow nobody can see against near-black. */
+    --inset-hairline: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+
+    --scrollbar: rgba(255, 255, 255, 0.16);
+    --scrollbar-hover: rgba(255, 255, 255, 0.26);
+  }
+}
+
+/* An explicit choice wins in both directions, so the toggle works whichever
+   way the operating system is set. */
+:root[data-theme="dark"] {
+  --bg: #0a0c11;
+  --bg-sunken: #06080b;
+  --surface-1: #101319;
+  --surface-2: #161a22;
+  --surface-3: #1e232d;
+  --surface-inset: rgba(255, 255, 255, 0.035);
+  --surface-hover: rgba(255, 255, 255, 0.045);
+  --surface-active: rgba(255, 255, 255, 0.08);
+  --surface-glass: rgba(16, 19, 25, 0.82);
+
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border: rgba(255, 255, 255, 0.11);
+  --border-strong: rgba(255, 255, 255, 0.2);
+
+  --text: #e9ebf0;
+  --text-secondary: #b0b6c2;
+  --text-muted: #9aa2b0;
+  --text-faint: #6a7280;
+  --heading: #f6f7fa;
+  --text-on-fill: #ffffff;
+
+  --accent: #8347ff;
+  --accent-hover: #9463ff;
+  --accent-ink: #ab92ff;
+  --accent-soft: rgba(131, 71, 255, 0.18);
+  --accent-line: rgba(160, 130, 255, 0.4);
+
+  --focus: #a084ff;
+
+  --positive: #3fa066;
+  --positive-ink: #74cf92;
+  --positive-soft: rgba(63, 160, 102, 0.16);
+  --caution: #c28d20;
+  --caution-ink: #e2ae50;
+  --caution-soft: rgba(194, 141, 32, 0.16);
+  --critical: #e05a5a;
+  --critical-ink: #ff8f8b;
+  --critical-soft: rgba(224, 90, 90, 0.16);
+  --info: #4590d8;
+  --info-ink: #7fb8f2;
+  --info-soft: rgba(69, 144, 216, 0.16);
+
+  --phase-plan: #2f7ec4;
+  --phase-plan-ink: #7fb8f2;
+  --phase-execute: #b3a0ff;
+  --phase-execute-ink: #c3b3ff;
+  --phase-review: #3fa688;
+  --phase-review-ink: #5cc39c;
+
+  --viz-1: #9d80ff;
+  --viz-2: #c28d20;
+  --viz-3: #3f86d4;
+  --viz-4: #3fa066;
+  --viz-5: #e084c4;
+  --viz-other: #737b8a;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 6px 18px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-3: 0 24px 56px rgba(0, 0, 0, 0.62), 0 2px 10px rgba(0, 0, 0, 0.5);
+  --inset-hairline: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+
+  --scrollbar: rgba(255, 255, 255, 0.16);
+  --scrollbar-hover: rgba(255, 255, 255, 0.26);
+}
+
+:root[data-density="compact"] {
+  --density: 0.82;
+}
+:root[data-density="comfortable"] {
+  --density: 1.14;
+}

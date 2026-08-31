@@ -2,7 +2,7 @@
 
 Crewlet is an open-source engine for orchestrating hierarchically organized AI agent companies. It provides the runtime, event system, task management, agent lifecycle, and knowledge infrastructure needed to operate a network of AI agents modeled after a real corporate structure.
 
-Crewlet ships as **an engine plus a thin operational surface**: the engine does the work, and a REST API + zero-build web dashboard (embedded in the engine process by default, or run as its own process) provide configuration, webhooks, and observability. Anything beyond that — custom UIs, metrics exporters, bespoke automations — is built *outside* the process: the engine loads no plugins, and its surfaces to the outside are the REST API, the `/ws/stream` socket, OTLP, and [MCP](../guides/tools-and-mcp.md#extending-the-engine) for anything an agent should be able to call.
+Crewlet ships as **an engine plus a thin operational surface**: the engine does the work, and a REST API + a web dashboard (embedded in the engine process by default, or run as its own process) provide configuration, webhooks, and observability. Anything beyond that — custom UIs, metrics exporters, bespoke automations — is built *outside* the process: the engine loads no plugins, and its surfaces to the outside are the REST API, the `/ws/stream` socket, OTLP, and [MCP](../guides/tools-and-mcp.md#extending-the-engine) for anything an agent should be able to call.
 
 ---
 
@@ -219,11 +219,14 @@ internal/
 ├── secrets/              # Config encryption at rest + the ${VAR} resolver
 └── version/ logging/ redact/ envref/ envfile/ workkey/  # small shared grammars
 
-static/dashboard/         # The zero-build ES-module dashboard, embedded in
-                          #   the binary — reactive store mirroring the server
-                          #   projection, one websocket as the only data
-                          #   channel, hash router, per-view modules. See
-                          #   reference/dashboard-design.md
+dashboard/                # The dashboard's SOURCE — React + TypeScript, built
+                          #   by Vite. Its output is committed to
+                          #   static/dashboard, so `go build ./...` needs no
+                          #   Node. See reference/dashboard-design.md
+static/dashboard/         # That build output, embedded in the binary — a
+                          #   store mirroring the server projection, one
+                          #   websocket as the only data channel, a hash
+                          #   router, one file per screen
 ```
 
 Every package states its own rationale in its package doc, so `go doc ./internal/coord` is the authority on coordination rather than this page.

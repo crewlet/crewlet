@@ -745,3 +745,88 @@ func TestAFailedTerminatorDoesNotEndThePhase(t *testing.T) {
 		t.Errorf("rounds = %d, want the successful terminator to end it at 1", res.RoundsUsed)
 	}
 }
+
+// --- narration -------------------------------------------------------------
+
+func TestNarrationStaysAttachedToItsOwnRound(t *testing.T) {
+	t.Parallel()
+	// The whole point of recording it. Result.Text joins every round's turn
+	// into one string, and that join CANNOT be undone — the parts are
+	// separated by a blank line and prose contains blank lines — so a reader
+	// handed only the blob put the first round's thinking under "reasoning"
+	// and every later round's thinking under "the answer", tags and all.
+	p := &scriptedProvider{turns: []llm.Completion{
+		{ReasoningContent: "which tool?", Content: "looking it up",
+			ToolCalls: []llm.ToolCall{toolCall("1", "search")}},
+		{ReasoningContent: "now I know", Content: "done"},
+	}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("search")}}, MaxRounds: 4,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Narration) != 2 {
+		t.Fatalf("narration = %#v, want one entry per round", res.Narration)
+	}
+	// ONE-BASED, matching Execution.Round.
+	if res.Narration[0].Round != 1 || res.Narration[1].Round != 2 {
+		t.Errorf("rounds = %d,%d — want 1,2", res.Narration[0].Round, res.Narration[1].Round)
+	}
+	if res.Narration[0].Reasoning != "which tool?" || res.Narration[0].Content != "looking it up" {
+		t.Errorf("round 0 = %#v", res.Narration[0])
+	}
+	if res.Narration[1].Reasoning != "now I know" || res.Narration[1].Content != "done" {
+		t.Errorf("round 1 = %#v", res.Narration[1])
+	}
+	// A round's narration and the calls that round asked for MUST carry the
+	// same number, because that is the only thing letting a reader interleave
+	// the two lists into one ledger.
+	if len(res.Executions) != 1 || res.Executions[0].Round != res.Narration[0].Round {
+		t.Errorf("execution round %#v does not match its narration round %d",
+			res.Executions, res.Narration[0].Round)
+	}
+}
+
+func TestARoundThatOnlyCalledToolsNarratesNothing(t *testing.T) {
+	t.Parallel()
+	// An empty entry would render as a blank paragraph above its own tools.
+	p := &scriptedProvider{turns: []llm.Completion{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "search")}},
+		{Content: "done"},
+	}}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("search")}}, MaxRounds: 4,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Narration) != 1 {
+		t.Fatalf("narration = %#v, want only the round that said something", res.Narration)
+	}
+	if res.Narration[0].Round != 2 || res.Narration[0].Content != "done" {
+		t.Errorf("narration = %#v, want round 2's answer", res.Narration[0])
+	}
+}
+
+func TestTheFailureViewCarriesTheRoundsItManagedToNarrate(t *testing.T) {
+	t.Parallel()
+	// A phase that dies mid-call is exactly when the model's last words
+	// matter: the frozen row would otherwise show tool calls with nothing
+	// that asked for them.
+	prog := &toolloop.Progress{}
+	p := &scriptedProvider{turns: []llm.Completion{
+		{Content: "starting", ToolCalls: []llm.ToolCall{toolCall("1", "search")}},
+	}, failAt: 2}
+	_, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: &fakeSurface{tools: []llm.ToolDef{def("search")}},
+		MaxRounds: 4, Progress: prog,
+	})
+	if err == nil {
+		t.Fatal("want the loop to fail")
+	}
+	snap := prog.Snapshot()
+	if len(snap.Narration) != 1 || snap.Narration[0].Content != "starting" {
+		t.Errorf("snapshot narration = %#v, want the round that ran", snap.Narration)
+	}
+}

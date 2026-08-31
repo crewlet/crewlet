@@ -1,0 +1,1139 @@
+/* The component library.
+ *
+ * One recipe per thing, and every one of them reads tokens rather than
+ * literals. The rule that keeps this file honest: a component may not
+ * introduce a colour, a radius, a font size or a spacing step that is not a
+ * token — if it needs one, the token is what gets added.
+ */
+
+/* ---- Surface ------------------------------------------------------------
+   Panel is THE surface. Everything on a screen is a panel, a row inside one,
+   or a control. On dark the top hairline is the elevation; on light the shadow
+   is — one recipe, two grounds, no second component. */
+
+.panel {
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1), var(--inset-hairline);
+  min-width: 0;
+}
+.panel-flush {
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  min-width: 0;
+}
+.panel-quiet {
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  min-width: 0;
+}
+.inset {
+  background: var(--surface-inset);
+  border-radius: var(--r-sm);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  min-height: var(--row-h-lg);
+}
+.panel-head > .panel-title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--heading);
+  letter-spacing: var(--track-tight);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.panel-head .panel-sub {
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+.panel-body {
+  padding: var(--space-4);
+}
+.panel-body.tight {
+  padding: var(--space-2);
+}
+.panel-body.none {
+  padding: 0;
+}
+.panel-foot {
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* A count beside a section title. Neutral by design: a coloured count is a
+   claim about severity that a number alone cannot support. */
+.count-chip {
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: var(--surface-inset);
+  border-radius: var(--r-full);
+  padding: 1px var(--space-2);
+  min-width: 20px;
+  text-align: center;
+}
+
+/* ---- Button -------------------------------------------------------------
+   Four variants and they are a hierarchy, not a palette: primary (the one
+   action), default (everything else), ghost (in a dense toolbar), danger
+   (destructive, and the only one that spends the critical hue). */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.btn:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+.btn:active:not(:disabled) {
+  background: var(--surface-active);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--text-on-fill);
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: transparent;
+}
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+.btn.ghost:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: transparent;
+  color: var(--text);
+}
+.btn.danger {
+  color: var(--critical-ink);
+  border-color: var(--border);
+}
+.btn.danger:hover:not(:disabled) {
+  background: var(--critical-soft);
+  border-color: var(--critical);
+}
+.btn.sm {
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  font-size: var(--fs-2xs);
+}
+.btn.icon {
+  width: var(--control-h);
+  padding: 0;
+}
+.btn.icon.sm {
+  width: var(--control-h-sm);
+}
+.btn.block {
+  width: 100%;
+}
+
+/* ---- Badge --------------------------------------------------------------
+   A soft tint plus its ink step, NEVER a solid block with a label on it. That
+   is what lets the status hues be light enough to read as marks on a dark
+   ground without dragging their own label under 4.5:1 with them. */
+
+/* A badge that ACTS. Same shape as the inert ones so the row still reads as
+   one set, plus a hover and a pressed state so it is discoverable as a
+   control rather than looking like a label that happens to respond. */
+.badge.actionable {
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.badge.actionable:hover {
+  border-color: currentColor;
+}
+.badge.actionable.pressed {
+  background: currentColor;
+}
+.badge.actionable.pressed > * {
+  mix-blend-mode: luminosity;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 1px var(--space-2);
+  border-radius: var(--r-xs);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  background: var(--surface-inset);
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+}
+.badge.positive {
+  background: var(--positive-soft);
+  color: var(--positive-ink);
+}
+.badge.caution {
+  background: var(--caution-soft);
+  color: var(--caution-ink);
+}
+.badge.critical {
+  background: var(--critical-soft);
+  color: var(--critical-ink);
+}
+.badge.info {
+  background: var(--info-soft);
+  color: var(--info-ink);
+}
+.badge.accent {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.badge.outline {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+.badge.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-3xs);
+}
+
+/* The dot is the shape half of a status. Colour is never the only carrier:
+   every dot sits beside its own word. */
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--text-faint);
+  flex: none;
+}
+.dot.positive {
+  background: var(--positive);
+}
+.dot.caution {
+  background: var(--caution);
+}
+.dot.critical {
+  background: var(--critical);
+}
+.dot.info {
+  background: var(--info);
+}
+.dot.accent {
+  background: var(--accent);
+}
+.dot.working {
+  background: var(--info);
+  animation: pulse-dot 1.8s var(--ease) infinite;
+}
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Phase is the one categorical identity outside a chart, because it is what a
+   reader tracks across the Model, Seat, Activity and Trace screens. */
+.phase-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  padding: 1px var(--space-2);
+  border-radius: var(--r-xs);
+}
+.phase-tag[data-phase="plan"] {
+  color: var(--phase-plan-ink);
+  background: color-mix(in srgb, var(--phase-plan) 14%, transparent);
+}
+.phase-tag[data-phase="execute"] {
+  color: var(--phase-execute-ink);
+  background: color-mix(in srgb, var(--phase-execute) 14%, transparent);
+}
+.phase-tag[data-phase="review"] {
+  color: var(--phase-review-ink);
+  background: color-mix(in srgb, var(--phase-review) 14%, transparent);
+}
+.phase-tag[data-phase="auxiliary"],
+.phase-tag[data-phase="turn"] {
+  color: var(--text-muted);
+  background: var(--surface-inset);
+}
+
+/* ---- Avatar -------------------------------------------------------------
+   A monogram, and it is NEUTRAL. The system this replaces coloured a seat by
+   `PALETTE[hash(name) % 8]`, over the same eight families it also used for
+   phases and event categories — so one amber meant "the execute phase", "the
+   decision category" and "the Analyst" at once. A hash of a name carries no
+   information: rename the seat and its colour changes, which is the proof it
+   never meant anything. Identity is the monogram and the name. */
+
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.02em;
+  flex: none;
+  text-transform: uppercase;
+}
+.avatar.lg {
+  width: 40px;
+  height: 40px;
+  font-size: var(--fs-sm);
+  border-radius: var(--r-md);
+}
+.avatar.sm {
+  width: 20px;
+  height: 20px;
+  font-size: 9px;
+  border-radius: var(--r-xs);
+}
+/* A human seat is drawn, not tinted: the engine does not run it, and that is a
+   structural fact rather than a status. */
+.avatar.human {
+  border-style: dashed;
+  border-color: var(--border);
+  background: transparent;
+}
+
+/* A link that IS a row takes the page's text colour, not the link colour.
+   Otherwise every seat name in every list renders in the accent — which is
+   identity-colouring by accident, and the accent is reserved for saying where
+   the reader IS. The affordance is the hover state and the cursor. */
+a.seat-card,
+a.list-row,
+a.feed-row,
+a.org-node,
+a.nav-item,
+a.brand,
+a.seat-chip {
+  color: inherit;
+  text-decoration: none;
+}
+a.seat-chip:hover {
+  color: var(--accent-ink);
+}
+a.seat-card:hover,
+a.list-row:hover,
+a.feed-row:hover,
+a.org-node:hover,
+a.brand:hover {
+  text-decoration: none;
+}
+
+/* ---- Table --------------------------------------------------------------
+   One table, everywhere. Sticky head, hairline rows, right-aligned numerics,
+   and a sortable column that says which way it is sorted. */
+
+.table-wrap {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.table {
+  width: 100%;
+  font-size: var(--fs-xs);
+}
+.table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-1);
+  text-align: left;
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.table th.sortable:hover {
+  color: var(--text);
+}
+.table th .sort-mark {
+  display: inline-block;
+  width: 10px;
+  margin-left: var(--space-1);
+  color: var(--accent-ink);
+}
+.table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: middle;
+  height: var(--row-h);
+}
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+.table tbody tr.clickable {
+  cursor: pointer;
+}
+.table tbody tr.clickable:hover td {
+  background: var(--surface-hover);
+}
+.table tbody tr.selected td {
+  background: var(--accent-soft);
+}
+.table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.table .shrink {
+  width: 1%;
+  white-space: nowrap;
+}
+/* A failed row is marked on its leading edge, so it is findable by scanning a
+   single column rather than by reading every line. */
+.table tbody tr.failed td:first-child {
+  box-shadow: inset 2px 0 0 var(--critical);
+}
+
+/* ---- List row -----------------------------------------------------------
+   The non-tabular list: an activity feed, a search result, a conversation. */
+
+.list {
+  display: flex;
+  flex-direction: column;
+}
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  min-height: var(--row-h);
+  min-width: 0;
+  text-align: left;
+  width: 100%;
+}
+.list-row:last-child {
+  border-bottom: none;
+}
+.list-row.clickable {
+  cursor: pointer;
+}
+.list-row.clickable:hover {
+  background: var(--surface-hover);
+}
+.list-row.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.list-row.failed {
+  box-shadow: inset 2px 0 0 var(--critical);
+}
+
+/* ---- Controls ----------------------------------------------------------- */
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 0 var(--space-3);
+  height: var(--control-h);
+  font-size: var(--fs-xs);
+  color: var(--text);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.textarea {
+  height: auto;
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  line-height: var(--lh-normal);
+  resize: vertical;
+}
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: var(--accent);
+  background: var(--surface-1);
+  outline: none;
+}
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--text-faint);
+}
+.select {
+  appearance: none;
+  padding-right: var(--space-6);
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) calc(50% + 1px),
+    calc(100% - 11px) calc(50% + 1px);
+  background-size: 4px 4px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.field > label {
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.field > .hint {
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+
+.search-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.search-input > svg {
+  position: absolute;
+  left: var(--space-2);
+  color: var(--text-faint);
+  pointer-events: none;
+}
+.search-input > .input {
+  padding-left: calc(var(--space-2) * 2 + 14px);
+}
+
+/* Select — a picker over a bounded set. Native <select> on purpose: it gets
+   keyboard nav, type-ahead and the platform's own overlay for free, and a
+   hand-built listbox would have to earn all three back. */
+/* `.picker`, NOT `.select` — that class is already the bare-element control
+   above, and reusing it put its width:100% and its own border on this
+   wrapper, so the picker stretched the whole toolbar and drew two boxes. */
+.picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  width: auto;
+  flex: 0 1 auto;
+}
+.picker > svg {
+  position: absolute;
+  right: var(--space-2);
+  color: var(--text-faint);
+  pointer-events: none;
+}
+.picker > .input {
+  appearance: none;
+  width: auto;
+  min-width: 132px;
+  max-width: 220px;
+  padding-right: calc(var(--space-2) * 2 + 8px);
+  cursor: pointer;
+}
+/* An active filter is stated by the control itself, so a reader scanning the
+   bar can see WHICH dimensions are narrowing the list without reading values. */
+.picker.on > .input {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Segmented control — lenses, tabs, ranges. One implementation; the system
+   this replaces had lens tabs, room tabs and filter pills as three. */
+.segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-inset);
+  border-radius: var(--r-sm);
+  min-width: 0;
+}
+.segmented > button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: calc(var(--control-h) - 6px);
+  padding: 0 var(--space-3);
+  border-radius: calc(var(--r-sm) - 1px);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.segmented > button:hover {
+  color: var(--text);
+}
+.segmented > button[aria-selected="true"] {
+  background: var(--surface-1);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+.segmented.sm > button {
+  height: calc(var(--control-h-sm) - 4px);
+  padding: 0 var(--space-2);
+  font-size: var(--fs-3xs);
+}
+
+/* Filter chips. Neutral until ON, when they take the accent — the one thing
+   that is currently narrowing the list is exactly the "current selection" the
+   accent is reserved for. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border-radius: var(--r-full);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.chip:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.chip[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent-ink);
+}
+.chip .chip-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+.chip[aria-pressed="true"] .chip-count {
+  color: inherit;
+}
+
+/* Tabs — the in-page navigation a section owns. */
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+.tabs > button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease);
+}
+.tabs > button:hover {
+  color: var(--text);
+}
+.tabs > button[aria-selected="true"] {
+  color: var(--text);
+}
+.tabs > button[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: var(--r-full) var(--r-full) 0 0;
+}
+
+/* ---- Meter --------------------------------------------------------------
+   A budget, a share, a fill. The track is always drawn: a bar with no track is
+   a bar whose maximum the reader has to guess. */
+
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.meter-track {
+  height: 4px;
+  border-radius: var(--r-full);
+  background: var(--surface-inset);
+  overflow: hidden;
+}
+.meter-fill {
+  height: 100%;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  transition: width var(--dur-slow) var(--ease-out);
+}
+.meter-fill[data-tone="caution"] {
+  background: var(--caution);
+}
+.meter-fill[data-tone="critical"] {
+  background: var(--critical);
+}
+.meter-fill[data-tone="positive"] {
+  background: var(--positive);
+}
+.meter-fill[data-tone="neutral"] {
+  background: var(--text-faint);
+}
+.meter-legend {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+
+/* A proportional bar broken into segments — spend by phase, tools by origin.
+   Always beside its own legend; a stacked bar with no legend is decoration. */
+.stack {
+  display: flex;
+  height: 6px;
+  border-radius: var(--r-full);
+  overflow: hidden;
+  background: var(--surface-inset);
+}
+.stack > span {
+  height: 100%;
+  min-width: 2px;
+}
+
+/* ---- Stat --------------------------------------------------------------- */
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  min-width: 0;
+}
+.stat-label {
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.stat-value {
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-tight);
+  line-height: 1.1;
+  color: var(--heading);
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.stat-value .unit {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-normal);
+  color: var(--text-muted);
+  letter-spacing: 0;
+}
+.stat-sub {
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  min-height: 1.2em;
+}
+/* A row of stats keeps its column count whatever it holds. The board this
+   replaces reflowed 1→3 columns as tiles appeared and vanished, which moved
+   every number on the page for a reason that had nothing to do with the
+   numbers. */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(var(--stat-cols, 4), minmax(0, 1fr));
+}
+.stat-row > .stat + .stat {
+  border-left: 1px solid var(--border-subtle);
+}
+@media (max-width: 900px) {
+  .stat-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stat-row > .stat:nth-child(odd) {
+    border-left: none;
+  }
+  .stat-row > .stat:nth-child(n + 3) {
+    border-top: 1px solid var(--border-subtle);
+  }
+}
+
+/* ---- Empty, error, loading ---------------------------------------------- */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-10) var(--space-4);
+  text-align: center;
+  color: var(--text-muted);
+}
+.empty > svg {
+  color: var(--text-faint);
+  margin-bottom: var(--space-1);
+}
+.empty-title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text-secondary);
+}
+.empty-sub {
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  max-width: 48ch;
+}
+.empty.inline {
+  padding: var(--space-6) var(--space-4);
+}
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  border: 1px solid transparent;
+}
+.banner > svg {
+  margin-top: 2px;
+}
+.banner.info {
+  background: var(--info-soft);
+  color: var(--info-ink);
+}
+.banner.caution {
+  background: var(--caution-soft);
+  color: var(--caution-ink);
+}
+.banner.critical {
+  background: var(--critical-soft);
+  color: var(--critical-ink);
+}
+.banner.neutral {
+  background: var(--surface-inset);
+  color: var(--text-secondary);
+}
+
+/* A skeleton is only ever shown where content of KNOWN shape is coming. A
+   spinner in place of a screen tells a reader nothing about what to expect. */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-inset) 25%,
+    var(--surface-hover) 37%,
+    var(--surface-inset) 63%
+  );
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: var(--r-xs);
+  height: 1em;
+}
+@keyframes shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+/* ---- Key/value ---------------------------------------------------------- */
+
+.kv {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: var(--space-2) var(--space-4);
+  font-size: var(--fs-xs);
+  align-items: baseline;
+}
+.kv > dt {
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+}
+.kv > dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Code --------------------------------------------------------------- */
+
+.code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  line-height: var(--lh-normal);
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  padding: var(--space-3);
+  overflow: auto;
+  max-height: 460px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  tab-size: 2;
+}
+.code.plain {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+code.inline {
+  font-size: 0.92em;
+  background: var(--surface-inset);
+  border-radius: var(--r-xs);
+  padding: 1px 4px;
+  color: var(--text-secondary);
+}
+kbd {
+  font-family: var(--font-mono);
+  font-size: var(--fs-3xs);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-bottom-width: 2px;
+  border-radius: var(--r-xs);
+  padding: 1px 5px;
+  color: var(--text-muted);
+}
+
+/* ---- Overlay ------------------------------------------------------------ */
+
+.veil {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--bg-sunken) 72%, transparent);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--space-16) var(--space-4) var(--space-4);
+  z-index: var(--z-modal);
+  animation: fade var(--dur) var(--ease);
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+.dialog {
+  width: min(560px, 100%);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  max-height: calc(100dvh - var(--space-16) - var(--space-4));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: rise var(--dur-slow) var(--ease-out);
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.dialog.wide {
+  width: min(880px, 100%);
+}
+.dialog-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.dialog-body {
+  padding: var(--space-4);
+  overflow: auto;
+}
+.dialog-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+}
+
+.popover {
+  position: absolute;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-3);
+  z-index: var(--z-popover);
+  min-width: 260px;
+  animation: rise var(--dur) var(--ease-out);
+}
+
+.toast-host {
+  position: fixed;
+  bottom: var(--space-4);
+  right: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  z-index: var(--z-toast);
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-xs);
+  max-width: 420px;
+  pointer-events: auto;
+  animation: rise var(--dur) var(--ease-out);
+}
+.toast.critical {
+  border-color: var(--critical);
+  color: var(--critical-ink);
+}
+.toast.positive svg {
+  color: var(--positive);
+}
+
+/* ---- Chart -------------------------------------------------------------- */
+
+.chart {
+  width: 100%;
+  overflow: visible;
+}
+.chart .axis-line {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+}
+.chart .grid-line {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+.chart .axis-text {
+  fill: var(--text-muted);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+.chart .series-label {
+  fill: var(--text-secondary);
+  font-size: 11px;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+.legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.legend .swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+
+/* A sparkline is a shape, not a chart: no axes, no labels, and it is always
+   captioned by the number beside it. */
+.spark {
+  display: block;
+  width: 100%;
+  height: 28px;
+  overflow: visible;
+}

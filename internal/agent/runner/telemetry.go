@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
@@ -283,6 +284,8 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		// from ever disagreeing about which round this is.
 		RoundNum:       res.RoundsUsed - 1,
 		ToolExecutions: toolExecutions(res.Executions),
+		RoundNarration: roundNarration(res.Narration),
+		PartialRound:   partialRound(res.Partial),
 	}, e.traceFor(ctx)))
 }
 
@@ -415,6 +418,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		UserPrompt:      rec.User,
 		Response:        rec.Result.Text,
 		ToolExecutions:  toolExecutions(rec.Result.Executions),
+		RoundNarration:  roundNarration(rec.Result.Narration),
 		InputTokens:     rec.Result.InputTokens,
 		OutputTokens:    rec.Result.OutputTokens,
 		TotalTokens:     rec.Result.InputTokens + rec.Result.OutputTokens,
@@ -511,6 +515,79 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 		out = append(out, row)
 	}
 	return out
+}
+
+// roundNarration renders the loop's per-round model turns in the wire shape
+// consumers read: round, reasoning, content.
+//
+// The round number matches the one on that round's tool executions, which is
+// the whole contract — it is what lets a reader interleave the two lists into
+// one chronological ledger without a second ordering rule.
+func roundNarration(narr []toolloop.Narration) []types.RoundNarration {
+	if len(narr) == 0 {
+		return nil
+	}
+	out := make([]types.RoundNarration, 0, len(narr))
+	for _, n := range narr {
+		out = append(out, types.RoundNarration{
+			"round":     n.Round,
+			"reasoning": n.Reasoning,
+			"content":   n.Content,
+		})
+	}
+	return out
+}
+
+// partialRound renders the round currently being written, or nil.
+//
+// Nil rather than an empty object when there is nothing in flight, so
+// `omitempty` drops the key entirely: a consumer reads "absent" as "no round
+// is open", and an empty object would read as "a round is open and has said
+// nothing", which is a different fact.
+func partialRound(p *toolloop.Partial) map[string]any {
+	if p == nil {
+		return nil
+	}
+	out := map[string]any{
+		"round":     p.Round,
+		"reasoning": tail(p.Reasoning),
+		"content":   tail(p.Content),
+	}
+	if len(p.Abandoned) > 0 {
+		out["abandoned"] = roundNarration(p.Abandoned)
+	}
+	return out
+}
+
+// partialTail bounds how much of a round in flight goes on the wire.
+//
+// The whole accumulated text is republished five times a second — deltas
+// cannot be sent instead, because the socket hub drops the OLDEST frame when a
+// client falls behind and a consumer that had missed one would splice the
+// remaining fragments into nonsense. Republishing the accumulation is
+// therefore the correct shape for a lossy channel, and it is also quadratic in
+// the length of the round: a thirteen-thousand-character reasoning block costs
+// a seat about four megabytes over its life, times every open dashboard.
+//
+// The tail is what a reader is actually watching — text appears at the END —
+// and the full text arrives moments later on the round's own narration, which
+// is authoritative anyway. Four thousand characters is roughly two screens at
+// this type size, so nothing a reader could have been mid-way through is cut.
+const partialTail = 4000
+
+// tail is the last partialTail characters, marked when it elides.
+func tail(text string) string {
+	if len(text) <= partialTail {
+		return text
+	}
+	// Cut on a RUNE boundary: slicing a UTF-8 string by bytes can split a
+	// multi-byte character, and the replacement glyph would be the last
+	// thing on screen every time the cut landed mid-character.
+	cut := text[len(text)-partialTail:]
+	for len(cut) > 0 && !utf8.RuneStart(cut[0]) {
+		cut = cut[1:]
+	}
+	return "…" + cut
 }
 
 // encodeArgs renders a call's arguments as JSON text, falling back to nothing

@@ -862,9 +862,10 @@ should follow, in order:
    without mentioning anyone — it answers again, because it is now following
    the thread.
 3. The engine's dashboard shows the turn. Start the API with
-   `crewlet run … -api-port 8000` and open <http://localhost:8000> —
-   Activity shows the inbound notification with a Mattermost badge, and the
-   agent's LLM calls are on its Agents page.
+   `crewlet run … -api-port 8000` and open <http://localhost:8000> — the
+   **Event log** carries the inbound notification with its source, and
+   **Model activity** carries the turn it woke: each phase, the rounds it
+   took, and the tools each round called.
 
 If a bot stays silent, check in this order:
 

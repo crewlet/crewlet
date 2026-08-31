@@ -2,16 +2,15 @@ package queries
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
@@ -73,12 +72,28 @@ type Sources struct {
 	// has fired" are told apart by the answer's own shape.
 	Runs ScheduleRuns
 
-	// Conversations is what each seat already said in each thread it works.
-	Conversations ledgerstore.Conversations
-
-	// Diary and Episodes are a seat's memory.
+	// Diary, Episodes and Skills are a seat's memory. Skills is the half
+	// that had no query at all: learning.Skills.List exists and is tested,
+	// and nothing served it, so a seat's synthesized skills were written,
+	// versioned, loadable by the agent itself — and invisible to the
+	// operator whose tokens paid for them.
 	Diary    *learning.Diary
 	Episodes *learning.Episodes
+	Skills   *learning.Skills
+
+	// Channels is the fleet's agent-to-agent authorization record. A
+	// consumer-defined interface rather than the whole coord.Fleet: this
+	// surface reads open channels and nothing else, and a source that could
+	// reach the activation pointer would eventually be given a reason to.
+	Channels interface {
+		OpenChannels(ctx context.Context) ([]coord.Channel, error)
+	}
+
+	// Knowledge is the company's ONE knowledge backend, behind the same
+	// seam a seat's Plan phase searches through — so an operator asking
+	// "what would an agent find" gets the answer an agent would get,
+	// rather than one from an index somebody has to keep fresh.
+	Knowledge knowledge.Searcher
 
 	// Budget is the DURABLE token counter — what the engine actually
 	// enforces against, across every node and every restart. Nil answers
@@ -165,6 +180,14 @@ func Register(r *Registry, s Sources) {
 		r.Register("events", s.events)
 		r.Register("event", s.event)
 		r.Register("trace", s.trace)
+		// A turn is its own question, not a slice of the trace: one trace
+		// can span several turns and one turn several traces. See the
+		// answer, and migration 0014 which made it askable at all.
+		r.Register("turn", s.turn)
+		// The company's phase records, with their payloads. `events` cannot
+		// serve this: its listing never selects the payload, and a phase
+		// record without one has no prompts, no response and no decision.
+		r.Register("phases", s.phases)
 	}
 	if s.Health != nil {
 		r.Register("stream", s.stream)
@@ -183,15 +206,21 @@ func Register(r *Registry, s Sources) {
 		// which is a different question from what it has done.
 		r.Register("schedules", s.schedules)
 		r.Register("integrations", s.integrations)
+		// Gated on the COMPANY, not on the searcher, for the same reason
+		// budgets is: "this company has no knowledge backend configured" is
+		// a fact the company alone establishes, and it is a far more useful
+		// answer than an unknown query. A nil searcher IS the answer here,
+		// not the absence of one.
+		r.Register("knowledge", s.knowledgeSearch)
 	}
 	if s.Sandbox != nil {
 		r.Register("sandbox_runs", s.sandboxRuns)
 	}
-	if s.Conversations != nil {
-		r.Register("conversations", s.conversations)
-	}
-	if s.Diary != nil || s.Episodes != nil {
+	if s.Diary != nil || s.Episodes != nil || s.Skills != nil {
 		r.Register("agent_memory", s.agentMemory)
+	}
+	if s.Channels != nil {
+		r.Register("a2a_channels", s.a2aChannels)
 	}
 	if s.Config != nil {
 		// OPERATOR-ONLY, all three. Reading the config document exposes
@@ -233,10 +262,22 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 	// configured and never spawned is exactly that, and a 404 there would
 	// make a healthy new company look broken. Its history is answered the
 	// same way.
+	history, next := s.phaseHistory(ctx, seat, role, p)
 	answer := map[string]any{
-		"role":        role,
-		"live":        nil,
-		"llm_history": s.phaseHistory(ctx, seat, role),
+		"role": role,
+		"live": nil,
+		// The rows are `store.EventRecord`s, PAYLOAD NESTED — the same
+		// shape `event`, `trace` and `turn` answer with. They used to be
+		// the payload flattened with an id and a timestamp merged in,
+		// which meant one client had to carry two readers for one kind of
+		// thing and a field added to the envelope reached three screens
+		// and not the fourth.
+		"llm_history": history,
+		// The cursor the caller pages with, or "" at the end of the
+		// record. Its absence is why a seat's transcript was a hard fifty
+		// rows with no way past them, while the events it was made of sat
+		// in the store addressable by id.
+		"next": next,
 	}
 	// ASSIGNED ONLY WHEN THERE IS ONE, because a nil *Overlay stored in an
 	// any is not nil: every `live != nil` check above this layer would read
@@ -263,32 +304,39 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 // model, response, tool_executions, total_tokens, cost_usd — because the same
 // shape drives the live row, and the timestamp is the one field that lives on
 // the envelope rather than inside it.
-func (s Sources) phaseHistory(ctx context.Context, seat, role string) []map[string]any {
+func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) ([]store.EventRecord, string) {
 	if s.Events == nil {
-		return []map[string]any{}
+		return []store.EventRecord{}, ""
 	}
-	records, err := s.Events.AgentPhases(ctx, s.agentIDOf(seat), role)
+	var before *store.Cursor
+	if id := p.String("before_id"); id != "" {
+		at, err := time.Parse(time.RFC3339Nano, p.String("before_time"))
+		if err == nil {
+			before = &store.Cursor{Time: at, ID: id}
+		}
+		// A malformed cursor falls back to the newest page rather than
+		// failing: this is best effort, and refusing the whole seat page
+		// over a bad query parameter would turn a paging bug into no
+		// screen at all.
+	}
+	records, err := s.Events.AgentPhases(ctx, s.agentIDOf(seat), role, before)
 	if err != nil {
 		log.WarnContext(ctx, "agent_history_unavailable", "seat", seat, "error", err)
-		return []map[string]any{}
+		return []store.EventRecord{}, ""
 	}
-	out := make([]map[string]any, 0, len(records))
-	for _, rec := range records {
-		row := map[string]any{}
-		if len(rec.Payload) > 0 {
-			if err := json.Unmarshal(rec.Payload, &row); err != nil {
-				// One unreadable row is not the list. Skipping it keeps
-				// the rest renderable, which is what a reader wants from
-				// a history panel.
-				continue
-			}
-		}
-		row["id"] = rec.ID
-		row["timestamp"] = rec.Time.UTC().Format(time.RFC3339Nano)
-		row["failed"] = rec.Failed
-		out = append(out, row)
+	if records == nil {
+		return []store.EventRecord{}, ""
 	}
-	return out
+	// The cursor is the LAST row's key, echoed rather than left for a client
+	// to assemble: (time, id) is the table's key, and a client rebuilding it
+	// from a rendered timestamp would lose the sub-second precision the
+	// tiebreak depends on.
+	last := records[len(records)-1]
+	next := ""
+	if len(records) == store.AgentPhaseLimit {
+		next = last.Time.UTC().Format(time.RFC3339Nano) + "|" + last.ID
+	}
+	return records, next
 }
 
 // firstOf returns the first non-empty value.

@@ -45,7 +45,7 @@ A fresh agent (no onboarding marker for its current org chain) needs to read its
 
 The marker invalidates itself when the org chain changes (`compute_chain_hash`), so a role move / reorg re-triggers onboarding for the new context. Set `onboarding_max_tool_rounds: 0` to disable the dedicated pass. When the marker store isn't wired (no DB), onboarding is skipped — there's no way to record completion, so it would otherwise run every turn.
 
-On the dashboard, onboarding renders as its **own** group (a `book` label, no trigger chip), separate from the triggering turn — it's one-time setup that happens to ride the first turn, not part of that turn's task.
+On the dashboard, onboarding renders as its own phase within the turn it rode in on, with a neutral tag rather than one of the three phase hues — it is one-time setup that happens to ride the first turn, not part of that turn's task, and colour is reserved for the phases a reader tracks across every screen.
 
 ---
 
@@ -371,7 +371,7 @@ that `integrations.slack.status_phrases` can replace. See
 
 Every turn opens one `agent.turn` OTel span with child spans `agent.turn.plan`, `agent.turn.execute`, `agent.turn.review`, `agent.turn.judge` (one per extension-judge call, nested under the phase that fired it). A sub-agent does not open a span of its own; it reports as an `agent_phase_completed` event with `phase=subagent` and `host_phase=execute`, so a dashboard groups it under the Execute round that spawned it, and a batch also emits one `subagent_batched`. The trigger event's OTel context is restored exactly once at the turn boundary so the span hierarchy is stable across agents.
 
-The extension judge additionally emits an `AgentPhaseCompleted` event with `phase="judge"` carrying its system prompt, user prompt, response, token counts, and decision (`extend` / `rescue`) — the same shape as the Plan/Execute/Review phase events, so the dashboard's per-agent "LLM Invocations" view renders judge calls alongside the main phases without any frontend change.
+The extension judge additionally emits an `AgentPhaseCompleted` event with `phase="judge"` carrying its system prompt, user prompt, response, token counts, and decision (`extend` / `rescue`) — the same shape as the Plan/Execute/Review phase events, so **Model activity** and the seat's own transcript render judge calls alongside the main phases without any frontend change.
 
 ### What streams during a turn
 
@@ -411,9 +411,36 @@ finished turn — not a second assembly of it that can disagree. Reasoning
 from an extended-thinking model rides in that string wrapped in
 `<think>...</think>` (the wire format is
 `internal/events/types`, shared with the
-[auxiliary-LLM telemetry](agent-learning.md)); the dashboard parses the
-markers and renders each one as a collapsible **Reasoning** block inline
-with the tool badges. The three builders of that field used to be three
+[auxiliary-LLM telemetry](agent-learning.md)).
+
+**A round is published while it is being written.** `llm.Request.OnDelta`
+asks a backend to stream; the tool loop accumulates the fragments into the
+round in flight and republishes at most five times a second, which is below
+the rate at which appearing text stops reading as live and well inside what
+the socket hub can carry. The fragment rides `partial_round` on
+`agent_turn_progress` — live-only, so nothing persists a half-written
+sentence — and is cleared the instant the round commits, because from then on
+its narration is authoritative. Streaming is opt-in per CALL, not a property
+of a backend: twelve of the engine's thirteen provider call sites want an
+answer rather than a running commentary. An endpoint that accepts a streaming
+request and answers without streaming is negotiated down to the unary call,
+once per process.
+
+**`response` is a join, so the split travels beside it.** That string is
+every round's assistant turn joined with a blank line, and the join cannot
+be undone — its parts are separated by a blank line and prose contains
+blank lines. A reader that split it on the leading `<think>` tag therefore
+showed the FIRST round's thinking as "the reasoning" and every later
+round's thinking as "the answer", tags and all. So both events also carry
+`round_narration`: one `{round, reasoning, content}` per round, recorded
+where the round's assistant message is appended, which is the last frame
+that knows which round the turn belongs to. Its `round` matches
+`tool_executions[].round`, and that shared number is the whole contract —
+it is what lets a consumer interleave the two lists into one ledger of
+"what it thought, what it said, what it called" without a second ordering
+rule. The reasoning stays collapsed by default: it is long, it is not the
+answer, and a reader scanning a turn for what it DID should not have to
+scroll past what it considered. The three builders of that field used to be three
 hand-written assemblies, and the live one omitted reasoning entirely: a
 thinking model's live row streamed tool calls against an empty response
 and only grew its reasoning once the phase was over.
@@ -434,7 +461,7 @@ therefore still agree across a suspend.
 
 ### Turn source (the triggering event)
 
-Every per-phase telemetry event (`AgentPhaseStarted`, `AgentPhaseCompleted`, `AgentTurnProgress`) and the `AgentTurnCompleted` aggregate carries a compact `trigger` descriptor — built by `internal/events/types` from the turn's the turn's trigger event. It records the `{id, type, summary, actor, timestamp}` of the event that *caused* the turn (a task assignment, notification, A2A request, or schedule tick). When the trigger is an external notification it additionally carries the originating `integration` (slack / jira / github / …), the human `sender`, and the `source_event_type`, so the dashboard labels the source with the actual integration — a branded Slack/Jira badge with the sender — instead of a generic "external notification". The dashboard's "LLM Invocations" view renders this as the invocation's **source**: a compact chip on each turn header and a labelled "Source" block in the per-phase detail, linking to the full event when the trigger was persisted (`#/events/{id}`). The descriptor is empty for engine-internal turns with no trigger.
+Every per-phase telemetry event (`AgentPhaseStarted`, `AgentPhaseCompleted`, `AgentTurnProgress`) and the `AgentTurnCompleted` aggregate carries a compact `trigger` descriptor — built by `internal/events/types` from the turn's the turn's trigger event. It records the `{id, type, summary, actor, timestamp}` of the event that *caused* the turn (a task assignment, notification, A2A request, or schedule tick). When the trigger is an external notification it additionally carries the originating `integration` (slack / jira / github / …), the human `sender`, and the `source_event_type`, so the dashboard labels the source with the actual integration — a branded Slack/Jira badge with the sender — instead of a generic "external notification". **Model activity** renders this as the turn's own header line — what woke it, and the integration badge when one did — and the seat's transcript carries the same, linking to the full event when the trigger was persisted (`#/events/{id}`). The descriptor is empty for engine-internal turns with no trigger.
 
 Each phase row in that view is keyed to its **phase colour** (plan / execute / review / auxiliary / sub-agent / judge — the same hue as the phase pill): a left accent stripe identifies the phase at a glance even while the row is collapsed, and expanding a row tints its border, header, and body with that colour so several open sections stay visually distinct instead of blurring into one neutral stack. The standalone per-phase detail card carries the same accent.
 

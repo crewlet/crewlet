@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -445,59 +445,6 @@ func slackSeats(company *config.Company) int {
 
 func boolPtr(v bool) *bool { return &v }
 
-// conversations answers what a seat already said — the threads it holds
-// context for, or one thread's entries.
-//
-// Served because a context source an operator cannot read is an invisible
-// second memory. This one is engine-owned, so it can be shown instead.
-func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
-	handle := p.String("handle")
-	if handle == "" {
-		return nil, fmt.Errorf("%w: conversations needs a handle", ErrBadParams)
-	}
-	if key := p.String("key"); key != "" {
-		entries, err := s.Conversations.History(ctx, handle, key, ConversationEntryLimit)
-		if err != nil {
-			return nil, err
-		}
-		if entries == nil {
-			entries = []ledger.Session{}
-		}
-		return map[string]any{
-			"handle": handle, "conversation_key": key,
-			"conversations": []any{}, "entries": entries,
-		}, nil
-	}
-	threads, err := s.Conversations.Threads(ctx, handle, ConversationListLimit)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]map[string]any, 0, len(threads))
-	for _, thread := range threads {
-		out = append(out, map[string]any{
-			"conversation_key": thread.Key,
-			"entries":          thread.Entries,
-			"last_at":          isoOrEmpty(thread.LastAt),
-		})
-	}
-	return map[string]any{
-		"handle": handle, "conversations": out, "entries": []any{},
-	}, nil
-}
-
-// The two conversation windows.
-const (
-	// ConversationListLimit bounds the threads one seat's page lists. A
-	// seat working a busy chat surface accumulates a thread per channel,
-	// and the page shows them as a sidebar.
-	ConversationListLimit = 50
-
-	// ConversationEntryLimit bounds one thread's entries. It matches the
-	// window a turn itself is given, so what an operator reads is what the
-	// next turn will read.
-	ConversationEntryLimit = 50
-)
-
 // agentMemory answers a seat's memory: its diary and its episodes.
 //
 // Both halves, because they answer different questions. The diary is what this
@@ -533,7 +480,18 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: agent_memory needs an id", ErrBadParams)
 	}
-	out := map[string]any{"id": id, "diary": []any{}, "episodes": []any{}}
+	// EVERY key is present on every answer, as an empty list rather than an
+	// absent one. A client cannot tell "this seat has learned nothing" from
+	// "this node does not keep that half" if the key simply is not there, and
+	// both are ordinary states.
+	out := map[string]any{
+		"id":             id,
+		"diary":          []map[string]any{},
+		"episodes":       []map[string]any{},
+		"skills":         []map[string]any{},
+		"counterparties": []map[string]any{},
+		"onboarded_at":   "",
+	}
 	now := s.clock()
 	if s.Diary != nil {
 		// RESOLVED, not passed through. The diary is keyed by the derived
@@ -546,9 +504,11 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if entries != nil {
-			out["diary"] = entries
+		rows := make([]map[string]any, 0, len(entries))
+		for _, e := range entries {
+			rows = append(rows, diaryRow(e))
 		}
+		out["diary"] = rows
 	}
 	if s.Episodes != nil {
 		// Episodes are keyed by HANDLE and the diary by agent id. The
@@ -560,9 +520,32 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if episodes != nil {
-			out["episodes"] = episodes
+		rows := make([]map[string]any, 0, len(episodes))
+		for _, e := range episodes {
+			rows = append(rows, episodeRow(e))
 		}
+		out["episodes"] = rows
+	}
+	if s.Skills != nil {
+		// The half that had no query at all. A seat drafts these from its
+		// own repeated work, versions them, and loads them mid-turn — and
+		// until now the operator paying for that could not see one.
+		// The zero ListOptions is the operator's view as much as the
+		// agent's: archived hidden, stale shown — a stale skill still
+		// works and still revives on use, so hiding it would misreport
+		// what the seat can actually load.
+		skills, err := s.Skills.List(ctx, id, learning.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		if len(skills) > MemoryPageLimit {
+			skills = skills[:MemoryPageLimit]
+		}
+		rows := make([]map[string]any, 0, len(skills))
+		for _, sk := range skills {
+			rows = append(rows, skillRow(sk))
+		}
+		out["skills"] = rows
 	}
 	return out, nil
 }

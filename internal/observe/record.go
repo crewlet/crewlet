@@ -43,6 +43,14 @@ var taggedKeys = map[string]string{
 	"task_id":    "task_id",
 	"channel_id": "channel_id",
 	"sender":     "sender",
+	// The identity of one unit of agent work. Almost every event a turn
+	// publishes carries it — each phase record, the turn's own completion,
+	// a provider fallback, a guard breach, a sandbox suspend and its
+	// resume — and until it was promoted none of them could be found BY
+	// it, so "everything that happened in this turn" was a question with
+	// no answer. A trace is NOT a substitute: one trace can span several
+	// turns, and a turn resumed after a restart can span several traces.
+	"turn_id": "turn_id",
 	// Which conversation (a Slack thread, a Jira issue, a PR) the event
 	// belongs to. channel_id does NOT cover it: that is set on A2A events
 	// alone and never on the phase records that carry the model's

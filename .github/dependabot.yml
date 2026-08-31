@@ -2,6 +2,7 @@
 #
 #   .github/workflows/*.yml   the actions CI and releases run on
 #   go.mod                    the engine's own Go dependencies
+#   dashboard/package.json    the dashboard's build and runtime dependencies
 #   Dockerfile                the base image a release ships
 #   docker-compose.yml        the images the local dev stack runs
 #
@@ -41,6 +42,22 @@ updates:
 
   - package-ecosystem: gomod
     directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+
+  # The dashboard's own dependencies. It is a React + TypeScript application
+  # built by Vite, and its build output is committed to static/dashboard — so a
+  # bump here changes bytes the engine binary EMBEDS, which is why the surface
+  # has to be watched like any other. The directory is where the manifest is,
+  # not the repository root: npm reads package.json beside the lockfile.
+  #
+  # A bump lands with a rebuilt bundle or it does not land at all: ci.yml's
+  # `dashboard` job rebuilds and diffs static/dashboard, so a version bump that
+  # changes the output fails until the output is committed with it.
+  - package-ecosystem: npm
+    directory: "/dashboard"
     schedule:
       interval: weekly
     commit-message:

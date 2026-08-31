@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"testing"
 	"testing/fstest"
 
@@ -196,8 +197,14 @@ func TestTheRealDashboardIsInTheBinary(t *testing.T) {
 		t.Error("the embedded shell is empty")
 	}
 
-	// And its entry module, which is what the shell imports.
-	if res := fetch(t, a, "/static/dashboard/js/app.js", nil); res.StatusCode != http.StatusOK {
+	// And its entry module, whose name the SHELL carries: the bundle is
+	// content-hashed, so a literal path here would be a path that goes stale
+	// on the next build and a test that fails for the wrong reason.
+	entry := regexp.MustCompile(`src="(/static/dashboard/assets/[^"]+\.js)"`).FindSubmatch(body)
+	if entry == nil {
+		t.Fatalf("the shell names no entry module:\n%s", body)
+	}
+	if res := fetch(t, a, string(entry[1]), nil); res.StatusCode != http.StatusOK {
 		t.Errorf("the dashboard's entry module is not in the binary: %d", res.StatusCode)
 	}
 	if _, err := static.FS().Open("dashboard/index.html"); err != nil {

@@ -58,9 +58,9 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the handle resolves to the derived agent id the diary is keyed by |
-| `GET` | `/org` | Full org tree (units, roles — including human seats with `"kind": "human"`) |
+| `GET` | `/org` | The company's identity and its full tree: `name`, `mission`, `vision`, `policies`, then `units` and `roles` (including human seats with `"kind": "human"`). The four identity fields are the founder-authored half of a company and are plain prose — no credentials, no `${VAR}` references; providers, MCP servers and integrations stay behind the operator-gated `/config` |
 | `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) |
-| `GET` | `/events` | Recent engine events from the event store (`limit` caps at 500; keyset-paged, see below) |
+| `GET` | `/events` | Recent engine events from the event store (`limit` caps at 400; keyset-paged, see below) |
 | `GET` | `/events/{event_id}` | Single event incl. payload |
 | `GET` | `/events/trace/{trace_id}` | All events in one trace, oldest first, capped at 500 |
 | `GET` | `/tokens/breakdown` | Per-stage / model / worker / agent / turn token-spend rollup |
@@ -70,7 +70,6 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `GET` | `/budgets` | Token caps, the durable shared counter they are enforced against, and which scopes are being refused (see [below](#get-budgets)) |
 | `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
-| `GET` | `/conversations` | What a seat already said in each thread / issue / pull request it works — the same [conversation-session](../concepts/conversation-sessions.md) rows the engine renders into that conversation's next turn. `?handle=` lists them; `?handle=&key=` returns one conversation's entries. `available: false` means this node cannot see the ledger, never that the seat has said nothing |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
@@ -268,7 +267,7 @@ On a `409`, re-read `/config` and send the edit again.
 
 ### The `config_audit` query
 
-Recent revision metadata for the dashboard's Configuration room. **A query, not a REST route** — there is no `GET /config/audit` in this build; the room asks the query channel for `config_audit` and gets the same revision records `GET /config/revisions` serves, in a wrapper object.
+Recent revision metadata for the dashboard's Configuration screen. **A query, not a REST route** — there is no `GET /config/audit` in this build; the screen asks the query channel for `config_audit` and gets the same revision records `GET /config/revisions` serves, in a wrapper object.
 
 ```
 query config_audit { "limit": <N> }
@@ -276,7 +275,7 @@ query config_audit { "limit": <N> }
 
 | Parameter | Default | Range | Description |
 |-----------------|---------|-------|-------------|
-| `limit` | `50` | `1..500` | Number of revisions to return, newest first. Out-of-range returns `400 invalid_limit`. |
+| `limit` | `50` | `1..500` | Number of revisions to return, newest first. An out-of-range number is CLAMPED to the range; only a non-numeric value is `400 invalid_limit`. |
 
 Response (`200 OK`):
 
@@ -355,6 +354,7 @@ projection, and the two are different sources on purpose: the store holds what
 completed, memory holds what is happening. A screen renders both with one
 renderer, so each history row carries the same fields a live one does —
 `turn_id`, `phase`, `iteration`, `model`, `response`, `tool_executions`,
+`round_narration`, `partial_round`,
 `total_tokens`, `cost_usd` — plus the envelope's `timestamp` and `failed`.
 
 An unreadable or absent event log costs the history and nothing else: the
@@ -452,7 +452,7 @@ stopped on is still there to read.
 The agent detail page streams the same way: it paints from a `agent`
 query, then keeps itself current from the pushes.
 `agent_phase_completed` / `agent_turn_completed` envelopes append to the
-LLM Invocations list live, and the agent's own `live_call` — pushed on
+phase transcript live, and the agent's own `live_call` — pushed on
 every round — is the in-flight row inside its turn card, replaced by the
 completed record when the phase finishes. Progress envelopes carry
 `turn_id` / `phase` / `iteration` for this correlation; they are
@@ -621,7 +621,7 @@ It is deliberately never persisted: replaying a live meter from history
 would show a dead process's counters as the current ones.
 
 Each agent's `live_call` is `null` between turns, or
-`{ turn_id, phase, iteration, model, response, tool_executions, rounds,
+`{ turn_id, phase, iteration, model, response, tool_executions, round_narration, rounds,
 in_progress }` while an LLM call is under way.  A call whose phase
 failed keeps `in_progress: false` plus `failed: true` and an `error`
 object, so the dashboard renders the failure instead of an answer that
@@ -677,18 +677,21 @@ REST route calls, so the two surfaces cannot diverge:
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload |
 | `events` | `{limit, type, source, category, trace_id, actor, related_agent, before, before_id}` | `GET /events` |
 | `trace` | `{trace_id}` | `GET /events/trace/{trace_id}` |
+| `turn` | `{turn_id}` | Every event of ONE unit of agent work, oldest first, payloads included — each phase, the turn's own completion, and the fallbacks and guard breaches that happened inside it. Not a slice of the trace: one trace can span several turns and one turn several traces. Rows written before migration `0014` carry no `turn_id` and do not answer this |
+| `phases` | `{role, limit, before_time, before_id}` | The company's `agent_phase_completed` records, newest first, **payloads included**, keyset-paged. `events?type=agent_phase_completed` is not a substitute: the event listing deliberately never selects the payload, and a phase record without one has no prompts, no response, no tool calls and no decision |
 | `tokens` | `{since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
 | `schedules` | — | `GET /schedules` |
 | `fleet` | — | `GET /fleet` — leases move with no event to push, so the Fleet view polls this rather than waiting for one. `fleet_unavailable` when a configured lease store cannot be read (the REST twin answers `503` for the same case) |
 | `sandbox_runs` | — | `GET /sandbox-runs` — `no_pending_store` when no database is configured; the REST twin answers that case with the `degraded` body below |
 | `budgets` | — | `GET /budgets` |
-| `conversations` | `{handle, key}` | `GET /conversations` — the seat page's **Threads** tab |
+| `a2a_channels` | — | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
+| `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's Plan phase uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.confluence_spaces`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
 | `integrations` | — | `GET /integrations` |
 | `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
 | `config` | — | `GET /config` *(operator token required)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |
 | `config_diff` | `{revision_id}` | `GET /config/revisions/{id}/diff` *(operator token required)* |
-| `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of the Config room's entity editor, whose write half is `PUT /config/{kind}/{id}` *(operator token required)* |
+| `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of the Configuration screen, whose write half is `PUT /config/{kind}/{id}` *(operator token required)* |
 
 ### Wiring
 
@@ -704,16 +707,24 @@ dashboards.  Backpressure is per-WebSocket: a stalled tab drops the
 oldest queued envelope so it cannot stall the publish path or other
 tabs.
 
-The dashboard itself is a zero-build, modular ES-module app served from
-`crewlet/static/dashboard/` (`index.html` shell + `styles/*.css` +
-`js/**` modules — a store that mirrors the projection, a reconnecting
-WebSocket client with heartbeat, query channel and REST-snapshot
-fallback, a keyed DOM patcher, a frame-coalescing render scheduler, a
-hash router so a refresh keeps your current view, and one view module
-per screen).  `/dashboard` serves the shell; `/static/{path}` serves its
-assets.  Its visual system —
-the token layer, the shared panel recipe, and the categorical hues — is
-documented in [Dashboard Design System](dashboard-design.md).
+The dashboard itself is a React + TypeScript application, built by Vite
+from `crewlet/dashboard/` into `crewlet/static/dashboard/`, which the
+binary embeds — a store that mirrors the projection and derives nothing,
+a reconnecting WebSocket client with heartbeat, query channel and
+REST-snapshot fallback, a hash router that keeps every screen, section
+and filter in the URL, and one file per screen.  `/dashboard` serves the
+shell; `/static/{path}` serves its assets.  The build output is
+COMMITTED, so `go build ./...` needs no Node.
+
+A second build target, `/static/dashboard/protocol.js`, is the wire
+protocol alone as plain ESM: `internal/e2e` replays a real company's
+captured frames through it under `node`, so the client's understanding
+of this contract is checked against a real server rather than against a
+fixture.
+
+Its visual system — the token layer, the measured palette, and the rules
+a change has to keep — is documented in
+[Dashboard Design System](dashboard-design.md).
 
 ---
 
@@ -721,55 +732,71 @@ documented in [Dashboard Design System](dashboard-design.md).
 
 ### `GET /agents/{id}/memory`
 
-Returns the four durable memory surfaces produced by the
-[agent-learning subsystem](../concepts/agent-learning.md) for one agent,
-combined into one JSON response so the dashboard can render the agent's
-"memory" view in a single round trip.
+What one seat has learned, in one round trip. Also served as the
+`agent_memory` query.
+
+`{id}` is the seat's **handle** — the canonical identifier everywhere in
+the system. The two halves are keyed differently in the store (the diary
+by the derived agent id, the episodes by the handle), and this route
+resolves that itself rather than making a caller know which.
 
 ```json
 {
-  "agent_id": "<static config id>",
-  "handle": "<agent handle>",
-  "role": "<role name>",
-  "runtime_id": "<live AgentInstance UUID, when known>",
-  "personal_memories": {
-    "long":  [{ "id", "content", "metadata", "ttl_until" }, ...],
-    "short": [{ "id", "content", "metadata", "ttl_until", "expired" }, ...]
-  },
+  "id": "<handle>",
+  "diary": [
+    { "id", "content", "retention", "source", "turn_id",
+      "created_at", "ttl_until", "retrievals" }
+  ],
   "episodes": [
-    { "id", "task_summary", "plan_summary", "tool_sequence",
-      "skills_used", "review_outcome", "started_at", "ended_at",
-      "duration_ms", "task_id", "turn_id" }, ...
+    { "id", "turn_id", "agent_handle", "task_summary", "plan_summary",
+      "review_outcome", "tool_sequence", "skills_used",
+      "conversation_key", "work_key", "created_at", "ended_at",
+      "duration_ms", "compacted", "count" }
   ],
-  "counterparty_profiles": [
-    { "subject_label", "subject_handle", "subject_external_id",
-      "subject_platform", "subject_name", "traits",
-      "interaction_count", "first_seen_at", "last_updated_at",
-      "last_corroborated_at" }, ...
+  "skills": [
+    { "id", "key", "title", "summary", "version", "updated_at", "uses" }
   ],
-  "synthesized_skills": [
-    { "id", "name", "description", "content",
-      "tool_sequence", "version", "created_at", "updated_at" }, ...
-  ]
+  "counterparties": [
+    { "observer_handle", "subject", "summary", "updated_at" }
+  ],
+  "onboarded_at": ""
 }
 ```
 
+**Every key is present on every answer**, as an empty list rather than an
+absent one. A caller cannot tell "this seat has learned nothing" from
+"this node does not keep that half" if the key is simply not there, and
+both are ordinary states.
+
+The rows are **projected here**, at the API boundary, rather than being
+the learning package's own structs marshalled directly. Two reasons, and
+the first is not stylistic: those are domain types whose fields exist for
+the recall path, they carry no `json` tags, and marshalling them shipped
+Go field names plus every row's raw embedding vector — up to a hundred
+`float32` arrays per request — to a screen with no use for one. Second,
+a wire shape belongs where the wire is.
+
 Sources:
 
-* **`personal_memories`** — knowledge documents at `AGENT` scope with
-  metadata `kind=memory_long` or `kind=memory_short`, written by the
-  `PersistDecider` and `reflect_and_persist` builtin. SHORT entries past
-  their `ttl_until` are returned with `expired=true` so the dashboard
-  can show them grayed out rather than hide them silently.
-* **`episodes`** — recent rows from the `episodes` table (one per
-  completed turn).  Ordered by `ended_at` descending, capped at 50.
-* **`counterparty_profiles`** — rows from `counterparty_profiles`
-  observed by this agent, ordered by `last_updated_at` descending.
-* **`synthesized_skills`** — the agent's own rows from
-  `synthesized_skills` via `learning.Skills.List`. The
-  table is strictly per-agent; cross-agent procedural artefacts are
-  [promoted](../concepts/agent-learning.md) as draft pages in the shared
-  knowledge backend, reachable by all members via query-time search.
+* **`diary`** — the seat's private observation log, written by
+  `reflect_and_persist` and the reflection pass. `retention` is `long` or
+  `short`; a short entry carries the `ttl_until` it expires at.
+  `retrievals` is how often it has actually been recalled, which is the
+  difference between a memory that keeps proving useful and one written
+  once and never read.
+* **`episodes`** — one row per completed turn, newest first, capped at
+  50. `duration_ms` is milliseconds: a Go `time.Duration` marshals as an
+  integer count of NANOSECONDS, which renders as a plausible and wildly
+  wrong number.
+* **`skills`** — the seat's own synthesized skills, drafted from its
+  repeated work and loadable mid-turn via `use_skill`. Archived rows are
+  hidden and stale ones shown, because a stale skill still works and
+  still revives on use.
+* **`counterparties`** — profiles built up from observed interactions.
+
+The table is strictly per-agent; cross-agent procedural artefacts are
+[promoted](../concepts/agent-learning.md) as draft pages in the shared
+knowledge backend, reachable by all members via query-time search.
 
 Each section degrades independently: a missing knowledge provider, an
 unreadable store, or a per-section query error returns an
@@ -885,7 +912,7 @@ a store that is configured and unreadable answers `503`.
 
 ### `GET /budgets`
 
-Backs the dashboard's **Spend** room. Three numbers describe a token
+Backs the dashboard's **Spend & budgets** screen. Three numbers describe a token
 budget and they cover three different spans, which is why any surface
 mixing them can only be wrong:
 
@@ -898,7 +925,7 @@ mixing them can only be wrong:
   `budget_reported` and resets when the process does.
 
 Only the meter and the cap share a span, which is why a seat card can draw
-a bar and this room mostly cannot. What it could never show before is the
+a bar and this screen mostly cannot. What it could never show before is the
 more useful picture — "this seat has burned 94% of its cap across two
 restarts" — because the durable half was reachable only from
 `crewlet budgets show`, which is itself a client of this route.
@@ -1033,7 +1060,7 @@ Three refusals, each pointing somewhere different:
 
 ### `GET /integrations`
 
-Backs the dashboard's **Integrations** room: how each external surface is
+Backs the dashboard's **Integrations** screen: how each external surface is
 wired, and what has come through it over the last 24 hours.
 
 Integrations had close to no surface at all before this. The dashboard

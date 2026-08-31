@@ -586,6 +586,14 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	var out phaseResult
 	budget := in.rounds
 	for {
+		// The loop numbers its rounds per INVOCATION, from 1. An extended
+		// phase runs it again, so without this offset the second invocation
+		// restarts at 1 and every consumer that orders on the round number
+		// sees the phase run backwards: the live projection's stale-round
+		// guard drops the whole extension, and the ledger merges extension
+		// round 1 into original round 1. Captured before the call because
+		// out.Rounds only grows after it returns.
+		prior := out.Rounds
 		res, err := toolloop.Run(ctx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
 			MaxRounds: budget, Budget: r.cfg.Budget,
@@ -600,18 +608,30 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			// one is read after the loop returns nothing, the other while
 			// it is still running.
 			Progress: progress,
+			// The live view is the only reason to stream, so it is on
+			// exactly when something is listening.
+			StreamPartials: true,
 			OnProgress: func(live toolloop.Result) {
-				emit.progress(ctx, ph, iteration, live)
+				emit.progress(ctx, ph, iteration, offsetRounds(live, prior))
 			},
 		})
 		if err != nil {
 			return fail(fmt.Errorf("runner: %s: %w", ph, err))
 		}
-		out.Rounds += res.RoundsUsed
 		out.Text = res.Text
 		out.Suspended = res.Suspended
 		out.Exhausted = res.ExhaustedRounds
-		out.Result = *res
+		// ACCUMULATED, not replaced. The conversation carries across an
+		// extension (so res.Text is already the whole phase), but the loop's
+		// executions and narration are per-invocation — assigning the last
+		// one wholesale dropped every tool call and every round of narration
+		// from before the extension, on exactly the long, hard phases that
+		// get extended.
+		shifted := offsetRounds(*res, out.Rounds)
+		shifted.Executions = append(out.Result.Executions, shifted.Executions...)
+		shifted.Narration = append(out.Result.Narration, shifted.Narration...)
+		out.Result = shifted
+		out.Rounds += res.RoundsUsed
 		// The loop's own count is per-invocation; an extended phase runs it
 		// more than once and the record must carry the phase's total.
 		out.Result.RoundsUsed = out.Rounds
@@ -651,6 +671,32 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		})
 		budget = granted
 	}
+}
+
+// offsetRounds renumbers one loop invocation's rounds onto the phase's own
+// scale, so an extension continues the count instead of restarting it.
+//
+// Copies rather than mutates: the caller's Result is the loop's live snapshot,
+// published from another goroutine, and shifting it in place would renumber a
+// slice the loop is still appending to.
+func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
+	if prior <= 0 {
+		return res
+	}
+	res.RoundsUsed += prior
+	execs := make([]toolloop.Execution, len(res.Executions))
+	for i, ex := range res.Executions {
+		ex.Round += prior
+		execs[i] = ex
+	}
+	res.Executions = execs
+	narration := make([]toolloop.Narration, len(res.Narration))
+	for i, n := range res.Narration {
+		n.Round += prior
+		narration[i] = n
+	}
+	res.Narration = narration
+	return res
 }
 
 type phaseResult struct {

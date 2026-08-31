@@ -104,17 +104,31 @@ func roster(company func() *config.Company, runtime NodeRuntime) []map[string]an
 	return out
 }
 
-// orgTree is the company's role and unit tree, verbatim.
+// orgTree is the company's IDENTITY and its role and unit tree, verbatim.
 //
-// VERBATIM, and that is the contract the client is written to: static/dashboard
-// js/org.js walks `roles` and `units` recursively and reads the config's own
-// field names off them — token_budget, mcp_env, contact, manages. Reshaping it
-// here would mean two definitions of the org's wire form, and the one the
-// client actually parses would be the one nobody edited.
+// VERBATIM, and that is the contract the client is written to: it walks `roles`
+// and `units` recursively and reads the config's own field names off them —
+// token_budget, mcp_env, contact, manages. Reshaping it here would mean two
+// definitions of the org's wire form, and the one the client actually parses
+// would be the one nobody edited.
 //
-// Marshalled through JSON rather than hand-built for the same reason: the tags
-// on config.Company ARE the wire names, so a field added to a role reaches the
-// dashboard without a second place to remember.
+// NAME, MISSION, VISION AND POLICIES ride along, and their absence was a real
+// hole rather than an omission of convenience: they are the founder-authored
+// half of a company — the thing the whole product is FOR — and they were on no
+// wire at all, so the screen that shows a company's charter could only ever
+// render blank, and the dashboard could not put a name to the company it was
+// describing. Policies especially: they render into every planner's prompt in
+// full, so an operator reading "why did it do that" needs to see the standing
+// instructions it was given.
+//
+// They are safe to send. Unlike the rest of the document these are plain
+// founder prose — no credentials, no ${VAR} references, nothing the config API
+// redacts. What is NOT here is equally deliberate: providers, mcp_servers and
+// integrations stay behind the operator-gated /config surface.
+//
+// Marshalled through JSON rather than hand-built so the tags on config.Company
+// stay the single definition of the wire names: a field added to a role reaches
+// the dashboard without a second place to remember.
 func orgTree(company func() *config.Company) map[string]any {
 	if company == nil {
 		return map[string]any{}
@@ -124,9 +138,16 @@ func orgTree(company func() *config.Company) map[string]any {
 		return map[string]any{}
 	}
 	raw, err := json.Marshal(struct {
-		Roles any `json:"roles"`
-		Units any `json:"units"`
-	}{Roles: c.Roles, Units: c.Units})
+		Name     string `json:"name"`
+		Mission  string `json:"mission"`
+		Vision   string `json:"vision"`
+		Policies any    `json:"policies"`
+		Roles    any    `json:"roles"`
+		Units    any    `json:"units"`
+	}{
+		Name: c.Name, Mission: c.Mission, Vision: c.Vision, Policies: c.Policies,
+		Roles: c.Roles, Units: c.Units,
+	})
 	if err != nil {
 		return map[string]any{}
 	}

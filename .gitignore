@@ -62,3 +62,10 @@ slack-apps.json
 .idea/
 .vscode/
 .DS_Store
+
+# The dashboard's dependency tree. Its BUILD OUTPUT is deliberately NOT ignored
+# — static/dashboard is committed, because `go build ./...` and
+# `go install …@latest` must work on a clean checkout with no node on the
+# machine and an embed directive cannot run a bundler. CI rebuilds it and diffs
+# the tree, so a stale commit is a red build rather than a silent one.
+dashboard/node_modules/
