@@ -5,6 +5,17 @@
       "properties": {
         "agent": {
           "description": "Which coding CLI to drive.",
+          "enum": [
+            "claude-code",
+            "codex",
+            "gemini-cli",
+            "qwen-code",
+            "opencode",
+            "cursor-agent",
+            "copilot",
+            "grok",
+            "custom"
+          ],
           "type": "string"
         },
         "auth": {

@@ -14,14 +14,22 @@ import (
 // the worst possible place to learn about it.
 func TestEveryConfiguredAgentNameHasAProfile(t *testing.T) {
 	t.Parallel()
+	// Compared as plain strings: config's set is typed (CLIAgentName) so a
+	// document cannot name one it does not define, while this package keys
+	// its profile registry by string because it does not import config.
+	// The two lists still have to be the same list.
 	shipped := BuiltinNames()
-	for _, name := range config.CLIAgentNames {
+	accepted := make([]string, len(config.CLIAgentNames))
+	for i, name := range config.CLIAgentNames {
+		accepted[i] = string(name)
+	}
+	for _, name := range accepted {
 		if !slices.Contains(shipped, name) {
 			t.Errorf("config accepts cli.agent %q but no profile ships for it", name)
 		}
 	}
 	for _, name := range shipped {
-		if !slices.Contains(config.CLIAgentNames, name) {
+		if !slices.Contains(accepted, name) {
 			t.Errorf("profile %q ships but config refuses it as cli.agent", name)
 		}
 	}
