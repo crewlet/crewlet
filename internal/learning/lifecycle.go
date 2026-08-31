@@ -159,6 +159,21 @@ type Options struct {
 	// ExemplarCount is how many members of a compacted cluster stay raw.
 	ExemplarCount int
 
+	// ToolFreeMaxAge is when a raw turn that called NO TOOLS is dropped.
+	//
+	// It exists because such a turn can never be COMPACTED: clustering
+	// pools turns by tool-sequence overlap, Jaccard over an empty set is
+	// undefined, and there is no other similarity signal here — so for a
+	// chat-only seat the fold that bounds every other seat's raw rows
+	// never fires and the table only grows. Every one of those rows is
+	// scanned and cosined on the Plan phase of every turn, for ever.
+	//
+	// A horizon rather than a cap, because these rows have no cluster to
+	// be a member of: there is no summary that would carry their content
+	// forward, so the only question is how long a chat turn stays worth
+	// scanning. See defaultToolFreeMaxAge.
+	ToolFreeMaxAge time.Duration
+
 	// CompactedMaxAge evicts summaries themselves. Zero keeps them
 	// forever, which is the default: they are small, and losing one loses
 	// the only record of a whole era of a seat's work.
@@ -196,6 +211,26 @@ const (
 	// After that only recall reads it, and there it is a half-finished plan
 	// competing with finished ones.
 	defaultNonTerminalMaxAge = 14 * day
+
+	// defaultToolFreeMaxAge is how long a raw turn that called no tools
+	// stays recallable.
+	//
+	// Ninety days, and the number is the same argument the chat-thread
+	// follow retention makes: a quarter is the point past which a
+	// conversation has stopped being live on every backend this engine
+	// speaks to. A tool-free turn IS a conversation — it answered somebody
+	// without doing anything — so its value as "similar prior work" decays
+	// with the thread it belonged to, while its cost does not decay at all:
+	// it is a row recall scans on every Plan phase at ~62 µs, permanently.
+	//
+	// Deliberately far longer than the other two raw-row horizons here (14
+	// and 30 days), because those drop rows that are half-finished or
+	// already carried forward by something else, and this one drops the
+	// only record of work that really happened. What keeps that honest is
+	// the diary: a fact worth remembering past a quarter is one the seat
+	// was supposed to persist with reflect_and_persist, which nothing here
+	// touches.
+	defaultToolFreeMaxAge = 90 * day
 
 	// defaultConsolidatedGrace is the audit window after a skill absorbs a
 	// row. A month is one full review cycle: long enough that a bad
@@ -248,6 +283,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.NonTerminalMaxAge <= 0 {
 		o.NonTerminalMaxAge = defaultNonTerminalMaxAge
+	}
+	if o.ToolFreeMaxAge <= 0 {
+		o.ToolFreeMaxAge = defaultToolFreeMaxAge
 	}
 	if o.ConsolidatedGrace <= 0 {
 		o.ConsolidatedGrace = defaultConsolidatedGrace
@@ -353,6 +391,13 @@ type PassResult struct {
 	NonTerminalDropped  int
 	ConsolidatedDropped int
 
+	// ToolFreeDropped counts raw turns dropped for having called no tools
+	// and aged past ToolFreeMaxAge. Counted separately from the others
+	// because it is the only sweep here that removes work nothing else
+	// carried forward — a summary replaces the rows it folds, and this
+	// replaces its rows with nothing.
+	ToolFreeDropped int
+
 	// OrphansDropped counts rows an existing summary already covered. Any
 	// value above zero means a previous pass wrote its summary and did not
 	// remove its sources; see [Lifecycle.sweepOrphans].
@@ -399,6 +444,16 @@ func (l *Lifecycle) Pass(ctx context.Context, handle string, now time.Time) (Pas
 
 	n, err = l.dropConsolidated(ctx, handle, now.Add(-l.opts.ConsolidatedGrace))
 	res.ConsolidatedDropped = int(n)
+	if err != nil {
+		return res, err
+	}
+
+	// The one bound on a chat-only seat's raw rows. Nothing below this can
+	// reach them: the fold clusters by tool overlap and skips them
+	// entirely, so without this the table grows for the life of the
+	// deployment and every Plan phase pays for it.
+	n, err = l.dropToolFree(ctx, handle, now.Add(-l.opts.ToolFreeMaxAge))
+	res.ToolFreeDropped = int(n)
 	if err != nil {
 		return res, err
 	}
@@ -460,6 +515,23 @@ func (l *Lifecycle) dropNonTerminal(ctx context.Context, handle string, cutoff t
 	return l.exec(ctx, "drop non-terminal episodes",
 		`DELETE FROM episodes WHERE agent_handle = ? AND kind = 'raw'
 		   AND review_outcome NOT IN `+terminalOutcomes+` AND ended_at < ?`,
+		handle, store.EncodeTime(cutoff))
+}
+
+// dropToolFree removes raw turns that called no tools and have aged out.
+//
+// Scoped to raw rows, like every other sweep here: a summary's tool sequence
+// is the union of its members' and is never empty, but relying on that would
+// make this sweep's safety depend on what another function computes.
+//
+// The empty sequence is stored as an empty JSON array, so the test is against
+// both spellings a writer could leave: a row that never had one and a row
+// whose list is present and empty.
+func (l *Lifecycle) dropToolFree(ctx context.Context, handle string, cutoff time.Time) (int64, error) {
+	return l.exec(ctx, "drop tool-free episodes",
+		`DELETE FROM episodes WHERE agent_handle = ? AND kind = 'raw'
+		   AND (tool_sequence IS NULL OR tool_sequence IN ('[]', ''))
+		   AND ended_at < ?`,
 		handle, store.EncodeTime(cutoff))
 }
 

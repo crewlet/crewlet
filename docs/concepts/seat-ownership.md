@@ -108,9 +108,8 @@ It is **not** on every seat-scoped write, and the honest inventory is narrower t
 | `counterparty_profiles.interaction_count` | **Collapsed.** The increment is skipped when the last counted work key repeats |
 | `agent_onboarding_markers` | Upsert *plus* `try_claim_pass`, a cross-process single-flight claim: already exclusive |
 | `agent_diary` | Byte-identical content collapses on write. Two turns that word the same fact differently still land twice |
-| `token_usage` | Two rows, skewing the dashboard rollup. **Not** budget enforcement, which reads the fleet's shared counter and stays correct |
 
-The last two are deliberate. Nothing can key a *differently worded* diary entry to its twin — that needs the duplicate turn not to happen, which is the completion ledger's job, not a write guard's. And `token_usage` is observability on a high-volume insert path swept on a TTL; a guard there costs more than the skew it prevents.
+The last one is deliberate. Nothing can key a *differently worded* diary entry to its twin — that needs the duplicate turn not to happen, which is the completion ledger's job, not a write guard's.
 
 ## Keying a write on the work
 
@@ -126,7 +125,50 @@ So the write is keyed on the work rather than fenced on the writer. Every turn d
 
 Exclusion is a **unique index** on `(agent_handle, work_key)` plus `INSERT … ON CONFLICT DO NOTHING` — one statement, no read-then-write, so two writers racing inside one process cannot both see "not there" and both insert. It is per agent rather than global: two seats legitimately act on one trigger (a broadcast, a task assigned to a unit) and each one's episode is its own memory. The column is nullable and an empty key maps to SQL `NULL`, which the index treats as distinct from every other `NULL` — so an unkeyed turn is never deduped against another, which is the whole reason it is nullable rather than defaulting to `''`.
 
-**The index is the node's**, like the table it is on, and that is the honest scope of the guarantee. `episodes` is a seat's memory and lives in [the node's own database](coordination.md#what-stays-node-local) — read by the node running that seat, never by a peer. So a duplicate written on two *different* nodes is two rows in two databases, neither of which the other reads, and no recall or synthesis anywhere sees both. What the index collapses is the case that actually recurs against one reader: **one node writing twice** — a redelivery it worked again, or a legitimate re-run after the [completion ledger](#the-completion-ledger) failed open.
+## A seat's memory follows it
+
+Placement moves seats — a node joining or leaving, a drain, a rolling upgrade
+— and a seat's memory is written to the node's own database. So the memory has
+to move too, or a seat that changes node reads a store that has never heard of
+it and runs its next turn having forgotten everything it learned elsewhere.
+
+Every memory row is published to a **compacted changelog** on the stream: one
+subject per row, on a stream that retains exactly one message per subject, so
+it holds the current value of every row rather than a log of every write. A
+node acquiring a seat replays that seat's subjects into its own store **before
+the mailbox attaches**, and a hydration that fails refuses the seat — a peer
+that can hydrate should take it instead, and a seat serving with amnesia
+produces work its own history contradicts.
+
+What travels: the diary, episodes, counterparty profiles, synthesized skills
+and their versions, onboarding markers, and the conversation ledger. What does
+not: this node's own audit log and dispatch history, which are records of what
+*this node* did rather than of what the seat knows.
+
+A row that arrives for one this node already has is resolved by what kind of
+row it is. An append-only row — a diary entry, an episode, a skill version, a
+ledger entry — is immutable once written, so the carried copy is discarded and
+the local row stands. A small mutable row — a counterparty profile, a skill's
+state and use count, an onboarding marker — is one whose *update is the
+content*, so the carried copy wins. That is safe rather than merely
+convenient: a seat is held by one node at a time, so the changelog's latest
+value for a subject is by construction the value its current owner wrote.
+
+A row can also collide with one this node already has under a *different*
+name — two episodes for one work key, written under two ids on two nodes.
+That is skipped rather than raised, and the distinction matters more than one
+row: hydration runs inside seat acquisition, so a raise refuses the seat, and
+a single duplicated episode would make a seat unplaceable across the whole
+fleet.
+
+**Deletes are deliberately not replicated.** The learning lifecycle drops rows
+constantly, and carrying a tombstone for each would double the protocol to
+keep a table converged that already converges itself: a hydrated node may
+resurrect rows its predecessor had swept, and the next lifecycle pass drops
+them again by the same rules. A crash loses at most one cycle of memory (30
+seconds); a graceful handoff flushes on release and loses none.
+
+**The index is the node's**, like the table it is on, and that is the honest scope of the guarantee. `episodes` is a seat's memory and lives in [the node's own database](coordination.md#what-stays-node-local) — read by the node running that seat, never by a peer. So a duplicate written on two *different* nodes is two rows in two databases, each under its own id — and memory replication carries both onto the changelog rather than collapsing them there. What collapses them is this index, on the node that next replays the seat: it imports the first and skips the second. The guarantee is therefore eventual and reader-scoped rather than fleet-wide at write time, which is the honest shape of it. What the index collapses is the case that actually recurs against one reader: **one node writing twice** — a redelivery it worked again, or a legitimate re-run after the [completion ledger](#the-completion-ledger) failed open.
 
 A turn with no ledgerable trigger — a scheduled fire, a sub-agent, a sandbox resume — carries an empty key, skips the guard entirely, and writes exactly as it always did. It has no cross-node duplicate to collapse.
 

@@ -368,7 +368,7 @@ The coding agent calls the LLM itself, from inside the sandbox, so the engine ca
 
 - **Pre-flight floor.** A launch is refused when the agent's remaining token budget is below `turn_engine.sandbox_min_budget_tokens` (default 2000); the `run_sandbox` call returns a normal failure the executor can act on, without suspending.
 - **Self-limits.** A fraction of the remaining budget (`turn_engine.sandbox_budget_fraction`, default 0.5) is translated into the coding agent's own caps — Claude Code's `--max-turns` — so the run self-limits.
-- **Post-accounting.** On collect, reported usage is charged to the budget cascade and the `token_usage` ledger, and the phase event carries the real usage and cost so the Tokens view rolls sandbox spend up alongside native phases. Mid-run enforcement is best-effort by design — the price of the capability; OpenCode's unreported usage stays at zero rather than being invented.
+- **Post-accounting.** On collect, reported usage is charged to the budget cascade, and the phase event carries the real usage and cost so the Tokens view rolls sandbox spend up alongside native phases. Mid-run enforcement is best-effort by design — the price of the capability; OpenCode's unreported usage stays at zero rather than being invented.
 
 ---
 

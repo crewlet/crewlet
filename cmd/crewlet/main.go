@@ -33,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -139,6 +140,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runMigrate(rest, stdout, stderr)
 	case "budgets":
 		return runBudgets(rest, stdout, stderr)
+	case "backup":
+		return runBackup(rest, stdout, stderr)
 	case "llm":
 		return runLLM(rest, stdout, stderr)
 	case "gitlab", "github", "jira", "slack", "confluence", "mattermost":
@@ -159,6 +162,8 @@ Usage:
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
   crewlet migrate [config]    Apply pending schema migrations (-check reports only)
   crewlet budgets <cmd>       Show or reset the durable token counters
+  crewlet backup -dir PATH    Copy this node's store and stream estate, through
+                              the running engine, to a path on ITS host
   crewlet secrets <cmd>       Read and rotate the encrypted secret store
   crewlet config <cmd>        Import, inspect and activate company revisions
   crewlet llm <cmd>           Log in, verify and export the subscription CLI backends
@@ -932,6 +937,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// that can reach it — which is why the reset is a route and not
 		// only a CLI subcommand.
 		Budgets: e.Backends().Fleet,
+		// Both estates a node holds, reachable only from inside it: the
+		// store is locked to this process and the broker binds no
+		// socket. See internal/backup.
+		Backup: backup.New(backup.Options{
+			Store:  e.Backends().Store,
+			Conn:   e.Backends().Conn(),
+			NodeID: boot.Node.ID,
+		}),
 		Config:  configSurface,
 		Secrets: secretSurface,
 		Inbound: api.Inbound{

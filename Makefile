@@ -141,14 +141,41 @@ vet: ## run go vet (ci: build + vet)
 # `latest`, so pinning one in this file would be a second answer to "which
 # linter does this repository use" — and a tool version in a Makefile is a
 # dependency surface Dependabot does not watch (.github/dependabot.yml).
+#
+# What IS checked is that the linter can run at all. golangci-lint refuses a
+# module whose `go` line is newer than the Go it was itself built with, and
+# says so as a config-load error that names neither the fix nor the cause. The
+# trap is that the obvious way to get "the latest" — `go install ...@latest` —
+# builds it with the LINTER MODULE's own minimum Go, which is behind ours, so
+# it produces a binary that lints nothing. Only the prebuilt releases are built
+# with a current Go. Checked here rather than left to that error message,
+# because the whole point of this target is to be the gate CI runs: one that
+# cannot run is worse than one that fails, since a contributor who reads
+# "can't load config" concludes the config is broken.
 lint: ## run golangci-lint (ci: golangci-lint)
 	@command -v golangci-lint >/dev/null 2>&1 || { \
 	  echo "golangci-lint is not on PATH."; \
-	  echo "  Install it from https://golangci-lint.run/welcome/install/ —"; \
-	  echo "  ci.yml runs whatever the latest release is, so no version is"; \
-	  echo "  pinned here."; \
+	  echo "  Install a PREBUILT RELEASE from"; \
+	  echo "  https://golangci-lint.run/welcome/install/ — ci.yml runs whatever"; \
+	  echo "  the latest release is, so no version is pinned here."; \
+	  echo "  NOT 'go install ...@latest' — see below."; \
 	  exit 1; \
 	} >&2
+	@built=$$(golangci-lint version 2>/dev/null | sed -n 's/.*built with go\([0-9][0-9.]*\).*/\1/p'); \
+	need=$$(sed -n 's/^go \([0-9][0-9.]*\)$$/\1/p' go.mod); \
+	if [ -n "$$built" ] && [ -n "$$need" ] && \
+	   [ "$$(printf '%s\n%s\n' "$$need" "$$built" | sort -V | head -1)" != "$$need" ]; then \
+	  { echo "golangci-lint is built with go$$built, but go.mod targets $$need."; \
+	    echo "  It will refuse this module rather than lint it, so this gate"; \
+	    echo "  would report nothing at all."; \
+	    echo "  Install a PREBUILT RELEASE from"; \
+	    echo "  https://golangci-lint.run/welcome/install/ — those are built with"; \
+	    echo "  a current Go. 'go install ...@latest' is NOT enough: it builds"; \
+	    echo "  the linter with the linter module's own minimum Go, which is"; \
+	    echo "  older than $$need."; \
+	    exit 1; \
+	  } >&2; \
+	fi
 	golangci-lint run
 
 # This includes ./internal/e2e/... — the end-to-end gates are ordinary Go

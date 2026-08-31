@@ -11,6 +11,12 @@ dashboard's suites use `node:assert` and nothing else) and
 `make check` runs and CI's own job downloads for itself. **Docker** only for
 the vendor loops below; the engine itself needs no services.
 
+Take golangci-lint as a **prebuilt release**, not via `go install ...@latest`:
+that builds it with the linter module's own minimum Go rather than the newest,
+and a golangci-lint built with a Go older than `go.mod`'s `go` line refuses
+this module outright instead of linting it — so the gate reports nothing at
+all rather than disagreeing. `make lint` checks this and says so.
+
 ```bash
 git clone https://github.com/crewlet/crewlet.git
 cd crewlet

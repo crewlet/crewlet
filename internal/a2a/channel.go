@@ -86,8 +86,9 @@ var (
 	ErrNotAnAgent = errors.New("a2a: target is not an agent seat")
 )
 
-// Store holds channels. A Postgres-shaped implementation and an in-memory twin
-// answer to the same conformance suite.
+// Store holds channels. CoordStore is the one implementation, riding the
+// fleet's coordination store; tests exercise it over the in-memory
+// coordination twin.
 type Store interface {
 	// Open records a new channel.
 	Open(ctx context.Context, ch Channel) error

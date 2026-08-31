@@ -190,7 +190,7 @@ export function createWorkView({ query, refresh }) {
           ? empty(
               "cpu",
               "No pending-run store",
-              "Detached sandbox runs are held in PostgreSQL. Without a database the engine cannot park one, so there is nothing durable to list.",
+              "Detached sandbox runs are held in the fleet's coordination store. Without it the engine cannot park one, so there is nothing durable to list.",
             )
           : loadError
             ? empty(

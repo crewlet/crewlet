@@ -52,6 +52,7 @@ const (
 	streamNotifications = "CREWLET_NOTIFICATIONS"
 	streamConfig        = "CREWLET_CONFIG"
 	streamDeadLetter    = "CREWLET_DLQ"
+	streamMemory        = topics.MemoryStream
 
 	// derivedPrefix names a stream provisioned for a subject namespace the
 	// engine does not itself define.
@@ -117,6 +118,12 @@ type streamSpec struct {
 	subjects  []string
 	retention jetstream.RetentionPolicy
 	maxAge    time.Duration
+
+	// maxPerSubject retains only the newest message on each subject,
+	// turning the stream from a log into a keyed table. Zero means
+	// unlimited, which is what every stream but the memory changelog
+	// wants.
+	maxPerSubject int
 }
 
 // engineStreams is the topology for the subjects the engine defines. Other
@@ -152,6 +159,25 @@ func engineStreams(eventRetention time.Duration) []streamSpec {
 			subjects:  []string{"crewlet.config.>"},
 			retention: jetstream.LimitsPolicy,
 			maxAge:    time.Hour,
+		},
+		{
+			// A seat's memory, one subject per row, ONE MESSAGE PER
+			// SUBJECT. That is what makes this a keyed table rather
+			// than a log: the stream holds the current value of every
+			// row, so a node acquiring a seat replays it in a single
+			// pass and gets the memory as it stands rather than every
+			// write that ever produced it.
+			//
+			// No maxAge. A seat's memory has no horizon here — what
+			// bounds it is the learning subsystem's own lifecycle,
+			// which is where the decision about what a seat should
+			// still remember belongs. An age bound on this stream
+			// would silently delete memory the seat still holds
+			// locally, and the two would disagree about the past.
+			name:          streamMemory,
+			subjects:      []string{topics.MemoryPrefix + ">"},
+			retention:     jetstream.LimitsPolicy,
+			maxPerSubject: 1,
 		},
 		{
 			// Dead letters are kept by age, not by interest: nothing

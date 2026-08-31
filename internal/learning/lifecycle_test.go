@@ -1693,3 +1693,57 @@ func BenchmarkRecallScan(b *testing.B) {
 		})
 	}
 }
+
+// A turn that called NO TOOLS can never be compacted: clustering pools turns
+// by tool-sequence overlap, and Jaccard over an empty set is undefined. So
+// for a chat-only seat the fold that bounds every other seat's raw rows never
+// fires, and the table grows for the life of the deployment — every row of it
+// scanned and cosined on the Plan phase of every turn.
+//
+// This is the only bound on those rows, so it is the only thing standing
+// between a chat-heavy seat and a recall that slows down for ever.
+func TestAToolFreeTurnIsDroppedOnceItHasAgedOut(t *testing.T) {
+	l, e, _ := newLife(t, Options{})
+
+	// Well past the horizon, and deliberately terminal and unconsolidated
+	// so no other sweep here could account for it going.
+	write(t, e, rawEp("chat-old", daysAgo(120)))
+	// Inside the horizon: a recent chat turn is still worth recalling.
+	write(t, e, rawEp("chat-new", daysAgo(10)))
+	// A tool-using turn of the same age must be untouched — that one has a
+	// fold to be carried into, which is exactly why it is not swept.
+	write(t, e, rawEp("tooled-old", daysAgo(120), "slack_post"))
+
+	res := mustPass(t, l)
+	if res.ToolFreeDropped != 1 {
+		t.Fatalf("dropped %d tool-free turns, want 1", res.ToolFreeDropped)
+	}
+
+	rawRows, _ := snapshot(t, e)
+	got := idsOf(rawRows)
+	if slices.Contains(got, "chat-old") {
+		t.Errorf("the aged-out chat turn survived: %v", got)
+	}
+	if !slices.Contains(got, "chat-new") {
+		t.Errorf("a chat turn inside the horizon was dropped: %v", got)
+	}
+	if !slices.Contains(got, "tooled-old") {
+		t.Errorf("a tool-using turn was swept by the tool-free horizon: %v", got)
+	}
+}
+
+// The horizon is a knob with a shipped default, and a deployment that sets
+// its own must be honoured — the whole reason this is an Option rather than
+// a constant.
+func TestTheToolFreeHorizonIsConfigurable(t *testing.T) {
+	l, e, _ := newLife(t, Options{ToolFreeMaxAge: 5 * day})
+	write(t, e, rawEp("chat", daysAgo(10)))
+
+	res := mustPass(t, l)
+	if res.ToolFreeDropped != 1 {
+		t.Fatalf("a shorter horizon did not drop the turn past it: %+v", res)
+	}
+	if l.Options().ToolFreeMaxAge != 5*day {
+		t.Errorf("the configured horizon was overwritten: %v", l.Options().ToolFreeMaxAge)
+	}
+}

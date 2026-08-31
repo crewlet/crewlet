@@ -130,13 +130,13 @@ func TestWithinIsStrictAndNotAPrefixTest(t *testing.T) {
 func TestInheritTakesOnlyTheAllowlist(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-not-for-the-child")
-	t.Setenv("CREWLET_DATABASE_URL", "postgres://example.com/db")
+	t.Setenv("CREWLET_SECRET_KEY_2026_01", "base64-keyring-material-not-for-the-child")
 
 	env := Inherit()
 	if env["PATH"] != "/usr/bin" {
 		t.Fatalf("PATH = %q, want it passed through", env["PATH"])
 	}
-	for _, secret := range []string{"ANTHROPIC_API_KEY", "CREWLET_DATABASE_URL"} {
+	for _, secret := range []string{"ANTHROPIC_API_KEY", "CREWLET_SECRET_KEY_2026_01"} {
 		if _, ok := env[secret]; ok {
 			t.Fatalf("%s reached the child environment", secret)
 		}

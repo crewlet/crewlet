@@ -569,9 +569,8 @@ type Channels interface {
 // standups.
 //
 // The node's own scheduled_runs table STAYS, as this node's audit record of
-// what it dispatched — the same split migration 0011 made between the shared
-// token counter and the per-agent token_usage rows. What the fleet has to
-// agree on is "may I start", and nothing more.
+// what it dispatched — the same split migration 0011 made for the token
+// counter. What the fleet has to agree on is "may I start", and nothing more.
 type Fires interface {
 	// ClaimFire records one fire identity and reports whether THIS caller
 	// wrote it.

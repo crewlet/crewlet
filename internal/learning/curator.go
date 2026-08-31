@@ -365,8 +365,11 @@ func (b *Background) announce(ctx context.Context, handle string, res PassResult
 		return
 	}
 	b.publish(ctx, handle, types.CompactionCompleted{
-		AgentHandle:             handle,
-		NonTerminalDropped:      res.NonTerminalDropped,
+		AgentHandle: handle,
+		// Reported together with the non-terminal drop: both are raw
+		// rows this pass removed without folding them into anything,
+		// which is the distinction the event's reader cares about.
+		NonTerminalDropped:      res.NonTerminalDropped + res.ToolFreeDropped,
 		ConsolidatedDropped:     res.ConsolidatedDropped + res.OrphansDropped,
 		ClustersCompacted:       res.ClustersCompacted,
 		RawReplacedByCompaction: res.RawReplaced,

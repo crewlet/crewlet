@@ -85,8 +85,56 @@ func RecordFor(ev *events.Event) (EventRecord, bool, error) {
 		SpanID:       ev.SpanID,
 		ParentSpanID: ev.ParentSpanID,
 		Tags:         extractTags(payload),
+		Spend:        extractSpend(ev.Type, payload),
 		Payload:      payload,
 	}, true, nil
+}
+
+// spendEventType is the one event that carries an LLM call's cost.
+//
+// Gated on the type rather than on "does the payload happen to have these
+// fields", because several other events carry a `model` or a `turn_id` and a
+// rollup that counted them would be counting calls that never happened.
+const spendEventType = "agent_phase_completed"
+
+// extractSpend pulls one LLM call's cost out of a phase completion.
+//
+// Read from the event's serialized form for the same reason [extractTags] is:
+// an event type this build has never heard of still arrives with its fields
+// intact in the envelope, so a newer node's phase completions are recorded
+// here exactly as a known one's are. Reaching through the decoded payload
+// instead would see nothing at all on an unknown type.
+//
+// Nil for every other event, which is what leaves the promoted columns at
+// their defaults — see schema/0015 for why they are columns.
+func extractSpend(eventType string, payload []byte) *Spend {
+	if eventType != spendEventType {
+		return nil
+	}
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		// The call happened, and dropping it because its payload would
+		// not decode understates the spend this exists to report.
+		return &Spend{}
+	}
+	spend := &Spend{
+		Phase:        payloadString(body, "phase"),
+		HostPhase:    payloadString(body, "host_phase"),
+		Worker:       payloadString(body, "worker"),
+		Model:        payloadString(body, "model"),
+		TurnID:       payloadString(body, "turn_id"),
+		Iteration:    payloadInt(body, "iteration"),
+		InputTokens:  payloadInt(body, "input_tokens"),
+		OutputTokens: payloadInt(body, "output_tokens"),
+		TotalTokens:  payloadInt(body, "total_tokens"),
+	}
+	if spend.Model == "" {
+		// An entry that names no model is identified by the provider
+		// slot it ran on. The backfill in schema/0015 does the same, so
+		// history and new rows agree on what "model" means.
+		spend.Model = payloadString(body, "provider_key")
+	}
+	return spend
 }
 
 // Record writes an event to the log, skipping types the store does not keep.

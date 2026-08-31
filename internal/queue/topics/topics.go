@@ -51,6 +51,26 @@ const (
 
 	// EventsPrefix prefixes the engine's fleet-wide routing subjects.
 	EventsPrefix = "crewlet.events."
+
+	// MemoryPrefix carries a seat's memory rows, one subject per row:
+	// crewlet.memory.<handle>.<table>.<key-digest>.
+	//
+	// A SUBJECT PER ROW is the whole design. The stream retains one message
+	// per subject, so it holds the current value of every row rather than a
+	// log of every write — which is what lets a node acquiring a seat replay
+	// that seat's memory in one pass instead of folding a history. See
+	// internal/learning/memsync.
+	MemoryPrefix = "crewlet.memory."
+
+	// MemoryStream is the stream those subjects live on.
+	//
+	// Named HERE rather than beside the other stream names, because it is
+	// the one stream a package outside the queue has to address by name:
+	// internal/learning/memsync opens a replay consumer on it directly,
+	// the way coordination rides the same connection outside the queue
+	// contract. Two spellings of it would be two things to keep equal.
+	MemoryStream = "CREWLET_MEMORY"
+
 	// EventsWildcard matches every engine event, for broadcast streams.
 	EventsWildcard = EventsPrefix + ">"
 

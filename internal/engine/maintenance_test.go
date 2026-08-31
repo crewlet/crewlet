@@ -40,6 +40,13 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// left to sweep.
 		"a2a_channels",
 		"a2a_channels_idle",
+		// The diary sweep earns its place here the hard way: Expire
+		// shipped with the diary, diary.go described the background
+		// sweep, and for as long as this list did not name it, nothing
+		// anywhere called it — expired short-term memories stayed rows
+		// every recall scanned, forever.
+		"agent_diary",
+		"agent_diary_long",
 		"chat_thread_follows",
 		"conversation_sessions",
 		"events",

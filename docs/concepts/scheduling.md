@@ -205,8 +205,8 @@ wait.
 
 `scheduled_runs` — the node's own table — stays as **this node's audit
 record** of what it dispatched, which is what the dashboard reads and what
-the retention sweep purges. It is the same split the token counter makes
-between the shared `budgets` slot and the per-agent `token_usage` rows:
+the retention sweep purges. It is the same split the token counter made
+when it moved to the shared `budgets` slot:
 what the fleet has to agree on is "may I start", and nothing more. Its
 `outcome` is `fired` or `skipped_catchup`; the downstream turn result
 (done / failed / timed-out) lives in the normal turn telemetry

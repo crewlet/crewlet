@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 )
@@ -41,6 +42,7 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		// what makes a single list of them honest rather than a
 		// coincidence: a node's short-horizon state IS its local index.
 		jobs = append(jobs, maintenance.StoreJobs(db)...)
+		jobs = append(jobs, maintenance.LearningJobs(learning.NewDiary(db))...)
 		jobs = append(jobs, maintenance.ScheduleJobs(sqlledger.New(db.SQL()))...)
 		jobs = append(jobs, maintenance.LedgerJobs(
 			ledgerstore.NewConversations(db),

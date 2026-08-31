@@ -717,6 +717,23 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 	if reg := e.startSeatServers(ctx, company, handle); reg != nil {
 		company.setSeatTools(handle, reg)
 	}
+
+	// THE SEAT'S MEMORY, before it can take a turn. Its diary, episodes,
+	// counterparties and skills were written on whichever nodes ran it
+	// before, and placement moves seats — so without this the seat opens
+	// its mailbox against a store that has never heard of it and runs its
+	// first turn having forgotten everything it learned elsewhere.
+	//
+	// A failure REFUSES the seat, like every other step here. A peer that
+	// takes it instead may hydrate cleanly, and a seat serving with
+	// amnesia produces work its own history contradicts — which is worse
+	// than the seat waiting for the next placement sweep.
+	if e.memory != nil {
+		if _, err := e.memory.Hydrate(ctx, handle); err != nil {
+			return fmt.Errorf("carrying the seat's memory: %w", err)
+		}
+	}
+
 	if e.sandboxCoordinator == nil {
 		return nil
 	}
@@ -755,6 +772,32 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	company := e.Company()
 	e.stopSeatServers(ctx, handle)
 	company.dropSeatTools(handle)
+
+	// A LAST PUBLISH, then forget the seat. The publish is what makes a
+	// graceful handoff lossless: whatever this node learned since its last
+	// cycle reaches the changelog before the successor hydrates. Forgetting
+	// the watermarks is what makes a LATER re-acquisition correct — resuming
+	// from the old marks would skip exactly the memory the other node made
+	// in between.
+	//
+	// Best effort, and it must be: this runs on the release path, where the
+	// seat is already gone. A failure here costs the successor whatever was
+	// written since the last cycle, which is the same bounded loss a crash
+	// costs — and refusing to release would strand the seat for a full TTL.
+	if e.memory != nil {
+		// BOUNDED, because this runs on the release path — including a
+		// drain, where every seat passes through here in turn. A broker
+		// that has stopped answering must cost the drain a few seconds
+		// per seat, not the whole shutdown.
+		flushCtx, stopFlush := context.WithTimeout(
+			context.WithoutCancel(ctx), memoryFlushTimeout)
+		if _, err := e.memory.Publish(flushCtx, handle); err != nil {
+			log.WarnContext(ctx, "seat_memory_not_flushed", "seat", handle, "error", err)
+		}
+		stopFlush()
+		e.memory.Forget(handle)
+	}
+
 	if e.sandboxCoordinator == nil {
 		return
 	}

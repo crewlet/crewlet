@@ -328,12 +328,18 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 	defer cancel()
 
 	config := jetstream.StreamConfig{
-		Name:      spec.name,
-		Subjects:  spec.subjects,
-		Retention: spec.retention,
-		Storage:   storage,
-		Replicas:  max(q.cfg.Replicas, 1),
-		MaxAge:    spec.maxAge,
+		Name:              spec.name,
+		Subjects:          spec.subjects,
+		Retention:         spec.retention,
+		Storage:           storage,
+		Replicas:          max(q.cfg.Replicas, 1),
+		MaxAge:            spec.maxAge,
+		MaxMsgsPerSubject: int64(spec.maxPerSubject),
+	}
+	if spec.maxPerSubject == 0 {
+		// The client spells "unlimited" as -1; a zero would be read as a
+		// stream that retains nothing at all.
+		config.MaxMsgsPerSubject = -1
 	}
 	if err := q.createStream(ctx, config); err != nil {
 		return fmt.Errorf("ensure stream %s: %w", spec.name, err)

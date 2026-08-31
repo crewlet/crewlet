@@ -279,6 +279,74 @@ func (d *Diary) MarkRetrieved(ctx context.Context, ids []string, at time.Time) {
 	}
 }
 
+// DiaryLongCap is how many durable entries one seat keeps.
+//
+// A CAP RATHER THAN A HORIZON, because a diary_long row is a fact the agent
+// deliberately marked durable — "the release train is Thursdays", "this
+// reviewer wants tests first" — and those do not stop being true after a
+// quarter. Expiring them by age would delete exactly what the kind exists to
+// protect.
+//
+// But they cannot be unbounded either: recall scans and cosines every
+// embedded row a seat owns, once per turn, at ~62 µs a row (the same
+// measurement the episode threshold is set from). Five hundred is that
+// threshold's budget — about 32 ms on the Plan phase of every turn — and a
+// seat holding five hundred durable facts about its own work is already far
+// past what a person would.
+//
+// So the bound is on WORTH rather than on age: see [Diary.TrimLong] for what
+// is dropped when a seat exceeds it.
+const DiaryLongCap = 500
+
+// TrimLong drops a seat's least-useful durable entries once it holds more
+// than cap of them, and reports how many went.
+//
+// EVICTED BY USE, NOT BY AGE. The order is retrieval count, then how recently
+// it was retrieved, then age — so what goes is what has never once been
+// recalled and has been sitting there longest, and a fact the seat reaches
+// for every week survives being old. An entry that has never been retrieved
+// is not necessarily worthless, but among five hundred it is the best
+// available guess at which one is.
+//
+// One statement per agent partition via a window function, so a fleet of
+// seats is trimmed without a query per seat.
+func (d *Diary) TrimLong(ctx context.Context, cap int) (int64, error) {
+	if cap <= 0 {
+		cap = DiaryLongCap
+	}
+	// COUNTED SEPARATELY, then deleted. RowsAffected is not usable on this
+	// statement: measured against the pinned driver, a delete whose
+	// subquery visits 12 rows and removes 6 reports 30. The count is what
+	// the sweep logs and what an operator reads, so it has to be the real
+	// number rather than whatever the driver totalled.
+	var over int64
+	if err := d.db.SQL().QueryRowContext(ctx, trimLongCountSQL, cap).Scan(&over); err != nil {
+		return 0, fmt.Errorf("learning: count trimmable diary entries: %w", err)
+	}
+	if over == 0 {
+		return 0, nil
+	}
+	if _, err := d.db.SQL().ExecContext(ctx, trimLongDeleteSQL, cap); err != nil {
+		return 0, fmt.Errorf("learning: trim diary: %w", err)
+	}
+	return over, nil
+}
+
+// rankedLongEntries ranks each seat's durable entries by worth, best first.
+// Shared by the count and the delete so the two can never disagree about
+// which rows are over the cap.
+const rankedLongEntries = `
+	SELECT id, ROW_NUMBER() OVER (
+		PARTITION BY agent_id
+		ORDER BY retrieval_count DESC, last_retrieved_at DESC, created_at DESC
+	) AS rank
+	FROM agent_diary WHERE kind = 'diary_long'`
+
+const trimLongCountSQL = `SELECT count(*) FROM (` + rankedLongEntries + `) WHERE rank > ?`
+
+const trimLongDeleteSQL = `DELETE FROM agent_diary WHERE id IN (
+	SELECT id FROM (` + rankedLongEntries + `) WHERE rank > ?)`
+
 // Expire deletes short entries whose deadline has passed.
 func (d *Diary) Expire(ctx context.Context, now time.Time) (int64, error) {
 	res, err := d.db.SQL().ExecContext(ctx,

@@ -17,7 +17,12 @@ package storetest
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,6 +54,15 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"ByID", testByID},
 		{"ReadFloor", testReadFloor},
 		{"RetentionSweep", testRetention},
+		{"RetentionSweepDrainsABacklogWiderThanOneBatch", testRetentionBacklog},
+		{"RelatedAgentIsAnIndexSeekNotAScan", testRelatedIndexed},
+		{"RelatedAgentIndexIsSweptWithTheLog", testRelatedSwept},
+		{"SpendFoldsTheWholeWindowNotACappedPrefix", testSpendUncapped},
+		{"SpendSurvivesARecordBuiltByHand", testSpendDerived},
+		{"BackupIsAReadableCopyOfTheData", testBackup},
+		{"BackupIsOneSelfContainedFile", testBackupSelfContained},
+		{"BackupRefusesAnOccupiedDestination", testBackupOccupied},
+		{"BackupSurvivesConcurrentWrites", testBackupUnderWrites},
 		{"RecordSkipsUntrackedTypes", testRecordUntracked},
 		{"NullUnconstrainedWorkKey", testWorkKeyNull},
 		{"FollowRoundTrips", testFollowRoundTrips},
@@ -587,6 +601,370 @@ func testRetention(t *testing.T, db *store.DB) {
 	if store.EventRetention < store.EventHistory {
 		t.Fatalf("retention %v is shorter than the read floor %v",
 			store.EventRetention, store.EventHistory)
+	}
+}
+
+// testRetentionBacklog: a purge over a backlog wider than one batch drains
+// it completely and keeps what is inside retention. The batch bound exists
+// so no single statement holds the writer for a whole overhang — but a loop
+// that stopped after one batch would leave the tail in place and report a
+// sweep that had not finished.
+func testRetentionBacklog(t *testing.T, db *store.DB) {
+	log := db.Events()
+	ctx := t.Context()
+	stale := store.EventPurgeBatch + 3
+	when := time.Now().UTC().Add(-store.EventRetention - time.Hour)
+	for i := range stale {
+		write(t, log, store.EventRecord{
+			ID: fmt.Sprintf("stale-%04d", i), Type: "task_created", Source: "pm",
+			Time: when.Add(time.Duration(i) * time.Millisecond), Category: "task",
+		})
+	}
+	write(t, log, store.EventRecord{
+		ID: "keep", Type: "task_created", Source: "pm",
+		Time: time.Now().UTC().Add(-time.Hour), Category: "task",
+	})
+
+	n, err := log.Purge(ctx)
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if n != int64(stale) {
+		t.Fatalf("purged %d rows, want the whole %d-row backlog", n, stale)
+	}
+	if _, err := log.ByID(ctx, "keep"); err != nil {
+		t.Fatalf("sweep took a row inside retention: %v", err)
+	}
+}
+
+// testRelatedIndexed: the filter answers correctly, and the shape it answers
+// through is one the engine can seek rather than scan.
+//
+// This is the one that used to hurt: matching lived in a JSON blob, so a
+// QUIET seat in a busy org was the worst case — the reader walked the whole
+// retention window in pages to conclude there was nothing to show.
+//
+// TWO ASSERTIONS OF DIFFERENT KINDS, and it is worth being straight about
+// which is which. The List calls are a behavioural test of this package. The
+// EXPLAIN is a TRIPWIRE on the schema and the engine's planner — it asks
+// whether the party index is there and gets used, the way capability_test.go
+// asks what the driver can do — and it re-states the join rather than
+// borrowing List's own string, so a rewrite of List that quietly stopped
+// joining would still pass here and be caught by the behavioural half plus
+// the plan going unused. Timing is deliberately not asserted: on a fixture
+// this small a scan is fast enough to pass.
+func testRelatedIndexed(t *testing.T, db *store.DB) {
+	log := db.Events()
+	ctx := t.Context()
+	for i := range 200 {
+		write(t, log, store.EventRecord{
+			ID: fmt.Sprintf("noise-%03d", i), Type: "task_created", Source: "pm",
+			Time: base.Add(time.Duration(i) * time.Second), Category: "task",
+			Actor: "somebody-else",
+		})
+	}
+	write(t, log, store.EventRecord{
+		ID: "mine", Type: "task_created", Source: "pm",
+		Time: base.Add(time.Hour), Category: "task",
+		Tags: map[string]string{"recipient": "lead"},
+	})
+
+	got, err := log.List(ctx, store.ListQuery{RelatedAgent: "lead"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "mine" {
+		t.Fatalf("related page = %v, want just the matching event", ids(got))
+	}
+
+	// A seat with nothing to show must not read the log to find that out.
+	quiet, err := log.List(ctx, store.ListQuery{RelatedAgent: "nobody"})
+	if err != nil {
+		t.Fatalf("quiet list: %v", err)
+	}
+	if len(quiet) != 0 {
+		t.Fatalf("a seat with no events got %d rows", len(quiet))
+	}
+
+	var plan string
+	rows, err := db.SQL().QueryContext(ctx, `EXPLAIN QUERY PLAN
+		SELECT crewlet_events.event_id FROM crewlet_events
+		JOIN crewlet_event_parties
+		  ON crewlet_event_parties.event_time = crewlet_events.event_time
+		 AND crewlet_event_parties.event_id = crewlet_events.event_id
+		WHERE crewlet_event_parties.party = ?
+		ORDER BY crewlet_events.event_time DESC LIMIT 50`, "lead")
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	cols, err := rows.Columns()
+	if err != nil {
+		t.Fatalf("explain columns: %v", err)
+	}
+	for rows.Next() {
+		cells := make([]any, len(cols))
+		into := make([]any, len(cols))
+		for i := range cells {
+			into[i] = &cells[i]
+		}
+		if err := rows.Scan(into...); err != nil {
+			t.Fatalf("explain scan: %v", err)
+		}
+		for _, cell := range cells {
+			plan += fmt.Sprintf("%v ", cell)
+		}
+	}
+	if strings.Contains(plan, "SCAN crewlet_events") {
+		t.Fatalf("the related filter scans the log rather than seeking an index:\n%s", plan)
+	}
+	if !strings.Contains(plan, "crewlet_event_parties") {
+		t.Fatalf("the party index is not used at all:\n%s", plan)
+	}
+}
+
+// testRelatedSwept: the party index is purged with the log it indexes. Left
+// unswept it grows for the life of the deployment while pointing at rows that
+// no longer exist.
+func testRelatedSwept(t *testing.T, db *store.DB) {
+	log := db.Events()
+	ctx := t.Context()
+	write(t, log, store.EventRecord{
+		ID: "old", Type: "task_created", Source: "pm",
+		Time:     time.Now().UTC().Add(-store.EventRetention - time.Hour),
+		Category: "task", Actor: "lead",
+	})
+	write(t, log, store.EventRecord{
+		ID: "new", Type: "task_created", Source: "pm",
+		Time: time.Now().UTC().Add(-time.Hour), Category: "task", Actor: "lead",
+	})
+
+	if _, err := log.Purge(ctx); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	var orphans int
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT count(*) FROM crewlet_event_parties p
+		 WHERE NOT EXISTS (SELECT 1 FROM crewlet_events e
+		   WHERE e.event_time = p.event_time AND e.event_id = p.event_id)`,
+	).Scan(&orphans); err != nil {
+		t.Fatalf("count orphans: %v", err)
+	}
+	if orphans != 0 {
+		t.Errorf("%d party rows outlived their events", orphans)
+	}
+	// And the live one still resolves.
+	got, err := log.List(ctx, store.ListQuery{RelatedAgent: "lead"})
+	if err != nil {
+		t.Fatalf("list after purge: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "new" {
+		t.Fatalf("after the sweep the filter returns %v", ids(got))
+	}
+}
+
+// testSpendUncapped: the rollup folds EVERY phase completion in the window.
+//
+// It used to stop at twenty thousand rows, newest first, and say nothing —
+// so a busy org's monthly spend was short by whatever fell past the cap, and
+// an undercount reads exactly like an underspend. This writes more rows than
+// that old ceiling and insists every one is counted.
+func testSpendUncapped(t *testing.T, db *store.DB) {
+	log := db.Events()
+	ctx := t.Context()
+	const rows = 20001
+	at := time.Now().UTC().Add(-time.Hour)
+	for i := range rows {
+		payload := []byte(`{"phase":"execute","model":"m","input_tokens":1,` +
+			`"output_tokens":2,"total_tokens":3}`)
+		write(t, log, store.EventRecord{
+			ID:       fmt.Sprintf("spend-%05d", i),
+			Type:     "agent_phase_completed",
+			Source:   "agent",
+			Time:     at.Add(time.Duration(i) * time.Millisecond),
+			Category: "agent",
+			Payload:  payload,
+		})
+	}
+
+	got, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1})
+	if err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	}
+	if len(got) != rows {
+		t.Fatalf("folded %d of %d phase completions — the window is being truncated",
+			len(got), rows)
+	}
+	var total int
+	for _, r := range got {
+		total += r.TotalTokens
+	}
+	if want := rows * 3; total != want {
+		t.Errorf("total tokens = %d, want %d", total, want)
+	}
+}
+
+// testSpendDerived: a record built by hand, carrying only a payload, still
+// records its spend. The write path derives it rather than trusting the
+// caller — a phase completion stored with zero tokens is a company that
+// reports having spent nothing.
+func testSpendDerived(t *testing.T, db *store.DB) {
+	log := db.Events()
+	write(t, log, store.EventRecord{
+		ID: "byhand", Type: "agent_phase_completed", Source: "agent",
+		Time: time.Now().UTC().Add(-time.Minute), Category: "agent",
+		Payload: []byte(`{"phase":"plan","provider_key":"anthropic",` +
+			`"turn_id":"t1","iteration":2,"input_tokens":10,` +
+			`"output_tokens":5,"total_tokens":15}`),
+	})
+
+	got, err := log.PhaseTokens(t.Context(), store.PhaseTokenQuery{SinceDays: 1})
+	if err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d records, want 1", len(got))
+	}
+	rec := got[0]
+	if rec.TotalTokens != 15 || rec.InputTokens != 10 || rec.OutputTokens != 5 {
+		t.Errorf("token counts lost: %+v", rec)
+	}
+	if rec.Phase != "plan" || rec.TurnID != "t1" || rec.Iteration != 2 {
+		t.Errorf("call identity lost: %+v", rec)
+	}
+	// An entry naming no model is identified by the provider slot it ran
+	// on, so a breakdown never groups real spend under an empty key.
+	if rec.Model != "anthropic" {
+		t.Errorf("model = %q, want the provider key as the fallback", rec.Model)
+	}
+}
+
+// testBackup: the copy a backup produces is a database that OPENS and holds
+// the rows the original held. The whole artifact is worthless if it cannot be
+// read back, and this is the only place that is proven before the day it
+// matters.
+func testBackup(t *testing.T, db *store.DB) {
+	log := db.Events()
+	ctx := t.Context()
+	write(t, log, store.EventRecord{
+		ID: "backed-up", Type: "task_created", Source: "pm",
+		Time: base, Category: "task",
+	})
+
+	dest := filepath.Join(t.TempDir(), "copy.db")
+	info, err := db.Backup(ctx, dest)
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	if info.Path != dest {
+		t.Errorf("BackupInfo.Path = %q, want %q", info.Path, dest)
+	}
+	if info.Bytes <= 0 {
+		t.Errorf("backup reports %d bytes", info.Bytes)
+	}
+	// The schema the copy carries is what a restore would bring back, so a
+	// copy that claims a different one than this binary applied would
+	// restore into a migration that runs from the wrong place.
+	if !slices.Equal(info.Migrations, store.SchemaVersions()) {
+		t.Errorf("copy carries schema %v, want %v", info.Migrations, store.SchemaVersions())
+	}
+
+	// Opened as a database in its own right — the restore path, exercised.
+	restored, err := store.Open(ctx, dest, store.Options{})
+	if err != nil {
+		t.Fatalf("the copy will not open as a database: %v", err)
+	}
+	defer func() { _ = restored.Close() }()
+	if _, err := restored.Events().ByID(ctx, "backed-up"); err != nil {
+		t.Fatalf("the copy lost a row the original held: %v", err)
+	}
+}
+
+// testBackupSelfContained: the copy is ONE file. A backup that silently
+// depended on a -wal beside it would restore as an older database — or as a
+// corrupt one — whenever an operator moved only the file they were told to.
+func testBackupSelfContained(t *testing.T, db *store.DB) {
+	write(t, db.Events(), store.EventRecord{
+		ID: "solo", Type: "task_created", Source: "pm", Time: base, Category: "task",
+	})
+	dest := filepath.Join(t.TempDir(), "copy.db")
+	if _, err := db.Backup(t.Context(), dest); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	for _, sidecar := range []string{"-wal", "-shm", "-tshm", ".part"} {
+		if _, err := os.Stat(dest + sidecar); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the backup left %s beside it, so the artifact is not one file", dest+sidecar)
+		}
+	}
+}
+
+// testBackupOccupied: a destination that exists is refused, and the file in
+// the way is left alone. It is by construction somebody's only copy of
+// something.
+func testBackupOccupied(t *testing.T, db *store.DB) {
+	dest := filepath.Join(t.TempDir(), "taken.db")
+	if err := os.WriteFile(dest, []byte("an earlier backup"), 0o600); err != nil {
+		t.Fatalf("seed the destination: %v", err)
+	}
+	_, err := db.Backup(t.Context(), dest)
+	if !errors.Is(err, store.ErrBackupExists) {
+		t.Fatalf("backup onto an occupied path: %v, want ErrBackupExists", err)
+	}
+	body, readErr := os.ReadFile(dest)
+	if readErr != nil || string(body) != "an earlier backup" {
+		t.Fatalf("the refused backup disturbed what was already there: %q, %v", body, readErr)
+	}
+}
+
+// testBackupUnderWrites: the copy is taken WITHOUT stopping the engine, so
+// the case that matters is a database being written throughout. The copy must
+// still open and verify — a point-in-time image, not a torn one.
+func testBackupUnderWrites(t *testing.T, db *store.DB) {
+	ctx := t.Context()
+	log := db.Events()
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// Failures are not asserted on: the point is that the
+			// backup does not break the writer's database, not that
+			// every write in a hot loop commits.
+			_ = log.Append(ctx, store.EventRecord{
+				ID:   fmt.Sprintf("live-%04d", i),
+				Type: "task_created", Source: "pm",
+				Time: base.Add(time.Duration(i) * time.Millisecond), Category: "task",
+			})
+		}
+	}()
+
+	dest := filepath.Join(t.TempDir(), "hot.db")
+	_, err := db.Backup(ctx, dest)
+	close(stop)
+	wg.Wait()
+	if err != nil {
+		t.Fatalf("backup under concurrent writes: %v", err)
+	}
+
+	restored, err := store.Open(ctx, dest, store.Options{})
+	if err != nil {
+		t.Fatalf("a copy taken under writes will not open: %v", err)
+	}
+	if err := restored.Close(); err != nil {
+		t.Fatalf("close the copy: %v", err)
+	}
+	// The original is still writable afterwards: a backup must not leave
+	// the live database wedged behind a lock or a stale transaction.
+	if err := log.Append(ctx, store.EventRecord{
+		ID: "after", Type: "task_created", Source: "pm", Time: base, Category: "task",
+	}); err != nil {
+		t.Fatalf("the live database is unwritable after a backup: %v", err)
 	}
 }
 

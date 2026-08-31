@@ -63,7 +63,7 @@ flowchart TD
         API --- ENG
     end
     STREAM["<b>Event stream</b><br/><i>embedded by default</i><br/>crewlet.agent.*.inbox<br/>crewlet.notifications<br/>crewlet.config.*"]
-    DB["<b>Store</b><br/><i>one local file</i><br/>company_config · token_usage<br/>agent_diary · episodes · …"]
+    DB["<b>Store</b><br/><i>one local file</i><br/>company_config · agent_diary<br/>episodes · …"]
     EXT -->|webhooks| API
     ENG -->|"MCP tools, called as each agent itself"| EXT
     ENG --> STREAM
@@ -111,7 +111,7 @@ Built-in providers: **OpenAI**, **Anthropic** (using their official SDKs), and *
 
 **Prompt caching.** Each call's large static prefix — the per-phase system prompt plus the tool-definition array — is the dominant repeated content of an agent turn: it is re-sent on every round of the [tool loop](agent-runtime.md#the-llm--tool-proxy) and is byte-stable across successive turns for the same agent (org config does not change mid-run). Both built-in providers cache it so it is re-read at a fraction of the base input price instead of re-billed in full each round. The Anthropic provider sets explicit `cache_control` breakpoints on the system block and the final tool definition (caching the whole `tools + system` prefix); the OpenAI provider relies on the platform's automatic prefix caching — the static system prompt is already first in the message array, which is what auto-caching requires. This is why the per-phase prompts can carry their full incident-hardened guidance (see [Turn Engine](turn-engine.md)) without the repetition dominating cost.
 
-`Completion.InputTokens` always reports the **full** prompt-token count regardless of cache state, so the budget cascade and the `token_usage` ledger stay correct: Anthropic reports cache reads/writes *separately* from its raw `input_tokens`, so the provider sums all three; OpenAI's `prompt_tokens` already includes the cached portion. `Completion.CacheReadInputTokens` / `cache_creation_input_tokens` break that total down for cost observability and are logged on every `llm_complete` event.
+`Completion.InputTokens` always reports the **full** prompt-token count regardless of cache state, so the budget cascade stays correct: Anthropic reports cache reads/writes *separately* from its raw `input_tokens`, so the provider sums all three; OpenAI's `prompt_tokens` already includes the cached portion. `Completion.CacheReadInputTokens` / `cache_creation_input_tokens` break that total down for cost observability and are logged on every `llm_complete` event.
 
 ### Embedding Provider
 
@@ -121,7 +121,6 @@ The `EmbeddingProvider` protocol defines `embed()` (batch text → vectors) and 
 
 One local file, opened by Turso — a pure-Go driver over the SQLite file format — and built from a forward-only migration sequence. There was a second certified driver (mainline SQLite) as an escape hatch, and it is retired: it could not serve a database with rows in it, because it has no vector functions and recall degraded to nothing without saying so. **The engine owns that file exclusively** — a second process pointed at the same path is corruption waiting for a schedule to collide, which is why everything genuinely shared between nodes lives in the coordination KV instead. The load-bearing tables:
 
-- **`token_usage`** — per-agent cumulative token consumption, upserted by the turn engine's shared tool loop after each LLM completion that passes the budget check. Durable audit record; not used to hydrate the in-memory the shared token counter on startup.
 - **`agent_diary`** (vector-indexed) — each agent's private observation log; the read-side counterpart of `reflect_and_persist`. Rows are embedded on write; the read path is hybrid candidate selection (vector top-K ∪ recency top-K, deduped, capped at 100) handed to an aux-LLM relevance filter. Shared knowledge is **not** in the database — the knowledge base is searched live (see [knowledge system](knowledge-system.md)).
 - **`episodes`** (vector-indexed) — one row per completed turn; raw and LLM-compacted aggregates share the same table.
 - **`synthesized_skills` / `synthesized_skill_versions`** — auto-drafted skills the agent can load via `use_skill`, with refinement history.
@@ -130,9 +129,9 @@ One local file, opened by Turso — a pure-Go driver over the SQLite file format
 - **`conversation_sessions`** — the [conversation ledger](conversation-sessions.md): one row per completed turn, keyed on the seat and the conversation it served, rendered back into that conversation's next turn. Deduped on the work key, trimmed on write, swept on a retention horizon.
 - **`secret_values`** — the local half of the [secret store](secret-store.md), and now only its bootstrap path: the company's credentials live on the coordination KV where every node reads them, and rows written here while the engine was stopped are migrated there at its next start. Sealed with the Tier A keyring either way; no plaintext mode.
 
-Alongside them sit the durable runtime tables a turn leaves behind — `crewlet_events`, `scheduled_runs`, `chat_thread_follows`, `token_usage` — and the config plane's `company_config` payloads. The full migration list is in `internal/store/schema/`.
+Alongside them sit the durable runtime tables a turn leaves behind — `crewlet_events`, `scheduled_runs`, `chat_thread_follows` — and the config plane's `company_config` payloads. The full migration list is in `internal/store/schema/`.
 
-What is *not* here is as deliberate: the completion ledger, the delivery dedupe, the notification valve, the credential cooldowns, the token counter, the activation pointer and each node's apply status all answer a question the whole **company** has to agree on, so they live in the fleet's [coordination store](coordination.md) rather than in any one node's file. `token_usage` above is the per-agent audit *record*, not the counter anything enforces against.
+What is *not* here is as deliberate: the completion ledger, the delivery dedupe, the notification valve, the credential cooldowns, the token counter, the activation pointer and each node's apply status all answer a question the whole **company** has to agree on, so they live in the fleet's [coordination store](coordination.md) rather than in any one node's file.
 
 Everything else is YAML config, in-memory state, or an external tool.
 
@@ -166,7 +165,9 @@ internal/
 ├── events/               # The envelope and the typed-payload registry
 ├── a2a/                  # Agent-to-agent channels (one ask, one answer)
 ├── schedule/             # Role/unit cron-style recurring work
-├── learning/             # What a seat remembers (there is no task package:
+├── learning/             # What a seat remembers, and memsync/ — the changelog
+│                         #   that carries it when a seat moves node
+│                         #   (there is no task package:
 │                         #   task state lives in the PM tool, and the engine
 │                         #   mirrors none of it)
 ├── knowledge/            # The backend-neutral knowledge-search seam
@@ -182,6 +183,8 @@ internal/
 ├── configplane/          # The activation pointer's cadence and postures
 ├── node/                 # The node's own identity, presence and drain
 ├── provision/            # The shared provisioning grammar and its sinks
+├── backup/               # A verified copy of both estates, taken from inside
+│                         #   the engine — the only place either is reachable
 ├── maintenance/          # The retention sweep, behind one singleton duty
 ├── tokens/               # Token accounting shared by the meter and the API
 ├── hostbox/ procgroup/   # The local sandbox host, and process-tree teardown
