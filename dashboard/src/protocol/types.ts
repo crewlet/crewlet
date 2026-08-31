@@ -587,12 +587,27 @@ export interface KnowledgeHit {
   updated_at: string;
 }
 
+/**
+ * Why a knowledge search did not run. `""` means it ran — a `note` alongside
+ * it describes a search that STARTED and degraded, which is a different fact
+ * from one that never started. Widened to `string` because the engine may
+ * learn a reason this build does not know, and an unknown one must render as
+ * its prose `note` rather than crash the screen.
+ */
+export type KnowledgeReason = "" | "no_company" | "no_backend" | "no_scope" | (string & {});
+
 export interface KnowledgeAnswer {
   backend: string;
   query: string;
   hits: KnowledgeHit[];
-  /** False when no knowledge backend is configured for this company. */
+  /** False when the search did not run at all; `reason` says which state. */
   available: boolean;
+  /**
+   * The state, as a value to branch on. Never branch on `note` — it is prose
+   * for a person and free to be reworded — and never infer the state from
+   * `backend`, which is empty for "no backend" and "no company" alike.
+   */
+  reason: KnowledgeReason;
   /** Search is best effort: a failure is an empty result plus this note. */
   note: string;
 }

@@ -169,24 +169,41 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	}
 	organization := s.organization()
 	out := map[string]any{
-		"backend":   s.Knowledge.Backend(),
+		"backend":   "",
 		"query":     text,
 		"hits":      []any{},
 		"available": true,
+		"reason":    string(KnowledgeRan),
 		"note":      "",
 	}
-	if organization == nil {
+	unavailable := func(reason KnowledgeReason, note string) (any, error) {
 		out["available"] = false
-		out["note"] = "no company configuration is active"
+		out["reason"] = string(reason)
+		out["note"] = note
 		return out, nil
 	}
+	if organization == nil {
+		return unavailable(KnowledgeNoCompany, "no company configuration is active")
+	}
+	// A nil searcher is the ANSWER, not a reason to be unregistered: exactly
+	// one backend serves a company, chosen by which integration is
+	// configured, so "none is" is a fact the company establishes on its own.
+	if s.Knowledge == nil {
+		return unavailable(KnowledgeNoBackend, "no knowledge backend is configured for this company")
+	}
+	out["backend"] = s.Knowledge.Backend()
 	// The seam's own pre-gate, and it is free: it answers "could this search
 	// possibly hit anything" with no I/O, which is exactly what a screen with
 	// no results needs in order to say WHY.
+	//
+	// A DIFFERENT state from the one above, and it must not borrow its
+	// wording: the backend IS wired, it just has no org-wide scope to read.
+	// Searching as the org means no per-seat credential, so the gate reduces
+	// to whether a read scope was declared — and an operator told "no backend
+	// is configured" here would go and check the integration they already
+	// configured correctly, instead of the empty field that is the cause.
 	if !s.Knowledge.CanSearch(nil, organization) {
-		out["available"] = false
-		out["note"] = "no knowledge backend is configured for this company"
-		return out, nil
+		return unavailable(KnowledgeNoScope, "the "+s.Knowledge.Backend()+" backend is configured but knowledge.confluence_spaces lists no space, so an org-wide search has nothing to read")
 	}
 	if text == "" {
 		return out, nil
@@ -212,6 +229,40 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	}
 	out["hits"] = rows
 	return out, nil
+}
+
+// KnowledgeReason says WHY a knowledge search did not run, as a stable value
+// a screen can branch on.
+//
+// It exists because `note` cannot serve both readers. The note is prose for a
+// person and is free to be reworded; a UI deciding which remedy to offer must
+// not be string-matching it, and inferring the state from the other fields is
+// the same mistake wearing a different hat — an empty `backend` means "no
+// backend" and "no company at all" alike, and offering to configure Confluence
+// to somebody who has configured no company is advice for the wrong problem.
+type KnowledgeReason string
+
+const (
+	// KnowledgeRan is the zero state: the search ran. Anything in `note`
+	// alongside it describes a search that STARTED and degraded, which is a
+	// different fact from one that never started.
+	KnowledgeRan KnowledgeReason = ""
+	// KnowledgeNoCompany — no company configuration is active on this node.
+	KnowledgeNoCompany KnowledgeReason = "no_company"
+	// KnowledgeNoBackend — a company is active and wired no knowledge backend.
+	KnowledgeNoBackend KnowledgeReason = "no_backend"
+	// KnowledgeNoScope — a backend is wired, with no org-wide read scope.
+	KnowledgeNoScope KnowledgeReason = "no_scope"
+)
+
+// Valid reports whether r is a reason this package emits, so an unknown value
+// off the wire is a value rather than a panic.
+func (r KnowledgeReason) Valid() bool {
+	switch r {
+	case KnowledgeRan, KnowledgeNoCompany, KnowledgeNoBackend, KnowledgeNoScope:
+		return true
+	}
+	return false
 }
 
 // KnowledgeHitLimit bounds one search. It matches what a Plan-phase prefetch

@@ -85,18 +85,40 @@ export function Knowledge() {
 
       {loading && <Skeleton rows={4} />}
 
+      {/* The search DID NOT RUN. `available: false` covers three states — no
+          company, no backend, a backend with no org-wide read scope — so the
+          engine's `note` is rendered rather than restated, and the REMEDY is
+          chosen off `reason`. Neither is guessed from `backend`: it is empty
+          for "no backend" and "no company" alike, and telling somebody with
+          no company configured to go and wire Confluence is the wrong fix. */}
       {q && data?.available === false && (
         <div className="banner neutral">
           <Icon name="book" size="sm" />
           <span>
-            No knowledge backend is configured for this company, so there is nothing to search.
-            Configure <code className="inline">knowledge.confluence_spaces</code> to give agents a
-            shared place to read from.
+            This search could not run: {data.note || "the engine gave no reason"}.
+            {data.reason === "no_backend" && (
+              <>
+                {" "}
+                Wire <code className="inline">integrations.confluence</code> and list the spaces to
+                read in <code className="inline">knowledge.confluence_spaces</code> to give agents a
+                shared place to read from.
+              </>
+            )}
+            {data.reason === "no_scope" && (
+              <>
+                {" "}
+                The integration itself is fine — add the spaces to search to{" "}
+                <code className="inline">knowledge.confluence_spaces</code>.
+              </>
+            )}
           </span>
         </div>
       )}
 
-      {q && data?.note && (
+      {/* The search DID run and came back degraded — a different banner,
+          because an empty result that ran is not the same fact as one that
+          never started. */}
+      {q && data?.available !== false && data?.note && (
         <div className="banner caution">
           <Icon name="alert" size="sm" />
           <span>

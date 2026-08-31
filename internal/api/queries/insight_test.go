@@ -3,6 +3,7 @@ package queries_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -215,18 +216,75 @@ func TestAHalfCursorIsRefused(t *testing.T) {
 // apart, so the answer carries `available` and a `note`.
 func TestKnowledgeSaysWhenThereIsNoBackend(t *testing.T) {
 	t.Parallel()
-	got := asMap(t, answer(t, queries.Sources{
-		Knowledge: stubSearcher{},
-		Company:   func() *config.Company { return nil },
-	}, "knowledge", map[string]any{"q": "anything"}))
 
-	if got["available"] != false {
-		t.Errorf("no company config, yet the search reports itself available: %v", got)
+	// A COMPANY WITH NO SEARCHER still answers, and says why. Gated on the
+	// company rather than on the searcher, for the same reason `budgets` is:
+	// exactly one backend serves a company, chosen by which integration is
+	// configured, so "none is" is a fact the company establishes on its own —
+	// and it is a far more useful answer than an unknown query.
+	none := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return &config.Company{Name: "Acme"} },
+	}, "knowledge", map[string]any{"q": "anything"}))
+	if none["available"] != false {
+		t.Errorf("no backend, yet the search reports itself available: %v", none)
 	}
-	if got["note"] == "" {
-		t.Errorf("an unavailable search gives no reason: %v", got)
+	if none["note"] == "" {
+		t.Errorf("an unavailable search gives no reason: %v", none)
 	}
-	if hits, ok := got["hits"].([]any); !ok || len(hits) != 0 {
-		t.Errorf("hits = %#v, want an empty list", got["hits"])
+	if hits, ok := none["hits"].([]any); !ok || len(hits) != 0 {
+		t.Errorf("hits = %#v, want an empty list", none["hits"])
 	}
+
+	// A searcher that is wired but cannot search — an operator who configured
+	// the integration and no spaces — is a DIFFERENT state, and says so
+	// rather than answering an empty search as though it had run.
+	gated := asMap(t, answer(t, queries.Sources{
+		Knowledge: stubSearcher{},
+		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
+	}, "knowledge", map[string]any{"q": "anything"}))
+	if gated["available"] != false || gated["note"] == "" {
+		t.Errorf("a gated search does not explain itself: %v", gated)
+	}
+	// And it must not BORROW the no-backend wording. Asserting only that a
+	// note exists cannot catch the two states sharing one string, which is
+	// exactly the bug: it sends an operator whose integration is fine to go
+	// and re-check that integration.
+	if gated["note"] == none["note"] {
+		t.Errorf("a wired-but-unscoped backend reports itself as no backend at all: %q", gated["note"])
+	}
+	if !strings.Contains(gated["note"].(string), "confluence_spaces") {
+		t.Errorf("the gated note does not name the field to fix: %q", gated["note"])
+	}
+
+	// And with no company at all, the answer names THAT rather than blaming
+	// the backend.
+	unconfigured := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return nil },
+	}, "knowledge", map[string]any{"q": "anything"}))
+	if unconfigured["available"] != false {
+		t.Errorf("no company, yet the search reports itself available: %v", unconfigured)
+	}
+
+	// The three states must be told apart by a VALUE, not by the prose. A
+	// screen picking which remedy to offer branches on this, so two states
+	// sharing a reason offers one of them the wrong fix — and every reason
+	// this package emits has to be one the enum admits.
+	for name, got := range map[string]map[string]any{
+		"no company": unconfigured, "no backend": none, "no scope": gated,
+	} {
+		reason, _ := got["reason"].(string)
+		if !queries.KnowledgeReason(reason).Valid() {
+			t.Errorf("%s reports a reason the enum does not admit: %q", name, reason)
+		}
+		if queries.KnowledgeReason(reason) == queries.KnowledgeRan {
+			t.Errorf("%s reports the search as having run: %v", name, got)
+		}
+	}
+	if none["reason"] == gated["reason"] {
+		t.Errorf("no backend and an unscoped backend share one reason: %q", none["reason"])
+	}
+	if unconfigured["reason"] == none["reason"] {
+		t.Errorf("no company and no backend share one reason: %q", none["reason"])
+	}
+
 }

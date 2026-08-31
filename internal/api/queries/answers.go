@@ -210,6 +210,12 @@ func Register(r *Registry, s Sources) {
 		// which is a different question from what it has done.
 		r.Register("schedules", s.schedules)
 		r.Register("integrations", s.integrations)
+		// Gated on the COMPANY, not on the searcher, for the same reason
+		// budgets is: "this company has no knowledge backend configured" is
+		// a fact the company alone establishes, and it is a far more useful
+		// answer than an unknown query. A nil searcher IS the answer here,
+		// not the absence of one.
+		r.Register("knowledge", s.knowledgeSearch)
 	}
 	if s.Sandbox != nil {
 		r.Register("sandbox_runs", s.sandboxRuns)
@@ -222,9 +228,6 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Channels != nil {
 		r.Register("a2a_channels", s.a2aChannels)
-	}
-	if s.Knowledge != nil {
-		r.Register("knowledge", s.knowledgeSearch)
 	}
 	if s.Config != nil {
 		// OPERATOR-ONLY, all three. Reading the config document exposes
