@@ -293,13 +293,13 @@ and the `scheduler_armed` / `scheduler_disarmed` log lines say when it changed.
 
 ## Observability
 
-- **Dashboard.** The **Schedules** view lists every configured schedule
-  (scope, cron, timezone, target → resolved runners, next run) and the
-  recent dispatch ledger. It's backed by `GET /schedules`, which serves
-  the resolved schedule list (computed once at startup), per-request
-  next-run times, and the most recent `scheduled_runs` rows. On the
-  embedded-API path the view refreshes live when a `ScheduledTaskFired`
-  event arrives.
+- **Dashboard.** The **Schedules** screen lists every configured schedule —
+  name, scope, cron, task, when it next fires and how it last went — and the
+  recent dispatch ledger beside it, both sortable. It is backed by
+  `GET /schedules`, which serves the resolved schedule list (computed once at
+  startup), per-request next-run times, and the most recent `scheduled_runs`
+  rows. The next-fire times tick as you watch: every relative time in the
+  product reads one shared clock rather than being baked at render.
 - **`ScheduledTaskFired`** event (`crewlet.events.scheduled_task_fired`) is
   emitted per dispatch with `scope_type`, `scope_id`, `schedule_name`,
   `target_handle`, and `scheduled_at` — surfaced in the dashboard / event

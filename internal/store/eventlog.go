@@ -174,6 +174,12 @@ type ListQuery struct {
 	TraceID  string
 	Actor    string
 
+	// TurnID selects one unit of agent work — every phase of it, its own
+	// completion record, and the fallbacks and breaches that happened
+	// inside it. Rows written before migration 0014 carry an empty
+	// turn_id and do not answer this filter; see the migration.
+	TurnID string
+
 	// RelatedAgent is a broad filter: events whose actor is the agent, or
 	// whose tags name it as agent_role / target / recipient / sender, plus
 	// every event sharing a trace with one of those — so the inbound
@@ -383,6 +389,7 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 	addEq("category", q.Category)
 	addEq("trace_id", q.TraceID)
 	addEq("actor", q.Actor)
+	addEq("turn_id", q.TurnID)
 
 	from := "crewlet_events"
 	if joined {
@@ -499,6 +506,29 @@ func (l *EventLog) Trace(ctx context.Context, traceID string) ([]EventRecord, er
 		traceID, EncodeTime(now().Add(-EventHistory)), MaxTraceEvents)
 }
 
+// Turn returns every event of one turn, OLDEST first.
+//
+// Ordered like a trace and for the same reason: a turn is read forwards — plan,
+// then execute, then review — rather than as a feed. It is a DIFFERENT set from
+// the trace, which is why it is a separate read: one trace can span several
+// turns (a webhook that wakes two seats), and a turn resumed on another node
+// after a restart can span several traces.
+//
+// A caller that gets exactly MaxTurnEvents rows should say the view is
+// truncated. The cap is the trace's, for the same reason: a turn that has
+// self-iterated many times is the one worth reading, and a bound low enough to
+// cut it short would hide exactly that.
+func (l *EventLog) Turn(ctx context.Context, turnID string) ([]EventRecord, error) {
+	return l.scanPayloads(ctx,
+		"SELECT "+listColumns+", payload FROM crewlet_events "+
+			"WHERE turn_id = ? AND event_time >= ? "+
+			"ORDER BY event_time ASC, event_id ASC LIMIT ?",
+		turnID, EncodeTime(now().Add(-EventHistory)), MaxTurnEvents)
+}
+
+// MaxTurnEvents bounds one turn's read.
+const MaxTurnEvents = MaxTraceEvents
+
 // ByID returns one event WITH its payload, or ErrNotFound.
 //
 // The identity is (event_time, event_id) and a caller holding only an id — a
@@ -578,6 +608,20 @@ func (l *EventLog) Purge(ctx context.Context) (int64, error) {
 }
 
 func (l *EventLog) scanRows(ctx context.Context, query string, args ...any) ([]EventRecord, error) {
+	return l.scan(ctx, false, query, args...)
+}
+
+// scanPayloads is scanRows for a query whose SELECT ends in `payload`.
+//
+// Kept as one scanner behind a flag rather than two: the column list and the
+// Scan call have to agree, and two copies of that agreement is exactly how a
+// column added to `listColumns` comes to be read into the wrong field by one
+// of them.
+func (l *EventLog) scanPayloads(ctx context.Context, query string, args ...any) ([]EventRecord, error) {
+	return l.scan(ctx, true, query, args...)
+}
+
+func (l *EventLog) scan(ctx context.Context, withPayload bool, query string, args ...any) ([]EventRecord, error) {
 	rows, err := l.db.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: query events: %w", err)
@@ -588,14 +632,20 @@ func (l *EventLog) scanRows(ctx context.Context, query string, args ...any) ([]E
 	for rows.Next() {
 		var rec EventRecord
 		var micros int64
-		var tagJSON string
-		if err := rows.Scan(&micros, &rec.ID, &rec.Type, &rec.Source,
+		var tagJSON, payload string
+		dest := []any{&micros, &rec.ID, &rec.Type, &rec.Source,
 			&rec.Category, &rec.Summary, &rec.Actor, &rec.TraceID,
-			&rec.SpanID, &rec.ParentSpanID, &tagJSON,
-		); err != nil {
+			&rec.SpanID, &rec.ParentSpanID, &tagJSON}
+		if withPayload {
+			dest = append(dest, &payload)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("store: scan event: %w", err)
 		}
 		finishRecord(&rec, micros, tagJSON)
+		if withPayload {
+			rec.Payload = json.RawMessage(payload)
+		}
 		out = append(out, rec)
 	}
 	if err := rows.Err(); err != nil {
@@ -688,8 +738,17 @@ const AgentPhaseLimit = 50
 const agentPhaseSQL = `
 SELECT ` + listColumns + `, payload
 FROM crewlet_events
-WHERE event_type = 'agent_phase_completed' AND (agent_id = ? OR agent_role = ?)
-ORDER BY event_time DESC, event_id DESC LIMIT ?`
+WHERE event_type = 'agent_phase_completed' AND (agent_id = ? OR agent_role = ?)`
+
+// agentPhaseCursorSQL is the same read, one page older.
+//
+// Keyset on (event_time, event_id) rather than OFFSET, for the reason every
+// other paged read here gives: the pair is the primary key, so it is unique and
+// already in index order — no sort node, and no drift as new phases land at the
+// head while a reader pages backwards.
+const agentPhaseCursorSQL = ` AND (event_time, event_id) < (?, ?)`
+
+const agentPhaseOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
 
 // AgentPhases returns one seat's durable per-phase records, newest first,
 // PAYLOAD INCLUDED.
@@ -707,36 +766,67 @@ ORDER BY event_time DESC, event_id DESC LIMIT ?`
 // agent_phase_completed only. That is the durable record — the prompts, the
 // response, the tools, the tokens — while agent_turn_progress is stream-only
 // by design, so history here is exactly the calls that finished.
-func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string) ([]EventRecord, error) {
+func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, before *Cursor) ([]EventRecord, error) {
 	if agentID == "" && agentRole == "" {
 		return nil, nil
 	}
-	rows, err := l.db.sql.QueryContext(ctx, agentPhaseSQL, agentID, agentRole, AgentPhaseLimit)
-	if err != nil {
-		return nil, fmt.Errorf("store: agent phases: %w", err)
+	query := agentPhaseSQL
+	args := []any{agentID, agentRole}
+	if before != nil && before.ID != "" {
+		query += agentPhaseCursorSQL
+		args = append(args, EncodeTime(before.Time), before.ID)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []EventRecord
-	for rows.Next() {
-		var rec EventRecord
-		var micros int64
-		var tagJSON, payload string
-		if err := rows.Scan(&micros, &rec.ID, &rec.Type, &rec.Source, &rec.Category,
-			&rec.Summary, &rec.Actor, &rec.TraceID, &rec.SpanID, &rec.ParentSpanID,
-			&tagJSON, &payload,
-		); err != nil {
-			return nil, fmt.Errorf("store: agent phases: scan: %w", err)
-		}
-		finishRecord(&rec, micros, tagJSON)
-		rec.Payload = json.RawMessage(payload)
-		out = append(out, rec)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: agent phases: %w", err)
-	}
-	return out, nil
+	query += agentPhaseOrderSQL
+	args = append(args, AgentPhaseLimit)
+	return l.scanPayloads(ctx, query, args...)
 }
+
+// phasesSQL is AgentPhases without the seat filter.
+const phasesSQL = `
+SELECT ` + listColumns + `, payload
+FROM crewlet_events
+WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
+
+// Phases returns the COMPANY's durable per-phase records, newest first,
+// PAYLOAD INCLUDED.
+//
+// The same read as AgentPhases with the seat filter lifted, because the
+// question "what have the models been doing" is a company-level one and the
+// answer that served it before was a per-seat list capped at fifty rows with no
+// pager. There was no other way to ask.
+//
+// It is a read of its own rather than a flag on ListQuery, for the reason
+// AgentPhases gives: the feed's listing deliberately never selects the payload,
+// and a page of ordinary events with every payload attached is the query that
+// makes an activity screen slow. A boolean on the shared type would put that
+// one keystroke away.
+//
+// `role` narrows to one seat when a caller wants it; empty means the company.
+func (l *EventLog) Phases(ctx context.Context, role string, limit int, before *Cursor) ([]EventRecord, error) {
+	query := phasesSQL
+	args := []any{EncodeTime(now().Add(-EventHistory))}
+	if role != "" {
+		query += ` AND agent_role = ?`
+		args = append(args, role)
+	}
+	if before != nil && before.ID != "" {
+		query += agentPhaseCursorSQL
+		args = append(args, EncodeTime(before.Time), before.ID)
+	}
+	query += agentPhaseOrderSQL
+	if limit <= 0 || limit > MaxPhasePage {
+		limit = MaxPhasePage
+	}
+	args = append(args, limit)
+	return l.scanPayloads(ctx, query, args...)
+}
+
+// MaxPhasePage bounds one page of company-wide phase records.
+//
+// Lower than the event feed's 400: each of these carries a phase's prompts and
+// its whole response verbatim, so the limit is set by the size of a row rather
+// than by how many a screen can show.
+const MaxPhasePage = 60
 
 // PhaseTokens returns the per-phase spend records inside a window.
 //

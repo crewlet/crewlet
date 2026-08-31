@@ -316,8 +316,21 @@ func TestConversationsListsASeatsThreads(t *testing.T) {
 		t.Fatalf("%d threads, want 2: %v", len(threads), body)
 	}
 	first, _ := threads[0].(map[string]any)
-	if first["conversation_key"] != "thread-b" {
+	// `key`, not `conversation_key`, and `turns` rather than `entries` for
+	// the count: the old shape used one word for a count in one place and a
+	// list in another, on the same answer.
+	if first["key"] != "thread-b" {
 		t.Errorf("first thread = %v, want the one that moved most recently", first)
+	}
+	if first["turns"] == nil {
+		t.Errorf("thread carries no turn count: %v", first)
+	}
+	// `available` is on EVERY answer, and it is what lets a reader trust an
+	// empty list: the ledger is written by whichever node ran the turn, so a
+	// node legitimately holding none of a seat's threads has to be able to
+	// say so.
+	if body["available"] != true {
+		t.Errorf("answer does not report availability: %v", body)
 	}
 	// Entries are empty on a LISTING: the sidebar shows keys, and carrying
 	// every entry of every thread would move a seat's whole history to

@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -455,17 +456,28 @@ func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
 	if handle == "" {
 		return nil, fmt.Errorf("%w: conversations needs a handle", ErrBadParams)
 	}
+	// `available` is present on EVERY answer, and it is the whole reason a
+	// reader can trust an empty list. The ledger is written by whichever node
+	// ran the turn, so on a fleet a node can legitimately hold none of a
+	// seat's threads — and "this seat has said nothing" and "this node does
+	// not have the record" are different facts a screen must be able to tell
+	// apart. Without it the client gated its whole tab on a key that was
+	// never sent, so the tab said "no conversation ledger on this node" even
+	// when the answer carried threads.
 	if key := p.String("key"); key != "" {
 		entries, err := s.Conversations.History(ctx, handle, key, ConversationEntryLimit)
 		if err != nil {
 			return nil, err
 		}
-		if entries == nil {
-			entries = []ledger.Session{}
-		}
 		return map[string]any{
-			"handle": handle, "conversation_key": key,
-			"conversations": []any{}, "entries": entries,
+			"handle":        handle,
+			"key":           key,
+			"conversations": []any{},
+			// ledger.Session is passed through: unlike the learning
+			// types it carries its own json tags, because the prompt
+			// builder and the store already share this shape.
+			"entries":   entriesOrEmpty(entries),
+			"available": true,
 		}, nil
 	}
 	threads, err := s.Conversations.Threads(ctx, handle, ConversationListLimit)
@@ -475,14 +487,33 @@ func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
 	out := make([]map[string]any, 0, len(threads))
 	for _, thread := range threads {
 		out = append(out, map[string]any{
-			"conversation_key": thread.Key,
-			"entries":          thread.Entries,
-			"last_at":          isoOrEmpty(thread.LastAt),
+			// `key`, and `turns` for the count. The previous shape named
+			// them `conversation_key` and `entries` — the second of which
+			// collided with the answer's own `entries` list, so one word
+			// meant a count in one place and a list in another.
+			"key":     thread.Key,
+			"turns":   thread.Entries,
+			"last_at": isoOrEmpty(thread.LastAt),
 		})
 	}
 	return map[string]any{
-		"handle": handle, "conversations": out, "entries": []any{},
+		"handle":        handle,
+		"conversations": out,
+		"entries":       []any{},
+		"available":     true,
 	}, nil
+}
+
+// entriesOrEmpty guarantees a list rather than `null`.
+//
+// A nil slice marshals as `null`, and every consumer here reads `.length` off
+// it — the same shape mismatch that made the Trace screen report "not found"
+// for every trace it was given.
+func entriesOrEmpty(sessions []ledger.Session) []ledger.Session {
+	if sessions == nil {
+		return []ledger.Session{}
+	}
+	return sessions
 }
 
 // The two conversation windows.
@@ -533,7 +564,18 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	if id == "" {
 		return nil, fmt.Errorf("%w: agent_memory needs an id", ErrBadParams)
 	}
-	out := map[string]any{"id": id, "diary": []any{}, "episodes": []any{}}
+	// EVERY key is present on every answer, as an empty list rather than an
+	// absent one. A client cannot tell "this seat has learned nothing" from
+	// "this node does not keep that half" if the key simply is not there, and
+	// both are ordinary states.
+	out := map[string]any{
+		"id":             id,
+		"diary":          []map[string]any{},
+		"episodes":       []map[string]any{},
+		"skills":         []map[string]any{},
+		"counterparties": []map[string]any{},
+		"onboarded_at":   "",
+	}
 	now := s.clock()
 	if s.Diary != nil {
 		// RESOLVED, not passed through. The diary is keyed by the derived
@@ -546,9 +588,11 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if entries != nil {
-			out["diary"] = entries
+		rows := make([]map[string]any, 0, len(entries))
+		for _, e := range entries {
+			rows = append(rows, diaryRow(e))
 		}
+		out["diary"] = rows
 	}
 	if s.Episodes != nil {
 		// Episodes are keyed by HANDLE and the diary by agent id. The
@@ -560,9 +604,32 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if episodes != nil {
-			out["episodes"] = episodes
+		rows := make([]map[string]any, 0, len(episodes))
+		for _, e := range episodes {
+			rows = append(rows, episodeRow(e))
 		}
+		out["episodes"] = rows
+	}
+	if s.Skills != nil {
+		// The half that had no query at all. A seat drafts these from its
+		// own repeated work, versions them, and loads them mid-turn — and
+		// until now the operator paying for that could not see one.
+		// The zero ListOptions is the operator's view as much as the
+		// agent's: archived hidden, stale shown — a stale skill still
+		// works and still revives on use, so hiding it would misreport
+		// what the seat can actually load.
+		skills, err := s.Skills.List(ctx, id, learning.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		if len(skills) > MemoryPageLimit {
+			skills = skills[:MemoryPageLimit]
+		}
+		rows := make([]map[string]any, 0, len(skills))
+		for _, sk := range skills {
+			rows = append(rows, skillRow(sk))
+		}
+		out["skills"] = rows
 	}
 	return out, nil
 }

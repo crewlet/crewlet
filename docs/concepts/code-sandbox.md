@@ -358,7 +358,7 @@ The token is **signed and self-describing** rather than a key into a store, beca
 
 The receiver **accepts and drops** when no upstream is configured: the engine's own per-turn span still carries the trace, and a deployment with no backend should not have every export fail. A failing backend is never reported to the box either — an exporter that gets a 5xx retries, and retries against a backend that is down turn one outage into two. The run env also carries non-secret resource attributes (`crewlet.turn_id`, `crewlet.agent_handle`) and a `TRACEPARENT`, so Claude Code's spans/metrics nest under the turn (its `CLAUDE_CODE_*` telemetry toggles are injected only for that runner). OpenCode emits no OTLP today — its observability is the published transcript plus the engine-side lifecycle events.
 
-**Dashboard.** The live-state projection maintains an active-sandboxes set from the `SandboxRunStarted` / `SandboxClarificationRequested` / `SandboxRunCompleted` lifecycle events, and the dashboard overview shows a **Running sandboxes** panel whenever a job is in flight — agent, coding agent, task, elapsed, status (running / awaiting input). Completed runs render as the three-row Execute group described above, with the findings and transcript.
+**Dashboard.** The live-state projection maintains an active-sandboxes set from the `SandboxRunStarted` / `SandboxClarificationRequested` / `SandboxRunCompleted` lifecycle events, and the dashboard's **Coding runs** screen shows every one — agent, coding agent, task, elapsed, status — merged with the DURABLE record, so a run whose box has already been reclaimed is still there. A run parked on a clarification is also the first thing the overview's attention queue reports, with the question it asked.
 
 ---
 

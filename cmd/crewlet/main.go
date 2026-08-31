@@ -917,8 +917,23 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Conversations: ledgerstore.NewConversations(e.Backends().Store),
 			Diary:         learning.NewDiary(e.Backends().Store),
 			Episodes:      learning.NewEpisodes(e.Backends().Store),
-			Config:        configSurface,
-			Budget:        e.Backends().Fleet,
+			// The skills a seat drafted for ITSELF. They were written,
+			// versioned and loadable by the agent, and reachable by no
+			// screen — so the operator paying for the learning loop
+			// could not see what it had produced.
+			Skills: learning.NewSkills(e.Backends().Store),
+			// The fleet's agent-to-agent authorization record. The
+			// FLEET's, not this node's: a channel is opened by whichever
+			// node owns the requester's seat, so a per-node read would
+			// draw a different set depending on which node answered.
+			Channels: e.Backends().Fleet,
+			// The company's ONE knowledge backend, behind the same seam a
+			// seat's Plan phase searches through — nil when none is
+			// configured, which leaves the question unregistered rather
+			// than answering an empty search as though it had run.
+			Knowledge: e.Knowledge(),
+			Config:    configSurface,
+			Budget:    e.Backends().Fleet,
 			// The DURABLE record of detached coding runs. Read rather
 			// than projected: a run parked on a person's question can
 			// wait days, and the live projection sweeps long before

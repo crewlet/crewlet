@@ -1,16 +1,17 @@
 // Replay captured server frames through the dashboard's OWN client.
 //
-// Not a test of the dashboard — the suites beside this file are that. This is
-// the last link of the server's end-to-end gate: the Go suite runs a real
-// company, captures every frame its WebSocket actually pushed, and hands the
-// file here. What runs against those bytes is `socket.js` and `store.js`
-// themselves, through the real `onmessage` path, so the question it answers is
-// the only one that matters at that seam — NOT "did the server send something"
-// but "does the client understand what the server sent".
+// Not a test of the dashboard — its own Vitest suites in dashboard/ are that.
+// This is the last link of the server's end-to-end gate: the Go suite runs a
+// real company, captures every frame its WebSocket actually pushed, and hands
+// the file here. What runs against those bytes is the dashboard's OWN protocol
+// module — the same source its bundle contains, emitted once more as plain ESM
+// — through the real message dispatch, so the question it answers is the only
+// one that matters at that seam: NOT "did the server send something" but "does
+// the client understand what the server sent".
 //
 // The distinction is not academic. It was written because a full turn's worth
-// of `agents` pushes were being sent as an object keyed by role, while
-// store.js guards `applyAgents` with `Array.isArray` and dropped every one of
+// of `agents` pushes were being sent as an object keyed by role, while the
+// store guards `applyAgents` with `Array.isArray` and dropped every one of
 // them: the server's own tests passed, the client's own tests passed, the
 // socket carried the frames, and the seat rendered idle from the first phase
 // to the last.
@@ -24,13 +25,10 @@
 // client to a coherent state.
 
 import { readFileSync } from "node:fs";
-import { installDom } from "./dom.mjs";
-import { JS_URL } from "./dashboardRoot.mjs";
+import { PROTOCOL_URL } from "./dashboardRoot.mjs";
 
-installDom();
-
-// The browser bits socket.js and authToken.js reach for. This socket is never
-// dialled — the frames are fed straight to the message handler — but the
+// The browser bits the socket and the token store reach for. This socket is
+// never dialled — the frames are fed straight to the message handler — but the
 // module builds one at construction, so the global has to exist.
 class InertWebSocket {
   static CONNECTING = 0;
@@ -51,8 +49,7 @@ globalThis.fetch = async () => {
   throw new Error("offline: the replay has no server");
 };
 
-const { Store } = await import(new URL("store.js", JS_URL));
-const { LiveSocket } = await import(new URL("socket.js", JS_URL));
+const { Store, LiveSocket } = await import(PROTOCOL_URL.href);
 
 const [file, ...flags] = process.argv.slice(2);
 if (!file) {
@@ -71,7 +68,7 @@ const socket = new LiveSocket(store);
 // The REAL dispatch table, reached the way an arriving frame reaches it.
 // Re-implementing the `switch` here would let the replay agree with a server
 // the dashboard does not.
-for (const raw of frames) socket._onMessage(raw);
+for (const raw of frames) socket.onMessage(raw);
 
 const problems = [];
 const state = store.state;
@@ -99,7 +96,7 @@ const phases = new Set();
 const replay = new Store();
 const probe = new LiveSocket(replay);
 for (const raw of frames) {
-  probe._onMessage(raw);
+  probe.onMessage(raw);
   for (const agent of replay.state.agents) {
     if (agent.state === "working") sawWorking = true;
     if (agent.live_call) {
@@ -122,14 +119,14 @@ for (const want of ["plan", "execute", "review"]) {
   }
 }
 
-// The spend rollup. store.js takes it two ways and both have to work: a
+// The spend rollup. The store takes it two ways and both have to work: a
 // snapshot is accepted only `if (snap.tokens && snap.tokens.totals)`, and a
-// push is stored as-is for views/spend.js to read `.since_days` off. A list of
-// raw records passes neither, and the Spend room renders blank with the
-// numbers sitting in memory the whole time.
+// push is stored as-is for the Spend screen to read `.since_days` off. A list
+// of raw records passes neither, and the screen renders blank with the numbers
+// sitting in memory the whole time.
 if (state.tokens === null) {
   problems.push(
-    "no spend rollup: every `tokens` frame was rejected, so the Spend room " +
+    "no spend rollup: every `tokens` frame was rejected, so the Spend screen " +
       "has nothing to draw",
   );
 } else {
@@ -141,14 +138,14 @@ if (state.tokens === null) {
   }
   if (!state.tokens.since_days) {
     problems.push(
-      "the spend rollup has no `since_days`: the view prints it beside the " +
+      "the spend rollup has no `since_days`: the screen prints it beside the " +
         "numbers and renders a 0-day window without it",
     );
   }
   if (!Array.isArray(state.tokens.by_phase)) {
     problems.push(
-      "`by_phase` is not an array: views/spend.js reads `.length` off it and " +
-        "throws, taking the whole room down",
+      "`by_phase` is not an array: the Spend screen maps over it and throws, " +
+        "taking the whole screen down",
     );
   }
 }

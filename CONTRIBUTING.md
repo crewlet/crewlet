@@ -5,11 +5,13 @@ need to get a development environment running and land a change.
 
 ## Development setup
 
-Prerequisites: **Go 1.27+**, **node** (any version with ES modules — the
-dashboard's suites use `node:assert` and nothing else) and
+Prerequisites: **Go 1.27+** and
 **[golangci-lint](https://golangci-lint.run/welcome/install/)**, which
-`make check` runs and CI's own job downloads for itself. **Docker** only for
-the vendor loops below; the engine itself needs no services.
+`make check` runs and CI's own job downloads for itself. **Node 24+** (npm
+ships with it) for the dashboard — its build output is committed, so building
+and running the ENGINE needs neither, but changing the dashboard or running
+`internal/e2e`'s client replay does. **Docker** only for the vendor loops
+below; the engine itself needs no services.
 
 Take golangci-lint as a **prebuilt release**, not via `go install ...@latest`:
 that builds it with the linter module's own minimum Go rather than the newest,
@@ -62,6 +64,9 @@ go build ./...
 go test ./... -race -count=1                                  # the full suite
 # then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
 CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build ./...            # test-cross
+# and the dashboard, whose build output is committed:
+cd dashboard && npm run build && git diff --exit-code -- ../static/dashboard
+cd dashboard && npm run typecheck && npm test                 # dashboard-test
 ```
 
 The race detector is not optional here: the engine's concurrency model is
@@ -70,6 +75,13 @@ is a data race until proven otherwise — so CI runs the *whole* suite under it
 and so does `make test`. `-count=1` is the other half: without it a cached
 PASS recorded before the change answers for the change. `make test-norace`
 skips the detector when you want the faster loop, and says so.
+
+`make dashboard-check` gates the same shape of problem one level out. The
+dashboard's build output is committed — `go build ./...` and
+`go install …@latest` must work on a clean checkout with no Node, and an embed
+directive cannot run a bundler — so a bundle that has drifted from its source
+compiles, embeds, serves and passes every Go test while running code nobody
+wrote. Rebuilding and diffing is the only thing that can tell you.
 
 `go mod tidy -diff` gates the half of tidiness nothing else notices. An
 *under*-tidy module already fails loudly — a missing requirement or `go.sum`
@@ -101,25 +113,37 @@ start, no environment variable to set and no compose profile to remember:
 Some suites need something the machine may not have and **skip silently
 without it** — a green run has simply not exercised them.
 
-- **`node`** runs the dashboard's suites. `static/dashboard/` is a zero-build
-  ES-module app — no package.json, no node_modules, no test runner — so
-  `tests/dashboard/js/*.test.mjs` execute under whatever `node` is on PATH,
-  driven from Go by `internal/api`. The dashboard has no Go code of its own,
-  so without node a whole subsystem goes quiet. **CI fails rather than
-  skipping** when node is missing: the suite itself fails the run outright
-  when `CI` is set and node is off `PATH`, and the `test` job installs one if
-  the runner image stops shipping it. That install step is a convenience, not
-  a guard — nothing asserts it is still there, and nothing needs to, because
-  the suite goes red either way. Locally, every `make` target that runs a
-  suite refuses to start without node, for the same reason — a target cannot
-  install it for you, but it can decline to hand you a green run that tested
-  none of the dashboard.
+- **`node`** runs `internal/e2e`'s client replay: the Go suite drives a real
+  company, captures every frame its WebSocket pushed, and replays those exact
+  bytes through the dashboard's own protocol module under plain `node`. That
+  gate asks "does the client understand what the server sent" rather than "did
+  the server send something", and it is the only place both halves of the wire
+  protocol are checked against each other. Without node it SKIPS, so the
+  `make` targets that run it refuse to start without one, and CI installs it.
 
-  **Which dashboard the suites test is a parameter.** They resolve it once,
-  in `tests/dashboard/js/dashboardRoot.mjs`, from `CREWLET_DASHBOARD_ROOT` —
+  It needs no npm and no build: `static/dashboard/protocol.js` is committed
+  along with the rest of the built tree.
+
+  **Which dashboard the replay tests is a parameter.** It resolves once, in
+  `tests/dashboard/js/dashboardRoot.mjs`, from `CREWLET_DASHBOARD_ROOT` —
   unset, it is `static/dashboard`, the tree the binary embeds. Spell the path
-  in a suite instead and it becomes a fact that can only ever be corrected in
-  most of the places it appears.
+  in the script instead and it becomes a fact that can only ever be corrected
+  in most of the places it appears.
+
+- **`npm`** builds and tests the dashboard itself. Its ~200 assertions — the
+  wire protocol, the router's history rules, the ordering comparators, and the
+  MEASURED contrast of every colour token over every surface it can land on,
+  in both themes and for protan and deutan vision — run under Vitest:
+  `make dashboard-test`. None of that is checkable by looking at the
+  stylesheet, which is why it is computed from the file that actually ships.
+
+  **The built dashboard is committed**, so building the ENGINE needs neither
+  node nor npm. Changing the dashboard does: run `make dashboard` and commit
+  `static/dashboard` with your source change. CI rebuilds and diffs it
+  (`make dashboard-check`), because a bundle that has drifted from its source
+  compiles, embeds, serves and passes every Go test while running code nobody
+  wrote — the same failure mode `go mod tidy -diff` and the generated
+  `schema/` are gated against.
 
 - **`TURSO_GO_CACHE_DIR`** is where the store driver's native library lives,
   and it is the one environment variable a store test can be defeated by.
@@ -271,7 +295,7 @@ whether it lands. Three things are worth knowing:
   handed an OIDC token: pinned, its updates arrive as reviewable pull
   requests instead of moving under the workflow unannounced.
 
-Adding a new dependency surface — a `package.json`, a second module — means
+Adding a new dependency surface — a second `package.json`, a second module — means
 adding its `updates:` entry in the same change. Nothing reports the omission:
 a manifest Dependabot has not been told about simply never produces a pull
 request, which is indistinguishable from one that has nothing to update. The

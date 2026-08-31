@@ -524,7 +524,7 @@ test rather than vanishing quietly.
 
 #### Querying events
 
-The dashboard's [Activity room](../reference/dashboard-design.md) is the
+The dashboard's [Event log](../reference/dashboard-design.md#information-architecture) is the
 intended reader — filters, traces and event detail, over the same
 `/ws/stream` query channel the REST routes use, so both surfaces answer from
 one implementation.
@@ -578,7 +578,7 @@ parent — the wait shows up as the gap it actually is.
 
 #### Dashboard Trace View
 
-The dashboard (`/dashboard` → Traces) groups events by `trace_id` into collapsible trace trees:
+The dashboard groups a trace's events into a tree — reach one from any row that carries a `trace_id`, or paste the id into the search box:
 
 - Root event (e.g., webhook) shown as the trace header
 - Child events nested underneath with connecting lines
@@ -722,7 +722,7 @@ Every LLM completion records prompt, completion and total tokens plus a call
 count, per agent and per model, with cache reads and writes broken out so
 cached prefixes are visible rather than folded into the total.
 
-Read them from the **Spend & Budgets** room in the dashboard, or over the
+Read them from the **Spend & budgets** screen in the dashboard, or over the
 socket's query channel — `tokens` for the rollup and `budgets` for the caps
 beside the durable counters the engine enforces against. Both are the same
 functions the REST routes call, so the two surfaces cannot disagree.

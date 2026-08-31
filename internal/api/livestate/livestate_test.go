@@ -9,16 +9,19 @@ import (
 const defaultTS = "2026-06-14T12:00:00+00:00"
 
 // env builds a serialized envelope, the shape Apply reads.
-func env(etype string, payload map[string]any, opts ...func(*livestate.Envelope)) livestate.Envelope {
+// env builds one frame. A POINTER, because Apply stamps the envelope it is
+// given — the derived `failed` mark has to reach the frame the client is
+// handed, and a value copy would be stamped and discarded.
+func env(etype string, payload map[string]any, opts ...func(*livestate.Envelope)) *livestate.Envelope {
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	e := livestate.Envelope{
+	e := &livestate.Envelope{
 		ID: "e1", Type: etype, Timestamp: defaultTS,
 		Category: "system", Payload: payload,
 	}
 	for _, opt := range opts {
-		opt(&e)
+		opt(e)
 	}
 	return e
 }

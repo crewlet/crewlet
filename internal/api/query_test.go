@@ -44,7 +44,7 @@ func seededApp(t *testing.T, mutate func(*api.Options)) *api.App {
 	}
 
 	state := livestate.New()
-	state.Apply(livestate.Envelope{
+	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "task_started", Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Category: "task", Payload: map[string]any{"role": "Lead", "task_id": "t-1"},
 	})

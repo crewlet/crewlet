@@ -311,11 +311,16 @@ dies on the first Ctrl+C and the drain logs have nowhere to go.
 
 ## 4. Watch the first turn
 
-Open the dashboard at <http://localhost:8000/>. Within five minutes the
-`hello-crewlet` schedule fires a `TaskAssigned` at the CEO, and you'll see the
-agent go `Working`, step through **Plan → Execute → Review**, and return to
-`Idle` — with every LLM invocation, prompt, and tool call inspectable in the
-UI. The same picture is available over the API:
+Open the dashboard at <http://localhost:8000/>. The **Overview** greets you
+with your company's name and mission, and says what — if anything — needs a
+person. Within five minutes the `hello-crewlet` schedule fires a
+`TaskAssigned` at the CEO: the seat appears under **Live seats**, and
+**Model activity** shows the turn as it runs — Plan, then Execute, then Review,
+each phase listing the rounds it took, the tools each round called, and the
+prompts the model actually saw. A phase that finishes updates in place rather
+than moving, so you can read one while the next is running.
+
+The same picture is available over the API:
 
 ```bash
 curl -s http://localhost:8000/agents | python3 -m json.tool

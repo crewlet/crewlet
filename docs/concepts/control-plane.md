@@ -76,7 +76,7 @@ Each node **re-stamps its key every tick**, not only when it converges, and the 
 
 **The bucket's own age is that bound**, set to four reconcile intervals when the store is opened. Nothing sweeps it, because there is nothing to sweep: a node that stops reporting stops renewing, and the broker expires the key on its own. That is also why the value is a bucket-wide constant rather than a per-write TTL — see [Coordination § Retention is a bucket's age](coordination.md#retention-is-a-buckets-age).
 
-A node's recorded failure text is **truncated** at 2 000 characters. The whole fleet's status is read on every posture decision and rendered on the dashboard's fleet view, so one node returning a megabyte of Go error would be paid for by every reader on every tick.
+A node's recorded failure text is **truncated** at 2 000 characters. The whole fleet's status is read on every posture decision and rendered on the dashboard's **Fleet** screen, so one node returning a megabyte of Go error would be paid for by every reader on every tick.
 
 ---
 
@@ -215,7 +215,7 @@ That is the whole exposure, and it is small enough that **the apply does not wai
 
 ### Reading a stuck node
 
-Each node's status carries the `error` it failed with, so the first question — *is this the revision or is this the node?* — is answered by the fleet view. It is on the dashboard, and it is one request:
+Each node's status carries the `error` it failed with, so the first question — *is this the revision or is this the node?* — is answered by the **Fleet** screen, which calls out every node whose applied epoch is behind the target and prints the error it failed with. It is also one request:
 
 ```bash
 curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \

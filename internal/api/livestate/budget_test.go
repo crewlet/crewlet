@@ -142,7 +142,7 @@ func TestNoMeterReportsAsNoMeter(t *testing.T) {
 
 // --- the live spend window ---------------------------------------------- //
 
-func phaseSpend(eventID, ts string, total int) livestate.Envelope {
+func phaseSpend(eventID, ts string, total int) *livestate.Envelope {
 	return env("agent_phase_completed", map[string]any{
 		"role": "Lead", "agent_id": "a-1", "phase": "plan",
 		"model": "claude-sonnet-5", "turn_id": "tn-1",

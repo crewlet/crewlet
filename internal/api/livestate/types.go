@@ -25,6 +25,17 @@ type Envelope struct {
 	ParentSpanID string         `json:"parent_span_id"`
 	Topic        string         `json:"topic"`
 	Payload      map[string]any `json:"payload,omitempty"`
+
+	// Failed says whether the work this event reports failed.
+	//
+	// It carries the SAME derivation FeedRow gets, from the same function,
+	// because the two halves of one list must agree. They did not: the
+	// snapshot's rows carried it and the live `event` push did not, so a
+	// failed turn arriving while a reader watched rendered identically to a
+	// successful one — and then grew its failure mark on the next reload,
+	// when the same row came back through the store. Set by Apply, not by a
+	// producer, so it cannot be forgotten at a call site.
+	Failed bool `json:"failed"`
 }
 
 // FeedRow is one payload-free row of the activity feed.

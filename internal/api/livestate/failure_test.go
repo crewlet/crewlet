@@ -96,7 +96,7 @@ func TestASpawnDoesNotDisturbAWorkingSeat(t *testing.T) {
 
 // --- phase failure ------------------------------------------------------- //
 
-func failedPhase(ts string) livestate.Envelope {
+func failedPhase(ts string) *livestate.Envelope {
 	return env("agent_phase_completed", map[string]any{
 		"role": "Lead", "turn_id": "tn-1", "phase": "plan", "iteration": 0,
 		"failed": true, "error_kind": "provider_error", "error": "429 from anthropic",
