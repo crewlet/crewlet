@@ -202,13 +202,20 @@ cooldowns are fleet state rather than per-process: a limit belongs to the key at
 the vendor, so four nodes should not each pay their own 429 to learn it.
 
 **The observability edge is two routes, not one, and the split is deliberate.**
-The same event forks. It is written to this node's `crewlet_events` **inline, in
-the publishing goroutine**, through a publish listener with no consumer group —
-so no two nodes can ever write one row. And it is read back off the broker by an
-**ephemeral broadcast** subscription on `crewlet.events.>` that feeds the live
-projection — so a dashboard tab attached to node B shows turns that ran on node
-A. Swap either mechanism for the other and you lose the guarantee the other one
-was providing.
+A published event forks. It is written to this node's `crewlet_events` **inline,
+in the publishing goroutine**, through a publish listener with no consumer
+group — so no two nodes can ever write one row. And it is read back off the
+broker by an **ephemeral broadcast** subscription on `crewlet.events.>` that
+feeds the live projection — so a dashboard tab attached to node B shows turns
+that ran on node A. Swap either mechanism for the other and you lose the
+guarantee the other one was providing.
+
+The two sets are not identical, and each exception carries its reason in
+`internal/events`: a few types are live-only — a per-round progress signal, a
+snapshot of in-memory meters — because persisting them would fill the log with
+intermediate states of rows it already holds finished, or let a dashboard
+hydrate a dead process's counters and render them as current. What the
+projection shows and what the store keeps are two questions with two answers.
 
 **Embedded and standalone are one wiring with one seam.** The API half runs in
 the engine's process by default and can run as its own; what differs is not the
