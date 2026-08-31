@@ -45,13 +45,29 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if tail := fs.Args(); bootstrapPath == "" && len(tail) == 1 {
-		bootstrapPath = tail[0]
-	} else if len(tail) > 0 && bootstrapPath != "" {
+	// THE SAME SHAPE AS `run`, because the failure is the same and worse
+	// here. The refusal used to be conjoined with `bootstrapPath != ""`,
+	// which made it unreachable on the exact input it was written for:
+	// `crewlet migrate a.yaml b.yaml` puts both names in the tail with no
+	// subject, so neither branch fired and the command silently migrated
+	// the database named by ./crewlet.yaml — a database the operator never
+	// named, and without -check it migrates it for real.
+	tail := fs.Args()
+	if bootstrapPath == "" && len(tail) == 1 {
+		bootstrapPath, tail = tail[0], nil
+	}
+	if len(tail) > 0 {
 		fmt.Fprintln(stderr, "usage: crewlet migrate [<config.yaml>] [-check]")
 		return errors.New("name at most one config document")
 	}
-	if bootstrapPath == "" {
+	if bootstrapPath != "" {
+		if isFlagSet(fs, "config") {
+			return errors.New(
+				"the config document is named twice, as a positional argument " +
+					"and as -config; they would have to agree and nothing " +
+					"checks that they do")
+		}
+	} else {
 		bootstrapPath = *configPath
 	}
 
