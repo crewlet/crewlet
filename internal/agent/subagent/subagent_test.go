@@ -260,7 +260,7 @@ func baseConfig(t *testing.T, w *world, p *provider) subagent.Config {
 		Seat:     seat(t),
 		Models:   models(t, phase.Entry{Key: "default", Provider: p}),
 		Universe: w.snapshot,
-		Parent:   w.parentAll(),
+		Parent:   w.parentAll,
 		Limits:   limits(),
 	}
 }
@@ -1793,3 +1793,76 @@ func (c skillFor) SkillsFor(_ prompts.Phase, surface prompts.Surface) []prompts.
 }
 
 func (c skillFor) Render(text string) string { return text }
+
+// --- what the caller must supply, and what happens without it ---------------
+
+// THE PARENT'S CALLABLE SET IS READ LIVE.
+//
+// An executor that discovers a tool mid-phase and activates it has widened
+// what it may call, and a child spawned afterwards inherits that. With a
+// frozen slice the tool is silently rejected by Permit's second filter and
+// reported to the model as refused — a permission decision nobody made.
+func TestTheParentsToolsAreReadWhenTheChildSpawns(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	parent := []string{"read_file"}
+	answer := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+		return &llm.Completion{Content: "done"}, nil
+	}}
+	cfg := baseConfig(t, w, answer)
+	cfg.Parent = func() []string { return parent }
+
+	res, err := subagent.Spawn(t.Context(), cfg, subagent.Request{
+		TaskPrompt: "go", SystemPrompt: "you are a worker",
+		ToolNames: []string{"read_file", "web_search"},
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if !slices.Contains(res.Rejected, "web_search") {
+		t.Fatalf("web_search was granted before the parent had it: %+v", res.Rejected)
+	}
+
+	// The parent discovers it mid-phase and activates it; the next spawn
+	// inherits that, which a frozen slice could not express.
+	parent = append(parent, "web_search")
+	res, err = subagent.Spawn(t.Context(), cfg, subagent.Request{
+		TaskPrompt: "go", SystemPrompt: "you are a worker",
+		ToolNames: []string{"web_search"},
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if slices.Contains(res.Rejected, "web_search") {
+		t.Error("a tool the parent had activated was still refused to its child")
+	}
+}
+
+// EVERY CHILD PRODUCES ONE TELEMETRY CALL, on every path it can end on.
+//
+// The package produces a Result for every outcome precisely so a caller's
+// phase event cannot be missing — and the tool is that caller. Without the
+// hook a fan-out is invisible: tokens charged, model calls made, and nothing
+// in the event store saying a sub-agent ran.
+func TestEveryChildIsReportedOnce(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	answer := &provider{name: "sub", reply: func(context.Context, int, llm.Request) (*llm.Completion, error) {
+		return &llm.Completion{Content: "done"}, nil
+	}}
+	var seen []subagent.Result
+	cfg := baseConfig(t, w, answer)
+	cfg.Telemetry = func(_ context.Context, res subagent.Result) { seen = append(seen, res) }
+
+	if _, err := subagent.Spawn(t.Context(), cfg, subagent.Request{
+		TaskPrompt: "go", SystemPrompt: "you are a worker",
+	}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("one child produced %d telemetry calls", len(seen))
+	}
+	if seen[0].SystemPrompt == "" || seen[0].UserPrompt == "" {
+		t.Error("the reported result carries no prompts, so a dashboard shows an empty phase")
+	}
+}

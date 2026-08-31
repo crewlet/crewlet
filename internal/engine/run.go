@@ -786,6 +786,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// was never supplied, so every exhaustion rescued with "no_judge"
 		// and the extension mechanism was inert.
 		Judge: e.judgeFor(company, req.Handle),
+		// The seat's headroom, for a sub-agent spawn. Three-valued on
+		// purpose: nil is "no ceiling configured", and a FAILED read
+		// refuses the spawn rather than granting it no ceiling.
+		Remaining: e.remainingFor(company, req.Handle),
 	})
 	if err != nil {
 		// No turn-completed event: nothing started, so nothing ended. A

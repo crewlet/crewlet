@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
@@ -208,8 +209,23 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 			ExtensionStep:  te.ExtensionRoundStep,
 			ExtensionOn:    te.ExtensionEnabled.Or(true),
 		},
-		Budget:       in.Budget,
-		Judge:        in.Judge,
+		Budget: in.Budget,
+		Judge:  in.Judge,
+		// The company's own sub-agent caps, from the SAME pinned epoch as
+		// the round caps above, so a revision landing mid-turn cannot move
+		// a cap a spawn is judged against. Every one of these six was
+		// declared, defaulted, validated, schema'd and read by nobody.
+		Subagent: &runner.SubagentConfig{
+			Limits: subagent.Limits{
+				MaxTurns:          te.SubagentMaxTurns,
+				Timeout:           seconds(te.SubagentTimeoutSeconds),
+				BatchTimeout:      seconds(te.SubagentBatchTimeoutSeconds),
+				MaxParallel:       te.SubagentMaxParallel,
+				BudgetFraction:    te.SubagentBudgetFraction,
+				MinPerChildTokens: te.SubagentMinPerChildTokens,
+			},
+			Remaining: in.Remaining,
+		},
 		Task:         in.Task,
 		Context:      in.Context,
 		Recon:        in.Recon,
@@ -253,6 +269,12 @@ type RunnerInput struct {
 	// Judge decides round-cap extensions. Nil sends every exhaustion
 	// straight to the rescue path.
 	Judge extension.Judge
+
+	// Remaining reads the seat's token headroom for a sub-agent spawn.
+	// Nil means the seat is uncapped, which is what a company with no
+	// token budget already is — and is NOT the same as a read that failed,
+	// which refuses the spawn rather than granting it no ceiling.
+	Remaining runner.Remaining
 
 	// Publisher receives the phase telemetry, and Turn identifies the turn
 	// it belongs to. Nil publishes nothing — the right answer for a runner

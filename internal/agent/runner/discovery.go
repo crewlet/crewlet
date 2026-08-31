@@ -37,7 +37,11 @@ const (
 // The alternative was building a placeholder Surface and assigning over it,
 // which copies a struct holding a mutex. It is harmless while nothing holds
 // that lock, and it is exactly the kind of harmless that stops being harmless.
-func discoveryTools(surface func() *tools.Surface) []tools.Callable {
+// DiscoveryTools is exported for [subagent.Config.Discovery], whose type it
+// matches exactly. A child's own prompt tells it to call list_mcp_server_tools
+// and activate_tool, so a nil Discovery makes that prompt a lie and costs a
+// wasted round every time the child obeys it.
+func DiscoveryTools(surface func() *tools.Surface) []tools.Callable {
 	return []tools.Callable{
 		&listMCPTools{surface: surface},
 		&activateTool{surface: surface},

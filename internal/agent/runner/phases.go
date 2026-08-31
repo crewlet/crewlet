@@ -50,6 +50,13 @@ type Config struct {
 	// straight to the rescue path.
 	Judge extension.Judge
 
+	// Subagent is what this turn needs to spawn sub-agents: the company's
+	// caps and a way to read the seat's remaining allowance. Nil leaves
+	// spawn_subagent off every surface, which is the honest shape for a
+	// build with no budget source — and was the shape of every build,
+	// because nothing imported internal/agent/subagent at all.
+	Subagent *SubagentConfig
+
 	// Budget is the shared token counter a turn charges. Nil disables the
 	// per-round charge, which is the embedded single-node case where no
 	// counter is shared with anyone.
@@ -200,7 +207,7 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 	submit := &submitted[planPayload]{
 		name: SubmitPlanTool, desc: submitPlanDescription, schema: planSchema, decode: decodePlan,
 	}
-	surface, err := r.surfaceWith(phase.Plan, snapshot, submit, r.planActive(snapshot))
+	surface, err := r.surfaceWith(ctx, phase.Plan, round, snapshot, submit, r.planActive(snapshot))
 	if err != nil {
 		return turn.Plan{}, turn.Surface{}, err
 	}
@@ -288,7 +295,7 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 func (r *Runner) Execute(ctx context.Context, round int, p turn.Plan, history []ledger.Iteration) (turn.Execution, turn.Surface, error) {
 	snapshot := r.cfg.Registry.Snapshot()
 	active := r.executeActive(snapshot, p)
-	surface, err := r.surfaceWith(phase.Execute, snapshot, nil, active)
+	surface, err := r.surfaceWith(ctx, phase.Execute, round, snapshot, nil, active)
 	if err != nil {
 		return turn.Execution{}, turn.Surface{}, err
 	}
@@ -358,7 +365,7 @@ func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Exec
 	submit := &submitted[reviewPayload]{
 		name: SubmitReviewTool, desc: submitReviewDescription, schema: reviewSchema, decode: decodeReview,
 	}
-	surface, err := r.surfaceWith(phase.Review, snapshot, submit, nil)
+	surface, err := r.surfaceWith(ctx, phase.Review, round, snapshot, submit, nil)
 	if err != nil {
 		return turn.Review{}, err
 	}
@@ -665,7 +672,14 @@ type phaseResult struct {
 // Private because the tool is per-phase state: two phases of one turn each get
 // their own, and registering into the shared registry would make one phase's
 // submission visible to the next.
-func (r *Runner) surfaceWith(ph phase.Phase, snapshot tools.Snapshot, submit tools.Callable, active []string) (*tools.Surface, error) {
+// The `extra` set is per-TURN rather than per-phase state: today it is the
+// sub-agent spawner, which is bound to one parent turn's grant and must reach
+// a resumed Execute as well as a fresh one. Injected here because this is the
+// single funnel every phase surface goes through, so a phase that lost the
+// tool mid-turn is not representable.
+func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
+	snapshot tools.Snapshot, submit tools.Callable, active []string,
+) (*tools.Surface, error) {
 	if submit != nil {
 		var err error
 		snapshot, err = snapshot.With(tools.Entry{Tool: submit, Origin: tools.OriginBuiltin})
@@ -682,13 +696,40 @@ func (r *Runner) surfaceWith(ph phase.Phase, snapshot tools.Snapshot, submit too
 	// are in its snapshot. The closure is read at call time, by which point
 	// the surface exists.
 	var surface *tools.Surface
-	for _, tool := range discoveryTools(func() *tools.Surface { return surface }) {
+	for _, tool := range DiscoveryTools(func() *tools.Surface { return surface }) {
 		var err error
 		snapshot, err = snapshot.With(tools.Entry{Tool: tool, Origin: tools.OriginBuiltin})
 		if err != nil {
 			return nil, fmt.Errorf("runner: %s: %w", ph, err)
 		}
 		active = append(active, tool.Name())
+	}
+
+	// The sub-agent spawner, on the same closure and for the same reason:
+	// the child inherits the parent's LIVE active list, which does not
+	// exist until this surface does.
+	//
+	// Built HERE rather than by each caller because this is the single
+	// funnel every phase surface goes through, so a fresh Execute and a
+	// RESUMED one get it from one place — and a resumed turn that lost the
+	// tool mid-run is not representable.
+	if entry := r.spawnEntry(ctx, ph, round, snapshot,
+		func() *tools.Surface { return surface }); entry.Tool != nil {
+		next, err := snapshot.With(entry)
+		if err != nil {
+			// A collision here is an operator's MCP server publishing a
+			// first-party tool name. LOSING THE SPAWNER is the
+			// proportionate answer: failing the surface would kill every
+			// Execute phase on that seat for as long as that server is
+			// configured, which is a far larger outage than the missing
+			// capability. The subagent package makes the same choice for
+			// the same collision one level down.
+			log.WarnContext(ctx, "spawn_tool_skipped", "phase", ph,
+				"tool", entry.Tool.Name(), "error", err.Error())
+		} else {
+			snapshot = next
+			active = append(active, entry.Tool.Name())
+		}
 	}
 	// Bound to the turn, which is what lets a seat-scoped tool know who is
 	// calling it without the seat travelling through the model's arguments.

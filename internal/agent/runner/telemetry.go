@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
@@ -94,6 +96,18 @@ type emitter struct {
 	turn  Turn
 	role  string
 	tally *Spend
+
+	// hostIteration is the Execute round a NESTED phase belongs to, so a
+	// dashboard groups a sub-agent under the round that spawned it rather
+	// than beside the turn's own phases. Zero on the emitter every
+	// ordinary phase uses, which never reads it.
+	hostIteration int
+}
+
+// nestedAt is this emitter bound to the round a nested phase runs under.
+func (e emitter) nestedAt(round int) emitter {
+	e.hostIteration = round
+	return e
 }
 
 func (r *Runner) emitter() emitter {
@@ -320,6 +334,67 @@ type phaseRecord struct {
 // megabytes of one string on an event that fans out to every open dashboard.
 // Two thousand characters holds any message written to be read.
 const maxErrorLength = 2000
+
+// subagentCompleted closes ONE sub-agent, as a phase nested under the Execute
+// round that spawned it.
+//
+// The subagent package produces a Result on every path a child can end on
+// precisely so the caller's phase event cannot be missing — and the spawn tool
+// is that caller. Without this a fan-out is invisible: its tokens are charged,
+// its model calls happened, and nothing in the event store or the dashboard
+// says a sub-agent ran at all. That is exactly how a subsystem stays broken
+// unnoticed.
+//
+// It does NOT tally into the parent's Spend. The parent's turn-level event
+// reports what the parent's own phases cost, and a child's tokens are already
+// charged through the shared meter — adding them here would report them twice
+// and make the turn's own phase numbers stop summing to its total.
+func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
+	if !e.on() {
+		return
+	}
+	ev := types.AgentPhaseCompleted{
+		Agent:    e.turn.AgentID,
+		RoleName: e.role,
+		TurnID:   e.turn.ID,
+		Phase:    types.PhaseSubagent,
+		// NESTED under the phase that spawned it, so a dashboard groups
+		// it beneath that Execute round rather than rendering it as a
+		// standalone sibling of the turn's own three phases.
+		HostPhase:      types.PhaseExecute,
+		HostIteration:  e.hostIteration,
+		Model:          res.Model,
+		ProviderKey:    res.ProviderKey,
+		Trigger:        e.turn.Trigger,
+		SystemPrompt:   res.SystemPrompt,
+		UserPrompt:     res.UserPrompt,
+		Response:       res.Text,
+		ToolExecutions: toolExecutions(res.Executions),
+		InputTokens:    res.InputTokens,
+		OutputTokens:   res.OutputTokens,
+		TotalTokens:    res.Tokens(),
+		RoundsUsed:     res.Rounds,
+		ToolsAvailable: res.ToolsAvailable,
+		// The grant's refusals, which is what Notes is documented to
+		// carry for this phase. A child that asked for a tool it could
+		// not have is the first thing to look at when its answer is thin.
+		Notes:           rejectedNote(res.Rejected),
+		Backend:         types.BackendNative,
+		ConversationKey: e.turn.ConversationKey,
+		Failed:          res.Failed,
+		Error:           truncate(res.Error, maxErrorLength),
+		ErrorKind:       res.ErrorKind,
+	}
+	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
+}
+
+// rejectedNote renders a grant's refusals for the event's Notes field.
+func rejectedNote(rejected []string) string {
+	if len(rejected) == 0 {
+		return ""
+	}
+	return "rejected tools: " + strings.Join(rejected, ", ")
+}
 
 // completed closes a phase.
 func (e emitter) completed(ctx context.Context, rec phaseRecord) {

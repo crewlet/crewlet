@@ -54,6 +54,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -254,7 +255,16 @@ type Config struct {
 	// registry, and granting from that would hand a child tools the parent
 	// never had.
 	Universe tools.Snapshot
-	Parent   []string
+
+	// Parent is what the parent may itself call, read through a getter for
+	// the same reason Discovery is: the parent's ACTIVE list is live. An
+	// executor that discovers a tool mid-phase and activates it has widened
+	// what it may call, and a child spawned afterwards should inherit that
+	// — with a frozen slice the tool is silently rejected by Permit's
+	// second filter and reported to the model as refused, which reads as a
+	// permission decision nobody made. Nil, or a nil result, means the
+	// parent may call nothing and every request is refused.
+	Parent func() []string
 
 	// Discovery builds the child's own discovery meta-tools, bound to the
 	// child's surface through a getter.
@@ -293,6 +303,50 @@ type Config struct {
 	// Trace is the parent turn's trace context, so a child's event hangs
 	// under the turn that spawned it.
 	Trace events.TraceContext
+
+	// Turn binds the child's surface to the parent turn.
+	//
+	// Without it every seat-bound tool in the grant fails at call time
+	// rather than at grant time: lookup_colleague answers "no organization
+	// is in scope", use_skill answers "can only be called during a turn".
+	// A child handed tools that always fail is worse than a child that was
+	// not granted them — it spends rounds discovering the refusal.
+	//
+	// Nil keeps the unbound behaviour, which is what a caller with no seat
+	// in scope (a test, a tool exercised directly) actually has.
+	Turn *turnctx.Turn
+
+	// Guard builds the child's load-before-use gate FROM THE CHILD'S OWN
+	// finished surface, so a child cannot reach by being spawned a tool
+	// its parent would have had to load a skill for.
+	//
+	// A factory rather than a value, for the reason Discovery is a getter:
+	// what a guard enforces is derived from an ACTIVE LIST, and the
+	// child's does not exist until its surface does. Handing it the
+	// parent's would gate the child on the parent's tools — a different
+	// set, arrived at for different reasons.
+	//
+	// Nil leaves the child ungated, which is correct for a company with no
+	// required skills.
+	Guard func(*tools.Surface) tools.Guard
+
+	// Telemetry receives every child's Result, once, on every path a child
+	// can end on.
+	//
+	// The package produces a Result for every outcome specifically so the
+	// caller's phase event cannot be missing — and the tool below is that
+	// caller. Without this hook a spawn is invisible: its tokens are
+	// charged, its model call happened, and nothing in the event store or
+	// the dashboard says a sub-agent ran at all.
+	Telemetry func(ctx context.Context, res Result)
+}
+
+// parentNames is the parent's callable set, nil-safe.
+func (c Config) parentNames() []string {
+	if c.Parent == nil {
+		return nil
+	}
+	return c.Parent()
 }
 
 func (c Config) validate() error {
@@ -671,6 +725,19 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 ) (res Result) {
 	res.ProviderKey = key
 
+	// TELEMETRY ON EVERY PATH, including the panic the frame below
+	// contains. Deferred FIRST so it runs LAST: the recovery below writes
+	// the failure onto res, and a hook registered before it would report a
+	// result the panic had not yet been folded into.
+	//
+	// The package produces a Result for every outcome precisely so a
+	// caller's phase event cannot be missing, and without this a spawn is
+	// invisible — its tokens charged, its model call made, and nothing in
+	// the event store saying a sub-agent ran.
+	if cfg.Telemetry != nil {
+		defer func() { cfg.Telemetry(ctx, res) }()
+	}
+
 	// A PANIC IS CONTAINED HERE, on both the single and the batched path.
 	//
 	// Batched, the case is not arguable: a panicking goroutine takes the
@@ -693,7 +760,7 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 		res.Error = ledger.Elide(fmt.Sprintf("sub-agent panicked: %v", r), errorLimit)
 	}()
 
-	grant := Permit(cfg.Universe, cfg.Parent, req.ToolNames)
+	grant := Permit(cfg.Universe, cfg.parentNames(), req.ToolNames)
 	res.Rejected = grant.Rejected
 	if len(grant.Rejected) > 0 {
 		log.InfoContext(ctx, "subagent_tools_rejected", "rejected", grant.Rejected,
@@ -719,6 +786,19 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 		}
 	}
 	surface = tools.NewSurface(phase.Subagent.String(), universe, active)
+	// BOUND to the parent turn, or every seat-scoped tool in the grant
+	// fails at call time — see Config.Turn.
+	if cfg.Turn != nil {
+		surface = surface.ForTurn(cfg.Turn)
+	}
+	if cfg.Guard != nil {
+		// AFTER the surface exists and from that surface, so what the
+		// guard enforces and what the child's catalogue showed cannot
+		// disagree.
+		if guard := cfg.Guard(surface); guard != nil {
+			surface = surface.WithGuard(guard)
+		}
+	}
 
 	// The catalogue is rendered only for a child that can act on it.
 	// Listing tools to a worker with no activate_tool is an invitation to

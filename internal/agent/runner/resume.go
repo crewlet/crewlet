@@ -57,7 +57,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.E
 	answer := r.cfg.Resume.Answer
 
 	snapshot := r.cfg.Registry.Snapshot()
-	surface, err := r.surfaceWith(phase.Execute, snapshot, nil, state.ActiveTools)
+	surface, err := r.surfaceWith(ctx, phase.Execute, state.Round, snapshot, nil, state.ActiveTools)
 	if err != nil {
 		return turn.Execution{}, turn.Surface{}, err
 	}
