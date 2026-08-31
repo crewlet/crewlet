@@ -575,7 +575,10 @@
   border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
   border-radius: var(--r-md);
   background: color-mix(in srgb, var(--accent) 3%, transparent);
-  padding: var(--space-3);
+  /* Generous, and more above than below: the label sits at the top edge and
+     small tracked caps read as crowded long before body text does. */
+  padding: var(--space-4) var(--space-4) var(--space-3);
+  gap: var(--space-3);
 }
 
 /* The pill that holds finished rows back. Splicing them in at the top pushed
