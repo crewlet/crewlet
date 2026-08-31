@@ -200,8 +200,41 @@ func TestAnAskCarriesTheCallingSeatNotAnArgument(t *testing.T) {
 	}
 	// The chain travels so the answering seat can refuse past the cap
 	// rather than discovering the loop at runtime.
-	if got.DelegationDepth != 1 || len(got.DelegationChain) != 1 {
-		t.Errorf("delegation = depth %d chain %v", got.DelegationDepth, got.DelegationChain)
+	//
+	// THE TURN'S OWN DEPTH, unincremented. a2a.Service.Open is the
+	// chokepoint that adds the hop, and adding one here too charged two
+	// per ask against a default limit of three — so a colleague's first
+	// reply could not be answered, and a two-message exchange died as an
+	// engine guard breach rather than as a conversation.
+	if got.DelegationDepth != 0 || len(got.DelegationChain) != 1 {
+		t.Errorf("delegation = depth %d chain %v, want this turn's own depth "+
+			"and a chain naming the asker", got.DelegationDepth, got.DelegationChain)
+	}
+}
+
+// ONE ASK IS ONE HOP, wherever the turn started.
+//
+// The pairing that makes the rule visible: whatever depth the asking turn is
+// at, the tool passes it through and the service adds exactly one. Charging
+// twice halves an operator's configured budget in the direction nobody
+// chose, and the config field states the rule — a turn triggered by another
+// agent inherits its depth plus one.
+func TestAnAskChargesOneHopFromTheTurnsOwnDepth(t *testing.T) {
+	t.Parallel()
+	for _, depth := range []int{0, 1, 2, 7} {
+		svc := &asker{}
+		tool := registered(t, builtin.Deps{A2A: svc}, builtin.A2AAskTool)
+		tc := turnFor(t, "agent-ceo")
+		tc.Depth = depth
+		res := callFor(t, tool, tc, map[string]any{
+			"target": "agent-cto", "brief": "?",
+		})
+		if res.Failed {
+			t.Fatalf("failed: %s", res.Output)
+		}
+		if got := svc.asks[0].DelegationDepth; got != depth {
+			t.Errorf("a turn at depth %d asked at depth %d", depth, got)
+		}
 	}
 }
 
