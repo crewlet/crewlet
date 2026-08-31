@@ -1018,6 +1018,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// and the listener is the one surface an unauthenticated client
 		// can reach.
 		ReadHeaderTimeout: apiReadHeaderTimeout,
+		IdleTimeout:       apiIdleTimeout,
 		BaseContext:       func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
 	}
 	go func() {
@@ -1067,6 +1068,26 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 // that a connection opened and left silent — the cheapest denial there is
 // against a listener — costs one slot for ten seconds rather than for ever.
 const apiReadHeaderTimeout = 10 * time.Second
+
+// apiIdleTimeout bounds how long a kept-alive connection may sit between
+// requests.
+//
+// Without it net/http falls back to ReadTimeout, which is also unset here — so
+// there was NO deadline at all between keep-alive requests, and a client that
+// completed one request and then went quiet held its slot indefinitely. The
+// neighbouring ReadHeaderTimeout makes the block look complete, which is
+// exactly why this was easy to miss: it bounds the FIRST header, not the
+// silence after a response.
+//
+// Sixty seconds, which is well above any real client's think time — the
+// dashboard polls far faster and its live channel is a websocket, which leaves
+// the keep-alive pool entirely once upgraded — and far below the cost of
+// holding a slot for a client that has gone away without saying so.
+//
+// A blanket ReadTimeout is deliberately NOT the instrument: it caps the whole
+// request including the body, which would put a ceiling on `crewlet backup`
+// and on a large config import. Body reads are bounded per route instead.
+const apiIdleTimeout = 60 * time.Second
 
 // engineRuntime answers the questions only a co-located engine can.
 type engineRuntime struct {
