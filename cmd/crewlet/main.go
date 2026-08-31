@@ -1108,6 +1108,9 @@ func (r engineRuntime) Snapshot() api.RuntimeState {
 		// a list of what the document names would claim more than this
 		// process can do.
 		VerifiableSources: r.engine.VerifiableSources(),
+		// The watchdog's own reading, so a node degrading towards its
+		// self-terminate threshold is visible before it hits it.
+		StallLag: r.engine.StallLag(),
 	}
 	if r.reconciler != nil {
 		// Read live, on every probe, rather than cached: a cached

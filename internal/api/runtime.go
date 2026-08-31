@@ -9,6 +9,8 @@
 package api
 
 import (
+	"time"
+
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -37,6 +39,12 @@ type RuntimeState struct {
 
 	// AppliedEpoch is the config revision this node is running.
 	AppliedEpoch int64
+
+	// StallLag is how far behind the node's watched duty is, and the
+	// early warning before the watchdog ends the process at the lease TTL.
+	// Zero is "nothing to report" rather than "measured as zero", which is
+	// the same answer a health surface wants for both.
+	StallLag time.Duration
 
 	// StartedAt is when the ENGINE started, which on the standalone
 	// deployment is a different process on a different clock from the

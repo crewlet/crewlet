@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -72,6 +73,23 @@ type Engine struct {
 	// dispatch turns one inbox partition into one turn. Held so a test can
 	// substitute its own without standing up a broker.
 	dispatch *Dispatcher
+
+	// watchdog ends this process when the seat host's heartbeat stops
+	// turning past the lease TTL.
+	//
+	// On the ENGINE rather than inside the seat host, for the reason
+	// [seat.Watchdog.Stop] gives: the engine is what knows a shutdown has
+	// begun, and disarming has to happen BEFORE the drain. Teardown
+	// legitimately blocks for a long time — reaping MCP process trees,
+	// joining goroutines, tearing sandboxes down — and a watchdog still
+	// armed through it would shoot a node in the middle of the seat
+	// release that makes a drain graceful.
+	//
+	// It was never constructed at all: seat.NewWatchdog had no caller
+	// outside its own test, so a node that wedged neither worked nor died,
+	// held a peer's mail unacked, and was never restarted by an
+	// orchestrator watching for liveness.
+	watchdog *seat.Watchdog
 
 	// batch is the inbox coalescing window and cap, shared with every seat
 	// attachment on this node.
@@ -436,6 +454,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		}); err != nil {
 		return fail(fmt.Errorf("engine: seat memory: %w", err))
 	}
+	// ARMED HERE, STARTED IN Start. The watchdog stands down permanently
+	// the first time no watched duty is live, and the host is not live
+	// until node.Start runs it — so building it here and starting it there
+	// is the only ordering that watches anything at all.
+	e.watchdog = seat.NewWatchdog()
+	e.watchdog.Watch("seat-host", n.Host())
 	e.node = n
 	e.dispatch = e.buildDispatcher(opts, backends)
 	// LAST, because its fleet-singleton duty is claimed under the node's
@@ -542,6 +566,27 @@ func (e *Engine) Start(ctx context.Context) error {
 	if err := e.node.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("engine: start: %w", err)
 	}
+	// AFTER the host is running, and detached from the caller's context
+	// like the host itself. Before it, every watched duty reads as not
+	// live and the watchdog stands down for the life of the process —
+	// which is the one failure mode a suicide timer must not have: it
+	// looks exactly like a healthy armed one. [Engine.Stop] disarms it.
+	//
+	// The precondition is CHECKED rather than commented, because getting
+	// it wrong is silent by construction: a watchdog that stood down and
+	// one that is watching are indistinguishable from outside the package,
+	// and the difference only shows up as a node that wedges and is never
+	// restarted.
+	if e.watchdog != nil {
+		if _, live := e.node.Host().Beat(); !live {
+			log.WarnContext(ctx, "watchdog_not_armed",
+				"detail", "the seat host is not running yet, so the watchdog would "+
+					"stand down permanently; this node will not end itself if it wedges",
+				"hint", "start the watchdog after node.Start, not before")
+		} else {
+			e.watchdog.Start(context.WithoutCancel(ctx))
+		}
+	}
 	company := e.Company()
 	log.InfoContext(ctx, "engine_started", "company", company.Config.Name,
 		"seats", len(company.Seats()))
@@ -554,6 +599,15 @@ func (e *Engine) Start(ctx context.Context) error {
 // cleanly and one that redelivers half-finished turns: it stops claiming, hands
 // back every seat, and waits for in-flight handlers before anything closes.
 func (e *Engine) Stop(ctx context.Context) {
+	// FIRST, before anything blocks. The drain below reaps MCP process
+	// trees, joins goroutines and waits on in-flight turns indefinitely —
+	// all legitimate, all slow, and all of it would look to an armed
+	// watchdog exactly like the wedge it exists to end. Exiting through
+	// the middle of a drain abandons the seat release that makes it
+	// graceful, and costs every peer a full TTL of dark seats.
+	if e.watchdog != nil {
+		e.watchdog.Stop()
+	}
 	e.node.Drain(ctx)
 	// After the drain: the waiter's keepalive is what stops a running box
 	// being reaped, so stopping it first would start the orphan clock on
@@ -579,6 +633,19 @@ func (e *Engine) Stop(ctx context.Context) {
 		e.backends.Close(ctx)
 	}
 	log.InfoContext(ctx, "engine_stopped")
+}
+
+// StallLag is how far behind the worst live watched duty is.
+//
+// The early-warning half of the watchdog: it fires at the lease TTL, and
+// this is the number climbing towards it. Zero means nothing to report —
+// either the duty is turning normally or nothing is being watched — which is
+// the same reading a health surface wants for both.
+func (e *Engine) StallLag() time.Duration {
+	if e.watchdog == nil {
+		return 0
+	}
+	return e.watchdog.Lag()
 }
 
 // Node exposes this process's participation in the fleet, for the operator
