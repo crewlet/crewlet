@@ -133,9 +133,16 @@ type Models interface {
 }
 
 // Diary is the seat's own memory, as much of it as this package reads.
+//
+// MarkRetrieved is a WRITE, and it is here rather than on the learning side's
+// own schedule because this package is the only one that knows which entries
+// were actually USED: the trim that bounds a seat's durable memory evicts by
+// retrieval count, so an unmarked recall makes it evict by age instead —
+// exactly what the cap exists not to do.
 type Diary interface {
 	Recall(ctx context.Context, agentID string, q learning.RecallQuery, now time.Time) ([]learning.DiaryHit, error)
 	Recent(ctx context.Context, agentID string, now time.Time, limit int) ([]learning.DiaryEntry, error)
+	MarkRetrieved(ctx context.Context, ids []string, at time.Time)
 }
 
 // Episodes is the seat's record of past turns.

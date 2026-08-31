@@ -50,6 +50,17 @@ const (
 	// already a paragraph of standing instructions in front of the task.
 	memoryMaxSelected = 8
 
+	// memoryMarkBudget bounds the detached write that records which
+	// memories the filter picked.
+	//
+	// ONE indexed UPDATE over at most memoryMaxSelected ids against a
+	// local file, so the work is sub-millisecond and this is a guard
+	// against a wedged store rather than a real allowance. It has to be
+	// finite because the write deliberately outlives the turn's context:
+	// an unbounded detached write on a store that never answers would
+	// park a goroutine per turn for the life of the process.
+	memoryMarkBudget = 5 * time.Second
+
 	// memoryFilterTokens is headroom for the filter's answer.
 	//
 	// The visible output is a JSON array of at most eight integers — ten
@@ -189,10 +200,40 @@ func (f *Fetcher) filterMemories(ctx context.Context, r Request, candidates []le
 		picked = picked[:memoryMaxSelected]
 	}
 	out := make([]learning.DiaryEntry, 0, len(picked))
+	ids := make([]string, 0, len(picked))
 	for _, i := range picked {
 		out = append(out, candidates[i])
+		ids = append(ids, candidates[i].ID)
 	}
+	f.markRetrieved(ctx, ids)
 	return out
+}
+
+// markRetrieved records that the filter SELECTED these entries.
+//
+// HERE, and only here, because this is where both recall paths meet — the
+// Plan-phase block and refresh_memory's hinted re-filter — and because what
+// counts as a use is what the filter picked. A candidate is not a use: the
+// pool is similarity union recency, so counting candidates would move the
+// counter for every entry a seat owns on every turn and make the trim's
+// ordering meaningless in the other direction.
+//
+// The trim that bounds a seat's durable memory orders by retrieval count,
+// then last retrieval, then age — so with nothing marking a use it evicted
+// the OLDEST durable facts, which is precisely what a cap on worth rather
+// than age exists to avoid. Nothing called MarkRetrieved before this.
+//
+// DETACHED and bounded: the turn's context is often cancelled the moment the
+// phase ends, and this write happens after the seat already had the benefit
+// of the recall. Inheriting the cancellation would drop the count on exactly
+// the turns that ran longest.
+func (f *Fetcher) markRetrieved(ctx context.Context, ids []string) {
+	if f.src.Diary == nil || len(ids) == 0 {
+		return
+	}
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), memoryMarkBudget)
+	defer cancel()
+	f.src.Diary.MarkRetrieved(writeCtx, ids, f.now())
 }
 
 // memoryFilterPrompt renders the task, the sender and the numbered pool.
