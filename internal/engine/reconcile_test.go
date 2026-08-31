@@ -894,7 +894,7 @@ func TestOrdinaryLagStillAdmitsWork(t *testing.T) {
 // and running every turn against a company it had already decided it did not
 // have. configplane.Posture.ServesTraffic was written for this and had no
 // caller at all.
-func TestAShedingNodeRefusesNewWork(t *testing.T) {
+func TestASheddingNodeRefusesNewWork(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
 	// Confirmed lag — this node tried the epoch and failed — plus a
