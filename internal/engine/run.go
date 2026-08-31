@@ -518,6 +518,13 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Turn == nil {
 		d.Turn = e.runTurn
 	}
+	if d.Conversation == nil {
+		// Read off the LIVE company on each dispatch, not captured here:
+		// buildDispatcher runs once and a config apply replaces the company.
+		d.Conversation = func() config.ConversationSession {
+			return e.Company().Config.TurnEngine.ConversationSession
+		}
+	}
 	if d.Park == nil {
 		d.Park = e.park
 	}

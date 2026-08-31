@@ -83,7 +83,11 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 		}
 		outcome := "success"
 		if call.Failed {
-			outcome = "error: " + elide(call.Result, opts.ValueLimit)
+			// THE ERROR VERBATIM. It is not an argument payload — it is
+			// what the next round has to fix, and a cut at the argument
+			// budget lands mid-message on exactly the long errors that
+			// need reading (a stack, a validation list, an API's reason).
+			outcome = "error: " + call.Result
 		}
 		marker := ""
 		if isRead {
@@ -167,7 +171,7 @@ func RenderIterations(records []Iteration, skip []string) string {
 	for _, rec := range records {
 		lines := []string{"### Iteration " + itoa(rec.Iteration)}
 		if rec.PlanSummary != "" {
-			lines = append(lines, "Planned: "+elide(rec.PlanSummary, PlanSummaryLimit))
+			lines = append(lines, "Planned: "+rec.PlanSummary)
 		}
 		opts := Format(skip, rec.Reads)
 		for _, group := range []struct {
@@ -180,13 +184,13 @@ func RenderIterations(records []Iteration, skip []string) string {
 			lines = append(lines, group.label, FormatCalls(group.calls, opts))
 		}
 		if rec.ExecuteText != "" {
-			lines = append(lines, "Produced: "+elide(rec.ExecuteText, ArtifactLimit))
+			lines = append(lines, "Produced: "+rec.ExecuteText)
 		}
 		if rec.CompletedWork != "" {
-			lines = append(lines, "Reviewer, on what already landed: "+elide(rec.CompletedWork, NoteLimit))
+			lines = append(lines, "Reviewer, on what already landed: "+rec.CompletedWork)
 		}
 		if rec.ReviewNotes != "" {
-			lines = append(lines, "Reviewer's correction: "+elide(rec.ReviewNotes, NoteLimit))
+			lines = append(lines, "Reviewer's correction: "+rec.ReviewNotes)
 		}
 		blocks = append(blocks, strings.Join(lines, "\n"))
 	}

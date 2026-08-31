@@ -957,16 +957,22 @@ func missingTools(s *tools.Surface, snapshot tools.Snapshot) []string {
 	return out
 }
 
-// reviewArtifact bounds the draft handed to the reviewer.
+// reviewArtifact is the draft handed to the reviewer.
 //
-// The same budget the cross-round ledger gives an artifact, because it is the
-// same content answering the same question: enough to judge, and enough for
-// the next round to extend rather than rewrite.
+// WHOLE. It used to be cut at the cross-round ledger's artifact budget, which
+// asked the reviewer to pass judgement on a draft it could only see the first
+// 2000 runes of — and Review's verdict is what decides whether the turn ships
+// or loops. A reviewer that cannot see the end of a document cannot tell an
+// unfinished one from a finished one, so the guard against a bad delivery was
+// reading a truncated copy of the thing it was guarding.
+//
+// "(empty)" rather than "" for a draft with no text: an absent section reads
+// as a section the engine forgot to fill in.
 func reviewArtifact(e turn.Execution) string {
 	if e.Text == "" {
 		return "(empty)"
 	}
-	return ledger.Elide(e.Text, ledger.ArtifactLimit)
+	return e.Text
 }
 
 // Caps returns the runner's round budgets, so an assembler can assert on what

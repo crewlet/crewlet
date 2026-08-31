@@ -345,7 +345,12 @@ func TestARowFromAnOlderEngineDecodesToLessContextNotAnError(t *testing.T) {
 	}
 }
 
-func TestBuildSessionAppliesEveryBudgetOnce(t *testing.T) {
+// ELIDE PAYLOADS, NEVER STRUCTURE — asserted on the write path, which is
+// where the distinction is permanent. This row is the store's only record of
+// the turn, so a field cut here is not a shortened rendering, it is the only
+// copy. Every structural field must survive whole; only a tool ARGUMENT is
+// elided, and the discriminating argument must survive that.
+func TestBuildSessionKeepsStructureWholeAndElidesOnlyArguments(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("z", 6000)
 	got := BuildSession(SessionInput{
@@ -356,21 +361,22 @@ func TestBuildSessionAppliesEveryBudgetOnce(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		value string
-		limit int
 	}{
-		{"trigger", got.Trigger, TriggerLimit},
-		{"plan summary", got.PlanSummary, PlanSummaryLimit},
-		{"reasoning", got.PlanReasoning, ReasoningLimit},
-		{"reply", got.Reply, ReplyLimit},
-		{"completed work", got.CompletedWork, NoteLimit},
+		{"trigger", got.Trigger},
+		{"plan summary", got.PlanSummary},
+		{"reasoning", got.PlanReasoning},
+		{"reply", got.Reply},
+		{"completed work", got.CompletedWork},
 	} {
-		// +1 for the ellipsis the marker adds.
-		if n := utf8.RuneCountInString(c.value); n > c.limit+1 {
-			t.Errorf("%s is %d runes, over its %d budget", c.name, n, c.limit)
+		if c.value != long {
+			t.Errorf("%s was cut at write time: %d runes of %d",
+				c.name, utf8.RuneCountInString(c.value), utf8.RuneCountInString(long))
 		}
-		if c.value == "" {
-			t.Errorf("%s was elided to nothing", c.name)
-		}
+	}
+	// The argument payload IS elided — that is the half of the principle
+	// this package keeps — and the identifier beside it survives.
+	if utf8.RuneCountInString(got.Calls) > BlobLimit+len("- slack_post() → success")+8 {
+		t.Errorf("the argument blob was not elided:\n%s", got.Calls)
 	}
 	if !strings.Contains(got.Calls, "C1") {
 		t.Errorf("the discriminating argument was lost at write time:\n%s", got.Calls)

@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -68,8 +69,28 @@ type Dispatcher struct {
 	// failing the dispatch over it would trade real work for a row.
 	Observe func(ctx context.Context, ev *events.Event)
 
+	// Conversation resolves the conversation-ledger policy for the turn
+	// about to run.
+	//
+	// A FUNCTION, and read per dispatch rather than captured at
+	// construction: the dispatcher is built once and the policy lives on
+	// the company config, which a live apply replaces. A captured copy
+	// would keep serving the revision the process started on.
+	//
+	// nil means the shipped defaults, which is what a test that does not
+	// care about the policy wants.
+	Conversation func() config.ConversationSession
+
 	// Now is injectable so a test can pin the clock.
 	Now func() time.Time
+}
+
+// conversationPolicy is the resolved policy, defaulted when unset.
+func (d *Dispatcher) conversationPolicy() config.ConversationSession {
+	if d.Conversation == nil {
+		return config.DefaultConversationSession()
+	}
+	return d.Conversation()
 }
 
 // Request is one dispatch's worth of work.
@@ -292,7 +313,8 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 			}
 		}
 	}
-	if d.Conversations == nil || req.ConversationKey == "" {
+	policy := d.conversationPolicy()
+	if d.Conversations == nil || req.ConversationKey == "" || !policy.Enabled.Or(true) {
 		return
 	}
 	entry := ledger.BuildSession(ledger.SessionInput{
@@ -303,17 +325,27 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 	if res.LastReview != nil {
 		entry.CompletedWork = res.LastReview.CompletedWork
 	}
+	// TRIMMED TO THE CONFIGURED KEEP. Passing 0 here meant "keep
+	// everything", so max_entries — documented as what bounds a DM whose
+	// conversation key is the whole channel and therefore never stops
+	// receiving entries — bounded nothing, and the table grew for the life
+	// of the deployment.
 	if err := d.Conversations.Append(ctx, handle, req.ConversationKey, entry,
-		req.WorkKey, now, 0); err != nil {
+		req.WorkKey, now, policy.MaxEntries); err != nil {
 		log.WarnContext(ctx, "conversation_not_recorded", "seat", handle,
 			"conversation", req.ConversationKey, "error", err)
 	}
 }
 
 func (d *Dispatcher) history(ctx context.Context, handle, conversation string) ([]ledger.Session, error) {
-	if d.Conversations == nil || conversation == "" {
+	if d.Conversations == nil || conversation == "" || !d.conversationPolicy().Enabled.Or(true) {
 		return nil, nil
 	}
+	// UNLIMITED on the read. What the prompt shows is the whole recorded
+	// conversation: the two knobs that used to bound it (injected_max_entries,
+	// injected_max_chars) were never threaded to any caller, and rather than
+	// wiring a truncation of the one block that tells a seat what it already
+	// said, they are gone. What bounds this is maxEntries at write time.
 	return d.Conversations.History(ctx, handle, conversation, 0)
 }
 

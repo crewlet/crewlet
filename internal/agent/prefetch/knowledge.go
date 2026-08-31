@@ -41,9 +41,6 @@ const (
 	// otherwise reconsider.
 	auxTemperature = 0.2
 
-	// KnowledgeCharBudget caps the rendered block.
-	KnowledgeCharBudget = 1500
-
 	// knowledgeHits is how many pages are rendered.
 	//
 	// Six, against a block that is a pointer rather than the content: each
@@ -119,7 +116,7 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) string {
 	for _, hit := range hits {
 		bullets = append(bullets, renderHit(hit))
 	}
-	rendered := budget(bullets, KnowledgeCharBudget)
+	rendered := joinBullets(bullets)
 	if rendered == "" {
 		return EmptyKnowledgeHint
 	}
@@ -180,7 +177,7 @@ func (f *Fetcher) AfterPlan(ctx context.Context, r Request, planSummary string) 
 // knowledgeQuery asks the auxiliary model for a search query.
 func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
 	answer, ok := f.auxCall(ctx, r.Seat, knowledgeQuerySystemPrompt,
-		"Task the agent is about to plan:\n\""+truncate(r.Task, 1200)+
+		"Task the agent is about to plan:\n\""+r.Task+
 			"\"\n\nKnowledge-base search query:", knowledgeQueryTokens)
 	if !ok {
 		return ""

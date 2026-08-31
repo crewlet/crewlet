@@ -68,18 +68,25 @@ type SessionInput struct {
 	CompletedWork string
 }
 
-// BuildSession assembles one entry, applying every budget once at write time.
+// BuildSession assembles one entry.
+//
+// VERBATIM, apart from the tool ARGUMENTS FormatCalls elides. Every field here
+// used to be cut at write time, which made the loss permanent: this row is the
+// store's only record of the turn, so a trigger trimmed at 400 runes was not a
+// shortened entry, it was the only copy. The turn's own rendering budget is a
+// read-side concern (see HistoryOptions), and applying one at write time
+// answered a display question by destroying data.
 func BuildSession(in SessionInput) Session {
 	return Session{
 		TurnID:        in.TurnID,
 		At:            in.At,
-		Trigger:       elide(in.Trigger, TriggerLimit),
-		PlanSummary:   elide(in.PlanSummary, PlanSummaryLimit),
-		PlanReasoning: elide(in.PlanReasoning, ReasoningLimit),
+		Trigger:       in.Trigger,
+		PlanSummary:   in.PlanSummary,
+		PlanReasoning: in.PlanReasoning,
 		Calls:         FormatCalls(in.Calls, Format(in.Skip, in.Reads)),
-		Reply:         elide(in.Reply, ReplyLimit),
+		Reply:         in.Reply,
 		Decision:      in.Decision,
-		CompletedWork: elide(in.CompletedWork, NoteLimit),
+		CompletedWork: in.CompletedWork,
 	}
 }
 
