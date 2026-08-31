@@ -249,7 +249,7 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 		}
 	}
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		if err := json.NewDecoder(io.LimitReader(resp.Body, httpx.MaxResponseBody)).Decode(out); err != nil {
 			return resp.Header, fmt.Errorf("mattermost: decode %s %s: %w", method, path, err)
 		}
 	} else {

@@ -148,7 +148,7 @@ func (a *e2bAPI) do(ctx context.Context, method, path string, in, out any) error
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, httpx.MaxResponseBody)).Decode(out); err != nil {
 		return fmt.Errorf("e2b: decode %s: %w", path, err)
 	}
 	return nil

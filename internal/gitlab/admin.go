@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // The write half of the GitLab client: what a provisioning run needs and the
@@ -58,7 +60,7 @@ func (c *Client) send(ctx context.Context, method, path string, body, out any) e
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, httpx.MaxResponseBody)).Decode(out); err != nil {
 		return fmt.Errorf("gitlab: decode %s: %w", path, err)
 	}
 	return nil

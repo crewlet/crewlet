@@ -112,7 +112,7 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, out an
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, httpx.MaxResponseBody)).Decode(out); err != nil {
 		return fmt.Errorf("gitlab: decode %s: %w", path, err)
 	}
 	return nil

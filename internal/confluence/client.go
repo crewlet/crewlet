@@ -218,7 +218,7 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, httpx.MaxResponseBody)).Decode(out); err != nil {
 		return fmt.Errorf("confluence: decode %s: %w", path, err)
 	}
 	return nil
