@@ -454,10 +454,13 @@ func (r *Reconciler) record(ctx context.Context, target coord.Activation,
 
 // publishApplied puts one node's outcome into the audit event log.
 //
-// The error text is TRUNCATED to the same bound the coordination record uses.
-// A driver's own message with a query in it runs to kilobytes, and this one is
-// kept for the retention horizon rather than a minute — so an unbounded copy
-// would be a permanent one.
+// THE WHOLE ERROR. It used to be cut to the coordination record's own bound,
+// which is a bound for a different reason: that record is re-read by every
+// peer on every reconcile tick, so its size is paid continuously. This one is
+// written once, and it is the durable copy — the place an operator looks days
+// later to find out why a revision did not apply on one node. Cutting the
+// permanent record to the size of the polled one leaves the failure's cause,
+// which sits at the end of a wrapped chain, in neither.
 func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation,
 	status configplane.ApplyStatus, applied []string, message string,
 ) {
@@ -468,7 +471,7 @@ func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation
 		RevisionID:        target.RevisionID,
 		Status:            applyStatus(status),
 		AppliedSubsystems: applied,
-		Error:             coord.TruncateApplyError(message),
+		Error:             message,
 	}, tracing.TraceOf(ctx))
 	ev.Timestamp = r.now()
 	// The NODE, not a seat. Every other field of the payload describes the

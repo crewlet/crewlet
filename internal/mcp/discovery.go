@@ -115,7 +115,7 @@ func ListServerTools(merged []Entry, available map[string]struct{}) *MetaTool {
 		}
 		lines := make([]string, len(tools))
 		for i, t := range tools {
-			lines[i] = "- " + t.Name + ": " + firstLine(t.Description)
+			lines[i] = catalogueLine(t.Name, t.Description)
 		}
 		return Result{Output: fmt.Sprintf(
 			"Tools on MCP server '%s' (%d total). Call activate_tool(name=...) to "+
@@ -269,11 +269,31 @@ func orNone(names []string) string {
 	return strings.Join(names, ", ")
 }
 
-func firstLine(text string) string {
-	for line := range strings.SplitSeq(text, "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			return trimmed
+// catalogueLine renders one "- name: description" entry, description WHOLE.
+//
+// Continuation lines are indented under the bullet rather than dropped: the
+// one-entry-per-bullet shape is what a model reads a listing as, and keeping
+// only the first line paid for that shape with the description's content —
+// a vendor's argument rules and preconditions live below its opening sentence,
+// and this listing is the only place they are ever shown.
+//
+// A duplicate of tools.CatalogueLine, which this package cannot import
+// (internal/tools imports internal/mcp). See the note on this file's own
+// callers in [ListServerTools].
+func catalogueLine(name, description string) string {
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return "- " + name
+	}
+	lines := strings.Split(description, "\n")
+	for i := 1; i < len(lines); i++ {
+		// Blank lines stay blank: indenting one leaves trailing
+		// whitespace on a line whose only job is the gap.
+		if strings.TrimSpace(lines[i]) != "" {
+			lines[i] = "  " + lines[i]
+		} else {
+			lines[i] = ""
 		}
 	}
-	return ""
+	return "- " + name + ": " + strings.Join(lines, "\n")
 }

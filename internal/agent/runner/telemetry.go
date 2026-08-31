@@ -328,15 +328,31 @@ type phaseRecord struct {
 	Err    error
 }
 
-// maxErrorLength caps the error text on a failed phase.
+// maxErrorLength caps a SUB-AGENT's error text on the phase event that reports
+// it.
 //
-// The prompts and the response are deliberately verbatim — this telemetry is
-// what shows an operator what the model actually saw — but an error is not
-// that. A provider chain that exhausted can carry every attempt's body, and a
-// wrapped decode failure can carry the whole undecodable document; both are
-// megabytes of one string on an event that fans out to every open dashboard.
-// Two thousand characters holds any message written to be read.
+// The parent phase's own error is verbatim: the prompts and the response
+// beside it are, this telemetry is what shows an operator what the model
+// actually saw, and a cut at 2000 characters landed on exactly the errors
+// worth reading. This one is bounded for a different reason — it is the only
+// field on this event whose length is set by a CHILD, and the child's failure
+// text reaches its parent's event whatever the child did. See
+// events.MaxDiagnosticBytes, which supersedes this.
 const maxErrorLength = 2000
+
+// truncate caps a string at n bytes, on a rune boundary. Cutting a multi-byte
+// rune in half produces invalid UTF-8, which a JSON encoder replaces with
+// U+FFFD — turning one over-long error into a garbled one.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && s[cut]&0xC0 == 0x80 {
+		cut--
+	}
+	return s[:cut] + "…"
+}
 
 // subagentCompleted closes ONE sub-agent, as a phase nested under the Execute
 // round that spawned it.
@@ -437,7 +453,14 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		Failed:          rec.Failed,
 	}
 	if rec.Err != nil {
-		ev.Error = truncate(rec.Err.Error(), maxErrorLength)
+		// VERBATIM, like the prompts and the response beside it. A cut at
+		// 2000 characters landed on exactly the errors worth reading — an
+		// exhausted provider chain naming what each attempt refused, a
+		// decode failure quoting the document — and an operator holding
+		// the first half of a wrapped chain cannot see the cause at its
+		// end. The envelope's own ceiling (queue.MaxPayloadBytes) bounds
+		// this, and it refuses rather than shortening.
+		ev.Error = rec.Err.Error()
 		ev.ErrorKind = classifyError(rec.Err)
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
@@ -637,23 +660,6 @@ func userPrompt(msgs []llm.Message) string {
 	}
 	return ""
 }
-
-// truncate caps a string at n bytes, on a rune boundary.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	cut := n
-	for cut > 0 && !utf8StartsRune(s[cut]) {
-		cut--
-	}
-	return s[:cut] + "…"
-}
-
-// utf8StartsRune reports whether b can begin a UTF-8 encoding. Cutting a
-// multi-byte rune in half produces invalid UTF-8, which JSON encoders replace
-// with U+FFFD — turning one over-long error into a garbled one.
-func utf8StartsRune(b byte) bool { return b&0xC0 != 0x80 }
 
 // traceFor is the trace an event this emitter publishes belongs to.
 //

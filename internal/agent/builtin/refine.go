@@ -131,9 +131,19 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 			clip(name))), nil
 	}
 
+	// REFUSED, not clipped — the same rule the body cap above states, and
+	// the reason is the refinement's only explanation of itself.
+	reason := strings.TrimSpace(argString(args, "reason"))
+	if len(reason) > diaryNoteMax {
+		return failed(fmt.Sprintf(
+			"That reason is %d characters and is capped at %d. Say what "+
+				"practice superseded the old text, in a sentence.",
+			len(reason), diaryNoteMax)), nil
+	}
+
 	rev := sk.Revision()
 	rev.Content = content
-	if reason := strings.TrimSpace(argString(args, "reason")); reason != "" {
+	if reason != "" {
 		// Recorded on the REFINEMENT rather than folded into the body: it
 		// explains the change, and a body carrying its own changelog grows
 		// one entry per edit in every prompt that loads it.
@@ -141,7 +151,7 @@ func (t *refineSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	}
 	updated, err := t.skills.Update(ctx, sk.ID, rev, learning.Refinement{
 		Kind:         learning.RefineTool,
-		Note:         clipTo(argString(args, "reason"), diaryNoteMax),
+		Note:         reason,
 		KeepVersions: t.versions,
 		At:           time.Now().UTC(),
 	})

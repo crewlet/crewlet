@@ -157,14 +157,14 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 	}
 	switch {
 	case err != nil:
-		summary.Error = truncate(err.Error(), maxTurnErrorLength)
+		summary.Error = err.Error()
 		summary.ErrorKind = "error"
 	case res.Breach != nil:
 		// A guard breach is not an error — the turn ran and was stopped by
 		// a rule. Naming the RULE is the whole value: "depth" and "stall"
 		// send an operator to different places, and a bare "failed" sends
 		// them to neither.
-		summary.Error = truncate(res.Breach.Detail, maxTurnErrorLength)
+		summary.Error = res.Breach.Detail
 		summary.ErrorKind = string(res.Breach.Kind)
 	}
 	e.publishEvent(ctx, events.New(summary, t.trace), t.role)
@@ -199,11 +199,6 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		ConversationKey:  t.convKey,
 	}, t.trace), t.role)
 }
-
-// maxTurnErrorLength caps the failure text on a turn event, for the same
-// reason the phase event caps its own: a wrapped provider failure can carry
-// every attempt's body, and this event fans out to every open dashboard.
-const maxTurnErrorLength = 2000
 
 // lastModel names the model that served the last phase to run.
 //
@@ -243,20 +238,6 @@ func (e *Engine) publishEvent(ctx context.Context, ev *events.Event, role string
 		log.WarnContext(ctx, "turn_telemetry_publish_failed", "type", ev.Type,
 			"role", role, "error", err)
 	}
-}
-
-// truncate caps a string at n bytes, on a rune boundary. Cutting a multi-byte
-// rune in half produces invalid UTF-8, which JSON encoders replace with U+FFFD
-// — turning one over-long error into a garbled one.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	cut := n
-	for cut > 0 && s[cut]&0xC0 == 0x80 {
-		cut--
-	}
-	return s[:cut] + "…"
 }
 
 // describeResume is describeTurn for a re-entry.

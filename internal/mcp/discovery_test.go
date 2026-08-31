@@ -35,15 +35,15 @@ func TestListServerToolsListsOneServer(t *testing.T) {
 	if !strings.Contains(res.Output, "(2 total)") {
 		t.Fatalf("output does not count the tools:\n%s", res.Output)
 	}
-	// Sorted, and only the first non-blank line of each description: the
-	// listing goes into a model's context every time it is called, and a
-	// reshuffling one is a diff the reader has to discount every turn.
-	want := "- create_pr: Open a pull request\n- get_file_contents: Read a file"
+	// Sorted — the listing goes into a model's context every time it is
+	// called, and a reshuffling one is a diff the reader has to discount
+	// every turn — and each description carried WHOLE, indented under its
+	// bullet. Keeping only the first line dropped exactly the argument
+	// rules and preconditions a vendor writes below its opening sentence,
+	// and this listing is the only place they are ever shown.
+	want := "- create_pr: Open a pull request\n  second line\n- get_file_contents: Read a file"
 	if !strings.Contains(res.Output, want) {
 		t.Fatalf("listing body wrong:\n%s", res.Output)
-	}
-	if strings.Contains(res.Output, "second line") {
-		t.Fatal("the listing carried a whole multi-line description")
 	}
 	if strings.Contains(res.Output, "send_message") {
 		t.Fatal("a builtin leaked into an MCP server's listing")

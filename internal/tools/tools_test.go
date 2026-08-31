@@ -296,10 +296,15 @@ func TestTheCatalogueNamesServersRatherThanExpandingThem(t *testing.T) {
 	if !strings.Contains(got, "- reflect: Record a lesson.") {
 		t.Errorf("the builtin is missing its one-line description:\n%s", got)
 	}
-	// A multi-line description breaks the one-tool-per-line shape the
-	// planner reads the catalogue as.
-	if strings.Contains(got, "More detail") {
-		t.Errorf("a description spilled onto a second line:\n%s", got)
+	// A MULTI-LINE DESCRIPTION SURVIVES WHOLE, indented under its bullet.
+	// Keeping only the first line preserved the one-entry-per-bullet shape
+	// by throwing away the content that shape was carrying — a tool's
+	// argument rules and preconditions live below its opening sentence.
+	if !strings.Contains(got, "More detail on a second line.") {
+		t.Errorf("a description was cut at its first line:\n%s", got)
+	}
+	if !strings.Contains(got, "\n  More detail") {
+		t.Errorf("a continuation line was not indented under its bullet:\n%s", got)
 	}
 	if strings.Contains(got, "gh_a") {
 		t.Errorf("an MCP server's tools were expanded:\n%s", got)

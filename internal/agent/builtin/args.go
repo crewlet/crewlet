@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -61,17 +60,17 @@ func argInt(args map[string]any, key string, fallback int) int {
 // of the loop tearing down.
 func failed(msg string) tools.Result { return tools.Result{Output: msg, Failed: true} }
 
-// clip bounds a caller-supplied string echoed into output or a log line, and
-// flattens newlines: a model's argument reaches both, and a smuggled newline
-// breaks a line-structured render while a pathological length bloats an audit
-// payload.
+// clip flattens a caller-supplied string echoed back into a tool result or a
+// log line.
+//
+// NEWLINES ONLY, no length cut. A smuggled newline genuinely breaks a
+// line-structured render, so folding whitespace earns its place. Cutting the
+// string did not: what is echoed here is the model's OWN argument, quoted back
+// so it can see what failed to match, and a shortened echo names a query the
+// model never sent — which is worse than a long line, because the model then
+// retries against the wrong string.
 func clip(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if utf8.RuneCountInString(s) <= displayMax {
-		return s
-	}
-	r := []rune(s)
-	return string(r[:displayMax]) + "…"
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func sortStrings(s []string) { slices.Sort(s) }

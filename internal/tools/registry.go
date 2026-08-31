@@ -319,12 +319,7 @@ func (r *Registry) Catalogue() string {
 			}
 			continue
 		}
-		desc := firstLine(e.Tool.Description())
-		if desc == "" {
-			lines = append(lines, "- "+name)
-			continue
-		}
-		lines = append(lines, "- "+name+": "+desc)
+		lines = append(lines, CatalogueLine(name, e.Tool.Description()))
 	}
 	for _, server := range serverOrder {
 		lines = append(lines, "- MCP server `"+server+"` (use the discovery tools to list its tools)")
@@ -339,9 +334,36 @@ func (r *Registry) Catalogue() string {
 //
 // A tool description can be a paragraph, and a catalogue is a list: a
 // multi-line entry breaks the one-tool-per-line shape the planner reads it as.
-func firstLine(s string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	return strings.TrimSpace(line)
+// CatalogueLine renders one "- name: description" catalogue entry with the
+// description WHOLE.
+//
+// Continuation lines are indented under the bullet rather than dropped. The
+// shape a model reads a catalogue as is one entry per bullet, and keeping only
+// the first line was paying for that shape with the description's content: a
+// tool whose usage rules, argument meanings or "call X first" precondition sit
+// below its opening sentence was advertised without them, and the model then
+// called it wrong. Vendor-authored MCP descriptions are routinely several
+// paragraphs, and this listing is the only place they are ever shown.
+//
+// Exported because the registry's own catalogue and the discovery meta-tool's
+// per-server listing must render identically — the model sees both in one
+// turn, and two renderers is how one starts cutting again.
+func CatalogueLine(name, description string) string {
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return "- " + name
+	}
+	lines := strings.Split(description, "\n")
+	for i := 1; i < len(lines); i++ {
+		// Blank lines stay blank: indenting one leaves trailing
+		// whitespace on a line whose only job is the gap.
+		if strings.TrimSpace(lines[i]) != "" {
+			lines[i] = "  " + lines[i]
+		} else {
+			lines[i] = ""
+		}
+	}
+	return "- " + name + ": " + strings.Join(lines, "\n")
 }
 
 // Snapshot is an immutable view of the registry, taken once.

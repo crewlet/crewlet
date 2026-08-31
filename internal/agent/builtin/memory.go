@@ -175,12 +175,13 @@ func (t *useSkill) suggest(ctx context.Context, handle, name string) string {
 		return fmt.Sprintf("You have no synthesized skill called %q, and none at all yet. "+
 			"Skills are distilled from your own completed turns.", clip(name))
 	}
+	// EVERY skill. This message exists so the model can retry with a name
+	// that works, and the name it wants is as likely to sort past a cap as
+	// before it — a truncated list of options is a list that answers a
+	// different question than the one the model asked.
 	names := make([]string, 0, len(have))
 	for _, s := range have {
 		names = append(names, s.Name)
-		if len(names) == displayLimit {
-			break
-		}
 	}
 	return fmt.Sprintf("You have no synthesized skill called %q. Yours are: %s.",
 		clip(name), strings.Join(names, ", "))
@@ -609,6 +610,18 @@ func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if t.onboarding == nil {
 		return failed("Onboarding is not configured on this deployment."), nil
 	}
+	// REFUSED, not clipped — the same bound reflect_and_persist enforces on
+	// the same store, by the same rule. This used to clip silently, so the
+	// two writers into the diary disagreed about what happens to an
+	// over-long note: one told the model to tighten it, the other stored
+	// half of it and reported success.
+	notes := strings.TrimSpace(argString(args, "notes"))
+	if len(notes) > diaryNoteMax {
+		return failed(fmt.Sprintf(
+			"Those notes are %d characters and a diary note is capped at %d. "+
+				"Tighten them — what you keep is what you will read back.",
+			len(notes), diaryNoteMax)), nil
+	}
 	err := t.onboarding.Mark(ctx, learning.Marker{
 		AgentID: agentID, Handle: turn.Handle(), Role: turn.Role(),
 		// The chain hash is what makes the marker specific to THIS
@@ -616,7 +629,7 @@ func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		// different orientation, and a marker that ignored it would
 		// leave a seat permanently un-onboarded to its new context.
 		ChainHash: learning.ChainHash(turn.Org, turn.Seat),
-		Summary:   clipTo(argString(args, "notes"), diaryNoteMax),
+		Summary:   notes,
 	}, time.Now().UTC())
 	if err != nil {
 		return failed(fmt.Sprintf("Could not record that: %v", err)), nil
@@ -653,14 +666,6 @@ func seatAgentID(turn *turnctx.Turn) (string, string) {
 // folding one into the function hides which of the two a caller is asking for.
 func clampInt(v, lo, hi int) int { //nolint:unparam // see the doc comment
 	return min(max(v, lo), hi)
-}
-
-func clipTo(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
 }
 
 // outcomeOverfetch widens a similarity search when an outcome filter is set.
