@@ -265,6 +265,16 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 			spend = *derived
 		}
 	}
+	// EVERY event that names a turn gets the column, not just the phase
+	// completions [extractSpend] is scoped to. That function's subject is
+	// SPEND, so it reads one event type and returns nil for the rest — which
+	// is right for the rollup and wrong for identity: reading one turn means
+	// every row it touched, and a delivery, a tool call or an A2A ask carries
+	// a turn id without carrying a token count. Scoped to the column that is
+	// an identifier so a non-phase row cannot acquire a phase's numbers.
+	if spend.TurnID == "" {
+		spend.TurnID = tags["turn_id"]
+	}
 	// IN ONE TRANSACTION with its party rows, because the party table is an
 	// INDEX of this one and an index that can be missing entries is not an
 	// index: an event stored without its parties is invisible to the filter
