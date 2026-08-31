@@ -9,11 +9,12 @@
  */
 
 import type { ReactNode } from "react";
-import { Avatar, Badge, cx } from "~/ui/primitives.tsx";
+import { Avatar, Badge, Button, cx } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { requestToken } from "~/protocol/index.ts";
 import { runState, seatTone, stateLabel, statusLine, toneOf, type Seat } from "~/lib/seats.ts";
 import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
@@ -253,9 +254,17 @@ export function QueryState({
       <div className="banner caution">
         <Icon name="key" size="sm" />
         <span>
-          This answer is auth-gated. Set an API token matching one of your{" "}
+          This answer is auth-gated. It needs an API token matching one of your{" "}
           <code className="inline">api.auth.tokens</code> entries.
         </span>
+        <span className="spacer" />
+        {/* The banner used to say "set a token" and offer nothing that could.
+            With anonymous reads allowed the socket is never refused, so the
+            dialog's only other doors — a refusal, and the engine panel — both
+            stay shut on exactly the screen that needs it. */}
+        <Button size="sm" icon="key" onClick={requestToken}>
+          Set token
+        </Button>
       </div>
     );
   }

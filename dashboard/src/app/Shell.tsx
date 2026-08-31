@@ -27,6 +27,7 @@ import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useDensity, useTheme, type ThemeChoice } from "~/lib/theme.ts";
+import { onTokenRequested } from "~/protocol/index.ts";
 
 export function Shell({ children }: { children: ReactNode }) {
   const route = useRoute();
@@ -53,6 +54,10 @@ export function Shell({ children }: { children: ReactNode }) {
   useEffect(() => {
     socket.onAuthRejected(() => setTokenOpen(true));
   }, [socket]);
+
+  // And from anywhere else that discovers it needs a credential — an
+  // auth-gated answer on a screen the socket was never refused for.
+  useEffect(() => onTokenRequested(() => setTokenOpen(true)), []);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
@@ -203,13 +208,22 @@ export function Shell({ children }: { children: ReactNode }) {
 
       <main className="main">
         <header className="topbar">
-          <Button
-            icon="menu"
-            variant="ghost"
-            size="sm"
-            title="Sections"
-            onClick={() => setDrawer((v) => !v)}
-          />
+          {/* The drawer EXISTS only under the layout breakpoint — above it
+              the sidebar is always on screen — so the control that opens it
+              is hidden by the same media query rather than by a second copy
+              of the width rule in JavaScript. It used to show at every
+              width, and clicking it wide put an unstyled veil into the
+              shell's own grid, which took the sidebar's column and pushed
+              the whole app into the next row. */}
+          <span className="drawer-toggle">
+            <Button
+              icon="menu"
+              variant="ghost"
+              size="sm"
+              title="Sections"
+              onClick={() => setDrawer((v) => !v)}
+            />
+          </span>
           <h1>{title}</h1>
           <span className="spacer" />
           <button className="omni" onClick={() => setPaletteOpen(true)}>

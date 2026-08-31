@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
-import { apiToken, storeToken } from "~/protocol/index.ts";
+import { apiToken, clearToken, storeToken } from "~/protocol/index.ts";
 
 export function TokenDialog({
   onClose,
@@ -26,6 +26,18 @@ export function TokenDialog({
   const [refused, setRefused] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => ref.current?.focus(), []);
+
+  // A credential you can set is one you must be able to drop — on a shared
+  // machine especially, where the token outlives the person who typed it.
+  function signOut(): void {
+    if (!clearToken()) {
+      setRefused(true);
+      return;
+    }
+    setValue("");
+    onSaved("");
+    onClose();
+  }
 
   function save(): void {
     const token = value.trim();
@@ -91,6 +103,15 @@ export function TokenDialog({
           )}
         </div>
         <footer className="dialog-foot">
+          {/* Only when there is something to drop. An always-present sign-out
+              on a surface nobody has signed into is a control that does
+              nothing, next to the one that does the work. */}
+          {apiToken() !== "" && (
+            <Button variant="danger" onClick={signOut}>
+              Sign out
+            </Button>
+          )}
+          <span className="spacer" />
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>

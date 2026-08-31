@@ -241,6 +241,25 @@ function storeToken(token) {
 		return false;
 	}
 }
+var listeners = /* @__PURE__ */ new Set();
+/** Ask for the token dialog. A no-op when no shell is mounted. */
+function requestToken() {
+	for (const listener of listeners) listener();
+}
+/** Subscribe the shell. Returns the unsubscribe. */
+function onTokenRequested(listener) {
+	listeners.add(listener);
+	return () => listeners.delete(listener);
+}
+/** Forget the stored token. Returns false if the browser refused the write. */
+function clearToken() {
+	try {
+		localStorage.removeItem(TOKEN_KEY);
+		return true;
+	} catch {
+		return false;
+	}
+}
 //#endregion
 //#region src/protocol/api.ts
 /**
@@ -638,4 +657,4 @@ var LiveSocket = class {
 	}
 };
 //#endregion
-export { LiveSocket, MAX_EVENTS, Store, api, apiToken, storeToken };
+export { LiveSocket, MAX_EVENTS, Store, api, apiToken, clearToken, onTokenRequested, requestToken, storeToken };

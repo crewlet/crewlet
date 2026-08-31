@@ -42,3 +42,41 @@ export function storeToken(token: string): boolean {
     return false;
   }
 }
+
+/**
+ * Asking the shell to raise the token dialog, from anywhere.
+ *
+ * The dialog belongs to the shell — it is chrome, and only the shell can
+ * render over the whole app — but the screens that DISCOVER a missing
+ * credential are anywhere. Threading a callback down to every one of them
+ * would put a prop about authentication on components that have nothing else
+ * to do with it, so the signal travels here instead, beside the token itself.
+ *
+ * This is the gap it closes: the dialog used to be reachable only from a
+ * REFUSAL. With anonymous reads allowed the socket is never refused — it
+ * connects, and only the operator-gated answers come back `unauthorized` — so
+ * the banner told a reader to set a token and offered nothing that could.
+ */
+type Listener = () => void;
+const listeners = new Set<Listener>();
+
+/** Ask for the token dialog. A no-op when no shell is mounted. */
+export function requestToken(): void {
+  for (const listener of listeners) listener();
+}
+
+/** Subscribe the shell. Returns the unsubscribe. */
+export function onTokenRequested(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/** Forget the stored token. Returns false if the browser refused the write. */
+export function clearToken(): boolean {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}

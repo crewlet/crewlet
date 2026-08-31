@@ -363,6 +363,22 @@
   background: var(--surface-2);
 }
 
+/* The drawer's veil, and the control that opens it. Both are declared
+   OUTSIDE the breakpoint below, for opposite reasons: the veil because a
+   position it only takes at one width is a layout participant at every other
+   — it was a plain div inside the shell's grid, so opening the drawer on a
+   desktop handed it the sidebar's column — and the toggle because "hidden"
+   has to be its default, with the breakpoint revealing it. */
+.drawer-veil {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--bg-sunken) 60%, transparent);
+  z-index: calc(var(--z-drawer) - 1);
+}
+.drawer-toggle {
+  display: none;
+}
+
 /* ---- Responsive ---------------------------------------------------------
    One breakpoint, and it is where the sidebar stops fitting beside content.
    The system this replaces had four undocumented breakpoints (900/820/720/620)
@@ -385,11 +401,8 @@
   .sidebar[data-open="true"] {
     transform: none;
   }
-  .drawer-veil {
-    position: fixed;
-    inset: 0;
-    background: color-mix(in srgb, var(--bg-sunken) 60%, transparent);
-    z-index: calc(var(--z-drawer) - 1);
+  .drawer-toggle {
+    display: inline-flex;
   }
   .screen-inner {
     padding: var(--space-4) var(--space-3) var(--space-12);
