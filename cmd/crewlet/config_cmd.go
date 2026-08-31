@@ -153,8 +153,7 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 	}
 	db, err := store.Open(ctx, boot.Store.Path, store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
-		BusyTimeout: time.Duration(
-			boot.Store.BusyTimeoutSeconds * float64(time.Second)),
+		BusyTimeout:  boot.Store.BusyTimeout(),
 	})
 	if err != nil {
 		// A LOCKED STORE HAS A ROUTE AROUND IT, and naming it here is the

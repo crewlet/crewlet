@@ -329,8 +329,7 @@ func openSecretValues(ctx context.Context, boot *config.Bootstrap) (*store.Secre
 	// running node has already done.
 	db, err := store.Open(ctx, boot.Store.Path, store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
-		BusyTimeout: time.Duration(
-			boot.Store.BusyTimeoutSeconds * float64(time.Second)),
+		BusyTimeout:  boot.Store.BusyTimeout(),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("open store: %w", err)

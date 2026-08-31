@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
@@ -80,8 +79,7 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	}
 	opts := store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
-		BusyTimeout: time.Duration(
-			boot.Store.BusyTimeoutSeconds * float64(time.Second)),
+		BusyTimeout:  boot.Store.BusyTimeout(),
 	}
 	ctx := context.Background()
 
