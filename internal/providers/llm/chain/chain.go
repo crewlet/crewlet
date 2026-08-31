@@ -141,8 +141,17 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 	inner := req
 	if req.Streaming() {
 		inner.OnDelta = func(d llm.Delta) {
-			streamed = true
-			req.OnDelta(d)
+			// TEXT is what counts as "something was shown". A member that
+			// forwards a fragment carrying none — a keep-alive, a
+			// bookkeeping event — must not make the next member announce a
+			// restart of an answer nobody ever saw.
+			if d.Content != "" || d.Reasoning != "" {
+				streamed = true
+			}
+			// Through Send, not straight to the callback: the empty-fragment
+			// filter belongs to every hop, and calling OnDelta directly here
+			// made the chain depend on each member having applied it first.
+			req.Send(d)
 		}
 	}
 

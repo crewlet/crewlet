@@ -16,7 +16,7 @@
  * would make every threaded seat forget what it said last turn.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip, Section } from "~/components/common.tsx";
 import { Badge, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
@@ -33,6 +33,15 @@ export function Conversations() {
   const now = useNow();
   const channels = useQuery("a2a_channels", undefined, { pollMs: 30_000 });
   const index = useMemo(() => indexOrg(org), [org]);
+
+  // A channel names its parties by HANDLE — see a2a.Channel.OtherParty — and
+  // a handle is an address, not a label. Passed straight through it put
+  // `agent-ai-systems-engineer` where the seat's name belongs and built the
+  // avatar's monogram out of it. The handle still does the linking.
+  const seatName = useCallback(
+    (handle: string) => index.byHandle.get(handle)?.name || handle,
+    [index],
+  );
 
   return (
     <>
@@ -110,14 +119,14 @@ export function Conversations() {
                 {
                   key: "from",
                   header: "Asked by",
-                  sortValue: (c) => c.requester,
-                  cell: (c) => <SeatChip name={c.requester} handle={c.requester} />,
+                  sortValue: (c) => seatName(c.requester),
+                  cell: (c) => <SeatChip name={seatName(c.requester)} handle={c.requester} />,
                 },
                 {
                   key: "to",
                   header: "Asked",
-                  sortValue: (c) => c.target,
-                  cell: (c) => <SeatChip name={c.target} handle={c.target} />,
+                  sortValue: (c) => seatName(c.target),
+                  cell: (c) => <SeatChip name={seatName(c.target)} handle={c.target} />,
                 },
                 {
                   key: "messages",
