@@ -8,7 +8,7 @@ All inter-component communication in Crewlet flows through a persistent event qu
 
 One protocol serves all inter-component communication:
 
-- **`EventQueue`** — persistent pub/sub with consumer groups. For fire-and-forget messages: task routing to agent inboxes, inbound/outbound notifications.
+- **`EventQueue`** — persistent pub/sub with consumer groups. For fire-and-forget messages: inbound deliveries, the wakes they route to agent inboxes, and everything a turn publishes about itself.
 
 **Two implementations** sit behind it — the JetStream client and an in-memory twin — and **nothing above `internal/queue` may branch on which one is running**. Where the broker itself runs is a third question, and it is a *connection* choice inside the first implementation rather than a second code path:
 
@@ -37,14 +37,24 @@ crewlet.agent.{handle}.control       # Sandbox completions — separate, because
 
 # Fleet-wide work queues — ONE consumer group each, so whichever node wins a
 # delivery is the node that has to route it
-crewlet.notifications.inbound        # Inbound webhooks from external systems
-crewlet.notifications.outbound       # Outbound messages to external systems
+crewlet.notifications.inbound        # Inbound webhooks from external systems.
+                                     #   There is no outbound counterpart:
+                                     #   nothing the engine sends outward is
+                                     #   queued — an agent writes through its
+                                     #   OWN MCP tools inside its turn, and the
+                                     #   chat working-indicator is a transport
+                                     #   call on the node already running it
 crewlet.events.{type}                # Internal routing (see Routing, below)
 
 # Control plane. Best-effort nudges: losing one costs a poll interval, never a
 # revision, because the authoritative path polls the activation pointer
 crewlet.config.revision_activated
 crewlet.config.revision_applied
+
+# A seat's memory, ONE SUBJECT PER ROW, on a stream that retains one message
+# per subject — so it holds the current value of every row rather than a log of
+# every write, and a node acquiring a seat replays it in a single pass
+crewlet.memory.{handle}.{table}.{key-digest}
 
 # Dead letters, deliberately OUTSIDE the crewlet.* space so the dashboard's
 # crewlet.events.> stream cannot resurface poison as live traffic
