@@ -106,3 +106,28 @@ func TestTheWatchdogIsDisarmedBeforeTheDrain(t *testing.T) {
 	// runs after the ordinary one has already been through.
 	e.Stop(t.Context())
 }
+
+// THE ENGINE SUPPLIES A ROUND-CAP EXTENSION JUDGE.
+//
+// The regression this exists for: extension.Judge had no implementation
+// anywhere in the tree and RunnerInput.Judge was never set, so
+// extension.Consider rescued with "no_judge" on every exhaustion. The
+// per-phase ceilings, the round step, the enable switch and the llm_judge
+// model role were all configuration that nothing read — a phase running out
+// of rounds while making obvious progress was rescued exactly like one that
+// was thrashing.
+func TestTheEngineSuppliesAnExtensionJudge(t *testing.T) {
+	e := watchdogEngine(t)
+	if got := e.judgeFor(e.Company(), "ceo"); got == nil {
+		t.Error("no judge for a seat whose company configures a model")
+	}
+	// A handle that is not a seat in this company has no chain to resolve
+	// and no judge — an ordinary answer, which Consider reads as "do not
+	// ask" rather than as a failure.
+	if got := e.judgeFor(e.Company(), "nobody"); got != nil {
+		t.Error("a judge for a handle that is not a seat")
+	}
+	if got := e.judgeFor(nil, "ceo"); got != nil {
+		t.Error("a judge built from no epoch")
+	}
+}

@@ -782,6 +782,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// Read off the PINNED epoch, so a revision that raises a ceiling
 		// mid-turn cannot move the limit a round is judged against.
 		Budget: e.meterFor(company, req.Handle),
+		// The round-cap extension judge, from the same pinned epoch. It
+		// was never supplied, so every exhaustion rescued with "no_judge"
+		// and the extension mechanism was inert.
+		Judge: e.judgeFor(company, req.Handle),
 	})
 	if err != nil {
 		// No turn-completed event: nothing started, so nothing ended. A

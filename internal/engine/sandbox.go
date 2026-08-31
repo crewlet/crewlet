@@ -274,6 +274,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		Publisher: e.backends.Queue,
 		Turn:      tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth),
 		Budget:    e.meterFor(company, in.Turn.Handle()),
+		// A resumed Execute loop can exhaust its rounds like any other,
+		// and it is the phase most likely to: it comes back mid-task with
+		// its budget already partly spent.
+		Judge: e.judgeFor(company, in.Turn.Handle()),
 		// NO onboarding on a resume. The pass is a seat's FIRST turn, and
 		// this turn already ran its first phase — running it here would
 		// spend the resumed turn's opening on orientation for a seat that
