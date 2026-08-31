@@ -638,6 +638,12 @@ func (e *Engine) Stop(ctx context.Context) {
 	// releases to the flush alone, which is the bounded path rather than
 	// the whole one.
 	e.stopMemorySync()
+	// BEFORE backends.Close below, which closes the store the four passes
+	// query. They tick on a detached context on purpose — like the node's
+	// loops, they must not stop at SIGTERM — so nothing else ends them,
+	// and a tick landing after the close would run compaction queries and
+	// paid summarisation against a closed database.
+	e.stopLearning()
 	e.stopScheduler()
 	e.stopCooldownRefresh()
 	e.node.Stop(ctx)
