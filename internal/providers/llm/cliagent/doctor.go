@@ -149,18 +149,31 @@ func (p *Provider) Diagnose(ctx context.Context, smoke bool) Diagnosis {
 }
 
 // probeVersion runs the CLI's own version command.
+//
+// THROUGH run, like every other child this package spawns. It hand-rolled a
+// second exec.CommandContext with no procgroup, no Cancel and no WaitDelay —
+// so probeTimeout bounded nothing it claimed to. cmd.Output waits for the
+// output pipes to reach EOF, and a coding CLI is a launcher whose forked
+// helper inherits them: the helper holding a pipe open kept Wait blocked long
+// past the ten seconds, with `doctor` looking wedged for the exact reason it
+// was run to diagnose.
+//
+// The error contract differs from Output's and that is the point: run reports
+// a non-zero exit as (res, nil), so an empty version is a probe that produced
+// nothing rather than one that failed to start.
 func (p *Provider) probeVersion(ctx context.Context) string {
 	if len(p.profile.VersionArgs) == 0 {
 		return ""
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(probeCtx, p.profile.Binary, p.profile.VersionArgs...) //nolint:gosec // args come from a validated profile
-	out, err := cmd.Output()
-	if err != nil {
+	res, err := run(ctx, invocation{
+		binary:  p.profile.Binary,
+		args:    p.profile.VersionArgs,
+		timeout: probeTimeout,
+	})
+	if err != nil || res.exitCode != 0 {
 		return ""
 	}
-	return strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	return strings.TrimSpace(strings.SplitN(res.stdout, "\n", 2)[0])
 }
 
 // smokeTest runs a REAL completion with a REAL tool.
