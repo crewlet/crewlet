@@ -1,8 +1,9 @@
 # Subscription LLM Backends
 
 Run agents on a **coding CLI you already pay a subscription for** —
-Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Copilot — instead of a
-metered API key.
+Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor, Copilot or
+Grok — instead of a metered API key. [Supported CLIs](#supported-clis)
+below is the full list.
 
 The `cli-agent` provider type drives the vendor's own command-line tool
 as a headless text model. The CLI holds the operator's OAuth login;
