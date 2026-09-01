@@ -224,15 +224,8 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 		blocks Blocks
 		wg     sync.WaitGroup
 	)
-	spawn := func(render func()) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			render()
-		}()
-	}
 	run := func(into *string, render func() string) {
-		spawn(func() {
+		wg.Go(func() {
 			defer recoverInto(into)
 			*into = render()
 		})
@@ -241,9 +234,9 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 	run(&blocks.RelevantKnowledge, func() string { return f.relevantKnowledge(ctx, r) })
 	run(&blocks.EpisodeRecall, func() string { return f.episodeRecall(ctx, r) })
 	run(&blocks.CounterpartyProfile, func() string { return f.counterpartyProfile(ctx, r) })
-	// Its own spawn rather than a run(), because it is the one block that
+	// Its own goroutine rather than a run(), because it is the one block that
 	// reports something back besides its prose.
-	spawn(func() {
+	wg.Go(func() {
 		defer recoverSkills(&blocks.SynthesizedSkills, &blocks.SkillIDs)
 		blocks.SynthesizedSkills, blocks.SkillIDs = f.synthesizedSkills(ctx, r)
 	})

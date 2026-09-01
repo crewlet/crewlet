@@ -236,16 +236,14 @@ func TestConcurrentRegistrationIsSafe(t *testing.T) {
 	r := registry(t)
 	var wg sync.WaitGroup
 	for i := range 32 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			// Each goroutine renames the same seat, so every write
 			// takes the withdraw-the-previous path as well.
 			_ = r.Register("mattermost", "name-"+string(rune('a'+i%26)), "engineering-lead")
 			_, _ = r.ByExternalID("mattermost", "name-a")
 			_ = r.ExternalID("mattermost", "engineering-lead")
 			_ = r.Namespaces()
-		}()
+		})
 	}
 	wg.Wait()
 

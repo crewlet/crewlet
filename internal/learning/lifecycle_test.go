@@ -570,11 +570,9 @@ func TestTwoNodesFoldingOneSeatWriteOneSummary(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i, l := range []*Lifecycle{a, b} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, errs[i] = l.Pass(context.Background(), "ceo", t0)
-		}()
+		})
 	}
 	wg.Wait()
 	for i, err := range errs {

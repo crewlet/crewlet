@@ -196,9 +196,7 @@ func (t *Transport) Start(ctx context.Context) error {
 
 	var wg sync.WaitGroup
 	for i, cfg := range t.cfg.Seats {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			client, err := NewClient(cfg.Token, t.http)
 			if err != nil {
 				found[i].err = err
@@ -216,7 +214,7 @@ func (t *Transport) Start(ctx context.Context) error {
 				},
 				client: client,
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

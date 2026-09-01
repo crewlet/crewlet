@@ -149,12 +149,10 @@ func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 	defer svc.Hub().Unregister(client)
 
 	var writer sync.WaitGroup
-	writer.Add(1)
-	go func() {
-		defer writer.Done()
+	writer.Go(func() {
 		defer cancel()
 		writeLoop(ctx, conn, client)
-	}()
+	})
 
 	client.send(Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()))
 	readLoop(ctx, conn, guard, client, query, operatorID)
@@ -245,6 +243,11 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 				client.send(queryError(req, CodeUnknownQuery))
 				continue
 			}
+			// NOT running.Go: the semaphore acquire has to happen on
+			// THIS goroutine, the reader. Moving it inside the spawned
+			// one would let the reader keep spawning past the cap and
+			// the backpressure would be a queue of blocked goroutines
+			// rather than a paused reader.
 			running.Add(1)
 			slots <- struct{}{}
 			go func(req request) {

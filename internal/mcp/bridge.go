@@ -211,14 +211,12 @@ func (b *Bridge) StopAll(ctx context.Context) (Change, error) {
 	errs := make([]error, len(entries))
 	var wg sync.WaitGroup
 	for i, e := range entries {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := e.client.stop(ctx); err != nil {
 				b.log.Error("server_stop_failed", "server", e.spec.Name, "error", err.Error())
 				errs[i] = err
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

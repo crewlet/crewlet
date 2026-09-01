@@ -259,9 +259,7 @@ func TestConcurrentCallsIntoOneSeatAreSafe(t *testing.T) {
 	ws := newWorkspace(t)
 	var wg sync.WaitGroup
 	for i := range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			checkout, err := ws.Acquire("dev", string(rune('a'+i%16)))
 			if err != nil {
 				t.Errorf("Acquire: %v", err)
@@ -270,7 +268,7 @@ func TestConcurrentCallsIntoOneSeatAreSafe(t *testing.T) {
 			if err := checkout.Release(); err != nil {
 				t.Errorf("Release: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

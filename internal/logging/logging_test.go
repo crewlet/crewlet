@@ -117,21 +117,17 @@ func TestConcurrentLoggingAndReconfigurationDoNotRace(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 50 {
 				packageLogger.Info("a_line", "k", "v")
 			}
-		}()
+		})
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range 20 {
 			logging.Configure(slog.LevelInfo, logging.FormatText, &syncBuffer{})
 		}
-	}()
+	})
 	wg.Wait()
 }
 

@@ -206,14 +206,12 @@ var valveCases = []fleetCase{{
 		var wg sync.WaitGroup
 		passed := make(chan bool, 32)
 		for range 32 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				ok, err := h.f.Allow(h.ctx, "seat:hot", limit, time.Second, at)
 				// An error under contention is the honest third
 				// answer, and it is NOT a pass.
 				passed <- err == nil && ok
-			}()
+			})
 		}
 		wg.Wait()
 		close(passed)
@@ -285,12 +283,10 @@ var claimCases = []fleetCase{{
 		var wg sync.WaitGroup
 		won := make(chan bool, 16)
 		for range 16 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				ok, err := h.f.Claim(h.ctx, "mattermost|race", time.Minute, at)
 				won <- err == nil && ok
-			}()
+			})
 		}
 		wg.Wait()
 		close(won)
@@ -354,12 +350,10 @@ var ledgerCases = []fleetCase{{
 		var wg sync.WaitGroup
 		errs := make(chan error, 16)
 		for i := range 16 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				errs <- h.f.Record(h.ctx, "ceo", "wk-race",
 					fmt.Sprintf("turn-%d", i), h.now())
-			}()
+			})
 		}
 		wg.Wait()
 		close(errs)
@@ -608,9 +602,7 @@ var planeCases = []fleetCase{{
 		won := make(chan string, 8)
 		raced := make(chan error, 8)
 		for i := range 8 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				id := fmt.Sprintf("edit-%d", i)
 				_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 					RevisionID: id, Payload: []byte("{}"), At: h.now(),
@@ -623,7 +615,7 @@ var planeCases = []fleetCase{{
 				default:
 					h.t.Errorf("Activate: %v", err)
 				}
-			}()
+			})
 		}
 		wg.Wait()
 		close(won)
@@ -643,14 +635,12 @@ var planeCases = []fleetCase{{
 		var wg sync.WaitGroup
 		epochs := make(chan int64, 8)
 		for i := range 8 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				got, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: fmt.Sprintf("rev-%d", i), Payload: []byte("{}"), At: h.now()})
 				if err == nil {
 					epochs <- got.Epoch
 				}
-			}()
+			})
 		}
 		wg.Wait()
 		close(epochs)
@@ -1022,11 +1012,9 @@ var budgetCases = []fleetCase{{
 		const callers = 8
 		var wg sync.WaitGroup
 		for range callers {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				_, _ = h.f.Charge(h.ctx, testSeat, 10, 0, 0)
-			}()
+			})
 		}
 		wg.Wait()
 		if got := h.used(coord.OrgScope); got != callers*10 {

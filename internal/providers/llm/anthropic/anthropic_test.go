@@ -1163,11 +1163,9 @@ func TestConcurrentCompletesShareOnePoolSafely(t *testing.T) {
 	})
 	var wg sync.WaitGroup
 	for range 32 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, _ = p.Complete(context.Background(), userTurn("hi"))
-		}()
+		})
 	}
 	wg.Wait()
 	for _, s := range p.Pool().Stats() {

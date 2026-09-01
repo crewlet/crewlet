@@ -727,9 +727,7 @@ var concurrencyCases = []testCase{
 		)
 		start := make(chan struct{})
 		for range claimers {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-start
 				ok, err := h.l.Claim(h.ctx, aRun(aKey()))
 				mu.Lock()
@@ -743,7 +741,7 @@ var concurrencyCases = []testCase{
 				case ok:
 					won++
 				}
-			}()
+			})
 		}
 		close(start)
 		h.await(&wg, "concurrent claims of one identity")
@@ -769,9 +767,7 @@ var concurrencyCases = []testCase{
 		)
 		start := make(chan struct{})
 		for i := range runners {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				key := aKey()
 				key.TargetHandle = fmt.Sprintf("member-%02d", i)
 				<-start
@@ -784,7 +780,7 @@ var concurrencyCases = []testCase{
 				case ok:
 					won++
 				}
-			}()
+			})
 		}
 		close(start)
 		h.await(&wg, "concurrent claims of distinct identities")

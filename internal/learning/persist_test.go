@@ -875,15 +875,13 @@ func TestConcurrentClassificationsDoNotCollide(t *testing.T) {
 	d := decider(t, says(`{"kind":"LONG","content":"a durable fact"}`), store)
 	var wg sync.WaitGroup
 	for i := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			turn := pdTurn()
 			turn.Event.TurnID = fmt.Sprintf("t%d", i)
 			if _, err := d.Decide(context.Background(), turn); err != nil {
 				t.Errorf("Decide: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if len(store.written()) != 8 {

@@ -576,16 +576,14 @@ func TestConcurrentSessionsAreSafe(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			ch := "C" + string(rune('a'+i%4))
 			s := d.Begin(t.Context(), "swe", "turn-"+string(rune('a'+i)), "plan",
 				chatMeta(func(m map[string]string) { m["channel"] = ch }))
 			s.Phase(t.Context(), "execute")
 			_ = d.Live()
 			s.End(t.Context(), false)
-		}()
+		})
 	}
 	wg.Wait()
 	if live := d.Live(); len(live) != 0 {

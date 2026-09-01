@@ -642,11 +642,9 @@ func (h *Host) ReleaseAll(ctx context.Context, reason ReleaseReason) {
 	}
 	var wg sync.WaitGroup
 	for _, handle := range handles {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			h.Release(ctx, handle, reason)
-		}()
+		})
 	}
 	wg.Wait()
 }

@@ -226,9 +226,7 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 				" — this seat receives no Jira events at all"
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			client, err := NewClient(ClientOptions{
 				URL:        opts.Client.URL(),
 				Email:      cred.Email,
@@ -245,7 +243,7 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 				return
 			}
 			out[i].Account = id
-		}()
+		})
 	}
 	wg.Wait()
 	return out

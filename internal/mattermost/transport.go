@@ -210,9 +210,7 @@ func (t *Transport) Start(ctx context.Context) error {
 		failed []string
 	)
 	for _, cfg := range t.cfg.Seats {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := t.startSeat(ctx, cfg.Resolve()); err != nil {
 				mu.Lock()
 				failed = append(failed, cfg.Handle)
@@ -220,7 +218,7 @@ func (t *Transport) Start(ctx context.Context) error {
 				log.ErrorContext(ctx, "mattermost_seat_failed", "handle", cfg.Handle,
 					"error", err.Error())
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	sort.Strings(failed)

@@ -410,9 +410,7 @@ func TestConcurrentCallsAreSafe(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 64 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			out, err := c.Complete(context.Background(), llm.Request{})
 			if err != nil {
 				t.Error(err)
@@ -424,7 +422,7 @@ func TestConcurrentCallsAreSafe(t *testing.T) {
 			if out.Model != "backup-model" {
 				t.Errorf("Completion.Model = %q", out.Model)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

@@ -265,14 +265,12 @@ func TestConcurrentCompletionsResumeOnlyOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			if err := rig.coordinator.OnCompleted(context.Background(), payload, ev); err != nil {
 				t.Errorf("OnCompleted: %v", err)
 			}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

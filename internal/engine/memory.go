@@ -65,9 +65,7 @@ func (e *Engine) startMemorySync(ctx context.Context) {
 	loop := &memorySync{stop: make(chan struct{})}
 	e.memorySync = loop
 	ticker := time.NewTicker(memorySyncInterval)
-	loop.done.Add(1)
-	go func() {
-		defer loop.done.Done()
+	loop.done.Go(func() {
 		defer ticker.Stop()
 		for {
 			select {
@@ -77,7 +75,7 @@ func (e *Engine) startMemorySync(ctx context.Context) {
 				e.syncSeatMemory(ctx)
 			}
 		}
-	}()
+	})
 }
 
 // stopMemorySync ends the loop, waiting for an in-flight cycle.

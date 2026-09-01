@@ -285,11 +285,9 @@ func startAll(ctx context.Context, reg *tools.Registry, specs []mcp.Spec,
 	out := make([]outcome, len(specs))
 	var wg sync.WaitGroup
 	for i, spec := range specs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			out[i].change, out[i].err = start(ctx, spec)
-		}()
+		})
 	}
 	wg.Wait()
 	for i, spec := range specs {

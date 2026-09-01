@@ -170,11 +170,9 @@ func TestAddRefusesADuplicateUnderRace(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, n)
 	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, errs[i] = b.Add(context.Background(), spec)
-		}()
+		})
 	}
 	wg.Wait()
 

@@ -272,15 +272,13 @@ func testAClaimIsExclusiveUnderContention(t *testing.T, s sandbox.PendingStore) 
 		wins int
 	)
 	for range 10 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, won, err := s.ClaimForResume(t.Context(), "t1"); err == nil && won {
 				mu.Lock()
 				wins++
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if wins != 1 {
@@ -605,9 +603,7 @@ func testAPauseExpiresExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for range racers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			won, err := s.ExpirePause(t.Context(), "t1")
 			if err != nil {
@@ -617,7 +613,7 @@ func testAPauseExpiresExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 			if won {
 				wins.Add(1)
 			}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

@@ -388,9 +388,7 @@ func TestAFakeRuntimeIsExecutableWhenItIsHandedOver(t *testing.T) {
 	stop := make(chan struct{})
 	var forkers sync.WaitGroup
 	for range 8 {
-		forkers.Add(1)
-		go func() {
-			defer forkers.Done()
+		forkers.Go(func() {
 			for {
 				select {
 				case <-stop:
@@ -399,22 +397,20 @@ func TestAFakeRuntimeIsExecutableWhenItIsHandedOver(t *testing.T) {
 					_ = exec.Command("/bin/true").Run() //nolint:noctx // a fork, not a subject
 				}
 			}
-		}()
+		})
 	}
 	t.Cleanup(func() { close(stop); forkers.Wait() })
 
 	var probes sync.WaitGroup
 	failures := make(chan string, 64)
 	for range 64 {
-		probes.Add(1)
-		go func() {
-			defer probes.Done()
+		probes.Go(func() {
 			runtime := fakeRuntime(t, "docker", dockerRootlessFormat,
 				`[name=rootless name=seccomp,profile=builtin]`, 0)
 			if !runtimeIsRootless(t.Context(), runtime) {
 				failures <- runtime
 			}
-		}()
+		})
 	}
 	probes.Wait()
 	close(failures)

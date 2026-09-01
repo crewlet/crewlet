@@ -79,9 +79,7 @@ var concurrencyCases = []testCase{
 		var failures []error
 
 		for i := range claimants {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-start
 				lease, err := claimUntilDefinite(h, "seat:ceo", coord.AcquireOptions{
 					Owner: fmt.Sprintf("node-%02d:1", i),
@@ -95,7 +93,7 @@ var concurrencyCases = []testCase{
 				case lease != nil:
 					winners = append(winners, lease)
 				}
-			}()
+			})
 		}
 		close(start)
 		h.await(&wg, "32 claimants racing for one resource")
@@ -126,9 +124,7 @@ var concurrencyCases = []testCase{
 		var failures []error
 
 		for range callers {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-start
 				lease, err := claimUntilDefinite(h, "seat:ceo", coord.AcquireOptions{
 					Owner: "node-a:1", TTL: LongTTL,
@@ -143,7 +139,7 @@ var concurrencyCases = []testCase{
 				default:
 					epochs[lease.Epoch]++
 				}
-			}()
+			})
 		}
 		close(start)
 		h.await(&wg, "16 concurrent claims by one owner")
@@ -203,9 +199,7 @@ var concurrencyCases = []testCase{
 		var wg sync.WaitGroup
 		start := make(chan struct{})
 		for i := range workers {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				owner := fmt.Sprintf("node-%d:1", i)
 				var held *coord.Lease
 				<-start
@@ -240,15 +234,13 @@ var concurrencyCases = []testCase{
 						held = nil
 					}
 				}
-			}()
+			})
 		}
 		// Readers alongside the writers: the listings and the floor are
 		// swept on every heartbeat of every node, so they race the
 		// claims in production too.
 		for range 2 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-start
 				for range iterations {
 					if _, err := h.b.Get(ctx, "seat:ceo"); err != nil {
@@ -267,7 +259,7 @@ var concurrencyCases = []testCase{
 						unanswered()
 					}
 				}
-			}()
+			})
 		}
 		close(start)
 		h.await(&wg, "acquire/renew/release churn with concurrent readers")

@@ -283,14 +283,12 @@ func TestConcurrentConsoleWritesDoNotInterleave(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			log := base.With("component", "worker", "n", i)
 			for range 50 {
 				log.Info("a_line", "k", "v")
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

@@ -614,9 +614,7 @@ func TestConcurrentDeliveriesAreSafe(t *testing.T) {
 	r := reflector(t, devOrg(), &recordingPub{}, w)
 	var wg sync.WaitGroup
 	for i := range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			turn := settledTurn()
 			// Half the goroutines race on ONE id, so the dedup guard is
 			// exercised under contention as well as the dispatch.
@@ -624,7 +622,7 @@ func TestConcurrentDeliveriesAreSafe(t *testing.T) {
 				turn.TurnID = fmt.Sprintf("t%d", i)
 			}
 			r.Handle(context.Background(), events.New(turn, events.TraceContext{}))
-		}()
+		})
 	}
 	wg.Wait()
 	if got := w.ran(); got != 9 {

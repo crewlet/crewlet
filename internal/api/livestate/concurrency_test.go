@@ -20,9 +20,7 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 	var wg sync.WaitGroup
 
 	for w := range 4 {
-		wg.Add(1)
-		go func(w int) {
-			defer wg.Done()
+		wg.Go(func() {
 			role := fmt.Sprintf("Seat-%d", w)
 			base := map[string]any{
 				"role": role, "turn_id": "tn-1", "phase": "plan", "iteration": 0,
@@ -39,13 +37,11 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 				s.Apply(env("budget_reported",
 					meterReport("m-1", w*100+i, seatMeter(role, i, 100)), streamOnly))
 			}
-		}(w)
+		})
 	}
 
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 100 {
 				s.RecentEvents(50)
 				s.ActiveSandboxes()
@@ -55,7 +51,7 @@ func TestTheProjectionIsSafeToReadWhileItIsWritten(t *testing.T) {
 				s.RuntimeIDFor("Seat-1")
 				s.MergeAgents([]map[string]any{{"role": "Seat-2"}, {"role": "Seat-3"}})
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
