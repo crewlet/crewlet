@@ -222,12 +222,23 @@ func (c *secretsClient) call(ctx context.Context, method, path string, body []by
 			"-api names its address", c.base, err)
 	}
 	defer resp.Body.Close()
-	// BOUNDED. Every answer here is a small JSON object or one credential;
-	// the reveal route's value is capped by the same limit the write is,
-	// and nothing else this client reads is larger.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSecretResponseBytes))
+	// BOUNDED, AND REFUSED PAST THE BOUND. Every answer here is a small JSON
+	// object or one credential; the reveal route's value is capped by the
+	// same limit the write is, and nothing else this client reads is larger.
+	//
+	// The refusal is what the bound needs to be worth having: io.LimitReader
+	// stops at its cap and reports a clean EOF, so an over-long answer used
+	// to arrive CLIPPED — and a clipped credential is one this command prints
+	// for an operator to paste somewhere, silently missing its tail.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSecretResponseBytes+1))
 	if err != nil {
 		return fmt.Errorf("reading the answer from %s: %w", c.base, err)
+	}
+	if len(raw) > maxSecretResponseBytes {
+		return fmt.Errorf(
+			"the node's answer to %s exceeded %d bytes, so it was not read: a "+
+				"credential this long is not one this build stores, and a clipped "+
+				"one would be worse than none", path, maxSecretResponseBytes)
 	}
 	if resp.StatusCode/100 != 2 {
 		return c.refusal(resp.StatusCode, path, raw)
