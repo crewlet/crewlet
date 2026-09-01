@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
@@ -93,10 +94,20 @@ func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 		// Reap it, so the pid does not linger as a zombie that the liveness
 		// probe would read as alive.
 		<-done
+		// THE NOTICE, THEN WHAT IT SAID. Replacing the captured stderr with
+		// the timeout line threw away the only account of what the command
+		// was doing when it hung — a registry auth prompt, a pull stalling,
+		// an image that does not exist — and left the operator "timed out
+		// after 30s" and nothing to act on. stdout was kept on this path all
+		// along; stderr is where a stuck child explains itself.
+		detail := fmt.Sprintf("timed out after %s", timeout)
+		if said := strings.TrimSpace(stderr.String()); said != "" {
+			detail += "\n" + said
+		}
 		return ExecResult{
 			ExitCode: 124,
 			Stdout:   stdout.String(),
-			Stderr:   fmt.Sprintf("timed out after %s", timeout),
+			Stderr:   detail,
 		}, nil
 	}
 }

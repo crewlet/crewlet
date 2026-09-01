@@ -61,6 +61,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -277,7 +278,15 @@ func upperFirst(s string) string {
 	if s == "" {
 		return ""
 	}
-	return strings.ToUpper(s[:1]) + s[1:]
+	// THE FIRST RUNE, not the first byte. s[:1] on a multi-byte lead rune
+	// hands ToUpper an invalid UTF-8 fragment, which it substitutes: an
+	// "Éditeur" phrase renders as "\uFFFD\x89diteur" in the event feed and the
+	// store's summary column. Every phrase today starts with an ASCII
+	// literal, so this is latent rather than live — and one variable-led
+	// phrase is all it takes. Still no locale machinery: this upper-cases
+	// one rune, it does not title-case a sentence.
+	first, size := utf8.DecodeRuneInString(s)
+	return strings.ToUpper(string(first)) + s[size:]
 }
 
 // a2aTag renders the [A2A:channel] marker a turn summary carries when the turn
