@@ -2,6 +2,7 @@ package config
 
 import (
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -219,10 +220,7 @@ func (r *Resolver) Map(path string, in map[string]string) (map[string]string, []
 	}
 	out := make(map[string]string, len(in))
 	var missing []Unresolved
-	keys := make([]string, 0, len(in))
-	for k := range in {
-		keys = append(keys, k)
-	}
+	keys := slices.Collect(maps.Keys(in))
 	// Sorted so a caller's log line and a test's expectation are stable;
 	// map order would make both flap.
 	slices.Sort(keys)

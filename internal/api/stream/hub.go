@@ -11,6 +11,8 @@ package stream
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -221,10 +223,7 @@ func (h *Hub) Clients() int {
 // up the publish path.
 func (h *Hub) Broadcast(env Envelope) {
 	h.mu.RLock()
-	targets := make([]*Client, 0, len(h.clients))
-	for c := range h.clients {
-		targets = append(targets, c)
-	}
+	targets := slices.Collect(maps.Keys(h.clients))
 	h.mu.RUnlock()
 
 	for _, c := range targets {
@@ -235,10 +234,7 @@ func (h *Hub) Broadcast(env Envelope) {
 // Close disconnects every client.
 func (h *Hub) Close() {
 	h.mu.Lock()
-	targets := make([]*Client, 0, len(h.clients))
-	for c := range h.clients {
-		targets = append(targets, c)
-	}
+	targets := slices.Collect(maps.Keys(h.clients))
 	h.clients = map[*Client]struct{}{}
 	h.mu.Unlock()
 

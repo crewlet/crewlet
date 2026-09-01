@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -248,10 +249,7 @@ func (s *EnvFileSink) NextStep() string {
 // partial write from an interrupted run would lose the ones below the cut,
 // and they would still exist at the vendor.
 func (s *EnvFileSink) rewrite() error {
-	names := make([]string, 0, len(s.values))
-	for name := range s.values {
-		names = append(names, name)
-	}
+	names := slices.Collect(maps.Keys(s.values))
 	// SORTED, so a rotation produces a diff an operator can read rather
 	// than a reshuffle of the whole file.
 	slices.Sort(names)
@@ -405,10 +403,5 @@ func (s *PrintSink) NextStep() string {
 }
 
 func contains(names []string, want string) bool {
-	for _, name := range names {
-		if name == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(names, want)
 }

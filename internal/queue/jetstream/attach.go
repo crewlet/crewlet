@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -182,11 +183,7 @@ func (q *Queue) PauseHolds(topic, group string) []string {
 	key := attachKey{topic, group}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	out := make([]string, 0, len(q.holds[key]))
-	for r := range q.holds[key] {
-		out = append(out, r)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(q.holds[key]))
 	return out
 }
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
@@ -204,7 +205,7 @@ func (m RoleSandboxMCP) IsZero() bool { return len(m.Servers) == 0 }
 
 func (s *RoleSandbox) validate(path string) error {
 	var p problems
-	if s.CodingAgent != "" && !oneOf(s.CodingAgent, CodingAgents) {
+	if s.CodingAgent != "" && !slices.Contains(CodingAgents, s.CodingAgent) {
 		p.add(at(path, "coding_agent"), ErrUnknownValue, "%q (want %s)",
 			s.CodingAgent, names(CodingAgents))
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 
@@ -197,10 +198,7 @@ var entityKinds = map[string]entityAccess{
 	},
 	EntityLLMProviders: {
 		ids: func(c *config.Company) []string {
-			out := make([]string, 0, len(c.Providers.LLM))
-			for key := range c.Providers.LLM {
-				out = append(out, key)
-			}
+			out := slices.Collect(maps.Keys(c.Providers.LLM))
 			return sorted(out)
 		},
 		find: func(c *config.Company, id string) (any, bool) {
@@ -264,10 +262,7 @@ var entityKinds = map[string]entityAccess{
 // EntityKinds names every addressable collection, sorted — so a caller can
 // discover the surface rather than carrying its own copy of this list.
 func EntityKinds() []string {
-	out := make([]string, 0, len(entityKinds))
-	for kind := range entityKinds {
-		out = append(out, kind)
-	}
+	out := slices.Collect(maps.Keys(entityKinds))
 	return sorted(out)
 }
 

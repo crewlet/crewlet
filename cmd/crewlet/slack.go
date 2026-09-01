@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -213,11 +214,7 @@ func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink in
 	}
 	printKept(w, res.Kept)
 	if len(res.Failed) > 0 {
-		handles := make([]string, 0, len(res.Failed))
-		for handle := range res.Failed {
-			handles = append(handles, handle)
-		}
-		slices.Sort(handles)
+		handles := slices.Sorted(maps.Keys(res.Failed))
 		fmt.Fprintf(w, "\n%d seat(s) FAILED — everything else completed and is "+
 			"recorded, so re-running resumes:\n", len(handles))
 		for _, handle := range handles {
@@ -225,11 +222,7 @@ func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink in
 		}
 	}
 	if len(res.Pending) > 0 {
-		handles := make([]string, 0, len(res.Pending))
-		for handle := range res.Pending {
-			handles = append(handles, handle)
-		}
-		slices.Sort(handles)
+		handles := slices.Sorted(maps.Keys(res.Pending))
 		fmt.Fprintf(w, "\n%d app(s) still need a workspace install — open each "+
 			"and click Allow, then re-run:\n", len(handles))
 		for _, handle := range handles {
@@ -257,11 +250,7 @@ func printSlackValidation(w io.Writer, res *slack.Result) {
 			len(res.Validated), strings.Join(res.Validated, ", "))
 	}
 	if len(res.Failed) > 0 {
-		handles := make([]string, 0, len(res.Failed))
-		for handle := range res.Failed {
-			handles = append(handles, handle)
-		}
-		slices.Sort(handles)
+		handles := slices.Sorted(maps.Keys(res.Failed))
 		fmt.Fprintf(w, "\n%d manifest(s) FAILED validation:\n", len(handles))
 		for _, handle := range handles {
 			fmt.Fprintf(w, "  %s: %s\n", handle, res.Failed[handle])

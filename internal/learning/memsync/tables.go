@@ -1,5 +1,7 @@
 package memsync
 
+import "slices"
+
 // The tables a seat's memory is made of, and how each one travels.
 //
 // ONE REGISTRY, and it is the whole reason this package is not fifteen
@@ -176,20 +178,10 @@ var tables = []table{
 
 // isBlob reports whether a column carries bytes.
 func (t table) isBlob(column string) bool {
-	for _, name := range t.blobs {
-		if name == column {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(t.blobs, column)
 }
 
 // isKey reports whether a column is part of the natural key.
 func (t table) isKey(column string) bool {
-	for _, name := range t.key {
-		if name == column {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(t.key, column)
 }

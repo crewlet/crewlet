@@ -154,6 +154,9 @@ func snapshotStreams(ctx context.Context, nc *nats.Conn, root string) ([]StreamA
 // than a reshuffle.
 func streamNames(ctx context.Context, js jetstream.JetStream) ([]string, error) {
 	lister := js.StreamNames(ctx)
+	// A plain range over the lister's CHANNEL — it is not a map, and it
+	// closes when the listing is complete or has failed, which is why the
+	// error is read after the loop rather than inside it.
 	var names []string
 	for name := range lister.Name() {
 		names = append(names, name)

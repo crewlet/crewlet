@@ -46,6 +46,7 @@
 package prompts
 
 import (
+	"maps"
 	"slices"
 	"strings"
 
@@ -127,11 +128,7 @@ func (s Seat) mcpServers() []string {
 	if !s.ok() {
 		return nil
 	}
-	names := make([]string, 0, len(s.Role.MCPEnv))
-	for name := range s.Role.MCPEnv {
-		names = append(names, name)
-	}
-	slices.Sort(names)
+	names := slices.Sorted(maps.Keys(s.Role.MCPEnv))
 	return names
 }
 

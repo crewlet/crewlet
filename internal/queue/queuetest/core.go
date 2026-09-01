@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -355,12 +356,7 @@ func (s *suite) runCore(t *testing.T) {
 			return
 		}
 		by.await(t, "a healthy member to take the redelivery", func(seen []string) bool {
-			for _, who := range seen {
-				if who == "b" {
-					return true
-				}
-			}
-			return false
+			return slices.Contains(seen, "b")
 		})
 	})
 

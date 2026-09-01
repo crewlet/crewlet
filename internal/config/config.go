@@ -56,6 +56,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -241,21 +242,13 @@ func (p *problems) wrap(err error) {
 // err returns the joined failures, or nil when there were none.
 func (p problems) err() error { return errors.Join(p...) }
 
-// oneOf reports whether value is in the allowed set, and renders the set
-// for the error message. Closed sets are declared as package-level slices
-// so the validator and the JSON Schema generator read the SAME list — a
-// schema that accepts what the validator rejects is worse than no schema,
-// because an editor then blesses a config that will not boot.
-func oneOf[T ~string](value T, allowed []T) bool {
-	for _, a := range allowed {
-		if value == a {
-			return true
-		}
-	}
-	return false
-}
-
 // names renders a closed set for an error message or a schema enum.
+//
+// EVERY CLOSED SET IN THIS PACKAGE IS A PACKAGE-LEVEL SLICE, and this is why:
+// the validator (through [slices.Contains]) and the JSON Schema generator
+// (through here) read the SAME list. A schema that accepts what the validator
+// rejects is worse than no schema, because an editor then blesses a config
+// that will not boot.
 func names[T ~string](allowed []T) string {
 	out := make([]string, len(allowed))
 	for i, a := range allowed {
@@ -280,10 +273,5 @@ func strs[T ~string](allowed []T) []string {
 // nobody can write a test against, and one an operator reasonably reads as
 // two different problems.
 func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
-	return out
+	return slices.Sorted(maps.Keys(m))
 }

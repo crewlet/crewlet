@@ -11,6 +11,7 @@ package node_test
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -286,11 +287,7 @@ func (f *fleet) nodesThatRan(handle string) []string {
 			seen[r.node] = struct{}{}
 		}
 	}
-	out := make([]string, 0, len(seen))
-	for n := range seen {
-		out = append(out, n)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(seen))
 	return out
 }
 

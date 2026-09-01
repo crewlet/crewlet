@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -277,10 +278,6 @@ func (s *SecretValues) Rekey(ctx context.Context, activeKeyID, by string, now ti
 }
 
 func sortedNames(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(m))
 	return out
 }

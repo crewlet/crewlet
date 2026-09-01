@@ -284,11 +284,7 @@ func (s *Service) Start(ctx context.Context) error {
 	// The list is built HERE rather than through Sources(): this holds
 	// the write lock, and Go's RWMutex is not reentrant — a read lock
 	// taken by the same goroutine deadlocks the boot.
-	sources := make([]string, 0, len(s.parsers))
-	for src := range s.parsers {
-		sources = append(sources, src)
-	}
-	slices.Sort(sources)
+	sources := slices.Sorted(maps.Keys(s.parsers))
 	log.InfoContext(ctx, "notify_inbound_started", "sources", sources)
 	return nil
 }
@@ -298,11 +294,7 @@ func (s *Service) Start(ctx context.Context) error {
 func (s *Service) Sources() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]string, 0, len(s.parsers))
-	for src := range s.parsers {
-		out = append(out, src)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(s.parsers))
 	return out
 }
 

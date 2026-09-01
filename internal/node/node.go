@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -533,10 +535,7 @@ func (n *Node) InFlightTurns() int { return n.turns.inFlight() }
 func (n *Node) Attached() []string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	out := make([]string, 0, len(n.attached))
-	for h := range n.attached {
-		out = append(out, h)
-	}
+	out := slices.Collect(maps.Keys(n.attached))
 	return out
 }
 

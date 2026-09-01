@@ -2,6 +2,7 @@ package config
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
@@ -329,7 +330,7 @@ var WorkingStatuses = []WorkingStatus{StatusAddressed, StatusAlways, StatusOff}
 // that they typed it wrong. Empty is valid — it is how a block takes the
 // default.
 func (w WorkingStatus) validate(path string) error {
-	if w == "" || oneOf(w, WorkingStatuses) {
+	if w == "" || slices.Contains(WorkingStatuses, w) {
 		return nil
 	}
 	var p problems
@@ -727,7 +728,7 @@ func (g *GitHub) validate(path string) error {
 	}
 	pv := g.Provisioning
 	pp := at(path, "provisioning")
-	if pv.OrgWebhook != "" && !oneOf(pv.OrgWebhook, ContainerWebhookModes) {
+	if pv.OrgWebhook != "" && !slices.Contains(ContainerWebhookModes, pv.OrgWebhook) {
 		p.add(at(pp, "org_webhook"), ErrUnknownValue, "%q (want %s)",
 			pv.OrgWebhook, names(ContainerWebhookModes))
 	}
@@ -791,17 +792,17 @@ func (g *GitLab) validate(path string) error {
 	}
 	pv := g.Provisioning
 	pp := at(path, "provisioning")
-	if pv.AccessLevel != "" && !oneOf(pv.AccessLevel, GitLabAccessLevels) {
+	if pv.AccessLevel != "" && !slices.Contains(GitLabAccessLevels, pv.AccessLevel) {
 		p.add(at(pp, "access_level"), ErrUnknownValue, "%q (want %s)",
 			pv.AccessLevel, names(GitLabAccessLevels))
 	}
 	for _, handle := range sortedKeys(pv.AccessLevels) {
-		if !oneOf(pv.AccessLevels[handle], GitLabAccessLevels) {
+		if !slices.Contains(GitLabAccessLevels, pv.AccessLevels[handle]) {
 			p.add(at(at(pp, "access_levels"), handle), ErrUnknownValue, "%q (want %s)",
 				pv.AccessLevels[handle], names(GitLabAccessLevels))
 		}
 	}
-	if pv.GroupWebhook != "" && !oneOf(pv.GroupWebhook, ContainerWebhookModes) {
+	if pv.GroupWebhook != "" && !slices.Contains(ContainerWebhookModes, pv.GroupWebhook) {
 		p.add(at(pp, "group_webhook"), ErrUnknownValue, "%q (want %s)",
 			pv.GroupWebhook, names(ContainerWebhookModes))
 	}

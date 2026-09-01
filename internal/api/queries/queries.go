@@ -204,11 +204,7 @@ func (r *Registry) register(name string, e entry) {
 func (r *Registry) Names() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]string, 0, len(r.entries))
-	for name := range r.entries {
-		out = append(out, name)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(r.entries))
 	return out
 }
 

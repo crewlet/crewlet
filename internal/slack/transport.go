@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"sync"
@@ -149,11 +150,7 @@ func (t *Transport) Status() *notify.StatusDriver { return t.status }
 func (t *Transport) Handles() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	out := make([]string, 0, len(t.seats))
-	for handle := range t.seats {
-		out = append(out, handle)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(t.seats))
 	return out
 }
 

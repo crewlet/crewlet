@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -63,11 +64,7 @@ func (p *Plan) Spaces() []string {
 	for _, item := range p.Items {
 		seen[strings.ToUpper(item.Space)] = true
 	}
-	out := make([]string, 0, len(seen))
-	for space := range seen {
-		out = append(out, space)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(seen))
 	return out
 }
 

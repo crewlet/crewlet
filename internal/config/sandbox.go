@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // SandboxType is the code-runtime backend.
 type SandboxType string
@@ -204,7 +207,7 @@ func (s *SandboxProvider) validate(path string) error {
 				"the block entirely to leave the sandbox unconfigured",
 			names(SandboxTypes))
 		return p.err()
-	case !oneOf(s.Type, SandboxTypes):
+	case !slices.Contains(SandboxTypes, s.Type):
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", s.Type, names(SandboxTypes))
 		return p.err()
 	}
@@ -258,7 +261,7 @@ func (s *SandboxProvider) validate(path string) error {
 				"authenticates")
 	}
 
-	if s.DefaultCodingAgent != "" && !oneOf(s.DefaultCodingAgent, CodingAgents) {
+	if s.DefaultCodingAgent != "" && !slices.Contains(CodingAgents, s.DefaultCodingAgent) {
 		p.add(at(path, "default_coding_agent"), ErrUnknownValue, "%q (want %s)",
 			s.DefaultCodingAgent, names(CodingAgents))
 	}
@@ -353,7 +356,7 @@ type LocalSandbox struct {
 
 func (l *LocalSandbox) validate(path string) error {
 	var p problems
-	if l.Containment != "" && !oneOf(l.Containment, Containments) {
+	if l.Containment != "" && !slices.Contains(Containments, l.Containment) {
 		p.add(at(path, "containment"), ErrUnknownValue, "%q (want %s)",
 			l.Containment, names(Containments))
 		return p.err()
@@ -370,7 +373,7 @@ func (l *LocalSandbox) validate(path string) error {
 		p.add(at(path, "image"), ErrConflict,
 			"image only applies to containment container. Remove it, or switch containment")
 	}
-	if l.Runtime != "" && !oneOf(l.Runtime, ContainerRuntimes) {
+	if l.Runtime != "" && !slices.Contains(ContainerRuntimes, l.Runtime) {
 		p.add(at(path, "runtime"), ErrUnknownValue, "%q (want %s)", l.Runtime, names(ContainerRuntimes))
 	}
 	if mode == ContainmentDirect {

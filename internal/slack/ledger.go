@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -132,11 +133,7 @@ func (l *Ledger) Save(path string) error {
 
 // Handles names the seats the ledger knows, sorted.
 func (l *Ledger) Handles() []string {
-	out := make([]string, 0, len(l.Apps))
-	for handle := range l.Apps {
-		out = append(out, handle)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(l.Apps))
 	return out
 }
 

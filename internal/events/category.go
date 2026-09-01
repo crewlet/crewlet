@@ -11,7 +11,10 @@
 
 package events
 
-import "slices"
+import (
+	"maps"
+	"slices"
+)
 
 // categories maps an event type to its dashboard category.
 //
@@ -204,11 +207,7 @@ func CategoryNames() []string {
 	for _, category := range categories {
 		seen[category] = true
 	}
-	out := make([]string, 0, len(seen))
-	for name := range seen {
-		out = append(out, name)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(seen))
 	return out
 }
 

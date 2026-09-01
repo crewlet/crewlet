@@ -2,6 +2,7 @@ package config
 
 import (
 	"iter"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -282,11 +283,7 @@ func (c *Company) validateProviderKeys() error {
 	if len(c.Providers.LLM) == 0 {
 		return nil
 	}
-	known := make([]string, 0, len(c.Providers.LLM))
-	for key := range c.Providers.LLM {
-		known = append(known, key)
-	}
-	slices.Sort(known)
+	known := slices.Sorted(maps.Keys(c.Providers.LLM))
 
 	for role, path := range c.eachRole() {
 		// Both written surfaces are checked, and each is reported at the

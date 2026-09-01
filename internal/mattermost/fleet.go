@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"time"
 
@@ -275,10 +277,7 @@ func (f *Fleet) Remove(handle string) {
 func (f *Fleet) Handles() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]string, 0, len(f.seats))
-	for handle := range f.seats {
-		out = append(out, handle)
-	}
+	out := slices.Collect(maps.Keys(f.seats))
 	return out
 }
 

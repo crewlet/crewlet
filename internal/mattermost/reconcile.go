@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -476,11 +477,7 @@ func joinChannels(ctx context.Context, opts Options, teamID, userID, handle stri
 	}
 	delete(wanted, "")
 
-	names := make([]string, 0, len(wanted))
-	for name := range wanted {
-		names = append(names, name)
-	}
-	slices.Sort(names)
+	names := slices.Sorted(maps.Keys(wanted))
 
 	var joined []string
 	for _, name := range names {

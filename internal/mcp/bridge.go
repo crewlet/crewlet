@@ -342,11 +342,7 @@ func (b *Bridge) Has(name string) bool {
 func (b *Bridge) Servers() []string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	out := make([]string, 0, len(b.servers))
-	for name := range b.servers {
-		out = append(out, name)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(b.servers))
 	return out
 }
 
@@ -462,11 +458,7 @@ func (b *Bridge) release(name string) {
 // The winner is the first server by name, so it does not depend on the order
 // servers happened to be added.
 func (b *Bridge) reindexLocked(before map[string]*Tool) Change {
-	names := make([]string, 0, len(b.servers))
-	for name := range b.servers {
-		names = append(names, name)
-	}
-	slices.Sort(names)
+	names := slices.Sorted(maps.Keys(b.servers))
 
 	next := make(map[string]*Tool, len(b.tools))
 	for _, server := range names {

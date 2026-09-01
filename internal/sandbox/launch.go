@@ -3,6 +3,8 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -300,10 +302,7 @@ func buildBrief(req LaunchRequest) string {
 			b.WriteString("- " + c + "\n")
 		}
 	}
-	names := make([]string, 0, len(req.MCPServers))
-	for name := range req.MCPServers {
-		names = append(names, name)
-	}
+	names := slices.Collect(maps.Keys(req.MCPServers))
 	b.WriteString("\n")
 	b.WriteString(EnvironmentBrief(req.Setup, names))
 	return b.String()

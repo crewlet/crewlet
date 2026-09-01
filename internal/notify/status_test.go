@@ -2,6 +2,7 @@ package notify_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -682,10 +683,5 @@ func TestEveryShippedPhraseSaysOnlyThatTheAgentIsBusy(t *testing.T) {
 }
 
 func slicesContains(pool []string, want string) bool {
-	for _, p := range pool {
-		if p == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(pool, want)
 }

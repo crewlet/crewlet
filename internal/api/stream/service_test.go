@@ -2,6 +2,7 @@ package stream_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -203,12 +204,7 @@ func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 }
 
 func contains(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }
 
 // --- the snapshot -------------------------------------------------------- //

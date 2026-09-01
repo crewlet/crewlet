@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -194,11 +195,7 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	offered := offeredTools(raw)
 	m.mu.Lock()
-	names := make([]string, 0, len(offered))
-	for n := range offered {
-		names = append(names, n)
-	}
-	slices.Sort(names)
+	names := slices.Sorted(maps.Keys(offered))
 	m.offered = append(m.offered, strings.Join(names, "+"))
 	m.systems = append(m.systems, systemPrompt(raw))
 	m.mu.Unlock()

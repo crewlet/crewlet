@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -190,11 +191,7 @@ func (r *Result) Err() error {
 	if len(r.Failed) == 0 {
 		return nil
 	}
-	handles := make([]string, 0, len(r.Failed))
-	for handle := range r.Failed {
-		handles = append(handles, handle)
-	}
-	slices.Sort(handles)
+	handles := slices.Sorted(maps.Keys(r.Failed))
 	var b strings.Builder
 	fmt.Fprintf(&b, "slack: %d of %d seat(s) could not be provisioned:", len(handles), r.attempted)
 	for _, handle := range handles {

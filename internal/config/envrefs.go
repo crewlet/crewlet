@@ -1,6 +1,7 @@
 package config
 
 import (
+	"maps"
 	"reflect"
 	"slices"
 
@@ -32,11 +33,7 @@ func ReferencedNames(payload any) []string {
 			seen[name] = struct{}{}
 		}
 	})
-	out := make([]string, 0, len(seen))
-	for name := range seen {
-		out = append(out, name)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(seen))
 	return out
 }
 

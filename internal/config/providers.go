@@ -384,7 +384,7 @@ func (l *LLMProvider) ResolvedKeys(r *Resolver) []string {
 
 func (l *LLMProvider) validate(path string) error {
 	var p problems
-	if l.Type != "" && !oneOf(l.Type, LLMProviderTypes) {
+	if l.Type != "" && !slices.Contains(LLMProviderTypes, l.Type) {
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", l.Type, names(LLMProviderTypes))
 		return p.err() // every rule below keys on the type
 	}
@@ -412,7 +412,7 @@ func (l *LLMProvider) validate(path string) error {
 					"CLI's reasoning model with `model`")
 		}
 	}
-	if l.ReasoningEffort != "" && !oneOf(l.ReasoningEffort, ReasoningEfforts) {
+	if l.ReasoningEffort != "" && !slices.Contains(ReasoningEfforts, l.ReasoningEffort) {
 		p.add(at(path, "reasoning_effort"), ErrUnknownValue, "%q (want %s)",
 			l.ReasoningEffort, names(ReasoningEfforts))
 	}
@@ -521,7 +521,7 @@ func (c CredentialCooldowns) validate(path string) error {
 // and unlike the []string this replaces. Two things followed from the bare
 // string. The generated schema emitted `"type":"string"` while its sibling
 // RoleSandbox.CodingAgent emitted an enum, so an editor blessed
-// `agent: claud-code` — which oneOf's own doc calls worse than no schema —
+// `agent: claud-code` — which [names]'s own doc calls worse than no schema —
 // and with no `js:` tag the field could not join schema_test.go's enum table,
 // so nothing noticed.
 type CLIAgentName string
@@ -551,7 +551,7 @@ var CLIAgentNames = []CLIAgentName{
 // Empty is NOT valid here — unlike an optional enum elsewhere — because the
 // caller checks emptiness first: an absent agent takes the provider's own
 // default rather than meaning "any".
-func (n CLIAgentName) Valid() bool { return oneOf(n, CLIAgentNames) }
+func (n CLIAgentName) Valid() bool { return slices.Contains(CLIAgentNames, n) }
 
 // CLIAgentAuthMode is how a cli-agent provider authenticates.
 type CLIAgentAuthMode string
@@ -733,7 +733,7 @@ func (c *CLIAgent) validate(path string) error {
 			"must be 0 (the default of %d) or positive, got %d",
 			defaultCLIMaxConcurrent, c.MaxConcurrent)
 	}
-	if c.Auth.Mode != "" && !oneOf(c.Auth.Mode, CLIAgentAuthModes) {
+	if c.Auth.Mode != "" && !slices.Contains(CLIAgentAuthModes, c.Auth.Mode) {
 		p.add(at(path, "auth.mode"), ErrUnknownValue, "%q (want %s)",
 			c.Auth.Mode, names(CLIAgentAuthModes))
 	}
@@ -783,7 +783,7 @@ func (e *EmbeddingProvider) Width() int {
 
 func (e *EmbeddingProvider) validate(path string) error {
 	var p problems
-	if e.Type != "" && !oneOf(e.Type, EmbeddingProviderTypes) {
+	if e.Type != "" && !slices.Contains(EmbeddingProviderTypes, e.Type) {
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", e.Type, names(EmbeddingProviderTypes))
 	}
 	if strings.TrimSpace(e.Model) == "" {

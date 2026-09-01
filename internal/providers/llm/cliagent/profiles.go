@@ -3,6 +3,7 @@ package cliagent
 import (
 	_ "embed"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -34,11 +35,7 @@ var builtins = sync.OnceValue(func() map[string]Profile {
 // BuiltinNames lists the profiles this build ships, sorted.
 func BuiltinNames() []string {
 	table := builtins()
-	names := make([]string, 0, len(table))
-	for name := range table {
-		names = append(names, name)
-	}
-	slices.Sort(names)
+	names := slices.Sorted(maps.Keys(table))
 	return names
 }
 
