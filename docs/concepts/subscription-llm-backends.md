@@ -132,6 +132,35 @@ invisible to the [tool registry](../guides/tools-and-mcp.md), the
 permission model, secret redaction, and the event stream. Routing agent
 work through them would fork the engine's tool surface in two.
 
+So every profile **denies the CLI's shell and file tools** wherever the
+vendor offers a way to, and each says how: a flag on the command line
+(Claude Code's `--disallowedTools`, Copilot's `--deny-tool`, Codex's
+read-only sandbox) or a settings file the engine writes into the seat's
+own home or the per-call working directory before every call (Gemini's
+`settings.json`, OpenCode's `opencode.json`, Cursor's `.cursor/cli.json`).
+The shell is the one that matters: the seat's home and environment are
+isolated, but the filesystem is not, and a CLI with a shell on the engine
+host reads whatever the engine user can read. A vendor with no such
+switch is declared as `local_tools: vendor-default` with a note saying
+which switch is missing — and `crewlet llm doctor` **measures** the
+stance rather than trusting it (see [Operating it](#operating-it)).
+
+**Web is the one local tool that stays on.** A subscription seat must
+not have less reach than the same CLI at a terminal, and a fetch is a
+read — it never gates a delivery. Where a vendor gates its web tools
+behind an approval a headless run cannot answer, the profile allows them
+explicitly (`--allowedTools WebFetch WebSearch`, Copilot's
+`--allow-tool`); where its default web search answers from an offline
+index, the profile switches it live (Codex's `web_search="live"`). What
+the CLI reads on the web is not in the engine's event stream — the cost
+of an unrecorded read, accepted. Seats on API models reach the web the
+way they reach everything external, through the MCP servers you configure.
+
+Both stances are profile fields, so an operator can override them like
+any other — `cli.overrides.local_tools`, `cli.overrides.local_tools_note`,
+and `cli.overrides.seed_files` (a list of `{path, in: home|work, content}`;
+lists replace wholesale).
+
 Instead the CLI is used strictly as a text model, and the tool channel
 rides in the prompt:
 
@@ -644,9 +673,14 @@ crewlet llm logout default            # revoke locally + delete credentials
 
 `doctor` is the command that matters. It checks the binary is on `PATH`,
 runs its version probe, reports whether a login is present, says whether
-token counts will be real or estimated — and then runs **a real
-completion with a real tool**, because a profile can look perfect and
-still not produce a parseable tool call:
+token counts will be real or estimated — and then runs **three real
+completions**: a smoke test with a real tool, because a profile can look
+perfect and still not produce a parseable tool call; a **shell probe**,
+which asks the CLI to run `date +%s` with its own shell and believes it
+only if the answer is within minutes of the engine's clock (a model can
+write a token it was asked to echo, but it cannot guess the current
+epoch); and a **web probe**, which asks the CLI to fetch a public
+endpoint that reports its own clock and applies the same test:
 
 ```
 provider      : subscription
@@ -659,12 +693,22 @@ credentials   : present
 token env     : set
 token usage   : reported by CLI
 smoke test    : ok — 812 in / 34 out
+local tools   : denied by profile — probe: refused
+web           : ok — fetched https://www.cloudflare.com/cdn-cgi/trace
 problems      : none
 ```
 
-One caveat worth stating plainly: `doctor` spends a real completion. On a
-subscription that is a few thousand tokens of your plan's allowance, which
-is why `-no-smoke` exists for a scripted health check that runs often.
+A profile that says `denied` while the shell ran is a problem naming the
+installed version, because the vendor's switch is not taking effect on
+it; a `vendor-default` profile whose shell ran is a problem stating the
+trust you are taking on; a web tool that could not fetch is a problem
+pointing at the vendor's sandbox flags and the egress proxy the child
+environment was told about.
+
+One caveat worth stating plainly: `doctor` spends three real completions.
+On a subscription that is a few thousand tokens of your plan's allowance,
+which is why `-no-smoke` exists for a scripted health check that runs
+often — it skips all three and says so on each line.
 
 ---
 

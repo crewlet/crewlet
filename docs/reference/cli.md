@@ -31,7 +31,7 @@ subcommand below is served by it.
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key |
 | `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and login state |
-| `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns (`-no-smoke` stops before the completion) |
+| `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before all three real calls) |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's credential files |
@@ -546,7 +546,13 @@ that work is established here rather than in the config document. `KEY` is the
 logged in. **`doctor`** is the one to run before a company's first turn: it
 checks the CLI is installed, the credentials answer, and — unless you pass
 `-no-smoke` — that a real completion comes back, which is the only check that
-catches a plan whose quota is exhausted.
+catches a plan whose quota is exhausted. The same run measures two claims the
+profile makes rather than trusting them: that the CLI's own **shell is
+refused** (it runs on the engine host, so a denial that stopped working is a
+seat reading whatever the engine user can read) and that its **web tool
+reaches the network** (the one local tool every profile deliberately keeps
+on). Both are believed only on evidence a model cannot invent — the current
+clock, read by the tool.
 
 **`login`** has four shapes because the vendors do:
 
