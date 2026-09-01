@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -73,4 +74,53 @@ roles:
 		t.Fatal("the seat has no sandbox block")
 	}
 	return cfg.Roles[0].Sandbox
+}
+
+// The round cap has the same three states as the pause TTL above, and needs a
+// pointer for the same reason: without one, the seat whose work legitimately
+// runs long could not escape a cap set for everybody else, because its "no
+// cap" and its "say nothing" would both be zero.
+func TestASeatThatSaysNothingAboutRoundsInheritsTheDefault(t *testing.T) {
+	c := parseSandboxSeat(t, `
+    sandbox:
+      enabled: true
+`)
+	if c.MaxTurns != nil {
+		t.Fatalf("max_turns = %v, want unset so the provider default applies", *c.MaxTurns)
+	}
+}
+
+// An explicit zero is how a seat opts OUT of a company-wide cap.
+func TestAnExplicitZeroRoundCapIsNotTheSameAsSayingNothing(t *testing.T) {
+	c := parseSandboxSeat(t, `
+    sandbox:
+      enabled: true
+      max_turns: 0
+`)
+	if c.MaxTurns == nil {
+		t.Fatal("an explicit 0 was read as unset, so the seat cannot escape a company cap")
+	}
+	if *c.MaxTurns != 0 {
+		t.Fatalf("max_turns = %v, want 0", *c.MaxTurns)
+	}
+}
+
+// A negative cap is refused rather than clamped: unlike pause_ttl_seconds it
+// has no earlier spelling to be compatible with, so a negative here is a
+// mistake and saying so is more use than silently reading it as uncapped.
+func TestANegativeRoundCapIsRefused(t *testing.T) {
+	_, err := config.ParseCompany([]byte(`
+name: Acme
+roles:
+  - name: SWE
+    sandbox:
+      enabled: true
+      max_turns: -2
+`))
+	if err == nil {
+		t.Fatal("a negative round cap was accepted")
+	}
+	if !strings.Contains(err.Error(), "max_turns") {
+		t.Fatalf("the error does not name the field: %v", err)
+	}
 }

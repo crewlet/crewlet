@@ -68,6 +68,7 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 		DefaultTemplate:    spec.Template,
 		DefaultTimeout:     seconds(spec.Timeout()),
 		DefaultPauseTTL:    seconds(spec.PauseTTL()),
+		DefaultMaxTurns:    spec.DefaultMaxTurns,
 		DefaultSetup:       setupSteps(spec.Setup),
 		Telemetry:          otel,
 	})
@@ -348,38 +349,66 @@ func resumePlan(run sandbox.PendingRun) turn.Plan {
 	return p
 }
 
-// persistSuspension writes a turn's suspended conversation to its row.
+// persistSuspension writes a turn's suspended conversation to its row, which
+// is also what OPENS the run to the completion poll.
 //
 // Called the moment the turn returns Suspended, because the runner holds the
-// conversation only until its frame unwinds. A suspension that cannot be
-// serialized FAILS THE RUN rather than being dropped: a row with no state is
-// one nothing can resume, and failing here — while the box is still in the
-// engine's hands — is far better than discovering it at a resume days later.
+// conversation only until its frame unwinds. Until this lands the run sits in
+// [sandbox.StatusLaunching] and nothing polls or claims it — the job is
+// already executing, and a job that finishes first would otherwise be
+// collected against a row with nothing to resume into.
+//
+// EVERY WAY THIS CAN FAIL FAILS THE RUN rather than dropping the suspension: a
+// row with no state is one nothing can resume, and failing here — while the
+// box is still in the engine's hands and the seat's owner is still this
+// process — is far better than leaving a launching row to hold a box until its
+// seat happens to move.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string) {
 	if e.sandboxPending == nil {
 		return
 	}
 	suspension, ok := r.Suspended()
 	if !ok {
-		log.ErrorContext(ctx, "sandbox_suspension_missing", "turn_id", turnID,
-			"detail", "the turn suspended but recorded no conversation; the run "+
-				"cannot be resumed and will be failed")
-		if err := e.sandboxPending.SetStatus(ctx, turnID, sandbox.StatusFailed, sandbox.Fence{}); err != nil {
-			log.WarnContext(ctx, "sandbox_suspension_mark_failed", "turn_id", turnID, "error", err)
-		}
+		e.failSuspension(ctx, turnID, "sandbox_suspension_missing",
+			"the turn suspended but recorded no conversation", nil)
 		return
 	}
 	blob, err := execstate.Encode(suspension.State)
 	if err != nil {
-		log.ErrorContext(ctx, "sandbox_suspension_unserializable",
-			"turn_id", turnID, "error", err)
-		if err := e.sandboxPending.SetStatus(ctx, turnID, sandbox.StatusFailed, sandbox.Fence{}); err != nil {
-			log.WarnContext(ctx, "sandbox_suspension_mark_failed", "turn_id", turnID, "error", err)
-		}
+		e.failSuspension(ctx, turnID, "sandbox_suspension_unserializable",
+			"the suspended conversation could not be serialized", err)
 		return
 	}
-	if err := e.sandboxPending.SaveExecuteState(ctx, turnID, blob); err != nil {
-		log.ErrorContext(ctx, "sandbox_suspension_unwritable", "turn_id", turnID, "error", err)
+	suspended, err := e.sandboxPending.MarkSuspended(ctx, turnID, blob)
+	if err != nil {
+		e.failSuspension(ctx, turnID, "sandbox_suspension_unwritable",
+			"the suspended conversation could not be written", err)
+		return
+	}
+	if !suspended {
+		// The row is not launching, so this suspension has nowhere to go:
+		// either the launch never recorded it, or its tail has already
+		// been claimed and settled by somebody else. Overwriting either
+		// one is worse than failing.
+		e.failSuspension(ctx, turnID, "sandbox_suspension_not_launching",
+			"the run was no longer launching when its conversation was written", nil)
+	}
+}
+
+// failSuspension marks a run unresumable and says why, in the one voice all
+// three failure paths share.
+func (e *Engine) failSuspension(ctx context.Context, turnID, event, detail string, cause error) {
+	args := []any{"turn_id", turnID,
+		"detail", detail + "; the run cannot be resumed and is failed"}
+	if cause != nil {
+		args = append(args, "error", cause)
+	}
+	log.ErrorContext(ctx, event, args...)
+	// Unfenced: this node is the seat's owner by construction — it just ran
+	// the turn — and a fence read back from a row this write may not be able
+	// to read is a second failure mode for no gain.
+	if err := e.sandboxPending.SetStatus(ctx, turnID, sandbox.StatusFailed, sandbox.Fence{}); err != nil {
+		log.WarnContext(ctx, "sandbox_suspension_mark_failed", "turn_id", turnID, "error", err)
 	}
 }
 
@@ -430,6 +459,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		CodingAgent:     string(gate.CodingAgent),
 		PauseTTL:        pauseTTL(gate),
+		MaxTurns:        gate.MaxTurns,
 		Env:             env,
 		CredentialFiles: credentials,
 	})
@@ -652,7 +682,7 @@ func (e *Engine) startSandboxWaiter(ctx context.Context, interval time.Duration)
 		// in the company, not just this node's seats, so N nodes running it
 		// unclaimed means N reconnects per box per tick and N racing
 		// reapers.
-		ClaimDuty: sandbox.DutyFunc(e.waiterDuty()),
+		ClaimDuty: sandbox.DutyFunc(e.waiterDuty(interval)),
 	})
 	if err != nil {
 		return err
@@ -700,22 +730,56 @@ const waiterDutyName = "sandbox-waiter"
 // Nil where there is no coordination backend, which is the single-node case:
 // that node always holds it, and a wrapper that always said yes would make a
 // single node report itself as a fleet singleton.
-func (e *Engine) waiterDuty() schedule.DutyFunc {
+func (e *Engine) waiterDuty(interval time.Duration) schedule.DutyFunc {
 	if e.backends == nil || e.backends.Coord == nil {
 		return nil
 	}
-	return e.workerDuty(waiterDutyName, waiterDutyTTL)
+	return e.workerDuty(waiterDutyName, e.waiterDutyTTL(interval))
 }
+
+// dutyTTLTicks is how many poll intervals the waiter duty survives without a
+// re-claim, and dutyTTLFloor the shortest it may ever be.
+//
+// Three intervals is the same "do not flap on a blip" rule the scheduler duty
+// and the seat heartbeat follow: the holder re-claims every tick, so this
+// rides out two consecutive slow or failed claims without the duty moving. The
+// invariant is the RATIO, not any duration — a duty that cannot outlive three
+// of its own ticks moves on ordinary jitter, and one that outlives many is
+// time the fleet has no waiter after a holder dies.
+//
+// The floor is for the other end: this code is driven at a sub-second cadence
+// in tests, and three of those is a lease that lapses inside its own claim.
+const (
+	dutyTTLTicks = 3
+	dutyTTLFloor = 30 * time.Second
+)
 
 // waiterDutyTTL is how long the waiter duty survives without a re-claim.
 //
-// Three poll intervals, the same "do not flap on a blip" rule the scheduler
-// duty and the seat heartbeat follow: the holder re-claims every tick, so this
-// rides out two consecutive slow or failed claims without the duty moving. At
-// the default 15 s poll that is 45 s — under a minute of no polling if the
-// holder dies, which costs at most one late completion, and the next tick's
-// keepalive is well inside the box TTL.
-const waiterDutyTTL = 3 * sandbox.DefaultPollInterval
+// DERIVED FROM THE INTERVAL IT GUARDS, and capped by the lease bucket's own
+// age. It used to be `3 * sandbox.DefaultPollInterval` — a compile-time
+// constant that ignored the configured interval entirely, so its own comment
+// ("three poll intervals") was true of exactly one deployment. That constant
+// was 45 s, which is also precisely the default lease TTL, and the KV refuses
+// a lease STRICTLY longer than its bucket's age: the two agreed by one
+// comparison. An operator lowering coordination.lease_ttl_seconds below 45
+// therefore made every waiter duty claim fail — and mayTick fails closed, so
+// the waiter would never tick again. Every detached run would hang forever and
+// every box lose its keepalive, with one warning per tick as the only symptom.
+//
+// Capping rather than erroring, because a duty that is re-claimed every tick
+// loses nothing by expiring sooner: the holder renews long before either
+// deadline, and a shorter TTL only means a dead holder is replaced faster.
+func (e *Engine) waiterDutyTTL(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		interval = sandbox.DefaultPollInterval
+	}
+	ttl := max(dutyTTLTicks*interval, dutyTTLFloor)
+	if e.leaseTTL > 0 && ttl > e.leaseTTL {
+		return e.leaseTTL
+	}
+	return ttl
+}
 
 // prepareSeat is the node's SeatReady hook: recover this seat's in-flight runs
 // and start listening for their completions, BEFORE its mailbox opens.

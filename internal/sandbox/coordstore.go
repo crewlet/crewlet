@@ -75,31 +75,52 @@ func (s *CoordStore) clock() time.Time {
 // while a caller told "no answer" retries.
 const casRetries = 16
 
-// Create records a new run row.
-//
-// Idempotent on the turn id: the id is the kick-off turn's, so a second create
-// is a retried launch and the row already there is the correct one — possibly
-// with a box already attached.
-func (s *CoordStore) Create(ctx context.Context, run PendingRun) error {
+// BeginLaunch opens a launch on this turn's row. See the contract on
+// [PendingStore].
+func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fence) error {
 	if run.TurnID == "" {
 		return fmt.Errorf("sandbox: a pending run needs a turn id")
-	}
-	if run.Status == "" {
-		run.Status = StatusRunning
 	}
 	now := s.clock()
 	if run.CreatedAt.IsZero() {
 		run.CreatedAt = now
 	}
+	// Not the caller's to choose: a row exists to be launched into, and
+	// the only status that can mean is launching.
+	run.Status = StatusLaunching
 	run.UpdatedAt = now
 	raw, err := encodeRun(run)
 	if err != nil {
 		return err
 	}
-	if _, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw); err != nil {
+	created, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw)
+	if err != nil {
 		return fmt.Errorf("sandbox: create run %s: %w", run.TurnID, err)
 	}
-	return nil
+	if created {
+		return nil
+	}
+	// The row was already there — a second run_sandbox call in this turn,
+	// or a redelivered kick-off. Only the LAUNCH-SCOPED state is reset: the
+	// identity fields stay the existing row's, and so does the box
+	// reference, which the caller is about to reattach to.
+	_, _, err = s.mutate(ctx, run.TurnID, func(existing *PendingRun) bool {
+		if outranked(*existing, fence) {
+			return false
+		}
+		existing.Status = StatusLaunching
+		// The previous job's suspension is not this job's. Left in place
+		// it is worse than absent: a completion claimed before the new
+		// suspension lands would resume the conversation the LAST call
+		// suspended, splicing this run's findings into a loop that has
+		// already moved on.
+		existing.ExecuteState = nil
+		// And its question is answered, or was never asked — either way a
+		// reply arriving now belongs to the new job, not the old one.
+		existing.Question, existing.Audience = "", ""
+		return true
+	})
+	return err
 }
 
 // Get returns one run by turn id.
@@ -207,6 +228,13 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		run.CodingAgent = box.CodingAgent
 		run.SessionID = box.SessionID
 		run.PauseTTLSeconds = box.PauseTTLSec
+		// A box being attached is a box that is RUNNING, so the snapshot
+		// stamp goes with it. A reused box is attached while its row still
+		// carried the paused_at from the collect that snapshotted it, and
+		// paused_at is half of what the operator board draws a held box
+		// from — so a live second run rendered as a paused one, being
+		// billed for, for the rest of the turn.
+		run.PausedAt = time.Time{}
 		return true
 	})
 	return err
@@ -236,14 +264,18 @@ func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 	return err
 }
 
-// SaveExecuteState persists the suspended Execute loop a resume splices the
-// coding agent's answer back into.
-func (s *CoordStore) SaveExecuteState(ctx context.Context, turnID string, state map[string]any) error {
-	_, _, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+// MarkSuspended writes the suspended Execute loop and opens the run to the
+// completion poll. See the contract on [PendingStore].
+func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, state map[string]any) (bool, error) {
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.Status != StatusLaunching {
+			return false
+		}
 		run.ExecuteState = maps.Clone(state)
+		run.Status = StatusRunning
 		return true
 	})
-	return err
+	return won, err
 }
 
 // ListActive returns every run that has not finished.

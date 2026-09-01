@@ -17,7 +17,29 @@ import (
 // RECOVERY pass has to be able to act on, and a state nobody recovers from is
 // a state that leaks a box.
 const (
-	// StatusRunning — the job is executing and the seat is BUSY.
+	// StatusLaunching — the job has been started, but the turn has not yet
+	// written the conversation a resume re-enters. The seat is BUSY and a
+	// box exists; what does not exist yet is anything to resume INTO.
+	//
+	// This state is the launch's two halves made visible, and it exists
+	// because they are not one write. [Launch] starts a detached process
+	// and returns; the suspended Execute conversation is serialized onto
+	// the row only once the turn's frame unwinds, which is milliseconds
+	// later on an idle host and hundreds of milliseconds on a loaded one.
+	// A completion fired inside that window was claimed against a row with
+	// no ExecuteState, and the coordinator — finding nothing to resume —
+	// FAILED the run: a coding job that finished too fast destroyed the
+	// agent's whole turn, permanently, with no retry. The window is not
+	// theoretical, it is measured: a job that completes in ~100 ms against
+	// an unwind that takes longer is the ordinary case for a trivial run.
+	//
+	// So the row says "launching" until the conversation is on it, and it
+	// is [PendingStore.MarkSuspended] — one write, both facts — that makes
+	// the run pollable and claimable at the same instant.
+	StatusLaunching = "launching"
+
+	// StatusRunning — the job is executing, the suspended conversation is
+	// on the row, and the seat is BUSY.
 	StatusRunning = "running"
 
 	// StatusAwaiting — the agent asked a person and stopped. The seat is
@@ -41,7 +63,20 @@ const (
 //
 // Reseed belongs here, and that is the whole reason it is a state rather than
 // a flag: reaping the box does not end the run.
+//
+// LAUNCHING IS DELIBERATELY ABSENT. A claim is the promise that a resume can
+// follow it, and a launching row has no conversation to resume — claiming one
+// is exactly the mistake [StatusLaunching] exists to make impossible.
 var Claimable = []string{StatusRunning, StatusAwaiting, StatusReseed}
+
+// Holding are the statuses in which a run holds its seat, so the seat takes no
+// new turn while it is in one.
+//
+// Launching is here and awaiting is not, and both for the same reason: the
+// seat is held while the engine is driving the run, and freed while a person
+// is. A launching run is a fraction of a second of engine work; a parked one
+// can wait days for an answer that arrives on the seat's own inbox.
+var Holding = []string{StatusLaunching, StatusRunning, StatusResumed}
 
 // Awaiting are the statuses still waiting on a person's answer, matched back
 // by conversation.
@@ -53,7 +88,8 @@ var Awaiting = []string{StatusAwaiting, StatusReseed}
 // that leaks a box, so a typo has to be refused at the write instead of
 // becoming a row no recovery pass matches.
 var allStatuses = []string{
-	StatusRunning, StatusAwaiting, StatusResumed, StatusDone, StatusFailed, StatusReseed,
+	StatusLaunching, StatusRunning, StatusAwaiting, StatusResumed,
+	StatusDone, StatusFailed, StatusReseed,
 }
 
 // Active are the statuses that still own engine-side state — a seat, a box, or
@@ -62,7 +98,12 @@ var allStatuses = []string{
 // RESUMED IS HERE, which looks wrong and is not: boot recovery has to be able
 // to SEE a tail that died mid-flight with the previous engine. Nothing else
 // would ever look at that row again, and its paused box would leak for ever.
-var Active = []string{StatusRunning, StatusAwaiting, StatusReseed, StatusResumed}
+// LAUNCHING is here for the same reason and only that reason — it is never
+// polled, but a node that died mid-launch left a box behind, and a row nobody
+// lists is a box nobody reclaims.
+var Active = []string{
+	StatusLaunching, StatusRunning, StatusAwaiting, StatusReseed, StatusResumed,
+}
 
 // PendingRun is one detached job's durable state, keyed by its kick-off turn.
 //
@@ -124,9 +165,15 @@ type PendingRun struct {
 	// ExecuteState is the SUSPENDED Execute conversation: the serialized
 	// messages, including the assistant turn with the dangling tool call,
 	// plus the surface bookkeeping needed to re-enter the loop where it
-	// stopped. Empty only when a crash landed between launch and the
-	// suspend persist — the coordinator then fails the run rather than
-	// resuming into nothing.
+	// stopped.
+	//
+	// Empty for exactly as long as the run is [StatusLaunching], which is
+	// the state that says so: the launch starts the job, and the turn
+	// writes this when its frame unwinds. Nothing polls or claims a run in
+	// that window, so a claimed run always has one — and a claimed run
+	// WITHOUT one can now only mean the row was written by a build that
+	// predates the launching state, which the coordinator fails rather
+	// than resuming into nothing.
 	ExecuteState map[string]any `json:"execute_state"`
 
 	PauseTTLSeconds float64 `json:"pause_ttl_seconds"`
@@ -161,8 +208,19 @@ func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
 // properties (at-most-once claim, epoch fencing) are properties of the
 // STATEMENTS, which is what makes running both against one suite worth doing.
 type PendingStore interface {
-	// Create persists a new running row, idempotently on the turn id.
-	Create(ctx context.Context, run PendingRun) error
+	// BeginLaunch opens a launch on this turn's row: it creates the row
+	// when there is none, and RESETS an existing one to launching —
+	// clearing the previous job's suspended conversation and the question
+	// it was parked on, while keeping the row's identity and its box.
+	//
+	// CREATE-OR-RESET rather than create-if-absent, because the SECOND
+	// run_sandbox call in one turn presents the same turn id as the first
+	// and is a different job. Left alone, the row kept the first
+	// suspension's conversation and whatever status the tail had reached —
+	// so a resume that relaunched read back as `resumed`, the settle path
+	// could not tell it from a finished turn, and it tore down the box the
+	// new job was running in.
+	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) error
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
 
@@ -211,8 +269,23 @@ type PendingStore interface {
 	MarkBoxPaused(ctx context.Context, turnID string, at time.Time) error
 	ReleaseBox(ctx context.Context, turnID string) error
 
-	// SaveExecuteState persists the suspended conversation.
-	SaveExecuteState(ctx context.Context, turnID string, state map[string]any) error
+	// MarkSuspended writes the suspended conversation AND flips launching to
+	// running, in one compare-and-swap.
+	//
+	// ONE WRITE, because it is one fact: the run becomes resumable and
+	// becomes pollable at the same instant. Two writes leave a state a
+	// reader can see — a `running` row with no conversation — and the
+	// reader is the completion poll, which fires on it. See
+	// [StatusLaunching] for what that cost.
+	//
+	// Reports whether the flip happened. FALSE IS NOT AN ERROR and is not a
+	// lost race either — it is a run that is no longer launching, which is
+	// left alone rather than overwritten: re-arming a row whose tail has
+	// already been claimed would hand a redelivered completion a second
+	// resume of a turn that is over. The caller has a suspended
+	// conversation with nowhere to put it, so the run cannot be resumed and
+	// must be failed rather than left holding a box.
+	MarkSuspended(ctx context.Context, turnID string, state map[string]any) (bool, error)
 
 	// ListActive returns every run that still owns engine-side state.
 	ListActive(ctx context.Context) ([]PendingRun, error)

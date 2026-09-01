@@ -165,6 +165,17 @@ type RoleSandbox struct {
 	// exists to prevent.
 	PauseTTLSeconds *float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty" desc:"Paused-box TTL. Unset (or negative) = provider default; 0 = never pause."`
 
+	// MaxTurns caps how many agentic rounds this seat's coding runs may
+	// take. UNSET inherits providers.sandbox.default_max_turns; an explicit
+	// 0 means uncapped, which is how a seat opts OUT of a company-wide cap.
+	//
+	// A POINTER, for the same reason pause_ttl_seconds is one: those are
+	// three states and an int has two. Without it, the one seat whose work
+	// legitimately runs long — a migration, a large refactor — could not
+	// escape a cap set for everybody else, because its "no cap" and its
+	// "say nothing" would be the same zero.
+	MaxTurns *int `yaml:"max_turns,omitempty" json:"max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for this seat's coding runs. Unset = provider default; 0 = uncapped."`
+
 	// MCP scopes which of the seat's MCP servers the coding agent gets.
 	//
 	// Scoping is at the SERVER level only, and that is a platform fact
@@ -196,6 +207,11 @@ func (s *RoleSandbox) validate(path string) error {
 	if s.CodingAgent != "" && !oneOf(s.CodingAgent, CodingAgents) {
 		p.add(at(path, "coding_agent"), ErrUnknownValue, "%q (want %s)",
 			s.CodingAgent, names(CodingAgents))
+	}
+	if s.MaxTurns != nil && *s.MaxTurns < 0 {
+		p.add(at(path, "max_turns"), ErrOutOfRange,
+			"%d (a round cap cannot be negative; omit the field to inherit "+
+				"the provider default, or set 0 for uncapped)", *s.MaxTurns)
 	}
 	if !s.Enabled {
 		// A gate that is off with provisioning under it is an operator who

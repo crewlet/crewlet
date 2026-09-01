@@ -23,26 +23,57 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// logs keeps only what a test could assert on.
+// logs indexes what a test can assert on, and passes on what a PERSON needs.
 //
-// Retaining every line of ~40 company boots would be a large buffer for no
-// reason, so this keeps the lines that carry a trace id and discards the rest.
-// That is also the only thing any test here looks for.
-var logs = &traceRecorder{}
+// TWO JOBS, and conflating them cost a real CI investigation. Retaining every
+// line of ~40 company boots would be a large buffer for no reason, so only the
+// lines carrying a trace id are kept for [traceRecorder.linesFor] — but this
+// is the engine's ONLY log destination for the whole package, so discarding
+// the rest discarded the engine's own account of every failure. A run of this
+// suite failed in CI with nothing but "timed out waiting for the suspended
+// turn to be resumed"; `sandbox_resume_no_execute_state`, which named the
+// cause on the line above it, went nowhere, and `-v` on the gates job bought
+// nothing at all.
+//
+// So the buffer stays bounded and trace-scoped, and anything at WARN or above
+// is written through to stderr, where `go test` attributes it to the failing
+// test. A failure always logs at that level; the debug chatter of forty boots
+// still does not.
+var logs = &traceRecorder{through: os.Stderr}
 
 type traceRecorder struct {
+	// through receives the lines a person reads. Never the buffer's job:
+	// the buffer answers assertions, this answers "why did it fail".
+	through io.Writer
+
 	mu    sync.Mutex
 	lines []string
 }
 
+// loud reports whether a line is one a reader of a failing run needs.
+//
+// Matched on the rendered JSON rather than a slog level hook, because this is
+// an io.Writer: by the time a line arrives its level is a field like any
+// other. The two names are what logging.FormatJSON emits for slog's WARN and
+// ERROR.
+func loud(line string) bool {
+	return strings.Contains(line, `"level":"WARN"`) ||
+		strings.Contains(line, `"level":"ERROR"`)
+}
+
 func (r *traceRecorder) Write(p []byte) (int, error) {
-	if idx := strings.Index(string(p), `"trace_id":"`); idx >= 0 {
+	line := string(p)
+	if strings.Contains(line, `"trace_id":"`) {
 		r.mu.Lock()
 		// Bounded, so a pathological run cannot grow without limit.
 		if len(r.lines) < 4096 {
-			r.lines = append(r.lines, string(p))
+			r.lines = append(r.lines, line)
 		}
 		r.mu.Unlock()
+	}
+	if r.through != nil && loud(line) {
+		// Best effort: a test's diagnostics must never fail the test.
+		_, _ = r.through.Write(p)
 	}
 	return len(p), nil
 }

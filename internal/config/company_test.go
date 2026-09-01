@@ -122,6 +122,11 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"providers.sandbox.default_pause_ttl_seconds", ErrOutOfRange,
 		},
 		{
+			"a negative company-wide round cap",
+			"name: Acme\nproviders:\n  sandbox:\n    type: fake\n    default_max_turns: -5\n",
+			"providers.sandbox.default_max_turns", ErrOutOfRange,
+		},
+		{
 			"a setup step that does nothing",
 			"name: Acme\nproviders:\n  sandbox:\n    type: fake\n    setup:\n      - name: empty\n",
 			"providers.sandbox.setup[0]", ErrMissing,

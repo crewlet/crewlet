@@ -58,6 +58,12 @@ type ManagerOptions struct {
 	// pass a negative value to disable pausing engine-wide.
 	DefaultPauseTTL time.Duration
 
+	// DefaultMaxTurns caps the agentic rounds of a coding run on a seat
+	// that names none. Zero is uncapped, which is the default: the right
+	// number depends on the work a company gives its agents, and one that
+	// is too low truncates a real task mid-flight.
+	DefaultMaxTurns int
+
 	// DefaultSetup are the engine-wide steps (providers.sandbox.setup)
 	// applied to every box before a role's own extras. The engine ships
 	// none of its own, so these two config lists are the ONLY provisioning
@@ -86,6 +92,7 @@ type Manager struct {
 	template    string
 	timeout     time.Duration
 	pauseTTL    time.Duration
+	maxTurns    int
 	setup       []SetupStep
 	telemetry   *OtelReceiver
 }
@@ -105,6 +112,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		template:    opts.DefaultTemplate,
 		timeout:     opts.DefaultTimeout,
 		pauseTTL:    opts.DefaultPauseTTL,
+		maxTurns:    max(opts.DefaultMaxTurns, 0),
 		setup:       slices.Clone(opts.DefaultSetup),
 		telemetry:   opts.Telemetry,
 	}
@@ -156,10 +164,17 @@ func (m *Manager) RunnerFor(codingAgent string) (Runner, error) {
 // an explicit zero means "never pause, always re-seed from git" — two
 // genuinely different instructions that a single zero value cannot carry.
 type SpecInput struct {
-	CodingAgent     string
-	Template        string
-	Timeout         time.Duration
-	PauseTTL        *time.Duration
+	CodingAgent string
+	Template    string
+	Timeout     time.Duration
+	PauseTTL    *time.Duration
+
+	// MaxTurns is the seat's round cap. Nil inherits the provider default;
+	// an explicit 0 is uncapped, which is how a seat escapes a company-wide
+	// cap — the same three states, and the same reason for a pointer, as
+	// PauseTTL above.
+	MaxTurns *int
+
 	Env             map[string]string
 	CredentialFiles map[string]string
 }
@@ -171,6 +186,7 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 		Template:        in.Template,
 		TimeoutSec:      m.timeout.Seconds(),
 		PauseTTLSec:     m.pauseTTL.Seconds(),
+		MaxTurns:        m.maxTurns,
 		Env:             maps.Clone(in.Env),
 		CredentialFiles: maps.Clone(in.CredentialFiles),
 	}
@@ -185,6 +201,12 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 	}
 	if in.PauseTTL != nil {
 		spec.PauseTTLSec = in.PauseTTL.Seconds()
+	}
+	if in.MaxTurns != nil {
+		spec.MaxTurns = *in.MaxTurns
+	}
+	if spec.MaxTurns < 0 {
+		spec.MaxTurns = 0
 	}
 	if spec.PauseTTLSec < 0 {
 		spec.PauseTTLSec = 0

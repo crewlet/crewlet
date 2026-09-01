@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // The knob has three states and the manager's input carries a pointer for
@@ -310,5 +312,69 @@ func TestEveryConfiguredSandboxTypeCanBeBuilt(t *testing.T) {
 			t.Errorf("providers.sandbox.type %q built no provider and no error, "+
 				"so a sandbox-enabled seat plans around a box it never gets", kind)
 		}
+	}
+}
+
+// A suspension with nowhere to go leaves a job running in a box nobody is
+// coming back for. Whichever of the three ways it happens — the runner never
+// recorded the conversation, it would not serialize, or the row was no longer
+// launching — the run has to be marked unresumable while the seat's owner is
+// still this process, so recovery reaps the box instead of stranding it.
+func TestAnUnrecordableSuspensionFailsTheRun(t *testing.T) {
+	store := sandbox.NewCoordStore(memory.NewFleet())
+	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", Role: "SWE",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	e := &Engine{sandboxPending: store}
+
+	e.failSuspension(t.Context(), "t1", "sandbox_suspension_missing",
+		"the turn suspended but recorded no conversation", nil)
+
+	got, found, err := store.Get(t.Context(), "t1")
+	if err != nil || !found {
+		t.Fatalf("Get = %v, %v", found, err)
+	}
+	if got.Status != sandbox.StatusFailed {
+		t.Fatalf("status = %q, want %q — a launching row holds a box nothing polls",
+			got.Status, sandbox.StatusFailed)
+	}
+}
+
+// The waiter duty must survive three of its OWN ticks and must never outlive
+// the lease bucket it is written into.
+//
+// It was `3 * sandbox.DefaultPollInterval` — a constant that ignored the
+// configured interval, so its own "three poll intervals" was true of exactly
+// one deployment. That constant was 45s, which is also the default lease TTL,
+// and the KV refuses a lease STRICTLY longer than its bucket's age: the two
+// agreed by one comparison. Lower coordination.lease_ttl_seconds below 45 and
+// every claim errors — and mayTick fails closed, so the waiter stops ticking
+// altogether and every detached run hangs forever.
+func TestTheWaiterDutyTTLFollowsItsCadenceAndItsBucket(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		interval time.Duration
+		lease    time.Duration
+		want     time.Duration
+	}{
+		{"the default cadence", sandbox.DefaultPollInterval, 45 * time.Second, 45 * time.Second},
+		{"a slower cadence scales with it", 60 * time.Second, 10 * time.Minute, 3 * time.Minute},
+		{"a fast cadence takes the floor", 100 * time.Millisecond, 45 * time.Second, 30 * time.Second},
+		{"an unset cadence takes the default", 0, 45 * time.Second, 45 * time.Second},
+		{"a short bucket is the ceiling", sandbox.DefaultPollInterval, 20 * time.Second, 20 * time.Second},
+		{"no bucket leaves the derived value", 60 * time.Second, 0, 3 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Engine{leaseTTL: tc.lease}
+			if got := e.waiterDutyTTL(tc.interval); got != tc.want {
+				t.Fatalf("waiterDutyTTL(%s) with a %s bucket = %s, want %s",
+					tc.interval, tc.lease, got, tc.want)
+			}
+			if tc.lease > 0 && e.waiterDutyTTL(tc.interval) > tc.lease {
+				t.Fatal("the duty asks to outlive its bucket; the KV refuses that on every claim")
+			}
+		})
 	}
 }

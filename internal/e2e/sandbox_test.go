@@ -72,9 +72,14 @@ roles:
     llm: scripted
     sandbox:
       enabled: true
+      # The seat's own round cap. Nothing about the stand-in agent honours
+      # it — what is under test is that a number written HERE reaches the
+      # coding CLI's argv, which is the whole of "wired".
+      max_turns: 7
       env:
         FAKE_AGENT_MODE: "${FAKE_AGENT_MODE}"
         FAKE_AGENT_PATH: "${FAKE_AGENT_PATH}"
+        FAKE_AGENT_ARGV: "${FAKE_AGENT_ARGV}"
   - name: Founder
     kind: human
     contact:
@@ -90,6 +95,17 @@ type codingNode struct {
 	*node
 	stateDir string
 	binDir   string
+	argvPath string
+}
+
+// agentArgv is what the stand-in coding CLI was actually invoked with.
+func (n *codingNode) agentArgv(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(n.argvPath)
+	if err != nil {
+		t.Fatalf("the coding agent recorded no invocation: %v", err)
+	}
+	return strings.Split(strings.TrimSpace(string(raw)), "\n")
 }
 
 // startCoding stands up a node with a local sandbox and a fake coding CLI.
@@ -106,11 +122,15 @@ func startCoding(t *testing.T, mode string) *codingNode {
 	// proof that ${VAR} references in that block resolve.
 	t.Setenv("FAKE_AGENT_MODE", mode)
 	t.Setenv("FAKE_AGENT_PATH", filepath.Join(binDir, "claude"))
+	// Outside the box directory, so it survives the teardown that ends the
+	// turn under test.
+	argv := filepath.Join(stateDir, "argv.txt")
+	t.Setenv("FAKE_AGENT_ARGV", argv)
 
 	model := newSandboxModel(t)
 	doc := fmt.Sprintf(sandboxCompanyDoc, model.url, stateDir)
 	n := bootCompany(t, doc, model)
-	return &codingNode{node: n, stateDir: stateDir, binDir: binDir}
+	return &codingNode{node: n, stateDir: stateDir, binDir: binDir, argvPath: argv}
 }
 
 // installFakeAgent writes a `claude` that behaves like a headless coding CLI.
@@ -125,6 +145,11 @@ func installFakeAgent(t *testing.T) string {
 # A stand-in for a headless coding CLI. Everything it touches — the findings
 # file, the ask shim, the JSON envelope — is the real protocol.
 work="$HOME/.crewlet"
+# The invocation, recorded OUTSIDE the box: the box is torn down when the
+# turn finishes, and the argv is what a test asserts about afterwards.
+if [ -n "${FAKE_AGENT_ARGV:-}" ]; then
+  for arg in "$@"; do printf '%s\n' "$arg"; done > "$FAKE_AGENT_ARGV"
+fi
 case "${FAKE_AGENT_MODE:-succeed}" in
   succeed)
     sleep 0.1
@@ -304,7 +329,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// sandbox's result is in it.
 	waitFor(t, "the suspended turn to be resumed", func() bool {
 		return slices.Contains(n.model.seen(), "resumed")
-	})
+	}, n.diagnose)
 	waitFor(t, "the run to settle", func() bool {
 		return len(n.activeRuns(t)) == 0
 	})
@@ -325,6 +350,19 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// so the phase was done with it.
 	if boxes := n.liveBoxes(t); len(boxes) != 0 {
 		t.Fatalf("%d box directories survived the turn: %v", len(boxes), boxes)
+	}
+	// THE SEAT'S ROUND CAP REACHED THE CODING AGENT'S ARGV. This is the
+	// whole of "wired": role.sandbox.max_turns, through the config, the
+	// spec overlay, the launch and the runner, to the flag the CLI reads.
+	// The field existed and rendered long before anything filled it in, so
+	// only an end-to-end assertion tells a wired knob from a decorative one.
+	argv := n.agentArgv(t)
+	i := slices.Index(argv, "--max-turns")
+	if i < 0 || i == len(argv)-1 {
+		t.Fatalf("the coding agent was invoked uncapped: %v", argv)
+	}
+	if argv[i+1] != "7" {
+		t.Fatalf("--max-turns %s, want the seat's own 7", argv[i+1])
 	}
 }
 
@@ -389,6 +427,63 @@ func (n *codingNode) runFor(t *testing.T, status string) sandbox.PendingRun {
 	}
 	t.Fatalf("no run in %q", status)
 	return sandbox.PendingRun{}
+}
+
+// diagnose renders everything a stalled coding turn is stuck on.
+//
+// Every field here is one somebody reading a CI log had to guess at: which
+// state the run reached (a launching run has not suspended yet; a failed one
+// was settled by a tail that could not resume it), whether its conversation
+// was ever written, whether its box still exists, and how far the model got.
+// It reads the DURABLE record rather than the projection, so it answers after
+// the run has been settled just as well as while it is live.
+func (n *codingNode) diagnose() string {
+	// EVERY ROW, not ListActive. That read is the operator board's and
+	// excludes `failed` and `done` by construction — which is precisely the
+	// row a destroyed turn leaves behind, so a diagnostic built on it prints
+	// "0 active run(s)" for the most likely stall and stops. The raw fleet
+	// records are decoded here rather than widening the store's contract
+	// with a list-everything a test is the only caller of.
+	records, err := n.engine.Backends().Fleet.SandboxRuns(context.Background())
+	if err != nil {
+		return fmt.Sprintf("the run records could not be read: %v", err)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "phases seen = %v; boxes on disk = %v; %d run record(s)",
+		n.model.seen(), n.liveBoxesQuietly(), len(records))
+	for _, record := range records {
+		var run struct {
+			Status       string         `json:"status"`
+			SandboxID    string         `json:"sandbox_id"`
+			CommandID    string         `json:"command_id"`
+			Question     string         `json:"question"`
+			PausedAt     time.Time      `json:"paused_at"`
+			ExecuteState map[string]any `json:"execute_state"`
+		}
+		if err := json.Unmarshal(record.Value, &run); err != nil {
+			fmt.Fprintf(&b, "\n  turn=%s <undecodable: %v>", record.Key, err)
+			continue
+		}
+		fmt.Fprintf(&b, "\n  turn=%s status=%s sandbox=%q command=%q "+
+			"execute_state_keys=%d question=%q paused_at=%s",
+			record.Key, run.Status, run.SandboxID, run.CommandID,
+			len(run.ExecuteState), run.Question, run.PausedAt)
+	}
+	return b.String()
+}
+
+// liveBoxesQuietly is [codingNode.liveBoxes] for a diagnostic, which must
+// report what it finds rather than fail the test it is explaining.
+func (n *codingNode) liveBoxesQuietly() []string {
+	entries, err := os.ReadDir(filepath.Join(n.stateDir, "boxes"))
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Name())
+	}
+	return out
 }
 
 // liveBoxes is what the local backend still has on disk.

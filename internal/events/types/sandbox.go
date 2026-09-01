@@ -10,6 +10,7 @@ func init() {
 	events.Register[SandboxRunStarted]()
 	events.Register[SandboxRunCompleted]()
 	events.Register[SandboxClarificationRequested]()
+	events.Register[SandboxRunFailed]()
 }
 
 // SandboxRunStarted marks a detached coding job being kicked off, after the
@@ -123,4 +124,70 @@ func (e SandboxClarificationRequested) SummaryFor(actor string) string {
 		audience = "someone"
 	}
 	return lead(actor, "asked "+audience+" a question")
+}
+
+// SandboxRunFailed records a detached coding run being settled without its
+// turn ever resuming.
+//
+// THE SILENT ENDING, given a voice. `settleFailed` marks the row, kills the
+// box and frees the seat — and published nothing, so a turn that had been
+// destroyed presented to the seat, the dashboard and the requester as an
+// identical silence. Three distinct conditions funnel into it, and the first
+// symptom of any of them was a wait that never ended: the run vanished from
+// the active board and the completion event that would have explained it had
+// already been acked. A failure has to be at least as loud as the question
+// [SandboxClarificationRequested] already announces.
+//
+// Reason is a closed set — see the SandboxFailure constants — because it is
+// the one field a reader acts on differently.
+type SandboxRunFailed struct {
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
+	SandboxID   string `json:"sandbox_id"`
+	CodingAgent string `json:"coding_agent"`
+	Reason      string `json:"reason"`
+	// Detail is a human sentence naming what to do about it, never a stack
+	// or a raw provider error: it reaches an operator's board.
+	Detail string `json:"detail"`
+}
+
+// The reasons a detached run is settled without resuming its turn.
+//
+// A NAMED SET, because the three are not variations of one failure: an
+// unreachable box is infrastructure, a missing conversation is a bug in this
+// engine, and an abandoned tail is a node that died. An operator seeing them
+// merged into "the sandbox failed" would chase the wrong one.
+const (
+	// SandboxFailureCollect — the job finished but its box could not be
+	// read back, so there is no result to splice in.
+	SandboxFailureCollect = "collect_unreachable"
+
+	// SandboxFailureNoConversation — the row carried no suspended Execute
+	// conversation, so there is nothing to resume into.
+	SandboxFailureNoConversation = "no_execute_state"
+
+	// SandboxFailureAbandoned — a tail the previous owner of this seat left
+	// mid-flight, found by the recovery pass. Nothing will ever pick it up.
+	SandboxFailureAbandoned = "abandoned_tail"
+)
+
+// EventType is the "sandbox_run_failed" wire type.
+func (SandboxRunFailed) EventType() string { return "sandbox_run_failed" }
+
+// Role is the seat whose turn was lost.
+func (e SandboxRunFailed) Role() string { return e.RoleName }
+
+// AgentID is the instance whose run failed.
+func (e SandboxRunFailed) AgentID() string { return e.Agent }
+
+// SummaryFor names the reason, because the whole point of this event is that
+// the three are told apart.
+func (e SandboxRunFailed) SummaryFor(actor string) string {
+	reason := e.Reason
+	if reason == "" {
+		reason = "an unrecorded reason"
+	}
+	return lead(actor, "lost a sandbox run to "+reason)
 }

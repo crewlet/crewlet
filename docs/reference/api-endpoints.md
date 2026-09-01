@@ -862,8 +862,13 @@ failing.
 ### `GET /sandbox-runs`
 
 Every detached [coding run](../concepts/code-sandbox.md) the engine still
-holds, oldest first — `running`, `awaiting_clarification`, `reseed`, and
-`resumed` run records.
+holds, oldest first — `launching`, `running`, `awaiting_clarification`,
+`reseed`, and `resumed` run records.
+
+A `launching` run is one whose coding job has started while the turn that
+started it is still unwinding, so the suspended conversation a resume
+re-enters is not on the row yet; it is listed but never polled, because a
+row nobody lists is a box nobody reclaims.
 
 Read from the durable row rather than from the live projection, which is
 the wrong source for this question twice over: it is in-memory, so it

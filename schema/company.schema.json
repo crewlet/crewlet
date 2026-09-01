@@ -1333,6 +1333,11 @@
           "description": "Env for this seat's sandbox run; declare external tokens here.",
           "type": "object"
         },
+        "max_turns": {
+          "description": "Agentic-round cap for this seat's coding runs. Unset = provider default; 0 = uncapped.",
+          "minimum": 0,
+          "type": "integer"
+        },
         "mcp": {
           "$ref": "#/$defs/RoleSandboxMCP"
         },
@@ -1395,6 +1400,11 @@
             "opencode"
           ],
           "type": "string"
+        },
+        "default_max_turns": {
+          "description": "Agentic-round cap for coding runs on seats that name none. 0 = uncapped.",
+          "minimum": 0,
+          "type": "integer"
         },
         "default_pause_ttl_seconds": {
           "description": "Paused-box TTL before reap and re-seed. 0 = never pause.",

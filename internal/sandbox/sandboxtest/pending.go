@@ -27,8 +27,14 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		name string
 		fn   func(*testing.T, sandbox.PendingStore)
 	}{
-		{"CreateIsIdempotent", testCreateIsIdempotent},
-		{"CreateNeedsATurnID", testCreateNeedsATurnID},
+		{"ASecondLaunchKeepsTheBoxItWillReattachTo", testASecondLaunchKeepsTheBoxItWillReattachTo},
+		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
+		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
+		{"ALaunchingRunIsNotClaimable", testALaunchingRunIsNotClaimable},
+		{"SuspendingOpensTheRunToTheTail", testSuspendingOpensTheRunToTheTail},
+		{"OnlyALaunchingRunCanSuspend", testOnlyALaunchingRunCanSuspend},
+		{"AttachingABoxClearsTheSnapshotStamp", testAttachingABoxClearsTheSnapshotStamp},
+		{"ALaunchingRunIsActive", testALaunchingRunIsActive},
 		{"TheTailIsClaimedExactlyOnce", testTheTailIsClaimedExactlyOnce},
 		{"AClaimIsExclusiveUnderContention", testAClaimIsExclusiveUnderContention},
 		{"AClaimReportsWhereItCameFrom", testAClaimReportsWhereItCameFrom},
@@ -66,10 +72,43 @@ func run(turnID string) sandbox.PendingRun {
 	}
 }
 
-func mustCreate(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) {
+// mustBeginLaunch opens a launch and leaves the run where a launch leaves it:
+// [sandbox.StatusLaunching], its job started and its conversation not yet
+// written.
+func mustBeginLaunch(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) {
 	t.Helper()
-	if err := s.Create(context.Background(), r); err != nil {
-		t.Fatalf("create %s: %v", r.TurnID, err)
+	if err := s.BeginLaunch(context.Background(), r, sandbox.Fence{}); err != nil {
+		t.Fatalf("begin launch %s: %v", r.TurnID, err)
+	}
+}
+
+// mustLaunched carries a run all the way through its launch: the row, then the
+// suspension that opens it to the completion poll.
+//
+// BOTH HALVES, because a run that has only had the first is not one any tail
+// acts on — the poll skips it and a claim refuses it — so a case that reached
+// for the store's `create` alone would be asserting about a state the rest of
+// the engine deliberately ignores.
+func mustLaunched(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) {
+	t.Helper()
+	mustBeginLaunch(t, s, r)
+	suspended, err := s.MarkSuspended(context.Background(), r.TurnID, suspension())
+	if err != nil {
+		t.Fatalf("mark suspended %s: %v", r.TurnID, err)
+	}
+	if !suspended {
+		t.Fatalf("mark suspended %s: the launch did not open to the poll", r.TurnID)
+	}
+}
+
+// suspension is a stand-in for the serialized Execute conversation.
+func suspension() map[string]any {
+	return map[string]any{
+		"messages":             []any{map[string]any{"role": "assistant", "content": "working"}},
+		"pending_tool_call_id": "call_1",
+		"pending_tool_name":    "run_sandbox",
+		"active_tool_names":    []any{"run_sandbox", "activate_tool"},
+		"iteration":            float64(2),
 	}
 }
 
@@ -85,29 +124,129 @@ func mustGet(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.Pendin
 	return got
 }
 
-func testCreateIsIdempotent(t *testing.T, s sandbox.PendingStore) {
-	// A kick-off turn redelivered after its ack was lost presents the same
-	// turn id. Raising would turn a recoverable redelivery into a failed
-	// turn, while the row already there is the correct one — possibly with
-	// a box attached that the second create would erase.
-	mustCreate(t, s, run("t1"))
+func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.PendingStore) {
+	// A second run_sandbox call in one turn presents the same turn id, and
+	// the box on that row is the paused checkout it is about to reattach
+	// to. A launch that erased it would re-clone the work instead.
+	mustLaunched(t, s, run("t1"))
 	if err := s.AttachSandbox(context.Background(), "t1",
 		sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1"}, sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-	mustCreate(t, s, run("t1"))
+	mustBeginLaunch(t, s, run("t1"))
 
 	if got := mustGet(t, s, "t1"); got.SandboxID != "box-9" {
-		t.Errorf("a repeat create erased the attached box: %+v", got)
+		t.Errorf("a second launch erased the attached box: %+v", got)
 	}
 }
 
-func testCreateNeedsATurnID(t *testing.T, s sandbox.PendingStore) {
+func testASecondLaunchDropsTheFirstSuspension(t *testing.T, s sandbox.PendingStore) {
+	// THE RELAUNCH RESET. The previous call's suspended conversation is not
+	// this job's, and leaving it in place is worse than absent: a
+	// completion claimed before the new suspension lands would splice this
+	// run's findings into the loop the LAST call suspended, which has
+	// already moved on. The status is what says so — back to launching, so
+	// the poll leaves it alone until the new conversation is written.
+	mustLaunched(t, s, run("t1"))
+	mustBeginLaunch(t, s, run("t1"))
+
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusLaunching {
+		t.Errorf("status = %q, want %q", got.Status, sandbox.StatusLaunching)
+	}
+	if len(got.ExecuteState) != 0 {
+		t.Errorf("the first call's suspension survived the relaunch: %+v", got.ExecuteState)
+	}
+}
+
+func testALaunchNeedsATurnID(t *testing.T, s sandbox.PendingStore) {
 	// The turn id is the identity. A row without one collides with every
 	// other row that forgot the same field, and nothing could ever find it.
-	r := run("")
-	if err := s.Create(context.Background(), r); err == nil {
+	if err := s.BeginLaunch(context.Background(), run(""), sandbox.Fence{}); err == nil {
 		t.Error("a run with no turn id was persisted")
+	}
+}
+
+func testALaunchingRunIsNotClaimable(t *testing.T, s sandbox.PendingStore) {
+	// THE WINDOW THIS STATE EXISTS TO CLOSE. The job is started and can
+	// finish at any moment, but the turn has not yet written the
+	// conversation a resume re-enters. A completion claimed here would find
+	// nothing to resume into and fail the whole turn.
+	mustBeginLaunch(t, s, run("t1"))
+
+	if _, won, err := s.ClaimForResume(context.Background(), "t1"); err != nil || won {
+		t.Fatalf("a launching run was claimed: won=%v err=%v", won, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusLaunching {
+		t.Errorf("a refused claim moved the row to %q", got.Status)
+	}
+}
+
+func testSuspendingOpensTheRunToTheTail(t *testing.T, s sandbox.PendingStore) {
+	// One write, both facts: the conversation lands and the run becomes
+	// pollable at the same instant. Two writes would leave a running row
+	// with nothing to resume into, which is the state the poll fires on.
+	mustBeginLaunch(t, s, run("t1"))
+	suspended, err := s.MarkSuspended(context.Background(), "t1", suspension())
+	if err != nil || !suspended {
+		t.Fatalf("mark suspended: suspended=%v err=%v", suspended, err)
+	}
+
+	got := mustGet(t, s, "t1")
+	if got.Status != sandbox.StatusRunning {
+		t.Errorf("status = %q, want %q", got.Status, sandbox.StatusRunning)
+	}
+	if len(got.ExecuteState) == 0 {
+		t.Error("the run opened to the poll with no conversation on it")
+	}
+	if _, won, err := s.ClaimForResume(context.Background(), "t1"); err != nil || !won {
+		t.Errorf("a suspended run was not claimable: won=%v err=%v", won, err)
+	}
+}
+
+func testOnlyALaunchingRunCanSuspend(t *testing.T, s sandbox.PendingStore) {
+	// A run whose tail has already been claimed has nowhere to put a
+	// suspension, and re-arming it would hand a redelivered completion a
+	// second resume of a turn that is over. Reported rather than written,
+	// so the caller fails the run instead of stranding it.
+	mustLaunched(t, s, run("t1"))
+	if _, won, err := s.ClaimForResume(context.Background(), "t1"); err != nil || !won {
+		t.Fatalf("claim: won=%v err=%v", won, err)
+	}
+
+	suspended, err := s.MarkSuspended(context.Background(), "t1", suspension())
+	if err != nil {
+		t.Fatalf("mark suspended: %v", err)
+	}
+	if suspended {
+		t.Error("a claimed run was re-armed by a late suspension")
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed {
+		t.Errorf("status = %q, want the claim to stand", got.Status)
+	}
+}
+
+func testAttachingABoxClearsTheSnapshotStamp(t *testing.T, s sandbox.PendingStore) {
+	// paused_at is half of what an operator board draws a HELD box from, so
+	// it has to move with the box. A reused box is attached while the row
+	// still carries the stamp from the collect that snapshotted it — and a
+	// live second run then rendered as a paused one, billing, for the rest
+	// of the turn.
+	mustLaunched(t, s, run("t1"))
+	if err := s.AttachSandbox(context.Background(), "t1",
+		sandbox.BoxRef{SandboxID: "box-1", CommandID: "c-1"}, sandbox.Fence{}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if err := s.MarkBoxPaused(context.Background(), "t1", base); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	if err := s.AttachSandbox(context.Background(), "t1",
+		sandbox.BoxRef{SandboxID: "box-1", CommandID: "c-2"}, sandbox.Fence{}); err != nil {
+		t.Fatalf("reattach: %v", err)
+	}
+
+	if got := mustGet(t, s, "t1"); got.Paused() {
+		t.Errorf("a reattached box still reads as a held snapshot: paused_at=%s", got.PausedAt)
 	}
 }
 
@@ -115,7 +254,7 @@ func testTheTailIsClaimedExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 	// THE AT-MOST-ONCE GATE. Two nodes both splicing a result into one
 	// suspended loop produce two turns from one job — which the seat sees
 	// as its own work arriving twice.
-	mustCreate(t, s, run("t1"))
+	mustLaunched(t, s, run("t1"))
 	if _, won, err := s.ClaimForResume(context.Background(), "t1"); err != nil || !won {
 		t.Fatalf("first claim: won=%v err=%v", won, err)
 	}
@@ -127,7 +266,7 @@ func testTheTailIsClaimedExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 func testAClaimIsExclusiveUnderContention(t *testing.T, s sandbox.PendingStore) {
 	// The property a fake cannot have. Ten goroutines racing one tail:
 	// exactly one may win.
-	mustCreate(t, s, run("t1"))
+	mustLaunched(t, s, run("t1"))
 	var (
 		wg   sync.WaitGroup
 		mu   sync.Mutex
@@ -155,7 +294,7 @@ func testAClaimReportsWhereItCameFrom(t *testing.T, s sandbox.PendingStore) {
 	// NAK'd trigger can re-claim on redelivery. Inferring it afterwards is
 	// unsound: a reused run keeps its old question, so "has a question"
 	// does not mean "was parked".
-	mustCreate(t, s, run("t1"))
+	mustLaunched(t, s, run("t1"))
 	if err := s.MarkAwaiting(context.Background(), "t1",
 		sandbox.Clarification{Question: "which branch?", Audience: "requester"}); err != nil {
 		t.Fatalf("park: %v", err)
@@ -176,7 +315,7 @@ func testAReseedIsStillClaimable(t *testing.T, s sandbox.PendingStore) {
 	// Reaping the box does NOT end the run — the answer can still arrive,
 	// and the work re-seeds from the pushed branch. That is the whole
 	// reason reseed is a state rather than a deletion.
-	mustCreate(t, s, run("t1"))
+	mustLaunched(t, s, run("t1"))
 	if err := s.SetStatus(context.Background(), "t1", sandbox.StatusReseed, sandbox.Fence{}); err != nil {
 		t.Fatalf("set reseed: %v", err)
 	}
@@ -187,7 +326,7 @@ func testAReseedIsStillClaimable(t *testing.T, s sandbox.PendingStore) {
 
 func testATerminalRunIsNotClaimable(t *testing.T, s sandbox.PendingStore) {
 	for _, status := range []string{sandbox.StatusDone, sandbox.StatusFailed} {
-		mustCreate(t, s, run(status))
+		mustLaunched(t, s, run(status))
 		if err := s.SetStatus(context.Background(), status, status, sandbox.Fence{}); err != nil {
 			t.Fatalf("set %s: %v", status, err)
 		}
@@ -201,7 +340,7 @@ func testParkingCarriesTheBranch(t *testing.T, s sandbox.PendingStore) {
 	// The WIP is pushed BEFORE the question is asked, so a snapshot reaped
 	// days later loses nothing a re-seed cannot recover. A question parked
 	// over unpushed work is a question whose answer arrives to an empty box.
-	mustCreate(t, s, run("t1"))
+	mustLaunched(t, s, run("t1"))
 	if err := s.MarkAwaiting(context.Background(), "t1", sandbox.Clarification{
 		Question: "which base branch?", Audience: "requester",
 		Branch: "wip/swe/t1", SessionID: "sess-1",
@@ -218,7 +357,7 @@ func testParkingCarriesTheBranch(t *testing.T, s sandbox.PendingStore) {
 func testOwnershipIsNotStolenByAnOlderLease(t *testing.T, s sandbox.PendingStore) {
 	// A run whose epoch is HIGHER belongs to a newer lease. Taking it would
 	// put two engines on one box, both collecting, both resuming.
-	mustCreate(t, s, run("t1"))
+	mustLaunched(t, s, run("t1"))
 	if won, err := s.ClaimOwnership(context.Background(), "t1", "node-b:2", 5); err != nil || !won {
 		t.Fatalf("claim: won=%v err=%v", won, err)
 	}
@@ -238,7 +377,7 @@ func testOwnershipIsNotStolenByAnOlderLease(t *testing.T, s sandbox.PendingStore
 func testAStaleFenceCannotWrite(t *testing.T, s sandbox.PendingStore) {
 	// THE FENCE IS THE GUARANTEE, the ownership check only an optimisation:
 	// a node whose lease moved cannot write even if it has not noticed yet.
-	mustCreate(t, s, run("t1"))
+	mustLaunched(t, s, run("t1"))
 	if _, err := s.ClaimOwnership(context.Background(), "t1", "node-b:2", 7); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -261,7 +400,7 @@ func testAStaleFenceCannotWrite(t *testing.T, s sandbox.PendingStore) {
 func testReleasingABoxClearsBothHalves(t *testing.T, s sandbox.PendingStore) {
 	// A paused_at pointing at no box is a snapshot the reaper looks for
 	// every tick and never finds — a warning per tick, for ever.
-	mustCreate(t, s, run("t1"))
+	mustLaunched(t, s, run("t1"))
 	if err := s.AttachSandbox(context.Background(), "t1",
 		sandbox.BoxRef{SandboxID: "box-1", CommandID: "c-1"}, sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
@@ -281,21 +420,33 @@ func testReleasingABoxClearsBothHalves(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
+func testALaunchingRunIsActive(t *testing.T, s sandbox.PendingStore) {
+	// A launching run is never polled, and is listed anyway: a node that
+	// died mid-launch left a box behind, and a row nobody lists is a box
+	// nobody reclaims.
+	mustBeginLaunch(t, s, run("t1"))
+
+	got, err := s.ListActive(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 || got[0].Status != sandbox.StatusLaunching {
+		t.Errorf("active = %+v, want the launching run", got)
+	}
+	seat, err := s.ListActiveForSeat(context.Background(), "swe")
+	if err != nil {
+		t.Fatalf("list for seat: %v", err)
+	}
+	if len(seat) != 1 {
+		t.Errorf("the seat's own listing missed its launching run: %+v", seat)
+	}
+}
+
 func testExecuteStateRoundTrips(t *testing.T, s sandbox.PendingStore) {
 	// THE SUSPENDED CONVERSATION. Everything the tool loop needs to re-enter
 	// where it stopped; a lossy round trip here resumes into a conversation
 	// that is not the one that was suspended.
-	mustCreate(t, s, run("t1"))
-	state := map[string]any{
-		"messages":             []any{map[string]any{"role": "assistant", "content": "working"}},
-		"pending_tool_call_id": "call_1",
-		"pending_tool_name":    "run_sandbox",
-		"active_tool_names":    []any{"run_sandbox", "activate_tool"},
-		"iteration":            float64(2),
-	}
-	if err := s.SaveExecuteState(context.Background(), "t1", state); err != nil {
-		t.Fatalf("save: %v", err)
-	}
+	mustLaunched(t, s, run("t1"))
 	got := mustGet(t, s, "t1")
 	if got.ExecuteState["pending_tool_call_id"] != "call_1" ||
 		got.ExecuteState["pending_tool_name"] != "run_sandbox" {
@@ -311,7 +462,7 @@ func testActiveIncludesResumed(t *testing.T, s sandbox.PendingStore) {
 	// Boot recovery has to SEE a tail that died mid-flight with the previous
 	// engine. Nothing else would ever look at that row again, and its paused
 	// box would leak for ever.
-	mustCreate(t, s, run("t1"))
+	mustLaunched(t, s, run("t1"))
 	if _, _, err := s.ClaimForResume(context.Background(), "t1"); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -338,8 +489,8 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 	// they were just asked.
 	first, second := run("t1"), run("t2")
 	second.CreatedAt = base.Add(time.Minute)
-	mustCreate(t, s, first)
-	mustCreate(t, s, second)
+	mustLaunched(t, s, first)
+	mustLaunched(t, s, second)
 	for _, id := range []string{"t1", "t2"} {
 		if err := s.MarkAwaiting(context.Background(), id,
 			sandbox.Clarification{Question: "?" + id}); err != nil {
@@ -363,7 +514,7 @@ func testAnAnswerWithNoConversationMatchesNothing(t *testing.T, s sandbox.Pendin
 	// Matching by seat alone would hand an unrelated message to whichever
 	// run happened to be waiting — and that run would treat it as the
 	// answer to its question.
-	mustCreate(t, s, run("t1"))
+	mustLaunched(t, s, run("t1"))
 	if err := s.MarkAwaiting(context.Background(), "t1",
 		sandbox.Clarification{Question: "?"}); err != nil {
 		t.Fatalf("park: %v", err)
@@ -386,7 +537,7 @@ func testTheReaperSeesOnlyOldSnapshots(t *testing.T, s sandbox.PendingStore) {
 		{"fresh", base.Add(-time.Minute), true},
 		{"boxless", base.Add(-2 * time.Hour), false},
 	} {
-		mustCreate(t, s, run(tc.id))
+		mustLaunched(t, s, run(tc.id))
 		if tc.hasBox {
 			if err := s.AttachSandbox(context.Background(), tc.id,
 				sandbox.BoxRef{SandboxID: "box-" + tc.id}, sandbox.Fence{}); err != nil {
@@ -416,7 +567,7 @@ func testListingsAreStable(t *testing.T, s sandbox.PendingStore) {
 	for i, id := range []string{"c", "a", "b"} {
 		r := run(id)
 		r.CreatedAt = base.Add(time.Duration(i) * time.Second)
-		mustCreate(t, s, r)
+		mustLaunched(t, s, r)
 	}
 	var first []string
 	for range 5 {
@@ -447,7 +598,7 @@ func testListingsAreStable(t *testing.T, s sandbox.PendingStore) {
 // the box gets destroyed — so two reapers racing must produce exactly one
 // destruction.
 func testAPauseExpiresExactlyOnce(t *testing.T, s sandbox.PendingStore) {
-	mustCreate(t, s, run("t1"))
+	mustLaunched(t, s, run("t1"))
 	park(t, s, "t1")
 
 	const racers = 10
@@ -491,7 +642,7 @@ func testOnlyAParkedRunCanExpire(t *testing.T, s sandbox.PendingStore) {
 		sandbox.StatusRunning, sandbox.StatusResumed,
 		sandbox.StatusDone, sandbox.StatusFailed, sandbox.StatusReseed,
 	} {
-		mustCreate(t, s, run(status))
+		mustLaunched(t, s, run(status))
 		if err := s.SetStatus(context.Background(), status, status, sandbox.Fence{}); err != nil {
 			t.Fatalf("SetStatus: %v", err)
 		}
@@ -508,7 +659,7 @@ func testOnlyAParkedRunCanExpire(t *testing.T, s sandbox.PendingStore) {
 // The answer that un-parks a run and the reaper that expires it are the same
 // race, from the two sides: whichever lands first, the other must lose.
 func testAnAnsweredRunCannotBeExpiredUnderTheResume(t *testing.T, s sandbox.PendingStore) {
-	mustCreate(t, s, run("t1"))
+	mustLaunched(t, s, run("t1"))
 	park(t, s, "t1")
 
 	if _, won, err := s.ClaimForResume(context.Background(), "t1"); err != nil || !won {
@@ -547,7 +698,7 @@ func park(t *testing.T, s sandbox.PendingStore, turnID string) {
 // checkout is live, moments before the reaper destroys it. One statement, no
 // window.
 func testExpiringAPauseClearsTheBoxInTheSameWrite(t *testing.T, s sandbox.PendingStore) {
-	mustCreate(t, s, run("t1"))
+	mustLaunched(t, s, run("t1"))
 	park(t, s, "t1")
 	if err := s.MarkBoxPaused(context.Background(), "t1", base); err != nil {
 		t.Fatalf("MarkBoxPaused: %v", err)

@@ -92,8 +92,20 @@ func newWaiterRig(t *testing.T) *waiterRig {
 	return rig
 }
 
-// launch seeds a running detached job with a real box behind it.
+// launch seeds a running detached job with a real box behind it, in the order
+// a real launch writes it: the row, the box, then the suspension that opens
+// the run to the poll.
 func (r *waiterRig) launch(turnID string) PendingRun {
+	r.t.Helper()
+	r.launching(turnID)
+	r.suspend(turnID)
+	return r.get(turnID)
+}
+
+// launching stops one step short of that: the job is started and its box
+// attached, but the turn has not yet written the conversation a resume
+// re-enters. Nothing may poll or claim a run here.
+func (r *waiterRig) launching(turnID string) PendingRun {
 	r.t.Helper()
 	ctx := r.t.Context()
 	box, err := r.provider.Create(ctx, Spec{})
@@ -105,8 +117,8 @@ func (r *waiterRig) launch(turnID string) PendingRun {
 		CodingAgent: "claude-code", ConversationKey: "chat:C1",
 		TraceID: "tr-1", SpanID: "sp-1", CreatedAt: r.now,
 	}
-	if err := r.pending.Create(ctx, run); err != nil {
-		r.t.Fatalf("Create row: %v", err)
+	if err := r.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
+		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
 		SandboxID: box.ID(), CommandID: "cmd-1",
@@ -115,6 +127,23 @@ func (r *waiterRig) launch(turnID string) PendingRun {
 		r.t.Fatalf("AttachSandbox: %v", err)
 	}
 	return r.get(turnID)
+}
+
+// suspend writes the execute_state a real suspending turn would have written,
+// which is what opens the run to the completion poll.
+func (r *waiterRig) suspend(turnID string) {
+	r.t.Helper()
+	suspended, err := r.pending.MarkSuspended(r.t.Context(), turnID, map[string]any{
+		"version":              float64(1),
+		"pending_tool_call_id": "call-1",
+		"pending_tool_name":    "run_sandbox",
+	})
+	if err != nil {
+		r.t.Fatalf("MarkSuspended: %v", err)
+	}
+	if !suspended {
+		r.t.Fatalf("MarkSuspended %s: the launch did not open to the poll", turnID)
+	}
 }
 
 func (r *waiterRig) get(turnID string) PendingRun {
@@ -243,13 +272,67 @@ func TestAVanishedBoxFiresCompletionOnceTheStreakIsLongEnough(t *testing.T) {
 	run := rig.launch("t1")
 	rig.provider.Vanished[run.SandboxID] = true
 
-	for i := 1; i < MaxConnectFailures; i++ {
+	// Two failures, but no time has passed: giving up is TERMINAL — the
+	// completion fires, collect cannot reconnect either, and the run is
+	// settled failed — so a burst of probes must not be able to spend the
+	// window on its own.
+	for i := range MinConnectFailures + 2 {
 		if fired := rig.tick(); fired != 0 {
-			t.Fatalf("gave up after %d failures, want %d", i, MaxConnectFailures)
+			t.Fatalf("gave up on probe %d with no time elapsed", i+1)
 		}
 	}
+	rig.now = rig.now.Add(ConnectGiveUp)
 	if fired := rig.tick(); fired != 1 {
-		t.Fatalf("fired %d on the %dth failure, want 1", fired, MaxConnectFailures)
+		t.Fatalf("fired %d after a full %s unreachable, want 1", fired, ConnectGiveUp)
+	}
+}
+
+// THE WINDOW IS A DURATION, NOT A TICK COUNT. It was four consecutive
+// failures, justified in the comment as "four ticks ≈ 1 minute" — true only at
+// the default cadence. Driven faster, the same four failures are a fraction of
+// a second, and a box that is briefly slow rather than gone gets its turn
+// destroyed.
+func TestTheGiveUpWindowDoesNotShrinkWithTheCadence(t *testing.T) {
+	rig := newWaiterRig(t)
+	fast, err := NewWaiter(WaiterOptions{
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Interval: 100 * time.Millisecond,
+		Now:      func() time.Time { return rig.now },
+	})
+	if err != nil {
+		t.Fatalf("NewWaiter: %v", err)
+	}
+	run := rig.launch("t1")
+	rig.provider.Vanished[run.SandboxID] = true
+
+	// Far more probes than the old count, across the whole of a fast
+	// waiter's tick budget for that many ticks.
+	for range 20 {
+		rig.now = rig.now.Add(100 * time.Millisecond)
+		if fired, err := fast.Tick(t.Context()); err != nil || fired != 0 {
+			t.Fatalf("gave up after 2s at a 100ms cadence: fired=%d err=%v", fired, err)
+		}
+	}
+	rig.now = rig.now.Add(ConnectGiveUp)
+	if fired, err := fast.Tick(t.Context()); err != nil || fired != 1 {
+		t.Fatalf("fired %d after a full %s unreachable: %v", fired, ConnectGiveUp, err)
+	}
+}
+
+// At a cadence slower than the window, the FIRST failure is already older than
+// it. One probe is not evidence a box is gone.
+func TestOneProbeNeverGivesUpHoweverOldTheRunIs(t *testing.T) {
+	rig := newWaiterRig(t)
+	run := rig.launch("t1")
+	rig.provider.Vanished[run.SandboxID] = true
+	rig.now = rig.now.Add(100 * time.Hour)
+
+	if fired := rig.tick(); fired != 0 {
+		t.Fatal("a single failed probe declared the box gone and failed the run")
+	}
+	rig.now = rig.now.Add(ConnectGiveUp)
+	if fired := rig.tick(); fired != 1 {
+		t.Fatalf("fired %d on the confirming probe, want 1", fired)
 	}
 }
 
@@ -260,16 +343,15 @@ func TestASuccessfulReconnectClearsTheFailureStreak(t *testing.T) {
 	run := rig.launch("t1")
 
 	rig.provider.Vanished[run.SandboxID] = true
-	for range MaxConnectFailures - 1 {
-		rig.tick()
-	}
+	rig.tick()
+	rig.now = rig.now.Add(ConnectGiveUp)
 	delete(rig.provider.Vanished, run.SandboxID)
-	rig.tick() // reachable again
+	rig.tick() // reachable again — the streak, and its clock, start over
 
 	rig.provider.Vanished[run.SandboxID] = true
-	for i := 1; i < MaxConnectFailures; i++ {
+	for i := range MinConnectFailures + 1 {
 		if fired := rig.tick(); fired != 0 {
-			t.Fatalf("the old streak carried over: gave up on failure %d", i)
+			t.Fatalf("the old streak carried over: gave up on probe %d", i+1)
 		}
 	}
 }
@@ -322,6 +404,33 @@ func TestAParkedRunIsNeitherPolledNorHeartBeaten(t *testing.T) {
 	}
 	if got := box.Keepalives(); got != 0 {
 		t.Fatalf("a parked box was heart-beaten %d times — the pause TTL would never expire it", got)
+	}
+}
+
+// THE LAUNCH WINDOW, from the poll's side. The job is running and can finish
+// at any moment, but the turn that started it has not yet written the
+// conversation a resume re-enters. Firing here hands the coordinator a claim
+// it cannot resume — and the run's turn is destroyed by a job that was too
+// quick. The tick that finds it suspended is the one that may fire.
+func TestARunThatHasNotSuspendedYetIsNotPolled(t *testing.T) {
+	rig := newWaiterRig(t)
+	run := rig.launching("t1")
+	box := rig.provider.Box(run.SandboxID)
+	rig.runner.Finish(Result{Success: true, Text: "done before the turn unwound"})
+
+	if fired := rig.tick(); fired != 0 {
+		t.Fatal("a completion fired for a run with no conversation to resume")
+	}
+	if got := rig.queue.count(); got != 0 {
+		t.Fatalf("published %d events for a launching run", got)
+	}
+	if got := box.Keepalives(); got != 0 {
+		t.Fatalf("a launching box was heart-beaten %d times before it was pollable", got)
+	}
+
+	rig.suspend("t1")
+	if fired := rig.tick(); fired != 1 {
+		t.Fatalf("fired %d completions once the suspension landed, want 1", fired)
 	}
 }
 

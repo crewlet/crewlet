@@ -17,12 +17,12 @@ import (
 // 15s bounds the completion-detection latency — negligible against coding jobs
 // that run minutes — while a tick costs only one reconnect plus a marker probe
 // per running box. It also keeps the keepalive ~60x inside the box TTL
-// ([DefaultBoxTimeout]) and makes the give-up window
-// [MaxConnectFailures] × 15s ≈ 1 minute.
+// ([DefaultBoxTimeout]). The give-up window for an unreachable box does NOT
+// derive from it — see [ConnectGiveUp].
 const DefaultPollInterval = 15 * time.Second
 
-// MaxConnectFailures is how many CONSECUTIVE failed reconnects a box gets
-// before the waiter gives up and fires completion anyway.
+// ConnectGiveUp is how long a box may stay unreachable before the waiter gives
+// up on it and fires completion anyway.
 //
 // The box is unreachable, so the run can never produce a result. The engine
 // keeps a running box alive on every tick, so this never fires merely because
@@ -30,7 +30,28 @@ const DefaultPollInterval = 15 * time.Second
 // box, a network partition, or the engine was down long enough that the
 // keepalive lapsed and the orphan was reaped. Firing lets the coordinator free
 // the seat and mark the run failed instead of polling a dead box forever.
-const MaxConnectFailures = 4
+//
+// A DURATION, NOT A TICK COUNT, and that is the fix rather than the style. It
+// was four consecutive failures, with the rationale written as "four ticks
+// ≈ 1 minute" — true only at [DefaultPollInterval]. The count is applied to
+// whatever interval the waiter was built with, so a deployment that polls
+// faster shrank the window with it: at the 100 ms cadence the e2e suite drives
+// this code at, four failures is 0.4 s, and a box that is briefly slow rather
+// than gone is declared dead. What follows is not a retry — the completion
+// fires, `collect` cannot reconnect either, and the coordinator settles the
+// run FAILED and tears the turn down. Giving up is terminal, so the window has
+// to be measured in the unit its own reasoning uses.
+const ConnectGiveUp = 60 * time.Second
+
+// MinConnectFailures is how many consecutive failures must have happened
+// before [ConnectGiveUp] can fire at all.
+//
+// The duration alone is not enough at a slow cadence: at a poll interval above
+// the give-up window, the FIRST failure is already older than it. Two attempts
+// is the smallest number that distinguishes "unreachable" from "one bad
+// probe", and it is what makes the rule read the same at every cadence — a box
+// is given up on after a minute AND at least one confirmation.
+const MinConnectFailures = 2
 
 // Publisher is the slice of the queue the waiter needs.
 type Publisher interface {
@@ -95,10 +116,10 @@ type Waiter struct {
 	now       func() time.Time
 
 	mu sync.Mutex
-	// failures counts consecutive reconnect failures per turn, reset on any
-	// success. Per-turn rather than per-box because a box id can be cleared
-	// and re-minted on a reseed while the run continues.
-	failures map[string]int
+	// failures tracks the CONSECUTIVE reconnect failures per turn, cleared
+	// on any success. Per-turn rather than per-box because a box id can be
+	// cleared and re-minted on a reseed while the run continues.
+	failures map[string]connectStreak
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -118,7 +139,7 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 		interval:  opts.Interval,
 		claimDuty: opts.ClaimDuty,
 		now:       opts.Now,
-		failures:  map[string]int{},
+		failures:  map[string]connectStreak{},
 		stopped:   make(chan struct{}),
 	}
 	if w.interval <= 0 {
@@ -195,6 +216,14 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 	fired := 0
 	for _, run := range runs {
 		if run.Status != StatusRunning {
+			// Running is the ONLY pollable state, and the one it most
+			// obviously excludes is [StatusLaunching]: that run's job is
+			// already executing, but the turn that started it has not yet
+			// written the conversation a resume re-enters. Firing there
+			// hands the coordinator a claim it cannot resume, and the
+			// coordinator's only honest answer to that is to fail the run
+			// — so a coding job that finished inside the window destroyed
+			// the turn. The next tick finds it suspended.
 			continue
 		}
 		if run.SandboxID == "" {
@@ -251,6 +280,16 @@ func (w *Waiter) mayTick(ctx context.Context) bool {
 	return holds
 }
 
+// connectStreak is one turn's run of consecutive failed reconnects.
+//
+// BOTH HALVES, because the give-up rule is both: since is what the duration is
+// measured from, and attempts is what stops a single probe against a slow
+// cadence from being the whole streak.
+type connectStreak struct {
+	since    time.Time
+	attempts int
+}
+
 // forget drops failure counters for runs that are no longer active, so a
 // reused turn id never inherits a dead run's streak.
 func (w *Waiter) forget(runs []PendingRun) {
@@ -279,10 +318,13 @@ const (
 func (w *Waiter) pollOne(ctx context.Context, run PendingRun) pollState {
 	box, err := w.manager.Provider().Connect(ctx, run.SandboxID)
 	if err != nil {
-		n := w.fail(run.TurnID)
+		streak, giveUp := w.fail(run.TurnID)
 		log.WarnContext(ctx, "sandbox_connect_failed",
-			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "attempts", n)
-		if n >= MaxConnectFailures {
+			"turn_id", run.TurnID, "sandbox_id", run.SandboxID,
+			"attempts", streak.attempts,
+			"unreachable_for_s", w.now().Sub(streak.since).Seconds(),
+			"error", err.Error())
+		if giveUp {
 			return pollGone
 		}
 		return pollRunning
@@ -321,11 +363,19 @@ func (w *Waiter) pollOne(ctx context.Context, run PendingRun) pollState {
 	return pollRunning
 }
 
-func (w *Waiter) fail(turnID string) int {
+// fail records one more failed reconnect and reports whether the streak has
+// run long enough to give up on.
+func (w *Waiter) fail(turnID string) (connectStreak, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.failures[turnID]++
-	return w.failures[turnID]
+	streak, seen := w.failures[turnID]
+	if !seen {
+		streak.since = w.now()
+	}
+	streak.attempts++
+	w.failures[turnID] = streak
+	spent := w.now().Sub(streak.since)
+	return streak, streak.attempts >= MinConnectFailures && spent >= ConnectGiveUp
 }
 
 func (w *Waiter) succeed(turnID string) {

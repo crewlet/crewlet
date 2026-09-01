@@ -118,6 +118,16 @@ type Engine struct {
 	sandboxWaiter      *sandbox.Waiter
 	sandboxPending     sandbox.PendingStore
 
+	// leaseTTL is the coordination bucket's own age, resolved once from
+	// Tier A.
+	//
+	// Held because it is a CEILING, not just this node's seat setting: the
+	// KV's expiry is bucket-wide, so it refuses any lease asked to outlive
+	// it, and a worker duty derived from its own cadence has to be clamped
+	// against it rather than hope the two numbers agree. They did agree,
+	// by one strictly-greater comparison, until somebody lowered this.
+	leaseTTL time.Duration
+
 	// memory carries a seat's memory between the nodes that run it.
 	//
 	// On the ENGINE rather than on an epoch, for the same reason the
@@ -395,6 +405,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// refused an unknown one at load, and it is what the fleet view reads
 	// a peer's presence row back through.
 	e.profile = opts.Bootstrap.Node.Profile(nodeID)
+	e.leaseTTL = leaseTTL(opts.Bootstrap)
 	n, err := node.New(node.Config{
 		Queue: backends.Queue,
 		Coord: backends.Coord,
@@ -426,7 +437,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			return e.prepareSeat(ctx, handle, lease.Epoch, lease.Owner)
 		},
 		SeatDone: e.releaseSeat,
-		LeaseTTL: leaseTTL(opts.Bootstrap),
+		LeaseTTL: e.leaseTTL,
 		// The host's own ceiling, from Tier A. Per NODE, so a fleet's is
 		// N times this. Passed through unresolved: zero is the shape of an
 		// absent key and node.New is what turns it into the default, so
