@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -408,7 +406,7 @@ func SeatsFrom(o *org.Organization, lookup org.EnvLookup) []SeatConfig {
 		if role.IsHuman() || role.Slack.IsZero() {
 			continue
 		}
-		token := resolve(role.Slack.BotToken, lookup)
+		token := envref.Resolve(role.Slack.BotToken, lookup)
 		if token == "" {
 			// A seat whose ${VAR} did not resolve is skipped rather
 			// than started with an empty token, which would fail at
@@ -419,29 +417,8 @@ func SeatsFrom(o *org.Organization, lookup org.EnvLookup) []SeatConfig {
 		out = append(out, SeatConfig{
 			Handle:  role.Handle(),
 			Token:   token,
-			Channel: resolve(role.Slack.Channel, lookup),
+			Channel: envref.Resolve(role.Slack.Channel, lookup),
 		})
 	}
 	return out
-}
-
-// resolve reads a config value that may be a whole ${VAR} reference.
-//
-// An UNRESOLVED reference yields empty rather than its literal text: a raw
-// ${VAR} matches nothing Slack will ever accept, so passing it through turns
-// a missing variable into an app that mysteriously authenticates as nobody.
-func resolve(value string, lookup org.EnvLookup) string {
-	value = strings.TrimSpace(value)
-	name, isRef := envref.Whole(value)
-	if !isRef {
-		return value
-	}
-	if lookup == nil {
-		lookup = os.LookupEnv
-	}
-	resolved, ok := lookup(name)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(resolved)
 }

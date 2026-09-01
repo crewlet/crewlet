@@ -3,7 +3,6 @@ package mattermost
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -488,7 +487,7 @@ func SeatsFrom(o *org.Organization, lookup org.EnvLookup) []SeatConfig {
 		if role.IsHuman() || role.Mattermost.IsZero() {
 			continue
 		}
-		token := resolve(role.Mattermost.BotToken, lookup)
+		token := envref.Resolve(role.Mattermost.BotToken, lookup)
 		if token == "" {
 			// A seat whose ${VAR} did not resolve is skipped rather
 			// than started with an empty token, which would fail at
@@ -499,31 +498,9 @@ func SeatsFrom(o *org.Organization, lookup org.EnvLookup) []SeatConfig {
 		out = append(out, SeatConfig{
 			Handle:   role.Handle(),
 			Token:    token,
-			Username: resolve(role.Mattermost.Username, lookup),
-			Channel:  resolve(role.Mattermost.Channel, lookup),
+			Username: envref.Resolve(role.Mattermost.Username, lookup),
+			Channel:  envref.Resolve(role.Mattermost.Channel, lookup),
 		}.Resolve())
 	}
 	return out
-}
-
-// resolve reads a config value that may be a whole ${VAR} reference.
-//
-// An UNRESOLVED reference yields empty rather than its literal text, for the
-// same reason it does everywhere else: a raw ${VAR} matches nothing any
-// server will ever send, so passing it through turns a missing variable into
-// a bot that mysteriously authenticates as nobody.
-func resolve(value string, lookup org.EnvLookup) string {
-	value = strings.TrimSpace(value)
-	name, isRef := envref.Whole(value)
-	if !isRef {
-		return value
-	}
-	if lookup == nil {
-		lookup = os.LookupEnv
-	}
-	resolved, ok := lookup(name)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(resolved)
 }
