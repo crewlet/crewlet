@@ -1,13 +1,13 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
-	"sort"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -346,7 +346,7 @@ func (b *Bridge) Servers() []string {
 	for name := range b.servers {
 		out = append(out, name)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -466,7 +466,7 @@ func (b *Bridge) reindexLocked(before map[string]*Tool) Change {
 	for name := range b.servers {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 
 	next := make(map[string]*Tool, len(b.tools))
 	for _, server := range names {
@@ -493,7 +493,7 @@ func (b *Bridge) reindexLocked(before map[string]*Tool) Change {
 		}
 	}
 	sortTools(change.Added)
-	sort.Strings(change.Removed)
+	slices.Sort(change.Removed)
 	return change
 }
 
@@ -530,12 +530,12 @@ func mergeChanges(first, second Change) Change {
 		}
 	}
 	sortTools(out.Added)
-	sort.Strings(out.Removed)
+	slices.Sort(out.Removed)
 	return out
 }
 
 func sortTools(tools []*Tool) {
-	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
+	slices.SortFunc(tools, func(a, b *Tool) int { return cmp.Compare(a.Name(), b.Name()) })
 }
 
 func toolNames(tools []*Tool) []string {

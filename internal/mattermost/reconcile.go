@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -481,7 +480,7 @@ func joinChannels(ctx context.Context, opts Options, teamID, userID, handle stri
 	for name := range wanted {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 
 	var joined []string
 	for _, name := range names {

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -271,7 +271,7 @@ func budgetsReset(args []string, stdout, stderr io.Writer) error {
 	// The report NAMES what was cleared. A count alone leaves an operator
 	// unable to tell "reset the seat I meant" from "reset a scope that was
 	// already empty".
-	sort.Strings(answer.Scopes)
+	slices.Sort(answer.Scopes)
 	fmt.Fprintf(stdout, "Reset %d scope(s): %s\n",
 		answer.Cleared, strings.Join(answer.Scopes, ", "))
 	return nil

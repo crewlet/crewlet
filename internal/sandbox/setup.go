@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -125,7 +124,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 		for path := range step.Files {
 			paths = append(paths, path)
 		}
-		sort.Strings(paths)
+		slices.Sort(paths)
 		for _, path := range paths {
 			if err := box.WriteFile(ctx, path, []byte(step.Files[path])); err != nil {
 				return &SetupError{Step: step.Name, Detail: err.Error()}
@@ -186,7 +185,7 @@ func EnvironmentBrief(steps []SetupStep, mcpServers []string) string {
 	}
 	if len(mcpServers) > 0 {
 		names := slices.Clone(mcpServers)
-		sort.Strings(names)
+		slices.Sort(names)
 		lines = append(lines, "You also have these MCP tool servers connected: "+
 			strings.Join(names, ", ")+".")
 	}

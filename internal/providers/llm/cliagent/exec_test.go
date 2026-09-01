@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -38,7 +38,7 @@ func TestCLIAgentFakeCLI(t *testing.T) {
 	switch {
 	case os.Getenv("FAKE_DUMP_ENV") == "1":
 		env := os.Environ()
-		sort.Strings(env)
+		slices.Sort(env)
 		fmt.Print(strings.Join(env, "\n"))
 	case os.Getenv("FAKE_ECHO_STDIN") == "1":
 		// Base64 rather than verbatim: the prompt CONTAINS the response

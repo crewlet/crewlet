@@ -1,9 +1,10 @@
 package coord
 
 import (
+	"cmp"
 	"context"
 	"errors"
-	"sort"
+	"slices"
 	"time"
 	"unicode/utf8"
 )
@@ -754,14 +755,15 @@ type Fleet interface {
 // company's own counter in the middle of its seats — and a listing whose order
 // differed between backends would make a diff of two captures unreadable.
 func SortUsage(rows []Usage) {
-	sort.Slice(rows, func(i, j int) bool {
-		switch {
-		case rows[i].Scope == OrgScope:
-			return rows[j].Scope != OrgScope
-		case rows[j].Scope == OrgScope:
-			return false
-		default:
-			return rows[i].Scope < rows[j].Scope
+	// The org counter ranks 0 and everything else 1, so cmp.Or falls
+	// through to the alphabetical compare only among the seats.
+	rank := func(u Usage) int {
+		if u.Scope == OrgScope {
+			return 0
 		}
+		return 1
+	}
+	slices.SortFunc(rows, func(a, b Usage) int {
+		return cmp.Or(cmp.Compare(rank(a), rank(b)), cmp.Compare(a.Scope, b.Scope))
 	})
 }

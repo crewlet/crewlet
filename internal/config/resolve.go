@@ -3,7 +3,7 @@ package config
 import (
 	"log/slog"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -225,7 +225,7 @@ func (r *Resolver) Map(path string, in map[string]string) (map[string]string, []
 	}
 	// Sorted so a caller's log line and a test's expectation are stable;
 	// map order would make both flap.
-	sort.Strings(keys)
+	slices.Sort(keys)
 	for _, k := range keys {
 		v, names := r.Expand(in[k])
 		out[k] = v

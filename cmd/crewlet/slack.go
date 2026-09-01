@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -217,7 +217,7 @@ func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink in
 		for handle := range res.Failed {
 			handles = append(handles, handle)
 		}
-		sort.Strings(handles)
+		slices.Sort(handles)
 		fmt.Fprintf(w, "\n%d seat(s) FAILED — everything else completed and is "+
 			"recorded, so re-running resumes:\n", len(handles))
 		for _, handle := range handles {
@@ -229,7 +229,7 @@ func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink in
 		for handle := range res.Pending {
 			handles = append(handles, handle)
 		}
-		sort.Strings(handles)
+		slices.Sort(handles)
 		fmt.Fprintf(w, "\n%d app(s) still need a workspace install — open each "+
 			"and click Allow, then re-run:\n", len(handles))
 		for _, handle := range handles {
@@ -261,7 +261,7 @@ func printSlackValidation(w io.Writer, res *slack.Result) {
 		for handle := range res.Failed {
 			handles = append(handles, handle)
 		}
-		sort.Strings(handles)
+		slices.Sort(handles)
 		fmt.Fprintf(w, "\n%d manifest(s) FAILED validation:\n", len(handles))
 		for _, handle := range handles {
 			fmt.Fprintf(w, "  %s: %s\n", handle, res.Failed[handle])

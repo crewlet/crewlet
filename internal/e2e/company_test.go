@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -198,7 +198,7 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 	for n := range offered {
 		names = append(names, n)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	m.offered = append(m.offered, strings.Join(names, "+"))
 	m.systems = append(m.systems, systemPrompt(raw))
 	m.mu.Unlock()

@@ -3,7 +3,7 @@ package cliagent
 import (
 	_ "embed"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -38,7 +38,7 @@ func BuiltinNames() []string {
 	for name := range table {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return names
 }
 

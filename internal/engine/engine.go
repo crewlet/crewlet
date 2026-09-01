@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -134,14 +135,7 @@ func (c *Company) Seats() []placement.Seat {
 	// is not a property the org model promises, and a fleet that reshuffled
 	// its eligibility list every tick would churn seats for no reason.
 	slices.SortFunc(out, func(a, b placement.Seat) int {
-		switch {
-		case a.Handle < b.Handle:
-			return -1
-		case a.Handle > b.Handle:
-			return 1
-		default:
-			return 0
-		}
+		return cmp.Compare(a.Handle, b.Handle)
 	})
 	return out
 }

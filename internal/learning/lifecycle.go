@@ -1,6 +1,7 @@
 package learning
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -955,15 +956,10 @@ func splitExemplars(cluster []Episode, want int) (exemplars, doomed []Episode) {
 		want = 0
 	}
 	ordered := slices.Clone(cluster)
+	// NEWEST FIRST, ties broken by the higher id — both keys descend, so
+	// both compares take their arguments reversed.
 	slices.SortFunc(ordered, func(a, b Episode) int {
-		switch {
-		case a.EndedAt.After(b.EndedAt):
-			return -1
-		case a.EndedAt.Before(b.EndedAt):
-			return 1
-		default:
-			return -1 * compareStrings(a.ID, b.ID)
-		}
+		return cmp.Or(b.EndedAt.Compare(a.EndedAt), cmp.Compare(b.ID, a.ID))
 	})
 	exemplars = ordered[:want]
 	kept := make([]string, len(exemplars))

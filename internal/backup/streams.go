@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -161,7 +161,7 @@ func streamNames(ctx context.Context, js jetstream.JetStream) ([]string, error) 
 	if err := lister.Err(); err != nil {
 		return nil, fmt.Errorf("backup: list streams: %w", err)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return names, nil
 }
 

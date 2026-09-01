@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -136,7 +136,7 @@ func (l *Ledger) Handles() []string {
 	for handle := range l.Apps {
 		out = append(out, handle)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

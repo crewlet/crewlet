@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -105,7 +105,7 @@ func buildEnv(p Profile, c *Checkout, extra map[string]string, auth Auth) []stri
 	}
 	// Sorted so a failing invocation is reproducible from a log line and
 	// so tests compare an environment rather than a map iteration order.
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

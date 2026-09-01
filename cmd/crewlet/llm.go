@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -223,7 +223,7 @@ func providerKeys(providers []cliAgentProvider) []string {
 	for _, p := range providers {
 		keys = append(keys, p.key)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys
 }
 

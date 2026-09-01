@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"sync"
 )
@@ -208,7 +208,7 @@ func (r *Registry) Names() []string {
 	for name := range r.entries {
 		out = append(out, name)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

@@ -1,12 +1,13 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -503,11 +504,11 @@ func mergeRelated(direct, siblings []EventRecord, limit int) []EventRecord {
 	// The sibling pass appends in its own scan order, so the merged list is
 	// no longer the newest-first order each query guaranteed. Same
 	// (time, id) tiebreak as the queries, for the same reason.
-	sort.SliceStable(out, func(i, j int) bool {
-		if !out[i].Time.Equal(out[j].Time) {
-			return out[i].Time.After(out[j].Time)
-		}
-		return out[i].ID > out[j].ID
+	slices.SortStableFunc(out, func(a, b EventRecord) int {
+		// BOTH KEYS DESCEND: newest instant first, and within one instant
+		// the higher id first, so a page boundary falls in the same place
+		// on every read.
+		return cmp.Or(b.Time.Compare(a.Time), cmp.Compare(b.ID, a.ID))
 	})
 	return truncate(out, limit)
 }

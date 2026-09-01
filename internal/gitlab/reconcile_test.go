@@ -1,6 +1,7 @@
 package gitlab_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -10,7 +11,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -985,8 +985,8 @@ func (s *cancellingSink) NextStep() string            { return "a test next step
 // sortByUsername gives the fake a deterministic order, with the DECOY first
 // — a caller taking element zero has to be wrong.
 func sortByUsername(rows []map[string]any) {
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i]["username"].(string) < rows[j]["username"].(string)
+	slices.SortFunc(rows, func(a, b map[string]any) int {
+		return cmp.Compare(a["username"].(string), b["username"].(string))
 	})
 }
 

@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,7 +70,7 @@ func flattenEnv(env map[string]string) []string {
 	for key, value := range env {
 		out = append(out, key+"="+value)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

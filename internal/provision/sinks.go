@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -254,7 +254,7 @@ func (s *EnvFileSink) rewrite() error {
 	}
 	// SORTED, so a rotation produces a diff an operator can read rather
 	// than a reshuffle of the whole file.
-	sort.Strings(names)
+	slices.Sort(names)
 
 	var body strings.Builder
 	body.WriteString("# Written by `crewlet ... provision`. Values are single-quoted\n" +

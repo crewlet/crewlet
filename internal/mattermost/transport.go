@@ -3,7 +3,7 @@ package mattermost
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -221,7 +221,7 @@ func (t *Transport) Start(ctx context.Context) error {
 		})
 	}
 	wg.Wait()
-	sort.Strings(failed)
+	slices.Sort(failed)
 	log.InfoContext(ctx, "mattermost_started", "seats", len(t.cfg.Seats),
 		"connected", len(t.cfg.Seats)-len(failed), "failed", failed,
 		"typing_status", string(t.status.Mode()))
@@ -379,7 +379,7 @@ func (t *Transport) Handles() []string {
 	for handle := range t.seats {
 		out = append(out, handle)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

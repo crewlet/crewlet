@@ -11,7 +11,7 @@
 
 package events
 
-import "sort"
+import "slices"
 
 // categories maps an event type to its dashboard category.
 //
@@ -208,7 +208,7 @@ func CategoryNames() []string {
 	for name := range seen {
 		out = append(out, name)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -220,7 +220,7 @@ func TypesByCategory() map[string][]string {
 		out[category] = append(out[category], eventType)
 	}
 	for _, group := range out {
-		sort.Strings(group)
+		slices.Sort(group)
 	}
 	return out
 }

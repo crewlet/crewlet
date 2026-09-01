@@ -29,9 +29,10 @@
 package ledger
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -118,11 +119,8 @@ func fitArguments(args map[string]any, blobLimit int) string {
 	}
 	// Ties broken by name so the admitted set is stable across runs; a map
 	// range alone would make "which key got dropped" a coin flip.
-	sort.Slice(order, func(i, j int) bool {
-		if order[i].cost != order[j].cost {
-			return order[i].cost < order[j].cost
-		}
-		return order[i].key < order[j].key
+	slices.SortFunc(order, func(a, b sized) int {
+		return cmp.Or(cmp.Compare(a.cost, b.cost), cmp.Compare(a.key, b.key))
 	})
 
 	kept := make(map[string]any, len(args))

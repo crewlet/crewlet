@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/config"
 )
@@ -503,7 +503,7 @@ func visitUnit(u *config.Unit, visit func(*config.Unit)) {
 func roleID(r *config.Role) string { return r.Seat().Handle() }
 
 func sorted(in []string) []string {
-	sort.Strings(in)
+	slices.Sort(in)
 	return in
 }
 

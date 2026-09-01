@@ -1,6 +1,7 @@
 package learning
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -277,18 +278,11 @@ type DiaryHit struct {
 // same total order episode recall uses, for the same reason.
 func rankDiary(hits []DiaryHit) {
 	slices.SortFunc(hits, func(a, b DiaryHit) int {
-		switch {
-		case a.Similarity > b.Similarity:
-			return -1
-		case a.Similarity < b.Similarity:
-			return 1
-		case a.Entry.CreatedAt.After(b.Entry.CreatedAt):
-			return -1
-		case a.Entry.CreatedAt.Before(b.Entry.CreatedAt):
-			return 1
-		default:
-			return -1 * compareStrings(a.Entry.ID, b.Entry.ID)
-		}
+		return cmp.Or(
+			cmp.Compare(b.Similarity, a.Similarity),
+			b.Entry.CreatedAt.Compare(a.Entry.CreatedAt),
+			cmp.Compare(b.Entry.ID, a.Entry.ID),
+		)
 	})
 }
 

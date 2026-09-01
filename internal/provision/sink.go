@@ -8,10 +8,11 @@
 package provision
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
@@ -208,7 +209,7 @@ type Plan struct {
 // anything.
 func (p *Plan) Add(s Seat) {
 	p.Seats = append(p.Seats, s)
-	sort.Slice(p.Seats, func(i, j int) bool { return p.Seats[i].Handle < p.Seats[j].Handle })
+	slices.SortFunc(p.Seats, func(a, b Seat) int { return cmp.Compare(a.Handle, b.Handle) })
 }
 
 // Note records a caveat.

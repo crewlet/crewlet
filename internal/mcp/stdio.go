@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"slices"
-	"sort"
 	"strings"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -96,8 +95,8 @@ func mergedEnv(spec Spec, log *slog.Logger) []string {
 			empty = append(empty, k)
 		}
 	}
-	sort.Strings(keys)
-	sort.Strings(empty)
+	slices.Sort(keys)
+	slices.Sort(empty)
 
 	if len(empty) > 0 {
 		// Almost always an unresolved ${VAR}: the server will come up, fail

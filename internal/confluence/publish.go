@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/skills"
@@ -68,7 +67,7 @@ func (p *Plan) Spaces() []string {
 	for space := range seen {
 		out = append(out, space)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

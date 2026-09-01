@@ -1,12 +1,12 @@
 package sandbox
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
-	"sort"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -319,7 +319,7 @@ func (s *CoordStore) ListPausedBefore(ctx context.Context, cutoff time.Time) ([]
 	if err != nil {
 		return nil, err
 	}
-	sort.SliceStable(got, func(i, j int) bool { return got[i].PausedAt.Before(got[j].PausedAt) })
+	slices.SortStableFunc(got, func(a, b PendingRun) int { return a.PausedAt.Compare(b.PausedAt) })
 	return got, nil
 }
 
@@ -431,11 +431,8 @@ func (s *CoordStore) list(ctx context.Context, match func(PendingRun) bool) ([]P
 	// Oldest first, so a recovery pass works its runs in the order they
 	// were launched: a listing that reordered every boot would make two
 	// runs of the same failure look like different failures.
-	sort.SliceStable(out, func(i, j int) bool {
-		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].CreatedAt.Before(out[j].CreatedAt)
-		}
-		return out[i].TurnID < out[j].TurnID
+	slices.SortStableFunc(out, func(a, b PendingRun) int {
+		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.TurnID, b.TurnID))
 	})
 	return out, nil
 }

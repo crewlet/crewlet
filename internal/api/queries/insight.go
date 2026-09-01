@@ -1,9 +1,10 @@
 package queries
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -146,8 +147,8 @@ func (s Sources) a2aChannels(ctx context.Context, _ Params) (any, error) {
 	}
 	// Most recently active first: an open channel that has not moved in a
 	// week is the anomaly, and it should not be buried under an id sort.
-	sort.SliceStable(out, func(i, j int) bool {
-		return out[i]["last_at"].(string) > out[j]["last_at"].(string)
+	slices.SortStableFunc(out, func(a, b map[string]any) int {
+		return cmp.Compare(b["last_at"].(string), a["last_at"].(string))
 	})
 	return map[string]any{"channels": out, "available": true}, nil
 }

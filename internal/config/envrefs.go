@@ -2,7 +2,7 @@ package config
 
 import (
 	"reflect"
-	"sort"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/envref"
 )
@@ -36,7 +36,7 @@ func ReferencedNames(payload any) []string {
 	for name := range seen {
 		out = append(out, name)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
