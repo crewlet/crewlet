@@ -236,10 +236,23 @@ func scanEpisode(rows interface{ Scan(...any) error }) (Episode, error) {
 	return ep, nil
 }
 
+// defaultEpisodeListing and defaultConversationListing are what [Episodes.Recent]
+// and [Episodes.ForConversation] return for a caller that names no limit.
+//
+// FLOORS, NOT POLICY, for the same reason [defaultDiaryListing] is: every
+// production caller passes an explicit limit. The conversation default is the
+// smaller of the two on purpose — "the previous turns on this same ticket" is
+// read to reconstruct one thread, where the useful answer is the last handful
+// and the rest is prompt weight.
+const (
+	defaultEpisodeListing      = 10
+	defaultConversationListing = 5
+)
+
 // Recent returns a seat's most recent episodes, newest first.
 func (e *Episodes) Recent(ctx context.Context, handle string, limit int) ([]Episode, error) {
 	if limit <= 0 {
-		limit = 10
+		limit = defaultEpisodeListing
 	}
 	rows, err := e.db.SQL().QueryContext(ctx,
 		`SELECT `+episodeColumns+` FROM episodes
@@ -264,7 +277,7 @@ func (e *Episodes) ForConversation(ctx context.Context, handle, conversation str
 		return nil, nil
 	}
 	if limit <= 0 {
-		limit = 5
+		limit = defaultConversationListing
 	}
 	rows, err := e.db.SQL().QueryContext(ctx,
 		`SELECT `+episodeColumns+` FROM episodes

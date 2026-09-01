@@ -396,6 +396,12 @@ type PassResult struct {
 	// because it is the only sweep here that removes work nothing else
 	// carried forward — a summary replaces the rows it folds, and this
 	// replaces its rows with nothing.
+	//
+	// Reported under its own key on `episode_lifecycle_pass`. The
+	// CompactionCompleted event folds it into NonTerminalDropped instead,
+	// deliberately, so the count reaches an operator on the surface that
+	// can carry a new field without two builds on one stream having to
+	// agree on it.
 	ToolFreeDropped int
 
 	// OrphansDropped counts rows an existing summary already covered. Any
@@ -480,6 +486,15 @@ func (l *Lifecycle) Pass(ctx context.Context, handle string, now time.Time) (Pas
 		"agent_handle", handle,
 		"non_terminal_dropped", res.NonTerminalDropped,
 		"consolidated_dropped", res.ConsolidatedDropped,
+		// ON ITS OWN HERE, unlike on the event, where it is folded into
+		// the non-terminal drop. This is the only sweep that removes work
+		// nothing else carried forward — a summary REPLACES the rows it
+		// folds, and this replaces its rows with nothing — so it is the
+		// one whose volume an operator has to be able to see before
+		// deciding whether ToolFreeMaxAge is too aggressive. The log is
+		// the only surface that can carry it without changing an event
+		// shape two builds on one stream have to agree on.
+		"tool_free_dropped", res.ToolFreeDropped,
 		"orphans_dropped", res.OrphansDropped,
 		"clusters_compacted", res.ClustersCompacted,
 		"raw_replaced", res.RawReplaced,

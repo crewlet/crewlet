@@ -171,6 +171,17 @@ func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 	return e, nil
 }
 
+// defaultDiaryListing is how many entries [Diary.Recent] returns for a caller
+// that names no limit.
+//
+// A FLOOR, NOT A POLICY. Every production caller passes an explicit limit —
+// the Plan-phase prefetch its own recency budget, the dashboard its page size,
+// the memory tool a clamped tool argument — so this answers only a caller that
+// asked for nothing, and it answers with a screenful rather than a page: the
+// value of an unbounded default here is a seat's entire diary rendered into a
+// prompt, which is the failure the limit exists for.
+const defaultDiaryListing = 10
+
 // Recent returns a seat's most recent LIVE entries, newest first.
 //
 // Live means unexpired. An expired short entry is filtered on READ as well as
@@ -179,7 +190,7 @@ func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 // week ago.
 func (d *Diary) Recent(ctx context.Context, agentID string, now time.Time, limit int) ([]DiaryEntry, error) {
 	if limit <= 0 {
-		limit = 10
+		limit = defaultDiaryListing
 	}
 	rows, err := d.db.SQL().QueryContext(ctx,
 		`SELECT `+diaryColumns+` FROM agent_diary
