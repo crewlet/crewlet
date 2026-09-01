@@ -400,17 +400,35 @@ func (n *codingNode) runFor(t *testing.T, status string) sandbox.PendingRun {
 // It reads the DURABLE record rather than the projection, so it answers after
 // the run has been settled just as well as while it is live.
 func (n *codingNode) diagnose() string {
-	runs, err := sandbox.NewCoordStore(n.engine.Backends().Fleet).ListActive(context.Background())
+	// EVERY ROW, not ListActive. That read is the operator board's and
+	// excludes `failed` and `done` by construction — which is precisely the
+	// row a destroyed turn leaves behind, so a diagnostic built on it prints
+	// "0 active run(s)" for the most likely stall and stops. The raw fleet
+	// records are decoded here rather than widening the store's contract
+	// with a list-everything a test is the only caller of.
+	records, err := n.engine.Backends().Fleet.SandboxRuns(context.Background())
 	if err != nil {
-		return fmt.Sprintf("the run record could not be read: %v", err)
+		return fmt.Sprintf("the run records could not be read: %v", err)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "phases seen = %v; boxes on disk = %v; %d active run(s)",
-		n.model.seen(), n.liveBoxesQuietly(), len(runs))
-	for _, run := range runs {
+	fmt.Fprintf(&b, "phases seen = %v; boxes on disk = %v; %d run record(s)",
+		n.model.seen(), n.liveBoxesQuietly(), len(records))
+	for _, record := range records {
+		var run struct {
+			Status       string         `json:"status"`
+			SandboxID    string         `json:"sandbox_id"`
+			CommandID    string         `json:"command_id"`
+			Question     string         `json:"question"`
+			PausedAt     time.Time      `json:"paused_at"`
+			ExecuteState map[string]any `json:"execute_state"`
+		}
+		if err := json.Unmarshal(record.Value, &run); err != nil {
+			fmt.Fprintf(&b, "\n  turn=%s <undecodable: %v>", record.Key, err)
+			continue
+		}
 		fmt.Fprintf(&b, "\n  turn=%s status=%s sandbox=%q command=%q "+
 			"execute_state_keys=%d question=%q paused_at=%s",
-			run.TurnID, run.Status, run.SandboxID, run.CommandID,
+			record.Key, run.Status, run.SandboxID, run.CommandID,
 			len(run.ExecuteState), run.Question, run.PausedAt)
 	}
 	return b.String()
