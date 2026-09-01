@@ -592,16 +592,16 @@ func LogBatchResult(l *slog.Logger, topic, group, batchKey string, evs []*events
 	}
 }
 
-// THE STACK IS CAPTURED IN THESE HELPERS, not passed in, and that works
-// because they are called from inside the deferred function that recovered:
-// a deferred call runs before its frame is popped, so debug.Stack() still
-// walks down through runtime.gopanic into the function that actually
-// panicked. Capturing it at the recover site and threading it through would
-// be identical minus one frame, and minus the chance a caller forgets.
-//
 // LogListenerPanic emits the standard line for a publish listener that
 // panicked and was recovered, and [LogStreamHandlerPanic] the one for a
 // stream handler.
+//
+// THE STACK IS CAPTURED HERE, not passed in, and that works because these are
+// called from inside the deferred function that recovered: a deferred call
+// runs before its frame is popped, so debug.Stack() still walks down through
+// runtime.gopanic into the function that actually panicked. Capturing it at
+// the recover site and threading it through would be identical minus one
+// frame, and minus the chance a caller forgets.
 //
 // # Why these live in the contract
 //

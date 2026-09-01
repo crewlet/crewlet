@@ -252,7 +252,7 @@ func TestTheWatermarkOrdersByInstantNotByBytes(t *testing.T) {
 		wholeSec   = "2026-01-02T03:04:05Z"
 	)
 	// The byte comparison this replaces would put the whole second last.
-	if !(wholeSec > fractional) {
+	if wholeSec <= fractional {
 		t.Fatal("the fixture no longer reproduces the byte ordering")
 	}
 

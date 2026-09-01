@@ -180,3 +180,22 @@ func toolRows(runtime NodeRuntime) []map[string]any {
 	}
 	return out
 }
+
+// rosterTick reads the roster for a push tick.
+//
+// A CONTEXT OF ITS OWN, like [App.streamHealth]'s and for the same reason:
+// the roster push is a timer, not a request, so there is nothing to inherit —
+// see [tickReadBudget], whose own doc names this caller. Bounded rather than
+// Background alone, because the read underneath reaches the coordination
+// plane and a push tick must not outlive the interval that will fire the next
+// one.
+//
+// A NAMED FUNCTION rather than a closure inside [New]: the two are identical
+// to run, but a closure built inside a constructor reads to contextcheck as
+// the constructor's own body — a background context created where the caller
+// had one to pass. streamHealth is a method for the same reason.
+func rosterTick(company func() *config.Company, runtime NodeRuntime) []map[string]any {
+	ctx, cancel := context.WithTimeout(context.Background(), tickReadBudget)
+	defer cancel()
+	return roster(ctx, company, runtime)
+}

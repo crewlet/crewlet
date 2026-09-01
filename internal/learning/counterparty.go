@@ -210,8 +210,6 @@ func (c *Counterparties) Record(ctx context.Context, o Observation) (bool, error
 	return counted, nil
 }
 
-// Get returns one profile, and false when the observer has never met the
-// subject.
 // Purge drops profiles nobody has interacted with since cutoff, reporting how
 // many went.
 //
@@ -245,6 +243,8 @@ func (c *Counterparties) Purge(ctx context.Context, cutoff time.Time) (int64, er
 	return n, nil
 }
 
+// Get returns one profile, and false when the observer has never met the
+// subject.
 func (c *Counterparties) Get(ctx context.Context, observer string, subject Subject) (Profile, bool, error) {
 	p, err := c.load(ctx, c.db.SQL(), observer, subject)
 	if err == sql.ErrNoRows { //nolint:errorlint // exact sentinel from load

@@ -893,7 +893,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		ActiveKeyID: boot.Secrets.ActiveKeyID,
 	})
 
-	app := api.New(api.Options{
+	// The contextcheck exemption is for the two PUSH TICKS this constructor
+	// registers — the roster re-send and the health frame. Both manufacture
+	// a bounded context of their own instead of inheriting one, which is
+	// what [api.tickReadBudget] and [api.App.streamHealth] both state is
+	// correct: a tick is a timer, not a request, so there is nothing to
+	// inherit, and a read that outlived the interval firing the next tick
+	// would cost a goroutine per tick for the life of the process. Nothing
+	// else reached from here creates a context.
+	app := api.New(api.Options{ //nolint:contextcheck // see the paragraph above
 		Bootstrap: boot,
 		Runtime:   engineRuntime{engine: e, reconciler: reconciler},
 		// THE ENGINE'S OWN RECEIVER, not a second one built here. In a
