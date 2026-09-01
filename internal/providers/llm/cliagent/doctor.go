@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,50 @@ const probeTimeout = 10 * time.Second
 // produce a parseable tool call, which is the whole reason the smoke test
 // runs a real one rather than just a completion.
 const smokePrompt = "Call the crewlet_smoke tool with ok set to true. Reply with only the JSON block."
+
+// The two isolation probes.
+//
+// Both ask the CLI to use one of ITS OWN tools and report a value the model
+// cannot fabricate: the current Unix time, read from the engine host's clock
+// by the shell, or from a public endpoint by the browser. A model asked to
+// echo a fixed token can simply write the token; a model asked for the time
+// has no way to be within a couple of minutes of it except by actually
+// running the tool. Each is sent with no tools of Crewlet's own, so no
+// envelope contract is rendered and the reply is plain prose.
+
+// shellProbePrompt asks the CLI to run a command on the engine host.
+const shellProbePrompt = "Using your shell or command-execution tool, run exactly this " +
+	"command and reply with only its output, nothing else: date +%s\n" +
+	"If you have no tool that can run commands, reply with only: " + noLocalToolsReply
+
+// noLocalToolsReply is what a CLI whose shell is denied is asked to say.
+const noLocalToolsReply = "NO-LOCAL-TOOLS"
+
+// webProbeURL answers with the server's clock on a line reading
+// `ts=<unix seconds>.<fraction>`. Chosen for being highly available and for
+// carrying a value that changes every request, so a fetch cannot be faked
+// from memory. It is a plain-text endpoint, which every vendor's fetch tool
+// can read.
+const webProbeURL = "https://www.cloudflare.com/cdn-cgi/trace"
+
+// webProbePrompt asks the CLI to fetch the URL with its own browser.
+const webProbePrompt = "Using your web fetch tool, fetch " + webProbeURL + " and reply with " +
+	"only the value after ts= on the line that starts with ts=, nothing else.\n" +
+	"If you have no tool that can fetch a URL, or the fetch fails, reply with only: " +
+	noWebReply
+
+// noWebReply is what a CLI with no reachable web tool is asked to say.
+const noWebReply = "NO-WEB"
+
+// probeSkew is how far a reported clock may sit from the engine's before the
+// probe stops believing a tool ran.
+//
+// A shell answers in the same second. A fetch through a vendor's tool can
+// take tens of seconds on a loaded host, and the endpoint's own clock is not
+// the engine's, so the window is generous — but it is still a window a
+// guessed epoch cannot land in: a model that does not know the current time
+// misses it by hours, not seconds.
+const probeSkew = 5 * time.Minute
 
 // Diagnosis is what `crewlet llm doctor` reports about one provider.
 //
@@ -55,6 +100,11 @@ type Diagnosis struct {
 	TokenUsage string
 	// Smoke is the result of a real completion with a real tool.
 	Smoke string
+	// LocalTools is the profile's stance on the CLI's own shell and file
+	// tools, beside what the shell probe measured.
+	LocalTools string
+	// Web is whether the CLI's own fetch tool reached the web, measured.
+	Web string
 
 	Problems []string
 }
@@ -133,18 +183,131 @@ func (p *Provider) Diagnose(ctx context.Context, smoke bool) Diagnosis {
 		d.Problems = append(d.Problems, problem)
 	}
 
+	stance := p.localToolsStance()
 	switch {
 	case !smoke:
 		d.Smoke = "skipped (-no-smoke)"
+		d.LocalTools = stance + " — probe skipped (-no-smoke)"
+		d.Web = "probe skipped (-no-smoke)"
 	case d.BinaryPath == "not on PATH":
 		d.Smoke = "skipped — no binary to run"
+		d.LocalTools = stance + " — probe skipped, no binary to run"
+		d.Web = "probe skipped — no binary to run"
 	default:
 		d.Smoke = p.smokeTest(ctx)
 		if strings.HasPrefix(d.Smoke, "failed") {
 			d.Problems = append(d.Problems, d.Smoke)
 		}
+		verdict, problem := p.shellProbe(ctx)
+		d.LocalTools = stance + " — " + verdict
+		if problem != "" {
+			d.Problems = append(d.Problems, problem)
+		}
+		d.Web = p.webProbe(ctx)
+		if strings.HasPrefix(d.Web, "failed") {
+			d.Problems = append(d.Problems, d.Web)
+		}
 	}
 	return d
+}
+
+// localToolsStance renders the profile's declared stance.
+func (p *Provider) localToolsStance() string {
+	switch p.profile.LocalTools {
+	case LocalToolsDenied:
+		return "denied by profile"
+	case LocalToolsVendorDefault:
+		return "vendor default (" + p.profile.LocalToolsNote + ")"
+	default:
+		return "not declared by profile"
+	}
+}
+
+// shellProbe asks the CLI to run a command with its own shell and reports
+// whether it did.
+//
+// The verdict is measured, never inferred from the profile: a profile that
+// says "denied" and a CLI that ran the command is precisely the finding an
+// operator needs, and a profile that says "vendor default" and a CLI that
+// refused is good news worth printing. The second return is the problem line,
+// empty when there is none.
+func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
+	comp, err := p.Complete(ctx, llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: shellProbePrompt}},
+	})
+	if err != nil {
+		return "probe failed — " + err.Error(), ""
+	}
+	ran := reportsCurrentClock(comp.Content, time.Now())
+	switch {
+	case ran && p.profile.LocalTools == LocalToolsDenied:
+		return "probe: SHELL RAN", fmt.Sprintf(
+			"the %q profile says local tools are denied, but the CLI ran a shell "+
+				"command on the engine host — the vendor's denial flag is not taking "+
+				"effect on this build (%s); check cli.overrides against the installed "+
+				"version before running seats on it", p.agent, orNone(p.profile.WrittenFor))
+	case ran:
+		return "probe: SHELL RAN", fmt.Sprintf(
+			"the %q CLI runs shell commands on the engine host as the engine user "+
+				"(%s) — it can read what that user can read. Run seats on it only on "+
+				"a host you would hand an autonomous agent, or prefer a backend whose "+
+				"profile denies local tools", p.agent, orNone(p.profile.LocalToolsNote))
+	default:
+		return "probe: refused", ""
+	}
+}
+
+// webProbe asks the CLI to fetch a URL with its own browser and reports
+// whether it did.
+//
+// Web is the one local tool a profile keeps ON, so a CLI that cannot reach
+// it is a problem: the seat has less reach than the same CLI at a terminal,
+// and the cause is usually a vendor sandbox flag that also cut the network,
+// or an egress proxy the child environment was not told about.
+func (p *Provider) webProbe(ctx context.Context) string {
+	comp, err := p.Complete(ctx, llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: webProbePrompt}},
+	})
+	if err != nil {
+		return "failed — " + err.Error()
+	}
+	if reportsCurrentClock(comp.Content, time.Now()) {
+		return "ok — fetched " + webProbeURL
+	}
+	return fmt.Sprintf(
+		"failed — the %q CLI could not fetch %s with its own web tool (it said: %q). "+
+			"Web is meant to stay on for every subscription seat: check that no vendor "+
+			"sandbox flag cuts the network and that the egress proxy reaches the child "+
+			"environment (cli.env / passthrough_env)",
+		p.agent, webProbeURL, truncate(comp.Content, 120))
+}
+
+// reportsCurrentClock reports whether text carries a Unix timestamp within
+// probeSkew of now — the evidence both probes turn on.
+//
+// The reply is scanned for every run of digits rather than parsed as a
+// number, because a CLI wraps its answer in whatever it wraps answers in: a
+// code fence, a sentence, a trailing newline. A fractional part is ignored.
+func reportsCurrentClock(text string, now time.Time) bool {
+	epoch := now.Unix()
+	for _, field := range strings.FieldsFunc(text, func(r rune) bool {
+		return r < '0' || r > '9'
+	}) {
+		if len(field) < 9 || len(field) > 11 {
+			// Fewer digits than a current epoch is a year or a byte
+			// count; more is milliseconds, which the prompt did not ask
+			// for and which would land a guess in range by accident.
+			continue
+		}
+		n, err := strconv.ParseInt(field, 10, 64)
+		if err != nil {
+			continue
+		}
+		if delta := time.Duration(n-epoch) * time.Second; delta > -probeSkew && delta < probeSkew {
+			return true
+		}
+	}
+	return false
 }
 
 // probeVersion runs the CLI's own version command.
@@ -219,6 +382,8 @@ func (d Diagnosis) Render(w io.Writer) {
 	line("token env", d.TokenEnv)
 	line("token usage", d.TokenUsage)
 	line("smoke test", d.Smoke)
+	line("local tools", d.LocalTools)
+	line("web", d.Web)
 	if d.Healthy() {
 		line("problems", "none")
 		return

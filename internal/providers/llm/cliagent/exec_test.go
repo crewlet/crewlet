@@ -47,6 +47,19 @@ func TestCLIAgentFakeCLI(t *testing.T) {
 		// example instead of the prompt.
 		prompt, _ := io.ReadAll(os.Stdin)
 		fmt.Print(base64.StdEncoding.EncodeToString(prompt))
+	case os.Getenv("FAKE_SHELL_PROBE_STDOUT") != "" || os.Getenv("FAKE_WEB_PROBE_STDOUT") != "":
+		// The doctor's isolation probes are two more completions, and a
+		// test of them needs the fake to answer each differently: which
+		// probe is asking is read off the prompt.
+		prompt, _ := io.ReadAll(os.Stdin)
+		switch {
+		case strings.Contains(string(prompt), webProbeURL):
+			fmt.Print(os.Getenv("FAKE_WEB_PROBE_STDOUT"))
+		case strings.Contains(string(prompt), noLocalToolsReply):
+			fmt.Print(os.Getenv("FAKE_SHELL_PROBE_STDOUT"))
+		default:
+			fmt.Print(os.Getenv("FAKE_STDOUT"))
+		}
 	default:
 		fmt.Print(os.Getenv("FAKE_STDOUT"))
 	}
