@@ -53,7 +53,7 @@ func catalogue() []events.Payload {
 		SkillTelemetryWriteFailed{}, CompactionRequested{},
 		CompactionCompleted{}, ReflectionCompleted{},
 		// sandbox.go
-		SandboxRunStarted{}, SandboxRunCompleted{},
+		SandboxRunStarted{}, SandboxRunCompleted{}, SandboxRunFailed{},
 		SandboxClarificationRequested{},
 		// turn.go
 		ExecuteMissingTool{}, PhaseToolActivated{}, ToolSkillGuardBlocked{},
@@ -108,6 +108,7 @@ var wireTypes = []string{
 	"role_updated",
 	"sandbox_clarification_requested",
 	"sandbox_run_completed",
+	"sandbox_run_failed",
 	"sandbox_run_started",
 	"scheduled_task_fired",
 	"skill_archived",

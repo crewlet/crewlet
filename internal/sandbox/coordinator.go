@@ -282,7 +282,9 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		// settle the row whatever the cleanup manages: both are network
 		// calls that can fail on their own, and neither failing is a reason
 		// to leave a seat parked on a run that is finished.
-		c.settleFailed(ctx, run)
+		c.settleFailed(ctx, run, types.SandboxFailureCollect,
+			"the coding job finished but its box could not be read back, so its "+
+				"result is lost; the work it pushed, if any, is on its branch")
 		return nil
 	}
 
@@ -438,7 +440,9 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 			"turn_id", run.TurnID, "claimed_from", run.ClaimedFrom,
 			"detail", "the row carried no suspended conversation; the turn "+
 				"cannot be resumed and the run is failed")
-		c.settleFailed(ctx, run)
+		c.settleFailed(ctx, run, types.SandboxFailureNoConversation,
+			"the run record carried no suspended conversation, so the turn that "+
+				"started it cannot be continued")
 		return nil
 	}
 	if c.resume == nil {
@@ -502,17 +506,55 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	return nil
 }
 
-// settleFailed marks a run failed, reaps its box, and frees the seat.
+// settleFailed marks a run failed, reaps its box, frees the seat, and SAYS SO.
 //
 // Every step is attempted regardless of the ones before it: each is a network
 // or store call that can fail on its own, and none of them failing is a reason
 // to leave a seat parked on a run that is over.
-func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun) {
+//
+// The announcement is the step that was missing. This path destroys a turn —
+// the row leaves the active board, the box is gone, and the completion that
+// would have explained it has already been acked — and it published nothing,
+// so all three ways of reaching here presented to the seat, the dashboard and
+// the requester as an identical silence. The first symptom was a wait that
+// never ended. `park` announces a QUESTION; a lost turn cannot be quieter than
+// that.
+func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, detail string) {
 	if err := c.pending.SetStatus(ctx, run.TurnID, StatusFailed, fenceOf(run)); err != nil {
 		log.WarnContext(ctx, "sandbox_failed_mark_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 	c.teardown(ctx, run)
 	c.clearBusy(run.AgentHandle)
+	c.announceFailure(ctx, run, reason, detail)
+}
+
+// announceFailure publishes the lost run, to the board and to its seat.
+//
+// TWO PUBLISHES, as for a start and a completion: the events copy is what a
+// dashboard and the event store read, and the per-seat control copy reaches
+// the node that was running the turn. Best effort — the run is already
+// settled, and a failed publish must not turn one lost turn into a stuck seat.
+func (c *Coordinator) announceFailure(ctx context.Context, run PendingRun, reason, detail string) {
+	failed := types.SandboxRunFailed{
+		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
+		TurnID: run.TurnID, SandboxID: run.SandboxID,
+		CodingAgent: run.CodingAgent,
+		Reason:      reason, Detail: redact.Secrets(detail),
+	}
+	ev := events.New(failed, events.TraceContext{
+		TraceID: run.TraceID, ParentSpanID: run.SpanID,
+	})
+	ev.Source = run.Role
+	if err := c.queue.Publish(ctx, topics.Event(failed.EventType()), ev); err != nil {
+		log.WarnContext(ctx, "sandbox_failure_publish_failed",
+			"turn_id", run.TurnID, "reason", reason, "error", err.Error())
+	}
+	if control := topics.AgentControl(run.AgentHandle); control != "" {
+		if err := c.queue.Publish(ctx, control, ev); err != nil {
+			log.WarnContext(ctx, "sandbox_failure_control_failed",
+				"turn_id", run.TurnID, "reason", reason, "error", err.Error())
+		}
+	}
 }
 
 // teardown reclaims a run's box and clears the row's record of it.
@@ -569,6 +611,13 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 				"turn_id", run.TurnID, "agent", run.AgentHandle,
 				"sandbox_id", run.SandboxID, "status", run.Status)
 			c.teardown(ctx, run)
+			// Announced like the other two ways a run is lost: the seat's
+			// new owner is about to open its mailbox, and a turn that
+			// died with the previous owner has to be visible rather than
+			// inferred from a row that quietly left the board.
+			c.announceFailure(ctx, run, types.SandboxFailureAbandoned,
+				"the node that owned this seat stopped mid-run, so its turn "+
+					"cannot be continued by the seat's new owner")
 			if err := c.pending.SetStatus(ctx, run.TurnID, StatusFailed, Fence{}); err != nil {
 				log.WarnContext(ctx, "sandbox_abandoned_mark_failed",
 					"turn_id", run.TurnID, "error", err.Error())

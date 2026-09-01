@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // resumeSpy records re-entries and can be made to fail.
@@ -95,6 +97,24 @@ func newCoordRig(t *testing.T) *coordRig {
 	}
 	rig.coordinator = coordinator
 	return rig
+}
+
+// failures is every SandboxRunFailed the coordinator announced, deduped
+// across the two topics each one goes to.
+func (r *coordRig) failures() []types.SandboxRunFailed {
+	r.queue.mu.Lock()
+	defer r.queue.mu.Unlock()
+	var out []types.SandboxRunFailed
+	seen := map[string]bool{}
+	for _, p := range r.queue.published {
+		payload, ok := p.event.Data.(*types.SandboxRunFailed)
+		if !ok || seen[p.event.ID.String()] {
+			continue
+		}
+		seen[p.event.ID.String()] = true
+		out = append(out, *payload)
+	}
+	return out
 }
 
 func (r *coordRig) completion(turnID string) (types.SandboxRunCompleted, *events.Event) {
@@ -454,6 +474,76 @@ func TestACompletionInTheLaunchWindowLeavesTheTurnAlone(t *testing.T) {
 	}
 	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
 		t.Fatalf("killed %v, want the box reclaimed once the turn was done", killed)
+	}
+}
+
+// A destroyed turn must be as loud as a question. settleFailed marked the row,
+// killed the box and freed the seat — and published nothing, so all three ways
+// of reaching it presented to the seat, the dashboard and the requester as an
+// identical silence. The first symptom was a wait that never ended.
+func TestALostRunIsAnnouncedWithTheReasonItWasLost(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		derail func(*coordRig)
+		want   string
+	}{
+		{"the box cannot be read back", func(r *coordRig) {
+			r.runner.CollectErr = errors.New("the box died mid-read")
+		}, types.SandboxFailureCollect},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newCoordRig(t)
+			rig.launch("t1")
+			rig.runner.Finish(Result{Success: true})
+			tc.derail(rig)
+			before := rig.queue.count()
+
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+
+			failed := rig.failures()
+			if len(failed) != 1 {
+				t.Fatalf("published %d failure events for a destroyed turn (queue grew by %d)",
+					len(failed), rig.queue.count()-before)
+			}
+			if failed[0].Reason != tc.want {
+				t.Fatalf("reason = %q, want %q", failed[0].Reason, tc.want)
+			}
+			if failed[0].TurnID != "t1" || failed[0].AgentHandle != "swe" {
+				t.Fatalf("the announcement does not name the run: %+v", failed[0])
+			}
+			if failed[0].Detail == "" {
+				t.Fatal("the announcement says what failed but not what it means")
+			}
+			// Both copies: the board reads the events topic, and the node
+			// running the turn reads the seat's control topic.
+			topicsSeen := rig.queue.topics()
+			for _, want := range []string{
+				topics.Event(types.SandboxRunFailed{}.EventType()),
+				topics.AgentControl("swe"),
+			} {
+				if !slices.Contains(topicsSeen, want) {
+					t.Fatalf("the failure did not reach %q; published to %v", want, topicsSeen)
+				}
+			}
+		})
+	}
+}
+
+// The recovery pass reaps a tail its previous owner abandoned, and that is a
+// turn lost too — the seat's new owner is about to open its mailbox.
+func TestAReapedAbandonedTailIsAnnounced(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launching("t1")
+
+	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-2", 7); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
+	failed := rig.failures()
+	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureAbandoned {
+		t.Fatalf("failures = %+v, want one %q", failed, types.SandboxFailureAbandoned)
 	}
 }
 

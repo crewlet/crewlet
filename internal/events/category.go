@@ -47,7 +47,13 @@ var categories = map[string]string{
 	"sandbox_run_started":             "task",
 	"sandbox_clarification_requested": "task",
 	"sandbox_run_completed":           "task",
-	"scheduled_task_fired":            "task",
+	// A run settled WITHOUT its turn resuming. Categorised beside the
+	// completion rather than kept live-only: this is the durable record
+	// that a turn was lost, and it is the one an operator goes looking for
+	// after the fact — a live-only failure would be swept before anybody
+	// asked why the work never came back.
+	"sandbox_run_failed":   "task",
+	"scheduled_task_fired": "task",
 
 	"message_sent": "communication",
 
