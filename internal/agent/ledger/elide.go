@@ -170,12 +170,25 @@ func goString(v any) string { return fmt.Sprintf("%v", v) }
 // For content whose payoff is at the end — a round's produced text, where the
 // draft follows the thinking that produced it. A head-preserving cut on that
 // keeps the reasoning and drops the deliverable.
+//
+// It walks BACK from the end rather than materialising []rune(text), so the
+// work is proportional to what is kept rather than to what is passed in. The
+// caller hands it a whole tool-loop transcript, which is megabytes on a long
+// Execute phase — a rune slice of that allocates four bytes per character of
+// input to keep a few thousand of them, on every prompt render.
 func elideTail(text string, limit int) string {
-	if limit <= 0 || utf8.RuneCountInString(text) <= limit {
+	if limit <= 0 {
 		return text
 	}
-	runes := []rune(text)
-	return "…" + strings.TrimLeft(string(runes[len(runes)-limit:]), " \t\n\r")
+	i := len(text)
+	for n := 0; n < limit && i > 0; n++ {
+		_, size := utf8.DecodeLastRuneInString(text[:i])
+		i -= size
+	}
+	if i == 0 {
+		return text
+	}
+	return "…" + strings.TrimLeft(text[i:], " \t\n\r")
 }
 
 // Elide trims text to limit runes with a visible ellipsis.
