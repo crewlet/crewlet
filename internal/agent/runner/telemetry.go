@@ -305,6 +305,11 @@ type phaseRecord struct {
 
 	// Decision is the phase's structured verdict: the plan's decision, the
 	// review's. Empty for Execute, which reaches none.
+	//
+	// A STRING rather than either enum, deliberately: this is the wire
+	// shape of a telemetry record, and the two phases put genuinely
+	// different sets in it — [turn.PlanDecision] and [phase.Decision].
+	// Callers render their own through String().
 	Decision string
 
 	// Rescued marks a phase whose submit tool never fired, so its payload

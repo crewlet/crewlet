@@ -675,7 +675,7 @@ func TestToolsCarryTheirSchemaAndACacheBreakpointOnTheLast(t *testing.T) {
 func TestToolChoiceMapping(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		choice string
+		choice llm.ToolChoice
 		want   string // "" means the field must be absent
 	}{
 		{"", "auto"},
@@ -684,7 +684,7 @@ func TestToolChoiceMapping(t *testing.T) {
 		{"none", "none"},
 		{"nonsense", ""},
 	} {
-		t.Run("choice="+tc.choice, func(t *testing.T) {
+		t.Run("choice="+string(tc.choice), func(t *testing.T) {
 			t.Parallel()
 			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("ok")) })
 			p := newProvider(t, url, nil)

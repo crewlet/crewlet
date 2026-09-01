@@ -195,7 +195,7 @@ func (p *Provider) smokeTest(ctx context.Context) string {
 				"required":   []any{"ok"},
 			},
 		}},
-		ToolChoice: "required",
+		ToolChoice: llm.ToolChoiceRequired,
 	})
 	if err != nil {
 		return "failed — " + err.Error()

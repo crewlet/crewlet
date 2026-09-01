@@ -21,6 +21,22 @@ const (
 
 func (d Decision) String() string { return string(d) }
 
+// Valid reports whether d is one of the four this package defines.
+//
+// EMPTY IS NOT VALID here, unlike the tool-choice and transport enums: every
+// producer of a Decision has concluded something, and the absent-field default
+// belongs where the wire shape is decoded — [runner] reads a missing review
+// decision as Done, for a reason it states — not in a predicate that would let
+// an unset field travel as if it meant something.
+func (d Decision) Valid() bool {
+	switch d {
+	case Done, SelfIterate, Failed, Skipped:
+		return true
+	default:
+		return false
+	}
+}
+
 // Gate is everything the engine knows about one round's delivery when it
 // comes to judge it: what the plan promised, what each phase called, and what
 // the surface says those tools are.

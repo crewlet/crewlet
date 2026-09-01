@@ -35,6 +35,23 @@ const (
 	PlanSkip PlanDecision = "skip"
 )
 
+// Valid reports whether d is one of the three a planner may conclude.
+//
+// EMPTY IS NOT VALID. An absent decision on the wire means [PlanRun] — it is
+// the common case and the one every other field is written for — but that
+// default is applied where the payload is decoded, not here: a predicate that
+// blessed "" would let an unset field travel as though the planner had chosen.
+func (d PlanDecision) Valid() bool {
+	switch d {
+	case PlanRun, PlanDirect, PlanSkip:
+		return true
+	default:
+		return false
+	}
+}
+
+func (d PlanDecision) String() string { return string(d) }
+
 // Plan is what the Plan phase produced.
 type Plan struct {
 	Decision  PlanDecision

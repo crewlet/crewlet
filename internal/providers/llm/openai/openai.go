@@ -505,14 +505,15 @@ func toolSchema(params map[string]any) shared.FunctionParameters {
 
 // toolChoice maps the contract's values onto the wire strings. The second
 // return is false when nothing should be sent.
-func toolChoice(choice string) (string, bool) {
+func toolChoice(choice llm.ToolChoice) (string, bool) {
 	switch choice {
-	case "", "auto":
-		return "auto", true
-	case "required", "none":
-		return choice, true
+	case "", llm.ToolChoiceAuto:
+		return string(llm.ToolChoiceAuto), true
+	case llm.ToolChoiceRequired, llm.ToolChoiceNone:
+		// OpenAI's spelling matches the contract's for both.
+		return string(choice), true
 	default:
-		log.Warn("unknown_tool_choice", "value", choice)
+		log.Warn("unknown_tool_choice", "value", string(choice))
 		return "", false
 	}
 }

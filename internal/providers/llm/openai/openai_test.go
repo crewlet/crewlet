@@ -542,7 +542,7 @@ func TestUnserialisableArgumentsAreRefusedBeforeTheCall(t *testing.T) {
 func TestToolsAndToolChoice(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		choice string
+		choice llm.ToolChoice
 		want   any // nil means the field must be absent
 	}{
 		{"", "auto"},
@@ -551,7 +551,7 @@ func TestToolsAndToolChoice(t *testing.T) {
 		{"none", "none"},
 		{"nonsense", nil},
 	} {
-		t.Run("choice="+tc.choice, func(t *testing.T) {
+		t.Run("choice="+string(tc.choice), func(t *testing.T) {
 			t.Parallel()
 			api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
 			p := newProvider(t, url, nil)

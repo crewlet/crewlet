@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 )
 
@@ -106,14 +107,14 @@ func TestAnAbsentDecisionTakesTheCommonCase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodePlan: %v", err)
 	}
-	if turn.PlanDecision(p.Decision) != turn.PlanRun {
+	if p.Decision != turn.PlanRun {
 		t.Errorf("decision = %q, want plan", p.Decision)
 	}
 	r, err := decodeReview(args(t, `{"final_artifact":"done here"}`))
 	if err != nil {
 		t.Fatalf("decodeReview: %v", err)
 	}
-	if r.Decision != "done" {
+	if r.Decision != phase.Done {
 		t.Errorf("decision = %q, want done", r.Decision)
 	}
 }
@@ -344,4 +345,64 @@ func TestALargeIDInAPlanSurvivesTheStructRoundTrip(t *testing.T) {
 	if !strings.Contains(p.Summary(), "1234567890123456789") {
 		t.Errorf("summary = %q", p.Summary())
 	}
+}
+
+// THE DECODERS ACCEPT EXACTLY WHAT THE ENUMS DEFINE, and refuse the rest.
+//
+// Both switches compared against untyped literals — "plan"/"direct"/"skip" and
+// "done"/"self_iterate"/"failed" — so renaming a constant would have left this
+// layer accepting a word nothing else in the engine produces, and refusing the
+// one it now does. Driven from the constants themselves, so a new member of
+// either set that this layer does not admit shows up here rather than as a
+// model answer silently refused in production.
+func TestTheDecodersAdmitExactlyTheDeclaredDecisions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("plan", func(t *testing.T) {
+		t.Parallel()
+		for _, d := range []turn.PlanDecision{turn.PlanRun, turn.PlanDirect, turn.PlanSkip} {
+			// `skip` is the one decision that needs no steps or tools.
+			body := `{"decision":"` + d.String() + `","tools_needed":["slack_post"]}`
+			p, err := decodePlan(args(t, body))
+			if err != nil {
+				t.Errorf("decodePlan(%s): %v", d, err)
+				continue
+			}
+			if p.Decision != d {
+				t.Errorf("decodePlan(%s) = %q", d, p.Decision)
+			}
+		}
+		if _, err := decodePlan(args(t,
+			`{"decision":"proceed","tools_needed":["slack_post"]}`)); err == nil {
+			t.Error("decodePlan accepted a decision the enum does not define")
+		}
+	})
+
+	t.Run("review", func(t *testing.T) {
+		t.Parallel()
+		for _, d := range []phase.Decision{phase.Done, phase.SelfIterate, phase.Failed} {
+			// self_iterate is the one that additionally needs notes.
+			body := `{"decision":"` + d.String() + `","notes":"try the other tool"}`
+			r, err := decodeReview(args(t, body))
+			if err != nil {
+				t.Errorf("decodeReview(%s): %v", d, err)
+				continue
+			}
+			if r.Decision != d {
+				t.Errorf("decodeReview(%s) = %q", d, r.Decision)
+			}
+		}
+		// phase.Skipped is a valid Decision and NOT a valid review: only a
+		// plan may conclude that nobody was asking, and a review reaching
+		// it would mean the turn ran after deciding not to.
+		if !phase.Skipped.Valid() {
+			t.Fatal("the fixture assumes phase.Skipped is a declared Decision")
+		}
+		if _, err := decodeReview(args(t, `{"decision":"skipped"}`)); err == nil {
+			t.Error("decodeReview accepted skipped, which only a plan may conclude")
+		}
+		if _, err := decodeReview(args(t, `{"decision":"complete"}`)); err == nil {
+			t.Error("decodeReview accepted a decision the enum does not define")
+		}
+	})
 }
