@@ -164,7 +164,7 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		}
 
 		a.q.beginHandler()
-		res := runBatchHandler(ctx, evs, h)
+		res := runBatchHandler(ctx, a.log, evs, h)
 		a.q.endHandler()
 
 		a.applyPartition(ctx, part.Key, part.Items, evs, res)

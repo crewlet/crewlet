@@ -148,3 +148,45 @@ func TestAPanicLineSurvivesANilEvent(t *testing.T) {
 		t.Fatalf("want two lines, got %d: %s", lines, buf.String())
 	}
 }
+
+// AND THE LINE CARRIES THE STACK, from the frame that actually panicked.
+//
+// A recovered panic that logs only its value is a bug report with the address
+// removed: "panic: runtime error: index out of range [3]" says nothing about
+// which of a dozen handlers holds that index. The stack is what makes
+// recovering free — the process survives AND the report is the one an
+// unrecovered panic would have printed.
+//
+// It works because these helpers are called from inside the deferred function
+// that recovered: a deferred call runs before its frame is popped, so
+// debug.Stack() still walks down through runtime.gopanic into the panicking
+// function. Asserted by panicking in a named function and looking for it.
+func TestAPanicLineCarriesTheStackOfWhatPanicked(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				queue.LogListenerPanic(logger, "crewlet.agent.alice.inbox",
+					&events.Event{Type: "task.created"}, r)
+			}
+		}()
+		panicFromANamedFrame()
+	}()
+
+	var line map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("decoding %q: %v", buf.String(), err)
+	}
+	stack, _ := line["stack"].(string)
+	if stack == "" {
+		t.Fatalf("the panic line carries no stack: %s", buf.String())
+	}
+	if !strings.Contains(stack, "panicFromANamedFrame") {
+		t.Errorf("the stack does not reach the frame that panicked:\n%s", stack)
+	}
+}
+
+// panicFromANamedFrame exists to be findable in a stack trace.
+func panicFromANamedFrame() { panic("boom") }

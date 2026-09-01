@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"runtime/debug"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -287,7 +288,7 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 		return
 	}
 	a.q.beginHandler()
-	res := runHandler(ctx, ev, h)
+	res := runHandler(ctx, a.log, ev, h)
 	a.q.endHandler()
 	a.apply(ctx, msg, ev, res)
 }
@@ -309,18 +310,25 @@ func (a *attachment) decode(msg jetstream.Msg) (*events.Event, bool) {
 
 // runHandler invokes a handler, converting a panic into a Nak so an
 // unexpected failure redelivers instead of killing the loop.
-func runHandler(ctx context.Context, ev *events.Event, h queue.Handler) (res queue.Result) {
+func runHandler(ctx context.Context, log *slog.Logger, ev *events.Event, h queue.Handler) (res queue.Result) {
 	defer func() {
 		if r := recover(); r != nil {
+			// The Nak carries the panic VALUE to the redelivery machinery;
+			// the stack goes to the log, because a handler that panics
+			// every delivery is a bug to find, not a delivery to retry.
+			log.Error("handler_panicked", "event_type", ev.Type,
+				"panic", r, "stack", string(debug.Stack()))
 			res = queue.Nak(fmt.Errorf("handler panicked: %v", r))
 		}
 	}()
 	return h(ctx, ev)
 }
 
-func runBatchHandler(ctx context.Context, evs []*events.Event, h queue.BatchHandler) (res queue.Result) {
+func runBatchHandler(ctx context.Context, log *slog.Logger, evs []*events.Event, h queue.BatchHandler) (res queue.Result) {
 	defer func() {
 		if r := recover(); r != nil {
+			log.Error("batch_handler_panicked", "batch", len(evs),
+				"panic", r, "stack", string(debug.Stack()))
 			res = queue.Nak(fmt.Errorf("batch handler panicked: %v", r))
 		}
 	}()

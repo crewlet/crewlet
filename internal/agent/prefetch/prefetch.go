@@ -5,6 +5,7 @@ package prefetch
 
 import (
 	"context"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -251,11 +252,11 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 // the whole PROCESS down rather than the turn — and these renderers read
 // stores, decode model output and index into slices whose length came from
 // an LLM. That is a wide enough surface that "this must never panic" is a
-// hope rather than a guarantee, and the guarantee is worth more than the
-// stack trace.
+// hope rather than a guarantee. The stack goes in the log line, so recovering
+// costs the process nothing an unrecovered panic would have told anyone.
 func recoverInto(into *string) {
 	if r := recover(); r != nil {
-		log.Error("prefetch_block_panicked", "panic", r)
+		log.Error("prefetch_block_panicked", "panic", r, "stack", string(debug.Stack()))
 		*into = ""
 	}
 }
@@ -267,7 +268,7 @@ func recoverInto(into *string) {
 // one way this list can lie to the curator.
 func recoverSkills(into *string, ids *[]string) {
 	if r := recover(); r != nil {
-		log.Error("prefetch_block_panicked", "panic", r)
+		log.Error("prefetch_block_panicked", "panic", r, "stack", string(debug.Stack()))
 		*into, *ids = "", nil
 	}
 }

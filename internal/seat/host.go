@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -855,6 +856,12 @@ func (h *Host) noteAdmission(ctx context.Context, handle string, admitted bool) 
 func callHook(name, handle string, fn func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			// LOGGED AS WELL AS RETURNED. The error reaches the caller,
+			// which is what makes the seat go undead and the teardown
+			// retry — but it carries a message, not a stack, and the
+			// panic is in somebody else's hook.
+			log.Error("seat_hook_panicked", "hook", name, "seat", handle,
+				"panic", r, "stack", string(debug.Stack()))
 			err = fmt.Errorf("seat hook %s panicked for %q: %v", name, handle, r)
 		}
 	}()
@@ -868,7 +875,8 @@ func callHook(name, handle string, fn func() error) (err error) {
 func (h *Host) safely(event string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error(event, "node", h.nodeID, "panic", r)
+			log.Error(event, "node", h.nodeID, "panic", r,
+				"stack", string(debug.Stack()))
 		}
 	}()
 	fn()

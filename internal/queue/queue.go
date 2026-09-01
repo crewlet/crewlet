@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"time"
@@ -456,7 +457,8 @@ func PartitionByKey[T any](items []T, key BatchKeyFunc, eventOf func(T) *events.
 func safeKey(ev *events.Event, key BatchKeyFunc) (k string) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error("batch_key_failed", "event_type", eventType(ev), "panic", r)
+			log.Error("batch_key_failed", "event_type", eventType(ev), "panic", r,
+				"stack", string(debug.Stack()))
 			k = fallbackKey(ev)
 		}
 	}()
@@ -590,6 +592,13 @@ func LogBatchResult(l *slog.Logger, topic, group, batchKey string, evs []*events
 	}
 }
 
+// THE STACK IS CAPTURED IN THESE HELPERS, not passed in, and that works
+// because they are called from inside the deferred function that recovered:
+// a deferred call runs before its frame is popped, so debug.Stack() still
+// walks down through runtime.gopanic into the function that actually
+// panicked. Capturing it at the recover site and threading it through would
+// be identical minus one frame, and minus the chance a caller forgets.
+//
 // LogListenerPanic emits the standard line for a publish listener that
 // panicked and was recovered, and [LogStreamHandlerPanic] the one for a
 // stream handler.
@@ -617,7 +626,7 @@ func LogBatchResult(l *slog.Logger, topic, group, batchKey string, evs []*events
 // The listener's work for this event is simply gone.
 func LogListenerPanic(l *slog.Logger, topic string, ev *events.Event, r any) {
 	l.Error("publish_listener_panicked", "topic", topic,
-		"event_type", eventType(ev), "panic", r)
+		"event_type", eventType(ev), "panic", r, "stack", string(debug.Stack()))
 }
 
 // LogStreamHandlerPanic emits the standard line for a stream handler that
@@ -629,7 +638,7 @@ func LogListenerPanic(l *slog.Logger, topic string, ev *events.Event, r any) {
 // use.
 func LogStreamHandlerPanic(l *slog.Logger, topic string, ev *events.Event, r any) {
 	l.Error("stream_handler_panicked", "topic", topic,
-		"event_type", eventType(ev), "panic", r)
+		"event_type", eventType(ev), "panic", r, "stack", string(debug.Stack()))
 }
 
 func errText(err error) string {
