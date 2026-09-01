@@ -52,11 +52,21 @@ type ExecResult struct {
 // Zero means UNSET for each field, and the runner falls back to the agent's own
 // default. Note what is not here: a run deadline. The engine imposes no
 // wall-clock limit on a coding job — it runs as long as it needs, and
-// completion is detected by tracking the job rather than by a clock.
+// completion is detected by tracking the job rather than by a clock. There WAS
+// a TimeoutSec here, read by nobody, contradicting the paragraph above it.
+//
+// NOTHING SETS EITHER FIELD TODAY. They reach the CLI — [codingagent] renders
+// them as --max-turns and --max-budget-usd — but the engine's only
+// LaunchRequest builds no Limits, so every production coding run is uncapped
+// on both. That is deliberate for the budget (the fleet's own token meter
+// already charges a collected run, and a second cap denominated in the
+// operator's dollars would fight it) and a gap for the rounds: a thrashing
+// coding agent has no engine-side bound at all. Wiring max_turns to a role's
+// sandbox block is the open item; until it is, this type is honest about
+// having no caller rather than looking like one whose caller nobody found.
 type Limits struct {
 	MaxTurns     int
 	MaxBudgetUSD float64
-	TimeoutSec   float64
 }
 
 // Spec is what it takes to mint and drive one box.
