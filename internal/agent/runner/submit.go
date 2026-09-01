@@ -2,19 +2,22 @@
 //
 // It is the wiring between four things that each know nothing about the
 // others: the prompt builder, the tool registry, the provider chain, and the
-// turn loop's [turn.Phases] contract. Everything here is plumbing plus the two
-// rules plumbing cannot express — how a phase's structured answer is
-// extracted, and what happens when the model never gives one.
+// turn loop's [turn.Phases] contract. Everything here is plumbing plus the one
+// rule plumbing cannot express: what happens when the model never gives a
+// structured answer at all.
+//
+// What a structured answer IS, and the three rules for capturing one, are
+// [github.com/crewlet/crewlet/internal/agent/structured]'s. What counts as a
+// VALID one stays here, in the decoders below, because that belongs to the
+// phase doing the asking.
 package runner
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/turn"
-	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // The names of the two structured-output tools. A phase ENDS by calling its
@@ -23,45 +26,6 @@ const (
 	SubmitPlanTool   = "submit_plan"
 	SubmitReviewTool = "submit_review"
 )
-
-// submitted is the captured payload of a structured-output call.
-//
-// The tool does not DO anything: it validates, records, and reports back. The
-// phase's answer is the arguments it was called with, so the loop's ordinary
-// tool machinery carries it out and nothing needs a side channel.
-type submitted[T any] struct {
-	name   string
-	desc   string
-	schema map[string]any
-	value  T
-	called bool
-	decode func(map[string]any) (T, error)
-}
-
-func (s *submitted[T]) Name() string               { return s.name }
-func (s *submitted[T]) Description() string        { return s.desc }
-func (s *submitted[T]) Parameters() map[string]any { return s.schema }
-
-func (s *submitted[T]) Call(_ context.Context, args map[string]any) (tools.Result, error) {
-	v, err := s.decode(args)
-	if err != nil {
-		// A failed validation goes BACK TO THE MODEL rather than ending
-		// the phase. It is the one tool failure the model can reliably
-		// fix, and refusing the turn over a malformed submission throws
-		// away everything the phase already did.
-		//nolint:nilerr // Deliberate: see the paragraph above.
-		return tools.Result{Output: "Invalid submission: " + err.Error(), Failed: true}, nil
-	}
-	// LAST WRITE WINS, and the call is still accepted. A model that
-	// submits twice has corrected itself; rejecting the second submission
-	// leaves the engine acting on the draft the model just replaced.
-	s.value = v
-	s.called = true
-	return tools.Result{Output: "submitted"}, nil
-}
-
-// Value returns the captured submission and whether one arrived.
-func (s *submitted[T]) Value() (T, bool) { return s.value, s.called }
 
 // planPayload is the wire shape of a submitted plan.
 type planPayload struct {
@@ -81,7 +45,7 @@ type step struct {
 
 func decodePlan(args map[string]any) (planPayload, error) {
 	var p planPayload
-	if err := remarshal(args, &p); err != nil {
+	if err := structured.Remarshal(args, &p); err != nil {
 		return p, err
 	}
 	switch turn.PlanDecision(p.Decision) {
@@ -150,7 +114,7 @@ type reviewPayload struct {
 
 func decodeReview(args map[string]any) (reviewPayload, error) {
 	var r reviewPayload
-	if err := remarshal(args, &r); err != nil {
+	if err := structured.Remarshal(args, &r); err != nil {
 		return r, err
 	}
 	switch r.Decision {
@@ -171,21 +135,4 @@ func decodeReview(args map[string]any) (reviewPayload, error) {
 		return r, fmt.Errorf("self_iterate needs notes saying what the next round should do differently")
 	}
 	return r, nil
-}
-
-// remarshal moves a decoded argument map into a typed struct.
-//
-// Via JSON rather than field-by-field because the arguments already came off
-// the wire as JSON and the struct tags are the schema — one definition of the
-// mapping instead of two that can disagree. json.Number survives the round
-// trip, so a large id in a plan's own arguments stays exact.
-func remarshal(args map[string]any, into any) error {
-	blob, err := json.Marshal(args)
-	if err != nil {
-		return fmt.Errorf("arguments could not be re-encoded: %w", err)
-	}
-	if err := json.Unmarshal(blob, into); err != nil {
-		return fmt.Errorf("arguments do not match the schema: %w", err)
-	}
-	return nil
 }

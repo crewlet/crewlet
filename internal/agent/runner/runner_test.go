@@ -6,13 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 )
 
-func planTool() *submitted[planPayload] {
-	return &submitted[planPayload]{
-		name: SubmitPlanTool, schema: planSchema, decode: decodePlan,
-	}
+func planTool() *structured.Tool[planPayload] {
+	return structured.New(SubmitPlanTool, submitPlanDescription, planSchema, decodePlan)
 }
 
 func args(t *testing.T, blob string) map[string]any {

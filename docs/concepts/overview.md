@@ -176,7 +176,8 @@ internal/
 │                         #   model↔tool round-trip and its suspend),
 │                         #   inbox/ (what wakes a seat, and what must not
 │                         #   wake it twice), ledger/ (iteration, conversation
-│                         #   and budget ledgers), prefetch/, prompts/,
+│                         #   and budget ledgers), structured/ (how a phase
+│                         #   gives a typed answer), prefetch/, prompts/,
 │                         #   skills/, builtin/, subagent/
 ├── queue/                # The EventQueue contract + the jetstream backend
 │                         #   and the in-memory twin, both certified by one
