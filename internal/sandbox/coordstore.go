@@ -228,6 +228,13 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		run.CodingAgent = box.CodingAgent
 		run.SessionID = box.SessionID
 		run.PauseTTLSeconds = box.PauseTTLSec
+		// A box being attached is a box that is RUNNING, so the snapshot
+		// stamp goes with it. A reused box is attached while its row still
+		// carried the paused_at from the collect that snapshotted it, and
+		// paused_at is half of what the operator board draws a held box
+		// from — so a live second run rendered as a paused one, being
+		// billed for, for the rest of the turn.
+		run.PausedAt = time.Time{}
 		return true
 	})
 	return err

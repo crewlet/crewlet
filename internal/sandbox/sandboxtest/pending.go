@@ -33,6 +33,7 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"ALaunchingRunIsNotClaimable", testALaunchingRunIsNotClaimable},
 		{"SuspendingOpensTheRunToTheTail", testSuspendingOpensTheRunToTheTail},
 		{"OnlyALaunchingRunCanSuspend", testOnlyALaunchingRunCanSuspend},
+		{"AttachingABoxClearsTheSnapshotStamp", testAttachingABoxClearsTheSnapshotStamp},
 		{"ALaunchingRunIsActive", testALaunchingRunIsActive},
 		{"TheTailIsClaimedExactlyOnce", testTheTailIsClaimedExactlyOnce},
 		{"AClaimIsExclusiveUnderContention", testAClaimIsExclusiveUnderContention},
@@ -222,6 +223,30 @@ func testOnlyALaunchingRunCanSuspend(t *testing.T, s sandbox.PendingStore) {
 	}
 	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed {
 		t.Errorf("status = %q, want the claim to stand", got.Status)
+	}
+}
+
+func testAttachingABoxClearsTheSnapshotStamp(t *testing.T, s sandbox.PendingStore) {
+	// paused_at is half of what an operator board draws a HELD box from, so
+	// it has to move with the box. A reused box is attached while the row
+	// still carries the stamp from the collect that snapshotted it — and a
+	// live second run then rendered as a paused one, billing, for the rest
+	// of the turn.
+	mustLaunched(t, s, run("t1"))
+	if err := s.AttachSandbox(context.Background(), "t1",
+		sandbox.BoxRef{SandboxID: "box-1", CommandID: "c-1"}, sandbox.Fence{}); err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if err := s.MarkBoxPaused(context.Background(), "t1", base); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	if err := s.AttachSandbox(context.Background(), "t1",
+		sandbox.BoxRef{SandboxID: "box-1", CommandID: "c-2"}, sandbox.Fence{}); err != nil {
+		t.Fatalf("reattach: %v", err)
+	}
+
+	if got := mustGet(t, s, "t1"); got.Paused() {
+		t.Errorf("a reattached box still reads as a held snapshot: paused_at=%s", got.PausedAt)
 	}
 }
 
