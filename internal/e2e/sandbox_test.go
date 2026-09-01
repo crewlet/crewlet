@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
@@ -23,6 +25,22 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
+
+// codingConversation is the thread the coding gate's turn arrives on, so the
+// entry the resumed turn files has somewhere to be filed.
+const codingConversation = "slack:C-coding"
+
+// conversation reads a seat's thread history straight from the node's own
+// store, which is where the ledger lives.
+func (n *node) conversation(t *testing.T, handle, key string) []ledger.Session {
+	t.Helper()
+	got, err := ledgerstore.NewConversations(n.engine.Backends().Store).
+		History(context.Background(), handle, key, 0)
+	if err != nil {
+		t.Fatalf("conversation history for %s on %s: %v", handle, key, err)
+	}
+	return got
+}
 
 // GATE G6 — the golden coding turn.
 //
@@ -312,7 +330,10 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
-	n.wake(t, "swe", "the api test is flaking, please fix it")
+	// ON A THREAD, as a chat message arrives. The conversation is what the
+	// resumed turn owes an answer to, and what its ledger entry is filed
+	// under — neither of which can be asserted on a trigger that has none.
+	n.wakeInConversation(t, "swe", "the api test is flaking, please fix it", codingConversation)
 
 	// The SUSPEND: the turn ends with a row that outlives it.
 	waitFor(t, "a detached run to be recorded", func() bool {
@@ -363,6 +384,25 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	}
 	if argv[i+1] != "7" {
 		t.Fatalf("--max-turns %s, want the seat's own 7", argv[i+1])
+	}
+	// AND THE CONVERSATION KNOWS THE TURN HAPPENED. A turn that ends on the
+	// resume path ends a thread's turn as surely as one that ends on the
+	// inbox path, and only the inbox path recorded it: the thread's history
+	// stopped at the moment the run detached, so the seat's next turn on it
+	// read a conversation in which the coding work had never happened.
+	//
+	// End to end because the two halves are in different processes' worth of
+	// code: the LAUNCH writes the conversation onto the run's row, and the
+	// RESUME — which cannot see the trigger any more — reads it back.
+	history := n.conversation(t, "swe", codingConversation)
+	if len(history) != 1 {
+		t.Fatalf("the resumed turn left %d conversation entries, want 1", len(history))
+	}
+	if history[0].Reply == "" {
+		t.Errorf("the entry carries no reply: %+v", history[0])
+	}
+	if history[0].Decision != "done" {
+		t.Errorf("decision = %q, want the resumed turn's own outcome", history[0].Decision)
 	}
 }
 

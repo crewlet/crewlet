@@ -114,6 +114,10 @@ func (t turnTelemetry) runnerTurn(company *Company, workKey string, depth int, c
 			// It was set on the sandbox-resume path alone, so every
 			// ordinary turn's ask reported a one-element chain.
 			Chain: chain,
+			// The conversation this turn owes an answer to, so work it
+			// detaches carries it: a coding run's row is written from
+			// here, and the resumed turn reports back from the row.
+			ConversationKey: t.convKey,
 		},
 	}
 }

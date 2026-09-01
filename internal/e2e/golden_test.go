@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -198,6 +199,24 @@ func (n *node) wake(t *testing.T, handle, text string) {
 // wakeInTrace is wake with a chosen trace, so a test can follow it through.
 func (n *node) wakeInTrace(t *testing.T, handle, text string, tc events.TraceContext) {
 	t.Helper()
+	n.publishWake(t, handle, text, "", tc)
+}
+
+// wakeInConversation is wake on a named thread, the way a real chat message
+// arrives: the notification service stamps the conversation onto the envelope
+// and the inbox partitions on it.
+//
+// Separate from [node.wake] rather than folded into it, because the stamp is
+// what the inbox COALESCES on — two stamped wakes are one digest turn, which
+// is right for a thread and wrong for the tests that wake a seat twice and
+// expect two turns.
+func (n *node) wakeInConversation(t *testing.T, handle, text, conversation string) {
+	t.Helper()
+	n.publishWake(t, handle, text, conversation, events.TraceContext{})
+}
+
+func (n *node) publishWake(t *testing.T, handle, text, conversation string, tc events.TraceContext) {
+	t.Helper()
 	body := text
 	ev := events.New(types.ExternalNotification{
 		NotificationSource: "slack",
@@ -207,6 +226,7 @@ func (n *node) wakeInTrace(t *testing.T, handle, text string, tc events.TraceCon
 		Body:               text,
 		SalientBody:        &body,
 	}, tc)
+	notify.Stamp(ev, conversation)
 	if err := n.engine.Backends().Queue.Publish(t.Context(),
 		topics.AgentInbox(handle), ev); err != nil {
 		t.Fatalf("wake %s: %v", handle, err)
