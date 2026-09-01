@@ -54,6 +54,10 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 					if f == nil {
 						t.Fatal("newFleet returned a nil backend")
 					}
+					// NOT t.Context(), for the reason [newHarness]
+					// states: that one is cancelled before cleanup
+					// runs, and the concurrency cases join goroutines
+					// that are still mid-call at that point.
 					ctx, cancel := context.WithTimeout(context.Background(), stallBudget)
 					t.Cleanup(cancel)
 					c.fn(&fleetHarness{t: t, ctx: ctx, f: f})

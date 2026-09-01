@@ -961,7 +961,8 @@ func TestAFailedRunsBoxIsReclaimedOnADeadContext(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	rig.coordinator.settleFailed(ctx, run)
+	rig.coordinator.settleFailed(ctx, run, types.SandboxFailureCollect,
+		"the box could not be read back")
 
 	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
 		t.Fatalf("killed %v, want the failed run's box %q: it will run to its "+
