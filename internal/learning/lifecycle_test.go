@@ -1759,3 +1759,46 @@ func TestTheToolFreeHorizonIsConfigurable(t *testing.T) {
 		t.Errorf("the configured horizon was overwritten: %v", l.Options().ToolFreeMaxAge)
 	}
 }
+
+// EVERY SIMILARITY DECISION IN THIS PACKAGE USES ONE FUNCTION, and they agree
+// at the boundary.
+//
+// The overlap was written twice, under two names, and the copies were free to
+// drift: `clusterByTools` and `clusterEpisodes` pooled by one of them while
+// `mostSimilar` — the near-duplicate check that decides whether a drafted
+// skill is a new one — used the other. A seat's skills clustered by one rule
+// and deduplicated by another means a draft can be rejected as a duplicate of
+// a skill it would never have been clustered with, which reads as "synthesis
+// stopped producing anything" and is invisible from either side alone.
+//
+// {x,y} and {y,z} overlap at exactly 1/3, so a threshold AT it must pool and a
+// threshold above it must not — on both paths, in the same direction.
+func TestEverySimilarityDecisionAgreesAtTheThreshold(t *testing.T) {
+	t.Parallel()
+	left, right := []string{"x", "y"}, []string{"y", "z"}
+	const atTheBoundary = 1.0 / 3.0
+	const justAbove = 0.34
+
+	for _, tc := range []struct {
+		name      string
+		threshold float64
+		same      bool
+	}{
+		{"at the boundary", atTheBoundary, true},
+		{"just above it", justAbove, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			clustered := clusterByTools([]Episode{
+				{ID: "a", ToolSequence: left}, {ID: "b", ToolSequence: right},
+			}, tc.threshold)
+			if pooled := len(clustered) == 1; pooled != tc.same {
+				t.Errorf("clusterByTools pooled = %v, want %v", pooled, tc.same)
+			}
+			if _, duplicate := mostSimilar(left, [][]string{right}, tc.threshold); duplicate != tc.same {
+				t.Errorf("mostSimilar duplicate = %v, want %v — the two paths disagree",
+					duplicate, tc.same)
+			}
+		})
+	}
+}

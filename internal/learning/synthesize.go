@@ -406,37 +406,11 @@ func stripFence(s string) string {
 func mostSimilar(seq []string, existing [][]string, threshold float64) (string, bool) {
 	best, bestAt := "", 0.0
 	for _, other := range existing {
-		if score := jaccard(seq, other); score > bestAt {
+		if score := toolJaccard(seq, other); score > bestAt {
 			best, bestAt = strings.Join(other, ","), score
 		}
 	}
 	return best, bestAt >= threshold
-}
-
-// jaccard is |A∩B| / |A∪B| over two tool sets. Two empty sets score 0 rather
-// than 1: "neither called anything" is not a shared procedure.
-func jaccard(a, b []string) float64 {
-	if len(a) == 0 || len(b) == 0 {
-		return 0
-	}
-	left, right := map[string]struct{}{}, map[string]struct{}{}
-	for _, s := range a {
-		left[s] = struct{}{}
-	}
-	for _, s := range b {
-		right[s] = struct{}{}
-	}
-	shared := 0
-	for s := range left {
-		if _, ok := right[s]; ok {
-			shared++
-		}
-	}
-	union := len(left) + len(right) - shared
-	if union == 0 {
-		return 0
-	}
-	return float64(shared) / float64(union)
 }
 
 // SynthesisSystemPrompt asks for a reusable procedure or nothing.

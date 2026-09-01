@@ -1090,13 +1090,21 @@ func clusterByTools(episodes []Episode, threshold float64) [][]Episode {
 	return clusters
 }
 
-// toolJaccard is set overlap between two tool sequences: shared tools over
-// distinct tools, ignoring order and repetition.
+// toolJaccard is set overlap between two tool sequences: |A∩B| / |A∪B| over
+// the distinct tools, ignoring order and repetition.
+//
+// ONE FUNCTION FOR ALL FIVE CALLERS — the two clusterers, the promoter, the
+// near-duplicate check and the lifecycle fold. It was written twice with two
+// names, and the copies could have disagreed on the threshold semantics
+// silently: a seat's skills would then have been clustered by one rule and
+// deduplicated by another, so a draft could be judged a duplicate of a skill
+// it would never have been clustered with.
 //
 // Empty on either side scores 0 rather than 1. Two turns that called no tools
 // have nothing in common that this function can see, and calling that a
 // perfect match would pool every tool-free turn a seat ever ran into one
-// cluster and summarise it as a pattern.
+// cluster and summarise it as a pattern. That guard is also what makes the
+// division below safe: with both sides non-empty the union is at least 1.
 func toolJaccard(a, b []string) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
