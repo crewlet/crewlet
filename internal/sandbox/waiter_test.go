@@ -272,13 +272,67 @@ func TestAVanishedBoxFiresCompletionOnceTheStreakIsLongEnough(t *testing.T) {
 	run := rig.launch("t1")
 	rig.provider.Vanished[run.SandboxID] = true
 
-	for i := 1; i < MaxConnectFailures; i++ {
+	// Two failures, but no time has passed: giving up is TERMINAL — the
+	// completion fires, collect cannot reconnect either, and the run is
+	// settled failed — so a burst of probes must not be able to spend the
+	// window on its own.
+	for i := range MinConnectFailures + 2 {
 		if fired := rig.tick(); fired != 0 {
-			t.Fatalf("gave up after %d failures, want %d", i, MaxConnectFailures)
+			t.Fatalf("gave up on probe %d with no time elapsed", i+1)
 		}
 	}
+	rig.now = rig.now.Add(ConnectGiveUp)
 	if fired := rig.tick(); fired != 1 {
-		t.Fatalf("fired %d on the %dth failure, want 1", fired, MaxConnectFailures)
+		t.Fatalf("fired %d after a full %s unreachable, want 1", fired, ConnectGiveUp)
+	}
+}
+
+// THE WINDOW IS A DURATION, NOT A TICK COUNT. It was four consecutive
+// failures, justified in the comment as "four ticks ≈ 1 minute" — true only at
+// the default cadence. Driven faster, the same four failures are a fraction of
+// a second, and a box that is briefly slow rather than gone gets its turn
+// destroyed.
+func TestTheGiveUpWindowDoesNotShrinkWithTheCadence(t *testing.T) {
+	rig := newWaiterRig(t)
+	fast, err := NewWaiter(WaiterOptions{
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Interval: 100 * time.Millisecond,
+		Now:      func() time.Time { return rig.now },
+	})
+	if err != nil {
+		t.Fatalf("NewWaiter: %v", err)
+	}
+	run := rig.launch("t1")
+	rig.provider.Vanished[run.SandboxID] = true
+
+	// Far more probes than the old count, across the whole of a fast
+	// waiter's tick budget for that many ticks.
+	for range 20 {
+		rig.now = rig.now.Add(100 * time.Millisecond)
+		if fired, err := fast.Tick(t.Context()); err != nil || fired != 0 {
+			t.Fatalf("gave up after 2s at a 100ms cadence: fired=%d err=%v", fired, err)
+		}
+	}
+	rig.now = rig.now.Add(ConnectGiveUp)
+	if fired, err := fast.Tick(t.Context()); err != nil || fired != 1 {
+		t.Fatalf("fired %d after a full %s unreachable: %v", fired, ConnectGiveUp, err)
+	}
+}
+
+// At a cadence slower than the window, the FIRST failure is already older than
+// it. One probe is not evidence a box is gone.
+func TestOneProbeNeverGivesUpHoweverOldTheRunIs(t *testing.T) {
+	rig := newWaiterRig(t)
+	run := rig.launch("t1")
+	rig.provider.Vanished[run.SandboxID] = true
+	rig.now = rig.now.Add(100 * time.Hour)
+
+	if fired := rig.tick(); fired != 0 {
+		t.Fatal("a single failed probe declared the box gone and failed the run")
+	}
+	rig.now = rig.now.Add(ConnectGiveUp)
+	if fired := rig.tick(); fired != 1 {
+		t.Fatalf("fired %d on the confirming probe, want 1", fired)
 	}
 }
 
@@ -289,16 +343,15 @@ func TestASuccessfulReconnectClearsTheFailureStreak(t *testing.T) {
 	run := rig.launch("t1")
 
 	rig.provider.Vanished[run.SandboxID] = true
-	for range MaxConnectFailures - 1 {
-		rig.tick()
-	}
+	rig.tick()
+	rig.now = rig.now.Add(ConnectGiveUp)
 	delete(rig.provider.Vanished, run.SandboxID)
-	rig.tick() // reachable again
+	rig.tick() // reachable again — the streak, and its clock, start over
 
 	rig.provider.Vanished[run.SandboxID] = true
-	for i := 1; i < MaxConnectFailures; i++ {
+	for i := range MinConnectFailures + 1 {
 		if fired := rig.tick(); fired != 0 {
-			t.Fatalf("the old streak carried over: gave up on failure %d", i)
+			t.Fatalf("the old streak carried over: gave up on probe %d", i+1)
 		}
 	}
 }
