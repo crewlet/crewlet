@@ -280,8 +280,6 @@ func (w *Waiter) mayTick(ctx context.Context) bool {
 	return holds
 }
 
-// forget drops failure counters for runs that are no longer active, so a
-// reused turn id never inherits a dead run's streak.
 // connectStreak is one turn's run of consecutive failed reconnects.
 //
 // BOTH HALVES, because the give-up rule is both: since is what the duration is
@@ -292,6 +290,8 @@ type connectStreak struct {
 	attempts int
 }
 
+// forget drops failure counters for runs that are no longer active, so a
+// reused turn id never inherits a dead run's streak.
 func (w *Waiter) forget(runs []PendingRun) {
 	active := make(map[string]bool, len(runs))
 	for _, run := range runs {
