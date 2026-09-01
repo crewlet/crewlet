@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -264,9 +265,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	stderr = strings.TrimSpace(stderr)
 	switch {
 	case result.Transcript != "":
-		result.Transcript = tail(result.Transcript, MaxTranscript)
+		result.Transcript = tail(result.Transcript)
 	case stderr != "":
-		result.Transcript = tail(stderr, MaxTranscript)
+		result.Transcript = tail(stderr)
 	}
 
 	code, err := readText(ctx, box, paths.ExitCode())
@@ -318,7 +319,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			// in all three ways — too small to hold the line naming the
 			// failing file, taken from the end that says least about a
 			// crash, and silent about having cut at all.
-			result.Error = tail(detail, MaxTranscript)
+			result.Error = tail(detail)
 		}
 	}
 
@@ -372,10 +373,26 @@ func readText(ctx context.Context, box sandbox.Sandbox, path string) (string, er
 	return string(raw), nil
 }
 
-// tail keeps the last n characters with a marker saying it cut.
-func tail(text string, n int) string {
-	if len(text) <= n {
+// tail keeps the last MaxTranscript characters with a marker saying it cut.
+//
+// The bound is NOT a parameter. Every caller is bounding the same thing — a
+// coding run's own account of itself — and a per-caller cap would let the
+// transcript and the error text disagree about how much of one run survives.
+//
+// RUNES, not bytes, and the kept half starts on a boundary. A byte slice at a
+// fixed offset from the end begins mid-rune whenever the text is not ASCII,
+// and the event store's JSON encoding replaces that partial rune with U+FFFD
+// — so a run whose output names a non-ASCII path opened with mojibake rather
+// than with a whole character. It is also what makes MaxTranscript's stated
+// unit true.
+func tail(text string) string {
+	if utf8.RuneCountInString(text) <= MaxTranscript {
 		return text
 	}
-	return "…[earlier output truncated]…\n" + text[len(text)-n:]
+	i := len(text)
+	for n := 0; n < MaxTranscript; n++ {
+		_, size := utf8.DecodeLastRuneInString(text[:i])
+		i -= size
+	}
+	return "…[earlier output truncated]…\n" + text[i:]
 }

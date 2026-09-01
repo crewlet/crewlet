@@ -139,7 +139,7 @@ func (a *e2bAPI) do(ctx context.Context, method, path string, in, out any) error
 		detail := readDetail(resp.Body)
 		return &E2BError{
 			Method: method, Path: path, Status: resp.StatusCode,
-			Detail: strings.TrimSpace(string(detail)),
+			Detail: strings.TrimSpace(detail),
 		}
 	}
 	if out == nil {

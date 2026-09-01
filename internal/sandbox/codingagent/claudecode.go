@@ -104,7 +104,7 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 		// whole stdout and nothing upstream limits it; marked, so a reader
 		// can tell a cut from a short run.
 		return sandbox.Result{
-			Text:  tail(text, MaxTranscript),
+			Text:  tail(text),
 			Error: "the coding agent's output could not be parsed",
 		}
 	}

@@ -58,9 +58,9 @@ func TestACodingRunsFailureTextKeepsItsEndAndSaysItCut(t *testing.T) {
 	t.Parallel()
 	huge := strings.Repeat("noise\n", MaxTranscript) + "FATAL: migrations/0007.sql is missing"
 
-	got := tail(huge, MaxTranscript)
-	if len(got) > MaxTranscript+len("…[earlier output truncated]…\n") {
-		t.Errorf("a %d-byte tail, past its bound", len(got))
+	got := tail(huge)
+	if n := utf8.RuneCountInString(got); n > MaxTranscript+utf8.RuneCountInString("…[earlier output truncated]…\n") {
+		t.Errorf("a %d-rune tail, past its bound", n)
 	}
 	if !strings.HasSuffix(got, "FATAL: migrations/0007.sql is missing") {
 		t.Error("the tail was not kept, so the line naming the failure is gone")
@@ -69,8 +69,32 @@ func TestACodingRunsFailureTextKeepsItsEndAndSaysItCut(t *testing.T) {
 		t.Error("the cut is silent")
 	}
 	// Under the bound, untouched — the bound is for pathological input.
-	if got := tail("short", MaxTranscript); got != "short" {
+	if got := tail("short"); got != "short" {
 		t.Errorf("a short output was altered: %q", got)
+	}
+}
+
+// The cut lands wherever the text happens to be long, so it must land on a
+// rune boundary. A byte slice does not: it opens the transcript with half a
+// character, which the event store's JSON encoding turns into U+FFFD — the
+// operator reading a failed run then sees mojibake where the run's own output
+// began.
+func TestATailedTranscriptStartsOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+	// Three bytes per rune, so a byte-offset cut lands mid-rune for two of
+	// every three possible lengths.
+	huge := strings.Repeat("日", MaxTranscript+1)
+
+	got := tail(huge)
+	if !utf8.ValidString(got) {
+		t.Error("the tail is not valid UTF-8, so it was cut through a rune")
+	}
+	body := strings.TrimPrefix(got, "…[earlier output truncated]…\n")
+	if strings.ContainsRune(body, utf8.RuneError) {
+		t.Error("the kept text opens with a replacement character")
+	}
+	if !strings.HasSuffix(got, "日") {
+		t.Error("the end of the output was not kept")
 	}
 }
 
