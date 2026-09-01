@@ -1787,14 +1787,36 @@ func TestEverySimilarityDecisionAgreesAtTheThreshold(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			// The lifecycle fold.
 			clustered := clusterByTools([]Episode{
 				{ID: "a", ToolSequence: left}, {ID: "b", ToolSequence: right},
 			}, tc.threshold)
 			if pooled := len(clustered) == 1; pooled != tc.same {
 				t.Errorf("clusterByTools pooled = %v, want %v", pooled, tc.same)
 			}
+
+			// The skill-drafting clusterer, which its own doc calls
+			// "the same algorithm, deliberately". Its members must be
+			// raw, recent and terminal to be eligible at all.
+			since := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+			eligible := func(id string, tools []string) Episode {
+				return Episode{
+					ID: id, Kind: KindRaw, ToolSequence: tools,
+					ReviewOutcome: "done", EndedAt: since.Add(time.Hour),
+				}
+			}
+			skills := clusterEpisodes([]Episode{
+				eligible("a", left), eligible("b", right),
+			}, len(left), tc.threshold, since)
+			if pooled := len(skills) == 1; pooled != tc.same {
+				t.Errorf("clusterEpisodes pooled = %v, want %v — it disagrees with "+
+					"the lifecycle fold at the same threshold", pooled, tc.same)
+			}
+
+			// The near-duplicate check that decides whether a drafted
+			// skill is a new one.
 			if _, duplicate := mostSimilar(left, [][]string{right}, tc.threshold); duplicate != tc.same {
-				t.Errorf("mostSimilar duplicate = %v, want %v — the two paths disagree",
+				t.Errorf("mostSimilar duplicate = %v, want %v — the paths disagree",
 					duplicate, tc.same)
 			}
 		})

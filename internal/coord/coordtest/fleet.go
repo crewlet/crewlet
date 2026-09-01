@@ -681,6 +681,47 @@ var planeCases = []fleetCase{{
 		}
 	},
 }, {
+	// THE TIE-BREAK IS PART OF THE CONTRACT, and it was implemented twice
+	// with nothing holding either to it. A rolling apply lands every node's
+	// report inside the same second, so a fleet view ordered by timestamp
+	// alone reshuffles between reads — and an operator watching a deploy
+	// converge would see the list jump with no node having changed.
+	//
+	// Newest first, the node id breaking the tie ASCENDING.
+	name: "one instant's reports are ordered by node id",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		// Recorded out of order, so a backend that answered in write
+		// order rather than sorting would pass a same-order assertion.
+		for _, node := range []string{"node-c", "node-a", "node-b"} {
+			if err := h.f.RecordApply(h.ctx, coord.NodeApply{
+				NodeID: node, Epoch: 7, Status: "ok", UpdatedAt: at,
+			}); err != nil {
+				h.t.Fatalf("RecordApply(%s): %v", node, err)
+			}
+		}
+		// One node reporting LATER must still sort ahead of all three,
+		// so the tie-break never outranks the timestamp.
+		if err := h.f.RecordApply(h.ctx, coord.NodeApply{
+			NodeID: "node-z", Epoch: 7, Status: "ok", UpdatedAt: at.Add(time.Second),
+		}); err != nil {
+			h.t.Fatalf("RecordApply(node-z): %v", err)
+		}
+
+		got, err := h.f.Fleet(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Fleet: %v", err)
+		}
+		ids := make([]string, len(got))
+		for i, row := range got {
+			ids[i] = row.NodeID
+		}
+		want := []string{"node-z", "node-a", "node-b", "node-c"}
+		if !slices.Equal(ids, want) {
+			h.t.Fatalf("fleet order = %v, want %v — freshest first, then by node id", ids, want)
+		}
+	},
+}, {
 	name: "a node's later report replaces its earlier one",
 	fn: func(h *fleetHarness) {
 		at := h.now()
