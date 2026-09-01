@@ -301,6 +301,11 @@ const botPageSize = 200
 
 // botWalkCeiling stops a walk that is not converging. An instance with more
 // managed bots than this is not one a single company config describes.
+//
+// Compared with > and not >=, for the reason internal/github's hookWalkCeiling
+// carries: at >= an instance holding EXACTLY this many bots is refused by an
+// error saying it has "more than" this many, though its next page is empty and
+// the walk had in fact converged.
 const botWalkCeiling = 5000
 
 // Bots lists the bot accounts the instance has, including disabled ones.
@@ -327,7 +332,7 @@ func (c *Client) Bots(ctx context.Context) ([]Bot, error) {
 		if len(batch) < botPageSize {
 			return out, nil
 		}
-		if len(out) >= botWalkCeiling {
+		if len(out) > botWalkCeiling {
 			return nil, fmt.Errorf(
 				"mattermost: the instance has more than %d bots, which is not one "+
 					"Crewlet provisions into", botWalkCeiling)

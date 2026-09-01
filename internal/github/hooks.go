@@ -120,8 +120,13 @@ func (c *Client) RepoWebhooks(ctx context.Context, owner, repo string) ([]Webhoo
 // this walks rather than trusting one request.
 const hookPageSize = 100
 
-// hookWalkCeiling stops a walk that is not converging. A target with more
-// hooks than this is not one Crewlet provisions into.
+// hookWalkCeiling stops a walk that is not converging. A target needing more
+// than this many requests' worth of hooks is not one Crewlet provisions into.
+//
+// It is a non-convergence guard, not a hard cap, so it is compared with > and
+// not >=: at >= a target holding EXACTLY this many hooks is refused by an
+// error saying it has "more than" this many, when its next page is empty and
+// the walk would have finished. The cost of the looser test is one extra page.
 const hookWalkCeiling = 1000
 
 // listWebhooks walks a target's hooks TO EXHAUSTION.
@@ -147,7 +152,7 @@ func (c *Client) listWebhooks(ctx context.Context, path string) ([]Webhook, erro
 		if len(rows) < hookPageSize {
 			return out, nil
 		}
-		if len(out) >= hookWalkCeiling {
+		if len(out) > hookWalkCeiling {
 			return nil, fmt.Errorf(
 				"github: %s has more than %d webhooks, which is not a target "+
 					"Crewlet provisions into", path, hookWalkCeiling)

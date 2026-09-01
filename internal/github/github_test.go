@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -810,6 +812,63 @@ func TestWebhooksAreWalkedToExhaustion(t *testing.T) {
 	}
 	if !found {
 		t.Error("the hook on the second page was not returned")
+	}
+}
+
+// The ceiling is a NON-CONVERGENCE guard, so it has to let a converging walk
+// through. Compared with >= it refuses a target holding EXACTLY the ceiling —
+// with an error saying the target has "more than" that many hooks, when the
+// next page is empty and the walk had finished. A refused listing is not a
+// cosmetic failure: every caller uses it to decide whether Crewlet's own hook
+// exists, so provisioning stops dead on that target.
+//
+// The limit is read back out of the error rather than hardcoded, so this
+// tracks the constant instead of pinning a copy of it.
+func TestAWalkStopsPastItsCeilingAndNotAtIt(t *testing.T) {
+	t.Parallel()
+	full := func(w http.ResponseWriter, page int) {
+		rows := make([]string, 0, 100)
+		for i := range 100 {
+			rows = append(rows, fmt.Sprintf(
+				`{"id":%d,"active":true,"events":["push"],"config":{"url":"https://e.example.com/%d-%d"}}`,
+				page*100+i, page, i))
+		}
+		_, _ = fmt.Fprintf(w, "[%s]", strings.Join(rows, ","))
+	}
+
+	// A target that never converges must be refused rather than walked for
+	// ever, and the refusal must name the limit it hit.
+	endless, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		full(w, page)
+	})
+	_, err := endless.OrgWebhooks(context.Background(), "acme")
+	if err == nil {
+		t.Fatal("a walk that never converges was not refused")
+	}
+	m := regexp.MustCompile(`more than (\d+)`).FindStringSubmatch(err.Error())
+	if m == nil {
+		t.Fatalf("the refusal does not name the limit it hit: %v", err)
+	}
+	ceiling, _ := strconv.Atoi(m[1])
+
+	// And a target holding EXACTLY that many is listed: full pages up to the
+	// ceiling, then the empty page that ends the walk.
+	pages := ceiling / 100
+	exact, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if page > pages {
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		full(w, page)
+	})
+	got, err := exact.OrgWebhooks(context.Background(), "acme")
+	if err != nil {
+		t.Fatalf("a target holding exactly the %d-hook ceiling was refused: %v", ceiling, err)
+	}
+	if len(got) != ceiling {
+		t.Errorf("hooks = %d, want the whole %d", len(got), ceiling)
 	}
 }
 
