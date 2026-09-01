@@ -328,32 +328,6 @@ type phaseRecord struct {
 	Err    error
 }
 
-// maxErrorLength caps a SUB-AGENT's error text on the phase event that reports
-// it.
-//
-// The parent phase's own error is verbatim: the prompts and the response
-// beside it are, this telemetry is what shows an operator what the model
-// actually saw, and a cut at 2000 characters landed on exactly the errors
-// worth reading. This one is bounded for a different reason — it is the only
-// field on this event whose length is set by a CHILD, and the child's failure
-// text reaches its parent's event whatever the child did. See
-// events.MaxDiagnosticBytes, which supersedes this.
-const maxErrorLength = 2000
-
-// truncate caps a string at n bytes, on a rune boundary. Cutting a multi-byte
-// rune in half produces invalid UTF-8, which a JSON encoder replaces with
-// U+FFFD — turning one over-long error into a garbled one.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	cut := n
-	for cut > 0 && s[cut]&0xC0 == 0x80 {
-		cut--
-	}
-	return s[:cut] + "…"
-}
-
 // subagentCompleted closes ONE sub-agent, as a phase nested under the Execute
 // round that spawned it.
 //
@@ -401,8 +375,15 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		Backend:         types.BackendNative,
 		ConversationKey: e.turn.ConversationKey,
 		Failed:          res.Failed,
-		Error:           truncate(res.Error, maxErrorLength),
-		ErrorKind:       res.ErrorKind,
+		// A CHILD'S failure text, which is the one field on this event
+		// whose length is set by something the parent does not control.
+		// Bounded only so the event can be published — one over the
+		// queue's ceiling is refused and this publisher logs and moves
+		// on, so an unbounded child error costs the operator the whole
+		// record rather than its tail. The parent phase's own error is
+		// carried the same way; see events.MaxDiagnosticBytes.
+		Error:     events.ClipDiagnostic(res.Error),
+		ErrorKind: res.ErrorKind,
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
 }
