@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // probeTimeout caps a version or status probe.
@@ -204,7 +204,7 @@ func (p *Provider) smokeTest(ctx context.Context) string {
 		return fmt.Sprintf(
 			"failed — the CLI answered but produced no parseable tool call, so seats on "+
 				"this provider will burn a corrective round every turn. It said: %q",
-			truncate(comp.Content, 200))
+			textcut.Ellipsis(strings.TrimSpace(comp.Content), 200))
 	}
 	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens)
 }
@@ -248,20 +248,6 @@ func orNone(s string) string {
 		return "unknown"
 	}
 	return s
-}
-
-// truncate bounds a probe's echoed output for a doctor line, never through a
-// rune: a byte slice splits whatever multi-byte character straddles the cut and
-// yields invalid UTF-8, which a JSON log encoder replaces with U+FFFD.
-func truncate(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n] + "…"
 }
 
 // LoginState is a one-word summary for `crewlet llm list`.

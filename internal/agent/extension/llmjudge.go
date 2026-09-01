@@ -9,11 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/logging"
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 var log = logging.Get("agent.extension")
@@ -143,7 +143,7 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 	decision, err := ParseVerdict(completion.Content)
 	if err != nil {
 		log.DebugContext(ctx, "extension_judge_unparsed", "model", j.key,
-			"answer", truncate(completion.Content, 200),
+			"answer", textcut.Ellipsis(completion.Content, 200),
 			"output_tokens", completion.OutputTokens)
 		return Decision{}, err
 	}
@@ -189,12 +189,12 @@ func renderJudgeRequest(req Request) string {
 
 	if task := strings.TrimSpace(req.Task); task != "" {
 		b.WriteString("\n## Task\n")
-		b.WriteString(truncate(task, 1500))
+		b.WriteString(textcut.Ellipsis(task, 1500))
 		b.WriteString("\n")
 	}
 	if plan := strings.TrimSpace(req.PlanSummary); plan != "" {
 		b.WriteString("\n## Plan\n")
-		b.WriteString(truncate(plan, 1000))
+		b.WriteString(textcut.Ellipsis(plan, 1000))
 		b.WriteString("\n")
 	}
 
@@ -218,7 +218,7 @@ func renderJudgeRequest(req Request) string {
 
 	if last := strings.TrimSpace(req.LastText); last != "" {
 		b.WriteString("\n## What it last said\n")
-		b.WriteString(truncate(last, 800))
+		b.WriteString(textcut.Ellipsis(last, 800))
 		b.WriteString("\n")
 	}
 	b.WriteString("\nVerdict:")
@@ -231,12 +231,12 @@ func renderJudgeRequest(req Request) string {
 // bounded rather than dropped.
 func renderJudgeCall(n int, c ledger.Call) string {
 	line := fmt.Sprintf("%d. %s(%s)", n, c.Name,
-		truncate(collapseSpace(renderArgs(c.Args)), judgeArgsShown))
+		textcut.Ellipsis(collapseSpace(renderArgs(c.Args)), judgeArgsShown))
 	if c.Failed {
 		// The FAILURE is the signal, and the text after it is what tells
 		// a second identical failure from a different one — which is the
 		// difference between a phase retrying usefully and a phase stuck.
-		line += " -> failed: " + truncate(collapseSpace(c.Result), 120)
+		line += " -> failed: " + textcut.Ellipsis(collapseSpace(c.Result), 120)
 	}
 	return line + "\n"
 }
@@ -330,11 +330,11 @@ func judgeReason(rest []string, countConsumed bool, following []string) string {
 		rest = rest[1:]
 	}
 	if tail := strings.TrimSpace(strings.Join(rest, " ")); tail != "" {
-		return truncate(tail, 300)
+		return textcut.Ellipsis(tail, 300)
 	}
 	for _, raw := range following {
 		if line := strings.TrimSpace(strings.Trim(strings.TrimSpace(raw), "`*#>-")); line != "" {
-			return truncate(line, 300)
+			return textcut.Ellipsis(line, 300)
 		}
 	}
 	return ""
@@ -343,21 +343,3 @@ func judgeReason(rest []string, countConsumed bool, following []string) string {
 // collapseSpace folds whitespace so one call renders on one line: a pretty
 // printed JSON argument would otherwise turn a twelve-line log into a page.
 func collapseSpace(s string) string { return strings.Join(strings.Fields(s), " ") }
-
-// truncate bounds a rendered field, marking where it was cut so the judge
-// does not read a severed argument as a different one.
-//
-// NEVER THROUGH A RUNE. A plain s[:max] splits whatever multi-byte character
-// straddles the boundary and yields invalid UTF-8, which a JSON encoder
-// replaces with U+FFFD — so a task, a plan or a tool argument that is not
-// ASCII reaches the judge garbled rather than merely short, and the judge's
-// whole job is telling two renderings apart.
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	for max > 0 && !utf8.RuneStart(s[max]) {
-		max--
-	}
-	return s[:max] + "…"
-}

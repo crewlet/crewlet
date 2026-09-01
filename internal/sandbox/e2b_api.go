@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The E2B control plane: minting, reclaiming and keeping a box alive.
@@ -301,7 +302,7 @@ func readDetail(body io.Reader) string {
 	text := strings.TrimSpace(string(raw))
 	switch {
 	case len(raw) > detailLimit:
-		return strings.TrimSpace(string(raw[:detailLimit])) +
+		return strings.TrimSpace(textcut.Bytes(string(raw), detailLimit)) +
 			"\n…(the rest of the response is past the 2048-byte cap this build reads)"
 	case err != nil && text == "":
 		return "(the response body could not be read: " + err.Error() + ")"

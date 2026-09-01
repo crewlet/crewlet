@@ -11,11 +11,11 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -933,7 +933,7 @@ func (l *Lifecycle) foldCluster(ctx context.Context, handle string, cluster []Ep
 	log.InfoContext(ctx, "episode_cluster_compacted",
 		"agent_handle", handle, "cluster_size", len(cluster),
 		"exemplars_kept", len(exemplars), "raw_deleted", deleted,
-		"pattern", truncate(row.CommonTaskPattern, 120))
+		"pattern", textcut.Ellipsis(row.CommonTaskPattern, 120))
 	return deleted, true, nil
 }
 
@@ -1240,33 +1240,6 @@ func cleanStrings(in []string) []string {
 	return out
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return clip(s, n) + "..."
-}
-
-// clip cuts s to at most n bytes, never through a rune.
-//
-// A plain s[:n] splits whatever multi-byte character straddles the cut and
-// yields invalid UTF-8 — which reaches a model as a replacement character,
-// an embedding API as a rejected body, and a JSON encoder as an escaped
-// substitution. Every one of those is a bug that only appears once the text
-// stops being ASCII, which in a company's traffic is a matter of when.
-func clip(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n]
-}
-
 // ---- the model-backed summarizer ------------------------------------- //
 
 // CompleteFunc is one call to a model on one seat's behalf: the ROLE whose
@@ -1396,7 +1369,7 @@ func RenderCluster(c Cluster) string {
 // that does not exist.
 func oneLine(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
-	return truncate(s, perTurnDetail)
+	return textcut.Ellipsis(s, perTurnDetail)
 }
 
 // ParseSummary reads a model's answer, tolerating prose around the JSON.
@@ -1427,7 +1400,7 @@ func ParseSummary(raw string) (Summary, error) {
 		}, nil
 	}
 	return Summary{}, fmt.Errorf("learning: no JSON object in the compactor's answer (%s)",
-		truncate(text, 200))
+		textcut.Ellipsis(text, 200))
 }
 
 // jsonText reads one string field, answering "" for absent or wrong-typed.

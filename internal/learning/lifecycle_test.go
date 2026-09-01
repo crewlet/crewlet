@@ -1349,7 +1349,7 @@ func TestRenderClusterFlattensClampsAndCounts(t *testing.T) {
 	if !strings.Contains(got, "task: line one line two") {
 		t.Errorf("newlines were not flattened:\n%s", got)
 	}
-	if strings.Contains(got, long) || !strings.Contains(got, "xxx...") {
+	if strings.Contains(got, long) || !strings.Contains(got, "xxx…") {
 		t.Errorf("the per-turn clamp did not apply:\n%s", got)
 	}
 	// Capped at 8, and it SAYS SO. The compactor is inferring "how this
