@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -204,9 +205,7 @@ func New(cfg Config) (*Runner, error) {
 // underneath.
 func (r *Runner) Plan(ctx context.Context, round int, notes string, history []ledger.Iteration) (turn.Plan, turn.Surface, error) {
 	snapshot := r.cfg.Registry.Snapshot()
-	submit := &submitted[planPayload]{
-		name: SubmitPlanTool, desc: submitPlanDescription, schema: planSchema, decode: decodePlan,
-	}
+	submit := structured.New(SubmitPlanTool, submitPlanDescription, planSchema, decodePlan)
 	surface, err := r.surfaceWith(ctx, phase.Plan, round, snapshot, submit, r.planActive(snapshot))
 	if err != nil {
 		return turn.Plan{}, turn.Surface{}, err
@@ -362,9 +361,7 @@ func (r *Runner) Execute(ctx context.Context, round int, p turn.Plan, history []
 // reviewer shown only what Execute said about itself grades the prose.
 func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Execution, history []ledger.Iteration) (turn.Review, error) {
 	snapshot := r.cfg.Registry.Snapshot()
-	submit := &submitted[reviewPayload]{
-		name: SubmitReviewTool, desc: submitReviewDescription, schema: reviewSchema, decode: decodeReview,
-	}
+	submit := structured.New(SubmitReviewTool, submitReviewDescription, reviewSchema, decodeReview)
 	surface, err := r.surfaceWith(ctx, phase.Review, round, snapshot, submit, nil)
 	if err != nil {
 		return turn.Review{}, err
