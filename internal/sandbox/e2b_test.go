@@ -903,17 +903,30 @@ func TestE2BKindMatchesTheConfigValue(t *testing.T) {
 func TestE2BACommandOutlivesTheControlPlaneTimeout(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()
-	stub.streamDelay = 250 * time.Millisecond
+	// THE RATIO IS THE PROPERTY, THE ABSOLUTE IS THE HEADROOM. Three frames
+	// at this delay is a 1.5 s stream against the 1 s bound below, so the
+	// command is demonstrably still running when that bound would have
+	// fired — which is the whole assertion.
+	stub.streamDelay = 500 * time.Millisecond
 	stub.frames = []any{startEvent(1), dataEvent("still going", ""), endEvent(0)}
 	server := httptest.NewServer(stub)
 	t.Cleanup(server.Close)
 
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
-		// A DELIBERATELY TINY overall bound, standing in for the
-		// control plane's: the command below runs longer than it.
+		// A SMALL overall bound, standing in for the control plane's: the
+		// command below runs longer than it.
+		//
+		// Small, not tiny. http.Client.Timeout is an OVERALL deadline, so
+		// it also has to cover the Create round trip on the line after
+		// this one — and at 100 ms that round trip was the fragile half of
+		// a test about something else entirely: CI failed here with
+		// "Client.Timeout exceeded while awaiting headers" on POST
+		// /sandboxes, in a suite where every package runs in parallel
+		// under -race. One second is ~200x a healthy local round trip and
+		// still well inside the stream above.
 		HTTP: &http.Client{
-			Timeout:   100 * time.Millisecond,
+			Timeout:   time.Second,
 			Transport: &toStub{target: server.URL},
 		},
 	})
