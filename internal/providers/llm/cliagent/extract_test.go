@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -203,5 +204,54 @@ func TestTheStderrTailSaysWhatItDropped(t *testing.T) {
 	// A short one is passed through whole, with no marker.
 	if got := tail("one\ntwo"); got != "one\ntwo" {
 		t.Errorf("a short stderr was altered: %q", got)
+	}
+}
+
+// A CLIPPED ANSWER IS NOT AN ANSWER. stdout past the cap is dropped by the
+// capped buffer, and the completion path used to parse whatever survived and
+// return it — a half-written envelope, a report cut mid-sentence — with
+// nothing downstream able to tell it from a model that stopped there.
+func TestAClippedStdoutIsRefusedRatherThanParsed(t *testing.T) {
+	t.Parallel()
+	var buf cappedBuffer
+	buf.limit = 64
+	body := strings.Repeat("x", 200)
+	if _, err := buf.Write([]byte(body)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if buf.Truncated() != len(body)-64 {
+		t.Fatalf("Truncated = %d, want %d", buf.Truncated(), len(body)-64)
+	}
+
+	p := &Provider{profile: Profile{}, model: "m"}
+	_, err := p.completion("prompt", &rawResult{
+		stdout: buf.String(), droppedStdout: buf.Truncated(),
+	})
+	if err == nil {
+		t.Fatal("a clipped stdout was parsed and returned as a completion")
+	}
+	if !strings.Contains(err.Error(), "incomplete") {
+		t.Errorf("the refusal does not say the answer is incomplete: %v", err)
+	}
+	// A SERVER failure, so the fallback chain may try another member and the
+	// credential is not benched: nothing about the prompt was rejected.
+	var fe *llm.Error
+	if !errors.As(err, &fe) || fe.Kind != llm.KindServer {
+		t.Errorf("kind = %v, want a server failure", err)
+	}
+}
+
+// stderr overrunning costs diagnosis, not correctness, so it must NOT refuse.
+func TestAClippedStderrStillReturnsTheAnswer(t *testing.T) {
+	t.Parallel()
+	p := &Provider{profile: Profile{}, model: "m"}
+	comp, err := p.completion("prompt", &rawResult{
+		stdout: "the answer", stderr: "noise", droppedStderr: 4096,
+	})
+	if err != nil {
+		t.Fatalf("a clipped stderr refused a good answer: %v", err)
+	}
+	if comp.Content != "the answer" {
+		t.Errorf("content = %q", comp.Content)
 	}
 }

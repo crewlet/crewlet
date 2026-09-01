@@ -537,5 +537,14 @@ func (s Sources) trace(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"trace_id": id, "events": rows}, nil
+	// SAYS WHEN IT CUT. EventLog.Trace stops at store.MaxTraceEvents and its
+	// own doc asks the caller to report that — a trace shown short with no
+	// note reads as a complete causal chain that simply ends, which is the
+	// one thing a reader must not conclude from it. Additive, so a client
+	// that predates the field is unaffected.
+	return map[string]any{
+		"trace_id":  id,
+		"events":    rows,
+		"truncated": len(rows) >= store.MaxTraceEvents,
+	}, nil
 }

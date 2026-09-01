@@ -160,11 +160,28 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 			t.Fatal("the asker was never woken with the answer")
 		}
 	}
-	if got, _ := reply.Payload["content"].(string); got != "the deploy at 02:14 rolled back" {
-		t.Errorf("the answer carried %q", got)
+	// THE TYPED PAYLOAD. The wake used to carry its body in the envelope's
+	// free-form bag, which meant the ask could only be read by a consumer
+	// that knew the key; it is a registered payload now, so the brief the
+	// turn is given comes off the same struct the decoder builds.
+	answer, ok := events.DataAs[*types.A2AMessage](reply)
+	if !ok {
+		t.Fatalf("the reply does not carry a typed A2AMessage payload")
 	}
-	if got, _ := reply.Payload["question"].(string); got != "What broke last night?" {
-		t.Errorf("the echo carried %q — the asker's turn ended, so this is its only context", got)
+	if answer.Content != "the deploy at 02:14 rolled back" {
+		t.Errorf("the answer carried %q", answer.Content)
+	}
+	if answer.Question != "What broke last night?" {
+		t.Errorf("the echo carried %q — the asker's turn ended, so this is its only context",
+			answer.Question)
+	}
+	// And both halves reach the woken seat as its ask: the channel is
+	// closed by the time this lands, so a brief without the question leaves
+	// the requester reading a reply with no antecedent.
+	brief := DescribeTrigger([]*events.Event{reply})
+	if !strings.Contains(brief, "the deploy at 02:14 rolled back") ||
+		!strings.Contains(brief, "What broke last night?") {
+		t.Errorf("the asker's turn is given %q", brief)
 	}
 	// UNCHANGED, not incremented: the ask is the delegation and this is
 	// that hop completing.

@@ -165,10 +165,40 @@ func marshal(v map[string]any) string {
 // exists so such a value costs a scruffy line rather than the whole record.
 func goString(v any) string { return fmt.Sprintf("%v", v) }
 
+// elideTail is elide from the other end: the LAST limit runes, marked.
+//
+// For content whose payoff is at the end — a round's produced text, where the
+// draft follows the thinking that produced it. A head-preserving cut on that
+// keeps the reasoning and drops the deliverable.
+//
+// It walks BACK from the end rather than materialising []rune(text), so the
+// work is proportional to what is kept rather than to what is passed in. The
+// caller hands it a whole tool-loop transcript, which is megabytes on a long
+// Execute phase — a rune slice of that allocates four bytes per character of
+// input to keep a few thousand of them, on every prompt render.
+func elideTail(text string, limit int) string {
+	if limit <= 0 {
+		return text
+	}
+	i := len(text)
+	for n := 0; n < limit && i > 0; n++ {
+		_, size := utf8.DecodeLastRuneInString(text[:i])
+		i -= size
+	}
+	if i == 0 {
+		return text
+	}
+	return "…" + strings.TrimLeft(text[i:], " \t\n\r")
+}
+
 // Elide trims text to limit runes with a visible ellipsis.
 //
-// Exported for callers outside this package that need the SAME budget applied
-// the same way — the reviewer's copy of the draft is the ledger's artifact
-// answering the same question, and two trimming functions would eventually
-// disagree about where a limit falls.
+// Exported for callers outside this package that need the same marked,
+// rune-safe trim — today the sub-agent runner, bounding the error text it
+// reports back to its parent. Two trimming functions would eventually
+// disagree about where a limit falls and whether the cut is marked.
+//
+// NOT for content. Every caller here bounds a string whose length is set by
+// something outside the engine; the draft, the plan and the reviewer's notes
+// are carried whole (see budgets.go).
 func Elide(text string, limit int) string { return elide(text, limit) }

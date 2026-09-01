@@ -345,7 +345,12 @@ func TestARowFromAnOlderEngineDecodesToLessContextNotAnError(t *testing.T) {
 	}
 }
 
-func TestBuildSessionAppliesEveryBudgetOnce(t *testing.T) {
+// ELIDE PAYLOADS, NEVER STRUCTURE — asserted on the write path, which is
+// where the distinction is permanent. This row is the store's only record of
+// the turn, so a field cut here is not a shortened rendering, it is the only
+// copy. Every structural field must survive whole; only a tool ARGUMENT is
+// elided, and the discriminating argument must survive that.
+func TestBuildSessionKeepsStructureWholeAndElidesOnlyArguments(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("z", 6000)
 	got := BuildSession(SessionInput{
@@ -356,24 +361,78 @@ func TestBuildSessionAppliesEveryBudgetOnce(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		value string
-		limit int
 	}{
-		{"trigger", got.Trigger, TriggerLimit},
-		{"plan summary", got.PlanSummary, PlanSummaryLimit},
-		{"reasoning", got.PlanReasoning, ReasoningLimit},
-		{"reply", got.Reply, ReplyLimit},
-		{"completed work", got.CompletedWork, NoteLimit},
+		{"trigger", got.Trigger},
+		{"plan summary", got.PlanSummary},
+		{"reasoning", got.PlanReasoning},
+		{"reply", got.Reply},
+		{"completed work", got.CompletedWork},
 	} {
-		// +1 for the ellipsis the marker adds.
-		if n := utf8.RuneCountInString(c.value); n > c.limit+1 {
-			t.Errorf("%s is %d runes, over its %d budget", c.name, n, c.limit)
+		if c.value != long {
+			t.Errorf("%s was cut at write time: %d runes of %d",
+				c.name, utf8.RuneCountInString(c.value), utf8.RuneCountInString(long))
 		}
-		if c.value == "" {
-			t.Errorf("%s was elided to nothing", c.name)
-		}
+	}
+	// The argument payload IS elided — that is the half of the principle
+	// this package keeps — and the identifier beside it survives.
+	if utf8.RuneCountInString(got.Calls) > BlobLimit+len("- slack_post() → success")+8 {
+		t.Errorf("the argument blob was not elided:\n%s", got.Calls)
 	}
 	if !strings.Contains(got.Calls, "C1") {
 		t.Errorf("the discriminating argument was lost at write time:\n%s", got.Calls)
+	}
+}
+
+// The RENDER is bounded, the RECORD is not — and the drop is reported. A
+// silently shortened history reads as the whole conversation, and a seat that
+// believes it has seen everything it said will not go and look for the rest.
+func TestATrimmedHistorySaysHowMuchItDropped(t *testing.T) {
+	t.Parallel()
+	entries := make([]Session, 6)
+	for i := range entries {
+		entries[i] = Session{TurnID: itoa(i), Reply: strings.Repeat("z", 5000)}
+	}
+	got := RenderHistory(entries, HistoryOptions{MaxChars: InjectedMaxChars})
+	if len(got) > InjectedMaxChars+500 {
+		t.Errorf("the rendered block is %d bytes, past its bound", len(got))
+	}
+	if !strings.Contains(got, "are not shown") {
+		t.Errorf("entries were dropped silently:\n%s", got[:200])
+	}
+	// WHOLE ENTRIES. A cut inside one would leave a half-recorded reply
+	// reading as the whole of what the seat said.
+	if strings.Count(got, strings.Repeat("z", 5000)) < 1 {
+		t.Errorf("an entry was cut rather than dropped:\n%s", got[:200])
+	}
+	// The newest always survives, however long: a block trimmed to nothing
+	// tells the next turn this conversation has no history.
+	solo := RenderHistory([]Session{{Reply: strings.Repeat("d", InjectedMaxChars*2)}},
+		HistoryOptions{MaxChars: InjectedMaxChars})
+	if !strings.Contains(solo, strings.Repeat("d", InjectedMaxChars*2)) {
+		t.Error("the only entry was dropped, so the turn reads as having no history")
+	}
+}
+
+// A prior round's produced text is kept WHOLE in the record and TAIL-elided
+// when rendered — the deliverable is what the round ended with, not what it
+// opened by thinking, and Execution.Text is the whole tool loop concatenated.
+func TestAPriorRoundsOutputIsTailElidedNotHeadCut(t *testing.T) {
+	t.Parallel()
+	produced := "<think>" + strings.Repeat("reasoning ", 2000) + "</think>\nTHE DRAFT ENDS HERE."
+	got := RenderIterations([]Iteration{{Iteration: 1, ExecuteText: produced}}, nil)
+	if !strings.Contains(got, "THE DRAFT ENDS HERE.") {
+		t.Error("the deliverable at the end of the round was cut away")
+	}
+	if strings.Count(got, "reasoning reasoning") > RenderedArtifactLimit {
+		t.Error("the block was not bounded at all")
+	}
+	if !strings.Contains(got, "…") {
+		t.Error("the cut is silent")
+	}
+	// And the record itself is untouched: this is a render bound.
+	whole := RenderIterations([]Iteration{{Iteration: 1, ExecuteText: "short"}}, nil)
+	if !strings.Contains(whole, "Produced: short") {
+		t.Errorf("a short round was altered: %q", whole)
 	}
 }
 

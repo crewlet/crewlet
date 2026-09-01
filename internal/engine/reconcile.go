@@ -454,10 +454,17 @@ func (r *Reconciler) record(ctx context.Context, target coord.Activation,
 
 // publishApplied puts one node's outcome into the audit event log.
 //
-// The error text is TRUNCATED to the same bound the coordination record uses.
-// A driver's own message with a query in it runs to kilobytes, and this one is
-// kept for the retention horizon rather than a minute — so an unbounded copy
-// would be a permanent one.
+// TWO DIFFERENT BOUNDS, and the difference is the point. The coordination
+// record is cut to [coord.MaxApplyErrorLength] (2000 bytes) because every peer
+// re-reads it on every reconcile tick, so its size is paid continuously. This
+// event is written once and kept for the event store's retention horizon — it
+// is the durable copy an operator reads days later — so it carries up to
+// [events.MaxDiagnosticBytes] (64 KiB), thirty times more, marked when it cuts.
+//
+// It is bounded at all only so that it can be PUBLISHED: an event over the
+// queue's payload ceiling is refused, and the publisher below logs and moves
+// on, so an unbounded failure text would cost the operator the whole record
+// rather than its tail.
 func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation,
 	status configplane.ApplyStatus, applied []string, message string,
 ) {
@@ -468,7 +475,7 @@ func (r *Reconciler) publishApplied(ctx context.Context, target coord.Activation
 		RevisionID:        target.RevisionID,
 		Status:            applyStatus(status),
 		AppliedSubsystems: applied,
-		Error:             coord.TruncateApplyError(message),
+		Error:             events.ClipDiagnostic(message),
 	}, tracing.TraceOf(ctx))
 	ev.Timestamp = r.now()
 	// The NODE, not a seat. Every other field of the payload describes the

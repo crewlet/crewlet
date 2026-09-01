@@ -162,12 +162,12 @@ func (t *a2aAsk) resolve(turn *turnctx.Turn, target string) (colleague.Seat, str
 	case 1:
 		return found[0].Seat, ""
 	}
+	// EVERY candidate. The handle the model wants is as likely to sort past
+	// a cap as before it, and a truncated ambiguity list leaves it choosing
+	// between options that do not include the answer.
 	var names []string
 	for _, c := range found {
 		names = append(names, c.Seat.Handle)
-		if len(names) == displayLimit {
-			break
-		}
 	}
 	return colleague.Seat{}, fmt.Sprintf(
 		"%q is ambiguous — it could be %s. Ask again with one exact handle.",

@@ -529,6 +529,13 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Turn == nil {
 		d.Turn = e.runTurn
 	}
+	if d.Conversation == nil {
+		// Read off the LIVE company on each dispatch, not captured here:
+		// buildDispatcher runs once and a config apply replaces the company.
+		d.Conversation = func() config.ConversationSession {
+			return e.Company().Config.TurnEngine.ConversationSession
+		}
+	}
 	if d.Park == nil {
 		d.Park = e.park
 	}
@@ -785,11 +792,16 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		Recon: func(ctx context.Context, planSummary string) string {
 			return fetcher.AfterPlan(ctx, prefetchReq, planSummary)
 		},
-		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{}),
-		Publisher:    e.backends.Queue,
-		Turn:         tel.runnerTurn(company, req.WorkKey, req.Depth, req.DelegationChain),
-		Markers:      e.markers(),
-		Latch:        e.onboarded,
+		// BOUNDED AT RENDER, never at write. The stored row is the only copy
+		// of the turn; what a prompt shows is a display decision, and this
+		// one drops whole entries oldest-first and says how many.
+		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{
+			MaxChars: ledger.InjectedMaxChars,
+		}),
+		Publisher: e.backends.Queue,
+		Turn:      tel.runnerTurn(company, req.WorkKey, req.Depth, req.DelegationChain),
+		Markers:   e.markers(),
+		Latch:     e.onboarded,
 		// Read off the PINNED epoch, so a revision that raises a ceiling
 		// mid-turn cannot move the limit a round is judged against.
 		Budget: e.meterFor(company, req.Handle),
@@ -832,7 +844,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// delegation_depth_limit before anything runs, and this argument was
 	// omitted — so the check ran against a constant zero and the limit
 	// bounded nothing.
-	res, err := turn.Run(ctx, r, company.TurnSettings(), turn.Input{
+	res, err := turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds), turn.Input{
 		TurnID: req.WorkKey, Depth: req.Depth,
 	})
 	// The moment the turn returns, and before its frame unwinds: the runner

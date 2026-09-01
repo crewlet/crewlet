@@ -396,8 +396,14 @@ func ResolveNodeID(b *Bootstrap, r *Resolver) (string, error) {
 // one identity recreates exactly that hole. There is no cache here: each holder calls this once and keeps what it got,
 // which is the property the cache was emulating. Minting a second one
 // mid-run fences an engine out of its own seats.
+// The uuid is carried WHOLE. It was cut to eight hex characters, which is 32
+// bits — a birthday collision at a few tens of thousands of incarnations, on
+// the one string the paragraph above spends nineteen lines explaining must
+// never be confused between two of them. Nothing wants it short: it is
+// compared for equality by the lease renewal and never rendered in a
+// width-constrained slot.
 func NewIncarnation(nodeID string) string {
-	return nodeID + ":" + uuid.NewString()[:8]
+	return nodeID + ":" + uuid.NewString()
 }
 
 // ---- store ----------------------------------------------------------- //

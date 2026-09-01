@@ -528,21 +528,21 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	}
 
 	runID := runID(e, label, handle)
+	// TYPED, not a Payload bag. The schedule's `task:` text is the whole ask
+	// this fire exists to deliver, and the bag it used to travel in had no
+	// reader anywhere in the engine — so the seat was woken with the event's
+	// type name and the founder's task text was dropped before any model saw
+	// it. Description and Schedule are read back by [types.TaskAssigned.Brief].
 	task := events.New(types.TaskAssigned{
-		TaskID:   runID,
-		Agent:    agentID.String(),
-		RoleName: seat.Name,
+		TaskID:      runID,
+		Agent:       agentID.String(),
+		RoleName:    seat.Name,
+		Description: e.Schedule.Task,
+		Schedule:    e.Schedule.Name,
+
+		TimeoutSeconds: int(e.Schedule.Timeout() / time.Second),
 	}, trace)
 	task.Source = "scheduler"
-	task.Payload = map[string]any{
-		"task_description": e.Schedule.Task,
-		"scheduled":        true,
-		"schedule_name":    e.Schedule.Name,
-		"scope_type":       string(e.Scope),
-		"scope_id":         e.ScopeID,
-		"timeout_seconds":  int(e.Schedule.Timeout() / time.Second),
-		"run_id":           runID,
-	}
 
 	if err := s.pub.Publish(ctx, topics.AgentInbox(handle), task); err != nil {
 		// The claim is already spent, and that is the at-most-once side of

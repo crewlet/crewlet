@@ -319,12 +319,7 @@ func (r *Registry) Catalogue() string {
 			}
 			continue
 		}
-		desc := firstLine(e.Tool.Description())
-		if desc == "" {
-			lines = append(lines, "- "+name)
-			continue
-		}
-		lines = append(lines, "- "+name+": "+desc)
+		lines = append(lines, CatalogueLine(name, e.Tool.Description()))
 	}
 	for _, server := range serverOrder {
 		lines = append(lines, "- MCP server `"+server+"` (use the discovery tools to list its tools)")
@@ -335,13 +330,15 @@ func (r *Registry) Catalogue() string {
 	return strings.Join(lines, "\n")
 }
 
-// firstLine trims a description to its first line.
+// CatalogueLine renders one "- name: description" catalogue entry with the
+// description whole; see [mcp.CatalogueLine] for why.
 //
-// A tool description can be a paragraph, and a catalogue is a list: a
-// multi-line entry breaks the one-tool-per-line shape the planner reads it as.
-func firstLine(s string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	return strings.TrimSpace(line)
+// Re-exported rather than reimplemented. The registry's catalogue and the
+// discovery listings must render identically — a model sees both in one turn —
+// and this package already imports internal/mcp, which the dependency edge
+// does not allow in the other direction.
+func CatalogueLine(name, description string) string {
+	return mcp.CatalogueLine(name, description)
 }
 
 // Snapshot is an immutable view of the registry, taken once.

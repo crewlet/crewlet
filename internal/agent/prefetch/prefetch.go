@@ -317,36 +317,27 @@ func (f *Fetcher) auxCall(ctx context.Context, seat *org.Role, system, user stri
 	return text, true
 }
 
-// budget caps a rendered block's characters.
+// joinBullets renders a block's bullets, dropping the empty ones.
 //
-// Applied per BULLET rather than by truncating the block, so a block never
-// ends mid-sentence: a reader — a model — that hits a truncated final line
-// cannot tell whether the thought was completed elsewhere.
-func budget(bullets []string, chars int) string {
-	rendered, _ := budgetN(bullets, chars)
-	return rendered
-}
-
-// budgetN is [budget] plus how many bullets survived.
+// NO CHARACTER BUDGET. There used to be one per block, and it was not the
+// upper bound its name claimed: it admitted the first bullet whatever its
+// size and then dropped every later one, unmarked — so a block was not
+// shortened, it was silently emptied of everything after its first entry, and
+// a counterparty profile of the second sender in a conversation simply never
+// rendered. What actually bounds these blocks is the ITEM cap each one
+// already has (the memories the filter may pick, the episodes recalled, the
+// knowledge hits searched for), every one of which is a number a reader can
+// reason about — unlike a character ceiling that lands mid-list.
 //
-// The count exists for the one caller that has a PARALLEL list to trim —
-// the skill menu's ids, which are reported back as used. Counting lines in
-// the rendered text instead would be wrong the first time a description
-// contained a newline, and would be wrong silently.
-func budgetN(bullets []string, chars int) (string, int) {
-	var (
-		kept []string
-		used int
-	)
+// The empty-drop is load-bearing: renderEpisode and renderSkill both return
+// "" for an entry with nothing to say, and joining those blindly leaves blank
+// bullets in the prompt.
+func joinBullets(bullets []string) string {
+	kept := make([]string, 0, len(bullets))
 	for _, bullet := range bullets {
-		if bullet == "" {
-			continue
+		if bullet != "" {
+			kept = append(kept, bullet)
 		}
-		if used+len(bullet) > chars && len(kept) > 0 {
-			break
-		}
-		kept = append(kept, bullet)
-		used += len(bullet) + 1
 	}
-	return strings.Join(kept, "\n"), len(kept)
+	return strings.Join(kept, "\n")
 }

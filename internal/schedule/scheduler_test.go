@@ -298,20 +298,34 @@ func TestARoleScheduleFiresToItsOwnInbox(t *testing.T) {
 	if tasks[0].topic != "crewlet.agent.qa.inbox" {
 		t.Fatalf("topic = %q, want the seat's inbox", tasks[0].topic)
 	}
-	payload := tasks[0].ev.Payload
-	for field, want := range map[string]any{
-		"task_description": "run smoke tests",
-		"scheduled":        true,
-		"schedule_name":    "smoke",
-		"scope_type":       "role",
-		"scope_id":         "qa",
+	// THE TYPED PAYLOAD, not the envelope's free-form bag. The fire's task
+	// text used to travel as Payload["task_description"] and nothing read it
+	// back, so the seat was woken with the event's type name and the
+	// founder-authored task never reached a model. Asserting the typed field
+	// is what keeps that from returning: this is the value
+	// [types.TaskAssigned.Brief] renders into the turn's ask.
+	fired, ok := events.DataAs[*types.TaskAssigned](tasks[0].ev)
+	if !ok {
+		t.Fatalf("the fire does not carry a typed TaskAssigned payload")
+	}
+	for field, got := range map[string]any{
+		"Description": fired.Description,
+		"Schedule":    fired.Schedule,
 		// Three minutes. A scheduled turn is a ritual, not open-ended work,
 		// and the cap is what releases the seat long before the next fire.
-		"timeout_seconds": 180,
+		"TimeoutSeconds": fired.TimeoutSeconds,
 	} {
-		if got := payload[field]; got != want {
-			t.Errorf("payload[%q] = %v, want %v", field, got, want)
+		want := map[string]any{
+			"Description": "run smoke tests", "Schedule": "smoke", "TimeoutSeconds": 180,
+		}[field]
+		if got != want {
+			t.Errorf("%s = %v, want %v", field, got, want)
 		}
+	}
+	// The ask a model is actually handed has to CONTAIN the task text; a
+	// brief that named only the id is the bug this test was blind to.
+	if brief := fired.Brief(); !strings.Contains(brief, "run smoke tests") {
+		t.Errorf("Brief() = %q, want it to carry the schedule's task text", brief)
 	}
 
 	// The id is DERIVED from (org name, handle) — the same value every node

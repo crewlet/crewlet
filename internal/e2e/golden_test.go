@@ -203,9 +203,15 @@ func (n *node) wakeInTrace(t *testing.T, handle, text string, tc events.TraceCon
 		NotificationSource: "slack",
 		SourceEventType:    "message",
 		Sender:             "U0FOUNDER",
-		Subject:            "How did the week go?",
-		Body:               text,
-		SalientBody:        &body,
+		// NEVER the message text. The subject was hardcoded to the string
+		// most callers also pass as the body, so subject and body were
+		// indistinguishable downstream — and every assertion that a turn
+		// received what was sent passed while the engine was handing the
+		// seat its SUBJECT and dropping the body. A subject that cannot
+		// equal the body is what makes those assertions mean something.
+		Subject:     "a message for " + handle,
+		Body:        text,
+		SalientBody: &body,
 	}, tc)
 	if err := n.engine.Backends().Queue.Publish(t.Context(),
 		topics.AgentInbox(handle), ev); err != nil {

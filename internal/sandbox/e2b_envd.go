@@ -313,6 +313,19 @@ func foldStream(r io.Reader, background bool) (e2bProcessResult, error) {
 // desynced length cannot exhaust the process.
 const maxEnvdFrame = 32 << 20
 
+// maxEnvdFile caps one file read back out of a box, and REFUSES past it.
+//
+// Separate from maxEnvdFrame, which guards a desynced stream length: this
+// bounds a whole file read into engine memory, and the two answer different
+// questions even at the same number.
+//
+// The refusal is the point. io.LimitReader stops at its cap and reports a
+// clean EOF, so a file of exactly the cap cannot be told from one that was
+// clipped there — and the files this reads are a run's report and its stderr,
+// which is precisely the content nothing downstream can sanity-check. A
+// silently halved report reads as a finished one.
+const maxEnvdFile = 32 << 20
+
 // readFile fetches a file from the box.
 //
 // EMPTY ON MISSING, not an error: the detached runner polls for a done marker
@@ -339,7 +352,19 @@ func (c *envdClient) readFile(ctx context.Context, path string) ([]byte, error) 
 		return nil, fmt.Errorf("e2b: read %s: %d: %s", path,
 			resp.StatusCode, strings.TrimSpace(string(detail)))
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, maxEnvdFrame))
+	// +1 so an overrun is visible; see maxEnvdFile.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxEnvdFile+1))
+	if err != nil {
+		return nil, fmt.Errorf("e2b: read %s: %w", path, err)
+	}
+	if len(raw) > maxEnvdFile {
+		return nil, fmt.Errorf(
+			"e2b: %s is larger than the %d-byte cap this engine reads back from "+
+				"a box, so it was not read — the coding agent wrote more than a "+
+				"report, and a clipped one would be indistinguishable from a "+
+				"finished one", path, maxEnvdFile)
+	}
+	return raw, nil
 }
 
 // writeFile puts a file into the box.

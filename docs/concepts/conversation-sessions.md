@@ -169,10 +169,26 @@ never promised.
 ## Cost
 
 The block is re-sent on every round of every phase, and Anthropic bills cache
-reads at full token value, so its cost multiplies by rounds used. That product
-is what `injected_max_chars` bounds. The default (~1.5k tokens) is the order of
-one iteration of the prior-work ledger; the `prompt.size` telemetry event
-records the delta fleet-wide.
+reads at full token value, so its cost multiplies by rounds used. Two things
+bound that product, and which one applies where is the whole design:
+
+- **`max_entries`, at write time** — how many turns of a conversation are kept
+  at all. A chat DM keys on the whole channel, so its ledger never stops
+  receiving entries.
+- **`ledger.InjectedMaxChars` (24 000 bytes), at render time** — how much
+  reaches one prompt. It drops **whole entries**, oldest first, and says how
+  many it dropped; the newest always survives however long it is. An entry
+  carries the seat's own reply, which is unbounded — a turn that produced a
+  document puts that document in the row — so without this a busy conversation
+  eventually exceeds the model's context and the turn cannot run at all.
+
+Never a cut *inside* an entry, and never at write time. The stored row is the
+only copy of that turn, and a half-recorded reply reads as the whole of what
+the seat said — which is how a seat repeats a reply it cannot see it already
+gave. Two config knobs (`injected_max_entries`, `injected_max_chars`) used to
+be documented here; neither was ever threaded to a caller, so both validated,
+defaulted and described a truncation that did not happen. The `prompt.size`
+telemetry event records the delta fleet-wide.
 
 Against that: the re-recon it displaces costs a `list_mcp_server_tools` round,
 an `activate_tool` round and the read itself, in Plan **and again** in Execute,
@@ -187,9 +203,10 @@ the agent's own plan, reasoning, or the results it gathered.
 turn_engine:
   conversation_session:
     enabled: true            # the feature gate — a live kill switch
-    max_entries: 20          # kept per conversation, trimmed at write time
-    injected_max_entries: 5  # how many reach the prompt: newest N, rendered oldest-first
-    injected_max_chars: 6000 # byte budget; oldest entries drop first
+    max_entries: 20          # kept per conversation, trimmed at write time.
+                             #   What ONE PROMPT shows is bounded separately,
+                             #   at render, by ledger.InjectedMaxChars — see
+                             #   Cost above
     retention_days: 30       # matches the event store's own horizon
 ```
 
@@ -217,6 +234,12 @@ table (not a hypertable), so dedupe is a plain unique index and an ordinary
 Bounded twice: `max_entries` trims on write (a chat DM keys on the whole
 channel rather than a thread, so its ledger never stops receiving entries),
 and the [maintenance worker](scaling.md) sweeps past `retention_days`.
+
+Every field of a recorded entry is stored **verbatim** apart from the tool
+arguments and results, which the [ledger budgets](turn-engine.md#prior-work-ledger-across-self_iterate-rounds)
+elide. This row is the store's only record of the turn, so a field cut at write
+time is not a shortened rendering — it is the only copy. Bounding what a
+*prompt* shows is a separate decision, made at render time; see Cost above.
 
 **Failure never stops a turn.** A write that fails is swallowed — it happens on
 a completed turn's tail, where there is nothing left to tell. A read that fails

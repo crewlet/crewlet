@@ -429,7 +429,10 @@ func TestARunWithoutItsInputsIsRefusedBeforeAnythingIsMade(t *testing.T) {
 // THE MANIFEST IS WHAT THE PARSER AND THE EDGE BOTH NEED.
 func TestTheManifestSubscribesToWhatTheParserRoutes(t *testing.T) {
 	t.Parallel()
-	manifest := slack.Manifest("Engineering Lead", "swe", "https://engine.example.com/")
+	manifest, err := slack.Manifest("Engineering Lead", "swe", "https://engine.example.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
 	encoded, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)
@@ -463,7 +466,10 @@ func TestTheManifestSubscribesToWhatTheParserRoutes(t *testing.T) {
 // directory, the other is the identity the rest of the engine addresses.
 func TestTheAppAndTheBotAreNamedDifferently(t *testing.T) {
 	t.Parallel()
-	manifest := slack.Manifest("Engineering Lead", "swe", "https://engine.example.com")
+	manifest, err := slack.Manifest("Engineering Lead", "swe", "https://engine.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
 	display := manifest["display_information"].(map[string]any)
 	if display["name"] != "Engineering Lead" {
 		t.Errorf("app name = %v", display["name"])
@@ -472,12 +478,17 @@ func TestTheAppAndTheBotAreNamedDifferently(t *testing.T) {
 	if bot["display_name"] != "swe" {
 		t.Errorf("bot display name = %v", bot["display_name"])
 	}
-	// Slack refuses an app name over 35 characters, and refusing the whole
-	// manifest for it would fail a run over a role somebody named
-	// carefully.
-	long := slack.Manifest(strings.Repeat("x", 80), "swe", "https://e.example.com")
-	if got := long["display_information"].(map[string]any)["name"].(string); len(got) != 35 {
-		t.Errorf("a long role name produced a %d-character app name", len(got))
+	// REFUSED, not truncated. Slack does cap an app name at 35, but cutting
+	// to it puts an app in the operator's workspace under a name their
+	// config does not contain — and two roles sharing a 35-character prefix
+	// become two apps a person cannot tell apart. The error has to name the
+	// role, or the operator cannot find which one to shorten.
+	_, err = slack.Manifest(strings.Repeat("x", 80), "swe", "https://e.example.com")
+	if err == nil {
+		t.Fatal("a role name over Slack's cap built a manifest")
+	}
+	if !strings.Contains(err.Error(), strings.Repeat("x", 80)) {
+		t.Errorf("the refusal does not name the offending role: %v", err)
 	}
 }
 

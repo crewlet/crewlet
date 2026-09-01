@@ -149,9 +149,9 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"turn_engine.execute_max_tool_rounds_ceiling", ErrOutOfRange,
 		},
 		{
-			"injecting more than is kept",
-			"name: Acme\nturn_engine:\n  conversation_session:\n    max_entries: 5\n    injected_max_entries: 30\n",
-			"turn_engine.conversation_session.injected_max_entries", ErrConflict,
+			"a conversation ledger that keeps nothing",
+			"name: Acme\nturn_engine:\n  conversation_session:\n    max_entries: 0\n",
+			"turn_engine.conversation_session.max_entries", ErrOutOfRange,
 		},
 
 		// learning

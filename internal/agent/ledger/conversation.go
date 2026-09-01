@@ -68,20 +68,49 @@ type SessionInput struct {
 	CompletedWork string
 }
 
-// BuildSession assembles one entry, applying every budget once at write time.
+// BuildSession assembles one entry.
+//
+// VERBATIM, apart from the tool ARGUMENTS FormatCalls elides. Every field here
+// used to be cut at write time, which made the loss permanent: this row is the
+// store's only record of the turn, so a trigger trimmed at 400 runes was not a
+// shortened entry, it was the only copy. The turn's own rendering budget is a
+// read-side concern (see HistoryOptions), and applying one at write time
+// answered a display question by destroying data.
 func BuildSession(in SessionInput) Session {
 	return Session{
 		TurnID:        in.TurnID,
 		At:            in.At,
-		Trigger:       elide(in.Trigger, TriggerLimit),
-		PlanSummary:   elide(in.PlanSummary, PlanSummaryLimit),
-		PlanReasoning: elide(in.PlanReasoning, ReasoningLimit),
+		Trigger:       in.Trigger,
+		PlanSummary:   in.PlanSummary,
+		PlanReasoning: in.PlanReasoning,
 		Calls:         FormatCalls(in.Calls, Format(in.Skip, in.Reads)),
-		Reply:         elide(in.Reply, ReplyLimit),
+		Reply:         in.Reply,
 		Decision:      in.Decision,
-		CompletedWork: elide(in.CompletedWork, NoteLimit),
+		CompletedWork: in.CompletedWork,
 	}
 }
+
+// InjectedMaxChars bounds the block a TURN is given, by dropping whole entries.
+//
+// The record is verbatim (see BuildSession); this bounds only the RENDER, and
+// it is the one bound this ledger needs. Each entry carries the seat's own
+// reply, which is unbounded — a seat whose turn produced a document puts that
+// document in the row — so a busy DM's twenty kept entries can be megabytes,
+// re-sent on every round of every phase of every later turn in that
+// conversation. That is not a prompt-weight preference: past the model's
+// context it is a turn that cannot run at all.
+//
+// WHOLE ENTRIES, oldest dropped first, and the drop is REPORTED — never a cut
+// inside an entry, which would leave a half-recorded reply reading as the
+// whole of what the seat said. The newest entry always survives however long
+// it is: a block trimmed to nothing tells the next turn this conversation has
+// no history, which is the one thing it must not conclude.
+//
+// 24000 bytes is roughly 6k tokens — the order of one iteration of the
+// prior-work ledger, and a small fraction of any model this engine targets.
+// It bites only on a conversation whose entries are documents rather than
+// replies, which is exactly the case an unbounded block cannot serve.
+const InjectedMaxChars = 24000
 
 // HistoryOptions bounds a rendered conversation. The zero value is unbounded,
 // which is what a reader for DISPLAY — the dashboard — wants.
@@ -112,15 +141,25 @@ func RenderHistory(entries []Session, opts HistoryOptions) string {
 	for _, entry := range selected {
 		blocks = append(blocks, renderSession(entry))
 	}
+	dropped := len(entries) - len(blocks)
 	if opts.MaxChars > 0 {
 		// The newest entry always survives, however long it is: a block
 		// trimmed to nothing tells the next turn this conversation has no
 		// history, which is the one thing it must not conclude.
 		for len(blocks) > 1 && len(strings.Join(blocks, "\n\n")) > opts.MaxChars {
 			blocks = blocks[1:]
+			dropped++
 		}
 	}
-	return strings.Join(blocks, "\n\n")
+	out := strings.Join(blocks, "\n\n")
+	if dropped > 0 {
+		// SAID OUT LOUD. A silently shortened history reads as the whole
+		// conversation, and a seat that believes it has seen everything it
+		// said will not go and look for the rest.
+		out = "_(" + itoa(dropped) + " earlier turn(s) in this conversation are not " +
+			"shown; re-read the thread itself if you need them.)_\n\n" + out
+	}
+	return out
 }
 
 // renderSession renders one entry as prose.

@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -68,8 +69,28 @@ type Dispatcher struct {
 	// failing the dispatch over it would trade real work for a row.
 	Observe func(ctx context.Context, ev *events.Event)
 
+	// Conversation resolves the conversation-ledger policy for the turn
+	// about to run.
+	//
+	// A FUNCTION, and read per dispatch rather than captured at
+	// construction: the dispatcher is built once and the policy lives on
+	// the company config, which a live apply replaces. A captured copy
+	// would keep serving the revision the process started on.
+	//
+	// nil means the shipped defaults, which is what a test that does not
+	// care about the policy wants.
+	Conversation func() config.ConversationSession
+
 	// Now is injectable so a test can pin the clock.
 	Now func() time.Time
+}
+
+// conversationPolicy is the resolved policy, defaulted when unset.
+func (d *Dispatcher) conversationPolicy() config.ConversationSession {
+	if d.Conversation == nil {
+		return config.DefaultConversationSession()
+	}
+	return d.Conversation()
 }
 
 // Request is one dispatch's worth of work.
@@ -99,6 +120,11 @@ type Request struct {
 	// Carried so a sub-agent spawn or an A2A ask can refuse past the cap
 	// rather than discovering the loop at runtime.
 	Depth int
+
+	// TimeoutSeconds is the wall-clock cap this turn's trigger carried, zero
+	// when it carried none. Only a scheduled fire sets one — see
+	// [types.TaskAssigned.TimeoutSeconds].
+	TimeoutSeconds int
 
 	// DelegationChain is who asked whom to get here. Provenance rather
 	// than a gate — "alice → bob → alice" is exactly what happened — and
@@ -178,6 +204,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	req := Request{
 		Handle: handle, Events: routing.Events,
 		WorkKey: routing.WorkKey, Coalesce: routing.Coalesce,
+		TimeoutSeconds:  wallClockOf(routing.Events),
 		ConversationKey: conversationKeyOf(routing.Events),
 		// READ OFF THE TRIGGER, and it was read off nothing: this field
 		// was set at no site on the inbox path, so every turn ran at
@@ -292,7 +319,8 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 			}
 		}
 	}
-	if d.Conversations == nil || req.ConversationKey == "" {
+	policy := d.conversationPolicy()
+	if d.Conversations == nil || req.ConversationKey == "" || !policy.Records() {
 		return
 	}
 	entry := ledger.BuildSession(ledger.SessionInput{
@@ -303,17 +331,28 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 	if res.LastReview != nil {
 		entry.CompletedWork = res.LastReview.CompletedWork
 	}
+	// TRIMMED TO THE CONFIGURED KEEP. Passing 0 here meant "keep
+	// everything", so max_entries — documented as what bounds a DM whose
+	// conversation key is the whole channel and therefore never stops
+	// receiving entries — bounded nothing, and the table grew for the life
+	// of the deployment.
 	if err := d.Conversations.Append(ctx, handle, req.ConversationKey, entry,
-		req.WorkKey, now, 0); err != nil {
+		req.WorkKey, now, policy.MaxEntries); err != nil {
 		log.WarnContext(ctx, "conversation_not_recorded", "seat", handle,
 			"conversation", req.ConversationKey, "error", err)
 	}
 }
 
 func (d *Dispatcher) history(ctx context.Context, handle, conversation string) ([]ledger.Session, error) {
-	if d.Conversations == nil || conversation == "" {
+	policy := d.conversationPolicy()
+	if d.Conversations == nil || conversation == "" || !policy.Records() {
 		return nil, nil
 	}
+	// UNLIMITED on the READ. What is recorded is read back whole; the block
+	// a turn is given is bounded at render time by dropping whole entries
+	// (ledger.InjectedMaxChars), which is where a bound belongs — the two
+	// config knobs that used to claim this job were never threaded to any
+	// caller and cut nothing.
 	return d.Conversations.History(ctx, handle, conversation, 0)
 }
 
@@ -366,19 +405,35 @@ func conversationKeyOf(evs []*events.Event) string {
 // one conversation and its opening message is what the rest are replies to. A
 // digest that led with the newest would hand the seat a follow-up with no idea
 // what it follows.
+//
+// THE BRIEF, NEVER THE SUMMARY. This function is the only thing standing
+// between a wake and the string a model is asked to act on, and the two
+// interfaces answer different questions: [events.Briefer] is the ask,
+// [events.Summarizer] is one line for a dashboard row. Reading the summary
+// here handed every turn in the company a stub: "Message from alice: deploy"
+// for a notification whose body was the actual request, "(a2a_request)" for a
+// colleague's question, "(task_assigned)" for a schedule's task text. The type
+// name remains only as the last resort it was always meant to be.
+//
+// TWO SOURCES, TYPED FIRST. Every wake type that runs a turn now states its
+// ask through Briefer, so the free-form bag below is not where any producer in
+// this build writes one. It is kept, and kept SECOND, because a rolling
+// upgrade puts two builds on one stream: a wake minted by a peer that predates
+// the typed payloads carries its body under "content" in the bag, and this
+// build decoding that event finds an empty typed payload. Reading the bag
+// after the brief is what stops such a wake reaching a seat as its type name.
 func DescribeTrigger(evs []*events.Event) string {
 	var parts []string
 	for _, ev := range evs {
 		if ev == nil {
 			continue
 		}
-		// The free-form bag first, for the wakes that carry no typed
-		// payload. The A2A wakes are the ones that matter: their bodies
-		// live under "content" because the service that mints them owns
-		// their shape, and reading only "text" rendered a colleague's
-		// question as the bare string "(a2a_request)" — an answering
-		// seat ran a whole turn against a blank ask, and answered by
-		// inventing one.
+		if brief, ok := ev.Data.(events.Briefer); ok {
+			if b := strings.TrimSpace(brief.Brief()); b != "" {
+				parts = append(parts, b)
+				continue
+			}
+		}
 		if body := payloadBody(ev); body != "" {
 			parts = append(parts, body)
 			continue
@@ -398,6 +453,27 @@ func DescribeTrigger(evs []*events.Event) string {
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// wallClockOf is the cap this partition's triggers carried.
+//
+// THE SMALLEST non-zero, for the same reason delegationOf takes the deepest: a
+// coalesced partition can hold triggers that arrived by different routes, and
+// a cap exists to bound the turn — so a batch containing one capped fire is
+// capped, and taking the first event's value would let an uncapped trigger
+// arriving alongside it remove the bound.
+func wallClockOf(evs []*events.Event) int {
+	smallest := 0
+	for _, ev := range evs {
+		fire, ok := events.DataAs[*types.TaskAssigned](ev)
+		if !ok || fire.TimeoutSeconds <= 0 {
+			continue
+		}
+		if smallest == 0 || fire.TimeoutSeconds < smallest {
+			smallest = fire.TimeoutSeconds
+		}
+	}
+	return smallest
 }
 
 // delegationOf is the delegation this partition inherits.
@@ -423,10 +499,15 @@ func delegationOf(evs []*events.Event) (int, []string) {
 // payloadBodyKeys are the untyped payload fields that carry a trigger's text,
 // in the order they are tried.
 //
-// A SHORT, CLOSED LIST rather than a scan: a wake with no typed payload has
-// no schema, so this is the only place that knows how to read one, and every
-// name here has a producer. "text" is the generic escape hatch; "content" is
-// what internal/a2a stamps on both of its wakes.
+// A SHORT, CLOSED LIST rather than a scan: a wake with no typed payload has no
+// schema, so this is the only place that knows how to read one.
+//
+// NO PRODUCER IN THIS BUILD writes either key any more — internal/a2a stamped
+// "content" on both its wakes until they became typed payloads, and nothing
+// ever wrote "text". The list survives as the ROLLING-UPGRADE path: a wake
+// minted by a peer that predates those types still carries its body here, and
+// this build would otherwise hand it to a seat as its type name. Keep both
+// names for as long as a node running that older build can still be publishing.
 var payloadBodyKeys = []string{"text", "content"}
 
 // payloadBody is a trigger's text from its untyped payload, or empty.

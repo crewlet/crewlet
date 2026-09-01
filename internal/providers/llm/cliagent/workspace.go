@@ -1,6 +1,8 @@
 package cliagent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -99,15 +101,33 @@ func (w *Workspace) SeatDir(seat string) string {
 	return filepath.Join(w.root, "seats", seatSlug(seat))
 }
 
-// seatSlug makes a seat handle safe as one path element.
+// slugReadable is how much of a handle a directory name shows before the
+// disambiguating digest. Long enough to recognise a seat at a glance, short
+// enough that name plus digest stays far inside NAME_MAX.
+const slugReadable = 48
+
+// seatSlug makes a seat handle safe as one path element, INJECTIVELY.
 //
-// Not a hash: an operator looking at a state directory to see whose home is
-// filling a disk needs to recognise the seat. Anything outside the safe set
-// becomes '-', and the result is bounded, so a handle from a vendor's API
-// cannot escape the directory or blow past NAME_MAX.
+// Not a hash outright: an operator looking at a state directory to see whose
+// home is filling a disk needs to recognise the seat. But not a lossy
+// rendering either — this directory is a seat's HOME, holding its coding-CLI
+// session, its history and its credentials, and two seats that land on one
+// slug get one home. That is the first thing this package's doc says must
+// never happen: seven seats on one subscription reading each other's
+// transcripts.
+//
+// The old rendering could collide two ways. Characters outside the safe set
+// all folded to '-', and the result was cut at 64 — so any two handles
+// sharing a 64-character prefix shared a home. Nothing bounded a handle's
+// length, so that was reachable from a config a founder could write.
+//
+// So: the readable form when it represents the handle EXACTLY, and otherwise
+// the readable prefix plus a digest of the whole handle. Distinct handles
+// cannot meet, whatever a vendor's API or a founder's YAML supplies.
 func seatSlug(seat string) string {
+	seat = strings.TrimSpace(seat)
 	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(seat)) {
+	for _, r := range strings.ToLower(seat) {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
 			b.WriteRune(r)
@@ -116,13 +136,23 @@ func seatSlug(seat string) string {
 		}
 	}
 	slug := strings.Trim(b.String(), "-")
+	// FAITHFUL means the slug IS the handle, compared against the raw input
+	// rather than a lowered copy: case-folding is a collision too, and
+	// "sarah-chen" and "SARAH-CHEN" would otherwise share a home. Only an
+	// exact match — nothing folded, nothing trimmed, nothing cut — lets two
+	// inputs be told apart by the slug alone. Every handle org.ValidHandle
+	// admits is already in this form, so the common case renders bare.
+	if slug == seat && slug != "" && len(slug) <= slugReadable {
+		return slug
+	}
+	sum := sha256.Sum256([]byte(seat))
+	if len(slug) > slugReadable {
+		slug = slug[:slugReadable]
+	}
 	if slug == "" {
 		slug = "seat"
 	}
-	if len(slug) > 64 {
-		slug = slug[:64]
-	}
-	return slug
+	return slug + "-" + hex.EncodeToString(sum[:])[:16]
 }
 
 // Checkout is one call's place to run, and the seat share it borrows.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -358,10 +359,22 @@ func firstString(values ...any) string {
 	return ""
 }
 
+// firstLine is one transcript line's echoed command or path, bounded.
+//
+// The bound is real — a heredoc echoed whole would blow up the phase event —
+// and the cut is marked. Two defects it used to carry: `line[:limit-1] + "…"`
+// emits limit+2 BYTES (limit-1 of content plus a three-byte ellipsis), so the
+// constant bounded nothing it named; and the byte slice split whatever
+// multi-byte character straddled the cut, which reaches the event store as
+// invalid UTF-8.
 func firstLine(s string, limit int) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	if len(line) <= limit {
+	if limit <= 0 || len(line) <= limit {
 		return line
 	}
-	return line[:limit-1] + "…"
+	cut := max(limit-len("…"), 0)
+	for cut > 0 && !utf8.RuneStart(line[cut]) {
+		cut--
+	}
+	return line[:cut] + "…"
 }

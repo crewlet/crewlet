@@ -7,17 +7,22 @@ import "strconv"
 // contract.
 //
 // ONE principle decides every number: ELIDE PAYLOADS, NEVER STRUCTURE. A
-// payload (a message body, page HTML, a diff) is unbounded, is re-authored
-// from the plan next round, and can never answer the ledger's question — so
-// carrying it only buries the two lines that can. Structure (the plan's steps,
-// the draft under review, the reviewer's correction) is bounded in practice
-// and is exactly what the next round has to act on, so it is cut only as a
-// guard against pathological output, never as routine trimming.
+// payload (a message body, page HTML, a diff) is a tool ARGUMENT: unbounded,
+// re-authored from the plan next round, and unable to answer the ledger's
+// question — so carrying it whole only buries the two lines that can.
 //
-// Every one of these is a GUARD, not a diet. Prompt caching keys on the
-// system+tools prefix, which the ledger never touches, so a larger block costs
-// little; the reason to bound it at all is that an unbounded block eats the
-// turn's own token budget and buries the signal.
+// Structure is everything else: the plan's steps, the draft under review, the
+// reviewer's correction, the trigger, the reply that was sent. That is exactly
+// what the next round has to act on, and it is now carried VERBATIM. It used
+// not to be — six further limits sat here cutting each of those at 400 to 2000
+// runes, which is the principle above applied to the half it excludes. A
+// reviewer's correction trimmed mid-instruction loses the engine-critical part
+// of the only carrier it has, and the ledger is not re-readable from anywhere:
+// unlike a chat message or an issue comment, there is no surface to go back to.
+//
+// What is left bounds ARGUMENTS and the read-call list, and both say when they
+// cut. Prompt caching keys on the system+tools prefix, which the ledger never
+// touches, so a larger block costs little.
 const (
 	// ValueLimit caps an argument VALUE. Identifiers are what say WHICH
 	// delivery fired — channel names, issue keys, page ids, handles, thread
@@ -32,26 +37,6 @@ const (
 	// takes. Enforced by dropping whole keys; see fitArguments.
 	BlobLimit = 800
 
-	// PlanSummaryLimit caps the previous plan's steps. A realistic 6-step
-	// plan renders ~850 runes, so 1200 covers ~8 steps: past anything a
-	// planner emits, while still bounding a runaway 20-step plan. Cutting
-	// lower chopped a routine plan mid-step, which reads as a SHORTER plan
-	// rather than a truncated one — worse than omitting it.
-	PlanSummaryLimit = 1200
-
-	// ArtifactLimit caps the draft Review judged. The next round has to
-	// improve that draft, so anything Review had enough of to judge, Plan
-	// needs enough of to extend rather than rewrite from scratch. Review's
-	// own summary of the same content uses the same number.
-	ArtifactLimit = 2000
-
-	// NoteLimit caps reviewer-authored prose. The correction is what the
-	// next round acts on and the ledger is its only carrier, so trimming it
-	// mid-instruction would lose engine-critical content. A pathological-
-	// output guard for a verbose model, not a routine trim — the ask is one
-	// or two sentences.
-	NoteLimit = 2000
-
 	// MaxReadCalls caps rendered tool-call lines per phase per round. Only
 	// positively-known READS are ever dropped to fit: a write is the whole
 	// reason the ledger exists and is never omitted, however many there are.
@@ -60,24 +45,23 @@ const (
 	// while keeping one block skimmable.
 	MaxReadCalls = 12
 
-	// ReasoningLimit caps the planner's own stated reasoning, carried so a
-	// later turn inherits WHY rather than only what. 600 is two or three
-	// sentences: the useful residue of a phase's thinking at a fraction of
-	// the cost of replaying it. (Raw extended thinking cannot be replayed
-	// anyway — only its flattened text is persisted, and vendors refuse
-	// replayed thinking without signatures nothing stores.)
-	ReasoningLimit = 600
-
-	// TriggerLimit caps what triggered the turn: sender plus the opening of
-	// what they said. Enough to recognise the message in a thread, never the
-	// whole body — the body is re-readable on the surface it came from, and
-	// the point of the entry is what the SEAT did about it.
-	TriggerLimit = 400
-
-	// ReplyLimit caps the reply the seat actually sent. Shares the artifact
-	// budget: it is the same content Review judged, answering the same
-	// question.
-	ReplyLimit = ArtifactLimit
+	// RenderedArtifactLimit bounds a PRIOR round's produced text as it is
+	// RENDERED into the next round's block. The Iteration record keeps it
+	// whole; this is a display bound, and that difference is the point of
+	// the paragraph above.
+	//
+	// It needs one because Execution.Text is every assistant message of that
+	// round's tool loop concatenated, thinking included — so its size is the
+	// round cap times the phase's max_tokens, PER ITERATION, and the block
+	// accumulates one of those per self_iterate and is re-sent on every round
+	// of all three phases that follow. That product, not the single value, is
+	// what a bound has to answer.
+	//
+	// 4000 runes is twice what the deleted write-time cut allowed and holds a
+	// full draft; the TAIL is kept, because a round's deliverable is what it
+	// ended with rather than what it opened by thinking. Marked, like every
+	// other cut in this package.
+	RenderedArtifactLimit = 4000
 )
 
 func itoa(n int) string { return strconv.Itoa(n) }

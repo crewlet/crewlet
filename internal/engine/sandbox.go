@@ -296,7 +296,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	if err != nil {
 		return err
 	}
-	res, err := turn.Run(ctx, r, company.TurnSettings(), turn.Input{
+	// NO WALL-CLOCK CAP ON A RESUME. The cap bounds the turn a fire started;
+	// a detached sandbox run can legitimately outlive it, and the resumed
+	// half is finishing work the box already did rather than starting more.
+	res, err := turn.Run(ctx, r, company.TurnSettings(0), turn.Input{
 		TurnID:  in.Run.TurnID,
 		Depth:   in.Run.DelegationDepth,
 		History: in.State.Iterations,

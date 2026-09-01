@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -762,6 +765,111 @@ func (s *stub) postedTo(t *testing.T, path string) map[string]any {
 // newStub is an empty record.
 func newStub() *stub {
 	return &stub{paths: map[string]int{}, bodies: map[string][][]byte{}}
+}
+
+// A hook past the first page read as ABSENT, and every caller uses this
+// listing to decide whether Crewlet's own hook already exists — so the
+// reconcile created a duplicate on every run, each delivering the same event
+// again. GitHub's documented 20-hooks limit is per EVENT per target, so a full
+// page is not evidence the listing is complete.
+func TestWebhooksAreWalkedToExhaustion(t *testing.T) {
+	t.Parallel()
+	var pages []string
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		pages = append(pages, r.URL.Query().Get("page"))
+		// A full page, then a short one: the walk must ask twice.
+		if r.URL.Query().Get("page") == "1" {
+			rows := make([]string, 0, 100)
+			for i := range 100 {
+				rows = append(rows, fmt.Sprintf(
+					`{"id":%d,"active":true,"events":["push"],"config":{"url":"https://e.example.com/%d"}}`,
+					i, i))
+			}
+			_, _ = fmt.Fprintf(w, "[%s]", strings.Join(rows, ","))
+			return
+		}
+		_, _ = w.Write([]byte(
+			`[{"id":999,"active":true,"events":["push"],"config":{"url":"https://e.example.com/last"}}]`))
+	})
+
+	got, err := client.OrgWebhooks(context.Background(), "acme")
+	if err != nil {
+		t.Fatalf("OrgWebhooks: %v", err)
+	}
+	if len(got) != 101 {
+		t.Errorf("hooks = %d, want both pages (101)", len(got))
+	}
+	if len(pages) < 2 || pages[0] != "1" || pages[1] != "2" {
+		t.Errorf("pages requested = %v, want the walk to continue past a full page", pages)
+	}
+	// The hook only the SECOND page carries is the one a first-page-only
+	// listing reported as absent.
+	var found bool
+	for _, h := range got {
+		if h.URL == "https://e.example.com/last" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the hook on the second page was not returned")
+	}
+}
+
+// The ceiling is a NON-CONVERGENCE guard, so it has to let a converging walk
+// through. Compared with >= it refuses a target holding EXACTLY the ceiling —
+// with an error saying the target has "more than" that many hooks, when the
+// next page is empty and the walk had finished. A refused listing is not a
+// cosmetic failure: every caller uses it to decide whether Crewlet's own hook
+// exists, so provisioning stops dead on that target.
+//
+// The limit is read back out of the error rather than hardcoded, so this
+// tracks the constant instead of pinning a copy of it.
+func TestAWalkStopsPastItsCeilingAndNotAtIt(t *testing.T) {
+	t.Parallel()
+	full := func(w http.ResponseWriter, page int) {
+		rows := make([]string, 0, 100)
+		for i := range 100 {
+			rows = append(rows, fmt.Sprintf(
+				`{"id":%d,"active":true,"events":["push"],"config":{"url":"https://e.example.com/%d-%d"}}`,
+				page*100+i, page, i))
+		}
+		_, _ = fmt.Fprintf(w, "[%s]", strings.Join(rows, ","))
+	}
+
+	// A target that never converges must be refused rather than walked for
+	// ever, and the refusal must name the limit it hit.
+	endless, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		full(w, page)
+	})
+	_, err := endless.OrgWebhooks(context.Background(), "acme")
+	if err == nil {
+		t.Fatal("a walk that never converges was not refused")
+	}
+	m := regexp.MustCompile(`more than (\d+)`).FindStringSubmatch(err.Error())
+	if m == nil {
+		t.Fatalf("the refusal does not name the limit it hit: %v", err)
+	}
+	ceiling, _ := strconv.Atoi(m[1])
+
+	// And a target holding EXACTLY that many is listed: full pages up to the
+	// ceiling, then the empty page that ends the walk.
+	pages := ceiling / 100
+	exact, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if page > pages {
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		full(w, page)
+	})
+	got, err := exact.OrgWebhooks(context.Background(), "acme")
+	if err != nil {
+		t.Fatalf("a target holding exactly the %d-hook ceiling was refused: %v", ceiling, err)
+	}
+	if len(got) != ceiling {
+		t.Errorf("hooks = %d, want the whole %d", len(got), ceiling)
+	}
 }
 
 // newTestClient points a client at a stub and asserts the request shape
