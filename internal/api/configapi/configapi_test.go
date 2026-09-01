@@ -3,6 +3,7 @@ package configapi_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -1237,5 +1238,66 @@ func TestOptionsAdvertisesWhatThePatchRouteTakes(t *testing.T) {
 		if !strings.Contains(res.Header().Get("Allow"), verb) {
 			t.Errorf("Allow = %q, missing %s", res.Header().Get("Allow"), verb)
 		}
+	}
+}
+
+// EVERY WRITE ROUTE LIFTS `_summary` OUT OF THE BODY, and on every one of them
+// the header wins over it.
+//
+// The three routes shared one 20-line preamble by copy for long enough that
+// the interesting failure was never the boilerplate — it was a route reading
+// the header FIRST and returning early, which never splits the body and hands
+// the parser a document carrying a `_summary` Tier B's strict decoder then
+// refuses BY NAME. That is green until somebody uses the body channel on that
+// one route, so it is asserted per route rather than once.
+func TestEveryWriteRouteTakesTheSummaryFromEitherChannel(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		seed   bool
+	}{
+		{"put", http.MethodPut, "/config", "_summary: %s\n" + companyDoc, false},
+		{"patch", http.MethodPatch, "/config", `{"_summary":%q,"mission":"ship it"}`, true},
+		{"entity", http.MethodPut, "/config/roles/ceo", `{"_summary":%q,"name":"CEO"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The body channel alone is enough.
+			s := newSurface(t, nil)
+			if tc.seed {
+				s.seed(t, companyDoc, nil)
+			}
+			res := s.do(t, tc.method, tc.path, fmt.Sprintf(tc.body, "from the body"), nil)
+			if res.Code != http.StatusCreated {
+				t.Fatalf("%s %s with a body summary = %d, want 201: %s",
+					tc.method, tc.path, res.Code, res.Body.String())
+			}
+			if got := s.do(t, http.MethodGet, "/config/revisions", "", nil).Body.String(); !strings.Contains(got, "from the body") {
+				t.Errorf("the body summary did not reach the history: %s", got)
+			}
+
+			// And when both are set, the header wins — on this route too.
+			s = newSurface(t, nil)
+			if tc.seed {
+				s.seed(t, companyDoc, nil)
+			}
+			res = s.do(t, tc.method, tc.path, fmt.Sprintf(tc.body, "from the body"),
+				map[string]string{"X-Summary": "from the header"})
+			if res.Code != http.StatusCreated {
+				t.Fatalf("%s %s with both = %d, want 201: %s",
+					tc.method, tc.path, res.Code, res.Body.String())
+			}
+			history := s.do(t, http.MethodGet, "/config/revisions", "", nil).Body.String()
+			if !strings.Contains(history, "from the header") {
+				t.Errorf("the header did not win on %s: %s", tc.name, history)
+			}
+			if strings.Contains(history, "from the body") {
+				t.Errorf("the body key won over the header on %s: %s", tc.name, history)
+			}
+		})
 	}
 }

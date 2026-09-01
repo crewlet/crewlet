@@ -2,9 +2,12 @@ package configapi
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 )
 
 // Where a revision summary comes from.
@@ -95,4 +98,43 @@ func rootMapping(doc *yaml.Node) *yaml.Node {
 		return nil
 	}
 	return node
+}
+
+// requireSummary takes the summary for a write and answers the request itself
+// when there is not one.
+//
+// ONE FUNCTION FOR THREE ROUTES, and the reason is the precedence rather than
+// the boilerplate: three copies of "split the body, then let the header win,
+// then refuse if empty" is three chances for one of them to read the header
+// FIRST and never lift `_summary` out — which parses green and then fails at
+// the document parser, by name, as an unknown field. Only the hint differs
+// per route, so only the hint is a parameter.
+//
+// It returns the remaining body, because splitting is what removes the key:
+// a caller that ignored the second result would hand the parser a document
+// with a `_summary` in it. ok is false when the request has been answered.
+func requireSummary(w http.ResponseWriter, r *http.Request, body []byte, hint string) (summary string, rest []byte, ok bool) {
+	summary, rest, err := splitSummary(body)
+	if err != nil {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			map[string]string{"detail": err.Error()})
+		return "", nil, false
+	}
+	if header := r.Header.Get("X-Summary"); header != "" {
+		// THE HEADER WINS when both are present. It is the more explicit
+		// channel — a `_summary` can survive in a document somebody keeps
+		// in version control long after it stopped describing the write.
+		summary = header
+	}
+	if summary == "" {
+		// Required, because the history is what an operator reads at 3am
+		// to find the change that broke something. A list of revisions
+		// with no summaries is a list of uuids.
+		httpjson.Write(w, http.StatusBadRequest, map[string]string{
+			"error": "summary_required",
+			"hint":  hint,
+		})
+		return "", nil, false
+	}
+	return summary, rest, true
 }

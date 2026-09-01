@@ -579,3 +579,45 @@ func TestAnAbsentEntityIsNotFoundBeforeItIsARename(t *testing.T) {
 		})
 	}
 }
+
+// A TYPO IN AN ENTITY BODY IS REFUSED, not dropped.
+//
+// `json.Unmarshal` ignores what it does not recognise, so `"gaol"` answered
+// 201 and stored a seat with no goal — the exact failure Tier B's strict
+// document parser exists to prevent, on the surface most likely to be
+// hand-edited in a hurry. Asserted per kind because each one decodes into its
+// own type and a new kind added without the strict decoder is silent.
+func TestAMistypedFieldInAnEntityBodyIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		kind string
+		id   string
+		body string
+	}{
+		{configapi.EntityRoles, "ceo", `{"name":"CEO","llm":"zulu","gaol":"ship it"}`},
+		{configapi.EntityUnits, "engineering", `{"name":"engineering","lead":"cto","rolez":[]}`},
+		{configapi.EntityLLMProviders, "zulu", `{"type":"anthropic","modell":"claude-sonnet-5"}`},
+		{configapi.EntityMCPServers, "tracker", `{"name":"tracker","transport":"http","url":"https://mcp.example.com","comand":"npx"}`},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			t.Parallel()
+			// nestedDoc, because every kind has to address something that
+			// EXISTS: a 404 for a missing entity would pass this test
+			// without the body ever being decoded.
+			s := newSurface(t, nil)
+			s.seed(t, nestedDoc, nil)
+
+			res := s.do(t, http.MethodPut, "/config/"+tc.kind+"/"+tc.id, tc.body,
+				map[string]string{"X-Summary": "with a typo in it"})
+			if res.Code != http.StatusBadRequest {
+				t.Fatalf("PUT %s/%s with an unknown field = %d, want 400: %s",
+					tc.kind, tc.id, res.Code, res.Body.String())
+			}
+			// AND IT NAMES THE FIELD. A caller who mistyped one key needs to
+			// be told which one, not that "the body is invalid".
+			if !strings.Contains(res.Body.String(), "invalid_body") {
+				t.Errorf("the refusal is not reported as a body problem: %s", res.Body.String())
+			}
+		})
+	}
+}

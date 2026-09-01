@@ -1,6 +1,7 @@
 package configapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -117,8 +118,8 @@ var entityKinds = map[string]entityAccess{
 			return found, true
 		},
 		replace: func(c *config.Company, id string, raw []byte) error {
-			var incoming config.Role
-			if err := json.Unmarshal(raw, &incoming); err != nil {
+			incoming, err := decodeEntity[config.Role](raw)
+			if err != nil {
 				return fmt.Errorf("decode role: %w", err)
 			}
 			// FOUND FIRST, judged second. Both orders refuse the same
@@ -171,8 +172,8 @@ var entityKinds = map[string]entityAccess{
 			return found, true
 		},
 		replace: func(c *config.Company, id string, raw []byte) error {
-			var incoming config.Unit
-			if err := json.Unmarshal(raw, &incoming); err != nil {
+			incoming, err := decodeEntity[config.Unit](raw)
+			if err != nil {
 				return fmt.Errorf("decode unit: %w", err)
 			}
 			var target *config.Unit
@@ -213,8 +214,8 @@ var entityKinds = map[string]entityAccess{
 			if _, ok := c.Providers.LLM[id]; !ok {
 				return ErrNoSuchEntity
 			}
-			var incoming config.LLMProvider
-			if err := json.Unmarshal(raw, &incoming); err != nil {
+			incoming, err := decodeEntity[config.LLMProvider](raw)
+			if err != nil {
 				return fmt.Errorf("decode llm provider: %w", err)
 			}
 			c.Providers.LLM[id] = incoming
@@ -238,8 +239,8 @@ var entityKinds = map[string]entityAccess{
 			return nil, false
 		},
 		replace: func(c *config.Company, id string, raw []byte) error {
-			var incoming config.MCPServer
-			if err := json.Unmarshal(raw, &incoming); err != nil {
+			incoming, err := decodeEntity[config.MCPServer](raw)
+			if err != nil {
 				return fmt.Errorf("decode mcp server: %w", err)
 			}
 			for i := range c.MCPServers {
@@ -366,26 +367,14 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			refuseBody(w, err)
 			return
 		}
-		summary, body, err := splitSummary(body)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "invalid_body", "detail": err.Error(),
-			})
-			return
-		}
-		if header := r.Header.Get("X-Summary"); header != "" {
-			summary = header
-		}
-		if summary == "" {
-			// The same rule the whole-document write has, and for the same
-			// reason: a list of revisions with no summaries is a list of
-			// uuids. A per-entity write can say more, so the hint does.
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "summary_required",
-				"hint": "this write needs an audit summary — the X-Summary header, " +
-					"or a top-level _summary key in the body. Name what changed " +
-					"about " + kind + "/" + id,
-			})
+		// The same rule the whole-document write has, and for the same
+		// reason: a list of revisions with no summaries is a list of
+		// uuids. A per-entity write can say more, so the hint does.
+		summary, body, ok := requireSummary(w, r, body,
+			"this write needs an audit summary — the X-Summary header, "+
+				"or a top-level _summary key in the body. Name what changed "+
+				"about "+kind+"/"+id)
+		if !ok {
 			return
 		}
 
@@ -516,4 +505,28 @@ func roleID(r *config.Role) string { return r.Seat().Handle() }
 func sorted(in []string) []string {
 	sort.Strings(in)
 	return in
+}
+
+// decodeEntity decodes one entity body STRICTLY.
+//
+// Unknown fields are refused, which is the same rule Tier B's document parser
+// has and for the same reason: a mistyped setting that silently did nothing is
+// the failure this build refuses to have. `json.Unmarshal` does the opposite —
+// it drops what it does not recognise — so a `PUT /config/roles/ceo` carrying
+// `"gaol"` answered 201 and stored a company with no goal on that seat. This
+// is the surface most likely to be hand-edited in a hurry, so it is the worst
+// place to accept a typo quietly.
+//
+// It also closes the one hole a whole-document write does not have: the body
+// key that carries a revision summary is lifted out before this runs, and a
+// route that forgot to lift it would be caught here rather than storing it.
+func decodeEntity[T any](raw []byte) (T, error) {
+	var out T
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&out); err != nil {
+		var zero T
+		return zero, err
+	}
+	return out, nil
 }

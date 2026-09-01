@@ -184,8 +184,13 @@ invalid is refused even when the entity itself is fine — a seat naming a
 provider that no longer exists is exactly the break a per-entity surface
 invites, because the caller never sees the rest of the document.
 
-Three rules follow from that:
+Four rules follow from that:
 
+- **An unknown field is refused, not dropped.** The entity body is decoded
+  strictly, the same way the whole-document parser is: `gaol` where `goal` was
+  meant is `400 invalid_body` naming the field. A decoder that ignored what it
+  did not recognise would answer `201` and store the seat with its goal
+  silently gone.
 - **A `PUT` never creates.** An id nothing carries is `404 no_such_entity`, not
   a new entity: naming one that is not there is far more often a typo than an
   intent to add one, and creating through this route would grow the company

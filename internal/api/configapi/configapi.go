@@ -394,29 +394,11 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		refuseBody(w, err)
 		return
 	}
-	summary, body, err := splitSummary(body)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_body", "detail": err.Error(),
-		})
-		return
-	}
-	if header := r.Header.Get("X-Summary"); header != "" {
-		// THE HEADER WINS when both are present. It is the more explicit
-		// channel — a `_summary` can survive in a document somebody keeps
-		// in version control long after it stopped describing the write.
-		summary = header
-	}
-	if summary == "" {
-		// Required, because the history is what an operator reads at 3am
-		// to find the change that broke something. A list of revisions
-		// with no summaries is a list of uuids.
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "summary_required",
-			"hint": "PUT /config needs an audit summary — the X-Summary header, " +
-				"or a top-level _summary key in the body. The revision history " +
-				"is the record of who changed what and why",
-		})
+	summary, body, ok := requireSummary(w, r, body,
+		"PUT /config needs an audit summary — the X-Summary header, "+
+			"or a top-level _summary key in the body. The revision history "+
+			"is the record of who changed what and why")
+	if !ok {
 		return
 	}
 
@@ -490,24 +472,12 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		refuseBody(w, err)
 		return
 	}
-	summary, body, err := splitSummary(body)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_body", "detail": err.Error(),
-		})
-		return
-	}
-	if header := r.Header.Get("X-Summary"); header != "" {
-		summary = header
-	}
-	if summary == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "summary_required",
-			"hint": "PATCH /config needs an audit summary — the X-Summary " +
-				"header, or a top-level _summary key in the body. A patch is " +
-				"the change least visible in a diff, so the sentence saying " +
-				"what it was for matters most here",
-		})
+	summary, body, ok := requireSummary(w, r, body,
+		"PATCH /config needs an audit summary — the X-Summary "+
+			"header, or a top-level _summary key in the body. A patch is "+
+			"the change least visible in a diff, so the sentence saying "+
+			"what it was for matters most here")
+	if !ok {
 		return
 	}
 
@@ -608,6 +578,10 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	if found {
 		parent = active.ID
 	}
+	// HEADER ONLY, and no [requireSummary]: this route reads no body, so
+	// there is no `_summary` to lift and nothing to refuse for. A revert
+	// also already knows what it did, so an unset header defaults rather
+	// than answering 400 — the one write here that can name itself.
 	summary := r.Header.Get("X-Summary")
 	if summary == "" {
 		summary = "revert to " + target.ID
