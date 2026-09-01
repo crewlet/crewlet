@@ -51,7 +51,6 @@ type LaunchRequest struct {
 	Setup      []SetupStep
 	MCPServers map[string]map[string]any
 	LLM        *AgentLLM
-	Limits     Limits
 
 	// ReuseBox is a box this turn already has, paused from an earlier
 	// run_sandbox call. Reattaching keeps the checkout; an empty value
@@ -136,9 +135,14 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	}
 
 	handle, err := runner.Start(ctx, box, RunRequest{
-		Brief:      buildBrief(req),
-		Env:        withTelemetry(m, req),
-		Limits:     req.Limits,
+		Brief: buildBrief(req),
+		Env:   withTelemetry(m, req),
+		// FROM THE SPEC, which is where the provider default and the
+		// seat's override have already been reconciled. A Limits the
+		// caller passed alongside would be a second answer to the same
+		// question, and it was the one nobody filled in: every coding run
+		// went out uncapped while the field looked wired.
+		Limits:     Limits{MaxTurns: req.Spec.MaxTurns},
 		LLM:        req.LLM,
 		MCPServers: req.MCPServers,
 	})

@@ -128,6 +128,18 @@ type SandboxProvider struct {
 	// default says so with role.sandbox.pause_ttl_seconds: -1.
 	DefaultPauseTTLSeconds float64 `yaml:"default_pause_ttl_seconds,omitempty" json:"default_pause_ttl_seconds,omitempty" js:"min=0" desc:"Paused-box TTL before reap and re-seed. 0 = never pause."`
 
+	// DefaultMaxTurns caps how many agentic rounds a coding run may take,
+	// for seats that name none.
+	//
+	// THE ONLY ENGINE-SIDE BOUND ON A RUNAWAY CODING AGENT. A coding job is
+	// deliberately never force-stopped on a clock — see
+	// default_timeout_seconds — so nothing else stops one that is thrashing
+	// rather than working, and the box's own TTL is refreshed on every
+	// waiter tick precisely so that it cannot. 0 means uncapped, which is
+	// the default: a cap that is too low truncates real work mid-task, and
+	// the right number depends on the tasks a company gives its agents.
+	DefaultMaxTurns int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for coding runs on seats that name none. 0 = uncapped."`
+
 	// Setup is the engine-wide provisioning applied to every box before
 	// each seat's own extras. The engine ships NO steps of its own — git
 	// auth included: the documented recipe is config, so an operator can
@@ -244,6 +256,10 @@ func (s *SandboxProvider) validate(path string) error {
 		p.add(at(path, "default_timeout_seconds"), ErrOutOfRange,
 			"must be 0 (the %v s default) or positive, got %v",
 			defaultSandboxTimeoutSeconds, s.DefaultTimeoutSeconds)
+	}
+	if s.DefaultMaxTurns < 0 {
+		p.add(at(path, "default_max_turns"), ErrOutOfRange,
+			"%d (a round cap cannot be negative; 0 means uncapped)", s.DefaultMaxTurns)
 	}
 	if s.DefaultPauseTTLSeconds < 0 {
 		p.add(at(path, "default_pause_ttl_seconds"), ErrOutOfRange,

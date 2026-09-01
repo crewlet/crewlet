@@ -55,15 +55,14 @@ type ExecResult struct {
 // completion is detected by tracking the job rather than by a clock. There WAS
 // a TimeoutSec here, read by nobody, contradicting the paragraph above it.
 //
-// NOTHING SETS EITHER FIELD TODAY. They reach the CLI — [codingagent] renders
-// them as --max-turns and --max-budget-usd — but the engine's only
-// LaunchRequest builds no Limits, so every production coding run is uncapped
-// on both. That is deliberate for the budget (the fleet's own token meter
-// already charges a collected run, and a second cap denominated in the
-// operator's dollars would fight it) and a gap for the rounds: a thrashing
-// coding agent has no engine-side bound at all. Wiring max_turns to a role's
-// sandbox block is the open item; until it is, this type is honest about
-// having no caller rather than looking like one whose caller nobody found.
+// MaxTurns comes from the resolved [Spec] — providers.sandbox.default_max_turns
+// overlaid with role.sandbox.max_turns — and is the only engine-side bound on
+// a runaway coding agent, since a job is deliberately never stopped on a clock.
+//
+// MAXBUDGETUSD IS SET BY NOBODY, deliberately. The fleet's own token meter
+// already post-charges a collected run against the seat's budget, and a second
+// cap denominated in the operator's dollars would fight it: two ceilings on one
+// spend, disagreeing, with the CLI's the one that silently wins.
 type Limits struct {
 	MaxTurns     int
 	MaxBudgetUSD float64
@@ -99,6 +98,16 @@ type Spec struct {
 	// the reaper reclaims it. 0 means never pause — always re-seed from the
 	// pushed branch instead.
 	PauseTTLSec float64
+
+	// MaxTurns caps the agentic rounds a coding run may take. 0 is
+	// uncapped, and is the default.
+	//
+	// Resolved here rather than passed alongside, because it is settled the
+	// same way TimeoutSec and PauseTTLSec are — a provider default with a
+	// per-seat override — and a second resolution path for the same shape
+	// of knob is how the two come to disagree. [Launch] turns it into the
+	// runner's [Limits].
+	MaxTurns int
 
 	// Env is the run environment: LLM credentials, the generic agent
 	// identity (CREWLET_AGENT_*), the setup steps' env, and role.sandbox.env

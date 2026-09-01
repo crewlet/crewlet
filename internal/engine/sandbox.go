@@ -68,6 +68,7 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 		DefaultTemplate:    spec.Template,
 		DefaultTimeout:     seconds(spec.Timeout()),
 		DefaultPauseTTL:    seconds(spec.PauseTTL()),
+		DefaultMaxTurns:    spec.DefaultMaxTurns,
 		DefaultSetup:       setupSteps(spec.Setup),
 		Telemetry:          otel,
 	})
@@ -458,6 +459,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		CodingAgent:     string(gate.CodingAgent),
 		PauseTTL:        pauseTTL(gate),
+		MaxTurns:        gate.MaxTurns,
 		Env:             env,
 		CredentialFiles: credentials,
 	})
