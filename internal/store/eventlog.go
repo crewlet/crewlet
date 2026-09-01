@@ -274,7 +274,7 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 		}
 	}
 	// EVERY event that names a turn gets the column, not just the phase
-	// completions [extractSpend] is scoped to. That function's subject is
+	// completions [SpendFor] is scoped to. That function's subject is
 	// SPEND, so it reads one event type and returns nil for the rest — which
 	// is right for the rollup and wrong for identity: reading one turn means
 	// every row it touched, and a delivery, a tool call or an A2A ask carries

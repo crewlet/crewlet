@@ -150,7 +150,7 @@ func TestABadTokenFailsTheHandshakeRatherThanOpeningAndDying(t *testing.T) {
 // to the upgrade attempt, would not fail any socket test — it would silently
 // strand every reader holding a stale token on a page that says "retrying"
 // for ever. That is the bug this asserts against; see _probeRefusal in
-// static/dashboard/js/socket.js.
+// dashboard/src/protocol/socket.ts.
 func TestAPlainGETSeparatesARefusedCredentialFromAnAcceptedOne(t *testing.T) {
 	t.Parallel()
 	f := newSocket(t, func(a *config.APIAuth) {

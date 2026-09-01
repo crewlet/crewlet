@@ -86,7 +86,7 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			// visible, and this route answers a GET without an Upgrade
 			// header 401 (refused) or 426 (accepted, wrong protocol).
 			// That pairing is load-bearing for the dashboard's token
-			// gate — see `_probeRefusal` in static/dashboard/js/socket.js.
+			// gate — see `probeRefusal` in dashboard/src/protocol/socket.ts.
 			// Real JSON, not http.Error: that sets text/plain AND
 			// nosniff, so a JSON literal handed to it is the one
 			// combination guaranteed to stop a strict client parsing
