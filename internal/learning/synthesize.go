@@ -356,11 +356,20 @@ func parseSkillDraft(c *llm.Completion) (skillDraft, bool) {
 	if body == "" || body == "{}" {
 		return skillDraft{}, false
 	}
-	body = stripFence(body)
 
 	var draft skillDraft
-	if err := json.Unmarshal([]byte(body), &draft); err != nil {
-		log.Warn("skill_draft_undecodable", "error", err.Error())
+	decoded := false
+	for _, candidate := range modelJSONCandidates(body) {
+		if json.Unmarshal([]byte(candidate), &draft) == nil {
+			decoded = true
+			break
+		}
+	}
+	if !decoded {
+		// WARN, not debug: a synthesizer that has stopped decoding is
+		// indistinguishable from a model with nothing to draft, and the
+		// second needs no attention while the first does.
+		log.Warn("skill_draft_undecodable", "response", preview(body, 200))
 		return skillDraft{}, false
 	}
 	draft.Name = strings.TrimSpace(draft.Name)
@@ -370,32 +379,6 @@ func parseSkillDraft(c *llm.Completion) (skillDraft, bool) {
 		return skillDraft{}, false
 	}
 	return draft, true
-}
-
-// stripFence unwraps the code fence a model puts around JSON it was told to
-// answer bare.
-//
-// Shared by every parser here rather than repeated per worker: a model told
-// "JSON only" fences it anyway often enough that a worker whose parser forgot
-// the case silently declines every fenced answer, which looks exactly like a
-// model that never has anything to say. Only the OUTER fence, and only when
-// both ends are present — a lone "```" inside a body is content, and a
-// procedure that legitimately quotes a shell block would lose it.
-func stripFence(s string) string {
-	trimmed := strings.TrimSpace(s)
-	if !strings.HasPrefix(trimmed, "```") || !strings.HasSuffix(trimmed, "```") {
-		return trimmed
-	}
-	// Past the opening fence and its language tag, which is whatever the
-	// model wrote on the rest of that first line.
-	rest := trimmed[len("```"):]
-	if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
-		rest = rest[nl+1:]
-	} else {
-		// A one-line fence: "```{}```" has no body line to skip past.
-		rest = strings.TrimPrefix(rest, "json")
-	}
-	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rest), "```"))
 }
 
 // mostSimilar reports the closest existing sequence past the threshold.

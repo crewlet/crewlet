@@ -1390,11 +1390,9 @@ func oneLine(s string) string {
 
 // ParseSummary reads a model's answer, tolerating prose around the JSON.
 //
-// Two attempts, and the order matters: the whole text first, so a clean answer
-// parses exactly as sent, then the span between the first brace and the last,
-// which is what recovers an answer wrapped in a code fence or an apology. A
-// model told "JSON only" complies most of the time and the fallback is for the
-// rest.
+// Down [modelJSONCandidates], so a fenced answer and one wrapped in an apology
+// both recover, and a clean one parses exactly as sent.
+//
 // FIELD BY FIELD once an object is found, never all-or-nothing. The pattern
 // sentence is the only part the planner actually reads, and decoding the whole
 // object into one struct throws it away whenever any other field comes back
@@ -1402,11 +1400,7 @@ func oneLine(s string) string {
 // a list would cost the summary the LLM call just bought.
 func ParseSummary(raw string) (Summary, error) {
 	text := strings.TrimSpace(raw)
-	candidates := []string{text}
-	if start, end := strings.Index(text, "{"), strings.LastIndex(text, "}"); start >= 0 && end > start {
-		candidates = append(candidates, text[start:end+1])
-	}
-	for _, candidate := range candidates {
+	for _, candidate := range modelJSONCandidates(text) {
 		var obj map[string]json.RawMessage
 		// A nil map with no error is `null`, which is valid JSON and not an
 		// object. Without the check it would parse as a summary with every

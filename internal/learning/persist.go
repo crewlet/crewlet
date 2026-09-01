@@ -653,21 +653,19 @@ func coerceTTLDays(v any) int {
 	return min(days, shortTTLMaxDays)
 }
 
-// extractJSONObject reads the classifier's object out of a response.
+// extractJSONObject reads a model's object out of a response.
 //
-// The whole response first, then the span from the first { to the last }.
-// The prompt forbids prose around the JSON and models emit it anyway — a
-// leading "Here's the classification:" is not a reason to lose a correctly
-// classified fact.
+// Down [modelJSONCandidates], which is the one recovery ladder this package
+// has: the prompt forbids prose around the JSON and models emit it anyway — a
+// leading "Here's the classification:" or a code fence is not a reason to lose
+// a correctly classified fact.
 func extractJSONObject(text string) (map[string]any, bool) {
-	if obj, ok := decodeObject(text); ok {
-		return obj, true
+	for _, candidate := range modelJSONCandidates(text) {
+		if obj, ok := decodeObject(candidate); ok {
+			return obj, true
+		}
 	}
-	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
-	if start < 0 || end <= start {
-		return nil, false
-	}
-	return decodeObject(text[start : end+1])
+	return nil, false
 }
 
 func decodeObject(candidate string) (map[string]any, bool) {
