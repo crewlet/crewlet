@@ -294,13 +294,43 @@ func (c *Client) DisableBot(ctx context.Context, userID string) error {
 	return err
 }
 
+// botPageSize is Mattermost's documented per_page maximum. A larger value is
+// clamped server-side, which would make a partial walk look like a complete
+// one — the page size and the stop condition have to agree.
+const botPageSize = 200
+
+// botWalkCeiling stops a walk that is not converging. An instance with more
+// managed bots than this is not one a single company config describes.
+const botWalkCeiling = 5000
+
 // Bots lists the bot accounts the instance has, including disabled ones.
 //
 // Including disabled: a decommission that could not see them would try to
 // disable the same account on every run and report it as work done each time.
+//
+// PAGED TO EXHAUSTION, the same correction internal/gitlab's GroupMembers
+// carries and for the same reason. It asked for one page of 200 and took
+// whatever came back, which is silent truncation on the listing a DESTRUCTIVE
+// decision is made from: on an instance with more bots than that, every
+// managed account past the first page was invisible to a decommission sweep
+// and stayed live for ever, with the run reporting success.
 func (c *Client) Bots(ctx context.Context) ([]Bot, error) {
 	var out []Bot
-	_, err := c.request(ctx, http.MethodGet,
-		"/bots?include_deleted=true&per_page=200", nil, &out, true)
-	return out, err
+	for page := 0; ; page++ {
+		var batch []Bot
+		if _, err := c.request(ctx, http.MethodGet, fmt.Sprintf(
+			"/bots?include_deleted=true&per_page=%d&page=%d", botPageSize, page),
+			nil, &batch, true); err != nil {
+			return nil, err
+		}
+		out = append(out, batch...)
+		if len(batch) < botPageSize {
+			return out, nil
+		}
+		if len(out) >= botWalkCeiling {
+			return nil, fmt.Errorf(
+				"mattermost: the instance has more than %d bots, which is not one "+
+					"Crewlet provisions into", botWalkCeiling)
+		}
+	}
 }

@@ -229,11 +229,26 @@ a schedule to opt out entirely.
 
 ### Hard wall-clock timeout
 
-Each scheduled turn carries `timeout_seconds` (default 180). The turn
-engine wraps the run in that cap; on breach the turn terminates as
-`failed` with a `scheduled_timeout` `TurnGuardBreach` and a `TaskFailed`,
-so a runaway loop can't monopolise the runner. A failing or timed-out run
-never blocks the next tick.
+Each scheduled turn carries `timeout_seconds` (default 180), on the fire's own
+`task_assigned` payload. The turn engine checks it **between rounds**: a turn
+past the cap starts no further Plan → Execute → Review round and ends `failed`
+with `error_kind: scheduled_timeout` on its `turn_completed` event, so a
+runaway loop can't monopolise the runner. A failing or timed-out run never
+blocks the next tick.
+
+**Between rounds, never mid-phase.** A phase that is running may already have
+fired side effects — a post, a comment, a status change — and abandoning it
+there would leave one half-written with nothing recording that it happened.
+That is the same reason a [drain](turn-engine.md) lets a running turn finish.
+So the cap refuses to start the next round rather than interrupting the
+current one, and a single round that outruns the cap is bounded by the phase
+timeouts beneath it. Round one always runs: a cap that refused before any work
+started would report a turn as timed out having done nothing, which is a
+misconfiguration rather than a slow turn.
+
+A resumed turn — one re-entering a suspended [code sandbox](code-sandbox.md)
+run — carries **no** cap. The cap bounds the turn a fire started; the resumed
+half is finishing work the box already did.
 
 ---
 

@@ -111,37 +111,3 @@ func TestContainsAnswersWithoutRewriting(t *testing.T) {
 		t.Fatal("Contains missed a known shape")
 	}
 }
-
-// A credential split across the cut boundary matches no rule in either half,
-// so the cut has to come first and the redaction after it.
-func TestTailRedactsAfterCuttingNotBefore(t *testing.T) {
-	secret := "glpat-" + strings.Repeat("e", 20)
-	text := strings.Repeat("x", 500) + "\n" + secret + " at the end"
-	got := redact.Tail(text, 40)
-	if strings.Contains(got, secret) {
-		t.Fatalf("the tail leaked a credential: %q", got)
-	}
-	if !strings.Contains(got, "elided") {
-		t.Fatalf("the tail did not say it had cut: %q", got)
-	}
-}
-
-func TestTailKeepsShortTextWhole(t *testing.T) {
-	if got := redact.Tail("all of it", 100); got != "all of it" {
-		t.Fatalf("Tail = %q", got)
-	}
-	if got := redact.Tail("anything", 0); got != "" {
-		t.Fatalf("Tail with no budget = %q, want empty", got)
-	}
-}
-
-func TestTailOpensAtALineBoundaryWhenOneIsNear(t *testing.T) {
-	text := "old\n" + strings.Repeat("a", 20) + "\nthe last line"
-	got := redact.Tail(text, 20)
-	if strings.HasPrefix(strings.TrimPrefix(got, "… earlier output elided …\n"), "a") {
-		return // opened mid-run because no boundary was near enough
-	}
-	if !strings.Contains(got, "the last line") {
-		t.Fatalf("Tail lost the end of the text: %q", got)
-	}
-}

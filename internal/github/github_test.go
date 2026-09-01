@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -762,6 +763,54 @@ func (s *stub) postedTo(t *testing.T, path string) map[string]any {
 // newStub is an empty record.
 func newStub() *stub {
 	return &stub{paths: map[string]int{}, bodies: map[string][][]byte{}}
+}
+
+// A hook past the first page read as ABSENT, and every caller uses this
+// listing to decide whether Crewlet's own hook already exists — so the
+// reconcile created a duplicate on every run, each delivering the same event
+// again. GitHub's documented 20-hooks limit is per EVENT per target, so a full
+// page is not evidence the listing is complete.
+func TestWebhooksAreWalkedToExhaustion(t *testing.T) {
+	t.Parallel()
+	var pages []string
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		pages = append(pages, r.URL.Query().Get("page"))
+		// A full page, then a short one: the walk must ask twice.
+		if r.URL.Query().Get("page") == "1" {
+			rows := make([]string, 0, 100)
+			for i := range 100 {
+				rows = append(rows, fmt.Sprintf(
+					`{"id":%d,"active":true,"events":["push"],"config":{"url":"https://e.example.com/%d"}}`,
+					i, i))
+			}
+			_, _ = fmt.Fprintf(w, "[%s]", strings.Join(rows, ","))
+			return
+		}
+		_, _ = w.Write([]byte(
+			`[{"id":999,"active":true,"events":["push"],"config":{"url":"https://e.example.com/last"}}]`))
+	})
+
+	got, err := client.OrgWebhooks(context.Background(), "acme")
+	if err != nil {
+		t.Fatalf("OrgWebhooks: %v", err)
+	}
+	if len(got) != 101 {
+		t.Errorf("hooks = %d, want both pages (101)", len(got))
+	}
+	if len(pages) < 2 || pages[0] != "1" || pages[1] != "2" {
+		t.Errorf("pages requested = %v, want the walk to continue past a full page", pages)
+	}
+	// The hook only the SECOND page carries is the one a first-page-only
+	// listing reported as absent.
+	var found bool
+	for _, h := range got {
+		if h.URL == "https://e.example.com/last" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the hook on the second page was not returned")
+	}
 }
 
 // newTestClient points a client at a stub and asserts the request shape

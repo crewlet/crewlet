@@ -833,7 +833,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// delegation_depth_limit before anything runs, and this argument was
 	// omitted — so the check ran against a constant zero and the limit
 	// bounded nothing.
-	res, err := turn.Run(ctx, r, company.TurnSettings(), turn.Input{
+	res, err := turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds), turn.Input{
 		TurnID: req.WorkKey, Depth: req.Depth,
 	})
 	// The moment the turn returns, and before its frame unwinds: the runner

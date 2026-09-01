@@ -68,12 +68,14 @@ type TaskAssigned struct {
 	// TimeoutSeconds is the schedule's wall-clock cap for this fire, zero
 	// for a delegation.
 	//
-	// NOT ENFORCED YET, and stated here rather than left implied: the cap is
-	// documented (docs/concepts/scheduling.md) and has a GuardKind reserved
-	// for it (GuardScheduledTimeout), but nothing raises that breach. It
-	// travelled as a write-only Payload key before this field existed, so
-	// carrying it typed is what gives the enforcement something to read when
-	// it lands — and what stops the value disappearing in the meantime.
+	// ENFORCED BETWEEN ROUNDS by the turn loop (turn.Settings.MaxWallClock):
+	// a turn past the cap starts no further round and ends with a
+	// scheduled_timeout breach, which reaches the turn event's error_kind.
+	// Never mid-phase — a phase that is running may already have fired side
+	// effects, and abandoning it there would leave a post half-written.
+	//
+	// It travelled as a write-only Payload key before this field existed, so
+	// nothing could read it and the documented cap bounded nothing.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 }
 

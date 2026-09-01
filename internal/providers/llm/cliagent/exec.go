@@ -100,6 +100,13 @@ type rawResult struct {
 	// timedOut reports that the wall-clock cap fired, which is a different
 	// fact from the context the caller passed being cancelled.
 	timedOut bool
+
+	// droppedStdout and droppedStderr are the bytes each stream lost past
+	// maxOutput. SEPARATE, because the two mean different things: a clipped
+	// stdout is a clipped ANSWER and the caller must refuse it, while a
+	// clipped stderr costs only diagnosis. Summing them, as this used to,
+	// produced a warning that could not say which had happened.
+	droppedStdout, droppedStderr int
 }
 
 // run executes one invocation, terminating the whole process TREE on timeout.
@@ -144,13 +151,20 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 		stderr:   stderr.String(),
 		timedOut: errors.Is(callCtx.Err(), context.DeadlineExceeded),
 	}
-	if dropped := stdout.Truncated() + stderr.Truncated(); dropped > 0 {
-		// Said out loud rather than swallowed: a truncated stream is
-		// how a usage figure or a closing fence goes missing, and an
-		// operator debugging a mangled answer needs to know the output
-		// was cut rather than malformed.
+	res.droppedStdout, res.droppedStderr = stdout.Truncated(), stderr.Truncated()
+	for _, s := range []struct {
+		stream  string
+		dropped int
+	}{{"stdout", res.droppedStdout}, {"stderr", res.droppedStderr}} {
+		if s.dropped == 0 {
+			continue
+		}
+		// NAMES THE STREAM. A truncated stream is how a usage figure or a
+		// closing fence goes missing, and an operator debugging a mangled
+		// answer needs to know which half was cut — the caller refuses on
+		// stdout and carries on for stderr.
 		log.WarnContext(ctx, "cli_agent_output_truncated", "binary", in.binary,
-			"dropped_bytes", dropped, "limit_bytes", maxOutput)
+			"stream", s.stream, "dropped_bytes", s.dropped, "limit_bytes", maxOutput)
 	}
 	if res.timedOut {
 		// The group was signalled by Cancel and given WaitDelay to go;

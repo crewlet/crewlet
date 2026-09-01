@@ -304,18 +304,50 @@ func TestReleaseIsIdempotent(t *testing.T) {
 // operator looking at the directory.
 func TestSeatSlugIsSafeAndRecognisable(t *testing.T) {
 	t.Parallel()
-	cases := map[string]string{
-		"sarah-chen":             "sarah-chen",
-		"Sarah Chen":             "sarah-chen",
-		"../../etc":              "etc",
-		"":                       "seat",
-		"///":                    "seat",
-		"a/b":                    "a-b",
-		strings.Repeat("x", 200): strings.Repeat("x", 64),
+	// A canonical handle — which is all org.ValidHandle admits — renders
+	// bare, so the common case stays readable.
+	if got := seatSlug("sarah-chen"); got != "sarah-chen" {
+		t.Errorf("seatSlug(%q) = %q, want it unchanged", "sarah-chen", got)
 	}
-	for in, want := range cases {
-		if got := seatSlug(in); got != want {
-			t.Errorf("seatSlug(%q) = %q, want %q", in, got, want)
+	for _, in := range []string{
+		"Sarah Chen", "../../etc", "", "///", "a/b", strings.Repeat("x", 200),
+	} {
+		got := seatSlug(in)
+		if got == "" {
+			t.Errorf("seatSlug(%q) = \"\"", in)
 		}
+		if strings.ContainsAny(got, "/\\.") {
+			t.Errorf("seatSlug(%q) = %q, which can escape the directory", in, got)
+		}
+		if len(got) > 255 {
+			t.Errorf("seatSlug(%q) is %d bytes, past NAME_MAX", in, len(got))
+		}
+	}
+}
+
+// AND INJECTIVE. This directory is a seat's HOME — its coding-CLI session,
+// its history, its credentials — so two seats that land on one slug get one
+// home, which is the cross-seat read this package exists to prevent. The
+// rendering used to collide two ways: every unsafe character folded to '-',
+// and the result was cut at 64 with nothing bounding a handle's length.
+func TestSeatSlugNeverCollides(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("x", 64)
+	seen := map[string]string{}
+	for _, in := range []string{
+		// Folded apart from each other under the old rendering.
+		"sarah-chen", "Sarah Chen", "sarah.chen", "sarah/chen", "SARAH-CHEN",
+		"a/b", "a.b", "a b", "a-b",
+		// Shared a 64-character prefix under the old rendering.
+		long + "-one", long + "-two", long + strings.Repeat("y", 40),
+		// Both degenerate inputs previously became the literal "seat".
+		"", "///", "..", "../../etc", "../../var",
+	} {
+		got := seatSlug(in)
+		if prev, dup := seen[got]; dup {
+			t.Errorf("seatSlug(%q) and seatSlug(%q) both give %q — one HOME for two seats",
+				prev, in, got)
+		}
+		seen[got] = in
 	}
 }

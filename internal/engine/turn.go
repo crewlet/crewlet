@@ -121,6 +121,11 @@ type Request struct {
 	// rather than discovering the loop at runtime.
 	Depth int
 
+	// TimeoutSeconds is the wall-clock cap this turn's trigger carried, zero
+	// when it carried none. Only a scheduled fire sets one — see
+	// [types.TaskAssigned.TimeoutSeconds].
+	TimeoutSeconds int
+
 	// DelegationChain is who asked whom to get here. Provenance rather
 	// than a gate — "alice → bob → alice" is exactly what happened — and
 	// it travels so an ask this turn makes names the whole path instead of
@@ -199,6 +204,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	req := Request{
 		Handle: handle, Events: routing.Events,
 		WorkKey: routing.WorkKey, Coalesce: routing.Coalesce,
+		TimeoutSeconds:  wallClockOf(routing.Events),
 		ConversationKey: conversationKeyOf(routing.Events),
 		// READ OFF THE TRIGGER, and it was read off nothing: this field
 		// was set at no site on the inbox path, so every turn ran at
@@ -447,6 +453,27 @@ func DescribeTrigger(evs []*events.Event) string {
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// wallClockOf is the cap this partition's triggers carried.
+//
+// THE SMALLEST non-zero, for the same reason delegationOf takes the deepest: a
+// coalesced partition can hold triggers that arrived by different routes, and
+// a cap exists to bound the turn — so a batch containing one capped fire is
+// capped, and taking the first event's value would let an uncapped trigger
+// arriving alongside it remove the bound.
+func wallClockOf(evs []*events.Event) int {
+	smallest := 0
+	for _, ev := range evs {
+		fire, ok := events.DataAs[*types.TaskAssigned](ev)
+		if !ok || fire.TimeoutSeconds <= 0 {
+			continue
+		}
+		if smallest == 0 || fire.TimeoutSeconds < smallest {
+			smallest = fire.TimeoutSeconds
+		}
+	}
+	return smallest
 }
 
 // delegationOf is the delegation this partition inherits.

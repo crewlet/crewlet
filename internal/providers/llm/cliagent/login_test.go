@@ -141,6 +141,62 @@ func TestARestoredBundleCannotEscapeTheCredentialDirectory(t *testing.T) {
 	}
 }
 
+// AN OVER-LARGE BUNDLE IS REFUSED, not clipped. io.LimitReader stops at its cap
+// and hands the tar reader a clean io.EOF, which is indistinguishable from the
+// end of a whole archive — so a bundle past the cap used to restore whatever
+// files fitted and report success, leaving a partial credential directory that
+// HasLogin then reads as a login and declines to repair.
+func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
+	p := loginProvider(t)
+	err := p.RestoreBundle(bundleOf(t, "creds.json", strings.Repeat("x", maxBundle+1)))
+	if err == nil {
+		t.Fatal("an oversized bundle was accepted")
+	}
+	if !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("the refusal does not say why: %v", err)
+	}
+	if p.Workspace().HasLogin() {
+		t.Error("a refused bundle still wrote a credential")
+	}
+}
+
+// A bundle is validated WHOLE before anything reaches the disk: the checks
+// reject mid-archive, and writing as the loop went left the rejected bundle's
+// earlier entries behind.
+func TestARejectedBundleLeavesNothingBehind(t *testing.T) {
+	p := loginProvider(t)
+	// A good entry FIRST, then one the name check refuses.
+	var raw bytes.Buffer
+	zw := gzip.NewWriter(&raw)
+	tw := tar.NewWriter(zw)
+	for _, e := range []struct{ name, body string }{
+		{"creds.json", `{"token":"real"}`},
+		{"../../.ssh/authorized_keys", "pwned"},
+	} {
+		if err := tw.WriteHeader(&tar.Header{
+			Name: e.name, Mode: 0o600, Size: int64(len(e.body)), Typeflag: tar.TypeReg,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(e.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.RestoreBundle(base64.StdEncoding.EncodeToString(raw.Bytes())); err == nil {
+		t.Fatal("a bundle holding a path traversal was accepted")
+	}
+	if p.Workspace().HasLogin() {
+		t.Error("the entry before the refused one was written anyway")
+	}
+}
+
 // A node that has been running holds the FRESHER refresh token; restoring a
 // boot-time blob over it is how a fleet logs itself out at the next expiry.
 func TestABundleDoesNotOverwriteALiveLogin(t *testing.T) {

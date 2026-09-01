@@ -19,7 +19,6 @@ package redact
 
 import (
 	"regexp"
-	"strings"
 )
 
 // Marker is the prefix every replacement carries, so a reader can tell
@@ -80,26 +79,3 @@ func Secrets(text string) string {
 // Contains reports whether text still holds something this pass would replace.
 // For assertions and for a caller that must refuse rather than sanitise.
 func Contains(text string) bool { return Secrets(text) != text }
-
-// Tail returns the last n bytes of text, redacted, prefixed with an elision
-// note when it had to cut.
-//
-// The shape a crash tail wants: a failing command's useful output is at the
-// END, and the redaction has to happen AFTER the cut — trimming a redacted
-// string could slice a marker in half, and trimming before redacting could
-// split a credential across the boundary so that neither half matches a rule.
-func Tail(text string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if len(text) <= n {
-		return Secrets(text)
-	}
-	cut := text[len(text)-n:]
-	// Start at a line boundary where there is one nearby, so the tail does
-	// not open mid-token.
-	if i := strings.IndexByte(cut, '\n'); i >= 0 && i < n/4 {
-		cut = cut[i+1:]
-	}
-	return "… earlier output elided …\n" + Secrets(cut)
-}
