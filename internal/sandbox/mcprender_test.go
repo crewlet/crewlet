@@ -110,3 +110,48 @@ func TestTheRenderedSpecDoesNotAliasTheConfiguration(t *testing.T) {
 		t.Fatal("the rendered spec aliased the server configuration")
 	}
 }
+
+// AN UNRECOGNISED TRANSPORT IS SKIPPED, not rendered as stdio.
+//
+// The field used to be a bare `string` and the renderer branched on
+// `== "http"`, so anything else — a typo, a transport a newer build knows and
+// this one does not — fell through to the stdio branch and produced
+// `{"command": "", "args": null}`. The agent inside the box then spends a
+// round failing to launch a server with no command, and nothing anywhere says
+// why. Skipping is what an unknown NAME already did, and this is the same
+// class of mistake.
+func TestAServerWithAnUnrecognisedTransportIsSkipped(t *testing.T) {
+	source := append(servers(), MCPServer{
+		Name: "mistyped", Transport: "htp", URL: "https://example.com/mcp",
+	})
+	got := RenderMCP(source, []string{"files", "mistyped"}, nil)
+	if _, rendered := got["mistyped"]; rendered {
+		t.Errorf("a server with an unrecognised transport reached the box: %v", got["mistyped"])
+	}
+	// AND THE REST STILL RENDER. One bad entry must not cost a seat its
+	// whole scoped surface.
+	if _, ok := got["files"]; !ok {
+		t.Errorf("the valid servers were lost too: %v", got)
+	}
+}
+
+// EMPTY MEANS STDIO, which is the default an operator gets by saying nothing.
+// Refusing it would drop every server that did not name a transport — which
+// is most of them.
+func TestTheTransportSetIsClosedAndEmptyMeansStdio(t *testing.T) {
+	for _, tc := range []struct {
+		transport Transport
+		valid     bool
+	}{
+		{"", true},
+		{TransportStdio, true},
+		{TransportHTTP, true},
+		{"htp", false},
+		{"HTTP", false}, // Not case-folded: the config layer's set is not either.
+		{"sse", false},  // A transport that exists in the wider MCP world and not here.
+	} {
+		if got := tc.transport.Valid(); got != tc.valid {
+			t.Errorf("Transport(%q).Valid() = %v, want %v", tc.transport, got, tc.valid)
+		}
+	}
+}

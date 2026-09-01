@@ -314,6 +314,8 @@ The coding agent is itself an MCP client, so the engine renders the role's serve
 
 Credentials from `role.mcp_env` are resolved into the rendered specs (HTTP servers get them as headers, stdio servers as env), so the in-box server instances authenticate as the seat. The connected server names are also listed in the coding agent's environment brief.
 
+A named server the company's `mcp_servers` does not carry is **skipped**, with a warning, rather than rendered empty — the agent must never be offered a server it cannot reach, because it spends a round discovering that. The same holds for a server whose `transport` is neither `stdio` nor `http`. One skipped entry does not cost the seat the rest of its surface.
+
 Two practical caveats:
 
 - **A cloud sandbox cannot reach your laptop.** An HTTP MCP server (or a git host) on `localhost` / a private LAN address is unreachable from an E2B cloud box. For laptop-local development stacks, use a self-hosted E2B `domain` on the same network, a tunnel, or scope those servers out of the sandbox.

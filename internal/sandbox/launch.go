@@ -50,7 +50,7 @@ type LaunchRequest struct {
 
 	Spec       Spec
 	Setup      []SetupStep
-	MCPServers map[string]map[string]any
+	MCPServers map[string]LaunchSpec
 	LLM        *AgentLLM
 
 	// ReuseBox is a box this turn already has, paused from an earlier

@@ -30,7 +30,7 @@ import (
 // translation. A caller assembles these from whatever its config says.
 type MCPServer struct {
 	Name      string
-	Transport string // "stdio" (default) or "http"
+	Transport Transport
 
 	// The stdio fields.
 	Command string
@@ -42,8 +42,53 @@ type MCPServer struct {
 	Headers map[string]string
 }
 
+// Transport is how the in-box agent reaches one server.
+//
+// A NAMED TYPE over a closed set, not a bare string, and this is the third
+// place the same set is spelled — `config.MCPTransport` and `mcp.TransportKind`
+// are the other two, each owned by the layer that acts on it, because this
+// package deliberately depends on the SHAPE of a server rather than on the
+// config tree.
+//
+// What the type buys is [Transport.Valid]: as a bare string an unrecognised
+// value fell through to the stdio branch and rendered `{"command": ""}` — a
+// server the agent inside the box then spends a round failing to launch, with
+// nothing anywhere saying why.
+type Transport string
+
+const (
+	// TransportStdio launches the server as a child process inside the box.
+	TransportStdio Transport = "stdio"
+	// TransportHTTP points the agent at a remote server.
+	TransportHTTP Transport = "http"
+)
+
+// Valid reports whether t is a transport this package can render.
+//
+// EMPTY IS VALID and means stdio, which is the default an operator gets by
+// saying nothing — the same default `config.MCPServer.Kind` applies.
+func (t Transport) Valid() bool {
+	switch t {
+	case "", TransportStdio, TransportHTTP:
+		return true
+	default:
+		return false
+	}
+}
+
 // LaunchSpec is one server as a runner writes it into a box.
-type LaunchSpec = map[string]any
+//
+// A DEFINED TYPE rather than an alias for `map[string]any`. As an alias it
+// named nothing the compiler could hold on to, and two of the three places
+// that carry this shape — [LaunchRequest.MCPServers] and
+// [RunRequest.MCPServers] — spelled out `map[string]map[string]any` instead,
+// so the concept had a name in exactly one file.
+//
+// The KEYS are the wire contract with each coding agent's config writer:
+// "type"/"url"/"headers" for HTTP, "command"/"args"/"env" for stdio. They are
+// generic on purpose — what each CLI's own config file looks like belongs to
+// its runner, not here.
+type LaunchSpec map[string]any
 
 // RenderMCP builds the launch specs for a seat's scoped sandbox surface.
 //
@@ -71,6 +116,18 @@ func RenderMCP(servers []MCPServer, scoped []string, credentials map[string]map[
 					"in mcp.servers, so the coding agent will not get it")
 			continue
 		}
+		// SKIPPED like an unknown name, for the same reason: rendering it
+		// would hand the agent a server it cannot reach, and a round spent
+		// discovering that is worse than not offering it. Rendering an
+		// unrecognised transport as stdio — which is what a bare string
+		// field did — produced `{"command": ""}` and said nothing at all.
+		if !server.Transport.Valid() {
+			log.Warn("sandbox_mcp_transport_unknown", "server", name,
+				"transport", string(server.Transport),
+				"hint", "mcp.servers."+name+".transport must be stdio or http, "+
+					"so the coding agent will not get this server")
+			continue
+		}
 		out[name] = launchSpec(server, credentials[name])
 	}
 	if len(out) == 0 {
@@ -86,13 +143,16 @@ func RenderMCP(servers []MCPServer, scoped []string, credentials map[string]map[
 // so a seat that supplies a token is saying something more specific than the
 // company-wide default it replaces.
 func launchSpec(server MCPServer, seatCredentials map[string]string) LaunchSpec {
-	if server.Transport == "http" {
-		spec := LaunchSpec{"type": "http", "url": server.URL}
+	if server.Transport == TransportHTTP {
+		spec := LaunchSpec{"type": string(TransportHTTP), "url": server.URL}
 		if headers := merged(server.Headers, seatCredentials); len(headers) > 0 {
 			spec["headers"] = headers
 		}
 		return spec
 	}
+	// Stdio, which an empty transport also means. An unrecognised one never
+	// reaches here — RenderMCP skips it — so this branch is not the
+	// fall-through it used to be.
 	spec := LaunchSpec{"command": server.Command, "args": slices.Clone(server.Args)}
 	if env := merged(server.Env, seatCredentials); len(env) > 0 {
 		spec["env"] = env

@@ -148,7 +148,7 @@ func openCodeProvider(llm sandbox.AgentLLM) map[string]any {
 }
 
 // openCodeMCP translates the generic launch specs into OpenCode's schema.
-func openCodeMCP(servers map[string]map[string]any) map[string]any {
+func openCodeMCP(servers map[string]sandbox.LaunchSpec) map[string]any {
 	out := make(map[string]any, len(servers))
 	for name, spec := range servers {
 		entry := map[string]any{"enabled": true}

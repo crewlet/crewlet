@@ -234,7 +234,7 @@ func TestTheOpenCodeConfigReferencesTheKeyRatherThanInliningIt(t *testing.T) {
 func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
-		MCPServers: map[string]map[string]any{
+		MCPServers: map[string]sandbox.LaunchSpec{
 			"files":  {"command": "mcp-files", "args": []any{"--root", "/src"}, "env": map[string]any{"K": "v"}},
 			"linear": {"type": "http", "url": "https://example.com/mcp", "headers": map[string]any{"H": "v"}},
 		},
