@@ -316,7 +316,27 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	if res.Suspended {
 		e.persistSuspension(ctx, r, in.Run.TurnID)
 	}
+	e.recordResume(ctx, in, res)
 	return nil
+}
+
+// recordResume files a finished resumed turn against the conversation it was
+// serving when it detached.
+//
+// ONLY THE DISPATCHER WROTE THIS, so a turn that ended here — which is every
+// turn that did code work — left the conversation ledger untouched. The
+// thread's history then stopped at the moment the run detached, and the
+// seat's next turn on it read a conversation in which the coding work had
+// never happened: no record of what was built, and nothing to stop it being
+// planned again.
+//
+// A turn that suspended again records nothing — [Dispatcher.RecordSession]
+// declines it, for both paths and for the same reason: it has not finished,
+// so there is no reply to file. The completion that eventually lands comes
+// back through this same frame and records then.
+func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result) {
+	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.ConversationKey,
+		in.Run.TurnID, res, e.dispatch.now())
 }
 
 // resumeTask is the brief the resumed turn re-enters with.
@@ -488,6 +508,14 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 			TurnID: t.ID, AgentID: agentID, AgentHandle: t.Handle(), Role: seat.Name,
 			Depth: t.Depth, Chain: t.Chain,
 			TraceID: runTrace.TraceID, SpanID: runTrace.SpanID,
+			// THE CONVERSATION THE WORK CAME FROM, which nothing set
+			// either. The row has carried this field since it was
+			// written, and with it empty a resumed turn had no way to
+			// say where its answer belonged: it left no conversation
+			// entry at all, so the next turn on that thread re-read
+			// history that stopped at the moment the run detached and
+			// planned as though the coding work had never happened.
+			ConversationKey: t.ConversationKey,
 		},
 		Brief:      brief,
 		Setup:      setup,

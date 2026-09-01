@@ -64,6 +64,17 @@ type Turn struct {
 	// past the cap rather than discovering the loop at runtime.
 	Depth int
 	Chain []string
+
+	// ConversationKey is the conversation this turn is serving — the Slack
+	// thread, the issue, the page — or empty for a trigger that has none.
+	//
+	// It travels because work this turn STARTS can outlive it and still owe
+	// that conversation an answer: a detached coding run is resumed in
+	// another process, days later, and what it reports has to land where
+	// the task came from. The resume cannot recover this by looking at the
+	// trigger, which may be long gone, so the launch writes it onto the
+	// run's own row and the resumed turn reads it back.
+	ConversationKey string
 }
 
 // Handle is the acting seat's handle, or "" when there is no seat.

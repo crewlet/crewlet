@@ -292,7 +292,37 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 			}
 		}
 	}
-	if d.Conversations == nil || req.ConversationKey == "" {
+	d.RecordSession(ctx, handle, req.ConversationKey, req.WorkKey, res, now)
+}
+
+// RecordSession appends what this turn said to the conversation it served.
+//
+// EXPORTED AND SEPARATE because a turn has two ways of ending and both owe
+// the conversation an entry. An ordinary turn ends here, in the dispatcher.
+// A turn that suspended on a detached coding run ends somewhere else
+// entirely — in another process, on another node, days later — and that path
+// recorded nothing at all: the thread's history stopped at the moment the run
+// detached, so the seat's next turn on it re-read a conversation in which the
+// coding work had never happened and planned it again.
+//
+// Fails open, like the completion write beside it: a turn whose bookkeeping
+// failed has already delivered, and refusing to admit it happened is the
+// worse of the two errors.
+func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation, workKey string,
+	res turn.Result, now time.Time,
+) {
+	if d == nil || d.Conversations == nil || conversation == "" {
+		return
+	}
+	// A SUSPENDED TURN HAS SAID NOTHING YET. It parked on a detached coding
+	// run, and its Result carries the self_iterate the suspend returns and
+	// an empty artifact — so filing it wrote the seat's "reply" to the
+	// thread as a decision it never made and an answer it never gave, and
+	// the next turn on that thread read it back as what this one had done.
+	// The completion ledger's write at the same moment IS right: the
+	// trigger has been worked, it is simply not finished. The finish comes
+	// back through the resume, which records then.
+	if res.Suspended {
 		return
 	}
 	entry := ledger.BuildSession(ledger.SessionInput{
@@ -303,10 +333,10 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 	if res.LastReview != nil {
 		entry.CompletedWork = res.LastReview.CompletedWork
 	}
-	if err := d.Conversations.Append(ctx, handle, req.ConversationKey, entry,
-		req.WorkKey, now, 0); err != nil {
+	if err := d.Conversations.Append(ctx, handle, conversation, entry,
+		workKey, now, 0); err != nil {
 		log.WarnContext(ctx, "conversation_not_recorded", "seat", handle,
-			"conversation", req.ConversationKey, "error", err)
+			"conversation", conversation, "error", err)
 	}
 }
 
@@ -334,8 +364,14 @@ func (d *Dispatcher) ledgered(eventType string) bool {
 	return d.Ledgered(eventType)
 }
 
+// now is the dispatcher's clock, injectable for tests.
+//
+// Nil-tolerant on the receiver, like [Dispatcher.RecordSession] beside it: a
+// caller reaching a dispatcher that was never built — a partially wired
+// engine, a test driving one method — asks the wall clock rather than
+// panicking on the way to a write the same nil check is about to decline.
 func (d *Dispatcher) now() time.Time {
-	if d.Now == nil {
+	if d == nil || d.Now == nil {
 		return time.Now().UTC()
 	}
 	return d.Now()
