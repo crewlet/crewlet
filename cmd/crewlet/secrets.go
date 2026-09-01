@@ -128,12 +128,9 @@ func runSecrets(args []string, stdout, stderr io.Writer) error {
 	// The trailing form — `secrets get -config path TOKEN` — leaves the
 	// name here instead. Anything beyond one is an error rather than a
 	// silently ignored argument.
-	tail := fs.Args()
-	if name == "" && len(tail) == 1 {
-		name, tail = tail[0], nil
-	}
-	if len(tail) > 0 {
-		return fmt.Errorf("secrets %s takes one name, got %d", sub, len(tail)+1)
+	name, given := onePositional(fs, name)
+	if given > 1 {
+		return fmt.Errorf("secrets %s takes one name, got %d", sub, given)
 	}
 
 	switch sub {

@@ -402,11 +402,8 @@ func validateConfigs(args []string, stdout, stderr io.Writer) error {
 	// to parse ZERO flags, discard both tokens and validate ./crewlet.yaml
 	// and ./company.yaml instead — printing a success line about files it
 	// never opened. A fix loop reading that converges on nothing.
-	tail := fs.Args()
-	if file == "" && len(tail) == 1 {
-		file, tail = tail[0], nil
-	}
-	if len(tail) > 0 {
+	file, given := onePositional(fs, file)
+	if given > 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet validate [<file.yaml>] [-tier auto|company|bootstrap] [-json]\n"+
 				"   or: crewlet validate [-config <tier-a.yaml>] [-company <tier-b.yaml>] [-json]")
@@ -590,11 +587,8 @@ func runEngine(args []string, stderr io.Writer) error {
 	// so `crewlet run /etc/crewlet.yaml -debug` used to parse no flags at
 	// all, discard the path, and boot from ./crewlet.yaml — or from
 	// nothing — without ever mentioning the file the operator named.
-	tail := fs.Args()
-	if file == "" && len(tail) == 1 {
-		file, tail = tail[0], nil
-	}
-	if len(tail) > 0 {
+	file, given := onePositional(fs, file)
+	if given > 1 {
 		fmt.Fprintln(stderr, "usage: crewlet run [<config.yaml>] "+
 			"[-company <company.yaml>] [-roles …] [-api-host …] [-api-port …]")
 		return errors.New("name at most one config document")
@@ -1200,11 +1194,8 @@ func emitSchema(args []string, stdout, stderr io.Writer) error {
 	// holds the trailing form (`schema -o path company`) and anything left
 	// over in either form — a second tier, a typo — which must be an error
 	// rather than a silently ignored argument.
-	tail := fs.Args()
-	if name == "" && len(tail) == 1 {
-		name, tail = tail[0], nil
-	}
-	if len(tail) > 0 {
+	name, given := onePositional(fs, name)
+	if given > 1 {
 		fmt.Fprintf(stderr, "usage: crewlet schema [%s|%s] [-o path]\n",
 			config.TierCompany, config.TierBootstrap)
 		return errors.New("name at most one tier")

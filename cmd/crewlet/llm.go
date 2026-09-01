@@ -104,11 +104,9 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
-	if key == "" && len(fs.Args()) == 1 {
-		key = fs.Args()[0]
-	} else if len(fs.Args()) > 0 {
-		return fmt.Errorf("llm %s takes one provider key, got %d",
-			sub, len(fs.Args())+len(nonEmpty(key)))
+	key, given := onePositional(fs, key)
+	if given > 1 {
+		return fmt.Errorf("llm %s takes one provider key, got %d", sub, given)
 	}
 
 	ctx := context.Background()

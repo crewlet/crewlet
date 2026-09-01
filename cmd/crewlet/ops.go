@@ -51,11 +51,8 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	// subject, so neither branch fired and the command silently migrated
 	// the database named by ./crewlet.yaml — a database the operator never
 	// named, and without -check it migrates it for real.
-	tail := fs.Args()
-	if bootstrapPath == "" && len(tail) == 1 {
-		bootstrapPath, tail = tail[0], nil
-	}
-	if len(tail) > 0 {
+	bootstrapPath, given := onePositional(fs, bootstrapPath)
+	if given > 1 {
 		fmt.Fprintln(stderr, "usage: crewlet migrate [<config.yaml>] [-check]")
 		return errors.New("name at most one config document")
 	}

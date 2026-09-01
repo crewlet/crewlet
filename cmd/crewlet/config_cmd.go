@@ -84,12 +84,9 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
-	tail := fs.Args()
-	if subject == "" && len(tail) == 1 {
-		subject, tail = tail[0], nil
-	}
-	if len(tail) > 0 {
-		return fmt.Errorf("config %s takes one argument, got %d", sub, len(tail)+1)
+	subject, given := onePositional(fs, subject)
+	if given > 1 {
+		return fmt.Errorf("config %s takes one argument, got %d", sub, given)
 	}
 
 	ctx := context.Background()

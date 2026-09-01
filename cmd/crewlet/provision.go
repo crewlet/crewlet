@@ -218,11 +218,8 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 			expiry = expiryDays
 		}
 	})
-	tail := fs.Args()
-	if companyPath == "" && len(tail) == 1 {
-		companyPath, tail = tail[0], nil
-	}
-	if companyPath == "" || len(tail) > 0 {
+	companyPath, given := onePositional(fs, companyPath)
+	if given != 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet gitlab provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
@@ -539,11 +536,8 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	tail := fs.Args()
-	if companyPath == "" && len(tail) == 1 {
-		companyPath, tail = tail[0], nil
-	}
-	if companyPath == "" || len(tail) > 0 {
+	companyPath, given := onePositional(fs, companyPath)
+	if given != 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet mattermost provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-handles a,b] "+
@@ -667,11 +661,8 @@ func runMattermostDoctor(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	tail := fs.Args()
-	if companyPath == "" && len(tail) == 1 {
-		companyPath, tail = tail[0], nil
-	}
-	if companyPath == "" || len(tail) > 0 {
+	companyPath, given := onePositional(fs, companyPath)
+	if given != 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet mattermost doctor <company.yaml> [-admin-token TOKEN]")
 		return errors.New("name exactly one company document")

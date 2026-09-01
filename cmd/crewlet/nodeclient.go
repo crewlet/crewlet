@@ -89,9 +89,8 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
-	if tail := fs.Args(); bootstrapPath == "" && len(tail) == 1 {
-		bootstrapPath = tail[0]
-	} else if len(tail) > 0 {
+	bootstrapPath, given := onePositional(fs, bootstrapPath)
+	if given > 1 {
 		fmt.Fprintf(stderr, "usage: crewlet %s [<config.yaml>]\n", name)
 		return nil, errors.New("name at most one config document")
 	}

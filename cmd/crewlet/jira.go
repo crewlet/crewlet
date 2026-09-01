@@ -44,11 +44,8 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	tail := fs.Args()
-	if companyPath == "" && len(tail) == 1 {
-		companyPath, tail = tail[0], nil
-	}
-	if companyPath == "" || len(tail) > 0 {
+	companyPath, given := onePositional(fs, companyPath)
+	if given != 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet jira provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
