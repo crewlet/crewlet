@@ -680,7 +680,7 @@ func (e *Engine) startSandboxWaiter(ctx context.Context, interval time.Duration)
 		// in the company, not just this node's seats, so N nodes running it
 		// unclaimed means N reconnects per box per tick and N racing
 		// reapers.
-		ClaimDuty: sandbox.DutyFunc(e.waiterDuty()),
+		ClaimDuty: sandbox.DutyFunc(e.waiterDuty(interval)),
 	})
 	if err != nil {
 		return err
@@ -728,22 +728,56 @@ const waiterDutyName = "sandbox-waiter"
 // Nil where there is no coordination backend, which is the single-node case:
 // that node always holds it, and a wrapper that always said yes would make a
 // single node report itself as a fleet singleton.
-func (e *Engine) waiterDuty() schedule.DutyFunc {
+func (e *Engine) waiterDuty(interval time.Duration) schedule.DutyFunc {
 	if e.backends == nil || e.backends.Coord == nil {
 		return nil
 	}
-	return e.workerDuty(waiterDutyName, waiterDutyTTL)
+	return e.workerDuty(waiterDutyName, e.waiterDutyTTL(interval))
 }
+
+// dutyTTLTicks is how many poll intervals the waiter duty survives without a
+// re-claim, and dutyTTLFloor the shortest it may ever be.
+//
+// Three intervals is the same "do not flap on a blip" rule the scheduler duty
+// and the seat heartbeat follow: the holder re-claims every tick, so this
+// rides out two consecutive slow or failed claims without the duty moving. The
+// invariant is the RATIO, not any duration — a duty that cannot outlive three
+// of its own ticks moves on ordinary jitter, and one that outlives many is
+// time the fleet has no waiter after a holder dies.
+//
+// The floor is for the other end: this code is driven at a sub-second cadence
+// in tests, and three of those is a lease that lapses inside its own claim.
+const (
+	dutyTTLTicks = 3
+	dutyTTLFloor = 30 * time.Second
+)
 
 // waiterDutyTTL is how long the waiter duty survives without a re-claim.
 //
-// Three poll intervals, the same "do not flap on a blip" rule the scheduler
-// duty and the seat heartbeat follow: the holder re-claims every tick, so this
-// rides out two consecutive slow or failed claims without the duty moving. At
-// the default 15 s poll that is 45 s — under a minute of no polling if the
-// holder dies, which costs at most one late completion, and the next tick's
-// keepalive is well inside the box TTL.
-const waiterDutyTTL = 3 * sandbox.DefaultPollInterval
+// DERIVED FROM THE INTERVAL IT GUARDS, and capped by the lease bucket's own
+// age. It used to be `3 * sandbox.DefaultPollInterval` — a compile-time
+// constant that ignored the configured interval entirely, so its own comment
+// ("three poll intervals") was true of exactly one deployment. That constant
+// was 45 s, which is also precisely the default lease TTL, and the KV refuses
+// a lease STRICTLY longer than its bucket's age: the two agreed by one
+// comparison. An operator lowering coordination.lease_ttl_seconds below 45
+// therefore made every waiter duty claim fail — and mayTick fails closed, so
+// the waiter would never tick again. Every detached run would hang forever and
+// every box lose its keepalive, with one warning per tick as the only symptom.
+//
+// Capping rather than erroring, because a duty that is re-claimed every tick
+// loses nothing by expiring sooner: the holder renews long before either
+// deadline, and a shorter TTL only means a dead holder is replaced faster.
+func (e *Engine) waiterDutyTTL(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		interval = sandbox.DefaultPollInterval
+	}
+	ttl := max(dutyTTLTicks*interval, dutyTTLFloor)
+	if e.leaseTTL > 0 && ttl > e.leaseTTL {
+		return e.leaseTTL
+	}
+	return ttl
+}
 
 // prepareSeat is the node's SeatReady hook: recover this seat's in-flight runs
 // and start listening for their completions, BEFORE its mailbox opens.

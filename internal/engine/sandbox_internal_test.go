@@ -341,3 +341,40 @@ func TestAnUnrecordableSuspensionFailsTheRun(t *testing.T) {
 			got.Status, sandbox.StatusFailed)
 	}
 }
+
+// The waiter duty must survive three of its OWN ticks and must never outlive
+// the lease bucket it is written into.
+//
+// It was `3 * sandbox.DefaultPollInterval` — a constant that ignored the
+// configured interval, so its own "three poll intervals" was true of exactly
+// one deployment. That constant was 45s, which is also the default lease TTL,
+// and the KV refuses a lease STRICTLY longer than its bucket's age: the two
+// agreed by one comparison. Lower coordination.lease_ttl_seconds below 45 and
+// every claim errors — and mayTick fails closed, so the waiter stops ticking
+// altogether and every detached run hangs forever.
+func TestTheWaiterDutyTTLFollowsItsCadenceAndItsBucket(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		interval time.Duration
+		lease    time.Duration
+		want     time.Duration
+	}{
+		{"the default cadence", sandbox.DefaultPollInterval, 45 * time.Second, 45 * time.Second},
+		{"a slower cadence scales with it", 60 * time.Second, 10 * time.Minute, 3 * time.Minute},
+		{"a fast cadence takes the floor", 100 * time.Millisecond, 45 * time.Second, 30 * time.Second},
+		{"an unset cadence takes the default", 0, 45 * time.Second, 45 * time.Second},
+		{"a short bucket is the ceiling", sandbox.DefaultPollInterval, 20 * time.Second, 20 * time.Second},
+		{"no bucket leaves the derived value", 60 * time.Second, 0, 3 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Engine{leaseTTL: tc.lease}
+			if got := e.waiterDutyTTL(tc.interval); got != tc.want {
+				t.Fatalf("waiterDutyTTL(%s) with a %s bucket = %s, want %s",
+					tc.interval, tc.lease, got, tc.want)
+			}
+			if tc.lease > 0 && e.waiterDutyTTL(tc.interval) > tc.lease {
+				t.Fatal("the duty asks to outlive its bucket; the KV refuses that on every claim")
+			}
+		})
+	}
+}
