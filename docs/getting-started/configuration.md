@@ -75,8 +75,10 @@ turn_engine:                            # optional — Plan/Execute/Review turn 
     enabled: true                       # feature gate — a live kill switch; off restores the
                                         #   pre-ledger prompt exactly
     max_entries: 20                     # entries KEPT per conversation, trimmed at write
-                                        #   time, and the only bound — the whole kept
-                                        #   conversation reaches the prompt
+                                        #   time. A second bound applies at RENDER time:
+                                        #   the injected block drops whole oldest entries,
+                                        #   saying how many, once it would exceed 24k
+                                        #   characters
     retention_days: 30                  # matches the event store's horizon; applied at next start
 
 learning:                               # optional — agent-learning subsystem
