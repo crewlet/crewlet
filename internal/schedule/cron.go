@@ -160,7 +160,7 @@ func parseField(expr, name, spec string, lo, hi int, aliases map[string]int) (ui
 	restricted := spec != "*"
 
 	var mask uint64
-	for _, term := range strings.Split(spec, ",") {
+	for term := range strings.SplitSeq(spec, ",") {
 		term = strings.TrimSpace(term)
 		if term == "" {
 			return 0, false, fmt.Errorf("%w %q: empty term in %s field %q", ErrCron, expr, name, spec)

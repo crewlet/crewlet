@@ -235,7 +235,7 @@ func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink in
 // splitHandles reads the -handles list.
 func splitHandles(raw string) []string {
 	var out []string
-	for _, handle := range strings.Split(raw, ",") {
+	for handle := range strings.SplitSeq(raw, ",") {
 		if handle = strings.TrimSpace(handle); handle != "" {
 			out = append(out, handle)
 		}

@@ -1378,7 +1378,7 @@ func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
 // trailing comma is not a role named "".
 func splitRoles(value string) []string {
 	var out []string
-	for _, name := range strings.Split(value, ",") {
+	for name := range strings.SplitSeq(value, ",") {
 		if name = strings.TrimSpace(name); name != "" {
 			out = append(out, name)
 		}

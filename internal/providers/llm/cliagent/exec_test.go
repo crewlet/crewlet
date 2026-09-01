@@ -434,7 +434,7 @@ func decodePrompt(t *testing.T, encoded string) string {
 
 // envValue reads one variable out of a dumped environment.
 func envValue(dump, name string) string {
-	for _, line := range strings.Split(dump, "\n") {
+	for line := range strings.SplitSeq(dump, "\n") {
 		if after, ok := strings.CutPrefix(line, name+"="); ok {
 			return after
 		}

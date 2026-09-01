@@ -874,7 +874,7 @@ func TestEverySynthesizedSkillReachesTheMenu(t *testing.T) {
 	}
 	// Every rendered line is a WHOLE bullet: entries are dropped or kept,
 	// never cut in half.
-	for _, line := range strings.Split(got, "\n") {
+	for line := range strings.SplitSeq(got, "\n") {
 		if strings.HasPrefix(line, "- ") && !strings.Contains(line, "**") {
 			t.Fatalf("a bullet was cut mid-render: %q", line)
 		}

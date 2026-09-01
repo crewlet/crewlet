@@ -220,7 +220,7 @@ func rekeyedConfig(t *testing.T, from, active string, others ...string) string {
 		t.Fatalf("read %s: %v", from, err)
 	}
 	storePath := ""
-	for _, line := range strings.Split(string(body), "\n") {
+	for line := range strings.SplitSeq(string(body), "\n") {
 		if strings.Contains(line, "path:") {
 			storePath = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "path:"))
 		}

@@ -80,7 +80,7 @@ func TestDerivedLoggersDoNotShareAttributes(t *testing.T) {
 	left.Info("left_line")
 	right.Info("right_line")
 
-	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
 		switch {
 		case strings.Contains(line, "left_line"):
 			if strings.Contains(line, "right") {

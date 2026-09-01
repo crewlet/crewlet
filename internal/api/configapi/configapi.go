@@ -222,7 +222,7 @@ func matchesTag(header, tag string, wildcardMatchesExisting bool) bool {
 		return wildcardMatchesExisting
 	}
 	bare := strings.Trim(tag, `"`)
-	for _, candidate := range strings.Split(header, ",") {
+	for candidate := range strings.SplitSeq(header, ",") {
 		candidate = strings.TrimSpace(candidate)
 		candidate = strings.TrimPrefix(candidate, "W/")
 		if candidate == tag || candidate == bare {

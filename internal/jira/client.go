@@ -1,6 +1,7 @@
 package jira
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -193,7 +194,7 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 		if err != nil {
 			return fmt.Errorf("jira: encode %s: %w", path, err)
 		}
-		payload = strings.NewReader(string(encoded))
+		payload = bytes.NewReader(encoded)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, payload)
 	if err != nil {

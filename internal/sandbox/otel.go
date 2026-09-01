@@ -287,7 +287,7 @@ func ValidSignal(signal string) bool {
 // one place it is understood.
 func ParseOtelHeaders(raw string) map[string]string {
 	out := map[string]string{}
-	for _, pair := range strings.Split(raw, ",") {
+	for pair := range strings.SplitSeq(raw, ",") {
 		key, value, ok := strings.Cut(pair, "=")
 		if key = strings.TrimSpace(key); !ok || key == "" {
 			continue

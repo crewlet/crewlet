@@ -228,7 +228,7 @@ func TestDerivedConsoleHandlersDoNotShareAttributes(t *testing.T) {
 	left.Info("left_line")
 	right.Info("right_line")
 
-	for _, got := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+	for got := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
 		switch {
 		case strings.Contains(got, "left_line"):
 			if !strings.Contains(got, "node=n1 side=left") {

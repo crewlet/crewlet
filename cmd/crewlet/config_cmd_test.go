@@ -183,7 +183,7 @@ func TestADiffIsRedactedAndNamesWhatMoved(t *testing.T) {
 	// THE UNCHANGED BULK IS ABSENT because a structural diff has nothing to
 	// elide: it reports only what moved. One edit is one line of output.
 	var moved int
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		if strings.HasPrefix(line, "~ ") || strings.HasPrefix(line, "+ ") ||
 			strings.HasPrefix(line, "- ") {
 			moved++
@@ -289,7 +289,7 @@ func activeRevisionID(t *testing.T, cfg string) string {
 	if err != nil {
 		t.Fatalf("revisions: %v", err)
 	}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if !strings.HasPrefix(line, "*") {
 			continue
 		}

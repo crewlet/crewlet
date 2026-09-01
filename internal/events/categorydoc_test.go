@@ -69,7 +69,7 @@ func TestTheDocumentedTableNamesNoVanishedType(t *testing.T) {
 	section := page[start : start+end]
 
 	var vanished []string
-	for _, quoted := range strings.Split(section, "`") {
+	for quoted := range strings.SplitSeq(section, "`") {
 		// Only the odd-indexed pieces are inside backticks, but scanning
 		// every piece and filtering on shape is simpler and cannot get
 		// the parity wrong: an event type is snake_case or dotted, never

@@ -166,7 +166,7 @@ func NewEnvFileSink(path string) (*EnvFileSink, error) {
 	body, err := os.ReadFile(path)
 	switch {
 	case err == nil:
-		for _, line := range strings.Split(string(body), "\n") {
+		for line := range strings.SplitSeq(string(body), "\n") {
 			if name, value, ok := envfile.ParseAssignment(line); ok {
 				s.values[name] = value
 			}

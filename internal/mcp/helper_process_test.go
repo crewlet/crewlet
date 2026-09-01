@@ -99,12 +99,12 @@ func toolsJSON(tools ...[3]string) string {
 
 func runHelper(mode string) int {
 	if script := os.Getenv(helperStderrEnv); script != "" {
-		for _, line := range strings.Split(script, "\n") {
+		for line := range strings.SplitSeq(script, "\n") {
 			fmt.Fprintln(os.Stderr, line)
 		}
 	}
 	if names := os.Getenv(helperEchoEnv); names != "" {
-		for _, k := range strings.Split(names, ",") {
+		for k := range strings.SplitSeq(names, ",") {
 			fmt.Fprintf(os.Stderr, "ENV %s=%s\n", k, os.Getenv(k))
 		}
 	}

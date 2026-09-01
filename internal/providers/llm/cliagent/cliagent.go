@@ -428,7 +428,7 @@ func (p *Provider) fail(kind llm.ErrorKind, retryAfter time.Duration, err error)
 // message that names the vendor's own sentence rather than its whole reply.
 func firstLine(texts ...string) string {
 	for _, text := range texts {
-		for _, line := range strings.Split(text, "\n") {
+		for line := range strings.SplitSeq(text, "\n") {
 			if trimmed := strings.TrimSpace(line); trimmed != "" {
 				return trimmed
 			}

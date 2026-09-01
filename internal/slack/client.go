@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -82,7 +83,7 @@ func call(ctx context.Context, httpClient *http.Client, method, token string, bo
 		return fmt.Errorf("slack: encode %s: %w", method, err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		APIBase+"/"+method, strings.NewReader(string(payload)))
+		APIBase+"/"+method, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("slack: %s: %w", method, err)
 	}

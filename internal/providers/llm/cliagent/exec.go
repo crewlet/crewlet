@@ -315,7 +315,7 @@ func extractObject(p Profile, stdout string) extracted {
 func extractStream(p Profile, stdout string) extracted {
 	var out extracted
 	var text strings.Builder
-	for _, line := range strings.Split(stdout, "\n") {
+	for line := range strings.SplitSeq(stdout, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

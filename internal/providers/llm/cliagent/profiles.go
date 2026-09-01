@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"bytes"
 	_ "embed"
 	"fmt"
 	"maps"
@@ -21,7 +22,7 @@ var profilesYAML []byte
 // initialisation where the panic has no caller to blame.
 var builtins = sync.OnceValue(func() map[string]Profile {
 	var table map[string]Profile
-	dec := yaml.NewDecoder(strings.NewReader(string(profilesYAML)))
+	dec := yaml.NewDecoder(bytes.NewReader(profilesYAML))
 	dec.KnownFields(true)
 	if err := dec.Decode(&table); err != nil {
 		// The file is embedded from this repository, so a decode failure
@@ -163,7 +164,7 @@ func applyOverrides(base Profile, overrides map[string]any) (Profile, error) {
 		return Profile{}, fmt.Errorf("encoding the merged profile: %w", err)
 	}
 	var merged Profile
-	dec := yaml.NewDecoder(strings.NewReader(string(out)))
+	dec := yaml.NewDecoder(bytes.NewReader(out))
 	dec.KnownFields(true)
 	if err := dec.Decode(&merged); err != nil {
 		return Profile{}, fmt.Errorf("%w — see the field list in "+

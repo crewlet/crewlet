@@ -318,7 +318,7 @@ func toolLine(part, obj map[string]any) string {
 // correct — the next read has it whole.
 func streamEvents(text string) []map[string]any {
 	var out []map[string]any
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || line[0] != '{' {
 			continue
