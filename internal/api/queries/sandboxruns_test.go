@@ -19,8 +19,16 @@ func seedRuns(t *testing.T, runs ...sandbox.PendingRun) *sandbox.CoordStore {
 	t.Helper()
 	store := sandbox.NewCoordStore(memory.NewFleet())
 	for _, run := range runs {
-		if err := store.Create(context.Background(), run); err != nil {
-			t.Fatalf("Create: %v", err)
+		// Through the launch, because that is the only way a row comes to
+		// exist: it opens launching and is moved from there.
+		if err := store.BeginLaunch(context.Background(), run, sandbox.Fence{}); err != nil {
+			t.Fatalf("BeginLaunch: %v", err)
+		}
+		if run.Status == "" || run.Status == sandbox.StatusLaunching {
+			continue
+		}
+		if err := store.SetStatus(context.Background(), run.TurnID, run.Status, sandbox.Fence{}); err != nil {
+			t.Fatalf("SetStatus %s: %v", run.TurnID, err)
 		}
 	}
 	return store
@@ -102,12 +110,16 @@ func TestASettledRunLeavesTheBoard(t *testing.T) {
 // already reachable through the event store.
 func TestTheSuspendedConversationIsNotShipped(t *testing.T) {
 	store := seedRuns(t, sandbox.PendingRun{
-		TurnID: "t1", AgentHandle: "swe", Status: sandbox.StatusRunning, CreatedAt: runBase,
+		TurnID: "t1", AgentHandle: "swe", CreatedAt: runBase,
 	})
-	if err := store.SaveExecuteState(t.Context(), "t1", map[string]any{
+	// The write that carries the conversation is also the one that moves
+	// the run to running, so this leaves the row exactly as a suspended
+	// turn leaves it.
+	suspended, err := store.MarkSuspended(t.Context(), "t1", map[string]any{
 		"messages": []any{map[string]any{"content": "a very long system prompt"}},
-	}); err != nil {
-		t.Fatalf("SaveExecuteState: %v", err)
+	})
+	if err != nil || !suspended {
+		t.Fatalf("MarkSuspended: suspended=%v err=%v", suspended, err)
 	}
 	rows := askRuns(t, store)
 	for _, key := range []string{"execute_state", "messages", "plan"} {

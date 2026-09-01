@@ -304,7 +304,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// sandbox's result is in it.
 	waitFor(t, "the suspended turn to be resumed", func() bool {
 		return slices.Contains(n.model.seen(), "resumed")
-	})
+	}, n.diagnose)
 	waitFor(t, "the run to settle", func() bool {
 		return len(n.activeRuns(t)) == 0
 	})
@@ -389,6 +389,45 @@ func (n *codingNode) runFor(t *testing.T, status string) sandbox.PendingRun {
 	}
 	t.Fatalf("no run in %q", status)
 	return sandbox.PendingRun{}
+}
+
+// diagnose renders everything a stalled coding turn is stuck on.
+//
+// Every field here is one somebody reading a CI log had to guess at: which
+// state the run reached (a launching run has not suspended yet; a failed one
+// was settled by a tail that could not resume it), whether its conversation
+// was ever written, whether its box still exists, and how far the model got.
+// It reads the DURABLE record rather than the projection, so it answers after
+// the run has been settled just as well as while it is live.
+func (n *codingNode) diagnose() string {
+	runs, err := sandbox.NewCoordStore(n.engine.Backends().Fleet).ListActive(context.Background())
+	if err != nil {
+		return fmt.Sprintf("the run record could not be read: %v", err)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "phases seen = %v; boxes on disk = %v; %d active run(s)",
+		n.model.seen(), n.liveBoxesQuietly(), len(runs))
+	for _, run := range runs {
+		fmt.Fprintf(&b, "\n  turn=%s status=%s sandbox=%q command=%q "+
+			"execute_state_keys=%d question=%q paused_at=%s",
+			run.TurnID, run.Status, run.SandboxID, run.CommandID,
+			len(run.ExecuteState), run.Question, run.PausedAt)
+	}
+	return b.String()
+}
+
+// liveBoxesQuietly is [codingNode.liveBoxes] for a diagnostic, which must
+// report what it finds rather than fail the test it is explaining.
+func (n *codingNode) liveBoxesQuietly() []string {
+	entries, err := os.ReadDir(filepath.Join(n.stateDir, "boxes"))
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Name())
+	}
+	return out
 }
 
 // liveBoxes is what the local backend still has on disk.

@@ -36,8 +36,11 @@ func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 		t.Fatal("a fresh launch reported reusing a box")
 	}
 	run := rig.get("t1")
-	if run.Status != StatusRunning {
-		t.Fatalf("status = %q, want %q", run.Status, StatusRunning)
+	// LAUNCHING, not running. The job is executing, and the turn that
+	// started it has not yet written the conversation a resume re-enters —
+	// so nothing may poll or claim it yet. See [StatusLaunching].
+	if run.Status != StatusLaunching {
+		t.Fatalf("status = %q, want %q", run.Status, StatusLaunching)
 	}
 	if run.SandboxID != res.SandboxID || run.CommandID != res.CommandID {
 		t.Fatalf("the row does not name the job: %+v", run)
@@ -183,6 +186,43 @@ func TestTheRowExistsBeforeTheBoxDoes(t *testing.T) {
 	}
 	if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || !found {
 		t.Fatalf("Get = %v, %v; the row must exist so recovery has something to act on", found, err)
+	}
+}
+
+// A launch that opened a row and then failed must CLOSE it. A run left
+// launching is polled by nothing and claimed by nothing — it just holds its
+// seat's busy count, and its box where it got that far, until the seat happens
+// to move to another node and recovery reaps it.
+func TestEveryFailedLaunchClosesTheRowItOpened(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		derail func(*waiterRig)
+	}{
+		{"the box cannot be provisioned", func(r *waiterRig) {
+			r.provider.CreateErr = errors.New("no capacity")
+		}},
+		{"the coding agent cannot be started", func(r *waiterRig) {
+			r.runner.StartErr = errors.New("the coding CLI is not installed")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newWaiterRig(t)
+			tc.derail(rig)
+
+			if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1")); err == nil {
+				t.Fatal("a launch that could not finish reported success")
+			}
+			run := rig.get("t1")
+			if run.Status == StatusLaunching {
+				t.Fatalf("the row was left open at %q — nothing will ever poll or claim it", run.Status)
+			}
+			if run.Status != StatusFailed {
+				t.Fatalf("status = %q, want %q", run.Status, StatusFailed)
+			}
+			if run.SandboxID != "" {
+				t.Fatalf("the row still names a box: %q", run.SandboxID)
+			}
+		})
 	}
 }
 

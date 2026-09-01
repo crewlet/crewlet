@@ -348,38 +348,66 @@ func resumePlan(run sandbox.PendingRun) turn.Plan {
 	return p
 }
 
-// persistSuspension writes a turn's suspended conversation to its row.
+// persistSuspension writes a turn's suspended conversation to its row, which
+// is also what OPENS the run to the completion poll.
 //
 // Called the moment the turn returns Suspended, because the runner holds the
-// conversation only until its frame unwinds. A suspension that cannot be
-// serialized FAILS THE RUN rather than being dropped: a row with no state is
-// one nothing can resume, and failing here — while the box is still in the
-// engine's hands — is far better than discovering it at a resume days later.
+// conversation only until its frame unwinds. Until this lands the run sits in
+// [sandbox.StatusLaunching] and nothing polls or claims it — the job is
+// already executing, and a job that finishes first would otherwise be
+// collected against a row with nothing to resume into.
+//
+// EVERY WAY THIS CAN FAIL FAILS THE RUN rather than dropping the suspension: a
+// row with no state is one nothing can resume, and failing here — while the
+// box is still in the engine's hands and the seat's owner is still this
+// process — is far better than leaving a launching row to hold a box until its
+// seat happens to move.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string) {
 	if e.sandboxPending == nil {
 		return
 	}
 	suspension, ok := r.Suspended()
 	if !ok {
-		log.ErrorContext(ctx, "sandbox_suspension_missing", "turn_id", turnID,
-			"detail", "the turn suspended but recorded no conversation; the run "+
-				"cannot be resumed and will be failed")
-		if err := e.sandboxPending.SetStatus(ctx, turnID, sandbox.StatusFailed, sandbox.Fence{}); err != nil {
-			log.WarnContext(ctx, "sandbox_suspension_mark_failed", "turn_id", turnID, "error", err)
-		}
+		e.failSuspension(ctx, turnID, "sandbox_suspension_missing",
+			"the turn suspended but recorded no conversation", nil)
 		return
 	}
 	blob, err := execstate.Encode(suspension.State)
 	if err != nil {
-		log.ErrorContext(ctx, "sandbox_suspension_unserializable",
-			"turn_id", turnID, "error", err)
-		if err := e.sandboxPending.SetStatus(ctx, turnID, sandbox.StatusFailed, sandbox.Fence{}); err != nil {
-			log.WarnContext(ctx, "sandbox_suspension_mark_failed", "turn_id", turnID, "error", err)
-		}
+		e.failSuspension(ctx, turnID, "sandbox_suspension_unserializable",
+			"the suspended conversation could not be serialized", err)
 		return
 	}
-	if err := e.sandboxPending.SaveExecuteState(ctx, turnID, blob); err != nil {
-		log.ErrorContext(ctx, "sandbox_suspension_unwritable", "turn_id", turnID, "error", err)
+	suspended, err := e.sandboxPending.MarkSuspended(ctx, turnID, blob)
+	if err != nil {
+		e.failSuspension(ctx, turnID, "sandbox_suspension_unwritable",
+			"the suspended conversation could not be written", err)
+		return
+	}
+	if !suspended {
+		// The row is not launching, so this suspension has nowhere to go:
+		// either the launch never recorded it, or its tail has already
+		// been claimed and settled by somebody else. Overwriting either
+		// one is worse than failing.
+		e.failSuspension(ctx, turnID, "sandbox_suspension_not_launching",
+			"the run was no longer launching when its conversation was written", nil)
+	}
+}
+
+// failSuspension marks a run unresumable and says why, in the one voice all
+// three failure paths share.
+func (e *Engine) failSuspension(ctx context.Context, turnID, event, detail string, cause error) {
+	args := []any{"turn_id", turnID,
+		"detail", detail + "; the run cannot be resumed and is failed"}
+	if cause != nil {
+		args = append(args, "error", cause)
+	}
+	log.ErrorContext(ctx, event, args...)
+	// Unfenced: this node is the seat's owner by construction — it just ran
+	// the turn — and a fence read back from a row this write may not be able
+	// to read is a second failure mode for no gain.
+	if err := e.sandboxPending.SetStatus(ctx, turnID, sandbox.StatusFailed, sandbox.Fence{}); err != nil {
+		log.WarnContext(ctx, "sandbox_suspension_mark_failed", "turn_id", turnID, "error", err)
 	}
 }
 

@@ -97,10 +97,11 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	}
 
 	// The row FIRST, so a crash between here and the box leaves a record
-	// rather than nothing. Create is idempotent: a redelivered kick-off
-	// presents the same turn id, and the row already there is the correct
-	// one — possibly with a box attached that a second create would erase.
-	if err := store.Create(ctx, PendingRun{
+	// rather than nothing. It opens in [StatusLaunching] and stays there
+	// until the turn writes the conversation a resume re-enters: nothing
+	// polls or claims a run in that window, which is what stops a job that
+	// finishes before the turn unwinds from being collected into nothing.
+	if err := store.BeginLaunch(ctx, PendingRun{
 		TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle,
 		AgentID: req.Turn.AgentID, Role: req.Turn.Role,
 		CodingAgent:          req.Spec.CodingAgent,
@@ -110,13 +111,18 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		NotificationMetadata: req.Turn.Metadata,
 		TraceID:              req.Turn.TraceID, SpanID: req.Turn.SpanID,
 		DelegationDepth: req.Turn.Depth, DelegationChain: req.Turn.Chain,
-		Status: StatusRunning, CreatedAt: now(),
-	}); err != nil {
+		CreatedAt: now(),
+	}, req.Fence); err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
 	}
 
 	box, runner, reused, err := acquire(ctx, m, req)
 	if err != nil {
+		// The row is open and this launch is over. Every failure past this
+		// point closes it: a run left LAUNCHING is polled by nothing and
+		// claimed by nothing, so it sits on its seat's busy count and its
+		// box until the seat happens to move to another node.
+		abandon(ctx, m, store, req, "")
 		return LaunchResult{}, err
 	}
 
@@ -125,7 +131,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
 		PauseTTLSec: req.Spec.PauseTTLSec,
 	}, req.Fence); err != nil {
-		reclaim(ctx, m, box.ID())
+		abandon(ctx, m, store, req, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: attaching the box: %w", err)
 	}
 
@@ -137,15 +143,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		MCPServers: req.MCPServers,
 	})
 	if err != nil {
-		reclaim(ctx, m, box.ID())
-		if relErr := store.ReleaseBox(ctx, req.Turn.TurnID); relErr != nil {
-			log.WarnContext(ctx, "sandbox_launch_release_failed",
-				"turn_id", req.Turn.TurnID, "error", relErr.Error())
-		}
-		if setErr := store.SetStatus(ctx, req.Turn.TurnID, StatusFailed, req.Fence); setErr != nil {
-			log.WarnContext(ctx, "sandbox_launch_mark_failed",
-				"turn_id", req.Turn.TurnID, "error", setErr.Error())
-		}
+		abandon(ctx, m, store, req, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: starting the coding agent: %w", err)
 	}
 
@@ -157,7 +155,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 		CodingAgent: req.Spec.CodingAgent, SessionID: handle.SessionID,
 		PauseTTLSec: req.Spec.PauseTTLSec,
 	}, req.Fence); err != nil {
-		reclaim(ctx, m, box.ID())
+		abandon(ctx, m, store, req, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)
 	}
 
@@ -222,16 +220,36 @@ func acquire(ctx context.Context, m *Manager, req LaunchRequest) (Sandbox, Runne
 	return box, runner, false, nil
 }
 
-// reclaim kills a box the launch could not finish wiring up.
+// abandon closes out a launch that could not finish: the box is reclaimed, the
+// row stops naming it, and the run is marked failed.
+//
+// ALL THREE, EVERY TIME, and each attempted regardless of the ones before it —
+// they are separate calls that fail separately, and none of them failing is a
+// reason to leave the rest undone. Three of the four failure paths used to do
+// none of it and simply return, which left the row OPEN: a launching run is
+// polled by nothing and claimed by nothing, so it held its seat's busy count
+// and, on two of those paths, a box, until the seat happened to move to
+// another node and recovery reaped it.
 //
 // A context of its own, because the failure that got us here is often the
 // caller's context expiring — and a teardown skipped for that reason leaves a
-// box running to its TTL with nobody to collect it.
-func reclaim(ctx context.Context, m *Manager, sandboxID string) {
+// box running to its TTL with nobody to collect it, and a row nobody settles.
+func abandon(ctx context.Context, m *Manager, store PendingStore, req LaunchRequest, sandboxID string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
-	if err := m.Provider().Kill(ctx, sandboxID); err != nil {
-		log.WarnContext(ctx, "sandbox_launch_reclaim_failed", "sandbox_id", sandboxID, "error", err.Error())
+	if sandboxID != "" {
+		if err := m.Provider().Kill(ctx, sandboxID); err != nil {
+			log.WarnContext(ctx, "sandbox_launch_reclaim_failed",
+				"sandbox_id", sandboxID, "error", err.Error())
+		}
+		if err := store.ReleaseBox(ctx, req.Turn.TurnID); err != nil {
+			log.WarnContext(ctx, "sandbox_launch_release_failed",
+				"turn_id", req.Turn.TurnID, "error", err.Error())
+		}
+	}
+	if err := store.SetStatus(ctx, req.Turn.TurnID, StatusFailed, req.Fence); err != nil {
+		log.WarnContext(ctx, "sandbox_launch_mark_failed",
+			"turn_id", req.Turn.TurnID, "error", err.Error())
 	}
 }
 

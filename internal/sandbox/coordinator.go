@@ -245,8 +245,10 @@ func (c *Coordinator) syncBusy(ctx context.Context, handle string) {
 	for _, run := range runs {
 		// A run parked on a question does NOT hold the seat: a person can
 		// take days to answer, and the seat has to be able to receive that
-		// answer — which arrives on its inbox.
-		if run.Status == StatusRunning || run.Status == StatusResumed {
+		// answer — which arrives on its inbox. [Holding] is the set that
+		// does, and it is a named list rather than a disjunction here
+		// because the same question is asked in three places.
+		if slices.Contains(Holding, run.Status) {
 			n++
 		}
 	}
@@ -423,9 +425,19 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	answer string, success bool, trigger *events.Event,
 ) error {
 	if len(run.ExecuteState) == 0 {
-		// No suspended conversation to resume — a crash between launching
-		// the job and persisting the suspend. The turn cannot continue.
-		log.WarnContext(ctx, "sandbox_resume_no_execute_state", "turn_id", run.TurnID)
+		// No suspended conversation to resume, and the turn cannot
+		// continue without one.
+		//
+		// This is now unreachable through any live path — a run holds
+		// [StatusLaunching] until its conversation is written, and a
+		// launching run is not claimable — which is exactly why it stays:
+		// it is the assertion that the launching state is doing its job.
+		// What can still land here is a row a build predating that state
+		// wrote, read by this one across a rolling upgrade.
+		log.WarnContext(ctx, "sandbox_resume_no_execute_state",
+			"turn_id", run.TurnID, "claimed_from", run.ClaimedFrom,
+			"detail", "the row carried no suspended conversation; the turn "+
+				"cannot be resumed and the run is failed")
 		c.settleFailed(ctx, run)
 		return nil
 	}
@@ -463,10 +475,18 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		log.WarnContext(ctx, "sandbox_settle_read_failed", "turn_id", run.TurnID, "error", err.Error())
 		return nil
 	}
-	if found && latest.Status == StatusRunning {
+	if found && (latest.Status == StatusRunning || latest.Status == StatusLaunching) {
 		// The resumed executor called run_sandbox AGAIN: a new detached job
 		// owns the box and the suspending turn re-marked the seat busy.
-		log.InfoContext(ctx, "sandbox_reused_in_turn", "turn_id", run.TurnID)
+		//
+		// BOTH STATES OF A LIVE JOB, not just running. The relaunch takes
+		// the row back through launching and it stays there until the
+		// resumed turn unwinds — which happens after this call returns, so
+		// launching is in fact the status this read usually sees. Reading
+		// only for running is why a second run_sandbox call in one turn had
+		// its box torn down underneath it.
+		log.InfoContext(ctx, "sandbox_reused_in_turn",
+			"turn_id", run.TurnID, "status", latest.Status)
 		return nil
 	}
 	// Tear down the box the LATEST row points at: a re-seeded run
@@ -522,10 +542,17 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 // A RESUMED row means the engine that owned this seat died between claiming a
 // completion and settling it. Nothing will ever pick it up — the at-most-once
 // claim already flipped, so a redelivered completion is refused — and its box
-// sits paused. Reaping it is safe HERE and only here: taking the seat's lease
-// is what proves no live process holds the row. A boot-time scan proves
-// nothing of the sort, because a peer could be mid-resume on a seat this node
-// never owned.
+// sits paused. A LAUNCHING row is the same fact one step earlier: that engine
+// died between starting the job and writing the conversation a resume would
+// re-enter, so there is nothing to resume into and never will be. Both are
+// unresumable tails holding a box, and both are reaped.
+//
+// Reaping is safe HERE and only here: taking the seat's lease is what proves
+// no live process holds the row — and for a launching row that proof is the
+// whole argument, because a launching row on a seat this node already owns is
+// a launch happening right now, microseconds from becoming resumable. A
+// boot-time scan proves nothing of the sort, because a peer could be
+// mid-resume on a seat this node never owned.
 func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epoch int64) error {
 	active, err := c.pending.ListActiveForSeat(ctx, handle)
 	if err != nil {
@@ -537,9 +564,10 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 	recovered, abandoned := 0, 0
 	for _, run := range active {
 		switch run.Status {
-		case StatusResumed:
+		case StatusLaunching, StatusResumed:
 			log.WarnContext(ctx, "sandbox_abandoned_tail_reaped",
-				"turn_id", run.TurnID, "agent", run.AgentHandle, "sandbox_id", run.SandboxID)
+				"turn_id", run.TurnID, "agent", run.AgentHandle,
+				"sandbox_id", run.SandboxID, "status", run.Status)
 			c.teardown(ctx, run)
 			if err := c.pending.SetStatus(ctx, run.TurnID, StatusFailed, Fence{}); err != nil {
 				log.WarnContext(ctx, "sandbox_abandoned_mark_failed",

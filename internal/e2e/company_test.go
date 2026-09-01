@@ -407,7 +407,14 @@ func textReply(text string) string {
 }
 
 // waitFor polls until cond holds, failing the test if it never does.
-func waitFor(t *testing.T, what string, cond func() bool) {
+//
+// diag, when given, is rendered INTO the failure. A timeout here reports that
+// something the engine should have done was not done, and on CI that one line
+// is the entire artefact: a run of this suite failed with nothing but "timed
+// out waiting for the suspended turn to be resumed", which named the symptom
+// and not one fact about the state that produced it. A condition worth waiting
+// on is worth saying what it saw instead.
+func waitFor(t *testing.T, what string, cond func() bool, diag ...func() string) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
@@ -415,6 +422,9 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	for _, d := range diag {
+		t.Logf("state when %q timed out: %s", what, d())
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }

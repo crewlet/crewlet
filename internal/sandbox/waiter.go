@@ -195,6 +195,14 @@ func (w *Waiter) Tick(ctx context.Context) (int, error) {
 	fired := 0
 	for _, run := range runs {
 		if run.Status != StatusRunning {
+			// Running is the ONLY pollable state, and the one it most
+			// obviously excludes is [StatusLaunching]: that run's job is
+			// already executing, but the turn that started it has not yet
+			// written the conversation a resume re-enters. Firing there
+			// hands the coordinator a claim it cannot resume, and the
+			// coordinator's only honest answer to that is to fail the run
+			// — so a coding job that finished inside the window destroyed
+			// the turn. The next tick finds it suspended.
 			continue
 		}
 		if run.SandboxID == "" {

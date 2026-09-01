@@ -97,18 +97,6 @@ func newCoordRig(t *testing.T) *coordRig {
 	return rig
 }
 
-// suspend seeds the execute_state a real suspending turn would have written.
-func (r *coordRig) suspend(turnID string) {
-	r.t.Helper()
-	if err := r.pending.SaveExecuteState(r.t.Context(), turnID, map[string]any{
-		"version":              float64(1),
-		"pending_tool_call_id": "call-1",
-		"pending_tool_name":    "run_sandbox",
-	}); err != nil {
-		r.t.Fatalf("SaveExecuteState: %v", err)
-	}
-}
-
 func (r *coordRig) completion(turnID string) (types.SandboxRunCompleted, *events.Event) {
 	run := r.get(turnID)
 	payload := types.SandboxRunCompleted{
@@ -149,7 +137,6 @@ func TestALaunchedRunParksTheSeatsMail(t *testing.T) {
 func TestARedeliveredStartDoesNotDoubleParkTheSeat(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 
 	started := types.SandboxRunStarted{AgentHandle: "swe", TurnID: "t1"}
 	for range 3 {
@@ -171,7 +158,6 @@ func TestARedeliveredStartDoesNotDoubleParkTheSeat(t *testing.T) {
 func TestAParkedClarificationFreesTheSeat(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	rig.coordinator.markBusy("swe")
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
@@ -201,7 +187,6 @@ func TestAParkedClarificationFreesTheSeat(t *testing.T) {
 func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	rig.coordinator.markBusy("swe")
 	rig.runner.Finish(Result{
 		Success: true, Text: "fixed the flake", DeliveredRefs: []string{"pr/42"},
@@ -238,7 +223,6 @@ func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 func TestADuplicateCompletionResumesOnlyOnce(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 
 	payload, ev := rig.completion("t1")
@@ -255,7 +239,6 @@ func TestADuplicateCompletionResumesOnlyOnce(t *testing.T) {
 func TestConcurrentCompletionsResumeOnlyOnce(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 	payload, ev := rig.completion("t1")
 
@@ -284,7 +267,6 @@ func TestConcurrentCompletionsResumeOnlyOnce(t *testing.T) {
 func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 	rig.resumer.err = errors.New("the node lost the seat mid-resume")
 
@@ -312,7 +294,6 @@ func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 func TestAFailedResumeRevertsToWhereTheClaimFoundIt(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
 		Question: "which branch?", Audience: "requester",
 	}); err != nil {
@@ -338,7 +319,6 @@ func TestAFailedResumeRevertsToWhereTheClaimFoundIt(t *testing.T) {
 func TestANodeThatCannotResumeSaysSoRatherThanSettling(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 
 	coordinator, err := NewCoordinator(CoordinatorOptions{
@@ -357,12 +337,19 @@ func TestANodeThatCannotResumeSaysSoRatherThanSettling(t *testing.T) {
 	}
 }
 
-// A crash between launching the job and persisting the suspend leaves a row
-// with nothing to re-enter. The turn cannot continue; the seat must not stay
-// parked on it.
+// A row with nothing to re-enter cannot continue its turn, and the seat must
+// not stay parked on it.
+//
+// No LIVE path produces one any more — a run holds [StatusLaunching] until its
+// conversation is written and a launching run is not claimable — so this
+// reaches the state the only way left: a row written by a build that predates
+// that state, read by this one across a rolling upgrade.
 func TestARunWithNoSuspendedConversationIsFailedAndFreed(t *testing.T) {
 	rig := newCoordRig(t)
-	run := rig.launch("t1")
+	run := rig.launching("t1")
+	if err := rig.pending.SetStatus(t.Context(), "t1", StatusRunning, Fence{}); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
 	rig.coordinator.markBusy("swe")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 
@@ -390,12 +377,19 @@ func TestARunWithNoSuspendedConversationIsFailedAndFreed(t *testing.T) {
 func TestCollectPausesTheBoxRatherThanTearingItDown(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
-	rig.suspend("t1")
 	box := rig.provider.Box(run.SandboxID)
 	// The resumed executor relaunches, so the settle path must leave the box.
+	//
+	// THROUGH THE REAL LAUNCH, not a hand-written status flip. This test
+	// used to set the row back to running itself, which no production path
+	// did — so it certified a branch the engine could never reach, while
+	// the real relaunch left the row in `resumed` and the settle below tore
+	// down the box the second job was running in.
 	rig.resumer.relaunch = func(ctx context.Context, r PendingRun) {
-		if err := rig.pending.SetStatus(ctx, r.TurnID, StatusRunning, Fence{}); err != nil {
-			t.Errorf("SetStatus: %v", err)
+		req := launchReq(r.TurnID)
+		req.ReuseBox = r.SandboxID
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+			t.Errorf("relaunch: %v", err)
 		}
 	}
 	rig.runner.Finish(Result{Success: true, Text: "first pass"})
@@ -410,15 +404,84 @@ func TestCollectPausesTheBoxRatherThanTearingItDown(t *testing.T) {
 	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
 		t.Fatalf("killed %v mid-turn", killed)
 	}
-	if got := rig.get("t1"); got.Status != StatusRunning {
-		t.Fatalf("status = %q, want the relaunch left running", got.Status)
+	if got := rig.get("t1"); got.Status != StatusLaunching {
+		t.Fatalf("status = %q, want the relaunch to own the row", got.Status)
+	}
+}
+
+// THE LAUNCH WINDOW. A coding job can finish between the launch starting it
+// and the turn writing the conversation a resume re-enters — a few
+// milliseconds on an idle host, hundreds on a loaded one, and every trivial
+// run is a candidate. Claiming there hands the coordinator a run it cannot
+// resume, and its only honest answer to that is to fail the turn: the agent's
+// whole in-progress turn destroyed by a job that was too quick.
+func TestACompletionInTheLaunchWindowLeavesTheTurnAlone(t *testing.T) {
+	rig := newCoordRig(t)
+	run := rig.launching("t1")
+	rig.coordinator.markBusy("swe")
+	rig.runner.Finish(Result{Success: true, Text: "done before the turn unwound"})
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+
+	if calls := rig.resumer.calls(); len(calls) != 0 {
+		t.Fatalf("resumed %d times from a run with no conversation to resume", len(calls))
+	}
+	got := rig.get("t1")
+	if got.Status != StatusLaunching {
+		t.Fatalf("status = %q, want the launch left untouched", got.Status)
+	}
+	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
+		t.Fatalf("killed %v out from under a turn that is still suspending", killed)
+	}
+	if !rig.coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat was freed while its run was still launching")
+	}
+
+	// And the turn then suspends normally: the next completion resumes it,
+	// which is the whole point of leaving it alone.
+	rig.suspend("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted after the suspend: %v", err)
+	}
+	if calls := rig.resumer.calls(); len(calls) != 1 {
+		t.Fatalf("resumed %d times after the suspend landed, want 1", len(calls))
+	}
+	if got := rig.get("t1"); got.Status != StatusDone {
+		t.Fatalf("status = %q, want %q", got.Status, StatusDone)
+	}
+	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+		t.Fatalf("killed %v, want the box reclaimed once the turn was done", killed)
+	}
+}
+
+// A launch that never got to write its conversation is an unresumable tail
+// holding a box, exactly like a claimed one whose engine died mid-resume.
+// Nothing else will ever look at that row, and taking the seat's lease is what
+// proves no live process is still driving it.
+func TestSeatRecoveryReapsALaunchNobodyFinished(t *testing.T) {
+	rig := newCoordRig(t)
+	run := rig.launching("t1")
+
+	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-2", 7); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
+	if got := rig.get("t1"); got.Status != StatusFailed {
+		t.Fatalf("status = %q, want %q", got.Status, StatusFailed)
+	}
+	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+		t.Fatalf("killed %v, want the abandoned launch's box reclaimed", killed)
+	}
+	if rig.coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the new owner took the seat parked on a run nothing can finish")
 	}
 }
 
 func TestAFinishedTurnTearsTheBoxDown(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
-	rig.suspend("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 
 	payload, ev := rig.completion("t1")
@@ -438,7 +501,6 @@ func TestAFinishedTurnTearsTheBoxDown(t *testing.T) {
 func TestAFailedCollectStillFreesTheSeat(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	rig.coordinator.markBusy("swe")
 	rig.runner.Finish(Result{Success: true})
 	rig.runner.CollectErr = errors.New("the box died mid-read")
@@ -464,7 +526,6 @@ func TestAFailedCollectStillFreesTheSeat(t *testing.T) {
 func TestACollectedRunIsChargedEvenOverBudget(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	rig.accountant.over = true
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 4000, OutputTokens: 1000})
 
@@ -485,7 +546,6 @@ func TestACollectedRunIsChargedEvenOverBudget(t *testing.T) {
 func TestAFailedChargeDoesNotAbortTheResume(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	rig.accountant.err = errors.New("counter unreachable")
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 100})
 
@@ -505,7 +565,6 @@ func TestAFailedChargeDoesNotAbortTheResume(t *testing.T) {
 func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
 		DeliveredRefs: []string{"wip/t1"},
@@ -543,7 +602,6 @@ func TestTheAnswerToAParkedQuestionResumesTheSameTurn(t *testing.T) {
 func TestAnAnswerAfterTheBoxWasReclaimedSaysToReseedFromGit(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	rig.runner.Finish(Result{
 		NeedsInput: true, Question: "which branch?", AskTo: "requester",
 		DeliveredRefs: []string{"wip/t1"},
@@ -577,7 +635,6 @@ func TestAnAnswerAfterTheBoxWasReclaimedSaysToReseedFromGit(t *testing.T) {
 func TestAZeroPauseTtlTearsTheBoxDownTheMomentTheRunBlocks(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
-	rig.suspend("t1")
 	if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
 		SandboxID: run.SandboxID, CodingAgent: "claude-code", PauseTTLSec: 0,
 	}, Fence{}); err != nil {
@@ -602,7 +659,6 @@ func TestAZeroPauseTtlTearsTheBoxDownTheMomentTheRunBlocks(t *testing.T) {
 func TestAParkedQuestionIsAnnounced(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "team"})
 
 	payload, ev := rig.completion("t1")
@@ -632,7 +688,6 @@ func TestAParkedQuestionIsAnnounced(t *testing.T) {
 func TestAnAnnouncedQuestionIsRedacted(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	secret := "glpat-" + strings.Repeat("e", 20)
 	rig.runner.Finish(Result{
 		NeedsInput: true, AskTo: "requester",
@@ -660,7 +715,6 @@ func TestAnAnnouncedQuestionIsRedacted(t *testing.T) {
 func TestTheResumeAnswerIsRedacted(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.suspend("t1")
 	secret := "ghp_" + strings.Repeat("b", 36)
 	rig.runner.Finish(Result{Success: true, Text: "cloned with " + secret})
 

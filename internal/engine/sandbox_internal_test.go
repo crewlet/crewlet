@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // The knob has three states and the manager's input carries a pointer for
@@ -310,5 +312,32 @@ func TestEveryConfiguredSandboxTypeCanBeBuilt(t *testing.T) {
 			t.Errorf("providers.sandbox.type %q built no provider and no error, "+
 				"so a sandbox-enabled seat plans around a box it never gets", kind)
 		}
+	}
+}
+
+// A suspension with nowhere to go leaves a job running in a box nobody is
+// coming back for. Whichever of the three ways it happens — the runner never
+// recorded the conversation, it would not serialize, or the row was no longer
+// launching — the run has to be marked unresumable while the seat's owner is
+// still this process, so recovery reaps the box instead of stranding it.
+func TestAnUnrecordableSuspensionFailsTheRun(t *testing.T) {
+	store := sandbox.NewCoordStore(memory.NewFleet())
+	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", Role: "SWE",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	e := &Engine{sandboxPending: store}
+
+	e.failSuspension(t.Context(), "t1", "sandbox_suspension_missing",
+		"the turn suspended but recorded no conversation", nil)
+
+	got, found, err := store.Get(t.Context(), "t1")
+	if err != nil || !found {
+		t.Fatalf("Get = %v, %v", found, err)
+	}
+	if got.Status != sandbox.StatusFailed {
+		t.Fatalf("status = %q, want %q — a launching row holds a box nothing polls",
+			got.Status, sandbox.StatusFailed)
 	}
 }
