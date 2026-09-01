@@ -23,12 +23,6 @@ const (
 	DiaryShort DiaryKind = "diary_short"
 )
 
-// DiaryEntry is one private observation a seat made about its own work.
-//
-// PRIVATE is the operative word, and the reason the table is called a diary
-// rather than a memory: it is the seat's own log, not knowledge other seats
-// can query. Every read is scoped to one agent id, and there is no cross-agent
-// surface at all.
 // MaxContentChars bounds one written diary note, for EVERY writer.
 //
 // A note is meant to be re-read in a later turn's prompt, so its cost is paid
@@ -47,6 +41,12 @@ const (
 // refuses; the decider has no one to ask, so it skips and says so.
 const MaxContentChars = 2000
 
+// DiaryEntry is one private observation a seat made about its own work.
+//
+// PRIVATE is the operative word, and the reason the table is called a diary
+// rather than a memory: it is the seat's own log, not knowledge other seats
+// can query. Every read is scoped to one agent id, and there is no cross-agent
+// surface at all.
 type DiaryEntry struct {
 	ID string
 

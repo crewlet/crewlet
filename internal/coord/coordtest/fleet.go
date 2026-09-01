@@ -736,7 +736,7 @@ var planeCases = []fleetCase{{
 		// error naming a non-ASCII path ended in half a character — which
 		// the KV's JSON encoding replaces with U+FFFD, delivering the fleet
 		// view a garbled message rather than a shortened one.
-		if err := h.f.RecordApply(h.ctx, coord.NodeApply{
+		if err = h.f.RecordApply(h.ctx, coord.NodeApply{
 			NodeID: "node-b", Epoch: 7, Status: "failed",
 			Error: strings.Repeat("日本語", 1000), UpdatedAt: h.now(),
 		}); err != nil {

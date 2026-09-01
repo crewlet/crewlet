@@ -210,7 +210,7 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 		detail := readDetail(resp.Body)
 		return &APIError{
 			Method: method, Path: path, Status: resp.StatusCode,
-			Detail: strings.TrimSpace(string(detail)),
+			Detail: strings.TrimSpace(detail),
 		}
 	}
 	if out == nil {

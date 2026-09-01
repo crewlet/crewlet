@@ -294,7 +294,7 @@ func (p *Provider) RestoreBundle(blob string) error {
 	for _, rel := range p.profile.CredentialPaths {
 		allowed[filepath.Base(rel)] = true
 	}
-	if err := os.MkdirAll(dest, 0o700); err != nil {
+	if err = os.MkdirAll(dest, 0o700); err != nil {
 		return fmt.Errorf("cliagent: preparing %q: %w", dest, err)
 	}
 
