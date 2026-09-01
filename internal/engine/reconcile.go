@@ -603,12 +603,15 @@ func (r *Reconciler) Run(ctx context.Context) {
 			// POINTER — it does not act on the event — so a nudge for
 			// a revision this node already serves costs one wasted
 			// read, and a lost nudge costs nothing but latency.
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
+			//
+			// Stopped but NOT drained. Since Go 1.23 a timer's channel
+			// is unbuffered and Stop/Reset are synchronised with the
+			// runtime, so no stale fire can be sitting in it — the
+			// `if !Stop() { select { case <-C: default: } }` dance this
+			// replaced was for the pre-1.23 buffered channel, where it
+			// was also subtly wrong: the default branch made it a race
+			// rather than a drain.
+			timer.Stop()
 		}
 		if err := r.Tick(ctx); err != nil {
 			log.WarnContext(ctx, "reconcile_tick_failed", "error", err)

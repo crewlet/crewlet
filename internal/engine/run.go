@@ -163,7 +163,13 @@ type Engine struct {
 	// env is this node's ${VAR} resolver: the secret store in front of the
 	// process environment, refreshed on every apply. One per node rather
 	// than one per call site — see secrets.go for why that matters.
-	env atomic.Pointer[*config.Resolver]
+	//
+	// Pointer[Resolver], not Pointer[*Resolver]. The doubled indirection
+	// bought a second nilable level with no meaning of its own — a stored
+	// non-nil pointer to a nil resolver read the same as nothing stored —
+	// so every reader had to check both, and one that checked only the
+	// outer would have dereferenced nil.
+	env atomic.Pointer[config.Resolver]
 
 	// cipher is the keyring this node seals and opens secret rows with,
 	// nil on a node that has none. Held rather than rebuilt because ONE

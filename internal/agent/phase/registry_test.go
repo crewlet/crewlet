@@ -164,6 +164,10 @@ func TestEveryPhaseReadsItsOwnField(t *testing.T) {
 		phase.Plan: "p", phase.Execute: "e", phase.Review: "r",
 		phase.Subagent: "s", phase.Auxiliary: "a", phase.Judge: "j",
 		phase.Sandbox: "sb",
+		// ONBOARDING HAS NO FIELD OF ITS OWN and resolves to the role
+		// default — asserted rather than omitted, so adding an
+		// `llm_onboarding:` without wiring it here fails loudly.
+		phase.Onboarding: "default",
 	}
 	if len(want) != len(phase.All) {
 		t.Fatalf("this test covers %d phases, phase.All has %d — a new phase "+
