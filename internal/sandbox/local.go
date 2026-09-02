@@ -23,28 +23,6 @@ import (
 // backend and the shared runtime as "sandbox.local" too.
 var localLog = logging.Get("sandbox.local")
 
-// Containment selects how a local box is isolated.
-type Containment string
-
-const (
-	// Direct runs the coding agent as a process tree on the engine host,
-	// rooted in a per-box directory with HOME and the XDG variables pointed
-	// at it and an allowlisted environment.
-	//
-	// THIS ISOLATES STATE, NOT THE HOST. The agent runs as the engine user
-	// with its own tools enabled, so it can read anything that user can read
-	// and reach anything its credentials reach. The right mode for a
-	// workstation or a dedicated VM, the wrong one for a shared host.
-	Direct Containment = "direct"
-
-	// Container runs a long-lived Docker or Podman container per box, with
-	// the box directory bind-mounted at DefaultHome — the same home a remote
-	// backend uses, so setup steps that provision system paths work exactly
-	// as they do remotely. Real host isolation, at the cost of an image with
-	// the coding CLI already installed.
-	Container Containment = "container"
-)
-
 // WorkspaceSubdir is where a box's checkout lives, relative to its home: the
 // coding agent's working directory. Kept under the home so container mode
 // needs exactly one bind mount.
@@ -285,8 +263,11 @@ func readPID(l boxLayout) int {
 
 // LocalOptions configures a [Local].
 type LocalOptions struct {
-	// Containment is Direct (default) or Container.
-	Containment Containment
+	// Placement is Direct (default) or Container. It is the ONE thing that
+	// differs between the two local cells, which is why one backend serves
+	// both: everything else — the box root, the reap, the process group,
+	// the ask shim — is identical.
+	Placement Placement
 
 	// StateDir is where boxes are created. Empty takes [DefaultBoxRoot].
 	StateDir string
@@ -323,12 +304,13 @@ var _ Provider = (*Local)(nil)
 // NewLocal validates the options and resolves the container runtime once,
 // rather than on every Create.
 func NewLocal(opts LocalOptions) (*Local, error) {
-	if opts.Containment == "" {
-		opts.Containment = Direct
+	if opts.Placement == "" {
+		opts.Placement = Direct
 	}
-	if opts.Containment != Direct && opts.Containment != Container {
-		return nil, localErrorf("providers.sandbox.local.containment %q is not one of %q or %q",
-			opts.Containment, Direct, Container)
+	if opts.Placement != Direct && opts.Placement != Container {
+		return nil, localErrorf("the local backend runs %q or %q, not %q — a "+
+			"remote placement is another backend's",
+			Direct, Container, opts.Placement)
 	}
 	// Refused at CONSTRUCTION, not at the first Create: an operator whose
 	// platform cannot run this backend should be told when the config is
@@ -345,9 +327,9 @@ func NewLocal(opts LocalOptions) (*Local, error) {
 		return nil, localErrorf("providers.sandbox.local.state_dir %q is not a usable path: %v", root, err)
 	}
 	local := &Local{opts: opts, root: abs}
-	if opts.Containment == Container {
+	if opts.Placement == Container {
 		if strings.TrimSpace(opts.Image) == "" {
-			return nil, localErrorf("providers.sandbox.local.containment %q requires an `image` "+
+			return nil, localErrorf("run_in %q requires providers.sandbox.local.image, an image "+
 				"that has the coding-agent CLI installed — there is no sensible default, and a "+
 				"box without the CLI fails only once an agent tries to use it", Container)
 		}
@@ -420,8 +402,8 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 	touchAlive(layout)
 
-	if l.opts.Containment == Direct {
-		localLog.Info("local_sandbox_created", "sandbox_id", id, "containment", "direct", "home", layout.root)
+	if l.opts.Placement == Direct {
+		localLog.Info("local_sandbox_created", "sandbox_id", id, "placement", string(Direct), "home", layout.root)
 		return &directBox{layout: layout, env: spec.Env, credentials: spec.CredentialFiles}, nil
 	}
 
@@ -456,7 +438,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		return nil, err
 	}
 	localLog.Info("local_sandbox_created",
-		"sandbox_id", id, "containment", "container", "image", l.opts.Image, "container", name)
+		"sandbox_id", id, "placement", string(Container), "image", l.opts.Image, "container", name)
 	return box, nil
 }
 
@@ -510,7 +492,7 @@ func (l *Local) Connect(ctx context.Context, sandboxID string) (Sandbox, error) 
 	// Rebuild the credential map from the box's own record, so a reconnected
 	// teardown still writes a refreshed login back.
 	credentials := readCredentialMap(layout)
-	if l.opts.Containment == Direct {
+	if l.opts.Placement == Direct {
 		box := &directBox{layout: layout, credentials: credentials}
 		box.resume()
 		return box, nil
@@ -536,7 +518,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		localLog.Warn("local_sandbox_kill_refused", "sandbox_id", sandboxID, "error", err.Error())
 		return nil
 	}
-	if l.opts.Containment == Container {
+	if l.opts.Placement == Container {
 		_, _ = runHost(ctx, hostCommand{argv: []string{l.runtime, "rm", "-f", l.containerName(sandboxID)}})
 	} else if pid := readPID(layout); pid > 0 {
 		// SIGKILL alone, with NO SIGCONT first. A stopped process is killed
@@ -660,7 +642,7 @@ func (l *Local) reapOrphans(ctx context.Context, olderThan time.Duration) {
 	}
 
 	var live map[string]bool
-	if l.opts.Containment == Container {
+	if l.opts.Placement == Container {
 		if live, err = l.liveContainers(ctx); err != nil {
 			// Cannot tell what is alive, so reap nothing: deleting a live
 			// box's checkout is unrecoverable, a lingering directory is not.
@@ -694,7 +676,7 @@ func lastSeen(l boxLayout) time.Time {
 
 // boxIsAlive reports whether this box still has something running in it.
 func (l *Local) boxIsAlive(layout boxLayout, live map[string]bool) bool {
-	if l.opts.Containment == Container {
+	if l.opts.Placement == Container {
 		return live[l.containerName(layout.id)]
 	}
 	pid := readPID(layout)

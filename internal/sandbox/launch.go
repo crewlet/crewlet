@@ -103,6 +103,11 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	if err := store.BeginLaunch(ctx, PendingRun{
 		TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle,
 		AgentID: req.Turn.AgentID, Role: req.Turn.Role,
+		// WRITTEN WITH THE ROW, before the box exists, because every
+		// failure path from here on reclaims through it — and because the
+		// process that collects this run may not be this one, nor reading
+		// the configuration that chose the cell.
+		Placement:       string(req.Spec.Placement),
 		CodingAgent:     req.Spec.CodingAgent,
 		TaskDescription: req.Task,
 		ConversationKey: req.Turn.ConversationKey,
@@ -192,7 +197,8 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 
 	log.InfoContext(ctx, "sandbox_run_started",
 		"turn_id", req.Turn.TurnID, "agent", req.Turn.AgentHandle,
-		"sandbox_id", box.ID(), "coding_agent", req.Spec.CodingAgent, "reused", reused)
+		"sandbox_id", box.ID(), "placement", string(req.Spec.Placement),
+		"coding_agent", req.Spec.CodingAgent, "reused", reused)
 
 	return LaunchResult{
 		SandboxID: box.ID(), CommandID: handle.CommandID,
@@ -209,7 +215,7 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 // pushed branch exists for.
 func acquire(ctx context.Context, m *Manager, req LaunchRequest) (Sandbox, Runner, bool, error) {
 	if req.ReuseBox != "" {
-		box, runner, err := m.Reconnect(ctx, req.ReuseBox, req.Spec.CodingAgent)
+		box, runner, err := m.Reconnect(ctx, req.Spec.Placement, req.ReuseBox, req.Spec.CodingAgent)
 		if err == nil {
 			return box, runner, true, nil
 		}
@@ -241,7 +247,12 @@ func abandon(ctx context.Context, m *Manager, store PendingStore, req LaunchRequ
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
 	if sandboxID != "" {
-		if err := m.Provider().Kill(ctx, sandboxID); err != nil {
+		provider, err := m.Provider(req.Spec.Placement)
+		if err != nil {
+			log.WarnContext(ctx, "sandbox_launch_reclaim_no_backend",
+				"sandbox_id", sandboxID, "placement", string(req.Spec.Placement),
+				"error", err.Error())
+		} else if err := provider.Kill(ctx, sandboxID); err != nil {
 			log.WarnContext(ctx, "sandbox_launch_reclaim_failed",
 				"sandbox_id", sandboxID, "error", err.Error())
 		}

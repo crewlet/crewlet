@@ -48,8 +48,9 @@ you are developing, evaluating, or running a small company yourself and want
 predictable cost — check your plan's terms, which are generally written for
 interactive use by the subscriber. A subscription can also back the
 [code sandbox](../concepts/code-sandbox.md) — via a headless token on any
-backend, or via `providers.sandbox.type: local`, which runs the coding agent
-on the engine host against the same login.
+backend, or via a local cell (`providers.sandbox.local` plus `run_in:
+direct`), which runs the coding agent on the engine host against the same
+login.
 
 **Embeddings** (`providers.embeddings`) power the agent-learning subsystem
 (personal diary + episode recall). Any OpenAI-compatible embeddings endpoint
@@ -283,11 +284,18 @@ see the [Code Sandbox](../concepts/code-sandbox.md) concept page.
 
 | Option | How | Notes |
 |---|---|---|
-| **None** | omit `providers.sandbox` (or `type: none`) | Roles use the native Execute tool-loop; no code authoring. |
-| **E2B cloud** | `type: e2b` + `E2B_API_KEY` | Sign up at <https://e2b.dev>, create an API key in the dashboard. Fastest path. |
-| **Self-hosted E2B** | `type: e2b` + `domain: "${E2B_DOMAIN}"` | Deploy [e2b-dev/infra](https://github.com/e2b-dev/infra) on your own cloud account, then point the same SDK/code path at it via `domain`. Your cluster issues its own `E2B_API_KEY`. |
-| **Local — container** | `type: local` + `local: {containment: container, image: …}` | Docker/Podman on the engine host. Real host isolation, no E2B account. You supply an image with the coding CLI installed. Can use a [subscription login](../concepts/subscription-llm-backends.md) instead of an API key. |
-| **Local — direct** | `type: local` + `local: {containment: direct}` | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up and the natural pair for a subscription backend — but the coding agent runs as the engine user, so it isolates *state*, not the host. Workstation or dedicated VM only. |
+| **None** | omit `providers.sandbox` | Roles use the native executor tool-loop; no code authoring. |
+| **E2B cloud** | `e2b: {api_key: "${E2B_API_KEY}"}` | Sign up at <https://e2b.dev>, create an API key in the dashboard. Fastest path. |
+| **Self-hosted E2B** | `e2b: {api_key: …, domain: "${E2B_DOMAIN}"}` | Deploy [e2b-dev/infra](https://github.com/e2b-dev/infra) on your own cloud account, then point the same SDK/code path at it via `domain`. Your cluster issues its own `E2B_API_KEY`. |
+| **Local — container** | `local: {image: …}` + `run_in: container` | Docker/Podman on the engine host. Real host isolation, no E2B account. You supply an image with the coding CLI installed. Can use a [subscription login](../concepts/subscription-llm-backends.md) instead of an API key. |
+| **Local — direct** | `local: {}` + `run_in: direct` | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up and the natural pair for a subscription backend — but the coding agent runs as the engine user, so it isolates *state*, not the host. Workstation or dedicated VM only. |
+
+`providers.sandbox` is a **catalogue**, so these are not exclusive: configure
+`e2b:` and `local:` together and give each seat its own `run_in` — the seat
+that needs the host's subscription login runs `direct`, the seat whose
+generated code must never touch that host runs `e2b`. Where a seat that names
+none goes is `default_run_in`, which is required whenever the catalogue offers
+more than one cell (and `local:` alone offers two).
 
 Coding-agent choice: **OpenCode** is provider-agnostic (reuses any
 OpenAI-compatible provider you already configured — no extra secret);

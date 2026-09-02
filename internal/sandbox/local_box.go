@@ -248,10 +248,10 @@ func (b *directBox) resolve(path string) (string, error) {
 }
 
 func (b *directBox) escapeError(path string) error {
-	return localErrorf("local sandbox (containment %q) refuses to touch %q: it is outside "+
+	return localErrorf("local sandbox (run_in %q) refuses to touch %q: it is outside "+
 		"the box at %s. Direct mode has no filesystem virtualisation, so this would write to "+
 		"the engine host itself. Put the file under the box's home, or use "+
-		"providers.sandbox.local.containment %q.", Direct, path, b.layout.root, Container)
+		"run_in %q.", Direct, path, b.layout.root, Container)
 }
 
 func (b *directBox) WriteFile(ctx context.Context, path string, content []byte) error {
@@ -617,9 +617,9 @@ func ResolveContainerRuntime(preference string) (string, error) {
 				return found, nil
 			}
 		}
-		return "", localErrorf("providers.sandbox.local.containment %q is set but neither "+
+		return "", localErrorf("run_in %q is set but neither "+
 			"docker nor podman is on the engine host's PATH. Install one, set "+
-			"providers.sandbox.local.runtime explicitly, or use containment %q", Container, Direct)
+			"providers.sandbox.local.runtime explicitly, or use run_in %q", Container, Direct)
 	default:
 		return "", localErrorf("providers.sandbox.local.runtime %q is not one of "+
 			`"auto", "docker" or "podman"`, preference)

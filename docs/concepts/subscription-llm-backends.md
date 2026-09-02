@@ -722,9 +722,9 @@ often — it skips all three and says so on each line.
   remote E2B, the headless token travels: `crewlet llm login <key>
   -capture-token` and Claude Code in the box bills your plan. For a CLI
   that mints no such token (Codex, Gemini CLI), use
-  [`providers.sandbox.type: local`](code-sandbox.md#local-sandboxes),
-  where the coding agent runs on the engine host and reads the login
-  directly. The credential *files* never travel to a remote box: they
+  a [local cell](code-sandbox.md#local-sandboxes) — `providers.sandbox.local`
+  plus `run_in: direct` or `container` — where the coding agent runs on
+  the engine host and reads the login directly. The credential *files* never travel to a remote box: they
   carry a refresh token whose rotation is shared fleet state.
 - **Latency.** Process launch plus model call. Point `llm_auxiliary` at
   a cheap API-key model rather than paying process startup for every

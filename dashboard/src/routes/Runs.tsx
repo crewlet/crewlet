@@ -54,6 +54,9 @@ export function Runs() {
         role: box.role,
         status: box.status,
         coding_agent: box.coding_agent,
+        // The live projection carries no placement; the durable row does,
+        // and it replaces this entry as soon as the store catches up.
+        placement: "",
         task_description: box.task,
         question: box.question ?? "",
         audience: box.audience ?? "",
@@ -171,6 +174,17 @@ export function Runs() {
                 ),
               },
               {
+                key: "where",
+                header: "Runs in",
+                shrink: true,
+                sortValue: (r) => r.placement,
+                cell: (r) => (
+                  <Badge outline mono>
+                    {r.placement || "—"}
+                  </Badge>
+                ),
+              },
+              {
                 key: "box",
                 header: "Box",
                 shrink: true,
@@ -255,6 +269,7 @@ export function Runs() {
                 />,
               ],
               ["Coding agent", detail.coding_agent || "—"],
+              ["Runs in", detail.placement || "—"],
               [
                 "Branch",
                 detail.branch ? (

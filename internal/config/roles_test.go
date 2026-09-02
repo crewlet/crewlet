@@ -105,6 +105,9 @@ func TestSeatTransform(t *testing.T) {
 	t.Parallel()
 	cfg := mustCompany(t, `
 name: Acme
+providers:
+  sandbox:
+    fake: true
 roles:
   - name: Agent SWE
     handle: swe
@@ -123,6 +126,7 @@ roles:
       jira: {project: ENGP}
     sandbox:
       enabled: true
+      run_in: container
       coding_agent: opencode
       env: {GITHUB_TOKEN: "${GH}"}
       mcp: {servers: [gitlab]}
@@ -150,7 +154,8 @@ roles:
 	if seat.Placement.Node != "node-2" || seat.Placement.Labels["zone"] != "eu" {
 		t.Fatalf("placement = %+v", seat.Placement)
 	}
-	if seat.Sandbox == nil || !seat.Sandbox.Enabled || seat.Sandbox.CodingAgent != "opencode" {
+	if seat.Sandbox == nil || !seat.Sandbox.Enabled || seat.Sandbox.CodingAgent != "opencode" ||
+		seat.Sandbox.RunIn != "container" {
 		t.Fatalf("sandbox = %+v", seat.Sandbox)
 	}
 	if seat.MCPEnv["gitlab"]["GITLAB_TOKEN"] != "${GL_SWE}" {

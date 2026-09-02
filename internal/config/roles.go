@@ -158,6 +158,16 @@ func (p *RolePlacement) Seat() placement.SeatPlacement {
 type RoleSandbox struct {
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled" desc:"Offer this seat the sandbox tool."`
 
+	// RunIn is WHERE this seat's code work runs, naming one cell of
+	// providers.sandbox. Empty inherits providers.sandbox.default_run_in.
+	//
+	// This is per-seat because it is a decision about ONE SEAT'S WORK: the
+	// seat that must use the operator's own subscription login and the seat
+	// whose generated code must never touch the engine host are different
+	// seats, and the block-wide `type:` this replaced could answer only for
+	// both at once.
+	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where this seat's code work runs. Empty inherits providers.sandbox.default_run_in."`
+
 	// CodingAgent overrides the provider-wide default for this seat only.
 	// Empty inherits it, resolved at LAUNCH rather than at config time, so
 	// a provider swap reaches seats that never named one.
@@ -220,6 +230,13 @@ func (m RoleSandboxMCP) IsZero() bool { return len(m.Servers) == 0 }
 
 func (s *RoleSandbox) validate(path string) error {
 	var p problems
+	if s.RunIn != "" && !oneOf(s.RunIn, Placements) {
+		// Only the SPELLING is checked here. Whether the cell is actually
+		// configured is a question about providers.sandbox, and a seat is
+		// validated without it — see (*Company).validateSandboxPlacement.
+		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
+			s.RunIn, names(Placements))
+	}
 	if s.CodingAgent != "" && !oneOf(s.CodingAgent, CodingAgents) {
 		p.add(at(path, "coding_agent"), ErrUnknownValue, "%q (want %s)",
 			s.CodingAgent, names(CodingAgents))
@@ -232,7 +249,7 @@ func (s *RoleSandbox) validate(path string) error {
 	if !s.Enabled {
 		// A gate that is off with provisioning under it is an operator who
 		// configured a sandbox and will watch nothing happen.
-		if len(s.Setup) > 0 || len(s.Env) > 0 || len(s.MCP.Servers) > 0 {
+		if len(s.Setup) > 0 || len(s.Env) > 0 || len(s.MCP.Servers) > 0 || s.RunIn != "" {
 			p.add(at(path, "enabled"), ErrConflict,
 				"this seat's sandbox is configured but not enabled, so none of "+
 					"it is read. Set enabled: true, or remove the block")
@@ -437,6 +454,7 @@ func (r *Role) Seat() *org.Role {
 		}
 		seat.Sandbox = &org.RoleSandbox{
 			Enabled:         s.Enabled,
+			RunIn:           string(s.RunIn),
 			CodingAgent:     string(s.CodingAgent),
 			PauseTTLSeconds: s.PauseTTLSeconds,
 			MCP:             org.RoleSandboxMCP{Servers: append([]string(nil), s.MCP.Servers...)},

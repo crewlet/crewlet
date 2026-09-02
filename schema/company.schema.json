@@ -215,6 +215,24 @@
       },
       "type": "object"
     },
+    "E2BSandbox": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key": {
+          "description": "Remote sandbox API key; required. ${VAR} supported.",
+          "type": "string"
+        },
+        "domain": {
+          "description": "Self-hosted sandbox cluster domain; empty = vendor cloud.",
+          "type": "string"
+        },
+        "template": {
+          "description": "Box template. This is where vCPU/RAM/disk are set — at template build time.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "EmbeddingProvider": {
       "additionalProperties": false,
       "properties": {
@@ -661,16 +679,8 @@
     "LocalSandbox": {
       "additionalProperties": false,
       "properties": {
-        "containment": {
-          "description": "direct (state isolation only) or container (host isolation).",
-          "enum": [
-            "direct",
-            "container"
-          ],
-          "type": "string"
-        },
         "image": {
-          "description": "Container image with the coding-agent CLI installed.",
+          "description": "Container image with the coding-agent CLI installed. Required for run_in: container.",
           "type": "string"
         },
         "network": {
@@ -694,7 +704,7 @@
           "type": "string"
         },
         "state_dir": {
-          "description": "Parent directory for box directories.",
+          "description": "Parent directory for box directories; used by both local placements.",
           "type": "string"
         }
       },
@@ -1345,6 +1355,15 @@
           "description": "Paused-box TTL. Unset (or negative) = provider default; 0 = never pause.",
           "type": "number"
         },
+        "run_in": {
+          "description": "Where this seat's code work runs. Empty inherits providers.sandbox.default_run_in.",
+          "enum": [
+            "direct",
+            "container",
+            "e2b"
+          ],
+          "type": "string"
+        },
         "setup": {
           "description": "Per-seat provisioning steps, applied after the engine-wide ones.",
           "items": {
@@ -1389,10 +1408,6 @@
     "SandboxProvider": {
       "additionalProperties": false,
       "properties": {
-        "api_key": {
-          "description": "Remote sandbox API key; required for type e2b. ${VAR} supported.",
-          "type": "string"
-        },
         "default_coding_agent": {
           "description": "Coding agent for seats that name none.",
           "enum": [
@@ -1411,18 +1426,31 @@
           "minimum": 0,
           "type": "number"
         },
+        "default_run_in": {
+          "description": "Where a sandbox-enabled seat that names none runs. Required unless the catalogue names exactly one cell.",
+          "enum": [
+            "direct",
+            "container",
+            "e2b"
+          ],
+          "type": "string"
+        },
         "default_timeout_seconds": {
           "description": "Box TTL/keepalive. Not a run cap — the orphan-reclaim grace.",
           "minimum": 0,
           "type": "number"
         },
-        "domain": {
-          "description": "Self-hosted sandbox cluster domain; empty = vendor cloud.",
-          "type": "string"
+        "e2b": {
+          "$ref": "#/$defs/E2BSandbox",
+          "description": "The remote backend. Absent = run_in: e2b is refused."
+        },
+        "fake": {
+          "description": "Use the in-process double for every placement. Demonstrations only.",
+          "type": "boolean"
         },
         "local": {
           "$ref": "#/$defs/LocalSandbox",
-          "description": "The local backend's block. Required for type local, refused otherwise."
+          "description": "The engine host as a backend. Absent = run_in: direct|container is refused."
         },
         "setup": {
           "description": "Provisioning steps applied to every box before per-seat extras.",
@@ -1430,20 +1458,6 @@
             "$ref": "#/$defs/SandboxSetupStep"
           },
           "type": "array"
-        },
-        "template": {
-          "description": "Box template. This is where vCPU/RAM/disk are set — at template build time.",
-          "type": "string"
-        },
-        "type": {
-          "description": "Backend: e2b, local, fake, or none. Required — there is no default.",
-          "enum": [
-            "e2b",
-            "local",
-            "fake",
-            "none"
-          ],
-          "type": "string"
         }
       },
       "type": "object"

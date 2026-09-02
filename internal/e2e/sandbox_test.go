@@ -69,11 +69,10 @@ providers:
       base_url: %s
       api_keys: ["${CREWLET_TEST_KEY}"]
   sandbox:
-    type: local
+    default_run_in: direct
     default_coding_agent: claude-code
     default_pause_ttl_seconds: 1800
     local:
-      containment: direct
       state_dir: %s
     setup:
       # A REAL setup step, which is also how the stand-in coding CLI gets
@@ -709,7 +708,7 @@ func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
 		image = "alpine:3"
 	}
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{
-		Containment: sandbox.Container, StateDir: t.TempDir(),
+		Placement: sandbox.Container, StateDir: t.TempDir(),
 		Image: image, Runtime: filepath.Base(runtime),
 	})
 	if err != nil {

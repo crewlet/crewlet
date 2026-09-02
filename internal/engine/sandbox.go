@@ -51,21 +51,26 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 	if spec == nil || !spec.Enabled() {
 		return nil, nil
 	}
-	provider, err := buildSandboxProvider(spec, env)
+	// ONLY THE CELLS THE COMPANY ACTUALLY REACHES, from the same computation
+	// validation reads. Building the whole catalogue eagerly constructed a
+	// container backend for a company whose seats all run direct, and failed
+	// the apply demanding an image the validator had just refused as a field
+	// nothing would read.
+	providers, err := buildSandboxProviders(spec, env, c.SandboxPlacements())
 	if err != nil {
 		return nil, err
 	}
-	if provider == nil {
+	if len(providers) == 0 {
 		return nil, nil
 	}
 	return sandbox.NewManager(sandbox.ManagerOptions{
-		Provider: provider,
+		Providers:        providers,
+		DefaultPlacement: sandbox.Placement(spec.RunIn()),
 		Runners: map[string]sandbox.Runner{
 			codingagent.ClaudeCodeName: codingagent.NewClaudeCode(),
 			codingagent.OpenCodeName:   codingagent.NewOpenCode(),
 		},
 		DefaultCodingAgent: string(spec.DefaultCodingAgent),
-		DefaultTemplate:    spec.Template,
 		DefaultTimeout:     seconds(spec.Timeout()),
 		DefaultPauseTTL:    seconds(spec.PauseTTL()),
 		DefaultMaxTurns:    spec.DefaultMaxTurns,
@@ -74,14 +79,62 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 	})
 }
 
-func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver) (sandbox.Provider, error) {
-	switch spec.Type {
-	case config.SandboxE2B:
+// buildSandboxProviders turns the catalogue into one backend per placement it
+// configures.
+//
+// THE CLOSED SET AND THIS FUNCTION ARE THE SAME LIST, asserted by a test,
+// because nothing else connects them: the last time they disagreed the
+// config's default named a backend with no case here, so a company validated
+// cleanly, reported a configured sandbox on the dashboard, and failed at its
+// first coding run.
+//
+// ONE LOCAL BACKEND PER LOCAL PLACEMENT, not one shared between them: the two
+// differ in exactly one option, and a single instance would have to be told
+// which cell it was serving on every call — which is the block-wide mode this
+// whole reshape removed, reintroduced one layer down.
+func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, reached map[config.Placement]string) (map[sandbox.Placement]sandbox.Provider, error) {
+	built := make(map[sandbox.Placement]sandbox.Provider, len(reached))
+	// WALKED IN THE CLOSED SET'S ORDER, not the map's: a map iterates
+	// randomly, and an error naming whichever backend happened to come
+	// first would differ between two runs of the same broken config.
+	for _, placement := range config.Placements {
+		if _, want := reached[placement]; !want {
+			continue
+		}
+		if !spec.Configured(placement) {
+			// Refused by validation, so this is the belt to that brace: an
+			// embedder building a company by hand reaches it, and a
+			// silently missing backend would offer run_sandbox to a seat
+			// whose runs can never start.
+			return nil, fmt.Errorf("providers.sandbox: %q is reached by %s and "+
+				"has no backend configured", placement, reached[placement])
+		}
+		provider, err := buildSandboxProvider(spec, env, placement)
+		if err != nil {
+			return nil, err
+		}
+		built[sandbox.Placement(placement)] = provider
+	}
+	return built, nil
+}
+
+func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, placement config.Placement) (sandbox.Provider, error) {
+	if spec.Fake {
+		// The in-process double, for a deployment demonstrating the flow
+		// without a real box. Named in config rather than inferred, so
+		// nobody runs one by accident — and it answers every placement,
+		// so a demonstration config differs from a real one in exactly
+		// one line.
+		return sandbox.NewFakeProvider(), nil
+	}
+	switch placement {
+	case config.PlacementE2B:
+		e2b := spec.E2B
 		// RESOLVED HERE, at the moment the provider is built, which is
 		// the only place the key's value exists in this process. Tier B
 		// stores its references verbatim — that is what keeps an exported
 		// revision free of resolved secrets — so a backend handed
-		// spec.APIKey directly would authenticate with the literal
+		// e2b.APIKey directly would authenticate with the literal
 		// "${E2B_API_KEY}" and get a 401 naming the vendor rather than
 		// the misconfiguration.
 		//
@@ -90,38 +143,28 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver) (s
 		// with a different variable, and passing the reference through
 		// would point every box at a host called "${E2B_DOMAIN}".
 		return sandbox.NewE2B(sandbox.E2BOptions{
-			APIKey:   resolvedOr(env, spec.APIKey),
-			Domain:   resolvedOr(env, spec.Domain),
-			Template: spec.Template,
+			APIKey:   resolvedOr(env, e2b.APIKey),
+			Domain:   resolvedOr(env, e2b.Domain),
+			Template: e2b.Template,
 		})
-	case config.SandboxLocal:
+	case config.PlacementDirect, config.PlacementContainer:
 		local := spec.Local
-		if local == nil {
-			local = &config.LocalSandbox{}
-		}
 		return sandbox.NewLocal(sandbox.LocalOptions{
-			Containment: sandbox.Containment(local.Containment),
-			StateDir:    local.StateDir,
-			Image:       local.Image,
-			Runtime:     string(local.Runtime),
-			Network:     local.Network,
-			RunArgs:     local.RunArgs,
+			Placement: sandbox.Placement(placement),
+			StateDir:  local.StateDir,
+			Image:     local.Image,
+			Runtime:   string(local.Runtime),
+			Network:   local.Network,
+			RunArgs:   local.RunArgs,
 		})
-	case config.SandboxFake:
-		// The in-process double, for a deployment demonstrating the flow
-		// without a real box. Named in config rather than inferred, so
-		// nobody runs one by accident.
-		return sandbox.NewFakeProvider(), nil
 	default:
 		// UNREACHABLE THROUGH A PARSED CONFIG, because the closed set and
-		// this switch are the same list — asserted by a test, because
-		// nothing else connects them and the last time they disagreed the
-		// config's default named a backend with no case here.
+		// this switch are the same list.
 		//
 		// Answered rather than panicked: an embedder building a spec by
 		// hand is a caller, not an operator to be crashed at.
-		return nil, fmt.Errorf("providers.sandbox.type %q is not one of %v",
-			spec.Type, config.SandboxTypes)
+		return nil, fmt.Errorf("providers.sandbox: %q is not one of %v",
+			placement, config.Placements)
 	}
 }
 
@@ -477,6 +520,11 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	agentLLM, credentials, credentialEnv := sandboxLLM(company, seat)
 	env := underlay(e.sandboxEnv(seat, gate, setup), credentialEnv)
 	spec := manager.BuildSpec(sandbox.SpecInput{
+		// The seat's cell, empty inheriting providers.sandbox's default.
+		// Resolved at LAUNCH rather than at config time, for the same
+		// reason coding_agent is: a catalogue change reaches every seat
+		// that named nothing without rewriting their blocks.
+		Placement:       sandbox.Placement(gate.RunIn),
 		CodingAgent:     string(gate.CodingAgent),
 		PauseTTL:        pauseTTL(gate),
 		MaxTurns:        gate.MaxTurns,
@@ -725,7 +773,8 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 		return err
 	}
 	e.sandboxCoordinator = coordinator
-	log.Info("sandbox_enabled", "provider", manager.Provider().Kind(),
+	log.Info("sandbox_enabled", "placements", manager.Placements(),
+		"default_run_in", string(manager.DefaultPlacement()),
 		"coding_agent", manager.DefaultCodingAgent())
 	return nil
 }

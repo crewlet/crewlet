@@ -127,7 +127,7 @@ func TestTheContainerRunsAsWhoeverCanManageTheMount(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			l := &Local{
-				opts:    LocalOptions{Containment: Container, Image: "img"},
+				opts:    LocalOptions{Placement: Container, Image: "img"},
 				runtime: fakeRuntime(t, tc.runtime, tc.format, tc.info, tc.exit),
 			}
 			argv := l.runArgv(t.Context(), boxLayout{id: "b", root: t.TempDir()}, "crewlet-sbx-b")
@@ -153,7 +153,7 @@ func TestRunArgsComeAfterEverythingTheBackendChose(t *testing.T) {
 	t.Parallel()
 	l := &Local{
 		opts: LocalOptions{
-			Containment: Container, Image: "img",
+			Placement: Container, Image: "img",
 			Network: "none", RunArgs: []string{"--user", "0:0", "--cap-add", "SYS_PTRACE"},
 		},
 		runtime: fakeRuntime(t, "docker", dockerRootlessFormat, `[name=seccomp]`, 0),
@@ -331,7 +331,7 @@ func TestCreateRefusesABoxWhoseMountIsNotShared(t *testing.T) {
 	t.Parallel()
 	state := t.TempDir()
 	l := &Local{
-		opts:    LocalOptions{Containment: Container, Image: "img"},
+		opts:    LocalOptions{Placement: Container, Image: "img"},
 		root:    state,
 		runtime: stubRuntime(t, state, false),
 	}
@@ -356,7 +356,7 @@ func TestCreateAcceptsABoxWhoseMountIsShared(t *testing.T) {
 	t.Parallel()
 	state := t.TempDir()
 	l := &Local{
-		opts:    LocalOptions{Containment: Container, Image: "img"},
+		opts:    LocalOptions{Placement: Container, Image: "img"},
 		root:    state,
 		runtime: stubRuntime(t, state, true),
 	}

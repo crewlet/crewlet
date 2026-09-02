@@ -287,56 +287,78 @@ func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
 	}
 }
 
-// EVERY BACKEND THE CONFIG ACCEPTS IS ONE THIS ENGINE CAN BUILD.
+// EVERY PLACEMENT THE CONFIG ACCEPTS IS ONE THIS ENGINE CAN BUILD.
 //
-// `config.SandboxTypes` is the closed set an operator's `type:` is checked
-// against, and `buildSandboxProvider` is what turns one into a running
-// backend. Nothing connects them, and when they last disagreed the config's
-// DEFAULT was the offender: `providers.sandbox: {}` validated, reported a
-// configured sandbox on every operator surface, and failed at the first
-// coding run with an error naming a backend nobody had written.
+// `config.Placements` is the closed set a `run_in:` is checked against, and
+// `buildSandboxProvider` is what turns one into a running backend. Nothing
+// connects them, and when they last disagreed the config's DEFAULT was the
+// offender: `providers.sandbox: {}` validated, reported a configured sandbox
+// on every operator surface, and failed at the first coding run with an error
+// naming a backend nobody had written.
 //
 // It fails in the direction that is hardest to see — the config says yes and
 // the runtime says no — and only for a company that actually runs code, so a
 // boot proves nothing. Hence a test that walks the set.
-func TestEveryConfiguredSandboxTypeCanBeBuilt(t *testing.T) {
+func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 	t.Parallel()
-	for _, kind := range config.SandboxTypes {
-		spec := &config.SandboxProvider{Type: kind}
-		if kind == config.SandboxE2B {
+	for _, placement := range config.Placements {
+		spec := &config.SandboxProvider{
 			// The one backend with a required credential of its own: the
 			// API authenticates every call, so a provider built without
 			// a key would report a configured sandbox and 401 at the
 			// first create.
-			spec.APIKey = "e2b_test_key"
+			E2B: &config.E2BSandbox{APIKey: "e2b_test_key"},
+			// An image, because one of the two local cells needs it and
+			// a backend that cannot be built for `container` is exactly
+			// what this test exists to catch.
+			Local: &config.LocalSandbox{Image: "example.invalid/box:1"},
 		}
-		if kind == config.SandboxLocal {
-			// The one backend with a required block of its own: type
-			// local with none would silently take `direct` containment,
-			// which runs the coding agent as the engine's user.
-			spec.Local = &config.LocalSandbox{Containment: config.ContainmentDirect}
-		}
-		if kind == config.SandboxNone {
-			// Not a backend — it is how an operator says "no code work",
-			// and buildSandbox never reaches the switch for it.
-			if spec.Enabled() {
-				t.Errorf("%q reports itself enabled, so the engine would try "+
-					"to build a backend for the value that means there is none", kind)
-			}
-			continue
+		if !spec.Configured(placement) {
+			t.Fatalf("a catalogue with every backend does not configure %q, so "+
+				"the closed set names a cell providers.sandbox cannot hold", placement)
 		}
 		// NO RESOLVER: this asks whether each backend can be CONSTRUCTED,
 		// and a nil resolver hands the literal through, which is what an
 		// in-process caller wrote.
-		provider, err := buildSandboxProvider(spec, nil)
+		provider, err := buildSandboxProvider(spec, nil, placement)
 		if err != nil {
-			t.Errorf("providers.sandbox.type %q is accepted by the config and "+
-				"cannot be built: %v", kind, err)
+			t.Errorf("run_in %q is accepted by the config and cannot be "+
+				"built: %v", placement, err)
 			continue
 		}
 		if provider == nil {
-			t.Errorf("providers.sandbox.type %q built no provider and no error, "+
-				"so a sandbox-enabled seat plans around a box it never gets", kind)
+			t.Errorf("run_in %q built no provider and no error, so a "+
+				"sandbox-enabled seat plans around a box it never gets", placement)
+		}
+	}
+}
+
+// A CATALOGUE WITH NOTHING IN IT IS NOT A SANDBOX, and the distinction is the
+// one an operator's half-finished edit lands on: `providers.sandbox: {}`
+// parses, and if it reported itself enabled the engine would build a manager
+// with no backends and offer run_sandbox to every gated seat.
+func TestAnEmptyCatalogueIsNotEnabled(t *testing.T) {
+	t.Parallel()
+	if (&config.SandboxProvider{}).Enabled() {
+		t.Error("an empty catalogue reports itself enabled")
+	}
+	if (&config.SandboxProvider{Fake: true}).Enabled() != true {
+		t.Error("the double does not report itself enabled")
+	}
+}
+
+// THE DOUBLE ANSWERS EVERY CELL, so a demonstration config differs from a
+// real one in exactly one line rather than in the placement every seat names.
+func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
+	t.Parallel()
+	spec := &config.SandboxProvider{Fake: true}
+	for _, placement := range config.Placements {
+		provider, err := buildSandboxProvider(spec, nil, placement)
+		if err != nil {
+			t.Fatalf("the double cannot serve %q: %v", placement, err)
+		}
+		if provider.Kind() != "fake" {
+			t.Errorf("placement %q built %q, not the double", placement, provider.Kind())
 		}
 	}
 }

@@ -60,9 +60,8 @@ providers:
       type: anthropic
       model: claude-golden
   sandbox:
-    type: local
-    local:
-      containment: direct
+    local: {}
+    default_run_in: direct
 roles:
   - name: SWE
     llm: fast` + roleBlock
