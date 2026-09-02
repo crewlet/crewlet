@@ -381,11 +381,14 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
   for (const rec of phases) byTurn.set(rec.turnId, [...(byTurn.get(rec.turnId) ?? []), rec]);
   return [...byTurn.entries()]
     .map(([turnId, list]) => {
-      // Within a turn, OLDEST first: a turn is read forwards — plan, then
-      // execute, then review — which is the opposite of a feed.
+      // Within a turn, OLDEST first: a turn is read forwards — onboarding
+      // (first turn only), then execute, then review — which is the opposite
+      // of a feed. A phase not on this list sorts after the ones that are and
+      // then by time, which is right for the nested calls (subagent, judge,
+      // auxiliary) that hang off a host phase.
       const ordered = [...list].sort((a, b) => {
         if (a.iteration !== b.iteration) return a.iteration - b.iteration;
-        const order = ["plan", "execute", "review"];
+        const order = ["onboarding", "execute", "review"];
         const ai = order.indexOf(a.phase);
         const bi = order.indexOf(b.phase);
         if (ai !== bi) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
@@ -432,24 +435,44 @@ export function splitThinking(response: string): { thinking: string; answer: str
   return { thinking: (m[1] ?? "").trim(), answer: (response ?? "").slice(m[0].length) };
 }
 
-/** What a phase's decision means, said in words rather than left as an enum. */
+/**
+ * What a phase's decision means, said in words rather than left as an enum.
+ *
+ * The executor's decision is its OUTCOME — its own last word on the turn —
+ * and `incomplete` is the one word here the model did not write: the engine
+ * synthesises it when the executor never submitted at all. It is labelled as
+ * such, because a reader who cannot tell an engine-written outcome from a
+ * model's own is reading a claim as a commitment.
+ *
+ * An unknown value falls through verbatim rather than being dropped, which is
+ * what keeps a row written by a build this bundle predates readable: the
+ * retired `plan` phase's `plan` / `direct` / `skip` still render as
+ * themselves.
+ */
 export function decisionLabel(phase: string, decision: string): string {
   if (!decision) return "";
   const p = phase.toLowerCase();
-  if (p === "plan") {
+  if (p === "execute") {
     return (
       {
-        plan: "planned the work",
-        direct: "answered directly, no plan needed",
-        skip: "skipped — nothing to do",
+        delivered: "delivered the work",
+        no_action: "nothing to do — ended silently",
+        blocked: "blocked, and said why",
+        incomplete: "never said what it did — the engine marked it incomplete",
       }[decision] ?? decision
     );
   }
   if (p === "review") {
     return (
-      { done: "accepted the work", self_iterate: "sent the turn back to Plan" }[decision] ??
-      decision
+      {
+        done: "accepted the work",
+        self_iterate: "sent the turn back for another round",
+        failed: "failed — the turn will not retry",
+      }[decision] ?? decision
     );
+  }
+  if (p === "onboarding") {
+    return { done: "read its team's pages and marked itself onboarded" }[decision] ?? decision;
   }
   return decision;
 }

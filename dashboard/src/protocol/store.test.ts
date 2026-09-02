@@ -37,12 +37,12 @@ describe("agent overlays", () => {
     // the roster several times a second with half its fields blank.
     const store = new Store();
     store.applySnapshot({ agents: [{ id: "pm", role: "PM", handle: "pm", state: "idle" }] });
-    store.applyAgents([{ role: "PM", state: "working", current_phase: "plan" }]);
+    store.applyAgents([{ role: "PM", state: "working", current_phase: "execute" }]);
 
     const [row] = store.state.agents;
     expect(row?.handle).toBe("pm");
     expect(row?.state).toBe("working");
-    expect(row?.current_phase).toBe("plan");
+    expect(row?.current_phase).toBe("execute");
   });
 
   test("a keyed object is DISCARDED rather than half-applied", () => {

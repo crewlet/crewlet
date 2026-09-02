@@ -325,7 +325,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 {!seat.backstory && !seat.responsibilities.length && !seat.guidelines.length && (
                   <span className="t-caption faint">
                     No profile is set. Backstory, responsibilities and guidelines render straight
-                    into this seat's Plan-phase prompt.
+                    into this seat's executor prompt.
                   </span>
                 )}
               </div>
@@ -488,7 +488,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 title="Past turns"
                 icon="layers"
                 count={memory.data?.episodes?.length ?? 0}
-                subtitle="one row per completed turn, searched by similarity at plan time"
+                subtitle="one row per completed turn, searched by similarity at turn start"
                 padding="none"
               >
                 <DataTable
