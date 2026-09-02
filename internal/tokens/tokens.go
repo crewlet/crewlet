@@ -293,7 +293,11 @@ func Aggregate(records []Record, opts Options) Rollup {
 	// recent activity, and ordering it by size would pin one expensive
 	// turn to the top for as long as it stayed in the window.
 	slices.SortFunc(out.ByTurn, func(a, b TurnRow) int {
-		if c := cmp.Compare(b.EndedAt, a.EndedAt); c != 0 {
+		// By INSTANT, for the reason [compareStamp] carries: a plain byte
+		// compare puts a whole-second stamp after every fractional one in
+		// the same second, so the newest turn is the one that happens to
+		// have landed on a round nanosecond.
+		if c := compareStamp(b.EndedAt, a.EndedAt); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.TurnID, b.TurnID)
@@ -358,14 +362,24 @@ func byTokensThen[T any](rows []T, key func(T) (int, string)) {
 // Falls back to a byte comparison when either side does not parse, which is
 // what livestate's stamp does and for the same reason: an unparseable stamp
 // still has to order somewhere deterministic.
-func laterStamp(a, b string) bool {
+func laterStamp(a, b string) bool { return compareStamp(a, b) > 0 }
+
+// compareStamp orders two stamps the way [laterStamp] compares them, as the
+// three-valued answer a sort needs.
+//
+// It is the primitive and laterStamp is the predicate, rather than the other
+// way round, because the newest-first turn sort needs the middle value:
+// written as two laterStamp calls it would say "equal" for every pair whose
+// bytes differ but whose instants do not, and the tie would then break on the
+// turn id — which is the ordering this comparison exists to stop.
+func compareStamp(a, b string) int {
 	if a == b {
-		return false
+		return 0
 	}
-	at, aok := time.Parse(time.RFC3339Nano, a)
-	bt, bok := time.Parse(time.RFC3339Nano, b)
-	if aok == nil && bok == nil {
-		return at.After(bt)
+	at, aerr := time.Parse(time.RFC3339Nano, a)
+	bt, berr := time.Parse(time.RFC3339Nano, b)
+	if aerr == nil && berr == nil {
+		return at.Compare(bt)
 	}
-	return a > b
+	return cmp.Compare(a, b)
 }

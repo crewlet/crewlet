@@ -897,10 +897,15 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 		); err != nil {
 			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
 		}
-		// RFC3339Nano, because the rollup's watermark and its per-turn
-		// bounds are LEXICOGRAPHIC comparisons over this string — the
-		// same encoding the live window carries, or the two orderings
-		// would disagree about which record is newer.
+		// RFC3339Nano, the same encoding the live window carries, so the
+		// two orderings cannot disagree about which record is newer.
+		//
+		// The rollup PARSES it back rather than comparing bytes (see
+		// tokens.compareStamp): RFC3339Nano trims trailing zeros, so a
+		// whole-second stamp ends in 'Z' where a fractional one ends in a
+		// digit, and 'Z' sorts after '.' — which put 03:04:05Z ahead of
+		// 03:04:05.9Z. The encoding is still what matters here; it is the
+		// one both sides agree to parse.
 		rec.Timestamp = DecodeTime(at).Format(time.RFC3339Nano)
 		out = append(out, rec)
 	}
