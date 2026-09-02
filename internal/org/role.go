@@ -346,10 +346,16 @@ type RoleSandboxMCP struct {
 type RoleSandbox struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
-	// RunIn names the providers.sandbox cell this seat's code work runs in
-	// — direct, container or e2b. Empty inherits the provider default,
-	// resolved at LAUNCH rather than at config time, so a catalogue change
-	// reaches seats that never named one.
+	// RunIn names the cell this seat's code work runs in: direct,
+	// container or e2b — or self, which is the executor's OWN agent-mode
+	// run and the one value with no providers.sandbox backend behind it.
+	// Empty inherits the provider default, resolved at LAUNCH rather than
+	// at config time, so a catalogue change reaches seats that never named
+	// one.
+	//
+	// A plain string rather than the config enum, like every other field
+	// here: this package is the runtime shape and does not import config.
+	// The closed set and what each cell means live on config.Placement.
 	RunIn string `yaml:"run_in,omitempty" json:"run_in,omitempty"`
 
 	// CodingAgent overrides the provider-wide default for this seat only.
