@@ -627,6 +627,70 @@ func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
 	}
 }
 
+// AND ITS TOKEN STOPS WORKING. Closing the transport only ends a connection
+// the box would reopen: it still holds a signed, unexpired URL, and while the
+// token's subject was the RUN id that URL resolved to whichever session the
+// run now had. The superseded box could then drive the new round's surface
+// and append to the durable call log the relaunch reset exists to clear —
+// re-delivering a message from a box nobody is collecting.
+func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	stale := f.open(t)
+	if res := callTool(t, dial(t, stale), "read_page", map[string]any{}); res.IsError {
+		t.Fatalf("the first run could not dispatch: %s", text(res))
+	}
+
+	fresh := f.bridge.Open(&mcpbridge.Session{
+		RunID: "run-1", Handle: "dev", Role: "Engineer",
+		Surface: f.surface, Ledger: f.ledger,
+	})
+	if fresh == stale {
+		t.Fatal("the relaunched run was handed the superseded box's own URL")
+	}
+	res, err := http.Post(stale, "application/json",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("a superseded box's token still reached a session: %d", res.StatusCode)
+	}
+	// The log tells the two misses apart, because only one is an operator's
+	// problem — and only the signed one may be warned about, on a route
+	// anyone can reach without a credential.
+	if _, reason := f.bridge.Miss(strings.TrimPrefix(stale, f.server.URL+mcpbridge.PathPrefix)); reason == "" {
+		t.Error("a superseded token resolved")
+	} else if !strings.Contains(reason, "relaunched") {
+		t.Errorf("the miss does not say the run was relaunched: %s", reason)
+	}
+}
+
+// A TOKEN THIS FLEET NEVER SIGNED IS NOT AN OPERATOR'S PROBLEM, and this
+// route is deliberately exempt from authentication — the box holds no API
+// token — so a warning per bad token is a log line anyone who can reach the
+// engine can write without limit. Only the half that takes the signing key to
+// produce may be warned about.
+func TestOnlyASignedMissIsWorthWarningAbout(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.open(t)
+	runID, reason := f.bridge.Miss("not-a-token")
+	if runID != "" {
+		t.Errorf("a forged token named run %q", runID)
+	}
+	if !strings.Contains(reason, "forged") {
+		t.Errorf("reason = %q", reason)
+	}
+	// A signed token for a run this node does not hold keeps its run id,
+	// which is what makes it the actionable half.
+	f.bridge.Close("run-1")
+	if id, _ := f.bridge.Miss(f.token(t, "run-1")); id != "run-1" {
+		t.Errorf("a fleet-signed miss named run %q, want run-1", id)
+	}
+}
+
 // The handshake says WHICH SEAT this is, because it reaches the coding
 // agent's own logs and a box that cannot tell one bridge from another is a box
 // whose logs cannot be read.
@@ -728,4 +792,19 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 	if strings.Contains(forgedReason, mcpbridge.BaseURLVar) {
 		t.Errorf("a forged token was blamed on the deployment: %q", forgedReason)
 	}
+}
+
+// token mints the path token for a run the fixture's bridge holds a session
+// for, so a case can hand the transport exactly what a box would.
+func (f *fixture) token(t *testing.T, runID string) string {
+	t.Helper()
+	url := f.bridge.Open(&mcpbridge.Session{
+		RunID: runID, Handle: "dev", Role: "Engineer", Surface: f.surface,
+	})
+	if url == "" {
+		t.Fatal("no endpoint")
+	}
+	tok := strings.TrimPrefix(url, f.server.URL+mcpbridge.PathPrefix)
+	f.bridge.Close(runID)
+	return tok
 }

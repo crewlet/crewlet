@@ -37,6 +37,8 @@ package mcpbridge
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -97,6 +99,15 @@ type Session struct {
 	// process — a test, or a host-placement run the engine is watching.
 	Ledger Ledger
 
+	// nonce distinguishes THIS session from an earlier one for the same
+	// run. It is half the token's subject, so a token minted for a
+	// superseded session no longer resolves — see [Bridge.Open].
+	nonce string
+
+	// synced is the surface revision the server was last rendered from,
+	// so a bridged call that changed nothing re-renders nothing.
+	synced uint64
+
 	// server is the ONE MCP server this session exposes, built at Open and
 	// kept for the run's life. One rather than one per request because the
 	// SDK asks for a server only when a box opens a new MCP session — every
@@ -104,7 +115,7 @@ type Session struct {
 	// with — so a server built per request would advertise, to a box that
 	// connected once and stayed connected, exactly the tool set the run
 	// started with. The live set is kept current by [Session.sync] instead.
-	server *mcp.Server
+	srv *mcp.Server
 
 	mu sync.Mutex
 	// advertised is what server currently carries, by name, so sync can
@@ -215,22 +226,70 @@ func (b *Bridge) Open(s *Session) string {
 		log.Warn("mcp_bridge_no_base_url", "run_id", s.RunID, "seat", s.Handle)
 		return ""
 	}
-	s.attach()
+	// THE PREVIOUS SERVER, WHATEVER HELD IT. Captured before attach
+	// replaces it, and disconnected below on both shapes this takes: a
+	// relaunch handing in a fresh Session for a run id that already has
+	// one, and a caller re-opening the SAME Session value. The second is
+	// the one an identity check would miss — attach would swap the server
+	// out from under the sessions a box had already opened on it, and
+	// those would go on serving from this surface, unreachable and
+	// unclosable, which is the leak Close exists to prevent.
 	b.mu.Lock()
 	previous := b.sessions[s.RunID]
+	b.mu.Unlock()
+	stale := previous.server()
+
+	s.attach()
+	b.mu.Lock()
 	b.sessions[s.RunID] = s
 	b.mu.Unlock()
-	if previous != nil && previous != s {
-		// THE SAME RUN, OPENED AGAIN, is a relaunch: a resumed executor
-		// that went back into a box under the turn id it already had. The
-		// coordinator deliberately does not end a run its own turn
-		// relaunched, so nothing else closes the earlier session — and the
-		// earlier box, if it is still connected, must not keep a working
-		// key to the surface the new run now owns.
+
+	if stale != nil {
+		// A relaunch: a resumed executor back in a box under the turn id
+		// it already had. The coordinator deliberately does not end a run
+		// its own turn relaunched, so nothing else closes the earlier
+		// session — and the earlier box must not keep a working key to
+		// the surface the new run now owns. Its TOKEN stops resolving
+		// too, because the subject names this session and not the run:
+		// closing the transport only ends a connection the box would
+		// reopen, and it holds a signed token that has not expired.
 		log.Info("mcp_bridge_session_replaced", "run_id", s.RunID, "seat", s.Handle)
-		previous.disconnect()
+		closeAll(stale)
 	}
-	return b.base + PathPrefix + b.signer.Mint(s.RunID, b.ttl)
+	return b.base + PathPrefix + b.signer.Mint(s.subject(), b.ttl)
+}
+
+// subject is what a run's token names: this SESSION, not its run.
+//
+// The run id alone was the subject once, and a relaunch reuses the turn id —
+// so the superseded box's token went on validating and resolving, to the new
+// session, whose surface and durable call log it could then drive. The nonce
+// is what makes a token stop working when the session it was minted for is
+// replaced.
+//
+// The separator is "~" and the nonce comes FIRST, so the parse is a cut at
+// the first one whatever a run id contains. Two characters are unavailable
+// for it: "." delimits [runtoken.Signer.Mint]'s own payload, and the whole
+// token is a URL PATH SEGMENT, so anything reserved there is worse than
+// wrong — "#" opens the fragment, and a client sends the engine everything
+// before it and keeps the rest, which authenticates as a truncated token
+// rather than failing as a malformed one. "~" is unreserved (RFC 3986 §2.3)
+// and appears in neither a hex nonce nor a UUID.
+func (s *Session) subject() string { return s.nonce + subjectSep + s.RunID }
+
+// subjectSep joins a session's nonce to its run id. See [Session.subject].
+const subjectSep = "~"
+
+// newNonce is a session's half of its token subject.
+//
+// Sixteen bytes of crypto/rand: it is not a secret on its own — the token's
+// HMAC is what makes it unforgeable — but it must not be GUESSABLE either,
+// or a superseded box could mint nothing while still naming the session that
+// replaced it. rand.Read never returns an error.
+func newNonce() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // Close ends a run's session. A token for a closed run resolves to nothing,
@@ -257,9 +316,7 @@ func (b *Bridge) Close(runID string) {
 	s := b.sessions[runID]
 	delete(b.sessions, runID)
 	b.mu.Unlock()
-	if s != nil {
-		s.disconnect()
-	}
+	closeAll(s.server())
 }
 
 // Live reports how many sessions are open. For the health surface and for a
@@ -297,33 +354,58 @@ func (b *Bridge) Live() int {
 // a forged token, so [Bridge.miss] tells the two apart in the LOG — never in
 // the response, where naming the reason tells an attacker the same thing.
 func (b *Bridge) session(token string) *Session {
-	runID := b.signer.Validate(token)
-	if runID == "" {
-		return nil
-	}
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.sessions[runID]
+	s, _, _ := b.resolve(token)
+	return s
 }
 
-// Miss says WHY a token did not resolve, for the log only.
+// resolve is [Bridge.session] plus WHY it missed, for the log only.
 //
-// A token this fleet signed, naming a run this node does not hold, is either a
-// finished run's box still calling — ordinary, and self-limiting — or the
-// deployment error above, where it is every call of a live run and the
-// operator has nothing to go on. Distinguished here because the response
-// deliberately cannot be: see [Bridge.Handler]. Exported for the test that
-// holds the two apart.
-func (b *Bridge) Miss(token string) (runID, reason string) {
-	runID = b.signer.Validate(token)
-	if runID == "" {
-		return "", "the token is forged, malformed or expired"
+// One function because the signature check is the expensive half and the two
+// answers come out of the same parse: asking separately verified the HMAC
+// twice on every rejected request, on the one route that has no credential in
+// front of it.
+//
+// The reason is never in the RESPONSE — see [Bridge.Handler] — and its two
+// values are logged at different levels for the same reason they are told
+// apart at all. A token this fleet never signed is unauthenticated traffic on
+// an unauthenticated route: an operator can do nothing about it and anyone who
+// can reach the engine can produce it at will, so it is a debug line rather
+// than a warning an attacker can print at will. A token this fleet DID sign,
+// naming a session this node does not hold, is either an ended run's box
+// (ordinary, self-limiting) or the deployment error below — and producing one
+// takes the signing key, so warning about it cannot be abused.
+func (b *Bridge) resolve(token string) (s *Session, runID, reason string) {
+	subject := b.signer.Validate(token)
+	if subject == "" {
+		return nil, "", "the token is forged, malformed or expired"
 	}
-	return runID, "this fleet signed the token, but this node holds no session " +
+	nonce, runID, ok := strings.Cut(subject, subjectSep)
+	if !ok {
+		return nil, "", "the token is forged, malformed or expired"
+	}
+	b.mu.RLock()
+	held := b.sessions[runID]
+	b.mu.RUnlock()
+	if held != nil && held.nonce == nonce {
+		return held, runID, ""
+	}
+	if held != nil {
+		return nil, runID, "this node holds a DIFFERENT session for that run — " +
+			"the run was relaunched and this token names the superseded one, " +
+			"which is a box that outlived the run it was started for"
+	}
+	return nil, runID, "this fleet signed the token, but this node holds no session " +
 		"for that run — the run has ended, or " + BaseURLVar + " resolves to a " +
 		"node other than the one that owns the seat (a load balancer in front of " +
 		"several, or a standalone API process). It must address the node that " +
 		"opened the session: a session is a live tool surface, not fleet state"
+}
+
+// Miss says WHY a token did not resolve, for the log only. Exported for the
+// test that holds the reasons apart; see [Bridge.resolve] for what they mean.
+func (b *Bridge) Miss(token string) (runID, reason string) {
+	_, runID, reason = b.resolve(token)
+	return runID, reason
 }
 
 // Handler serves the bridge under [PathPrefix].
@@ -344,7 +426,7 @@ func (b *Bridge) Handler() http.Handler {
 			if s == nil {
 				return nil
 			}
-			return s.server
+			return s.server()
 		}, nil)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -357,9 +439,19 @@ func (b *Bridge) Handler() http.Handler {
 		// different facts, and telling the caller which one it was tells
 		// an attacker the same.
 		token := r.PathValue("token")
-		if b.session(token) == nil {
-			runID, reason := b.Miss(token)
-			log.Warn("mcp_bridge_unresolved", "run_id", runID, "reason", reason)
+		if s, runID, reason := b.resolve(token); s == nil {
+			// LEVELLED BY WHO COULD HAVE CAUSED IT, not by how it reads.
+			// This route is deliberately exempt from authentication (the
+			// box holds no API token — see [PathPrefix]), so a line
+			// written for every bad token is a line anyone who can reach
+			// the engine can write without limit. Only the half that
+			// takes the signing key to produce is a warning.
+			if runID == "" {
+				log.DebugContext(r.Context(), "mcp_bridge_unresolved", "reason", reason)
+			} else {
+				log.WarnContext(r.Context(), "mcp_bridge_unresolved",
+					"run_id", runID, "reason", reason)
+			}
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -371,12 +463,15 @@ func (b *Bridge) Handler() http.Handler {
 // current tool set.
 func (s *Session) attach() {
 	s.mu.Lock()
-	s.server = mcp.NewServer(&mcp.Implementation{
+	s.nonce = newNonce()
+	s.srv = mcp.NewServer(&mcp.Implementation{
 		Name:    serverName,
 		Title:   s.Role + " (" + s.Handle + ")",
 		Version: "1",
 	}, nil)
-	s.advertised = map[string]struct{}{}
+	// Nil rather than empty, so the first sync renders unconditionally
+	// however the surface's revision happens to be numbered.
+	s.advertised = nil
 	s.mu.Unlock()
 	s.sync()
 }
@@ -395,15 +490,27 @@ func (s *Session) attach() {
 // which every run starts without and activates when it needs one — would be
 // listed as active by the surface and refused as unknown by the server.
 func (s *Session) sync() {
+	// ASKED BEFORE THE LOCK IS WORTH TAKING. Almost no bridged call is an
+	// activation, and ToolDefs deep-clones every active tool's schema — so
+	// on a seat with a large grant the unconditional render was the cost of
+	// the whole surface on every call, serialised behind this mutex.
+	rev := s.Surface.Revision()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.advertised != nil && s.synced == rev {
+		return
+	}
+	if s.advertised == nil {
+		s.advertised = map[string]struct{}{}
+	}
+	s.synced = rev
 	live := make(map[string]struct{})
 	for _, def := range s.Surface.ToolDefs() {
 		live[def.Name] = struct{}{}
 		if _, have := s.advertised[def.Name]; have {
 			continue
 		}
-		s.server.AddTool(&mcp.Tool{
+		s.srv.AddTool(&mcp.Tool{
 			Name:        def.Name,
 			Description: def.Description,
 			InputSchema: def.Parameters,
@@ -420,28 +527,40 @@ func (s *Session) sync() {
 		}
 	}
 	if len(gone) > 0 {
-		s.server.RemoveTools(gone...)
+		s.srv.RemoveTools(gone...)
 		for _, name := range gone {
 			delete(s.advertised, name)
 		}
 	}
 }
 
-// disconnect closes every MCP session a box opened on this server.
+// server is this session's MCP server, nil-safe on the session so a caller
+// holding a map miss does not have to branch before asking.
+func (s *Session) server() *mcp.Server {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.srv
+}
+
+// closeAll ends every MCP session a box opened on one server.
 //
 // Closing a server session runs the handler's own removal hook, so the
 // session leaves the SDK's table as well as ending on the wire — which is what
 // makes [Bridge.Close] release the surface rather than merely hide it.
-func (s *Session) disconnect() {
-	s.mu.Lock()
-	server := s.server
-	s.mu.Unlock()
+//
+// It takes the SERVER rather than the Session because the two callers hold
+// the object at different moments: Close has a session it just removed, and
+// Open has the server a replaced session held BEFORE attach swapped it.
+func closeAll(server *mcp.Server) {
 	if server == nil {
 		return
 	}
 	for session := range server.Sessions() {
 		if err := session.Close(); err != nil {
-			log.Debug("mcp_bridge_session_close", "run_id", s.RunID, "error", err)
+			log.Debug("mcp_bridge_session_close", "error", err)
 		}
 	}
 }
@@ -455,12 +574,7 @@ func (s *Session) disconnect() {
 // that probe's session is never retired — so the number says "something is
 // still attached", never "how many boxes".
 func (s *Session) Connections() int {
-	if s == nil {
-		return 0
-	}
-	s.mu.Lock()
-	server := s.server
-	s.mu.Unlock()
+	server := s.server()
 	if server == nil {
 		return 0
 	}
