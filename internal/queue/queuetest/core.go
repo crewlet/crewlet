@@ -656,15 +656,12 @@ func (s *suite) runCore(t *testing.T) {
 			})
 
 		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := range overlapRounds {
 				_ = q.Publish(ctx, "topic.overlap", newEvent(fmt.Sprintf("m%d", i)))
 			}
-		}()
-		go func() {
-			defer wg.Done()
+		})
+		wg.Go(func() {
 			for range overlapRounds {
 				// A drain against a queue that is mostly idle, so most of
 				// these start their wait at zero — the case the WaitGroup
@@ -674,7 +671,7 @@ func (s *suite) runCore(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 		wg.Wait()
 
 		if got := q.InFlightCount(); got < 0 {

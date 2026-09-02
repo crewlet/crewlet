@@ -521,9 +521,8 @@ func (h *Host) Start(ctx context.Context) {
 	h.renewNodePresence(ctx)
 	h.Sweep(ctx)
 
-	h.wg.Add(2)
-	go func() { defer h.wg.Done(); h.heartbeatLoop(loopCtx) }()
-	go func() { defer h.wg.Done(); h.sweepLoop(loopCtx) }()
+	h.wg.Go(func() { h.heartbeatLoop(loopCtx) })
+	h.wg.Go(func() { h.sweepLoop(loopCtx) })
 
 	log.InfoContext(ctx, "seat_host_started", "node", h.nodeID, "owner", h.owner, "held", len(h.Held()))
 }

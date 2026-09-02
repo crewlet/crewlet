@@ -250,11 +250,11 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 			// rather than a paused reader.
 			running.Add(1)
 			slots <- struct{}{}
-			go func(req request) {
+			go func() {
 				defer running.Done()
 				defer func() { <-slots }()
 				runQuery(ctx, guard, client, query, req, operatorID)
-			}(req)
+			}()
 		default:
 			// Unknown kinds are ignored, which is what makes new ones
 			// additive on both ends.
