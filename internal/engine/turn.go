@@ -706,9 +706,22 @@ func triggerTrace(evs []*events.Event) events.TraceContext {
 // declared `skip` on a direct @mention read to the person who sent it exactly
 // like the message never arriving.
 //
-// STRONGEST WINS across a coalesced partition, in the order below. A partition
-// is one conversation, and if any part of it asked this seat something, the
-// turn owes an answer — a merge must not be able to launder an obligation.
+// STRONGEST WINS across a coalesced partition, whatever order the events
+// arrived in. A partition is one conversation, and if any part of it asked
+// this seat something, the turn owes an answer — a merge must not be able to
+// launder an obligation. The strength order is [turn.ReplyTool] over
+// [turn.ReplyEngine] over [turn.ReplyNone]: a tool obligation is the one the
+// engine ENFORCES ([turn.Check] and [turn.OverrideDone] send a round back
+// until a tool delivered), while an A2A ask is answered by the engine from the
+// turn's artifact whichever value this returns. So where both were owed, tool
+// loses nothing for the asker and keeps the check; engine would let the turn
+// end in text the tool-side requester never sees.
+//
+// Today the inbox never builds such a partition — every type but a
+// notification burst keys uniquely and arrives alone (see [inbox.Route]) — so
+// the ranking is a contract held for the key scheme that would, rather than a
+// path that runs. It is held anyway, because the alternative is a function
+// whose answer depends on which event a broker happened to deliver first.
 //
 // The default is [turn.ReplyNone], and it is the safe half. A seat wrongly
 // told nobody is waiting keeps the freedom to end a turn having done nothing,
@@ -720,18 +733,20 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 		if ev == nil {
 			continue
 		}
+		var owed turn.Reply
 		switch ev.Type {
 		case types.A2ARequestType:
 			// A colleague asked, and the ENGINE answers: engine/a2a.go
 			// returns the turn's artifact on the channel the ask opened.
 			// Nothing here calls a tool to deliver, so demanding one
-			// would loop every colleague exchange to exhaustion.
-			return turn.ReplyEngine
+			// for the ask alone would loop every colleague exchange to
+			// exhaustion.
+			owed = turn.ReplyEngine
 
 		case types.TaskAssigned{}.EventType():
 			// Work was assigned to this seat. The answer lives wherever
 			// the tracker is, and only a tool puts it there.
-			out = turn.ReplyTool
+			owed = turn.ReplyTool
 
 		case types.ExternalNotification{}.EventType():
 			// The vendor's own reading of its routing — see
@@ -739,7 +754,7 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// event written by a build that predates the field is
 			// unaddressed rather than an obligation nobody recorded.
 			if addressed, _ := ev.Payload["addressed"].(bool); addressed {
-				out = turn.ReplyTool
+				owed = turn.ReplyTool
 			}
 
 			// types.A2AMessageType is deliberately absent: that hop wakes
@@ -747,6 +762,18 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// is already closed. Nobody is waiting on what this turn does
 			// with it.
 		}
+		if replyRank[owed] > replyRank[out] {
+			out = owed
+		}
 	}
 	return out
+}
+
+// replyRank orders the obligations for [ReplyFor]: the one the engine
+// enforces outranks the one it answers itself, and both outrank none. A
+// value not in the map ranks zero, below every real obligation.
+var replyRank = map[turn.Reply]int{
+	turn.ReplyNone:   1,
+	turn.ReplyEngine: 2,
+	turn.ReplyTool:   3,
 }

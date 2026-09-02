@@ -66,7 +66,7 @@ func TestAnAddressedNotificationOwesAnAnswer(t *testing.T) {
 
 // STRONGEST WINS, and a merge must not be able to launder an obligation: if
 // any part of a coalesced partition asked this seat something, the turn owes
-// an answer.
+// an answer — WHICHEVER ORDER the broker delivered the events in.
 func TestTheStrongestObligationInAPartitionWins(t *testing.T) {
 	t.Parallel()
 	passing := wake(t, types.ExternalNotification{}.EventType(), map[string]any{})
@@ -77,11 +77,22 @@ func TestTheStrongestObligationInAPartitionWins(t *testing.T) {
 	if got := ReplyFor([]*events.Event{passing, asked}); got != turn.ReplyTool {
 		t.Errorf("a burst carrying one ask = %s, want tool", got)
 	}
-	// The engine's own delivery outranks a tool one wherever both appear:
-	// the artifact reaches the asker either way, and demanding a tool call
-	// as well would loop the exchange.
-	if got := ReplyFor([]*events.Event{asked, ask}); got != turn.ReplyEngine {
-		t.Errorf("a partition carrying an A2A ask = %s, want engine", got)
+	// A TOOL OBLIGATION OUTRANKS THE ENGINE'S. The tool one is what the
+	// engine enforces — a round is sent back until a tool delivered — while
+	// an A2A ask is answered from the turn's artifact whatever this says.
+	// So where both are owed, tool loses the asker nothing and keeps the
+	// check; engine would let the turn end in text the tool-side requester
+	// never sees. And the answer cannot depend on which event came first,
+	// or it would depend on the broker.
+	for _, order := range [][]*events.Event{{asked, ask}, {ask, asked}, {ask, passing, asked}} {
+		if got := ReplyFor(order); got != turn.ReplyTool {
+			t.Errorf("a partition carrying an A2A ask and an addressed notification = %s, want tool", got)
+		}
+	}
+	for _, order := range [][]*events.Event{{passing, ask}, {ask, passing}} {
+		if got := ReplyFor(order); got != turn.ReplyEngine {
+			t.Errorf("a partition carrying an A2A ask and a passing mention = %s, want engine", got)
+		}
 	}
 	// And the counterfactual, or every assertion here passes for a
 	// function that hardcodes an obligation.
