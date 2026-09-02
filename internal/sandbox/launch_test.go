@@ -97,7 +97,7 @@ func TestTheCodingAgentIsToldTheGoalTheCriteriaAndItsEnvironment(t *testing.T) {
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
 	req.Setup = []SetupStep{{Name: "git-auth", Brief: "git is already authenticated."}}
-	req.MCPServers = map[string]LaunchSpec{"linear": {}}
+	req.MCPServers = map[string]MCPServer{"linear": {Name: "linear"}}
 
 	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, req); err != nil {
 		t.Fatalf("Launch: %v", err)

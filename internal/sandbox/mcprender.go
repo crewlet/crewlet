@@ -18,10 +18,12 @@ import (
 // would be a claim rather than a control. What the engine decides is which
 // SERVERS reach the box, which it decides before the agent starts.
 //
-// This is a pure translation, deliberately: the engine's own server
-// configuration and the seat's credentials in, the generic launch-spec shape
-// the runners render out. What each CLI's config file looks like belongs to
-// its runner, not here.
+// This is a pure RESOLUTION, deliberately: the engine's own server
+// configuration and the seat's credentials in, the same server shape out with
+// the credentials merged and the unreachable entries dropped. What each CLI's
+// config file looks like belongs to its runner — which is where the key names
+// live, because this package once rendered them and then told the reader they
+// belonged elsewhere.
 
 // MCPServer is the engine's view of one configured server.
 //
@@ -76,30 +78,24 @@ func (t Transport) Valid() bool {
 	}
 }
 
-// LaunchSpec is one server as a runner writes it into a box.
+// RenderMCP resolves a seat's scoped sandbox surface.
 //
-// A DEFINED TYPE rather than an alias for `map[string]any`. As an alias it
-// named nothing the compiler could hold on to, and two of the three places
-// that carry this shape — [LaunchRequest.MCPServers] and
-// [RunRequest.MCPServers] — spelled out `map[string]map[string]any` instead,
-// so the concept had a name in exactly one file.
-//
-// The KEYS are the wire contract with each coding agent's config writer:
-// "type"/"url"/"headers" for HTTP, "command"/"args"/"env" for stdio. They are
-// generic on purpose — what each CLI's own config file looks like belongs to
-// its runner, not here.
-type LaunchSpec map[string]any
-
-// RenderMCP builds the launch specs for a seat's scoped sandbox surface.
+// It answers in the SAME type it takes, with the seat's credentials merged in
+// — not a generic `map[string]any` of each CLI's own config keys. That shape
+// erased everything a runner needed: internal/sandbox/codingagent's OpenCode
+// writer had to assert its way back out of it, and its args branch carried two
+// fallbacks (`[]string` and `[]any`) because nothing but a convention said
+// which one it would find. The keys it erased into were Claude Code's, which
+// this package's own doc said belonged to a runner.
 //
 // Only the named servers are included, and one with no matching configuration
-// is SKIPPED rather than rendered empty: the agent must never be shown a
+// is SKIPPED rather than returned empty: the agent must never be shown a
 // server the engine does not know, because it would spend a round discovering
 // that it cannot connect.
 //
 // Order does not matter to the output — it is a map — but the input list is
 // walked in the seat's own order so a duplicate name resolves once.
-func RenderMCP(servers []MCPServer, scoped []string, credentials map[string]map[string]string) map[string]LaunchSpec {
+func RenderMCP(servers []MCPServer, scoped []string, credentials map[string]map[string]string) map[string]MCPServer {
 	if len(scoped) == 0 {
 		return nil
 	}
@@ -107,7 +103,7 @@ func RenderMCP(servers []MCPServer, scoped []string, credentials map[string]map[
 	for _, s := range servers {
 		byName[s.Name] = s
 	}
-	out := make(map[string]LaunchSpec, len(scoped))
+	out := make(map[string]MCPServer, len(scoped))
 	for _, name := range scoped {
 		server, known := byName[name]
 		if !known {
@@ -116,11 +112,12 @@ func RenderMCP(servers []MCPServer, scoped []string, credentials map[string]map[
 					"in mcp.servers, so the coding agent will not get it")
 			continue
 		}
-		// SKIPPED like an unknown name, for the same reason: rendering it
-		// would hand the agent a server it cannot reach, and a round spent
-		// discovering that is worse than not offering it. Rendering an
-		// unrecognised transport as stdio — which is what a bare string
-		// field did — produced `{"command": ""}` and said nothing at all.
+		// SKIPPED like an unknown name, for the same reason: handing a
+		// runner a server it cannot render would put a broken entry in the
+		// agent's config, and a round spent discovering that is worse than
+		// not offering it. Rendering an unrecognised transport as stdio —
+		// which is what a bare string field did — produced an empty command
+		// and said nothing at all.
 		if !server.Transport.Valid() {
 			log.Warn("sandbox_mcp_transport_unknown", "server", name,
 				"transport", string(server.Transport),
@@ -128,7 +125,7 @@ func RenderMCP(servers []MCPServer, scoped []string, credentials map[string]map[
 					"so the coding agent will not get this server")
 			continue
 		}
-		out[name] = launchSpec(server, credentials[name])
+		out[name] = withCredentials(server, credentials[name])
 	}
 	if len(out) == 0 {
 		return nil
@@ -136,28 +133,29 @@ func RenderMCP(servers []MCPServer, scoped []string, credentials map[string]map[
 	return out
 }
 
-// launchSpec renders one server, merging the seat's credentials over the
-// server's own.
+// withCredentials merges the seat's credentials over the server's own, into
+// whichever field its transport authenticates through.
 //
 // The seat's win: a server declares the shape and a seat declares who it is,
 // so a seat that supplies a token is saying something more specific than the
 // company-wide default it replaces.
-func launchSpec(server MCPServer, seatCredentials map[string]string) LaunchSpec {
+//
+// The OTHER transport's field is cleared rather than carried: a stdio server
+// with headers on it is a config nobody wrote, and leaving one there would let
+// a future runner render a credential into a file the transport never reads.
+func withCredentials(server MCPServer, seat map[string]string) MCPServer {
+	out := server
 	if server.Transport == TransportHTTP {
-		spec := LaunchSpec{"type": string(TransportHTTP), "url": server.URL}
-		if headers := merged(server.Headers, seatCredentials); len(headers) > 0 {
-			spec["headers"] = headers
-		}
-		return spec
+		out.Command, out.Args, out.Env = "", nil, nil
+		out.Headers = merged(server.Headers, seat)
+		return out
 	}
 	// Stdio, which an empty transport also means. An unrecognised one never
-	// reaches here — RenderMCP skips it — so this branch is not the
-	// fall-through it used to be.
-	spec := LaunchSpec{"command": server.Command, "args": slices.Clone(server.Args)}
-	if env := merged(server.Env, seatCredentials); len(env) > 0 {
-		spec["env"] = env
-	}
-	return spec
+	// reaches here — RenderMCP skips it.
+	out.URL, out.Headers = "", nil
+	out.Args = slices.Clone(server.Args)
+	out.Env = merged(server.Env, seat)
+	return out
 }
 
 func merged(base, over map[string]string) map[string]string {

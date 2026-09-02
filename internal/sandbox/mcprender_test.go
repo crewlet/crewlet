@@ -43,27 +43,33 @@ func TestAScopedServerTheEngineDoesNotKnowIsSkipped(t *testing.T) {
 	}
 }
 
-func TestAStdioServerRendersItsCommandAndArguments(t *testing.T) {
+func TestAStdioServerKeepsItsCommandAndArguments(t *testing.T) {
 	got := RenderMCP(servers(), []string{"files"}, nil)["files"]
-	if got["command"] != "mcp-files" {
-		t.Fatalf("command = %v", got["command"])
+	if got.Command != "mcp-files" {
+		t.Fatalf("command = %q", got.Command)
 	}
-	if args, _ := got["args"].([]string); !reflect.DeepEqual(args, []string{"--root", "/src"}) {
-		t.Fatalf("args = %v", got["args"])
+	if !reflect.DeepEqual(got.Args, []string{"--root", "/src"}) {
+		t.Fatalf("args = %v", got.Args)
 	}
-	if got["type"] != nil {
-		t.Fatalf("a stdio server was given a transport tag: %v", got)
+	// THE OTHER TRANSPORT'S FIELDS ARE CLEARED. A stdio server carrying a
+	// url or headers is a config nobody wrote, and leaving one there lets a
+	// future runner render a credential into a file the transport never
+	// reads.
+	if got.URL != "" || got.Headers != nil {
+		t.Fatalf("a stdio server carried http fields: %+v", got)
 	}
 }
 
-func TestAnHttpServerRendersItsUrlAndHeaders(t *testing.T) {
+func TestAnHttpServerKeepsItsUrlAndHeaders(t *testing.T) {
 	got := RenderMCP(servers(), []string{"linear"}, nil)["linear"]
-	if got["type"] != "http" || got["url"] != "https://example.com/mcp" {
-		t.Fatalf("spec = %v", got)
+	if got.Transport != TransportHTTP || got.URL != "https://example.com/mcp" {
+		t.Fatalf("server = %+v", got)
 	}
-	headers, _ := got["headers"].(map[string]string)
-	if headers["X-Client"] != "crewlet" {
-		t.Fatalf("headers = %v", headers)
+	if got.Headers["X-Client"] != "crewlet" {
+		t.Fatalf("headers = %v", got.Headers)
+	}
+	if got.Command != "" || got.Args != nil || got.Env != nil {
+		t.Fatalf("an http server carried stdio fields: %+v", got)
 	}
 }
 
@@ -77,14 +83,14 @@ func TestTheSeatsOwnCredentialsWinOverTheServersDefaults(t *testing.T) {
 	}
 	rendered := RenderMCP(servers(), []string{"files", "linear"}, creds)
 
-	env, _ := rendered["files"]["env"].(map[string]string)
+	env := rendered["files"].Env
 	if env["MODE"] != "read-only" {
 		t.Fatalf("the seat's value did not win: %v", env)
 	}
 	if env["TOKEN"] != "seat-token" {
 		t.Fatalf("the seat's own credential did not reach the box: %v", env)
 	}
-	headers, _ := rendered["linear"]["headers"].(map[string]string)
+	headers := rendered["linear"].Headers
 	if headers["Authorization"] != "Bearer seat-token" || headers["X-Client"] != "crewlet" {
 		t.Fatalf("headers = %v", headers)
 	}
@@ -94,20 +100,19 @@ func TestTheSeatsOwnCredentialsWinOverTheServersDefaults(t *testing.T) {
 func TestOneServersCredentialsDoNotReachAnother(t *testing.T) {
 	creds := map[string]map[string]string{"files": {"TOKEN": "for-files-only"}}
 	rendered := RenderMCP(servers(), []string{"files", "linear"}, creds)
-	headers, _ := rendered["linear"]["headers"].(map[string]string)
-	if _, leaked := headers["TOKEN"]; leaked {
-		t.Fatalf("the files credential reached the linear server: %v", headers)
+	if _, leaked := rendered["linear"].Headers["TOKEN"]; leaked {
+		t.Fatalf("the files credential reached the linear server: %v",
+			rendered["linear"].Headers)
 	}
 }
 
 // The rendered args must not alias the configuration a later apply replaces.
-func TestTheRenderedSpecDoesNotAliasTheConfiguration(t *testing.T) {
+func TestTheRenderedServerDoesNotAliasTheConfiguration(t *testing.T) {
 	source := servers()
 	rendered := RenderMCP(source, []string{"files"}, nil)
-	args, _ := rendered["files"]["args"].([]string)
-	args[0] = "--mutated"
+	rendered["files"].Args[0] = "--mutated"
 	if source[0].Args[0] != "--root" {
-		t.Fatal("the rendered spec aliased the server configuration")
+		t.Fatal("the rendered server aliased the configuration")
 	}
 }
 
@@ -115,11 +120,10 @@ func TestTheRenderedSpecDoesNotAliasTheConfiguration(t *testing.T) {
 //
 // The field used to be a bare `string` and the renderer branched on
 // `== "http"`, so anything else — a typo, a transport a newer build knows and
-// this one does not — fell through to the stdio branch and produced
-// `{"command": "", "args": null}`. The agent inside the box then spends a
-// round failing to launch a server with no command, and nothing anywhere says
-// why. Skipping is what an unknown NAME already did, and this is the same
-// class of mistake.
+// this one does not — fell through to the stdio branch and yielded a server
+// with an empty command. The agent inside the box then spends a round failing
+// to launch it, and nothing anywhere says why. Skipping is what an unknown
+// NAME already did, and this is the same class of mistake.
 func TestAServerWithAnUnrecognisedTransportIsSkipped(t *testing.T) {
 	source := append(servers(), MCPServer{
 		Name: "mistyped", Transport: "htp", URL: "https://example.com/mcp",
