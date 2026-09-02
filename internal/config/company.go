@@ -337,6 +337,14 @@ func (c *Company) validateProviderKeys() error {
 // A rule that holds for a seat in `roles:` and not for the identical seat one
 // level down is not a rule, and the seats it missed are exactly the ones whose
 // mistakes have no run-time symptom to find them by.
+// EachRole is [Company.eachRole] for callers outside this package.
+//
+// Exported because the ENGINE needs the same walk: a seat's sandbox block is
+// looked up by name at launch, and a lookup that stopped at the top-level
+// `roles:` answered nil for every seat in a unit. One walker, so a rule that
+// holds for a seat in `roles:` holds for the identical seat one level down.
+func (c *Company) EachRole(visit func(path string, role *Role)) { c.eachRole(visit) }
+
 func (c *Company) eachRole(visit func(path string, role *Role)) {
 	for i := range c.Roles {
 		visit(idx("roles", i), &c.Roles[i])

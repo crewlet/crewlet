@@ -590,3 +590,40 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 func emptySurface() *tools.Surface {
 	return tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil)
 }
+
+// A TOKEN THIS FLEET SIGNED THAT NAMES NO SESSION HERE IS DIAGNOSABLE.
+//
+// The response deliberately cannot say why — forged, expired and "that run is
+// over" are three different facts, and naming one tells an attacker the same.
+// But the operator needs the fourth: a bridge URL that resolves to a node
+// other than the one holding the session answers 401 to every call of a LIVE
+// run, forever, and without this it is indistinguishable from a forged token.
+func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	// A session THIS node opened, then a PEER over the same fleet key —
+	// which is exactly a load balancer in front of two nodes.
+	endpoint := f.open(t)
+	token := endpoint[strings.LastIndex(endpoint, "/")+1:]
+
+	peer := mcpbridge.New(mcpbridge.Options{
+		Key: []byte("test-key"), BaseURL: "https://engine.example.com",
+	})
+	runID, reason := peer.Miss(token)
+	if runID != "run-1" {
+		t.Fatalf("the peer could not even name the run: %q", runID)
+	}
+	if !strings.Contains(reason, mcpbridge.BaseURLVar) {
+		t.Errorf("the reason does not name the setting that fixes it: %q", reason)
+	}
+
+	// A FORGED token is the other reason, and it names no run — telling
+	// the two apart is the whole point.
+	forgedID, forgedReason := peer.Miss("v1.run-1.9999999999.notasignature")
+	if forgedID != "" {
+		t.Errorf("a forged token resolved to run %q", forgedID)
+	}
+	if strings.Contains(forgedReason, mcpbridge.BaseURLVar) {
+		t.Errorf("a forged token was blamed on the deployment: %q", forgedReason)
+	}
+}

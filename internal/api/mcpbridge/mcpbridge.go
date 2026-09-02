@@ -228,6 +228,22 @@ func (b *Bridge) Live() int {
 // still going. A token that passes the first and fails the second is the
 // ordinary case — a box that outlived its run — and it must not reach a
 // surface.
+//
+// # The session is not fleet state, and cannot be
+//
+// A session holds a live [tools.Surface]: the seat's MCP children, its skill
+// guard, its per-turn recording. Those are objects in the process that claimed
+// the seat, so THE NODE THAT OPENED A SESSION IS THE ONLY ONE THAT CAN SERVE
+// IT. Signing shares authentication across a fleet; it does not and could not
+// share the surface.
+//
+// So the bridge URL a box is handed must resolve to that node. Each node mints
+// its endpoint from its OWN CREWLET_MCP_BRIDGE_URL, which makes a
+// per-node-addressable value correct and a shared load-balancer address wrong:
+// behind a balancer, calls land on peers that never held the session and
+// answer 401 forever. That misconfiguration used to be indistinguishable from
+// a forged token, so [Bridge.miss] tells the two apart in the LOG — never in
+// the response, where naming the reason tells an attacker the same thing.
 func (b *Bridge) session(token string) *Session {
 	runID := b.signer.Validate(token)
 	if runID == "" {
@@ -236,6 +252,26 @@ func (b *Bridge) session(token string) *Session {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.sessions[runID]
+}
+
+// Miss says WHY a token did not resolve, for the log only.
+//
+// A token this fleet signed, naming a run this node does not hold, is either a
+// finished run's box still calling — ordinary, and self-limiting — or the
+// deployment error above, where it is every call of a live run and the
+// operator has nothing to go on. Distinguished here because the response
+// deliberately cannot be: see [Bridge.Handler]. Exported for the test that
+// holds the two apart.
+func (b *Bridge) Miss(token string) (runID, reason string) {
+	runID = b.signer.Validate(token)
+	if runID == "" {
+		return "", "the token is forged, malformed or expired"
+	}
+	return runID, "this fleet signed the token, but this node holds no session " +
+		"for that run — the run has ended, or " + BaseURLVar + " resolves to a " +
+		"node other than the one that owns the seat (a load balancer in front of " +
+		"several, or a standalone API process). It must address the node that " +
+		"opened the session: a session is a live tool surface, not fleet state"
 }
 
 // Handler serves the bridge under [PathPrefix].
@@ -263,7 +299,10 @@ func (b *Bridge) Handler() http.Handler {
 		// NO DETAIL: forged, expired and "that run is over" are three
 		// different facts, and telling the caller which one it was tells
 		// an attacker the same.
-		if b.session(r.PathValue("token")) == nil {
+		token := r.PathValue("token")
+		if b.session(token) == nil {
+			runID, reason := b.Miss(token)
+			log.Warn("mcp_bridge_unresolved", "run_id", runID, "reason", reason)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
