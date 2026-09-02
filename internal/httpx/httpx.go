@@ -14,6 +14,18 @@
 // against one host would hold N pools of idle connections and still reuse
 // nothing between them. The whole value is that every caller to a host lands
 // in the same pool.
+//
+// So EVERY outbound client is built here, including the ones whose own
+// concurrency is one: the operator CLI holds a single call in flight and
+// gains nothing from the pool, but a second way to build a client is a second
+// place for the next one to be built wrong, and a nil Transport looks
+// identical to a considered default. The rule is greppable — a bare
+// &http.Client{} outside this package is the bug.
+//
+// A round tripper that WRAPS another is the shape that slips through, because
+// it names no client at all: [Transport] is what such a wrapper's base must
+// be, not http.DefaultTransport. internal/mcp's per-server identity tripper
+// is the one in this tree.
 package httpx
 
 import (

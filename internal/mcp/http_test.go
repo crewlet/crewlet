@@ -3,12 +3,15 @@ package mcp
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // httpMCPServer is a minimal Streamable-HTTP MCP endpoint.
@@ -406,5 +409,23 @@ func TestAnOrdinaryErrorBodyIsReplayedWhole(t *testing.T) {
 	}
 	if string(got) != payload {
 		t.Errorf("replayed %q, want %q", got, payload)
+	}
+}
+
+// TestIdentityWrapsTheSharedTransport is the round-tripper case internal/httpx
+// names: a wrapper carries no *http.Client of its own, so the shape that
+// signals a nil Transport elsewhere — an &http.Client{} with no field — never
+// appears, and http.DefaultTransport sits at the base looking deliberate.
+//
+// It is the worst place in the tree for two idle connections per host: a
+// company runs one of these per remote server PER SEAT, so every seat sharing
+// one vendor endpoint contends on the same two.
+func TestIdentityWrapsTheSharedTransport(t *testing.T) {
+	t.Parallel()
+	_, ident := newHTTPTransport(Spec{
+		Name: "remote", URL: "https://mcp.example.com/",
+	}, slog.New(slog.DiscardHandler))
+	if ident.base != httpx.Transport() {
+		t.Errorf("identity base = %T, want the one httpx shares", ident.base)
 	}
 }

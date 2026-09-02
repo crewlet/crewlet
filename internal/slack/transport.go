@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -107,7 +108,7 @@ func NewTransport(opts TransportOptions) (*Transport, error) {
 	}
 	httpClient := opts.HTTP
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: ClientTimeout}
+		httpClient = httpx.Client(ClientTimeout)
 	}
 	t := &Transport{
 		cfg: opts.Config, registry: opts.Registry,

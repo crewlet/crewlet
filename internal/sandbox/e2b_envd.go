@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // envd: the agent inside the box.
@@ -121,10 +123,16 @@ type envdClient struct {
 
 // newEnvdClient derives envd's client from the caller's, keeping its
 // transport and dropping its deadline.
+//
+// The transport falls back to [httpx.Transport] rather than to nil, which
+// would be http.DefaultTransport and its two idle connections per host —
+// the one thing every other client here was moved off.
 func newEnvdClient(host string, from *http.Client) *envdClient {
-	client := &http.Client{}
+	client := &http.Client{Transport: httpx.Transport()}
 	if from != nil {
-		client.Transport = from.Transport
+		if from.Transport != nil {
+			client.Transport = from.Transport
+		}
 		client.CheckRedirect = from.CheckRedirect
 		client.Jar = from.Jar
 	}

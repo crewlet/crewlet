@@ -12,6 +12,8 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // maxLoggedErrorBody bounds how much of a failing HTTP response is logged.
@@ -61,7 +63,7 @@ const protocolVersionHeader = "Mcp-Protocol-Version"
 // what the connection does.
 func newHTTPTransport(spec Spec, log *slog.Logger) (sdk.Transport, *httpIdentity) {
 	ident := &httpIdentity{
-		base:    http.DefaultTransport,
+		base:    httpx.Transport(),
 		headers: maps.Clone(spec.Headers),
 		server:  spec.Name,
 		log:     log,

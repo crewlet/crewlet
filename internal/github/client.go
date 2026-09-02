@@ -109,7 +109,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}
 	client := opts.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: ClientTimeout}
+		client = httpx.Client(ClientTimeout)
 	}
 	return &Client{
 		base: base, web: web,
