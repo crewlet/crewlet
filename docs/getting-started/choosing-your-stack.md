@@ -308,7 +308,8 @@ generated code must never touch that host runs `e2b`. Where a seat that names
 none goes is `default_run_in`, which is required whenever some seat (or
 agent-mode entry) would fall to it on a catalogue offering more than one cell
 (and `local:` alone offers two); a company whose every seat names its own
-needs none.
+needs none — as long as *something* names a cell, since a backend is only
+built for a cell that is reached.
 
 Coding-agent choice: **OpenCode** is provider-agnostic (reuses any
 OpenAI-compatible provider you already configured — no extra secret);

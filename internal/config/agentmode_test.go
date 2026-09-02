@@ -248,3 +248,69 @@ func TestTheBridgeServerNameIsReserved(t *testing.T) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
 }
+
+// A HUMAN SEAT RUNS NO EXECUTOR, so it reaches no providers.llm entry.
+//
+// `llm` is one of the fields a human seat may not carry, so its chain is
+// always empty and always falls through to the company-wide fallback — the
+// entry called "default", else the first declared. Resolved rather than
+// refused, that made an agent-mode entry declared first "reached" by a seat
+// that is never spawned: a company was refused for a box its founder's seat
+// would never run in, and one with a catalogue built a backend for a run that
+// cannot happen.
+func TestAHumanSeatReachesNoExecutorEntry(t *testing.T) {
+	t.Parallel()
+	// The agent-mode entry is declared FIRST, so it is the fallback.
+	const providers = "name: Acme\nproviders:\n  llm:\n" +
+		"    coder:\n      type: cli-agent\n      model: sonnet\n" +
+		"      cli: {agent: claude-code, mode: agent, run_in: e2b}\n" +
+		"    main:\n      type: anthropic\n      model: claude-golden\n"
+	const founder = "  - name: Founder\n    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n"
+
+	// No catalogue, and none needed: no seat's executor is the agent-mode
+	// entry, so nothing runs in a box.
+	cfg := mustCompany(t, providers+"roles:\n"+founder+"  - name: SWE\n    llm: main\n")
+	if _, _, resolved := cfg.ExecutorProvider(&cfg.Roles[0]); resolved {
+		t.Error("a human seat resolved an executor; it is never spawned and runs no phase")
+	}
+	if _, _, resolved := cfg.ExecutorProvider(&cfg.Roles[1]); !resolved {
+		t.Error("an agent seat resolved no executor")
+	}
+	if len(cfg.SandboxPlacements()) != 0 {
+		t.Errorf("a cell is reached by a seat nobody spawns: %v", cfg.SandboxPlacements())
+	}
+
+	// And an AGENT seat falling through the same fallback still reaches it,
+	// or this would just be "the fallback never counts".
+	rejects(t, providers+"roles:\n"+founder+"  - name: SWE\n", agentModeEntryPath("coder"))
+}
+
+// THE FALLBACK IS THE COMPANY'S, NOT THE SEAT'S — the entry called "default",
+// else the first declared — so it is resolved once for a walk over every seat
+// rather than rebuilt per seat. Asserted because the two paths to it must
+// keep answering the same thing: ExecutorProvider is what validation reads,
+// and the walker takes the short one.
+func TestBothPathsToTheExecutorEntryAgree(t *testing.T) {
+	t.Parallel()
+	for _, doc := range []string{
+		"    first:\n      type: anthropic\n      model: a\n" +
+			"    default:\n      type: anthropic\n      model: b\n",
+		"    first:\n      type: anthropic\n      model: a\n" +
+			"    second:\n      type: anthropic\n      model: b\n",
+	} {
+		cfg := mustCompany(t, "name: Acme\nproviders:\n  llm:\n"+doc+
+			"roles:\n  - name: Picky\n    llm: first\n  - name: Silent\n")
+		fallback, ok := cfg.executorFallback()
+		if !ok {
+			t.Fatal("no fallback for a company with providers")
+		}
+		for i := range cfg.Roles {
+			wantKey, wantEntry, wantOK := cfg.ExecutorProvider(&cfg.Roles[i])
+			gotKey, gotEntry, gotOK := cfg.executorProvider(&cfg.Roles[i], fallback)
+			if gotKey != wantKey || gotOK != wantOK || gotEntry.Model != wantEntry.Model {
+				t.Errorf("%s: short path = %q/%v, ExecutorProvider = %q/%v",
+					cfg.Roles[i].Name, gotKey, gotOK, wantKey, wantOK)
+			}
+		}
+	}
+}

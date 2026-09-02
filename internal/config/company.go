@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // Company is Tier B — founder-owned, live-editable, versioned in the store.
@@ -443,9 +445,13 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 // Sorted, so a message naming "the first seat" or a backend built in this
 // order is the same on every run of the same config.
 func (c *Company) agentModeExecutorKeys() []string {
+	fallback, ok := c.executorFallback()
+	if !ok {
+		return nil
+	}
 	seen := map[string]struct{}{}
 	c.EachRole(func(_ string, role *Role) {
-		key, entry, resolved := c.ExecutorProvider(role)
+		key, entry, resolved := c.executorProvider(role, fallback)
 		if !resolved || !entry.CLI.AgentMode() {
 			return
 		}
@@ -473,11 +479,45 @@ func agentModeEntryPath(key string) string {
 // a test that walks the same fallbacks. What must never happen is this one
 // growing a rule the registry does not have.
 //
-// The second return is false when the company configures no provider at all,
-// which the registry refuses at construction and this must not crash on.
+// The second return is false when there is no executor to resolve: a company
+// that configures no provider at all (which the registry refuses at
+// construction and this must not crash on), or a HUMAN SEAT. A human seat is
+// addressable and never spawned — it runs no phase, and `llm` is one of the
+// fields [org.Role.Validate] refuses on one — so resolving it would answer
+// with whatever entry happens to be declared first and call that entry
+// reached. It is the fallback below that makes this more than a theoretical
+// tidiness: a company whose first-declared entry was an agent-mode CLI was
+// refused for a box its founder's seat would never run in.
 func (c *Company) ExecutorProvider(role *Role) (string, LLMProvider, bool) {
+	fallback, ok := c.executorFallback()
+	if !ok {
+		return "", LLMProvider{}, false
+	}
+	return c.executorProvider(role, fallback)
+}
+
+// executorFallback is the entry a seat that names none runs on: the one
+// called "default", else the first declared. SEAT-INDEPENDENT, and resolved
+// once by a caller walking every seat — [Providers.ProviderOrder] allocates,
+// and it was allocating per seat to answer a question no seat can change.
+//
+// False when the company configures no provider at all.
+func (c *Company) executorFallback() (string, bool) {
+	if _, ok := c.Providers.LLM["default"]; ok {
+		return "default", true
+	}
 	order := c.Providers.ProviderOrder()
 	if len(order) == 0 {
+		return "", false
+	}
+	return order[0], true
+}
+
+// executorProvider is [Company.ExecutorProvider] over a resolved fallback.
+// ONE resolution rule, reachable two ways — what must never happen is this
+// growing a rule the phase registry does not have.
+func (c *Company) executorProvider(role *Role, fallback string) (string, LLMProvider, bool) {
+	if role.Kind == org.KindHuman {
 		return "", LLMProvider{}, false
 	}
 	for _, key := range role.LLM.Default {
@@ -485,10 +525,7 @@ func (c *Company) ExecutorProvider(role *Role) (string, LLMProvider, bool) {
 			return key, entry, true
 		}
 	}
-	if entry, ok := c.Providers.LLM["default"]; ok {
-		return "default", entry, true
-	}
-	return order[0], c.Providers.LLM[order[0]], true
+	return fallback, c.Providers.LLM[fallback], true
 }
 
 // validateSandboxPlacement holds the rules that need BOTH the catalogue and
@@ -596,6 +633,26 @@ func (c *Company) validateSandboxPlacement() error {
 	}
 
 	reached := c.SandboxPlacements()
+	if catalogue.Enabled() && len(reached) == 0 {
+		// A CATALOGUE NOTHING CAN RUN, and it is not merely inert. The
+		// engine builds a backend only for a cell something reaches, so
+		// zero reached cells means no manager, no coordinator, and
+		// `run_sandbox` registered for nobody — and the sandbox runtime is
+		// built ONCE AT BOOT, so a founder who later adds a sandbox-enabled
+		// seat live gets a clean apply and code work that silently never
+		// happens, for the life of the process.
+		//
+		// It is only reachable on an AMBIGUOUS catalogue: any catalogue
+		// that resolves a default reaches that default, precisely so a seat
+		// added later has somewhere to go. So the remedy is the default —
+		// or a seat, which is the other thing that would reach a cell.
+		p.add(at("providers.sandbox", "default_run_in"), ErrMissing,
+			"this catalogue configures more than one place to run code (%s) and "+
+				"nothing names one, so no backend is built and no seat can ever "+
+				"run code here. Name the default, give a seat `run_in`, or remove "+
+				"the block",
+			names(catalogue.available()))
+	}
 	if local := catalogue.localBlock(); local != nil {
 		// THE IMAGE IS ONLY NEEDED WHERE A CONTAINER IS ACTUALLY RUN, and
 		// only the walk above knows that. Required unconditionally it would

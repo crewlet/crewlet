@@ -64,9 +64,7 @@ func TestAnAmbiguousCatalogueNeedsADefaultOnlyWhereASeatWouldReadIt(t *testing.T
 		}
 	}
 
-	// Every seat naming its cell needs no default — and no seat at all
-	// needs none either, since nothing would read it.
-	mustCompany(t, local)
+	// Every seat naming its cell needs no default.
 	cfg := mustCompany(t, both+"roles:\n  - name: SWE\n    sandbox: {enabled: true, run_in: direct}\n"+
 		"  - name: Ops\n    sandbox: {enabled: true, run_in: e2b}\n")
 	reached := cfg.SandboxPlacements()
@@ -86,6 +84,44 @@ func TestAnAmbiguousCatalogueNeedsADefaultOnlyWhereASeatWouldReadIt(t *testing.T
 	cfg = mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    e2b: {api_key: \"${E2B_API_KEY}\"}\n"+silent)
 	if got := cfg.Providers.Sandbox.RunIn(); got != PlacementE2B {
 		t.Fatalf("a remote-only catalogue resolved to %q, want %q", got, PlacementE2B)
+	}
+}
+
+// A CATALOGUE NOTHING REACHES IS REFUSED, and it is the one shape "require a
+// default only where something reads it" must NOT let through.
+//
+// The engine builds a backend only for a cell something reaches, so an
+// ambiguous catalogue with no default and no seat reaches nothing, builds
+// nothing, and registers run_sandbox for nobody. That would merely be inert
+// if it could be repaired later — but the sandbox runtime is built ONCE AT
+// BOOT, so the founder who then adds a sandbox-enabled seat live gets a clean
+// apply and code work that silently never happens for the life of the
+// process. Every catalogue that resolves a default reaches it precisely so a
+// seat added later has somewhere to go.
+func TestACatalogueNothingReachesIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, doc := range []string{
+		"name: Acme\nproviders:\n  sandbox:\n    local: {}\n",
+		"name: Acme\nproviders:\n  sandbox:\n    local: {}\n    e2b: {api_key: k}\n",
+	} {
+		err := rejects(t, doc, "providers.sandbox.default_run_in")
+		if !errors.Is(err, ErrMissing) {
+			t.Fatalf("want ErrMissing, got %v", err)
+		}
+	}
+	// The three ways to reach a cell all satisfy it, or the rule would be
+	// "an ambiguous catalogue is refused" wearing a longer message.
+	for _, tail := range []string{
+		"    default_run_in: direct\n",
+		"roles:\n  - name: SWE\n    sandbox: {enabled: true, run_in: direct}\n",
+		"  llm:\n    sub:\n      type: cli-agent\n      model: sonnet\n" +
+			"      cli: {agent: claude-code, mode: agent, run_in: direct}\n" +
+			"roles:\n  - name: SWE\n    llm: sub\n",
+	} {
+		cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n"+tail)
+		if len(cfg.SandboxPlacements()) == 0 {
+			t.Errorf("nothing reached a cell, so no backend is built:\n%s", tail)
+		}
 	}
 }
 

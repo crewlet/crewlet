@@ -184,7 +184,11 @@ as a seat's would. `self` is not accepted here — it is a *seat's* answer,
 meaning "my code work rides my executor's run", and an agent-mode entry
 **is** that run. Only entries some seat's executor actually resolves to
 are checked and built for; an entry nobody runs on is checked the day a
-seat points at it.
+seat points at it. A seat that names no `llm` resolves the company-wide
+fallback (the entry called `default`, else the first declared), so an
+agent-mode entry can be reached without any seat naming it — but a
+**human seat** never resolves one at all: it is addressable and never
+spawned, so it runs no executor and reaches no entry.
 
 The credential guard that refuses a remote run whose login cannot follow
 it (see [Code Sandbox](code-sandbox.md#failure-modes)) reads **this**
