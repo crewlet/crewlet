@@ -1,8 +1,9 @@
 package config
 
 import (
+	"maps"
 	"reflect"
-	"sort"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/envref"
 )
@@ -32,11 +33,7 @@ func ReferencedNames(payload any) []string {
 			seen[name] = struct{}{}
 		}
 	})
-	out := make([]string, 0, len(seen))
-	for name := range seen {
-		out = append(out, name)
-	}
-	sort.Strings(out)
+	out := slices.Sorted(maps.Keys(seen))
 	return out
 }
 

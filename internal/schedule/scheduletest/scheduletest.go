@@ -727,9 +727,7 @@ var concurrencyCases = []testCase{
 		)
 		start := make(chan struct{})
 		for range claimers {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-start
 				ok, err := h.l.Claim(h.ctx, aRun(aKey()))
 				mu.Lock()
@@ -743,7 +741,7 @@ var concurrencyCases = []testCase{
 				case ok:
 					won++
 				}
-			}()
+			})
 		}
 		close(start)
 		h.await(&wg, "concurrent claims of one identity")
@@ -769,9 +767,7 @@ var concurrencyCases = []testCase{
 		)
 		start := make(chan struct{})
 		for i := range runners {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				key := aKey()
 				key.TargetHandle = fmt.Sprintf("member-%02d", i)
 				<-start
@@ -784,7 +780,7 @@ var concurrencyCases = []testCase{
 				case ok:
 					won++
 				}
-			}()
+			})
 		}
 		close(start)
 		h.await(&wg, "concurrent claims of distinct identities")
@@ -804,9 +800,7 @@ var concurrencyCases = []testCase{
 		// serialisation into a real race here.
 		const rounds = 40
 		var wg sync.WaitGroup
-		wg.Add(3)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := range rounds {
 				key := aKey()
 				key.FireLabel = fmt.Sprintf("20260608T%04d", i)
@@ -814,17 +808,15 @@ var concurrencyCases = []testCase{
 					return
 				}
 			}
-		}()
-		go func() {
-			defer wg.Done()
+		})
+		wg.Go(func() {
 			for range rounds {
 				if _, err := h.l.Recent(h.ctx, 10); err != nil {
 					return
 				}
 			}
-		}()
-		go func() {
-			defer wg.Done()
+		})
+		wg.Go(func() {
 			for range rounds {
 				// A cutoff below every row, so the sweep runs its whole
 				// scan and deletes nothing — the read-write interleaving is
@@ -833,7 +825,7 @@ var concurrencyCases = []testCase{
 					return
 				}
 			}
-		}()
+		})
 		h.await(&wg, "interleaved claims, reads and sweeps")
 
 		if got := len(h.recent(rounds * 2)); got != rounds {

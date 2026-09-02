@@ -50,10 +50,11 @@
 package kv
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -384,6 +385,6 @@ func median(t *testing.T, n int, call func() error) time.Duration {
 		}
 		taken = append(taken, time.Since(start))
 	}
-	sort.Slice(taken, func(i, j int) bool { return taken[i] < taken[j] })
+	slices.SortFunc(taken, func(a, b time.Duration) int { return cmp.Compare(a, b) })
 	return taken[len(taken)/2].Round(10 * time.Microsecond)
 }

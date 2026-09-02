@@ -679,9 +679,7 @@ func TestRotateIsSafeUnderConcurrency(t *testing.T) {
 	p, _ := newTestPool(t, []string{"k0", "k1", "k2"}, Policy{RateLimit: time.Millisecond})
 	var wg sync.WaitGroup
 	for i := range 64 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, _ = Rotate(t.Context(), p, Identity{Provider: "test"},
 				classifier(llm.KindRateLimit, 0),
 				func(key string) (string, error) {
@@ -690,7 +688,7 @@ func TestRotateIsSafeUnderConcurrency(t *testing.T) {
 					}
 					return key, nil
 				})
-		}()
+		})
 	}
 	wg.Wait()
 	for _, s := range p.Stats() {

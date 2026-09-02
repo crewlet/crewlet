@@ -241,6 +241,7 @@ package coordtest
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"reflect"
 	"slices"
 	"sync"
@@ -768,11 +769,7 @@ func (h *harness) requireResources(what string, got []coord.Lease, want ...strin
 
 func (h *harness) requireSet(what string, got map[string]struct{}, want ...string) {
 	h.t.Helper()
-	gotNames := make([]string, 0, len(got))
-	for r := range got {
-		gotNames = append(gotNames, r)
-	}
-	slices.Sort(gotNames)
+	gotNames := slices.Sorted(maps.Keys(got))
 	slices.Sort(want)
 	if !slices.Equal(gotNames, want) {
 		h.t.Fatalf("%s = %v, want %v", what, gotNames, want)

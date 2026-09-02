@@ -304,7 +304,7 @@ type RunRequest struct {
 	// the agent inside the box negotiates its own tool list with the server
 	// and an allowlist the engine could not enforce would be a claim rather
 	// than a control.
-	MCPServers map[string]map[string]any
+	MCPServers map[string]MCPServer
 }
 
 // Run is the inline shape: start, wait, collect.

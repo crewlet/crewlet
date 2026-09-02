@@ -29,10 +29,11 @@
 package fleetsecrets
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -166,7 +167,7 @@ func (s *Store) List(ctx context.Context) ([]secrets.Record, error) {
 			UpdatedBy: row.UpdatedBy, Source: row.Source,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b secrets.Record) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }
 
@@ -240,11 +241,11 @@ func (s *Store) Rekey(ctx context.Context, activeKeyID, by string, now time.Time
 			// partial rekey is a fact an operator has to act on, and
 			// discarding the list would leave them re-running a pass
 			// with no idea which rows already moved.
-			sort.Strings(moved)
+			slices.Sort(moved)
 			return moved, err
 		}
 		moved = append(moved, row.Name)
 	}
-	sort.Strings(moved)
+	slices.Sort(moved)
 	return moved, nil
 }

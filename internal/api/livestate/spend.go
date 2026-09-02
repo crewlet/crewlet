@@ -1,6 +1,7 @@
 package livestate
 
 import (
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -26,7 +27,12 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		}
 		s.countedPhases.put(env.ID, struct{}{})
 	}
-	s.spend = append(s.spend, tokens.Record{
+	// The stamp is PARSED ONCE, here, and carried with the record. The
+	// prune below tests every retained record's age on every spend event,
+	// and re-parsing them — up to three layouts each, twice per pass —
+	// happened inside the projection's write lock, which is the mutex
+	// every /agents request and every websocket snapshot waits on.
+	s.spend = append(s.spend, spendEntry{at: newStamp(env.Timestamp), Record: tokens.Record{
 		EventID:      env.ID,
 		Timestamp:    env.Timestamp,
 		AgentID:      str(payload, "agent_id"),
@@ -40,7 +46,7 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		InputTokens:  num(payload, "input_tokens"),
 		OutputTokens: num(payload, "output_tokens"),
 		TotalTokens:  num(payload, "total_tokens"),
-	})
+	}})
 	s.pruneSpend(env.Timestamp)
 	return true
 }
@@ -62,48 +68,48 @@ func (s *LiveState) pruneSpend(nowISO string) {
 		// than the cap in a day. Truncating the OLDEST is what makes a
 		// rollup past the cap cover slightly less than a window rather
 		// than report a wrong total.
-		s.spend = append(make([]tokens.Record, 0, spendRecordLimit),
+		s.spend = append(make([]spendEntry, 0, spendRecordLimit),
 			s.spend[len(s.spend)-spendRecordLimit:]...)
 	}
 	now := newStamp(nowISO)
 	if !now.valid {
 		return
 	}
-	cutoff := stamp{t: now.t.Add(-LiveSpendWindow), valid: true,
-		raw: now.t.Add(-LiveSpendWindow).Format(time.RFC3339Nano)}
+	// No `raw`: it is only read when a comparison has an INVALID side, and
+	// aged() below tests validity first, so the formatted string was
+	// computed on every prune and never looked at.
+	cutoff := stamp{t: now.t.Add(-LiveSpendWindow), valid: true}
 
 	// A record whose own timestamp is unusable is KEPT, for the reason the
 	// sandbox sweep keeps an undateable entry: it cannot be aged out on
 	// time, and dropping it on that basis would be arbitrary. The count
 	// cap above is what bounds those.
-	aged := func(record tokens.Record) bool {
-		ts := newStamp(record.Timestamp)
-		return ts.valid && ts.before(cutoff)
-	}
-	stale := false
-	for i := range s.spend {
-		if aged(s.spend[i]) {
-			stale = true
-			break
-		}
-	}
-	if !stale {
+	aged := func(e spendEntry) bool { return e.at.valid && e.at.before(cutoff) }
+	if !slices.ContainsFunc(s.spend, aged) {
 		return
 	}
-	kept := make([]tokens.Record, 0, len(s.spend))
-	for _, record := range s.spend {
-		if !aged(record) {
-			kept = append(kept, record)
-		}
-	}
-	s.spend = kept
+	s.spend = slices.DeleteFunc(s.spend, aged)
+}
+
+// spendEntry is one record with its timestamp already parsed.
+//
+// The parse is the point. tokens.Record is the WIRE shape — it carries the
+// stamp as the string the dashboard renders — and this is the projection's
+// own copy, so the parsed instant lives beside it rather than in it.
+type spendEntry struct {
+	tokens.Record
+	at stamp
 }
 
 // SpendRecords returns the records inside the live window.
 func (s *LiveState) SpendRecords() []tokens.Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]tokens.Record(nil), s.spend...)
+	out := make([]tokens.Record, len(s.spend))
+	for i, e := range s.spend {
+		out[i] = e.Record
+	}
+	return out
 }
 
 // LiveSpendWindowDays is the live window expressed the way the dashboard

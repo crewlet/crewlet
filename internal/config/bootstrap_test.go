@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
@@ -232,5 +233,46 @@ func TestNodeProfileCarriesRolesAndLabels(t *testing.T) {
 	}
 	if profile.Labels["zone"] != "eu" {
 		t.Fatalf("labels = %v", profile.Labels)
+	}
+}
+
+// THE SECONDS ACCESSORS ARE THE ONE CONVERSION.
+//
+// Each of these had zero callers while five sites hand-rolled the same
+// `float64(time.Second)` arithmetic — one slip from being off by 10^9, with
+// the compiler accepting both spellings. CLAUDE.md's rule is that a field
+// named ...Seconds is converted once, at the edge.
+func TestTheDurationAccessorsConvertTheirOwnUnits(t *testing.T) {
+	t.Parallel()
+	store := &Store{BusyTimeoutSeconds: 2.5}
+	if got := store.BusyTimeout(); got != 2500*time.Millisecond {
+		t.Errorf("BusyTimeout = %v, want 2.5s", got)
+	}
+	coord := &Coordination{LeaseTTLSeconds: 45}
+	if got := coord.LeaseTTL(); got != 45*time.Second {
+		t.Errorf("LeaseTTL = %v, want 45s", got)
+	}
+	// HOURS, not seconds — the one field here measured differently, and
+	// the reason a shared helper would be wrong.
+	stream := &Stream{EventRetentionHours: 30 * 24}
+	if got := stream.EventRetention(); got != 30*24*time.Hour {
+		t.Errorf("EventRetention = %v, want 720h", got)
+	}
+}
+
+// Zero passes straight through, because zero is what every caller reads as
+// "take the default" — and the accessor deliberately does not apply it: the
+// defaults live with the subsystems that own them, which config must not
+// import.
+func TestAZeroDurationAccessorStaysZero(t *testing.T) {
+	t.Parallel()
+	if got := (&Store{}).BusyTimeout(); got != 0 {
+		t.Errorf("BusyTimeout = %v, want 0", got)
+	}
+	if got := (&Coordination{}).LeaseTTL(); got != 0 {
+		t.Errorf("LeaseTTL = %v, want 0", got)
+	}
+	if got := (&Stream{}).EventRetention(); got != 0 {
+		t.Errorf("EventRetention = %v, want 0", got)
 	}
 }

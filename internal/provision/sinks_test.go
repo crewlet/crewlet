@@ -78,7 +78,7 @@ func readEnvFile(t *testing.T, path string) map[string]string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	out := map[string]string{}
-	for _, line := range strings.Split(string(body), "\n") {
+	for line := range strings.SplitSeq(string(body), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "#") {
 			continue
 		}
@@ -325,7 +325,7 @@ func TestSourcingARolledBackPrintStreamUnsetsEverything(t *testing.T) {
 	// Replay the stream the way a shell would: an `export` sets, an
 	// `unset` clears, and a comment does nothing at all.
 	env := map[string]string{}
-	for _, line := range strings.Split(out.String(), "\n") {
+	for line := range strings.SplitSeq(out.String(), "\n") {
 		line = strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(line, "export "):

@@ -35,18 +35,8 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	tail := fs.Args()
-	for companyPath == "" || directory == "" {
-		if len(tail) == 0 {
-			break
-		}
-		if companyPath == "" {
-			companyPath, tail = tail[0], tail[1:]
-			continue
-		}
-		directory, tail = tail[0], tail[1:]
-	}
-	if companyPath == "" || directory == "" || len(tail) > 0 {
+	companyPath, directory, given := twoPositionals(fs, companyPath, directory)
+	if given != 2 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet confluence import <company.yaml> <directory> "+
 				"[-space KEY] [-prune] [-dry-run]")
@@ -175,11 +165,8 @@ func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	tail := fs.Args()
-	if companyPath == "" && len(tail) == 1 {
-		companyPath, tail = tail[0], nil
-	}
-	if companyPath == "" || len(tail) > 0 {
+	companyPath, given := onePositional(fs, companyPath)
+	if given != 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet confluence resync <company.yaml> [-space KEY]")
 		return errors.New("name exactly one company document")

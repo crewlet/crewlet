@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // PersistDecider is the post-turn classifier that decides what, if anything,
@@ -653,21 +654,19 @@ func coerceTTLDays(v any) int {
 	return min(days, shortTTLMaxDays)
 }
 
-// extractJSONObject reads the classifier's object out of a response.
+// extractJSONObject reads a model's object out of a response.
 //
-// The whole response first, then the span from the first { to the last }.
-// The prompt forbids prose around the JSON and models emit it anyway — a
-// leading "Here's the classification:" is not a reason to lose a correctly
-// classified fact.
+// Down [modelJSONCandidates], which is the one recovery ladder this package
+// has: the prompt forbids prose around the JSON and models emit it anyway — a
+// leading "Here's the classification:" or a code fence is not a reason to lose
+// a correctly classified fact.
 func extractJSONObject(text string) (map[string]any, bool) {
-	if obj, ok := decodeObject(text); ok {
-		return obj, true
+	for _, candidate := range modelJSONCandidates(text) {
+		if obj, ok := decodeObject(candidate); ok {
+			return obj, true
+		}
 	}
-	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
-	if start < 0 || end <= start {
-		return nil, false
-	}
-	return decodeObject(text[start : end+1])
+	return nil, false
 }
 
 func decodeObject(candidate string) (map[string]any, bool) {
@@ -711,13 +710,11 @@ func orElse(s, fallback string) string {
 	return s
 }
 
-// preview truncates for a log line or a prompt, counting RUNES rather than
-// bytes: a byte slice through a multi-byte character produces invalid UTF-8,
-// which a JSON encoder then replaces or refuses.
-func preview(s string, limit int) string {
-	r := []rune(s)
-	if len(r) <= limit {
-		return s
-	}
-	return string(r[:limit]) + "..."
-}
+// preview shortens a model's answer for a log line.
+//
+// BYTES, through [textcut.Ellipsis], which is the unit a log field wants — and
+// it walks back to a rune boundary rather than materialising the whole string
+// as runes to cut it, which is what this did when it counted them. Every
+// caller is a diagnostic preview of a model response, so nothing here depends
+// on an exact character count.
+func preview(s string, limit int) string { return textcut.Ellipsis(s, limit) }

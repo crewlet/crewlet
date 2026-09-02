@@ -1,9 +1,9 @@
 package webhooks
 
 import (
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"strconv"
 )
@@ -29,24 +29,13 @@ import (
 const MaxBodyBytes = 25 << 20
 
 // errBodyTooLarge is what a body over the cap surfaces as.
-var errBodyTooLarge = errors.New("webhooks: body over the limit")
+var errBodyTooLarge = httpjson.ErrTooLarge
 
-// readBody reads at most MaxBodyBytes.
-//
-// It reads the WHOLE body even when the request will be refused. An HTTP
-// server that answers without draining leaves unread bytes in the socket, and
-// the provider sees a connection reset instead of the status it was sent —
-// which for a 401 means "retry forever" rather than "your signature is wrong".
+// readBody reads at most MaxBodyBytes. The draining rule it relies on — an
+// answer without a drained body reaches the provider as a connection reset
+// rather than the status it was sent — lives with [httpjson.ReadBody].
 func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBodyBytes))
-	if err == nil {
-		return raw, nil
-	}
-	var overflow *http.MaxBytesError
-	if errors.As(err, &overflow) {
-		return nil, errBodyTooLarge
-	}
-	return nil, err
+	return httpjson.ReadBody(w, r, MaxBodyBytes)
 }
 
 // parseObject decodes a webhook body, accepting only a JSON object.

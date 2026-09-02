@@ -3,6 +3,7 @@ package prefetch_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,6 +81,11 @@ type diary struct {
 	hits   []learning.DiaryHit
 	recent []learning.DiaryEntry
 	err    error
+
+	// marked collects the ids handed to MarkRetrieved. A POINTER because
+	// the fake is used as a value in struct literals throughout, so a
+	// plain slice field would record into a copy the test cannot see.
+	marked *retrievalLog
 }
 
 func (d diary) Recall(context.Context, string, learning.RecallQuery, time.Time) ([]learning.DiaryHit, error) {
@@ -88,6 +94,40 @@ func (d diary) Recall(context.Context, string, learning.RecallQuery, time.Time) 
 
 func (d diary) Recent(context.Context, string, time.Time, int) ([]learning.DiaryEntry, error) {
 	return d.recent, d.err
+}
+
+// MarkRetrieved honours ctx, like the real one: store.ExecContext refuses a
+// dead context, so a fake that recorded regardless would make the detach
+// untestable — the mark would "land" whether or not it was detached.
+func (d diary) MarkRetrieved(ctx context.Context, ids []string, at time.Time) {
+	if d.marked == nil || ctx.Err() != nil {
+		return
+	}
+	d.marked.record(ids, at)
+}
+
+// retrievalLog is what the fake diary saw marked, across goroutines: the
+// mark is a DETACHED write, so it does not run on the caller's goroutine
+// ordering and a plain slice would be a race under -race.
+type retrievalLog struct {
+	mu   sync.Mutex
+	ids  []string
+	at   time.Time
+	call int
+}
+
+func (l *retrievalLog) record(ids []string, at time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ids = append(l.ids, ids...)
+	l.at = at
+	l.call++
+}
+
+func (l *retrievalLog) seen() ([]string, int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.ids), l.call
 }
 
 type episodes struct {
@@ -834,7 +874,7 @@ func TestEverySynthesizedSkillReachesTheMenu(t *testing.T) {
 	}
 	// Every rendered line is a WHOLE bullet: entries are dropped or kept,
 	// never cut in half.
-	for _, line := range strings.Split(got, "\n") {
+	for line := range strings.SplitSeq(got, "\n") {
 		if strings.HasPrefix(line, "- ") && !strings.Contains(line, "**") {
 			t.Fatalf("a bullet was cut mid-render: %q", line)
 		}
@@ -862,3 +902,69 @@ func (nilProvider) Complete(context.Context, llm.Request) (*llm.Completion, erro
 }
 
 func (nilProvider) Model() string { return "nil-provider" }
+
+// WHAT THE FILTER PICKED IS A USE, and it is recorded.
+//
+// The trim that bounds a seat's durable memory orders by retrieval count
+// first, so an unmarked recall makes it evict the OLDEST entries — exactly
+// what a cap on worth rather than age exists to avoid. Nothing marked a
+// retrieval before this, so retrieval_count was permanently zero in every
+// deployment and the ordering was decorative.
+func TestTheMemoriesTheFilterPickedAreMarkedRetrieved(t *testing.T) {
+	t.Parallel()
+	log := &retrievalLog{}
+	picked := memory("m1", "the release train is Thursdays")
+	passedOver := memory("m2", "the old redirect rule was retired in March")
+
+	got := fetch(t, prefetch.Sources{
+		Diary:  diary{recent: []learning.DiaryEntry{picked, passedOver}, marked: log},
+		Models: models{provider: &aux{answers: []string{"[0]"}}},
+	}, request(t)).PersonalMemory
+
+	if !strings.Contains(got, "release train") {
+		t.Fatalf("the filter's pick never reached the block:\n%s", got)
+	}
+	ids, calls := log.seen()
+	if calls == 0 {
+		t.Fatal("the recall marked nothing: the trim will evict by age instead of by use")
+	}
+	if !slices.Contains(ids, "m1") {
+		t.Errorf("marked %v, want the entry the filter picked", ids)
+	}
+	// A CANDIDATE IS NOT A USE. The pool is similarity union recency, so
+	// counting candidates would move the counter for every entry a seat
+	// owns on every turn and make the ordering meaningless the other way.
+	if slices.Contains(ids, "m2") {
+		t.Errorf("marked %v, which includes a candidate the filter passed over", ids)
+	}
+}
+
+// AND THE MARK OUTLIVES THE TURN'S CONTEXT.
+//
+// The write happens after the seat already had the benefit of the recall,
+// and a turn's context is routinely cancelled the moment its phase ends.
+// Inheriting that cancellation would drop the count on exactly the turns
+// that ran longest.
+func TestARecallIsMarkedEvenWhenTheTurnsContextIsDone(t *testing.T) {
+	t.Parallel()
+	log := &retrievalLog{}
+	ctx, cancel := context.WithCancel(t.Context())
+	src := prefetch.Sources{
+		Diary:  diary{recent: []learning.DiaryEntry{memory("m1", "a memory")}, marked: log},
+		Models: models{provider: &aux{answers: []string{"[0]"}}},
+	}
+	// Cancelled between the fetch's reads and the mark is not something a
+	// test can time; cancelling before proves the stronger property, since
+	// the mark must still land on an already-dead context.
+	cancel()
+	prefetch.New(src).Fetch(ctx, request(t))
+
+	ids, calls := log.seen()
+	if calls == 0 {
+		t.Fatal("the mark inherited the turn's cancellation, so a recall on a " +
+			"turn that is already finishing never moves the counter")
+	}
+	if !slices.Contains(ids, "m1") {
+		t.Errorf("marked %v, want the entry the filter picked", ids)
+	}
+}

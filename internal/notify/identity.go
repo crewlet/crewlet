@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"slices"
@@ -331,10 +332,10 @@ func (r *Registry) heldBy(key identityKey) string {
 }
 
 func compareIdentityKey(a, b identityKey) int {
-	if c := strings.Compare(a.namespace, b.namespace); c != 0 {
-		return c
-	}
-	return strings.Compare(a.externalID, b.externalID)
+	return cmp.Or(
+		cmp.Compare(a.namespace, b.namespace),
+		cmp.Compare(a.externalID, b.externalID),
+	)
 }
 
 func orgLabel(name string) string {

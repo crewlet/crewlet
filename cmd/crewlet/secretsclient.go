@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -102,7 +103,7 @@ func newSecretsClient(boot *config.Bootstrap, override string) (*secretsClient, 
 	return &secretsClient{
 		base:  strings.TrimRight(parsed.String(), "/"),
 		token: token,
-		http:  &http.Client{Timeout: apiTimeout},
+		http:  httpx.Client(apiTimeout),
 	}, nil
 }
 

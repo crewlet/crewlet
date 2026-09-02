@@ -75,10 +75,15 @@ linters:
       #              that proves a misspelled frontmatter key is refused.
       #   enginer  — a fuzzy-match test input; spelling it correctly would
       #              stop testing the fuzzy match.
+      #   alwyas   — the typo in a doc comment ABOUT typos, and the fixture
+      #              that proves `typing_status: alwyas` is refused rather
+      #              than silently degraded. Correcting it would assert the
+      #              validator against a value that was never wrong.
       ignore-rules:
         - noteable
         - requred
         - enginer
+        - alwyas
     revive:
       rules:
         - name: exported

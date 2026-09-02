@@ -71,11 +71,37 @@ func Secrets(text string) string {
 		return text
 	}
 	for _, r := range rules {
-		text = r.pattern.ReplaceAllString(text, r.with)
+		// MATCH BEFORE REPLACING, because ReplaceAllString allocates even
+		// when it changes nothing: with no match it still copies the
+		// whole input into a fresh buffer and then converts that buffer
+		// to a string. Eleven rules over a clean transcript is therefore
+		// twenty-two full copies of it — and a clean transcript is the
+		// overwhelming case, since this runs on every sandbox result and
+		// every coding-run transcript whether or not a credential is
+		// in it.
+		// MatchString allocates nothing.
+		if r.pattern.MatchString(text) {
+			text = r.pattern.ReplaceAllString(text, r.with)
+		}
 	}
 	return text
 }
 
 // Contains reports whether text still holds something this pass would replace.
 // For assertions and for a caller that must refuse rather than sanitise.
-func Contains(text string) bool { return Secrets(text) != text }
+//
+// Asked of the RULES rather than by redacting and comparing. The old form
+// built the entire redacted string to throw it away, which is the whole cost
+// of the pass paid for an answer that is one bit — and it stopped at the first
+// rule only by accident of there being nothing to stop.
+func Contains(text string) bool {
+	if text == "" {
+		return false
+	}
+	for _, r := range rules {
+		if r.pattern.MatchString(text) {
+			return true
+		}
+	}
+	return false
+}

@@ -31,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -162,7 +163,13 @@ type Engine struct {
 	// env is this node's ${VAR} resolver: the secret store in front of the
 	// process environment, refreshed on every apply. One per node rather
 	// than one per call site — see secrets.go for why that matters.
-	env atomic.Pointer[*config.Resolver]
+	//
+	// Pointer[Resolver], not Pointer[*Resolver]. The doubled indirection
+	// bought a second nilable level with no meaning of its own — a stored
+	// non-nil pointer to a nil resolver read the same as nothing stored —
+	// so every reader had to check both, and one that checked only the
+	// outer would have dereferenced nil.
+	env atomic.Pointer[config.Resolver]
 
 	// cipher is the keyring this node seals and opens secret rows with,
 	// nil on a node that has none. Held rather than rebuilt because ONE
@@ -208,8 +215,21 @@ type Engine struct {
 	// per-role children. Separate from the shared bridge above because a
 	// bridge's catalogue is keyed by tool name across its servers, and two
 	// seats' children of one template publish the same names.
-	mcpMu   sync.Mutex
-	seatMCP map[string]*mcp.Bridge
+	//
+	// seatTools is that seat's registry — the epoch's surface cloned, with
+	// the bridge's catalogue filed into it. It lives HERE, beside the
+	// bridge whose lifetime it shares, rather than on the [Company]: both
+	// are per-SEAT-LEASE, and a [Company] is per-EPOCH. Held on the epoch
+	// it was silently dropped by every apply, because an apply publishes a
+	// new [Company] and nothing carried the map across — so every seat
+	// this node already held fell back to the shared surface and lost its
+	// entire per-role tool set, permanently, until the seat was released
+	// and re-claimed. Both maps are guarded by mcpMu because they must
+	// never disagree: a registry naming tools of a bridge that is gone
+	// offers the model entries that can only fail.
+	mcpMu     sync.Mutex
+	seatMCP   map[string]*mcp.Bridge
+	seatTools map[string]*tools.Registry
 
 	// embeddings is the company's vector backend, swapped on apply. An
 	// atomic pointer rather than a mutex because it is read on the Plan
@@ -638,6 +658,12 @@ func (e *Engine) Stop(ctx context.Context) {
 	// releases to the flush alone, which is the bounded path rather than
 	// the whole one.
 	e.stopMemorySync()
+	// BEFORE backends.Close below, which closes the store the four passes
+	// query. They tick on a detached context on purpose — like the node's
+	// loops, they must not stop at SIGTERM — so nothing else ends them,
+	// and a tick landing after the close would run compaction queries and
+	// paid summarisation against a closed database.
+	e.stopLearning()
 	e.stopScheduler()
 	e.stopCooldownRefresh()
 	e.node.Stop(ctx)
@@ -785,7 +811,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	tel.skills = blocks.SkillIDs
 	fetcher := e.prefetcher(company)
 
-	r, err := company.RunnerFor(req.Handle, RunnerInput{
+	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
 		Context: blocks,
 		Skills:  e.skills,

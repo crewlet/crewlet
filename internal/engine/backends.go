@@ -214,7 +214,7 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company) (
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
 	opts := store.Options{
 		MaxOpenConns: b.Store.MaxOpenConns,
-		BusyTimeout:  time.Duration(b.Store.BusyTimeoutSeconds * float64(time.Second)),
+		BusyTimeout:  b.Store.BusyTimeout(),
 	}
 	// Nil embeddings means no vector recall is configured, which the store
 	// reads as width 0 — writes carrying a vector are refused, everything
@@ -268,8 +268,11 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		Token:       b.Stream.Token,
 		TLS:         streamTLS(b.Stream.TLS),
 	}
+	// Through the accessor, so the seconds-to-duration conversion happens
+	// once at the edge rather than being re-derived here — one slip from
+	// being off by 10^9, with the compiler accepting both.
 	if b.Stream.EventRetentionHours > 0 {
-		cfg.EventRetention = time.Duration(b.Stream.EventRetentionHours * float64(time.Hour))
+		cfg.EventRetention = b.Stream.EventRetention()
 	}
 	out, conn, err := openStream(ctx, b, cfg)
 	if err != nil {
@@ -427,8 +430,11 @@ func streamTLS(t config.NATSTLS) jetstream.TLS {
 // nodes' seats on ordinary jitter, and each spurious handoff costs a real MCP
 // respawn; longer is time a dead node's seats sit dark.
 func leaseTTL(b *config.Bootstrap) time.Duration {
+	// The ZERO-MEANS-DEFAULT policy stays here rather than moving onto the
+	// accessor: seat.SeatLeaseTTL is the seat package's constant, and
+	// config must not import it. Only the arithmetic moves.
 	if b.Coordination.LeaseTTLSeconds <= 0 {
 		return seat.SeatLeaseTTL
 	}
-	return time.Duration(b.Coordination.LeaseTTLSeconds * float64(time.Second))
+	return b.Coordination.LeaseTTL()
 }

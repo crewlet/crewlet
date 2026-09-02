@@ -89,7 +89,7 @@ func EncodeSkillPage(frontmatter, body string) string {
 	b.WriteString(`<ac:plain-text-body><![CDATA[`)
 	b.WriteString(strings.TrimSpace(frontmatter))
 	b.WriteString(`]]></ac:plain-text-body></ac:structured-macro>`)
-	for _, paragraph := range strings.Split(strings.TrimSpace(body), "\n\n") {
+	for paragraph := range strings.SplitSeq(strings.TrimSpace(body), "\n\n") {
 		if paragraph = strings.TrimSpace(paragraph); paragraph != "" {
 			b.WriteString("<p>" + html.EscapeString(paragraph) + "</p>")
 		}

@@ -56,9 +56,7 @@ func TestConcurrentStartsDoNotCorruptTheLibraryCache(t *testing.T) {
 	var wg sync.WaitGroup
 	failures := make([]string, starts)
 	for i := range starts {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			cmd := exec.Command(os.Args[0], //nolint:gosec // os.Args[0] is this test binary
 				"-test.run=^TestTursoLibraryPreparedByAChildProcess$", "-test.count=1")
 			cmd.Env = append(os.Environ(),
@@ -66,7 +64,7 @@ func TestConcurrentStartsDoNotCorruptTheLibraryCache(t *testing.T) {
 			if out, err := cmd.CombinedOutput(); err != nil {
 				failures[i] = err.Error() + ": " + string(out)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	for i, failure := range failures {

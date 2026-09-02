@@ -1,10 +1,10 @@
 package queries
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -145,7 +145,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	var routed []string
 	known := s.Routed != nil
 	if known {
-		routed = s.Routed()
+		routed = s.Routed(ctx)
 		known = routed != nil
 	}
 	// The same shape for what could VERIFY a delivery, and read the same
@@ -153,7 +153,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	var verifiable []string
 	verifiableKnown := s.Verifiable != nil
 	if verifiableKnown {
-		verifiable = s.Verifiable()
+		verifiable = s.Verifiable(ctx)
 		verifiableKnown = verifiable != nil
 	}
 
@@ -254,8 +254,8 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// whole configuration and there is no separate credential.
 		add("forge", true, nil, map[string]any{"app_id": in.ForgeAppID})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i]["key"].(string) < out[j]["key"].(string)
+	slices.SortFunc(out, func(a, b map[string]any) int {
+		return cmp.Compare(a["key"].(string), b["key"].(string))
 	})
 	body := map[string]any{
 		"integrations": out,
@@ -425,7 +425,7 @@ func seatsFor(company *config.Company, kind string) []string {
 			out = append(out, r.Name)
 		}
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

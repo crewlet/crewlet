@@ -17,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 )
@@ -44,14 +45,7 @@ const (
 var Formats = []Format{FormatConsole, FormatText, FormatJSON}
 
 // Valid reports whether f is a format this build can install.
-func (f Format) Valid() bool {
-	for _, known := range Formats {
-		if f == known {
-			return true
-		}
-	}
-	return false
-}
+func (f Format) Valid() bool { return slices.Contains(Formats, f) }
 
 // Level is a log level as an OPERATOR writes it — the spelling that appears
 // in a config file, a flag or an environment variable.
@@ -79,14 +73,7 @@ var Levels = []Level{LevelDebug, LevelInfo, LevelWarn, LevelError}
 // the set a config file is checked against and a schema offers, and two
 // spellings of one level in an editor's completion list is a choice nobody
 // benefits from making.
-func (l Level) Valid() bool {
-	for _, known := range Levels {
-		if l == known {
-			return true
-		}
-	}
-	return false
-}
+func (l Level) Valid() bool { return slices.Contains(Levels, l) }
 
 // Slog maps the operator's spelling onto the level the handler compares
 // against, via [ParseLevel] — so an unset value is info.

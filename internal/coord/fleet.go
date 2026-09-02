@@ -1,11 +1,13 @@
 package coord
 
 import (
+	"cmp"
 	"context"
 	"errors"
-	"sort"
+	"slices"
 	"time"
-	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The FLEET-SHARED state, beyond ownership.
@@ -345,14 +347,7 @@ const MaxApplyErrorLength = 2000
 // path or an accented message reached the fleet view garbled rather than
 // merely shortened.
 func TruncateApplyError(detail string) string {
-	if len(detail) <= MaxApplyErrorLength {
-		return detail
-	}
-	cut := MaxApplyErrorLength
-	for cut > 0 && !utf8.RuneStart(detail[cut]) {
-		cut--
-	}
-	return detail[:cut] + "…"
+	return textcut.Ellipsis(detail, MaxApplyErrorLength)
 }
 
 // NodeApply is one node's last word about an epoch.
@@ -754,14 +749,15 @@ type Fleet interface {
 // company's own counter in the middle of its seats — and a listing whose order
 // differed between backends would make a diff of two captures unreadable.
 func SortUsage(rows []Usage) {
-	sort.Slice(rows, func(i, j int) bool {
-		switch {
-		case rows[i].Scope == OrgScope:
-			return rows[j].Scope != OrgScope
-		case rows[j].Scope == OrgScope:
-			return false
-		default:
-			return rows[i].Scope < rows[j].Scope
+	// The org counter ranks 0 and everything else 1, so cmp.Or falls
+	// through to the alphabetical compare only among the seats.
+	rank := func(u Usage) int {
+		if u.Scope == OrgScope {
+			return 0
 		}
+		return 1
+	}
+	slices.SortFunc(rows, func(a, b Usage) int {
+		return cmp.Or(cmp.Compare(rank(a), rank(b)), cmp.Compare(a.Scope, b.Scope))
 	})
 }

@@ -264,7 +264,7 @@ func (o *Onboarding) Mark(ctx context.Context, m Marker, at time.Time) error {
 // DEFERRED, both claimants take their snapshot before either writes, and the
 // second commit is refused rather than silently overwriting the first
 // (measured, TestWhyTheClaimIsOneStatement: turso answers "database snapshot
-// is stale", modernc.org/sqlite "database is locked (517)"). But the loser
+// is stale"). But the loser
 // learns it lost through an ERROR, and an error is the one thing this package
 // keeps distinct from a definite answer. Both shapes skip the pass, so the
 // difference never surfaces as a duplicate onboarding; it surfaces as a store

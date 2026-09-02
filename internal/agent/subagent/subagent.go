@@ -650,9 +650,7 @@ func SpawnBatch(ctx context.Context, cfg Config, req BatchRequest) ([]Result, er
 	sem := make(chan struct{}, cfg.Limits.MaxParallel)
 	var wg sync.WaitGroup
 	for i, task := range req.Tasks {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			select {
 			case sem <- struct{}{}:
 				defer func() { <-sem }()
@@ -682,7 +680,7 @@ func SpawnBatch(ctx context.Context, cfg Config, req BatchRequest) ([]Result, er
 				ToolNames:    req.ToolNames,
 				MaxTurns:     task.MaxTurns,
 			})
-		}()
+		})
 	}
 
 	// WAIT for every child, deadline or not.

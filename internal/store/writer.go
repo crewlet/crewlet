@@ -85,7 +85,7 @@ func RecordFor(ev *events.Event) (EventRecord, bool, error) {
 		SpanID:       ev.SpanID,
 		ParentSpanID: ev.ParentSpanID,
 		Tags:         extractTags(payload),
-		Spend:        extractSpend(ev.Type, payload),
+		Spend:        SpendFor(ev.Type, payload),
 		Payload:      payload,
 	}, true, nil
 }
@@ -97,7 +97,7 @@ func RecordFor(ev *events.Event) (EventRecord, bool, error) {
 // rollup that counted them would be counting calls that never happened.
 const spendEventType = "agent_phase_completed"
 
-// extractSpend pulls one LLM call's cost out of a phase completion.
+// SpendFor pulls one LLM call's cost out of a phase completion.
 //
 // Read from the event's serialized form for the same reason [extractTags] is:
 // an event type this build has never heard of still arrives with its fields
@@ -107,32 +107,42 @@ const spendEventType = "agent_phase_completed"
 //
 // Nil for every other event, which is what leaves the promoted columns at
 // their defaults — see schema/0015 for why they are columns.
-func extractSpend(eventType string, payload []byte) *Spend {
+// It reads the SHALLOW form, like [extractTags] fifty lines below and unlike
+// the version this replaces: nine scalars are wanted, and decoding into
+// map[string]any deep-decoded the engine's largest payload — a phase
+// completion carries the phase's whole prompt and tool log — on the
+// publishing goroutine of every LLM call. map[string]json.RawMessage leaves
+// everything it is not asked for as bytes.
+//
+// A struct decode would be shorter and is wrong here for the reason the
+// per-field accessors exist: it fails the whole call on one wrong-typed
+// field, where these zero only the offender.
+func SpendFor(eventType string, payload []byte) *Spend {
 	if eventType != spendEventType {
 		return nil
 	}
-	var body map[string]any
+	var body map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &body); err != nil {
 		// The call happened, and dropping it because its payload would
 		// not decode understates the spend this exists to report.
 		return &Spend{}
 	}
 	spend := &Spend{
-		Phase:        payloadString(body, "phase"),
-		HostPhase:    payloadString(body, "host_phase"),
-		Worker:       payloadString(body, "worker"),
-		Model:        payloadString(body, "model"),
-		TurnID:       payloadString(body, "turn_id"),
-		Iteration:    payloadInt(body, "iteration"),
-		InputTokens:  payloadInt(body, "input_tokens"),
-		OutputTokens: payloadInt(body, "output_tokens"),
-		TotalTokens:  payloadInt(body, "total_tokens"),
+		Phase:        jsonString(body["phase"]),
+		HostPhase:    jsonString(body["host_phase"]),
+		Worker:       jsonString(body["worker"]),
+		Model:        jsonString(body["model"]),
+		TurnID:       jsonString(body["turn_id"]),
+		Iteration:    jsonInt(body["iteration"]),
+		InputTokens:  jsonInt(body["input_tokens"]),
+		OutputTokens: jsonInt(body["output_tokens"]),
+		TotalTokens:  jsonInt(body["total_tokens"]),
 	}
 	if spend.Model == "" {
 		// An entry that names no model is identified by the provider
 		// slot it ran on. The backfill in schema/0015 does the same, so
 		// history and new rows agree on what "model" means.
-		spend.Model = payloadString(body, "provider_key")
+		spend.Model = jsonString(body["provider_key"])
 	}
 	return spend
 }
@@ -200,6 +210,25 @@ func extractTags(payload []byte) map[string]string {
 // jsonString reads a JSON value as a string, yielding "" for anything that is
 // not one — including absent, null, and a number that happens to sit in a
 // field a tag names.
+// jsonInt reads a number out of a raw JSON field.
+//
+// json.Number rather than float64, so a token count past 2^53 is not silently
+// rounded on its way into a column an operator bills from.
+func jsonInt(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return 0
+	}
+	v, err := n.Int64()
+	if err != nil {
+		return 0
+	}
+	return int(v)
+}
+
 func jsonString(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""

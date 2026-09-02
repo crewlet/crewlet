@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // envd: the agent inside the box.
@@ -68,13 +70,19 @@ const e2bStreamIdleTimeout = 10 * time.Minute
 // that returned an error while the connection stayed open would leak the
 // round-trip: the transport keeps the connection, and envd keeps the process.
 type idleReader struct {
-	inner  io.Reader
-	timer  *time.Timer
+	inner io.Reader
+	timer *time.Timer
+
+	// idle is HELD, because the reset on progress needs the same value the
+	// first arming used. Reading the package constant there instead made
+	// the parameter a lie: a caller passing anything else got its budget
+	// once and ten minutes on every read after it.
+	idle   time.Duration
 	cancel context.CancelFunc
 }
 
 func newIdleReader(body io.Reader, cancel context.CancelFunc, idle time.Duration) *idleReader {
-	r := &idleReader{inner: body, cancel: cancel}
+	r := &idleReader{inner: body, idle: idle, cancel: cancel}
 	r.timer = time.AfterFunc(idle, cancel)
 	return r
 }
@@ -85,7 +93,7 @@ func (r *idleReader) Read(p []byte) (int, error) {
 		// RESET ON PROGRESS, not on entry: a read that blocked for nine
 		// minutes and then delivered a byte is a live command, and one
 		// that never delivers anything is what this exists to stop.
-		r.timer.Reset(e2bStreamIdleTimeout)
+		r.timer.Reset(r.idle)
 	}
 	return n, err
 }
@@ -115,10 +123,16 @@ type envdClient struct {
 
 // newEnvdClient derives envd's client from the caller's, keeping its
 // transport and dropping its deadline.
+//
+// The transport falls back to [httpx.Transport] rather than to nil, which
+// would be http.DefaultTransport and its two idle connections per host —
+// the one thing every other client here was moved off.
 func newEnvdClient(host string, from *http.Client) *envdClient {
-	client := &http.Client{}
+	client := &http.Client{Transport: httpx.Transport()}
 	if from != nil {
-		client.Transport = from.Transport
+		if from.Transport != nil {
+			client.Transport = from.Transport
+		}
 		client.CheckRedirect = from.CheckRedirect
 		client.Jar = from.Jar
 	}

@@ -1,12 +1,12 @@
 package memory
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
-	"sort"
 	"sync"
 	"time"
 
@@ -282,11 +282,10 @@ func (f *Fleet) Fleet(context.Context) ([]coord.NodeApply, error) {
 	}
 	// Freshest first, and the node id breaks a tie, so two nodes that
 	// reported in the same millisecond order the same way on every read.
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
-			return out[i].UpdatedAt.After(out[j].UpdatedAt)
-		}
-		return out[i].NodeID < out[j].NodeID
+	slices.SortFunc(out, func(a, b coord.NodeApply) int {
+		// NEWEST FIRST, so the negated compare; the node id breaks a tie
+		// ascending so one instant's statuses have a stable order.
+		return cmp.Or(b.UpdatedAt.Compare(a.UpdatedAt), cmp.Compare(a.NodeID, b.NodeID))
 	})
 	return out, nil
 }
@@ -616,7 +615,7 @@ func (f *Fleet) SecretValues(_ context.Context) ([]coord.SecretRecord, error) {
 	for _, rec := range f.secrets {
 		out = append(out, rec)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b coord.SecretRecord) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }
 

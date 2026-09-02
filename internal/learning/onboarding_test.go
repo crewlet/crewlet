@@ -371,9 +371,7 @@ func TestExactlyOneClaimantWins(t *testing.T) {
 	)
 	gate.Add(1)
 	for range claimants {
-		done.Add(1)
-		go func() {
-			defer done.Done()
+		done.Go(func() {
 			gate.Wait()
 			// Every claimant passes the SAME now, so nobody can win by
 			// arriving after the lease it is racing has expired.
@@ -386,7 +384,7 @@ func TestExactlyOneClaimantWins(t *testing.T) {
 			if p.Held() {
 				held = append(held, p)
 			}
-		}()
+		})
 	}
 	gate.Done()
 	done.Wait()
@@ -426,9 +424,7 @@ func TestTwoIndependentHandlesStillProduceOneWinner(t *testing.T) {
 	gate.Add(1)
 	for _, db := range []*store.DB{a, b, a, b} {
 		o := onboardingOn(t, db)
-		done.Add(1)
-		go func() {
-			defer done.Done()
+		done.Go(func() {
 			gate.Wait()
 			p, err := o.Claim(t.Context(), "seat-1", base, 15*time.Minute)
 			mu.Lock()
@@ -439,7 +435,7 @@ func TestTwoIndependentHandlesStillProduceOneWinner(t *testing.T) {
 			if p.Held() {
 				held = append(held, p)
 			}
-		}()
+		})
 	}
 	gate.Done()
 	done.Wait()
@@ -684,10 +680,10 @@ func TestWhyTheClaimIsOneStatement(t *testing.T) {
 	t.Parallel()
 	// The measurement behind Claim's single conditional upsert. store.Tx
 	// begins DEFERRED, so two claimants doing read-then-write both take
-	// their snapshot before either writes. What the drivers do next is safe
+	// their snapshot before either writes. What the driver does next is safe
 	// but unusable: one commits and the other is REFUSED — turso with
-	// "database snapshot is stale", modernc.org/sqlite with "database is
-	// locked (517)". The loser therefore learns it lost through an error,
+	// "database snapshot is stale". The loser therefore learns it lost
+	// through an error,
 	// indistinguishable from the store being down, which is the distinction
 	// Onboarded and Claim exist to keep. The upsert form gives that loser a
 	// definite answer instead.
@@ -706,9 +702,7 @@ func TestWhyTheClaimIsOneStatement(t *testing.T) {
 	)
 	read.Add(2)
 	for i := range 2 {
-		done.Add(1)
-		go func() {
-			defer done.Done()
+		done.Go(func() {
 			err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 				var lease sql.NullInt64
 				if err := tx.QueryRowContext(t.Context(),
@@ -731,7 +725,7 @@ func TestWhyTheClaimIsOneStatement(t *testing.T) {
 			mu.Lock()
 			outcome = append(outcome, err)
 			mu.Unlock()
-		}()
+		})
 	}
 	done.Wait()
 

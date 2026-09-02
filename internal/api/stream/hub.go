@@ -11,6 +11,8 @@ package stream
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -18,6 +20,20 @@ import (
 )
 
 var log = logging.Get("api.stream")
+
+// writeTimeout bounds ONE frame written to a client.
+//
+// A TCP peer that vanishes without a FIN — a closed laptop, a dropped NAT
+// entry, a mobile handoff — leaves a Write blocked until the kernel gives up,
+// which is minutes with default keepalives. Until then the socket's goroutine,
+// its queue and its hub registration stay live, so a page nobody is reading
+// holds a slot on every broadcast.
+//
+// THIRTY SECONDS, and it is deliberately generous: [QueueDepth] below decides
+// that a slow tab must not be disconnected, so this exists to tell GONE from
+// SLOW and nothing else. A tighter deadline would sever a mobile tab
+// mid-snapshot and contradict that decision.
+const writeTimeout = 30 * time.Second
 
 // QueueDepth is how many envelopes one client may have waiting.
 //
@@ -207,10 +223,7 @@ func (h *Hub) Clients() int {
 // up the publish path.
 func (h *Hub) Broadcast(env Envelope) {
 	h.mu.RLock()
-	targets := make([]*Client, 0, len(h.clients))
-	for c := range h.clients {
-		targets = append(targets, c)
-	}
+	targets := slices.Collect(maps.Keys(h.clients))
 	h.mu.RUnlock()
 
 	for _, c := range targets {
@@ -221,10 +234,7 @@ func (h *Hub) Broadcast(env Envelope) {
 // Close disconnects every client.
 func (h *Hub) Close() {
 	h.mu.Lock()
-	targets := make([]*Client, 0, len(h.clients))
-	for c := range h.clients {
-		targets = append(targets, c)
-	}
+	targets := slices.Collect(maps.Keys(h.clients))
 	h.clients = map[*Client]struct{}{}
 	h.mu.Unlock()
 

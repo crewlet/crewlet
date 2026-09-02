@@ -245,6 +245,31 @@ func (s *Service) Replace(p Parser, prompt Prompt) error {
 	return nil
 }
 
+// Unregister removes a source's parser, reporting whether one was there.
+//
+// The counterpart of [Service.Replace], and the half that was missing: every
+// vendor reconciler converged only toward "configured", so setting
+// `integrations.<vendor>.enabled: false` — the gesture an operator makes
+// after a credential leak — applied cleanly, changed nothing, and left the
+// boot-time parser routing deliveries under the credential being revoked.
+//
+// The PROMPT is deliberately left in place. Prompts are additive guidance
+// keyed by their own identity rather than by source, several vendors
+// contribute overlapping text, and a seat that reads one for a surface it no
+// longer has is harmless where a seat missing one it does have is not.
+func (s *Service) Unregister(source string) bool {
+	if source == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.parsers[source]; !ok {
+		return false
+	}
+	delete(s.parsers, source)
+	return true
+}
+
 // Start attaches to the inbound topic.
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
@@ -259,11 +284,7 @@ func (s *Service) Start(ctx context.Context) error {
 	// The list is built HERE rather than through Sources(): this holds
 	// the write lock, and Go's RWMutex is not reentrant — a read lock
 	// taken by the same goroutine deadlocks the boot.
-	sources := make([]string, 0, len(s.parsers))
-	for src := range s.parsers {
-		sources = append(sources, src)
-	}
-	slices.Sort(sources)
+	sources := slices.Sorted(maps.Keys(s.parsers))
 	log.InfoContext(ctx, "notify_inbound_started", "sources", sources)
 	return nil
 }
@@ -273,11 +294,7 @@ func (s *Service) Start(ctx context.Context) error {
 func (s *Service) Sources() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]string, 0, len(s.parsers))
-	for src := range s.parsers {
-		out = append(out, src)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(s.parsers))
 	return out
 }
 

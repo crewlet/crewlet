@@ -51,7 +51,7 @@ func RenderPrompt(req llm.Request) (string, error) {
 		// "none" means the caller has offered tools but does not want one
 		// this round, so the contract is the permissive form; "required"
 		// is the turn engine's corrective re-prompt and says so.
-		b.WriteString(RenderContract(req.ToolChoice == "required"))
+		b.WriteString(RenderContract(req.ToolChoice == llm.ToolChoiceRequired))
 	}
 
 	return strings.TrimSpace(b.String()) + "\n", nil

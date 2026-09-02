@@ -42,16 +42,23 @@ type Reconciler struct {
 	nodeID  string
 	cipher  secrets.Cipher
 
-	// applied is the epoch this node is serving, and 0 before its first
-	// successful apply. Atomic because the health surface reads it from
-	// whatever goroutine answered a probe.
-	applied atomic.Int64
-
-	// attempts counts tries at the CURRENT target, reset when the target
-	// moves. Per epoch, not per node lifetime: re-activating a fixed
-	// revision resets the budget, so the runbook's fix actually works.
-	attempts int
-	target   int64
+	// progress is this node's convergence state, published as ONE value.
+	//
+	// Written only by the tick — Run's loop, or the one-shot CLI path,
+	// never both at once — and read by every surface that reports on this
+	// node: the seat heartbeat through SetPosture, the readiness probe,
+	// and each runtime-state HTTP handler, all on their own goroutines.
+	//
+	// ONE POINTER rather than three fields, because the three are read
+	// TOGETHER and have to agree. `applied` alone was atomic, with a
+	// comment naming this exact hazard; `attempts` and `target` were left
+	// bare beside it and were a plain data race — invisible to -race only
+	// because no test drove Posture concurrently with Run. Three separate
+	// atomics would fix the race and leave the torn read: DecidePosture
+	// comparing an applied epoch from one moment against an attempt count
+	// from another can conclude "converged but still retrying", which is
+	// not a state this node was ever in.
+	progress atomic.Pointer[applyProgress]
 
 	// decided is the last posture this reconciler computed, for the one
 	// reader that cannot afford to compute its own.
@@ -179,8 +186,38 @@ func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 	}, nil
 }
 
+// applyProgress is what the tick has achieved against what it is aiming at.
+//
+// A value type, stored and replaced whole, so every reader sees a triple
+// that was true at one instant.
+type applyProgress struct {
+	// applied is the epoch this node is serving, 0 before its first
+	// successful apply.
+	applied int64
+
+	// target is the epoch the pointer named when this node last saw it.
+	target int64
+
+	// attempts counts tries at target, reset when target moves. Per epoch,
+	// not per node lifetime: re-activating a fixed revision resets the
+	// budget, so the runbook's fix actually works.
+	attempts int
+}
+
+// snapshot reads the triple. The zero value is a node that has not ticked.
+func (r *Reconciler) snapshot() applyProgress {
+	if p := r.progress.Load(); p != nil {
+		return *p
+	}
+	return applyProgress{}
+}
+
+// publish replaces the triple. Callers are the tick alone, which is why a
+// plain load-modify-store needs no compare-and-swap.
+func (r *Reconciler) publish(p applyProgress) { r.progress.Store(&p) }
+
 // Applied is the epoch this node is serving, or 0 before its first apply.
-func (r *Reconciler) Applied() int64 { return r.applied.Load() }
+func (r *Reconciler) Applied() int64 { return r.snapshot().applied }
 
 // Posture is what this node should do about the gap between what it has
 // applied and what the pointer names.
@@ -189,6 +226,21 @@ func (r *Reconciler) Applied() int64 { return r.applied.Load() }
 // the readiness probe and a cached posture is a node that reports healthy
 // through the whole window in which it stopped being so.
 func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
+	// BOUNDED, because this is on the liveness and readiness path. The view
+	// below is two coordination round trips, one of which iterates the
+	// fleet's keys — which the NATS client's default per-API timeout does
+	// not cover — so a wedged broker turned a probe into a hang. An
+	// orchestrator reading a hung /ready as "not answering" is the same
+	// outcome as reading it as "not ready", except it takes the whole probe
+	// timeout to get there and the operator learns nothing.
+	//
+	// posturePollBudget is an eighth of the reconcile cadence and inside a
+	// typical 5s liveness timeout, so a slow plane degrades to the
+	// fail-open PostureServe answer below — which this function's own
+	// comment already promises for a plane it cannot read.
+	ctx, cancel := context.WithTimeout(ctx, posturePollBudget)
+	defer cancel()
+
 	view, err := r.view(ctx)
 	if err != nil {
 		// FAILS TO SERVE, not to stuck. A store this node cannot read is
@@ -202,6 +254,19 @@ func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 	}
 	return r.decide(configplane.DecidePosture(view))
 }
+
+// posturePollBudget bounds one posture read.
+//
+// AN EIGHTH of the reconcile cadence, so a probe can never outlive the tick
+// that would have corrected what it is reporting, and comfortably inside the
+// 5-second liveness timeout an orchestrator defaults to. What it buys is that
+// a broker which has stopped answering makes /health and /ready slow by two
+// seconds rather than by their caller's entire patience.
+//
+// Failing this read is SAFE by construction: the caller already treats an
+// unreadable plane as PostureServe, on the reasoning that the safe answer to
+// "am I behind?" is the one that keeps a working company working.
+const posturePollBudget = configplane.ReconcileInterval / 8
 
 // decide records a posture for the admission gate and returns it.
 //
@@ -233,7 +298,10 @@ func (r *Reconciler) view(ctx context.Context) (configplane.FleetView, error) {
 	if err != nil {
 		return configplane.FleetView{}, err
 	}
-	applied := r.applied.Load()
+	// ONE SNAPSHOT for the whole view, so the applied epoch, the attempt
+	// count and the status derived from it all describe the same moment.
+	progress := r.snapshot()
+	applied := progress.applied
 	if !found {
 		// No activation at all. A node with nothing to converge on is
 		// current by definition — an unconfigured deployment is not a
@@ -248,7 +316,7 @@ func (r *Reconciler) view(ctx context.Context) (configplane.FleetView, error) {
 	return configplane.FleetView{
 		TargetEpoch:  target.Epoch,
 		AppliedEpoch: applied,
-		SelfStatus:   r.selfStatus(),
+		SelfStatus:   selfStatus(progress),
 		// ALWAYS ZERO, and that is the honest value here rather than an
 		// unset field. TicksBehind exists so a reconciler whose apply is
 		// asynchronous can distinguish "behind and still working on it"
@@ -261,7 +329,7 @@ func (r *Reconciler) view(ctx context.Context) (configplane.FleetView, error) {
 		// testing found exactly that: removing the increment changed no
 		// outcome.
 		TicksBehind:   0,
-		Attempts:      r.attempts,
+		Attempts:      progress.attempts,
 		PeersOK:       ok,
 		PeersReported: reported,
 	}, nil
@@ -274,8 +342,8 @@ func (r *Reconciler) view(ctx context.Context) (configplane.FleetView, error) {
 // it. A node that has applied the target reports ok; one that has tried and
 // not reached it reports error, which is the honest reading of "still serving
 // the prior epoch".
-func (r *Reconciler) selfStatus() configplane.ApplyStatus {
-	if r.attempts == 0 {
+func selfStatus(p applyProgress) configplane.ApplyStatus {
+	if p.attempts == 0 {
 		return configplane.StatusOK
 	}
 	return configplane.StatusError
@@ -297,21 +365,24 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 		// report: a fresh deployment sits here until the first import.
 		return nil
 	}
-	if target.Epoch != r.target {
+	progress := r.snapshot()
+	if target.Epoch != progress.target {
 		// A new target resets the attempt budget, which is what makes
 		// "re-activate the fixed revision" the documented recovery.
-		r.target, r.attempts = target.Epoch, 0
+		progress.target, progress.attempts = target.Epoch, 0
+		r.publish(progress)
 	}
-	if r.applied.Load() == target.Epoch {
+	if progress.applied == target.Epoch {
 		return nil
 	}
-	if r.attempts >= configplane.MaxApplyAttempts {
+	if progress.attempts >= configplane.MaxApplyAttempts {
 		// Out of retries on this epoch. The posture already reads this
 		// node as having tried and failed, so it moves toward stuck or
 		// isolated without another counter to keep.
 		return nil
 	}
-	r.attempts++
+	progress.attempts++
+	r.publish(progress)
 	return r.apply(ctx, target)
 }
 
@@ -321,8 +392,9 @@ func (r *Reconciler) apply(ctx context.Context, target coord.Activation) error {
 	status, applied, err := r.applyRevision(ctx, target)
 	r.record(ctx, target, status, applied, err)
 	if status == configplane.StatusOK {
-		r.applied.Store(target.Epoch)
-		r.attempts = 0
+		progress := r.snapshot()
+		progress.applied, progress.attempts = target.Epoch, 0
+		r.publish(progress)
 	}
 	if r.onApply != nil {
 		r.onApply(target.Epoch, status)
@@ -531,12 +603,15 @@ func (r *Reconciler) Run(ctx context.Context) {
 			// POINTER — it does not act on the event — so a nudge for
 			// a revision this node already serves costs one wasted
 			// read, and a lost nudge costs nothing but latency.
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
+			//
+			// Stopped but NOT drained. Since Go 1.23 a timer's channel
+			// is unbuffered and Stop/Reset are synchronised with the
+			// runtime, so no stale fire can be sitting in it — the
+			// `if !Stop() { select { case <-C: default: } }` dance this
+			// replaced was for the pre-1.23 buffered channel, where it
+			// was also subtly wrong: the default branch made it a race
+			// rather than a drain.
+			timer.Stop()
 		}
 		if err := r.Tick(ctx); err != nil {
 			log.WarnContext(ctx, "reconcile_tick_failed", "error", err)

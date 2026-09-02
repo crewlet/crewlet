@@ -138,7 +138,7 @@ providers:
                                                  #   reaped on the next create
     default_coding_agent: opencode               # provider-agnostic → reuses the openai-compatible LLM above
     default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
-    default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); a paused box costs its state for as long as it is held, so the engine reaps it after this long and re-seeds from the pushed branch. 0 = never pause, always re-seed.
+    default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); a paused box costs its state for as long as it is held, so the engine reaps it after this long and re-seeds from the pushed branch. 0 = never pause, always re-seed; omit the key entirely for this 1800s default.
     # ENGINE-WIDE setup steps — applied to every sandbox-enabled seat's box
     # before each role's own role.sandbox.setup extras.  Put anything shared
     # by ALL seats here exactly once; keep stack-specific provisioning

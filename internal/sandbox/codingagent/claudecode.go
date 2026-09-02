@@ -69,7 +69,11 @@ func (ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	if len(req.MCPServers) == 0 {
 		return "", nil
 	}
-	blob, err := json.MarshalIndent(map[string]any{"mcpServers": req.MCPServers}, "", "  ")
+	servers := make(map[string]any, len(req.MCPServers))
+	for name, s := range req.MCPServers {
+		servers[name] = claudeCodeMCP(s)
+	}
+	blob, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
 	if err != nil {
 		return "", err
 	}
@@ -77,6 +81,31 @@ func (ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		return "", err
 	}
 	return paths.MCPConfig(), nil
+}
+
+// claudeCodeMCP is one server in this CLI's own .mcp.json vocabulary.
+//
+// THE KEY NAMES ARE THIS RUNNER'S, which is why they live here: they are what
+// `claude --mcp-config` reads, and nothing above this file should have to know
+// them. internal/sandbox used to spell them out and then say in its own doc
+// that they belonged to a runner.
+//
+// An empty `env` or `headers` is OMITTED rather than written as an empty
+// object, which is what the CLI's own examples show and what this wrote
+// before.
+func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
+	if s.Transport == sandbox.TransportHTTP {
+		out := map[string]any{"type": string(sandbox.TransportHTTP), "url": s.URL}
+		if len(s.Headers) > 0 {
+			out["headers"] = s.Headers
+		}
+		return out
+	}
+	out := map[string]any{"command": s.Command, "args": s.Args}
+	if len(s.Env) > 0 {
+		out["env"] = s.Env
+	}
+	return out
 }
 
 // Finished is false: this CLI exits cleanly, so the done marker is the signal.

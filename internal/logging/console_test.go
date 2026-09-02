@@ -228,7 +228,7 @@ func TestDerivedConsoleHandlersDoNotShareAttributes(t *testing.T) {
 	left.Info("left_line")
 	right.Info("right_line")
 
-	for _, got := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+	for got := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
 		switch {
 		case strings.Contains(got, "left_line"):
 			if !strings.Contains(got, "node=n1 side=left") {
@@ -283,14 +283,12 @@ func TestConcurrentConsoleWritesDoNotInterleave(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			log := base.With("component", "worker", "n", i)
 			for range 50 {
 				log.Info("a_line", "k", "v")
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

@@ -3,6 +3,7 @@ package seat
 import (
 	"context"
 	"maps"
+	"runtime/debug"
 	"slices"
 	"time"
 
@@ -152,6 +153,7 @@ func (h *Host) currentSeats() (seats []placement.Seat, ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("seat_lookup_failed", "node", h.nodeID, "panic", r,
+				"stack", string(debug.Stack()),
 				"hint", "the org could not be read, so this pass changed nothing; releasing "+
 					"every seat on an unreadable org would decommission the whole node")
 			seats, ok = nil, false

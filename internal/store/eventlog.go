@@ -1,12 +1,13 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -246,13 +247,20 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 		payload = json.RawMessage("{}")
 	}
 	// DERIVED HERE WHEN THE CALLER DID NOT SET IT, rather than trusted to
-	// have been set. [RecordFor] fills it on the one production path, so
-	// this normally costs nothing — but a caller that builds a record by
-	// hand and sets only the payload would otherwise write a phase
-	// completion whose spend columns are all zero, and a rollup reading
-	// them would report a company that spent nothing. Silence is the one
-	// failure this column promotion exists to remove, so it must not be
-	// reintroduced by the write path.
+	// have been set. A caller that builds a record by hand and sets only
+	// the payload would otherwise write a phase completion whose spend
+	// columns are all zero, and a rollup reading them would report a
+	// company that spent nothing. Silence is the one failure this column
+	// promotion exists to remove, so it must not be reintroduced by the
+	// write path.
+	//
+	// The comment here used to say [RecordFor] fills it on the one
+	// production path "so this normally costs nothing". That was false in
+	// both halves: RecordFor has no production caller — the wiring is
+	// observe.NewWriter — so this branch was the ONLY one ever taken, and
+	// it re-decoded the payload on every phase completion. observe.Record
+	// now sets Spend from the bytes it already has, which makes the
+	// fallback the exception it was always described as.
 	//
 	// The zero value writes the same empty strings and zeroes the column
 	// defaults would, so every non-phase row is unaffected.
@@ -261,12 +269,12 @@ func (l *EventLog) Append(ctx context.Context, rec EventRecord) error {
 	case rec.Spend != nil:
 		spend = *rec.Spend
 	default:
-		if derived := extractSpend(rec.Type, payload); derived != nil {
+		if derived := SpendFor(rec.Type, payload); derived != nil {
 			spend = *derived
 		}
 	}
 	// EVERY event that names a turn gets the column, not just the phase
-	// completions [extractSpend] is scoped to. That function's subject is
+	// completions [SpendFor] is scoped to. That function's subject is
 	// SPEND, so it reads one event type and returns nil for the rest — which
 	// is right for the rollup and wrong for identity: reading one turn means
 	// every row it touched, and a delivery, a tool call or an A2A ask carries
@@ -496,11 +504,11 @@ func mergeRelated(direct, siblings []EventRecord, limit int) []EventRecord {
 	// The sibling pass appends in its own scan order, so the merged list is
 	// no longer the newest-first order each query guaranteed. Same
 	// (time, id) tiebreak as the queries, for the same reason.
-	sort.SliceStable(out, func(i, j int) bool {
-		if !out[i].Time.Equal(out[j].Time) {
-			return out[i].Time.After(out[j].Time)
-		}
-		return out[i].ID > out[j].ID
+	slices.SortStableFunc(out, func(a, b EventRecord) int {
+		// BOTH KEYS DESCEND: newest instant first, and within one instant
+		// the higher id first, so a page boundary falls in the same place
+		// on every read.
+		return cmp.Or(b.Time.Compare(a.Time), cmp.Compare(b.ID, a.ID))
 	})
 	return truncate(out, limit)
 }
@@ -889,10 +897,15 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 		); err != nil {
 			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
 		}
-		// RFC3339Nano, because the rollup's watermark and its per-turn
-		// bounds are LEXICOGRAPHIC comparisons over this string — the
-		// same encoding the live window carries, or the two orderings
-		// would disagree about which record is newer.
+		// RFC3339Nano, the same encoding the live window carries, so the
+		// two orderings cannot disagree about which record is newer.
+		//
+		// The rollup PARSES it back rather than comparing bytes (see
+		// tokens.compareStamp): RFC3339Nano trims trailing zeros, so a
+		// whole-second stamp ends in 'Z' where a fractional one ends in a
+		// digit, and 'Z' sorts after '.' — which put 03:04:05Z ahead of
+		// 03:04:05.9Z. The encoding is still what matters here; it is the
+		// one both sides agree to parse.
 		rec.Timestamp = DecodeTime(at).Format(time.RFC3339Nano)
 		out = append(out, rec)
 	}
@@ -900,27 +913,4 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 		return nil, fmt.Errorf("store: phase tokens: %w", err)
 	}
 	return out, nil
-}
-
-func payloadString(body map[string]any, key string) string {
-	s, _ := body[key].(string)
-	return s
-}
-
-// payloadInt reads a number out of a decoded payload.
-//
-// JSON has one number type and encoding/json decodes it as float64, so a
-// straight int assertion fails on every value — including the ones that were
-// written as ints. Both branches are needed because a payload can also arrive
-// through a path that kept the Go type.
-func payloadInt(body map[string]any, key string) int {
-	switch v := body[key].(type) {
-	case float64:
-		return int(v)
-	case int:
-		return v
-	case int64:
-		return int(v)
-	}
-	return 0
 }

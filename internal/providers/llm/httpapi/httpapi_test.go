@@ -18,6 +18,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 func TestMain(m *testing.M) {
@@ -248,9 +250,9 @@ func TestNewHTTPClientRaisesTheIdleConnectionCeiling(t *testing.T) {
 	if !ok {
 		t.Fatalf("Transport = %T, want an *http.Transport", client.Transport)
 	}
-	if transport.MaxIdleConnsPerHost != idleConnsPerHost {
+	if transport.MaxIdleConnsPerHost != httpx.MaxIdleConnsPerHost {
 		t.Fatalf("MaxIdleConnsPerHost = %d, want %d",
-			transport.MaxIdleConnsPerHost, idleConnsPerHost)
+			transport.MaxIdleConnsPerHost, httpx.MaxIdleConnsPerHost)
 	}
 	if transport.MaxIdleConnsPerHost == http.DefaultMaxIdleConnsPerHost {
 		t.Fatal("the stdlib default of 2 would churn a TLS handshake per call " +

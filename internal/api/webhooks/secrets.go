@@ -94,6 +94,17 @@ func (s Secrets) Verifiable() []string {
 // dashboard renders, not a secret — so a forged delivery would have verified
 // against a string an attacker could read.
 //
+// A DISABLED BLOCK CONTRIBUTES NOTHING, so its route answers 503 rather than
+// verifying and ingesting a delivery the routing half will then drop:
+// `enabled: false` is what an operator sets after a credential leak, and
+// accepting deliveries that go nowhere is worse than refusing them. It also
+// makes this agree with RoutedSources, which reports what can actually reach
+// a seat.
+//
+// Only GitHub and GitLab have that switch. For Jira and Confluence the block
+// being PRESENT is the enablement — removing it is the gesture — and a nil
+// block already contributes nothing here.
+//
 // resolve is what a ${VAR} answers to; nil resolves nothing, which leaves
 // every route with an empty secret and therefore refusing to serve. That is
 // the safe direction: a route with nothing to verify with answers 503 rather
@@ -110,10 +121,10 @@ func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) stri
 		// rather than a secret, and resolved the same way anything else
 		// that can be a ${VAR} is.
 		s.ForgeAppID = resolve(in.ForgeAppID)
-		if in.GitHub != nil {
+		if in.GitHub != nil && in.GitHub.Enabled {
 			s.GitHub = resolve(in.GitHub.WebhookSecret)
 		}
-		if in.GitLab != nil {
+		if in.GitLab != nil && in.GitLab.Enabled {
 			s.GitLab = resolve(in.GitLab.SigningSecret)
 		}
 		if in.Jira != nil {

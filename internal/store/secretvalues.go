@@ -5,7 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -277,10 +278,6 @@ func (s *SecretValues) Rekey(ctx context.Context, activeKeyID, by string, now ti
 }
 
 func sortedNames(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
+	out := slices.Sorted(maps.Keys(m))
 	return out
 }

@@ -1,6 +1,10 @@
 // Package cliagent drives a coding CLI the operator already pays a
-// subscription for — Claude Code, Codex, Gemini CLI, OpenCode, Cursor,
-// Copilot — as a headless text model behind [llm.Provider].
+// subscription for as a headless text model behind [llm.Provider].
+//
+// WHICH CLIs is profiles.yaml's answer, not this comment's — [BuiltinNames]
+// reads the shipped table and `profile_test.go` holds it to the contract. A
+// prose list here would be a second copy of that answer with nothing checking
+// it, and it already went stale by three.
 //
 // The CLI holds the operator's OAuth login, so Crewlet never sees a password
 // and never re-implements a vendor's auth. What makes this more than "shell
@@ -424,7 +428,7 @@ func (p *Provider) fail(kind llm.ErrorKind, retryAfter time.Duration, err error)
 // message that names the vendor's own sentence rather than its whole reply.
 func firstLine(texts ...string) string {
 	for _, text := range texts {
-		for _, line := range strings.Split(text, "\n") {
+		for line := range strings.SplitSeq(text, "\n") {
 			if trimmed := strings.TrimSpace(line); trimmed != "" {
 				return trimmed
 			}

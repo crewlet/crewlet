@@ -206,10 +206,11 @@ in a fixed order, and names each stage it got through:
 4. **`learning`** — rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting.
 5. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows. **Conditional:** only where this node booted with a sandbox coordinator (see below).
 6. **`parties`** — rebuild the party index *before* the epoch is published, so a seat the revision **adds** is addressable the instant the epoch carrying it is current.
-7. **`integrations`** — rebuild the four trackers against the new epoch, so work items route by the new chart rather than the boot-time one. Confluence and Jira re-derive a **lead map** from the org — space and project key to unit lead — which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
+7. **`integrations`** — rebuild the four trackers against the new epoch, so work items route by the new chart rather than the boot-time one. A vendor the revision **retires** — its block removed, or `enabled: false` for GitHub and GitLab — has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org — space and project key to unit lead — which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
 8. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
 9. **`mailboxes`** — ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. **Conditional:** only where the engine has a node — `crewlet validate` applies to nothing.
-10. **`scheduler`** — re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
+10. **`seat_tools`** — rebuild the registry each seat this node *holds* runs against. **After** the swap, because that registry is a clone of the current epoch's surface: a seat's per-role children are filed into a copy of the builtins plus the shared servers, so a new epoch leaves the copy stale. The children themselves are deliberately untouched — they belong to the seat's lease, not to the epoch (see below) — so what is rebuilt is the catalogue a turn is built against, never a process. **Conditional:** absent where this node holds no seat with per-role children.
+11. **`scheduler`** — re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
 
 Then `crewlet.config.revision_applied` is published with `status`, the
 `applied_subsystems` list and any error.
@@ -226,10 +227,11 @@ detail lives on the event rather than on the operator surfaces reading the
 bucket. The active row stays active either way; the control plane records
 the outcome so peers can see it (see [Control Plane](control-plane.md)).
 
-**Read that list by name, never by number.** Two of the ten stages are
-conditional, so a successful apply on a node that booted without a sandbox
-reports nine names and the swap is the seventh of them. The numbering above is
-the order the code runs, not an index into what a node reports.
+**Read that list by name, never by number.** Three of the eleven stages are
+conditional, so a successful apply on a node that booted without a sandbox and
+holds no seat with per-role children reports eight names and the swap is the
+sixth of them. The numbering above is the order the code runs, not an index
+into what a node reports.
 
 > **"No rollback" is not "no mutation".** What the build-first ordering buys is
 > that a revision which cannot be *built* changes nothing: `NewCompany`
@@ -270,6 +272,16 @@ it is already serving. The comparison is over *resolved* values, so a rotated
 credential reads as a changed spec — see
 [Rotation](control-plane.md#rotation).
 
+A server the revision **removed** is stopped rather than merely dropped from
+the catalogue, and that is a separate step because the reconcile above is
+driven by the specs the *current* config names — so it never visits a name
+that is gone. Without it the child kept running until the engine stopped,
+holding the company's credentials, and a *rename* ran two of them. Retiring
+happens before the reconcile, so a rename frees the name and the tools it
+published before the replacement files its own. Taking a leaking integration
+offline by deleting its `mcp_servers` entry therefore takes effect on the next
+turn, which is what the rest of this section already promised.
+
 **Per-role children are not on this path.** They belong to a seat's *lease*
 rather than to the epoch: the apply-time reconcile skips every non-shared
 server, and a role's `mcp_env` — which carries the per-agent Slack/GitHub
@@ -277,6 +289,15 @@ credentials — is never part of a spec an apply compares. Such a child is
 spawned when its seat is claimed and torn down when it is released, so an
 `mcp_env` change reaches it when the seat next changes hands, not on the apply
 that carried it.
+
+What an apply *does* rebuild for a held seat is that seat's **registry** — the
+`seat_tools` stage above. The two are separate on purpose: the registry is a
+clone of the epoch's surface and goes stale the moment a new epoch is
+published, while the child is a running process holding that seat's
+credentials and must not be restarted for a config edit that did not name it.
+So an apply re-files the live children's catalogue into a fresh clone of the
+new epoch's builtins and shared servers, and the child never learns it
+happened.
 
 ### The API half
 

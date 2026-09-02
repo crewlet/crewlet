@@ -16,6 +16,13 @@
 //     and re-encodes losslessly. A rolling upgrade publishes types the older
 //     half has never heard of; dropping or erroring on those would make every
 //     upgrade an outage.
+//
+// LOSSLESS MEANS THE BYTES. Every merge here is over
+// map[string]json.RawMessage, never map[string]any: decoding a JSON number
+// into `any` yields a float64, so a 19-digit id or any integer past 2^53 is
+// silently rewritten. That applied to KNOWN payloads too, since the envelope
+// and the typed body were both remapped through `any` on every publish — so
+// the codec quietly corrupted the traffic it existed to carry unchanged.
 package events
 
 import (
@@ -29,9 +36,10 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Payload is the typed body of an event. Implementations are plain structs
@@ -92,7 +100,13 @@ type Event struct {
 	// Extra holds fields that belong to neither the envelope nor a known
 	// Data type — which is what an event from a newer build looks like.
 	// Preserved verbatim so a round trip through an older node is lossless.
-	Extra map[string]any `json:"-"`
+	//
+	// RAW JSON, not `any`. Decoding into `any` turns every JSON number into
+	// a float64, so a 19-digit id came back off by a hundred and any integer
+	// past 2^53 came back wrong — on the one path whose entire job is to
+	// change nothing. Holding the bytes is what makes "preserved verbatim"
+	// true rather than aspirational.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // envelopeKeys are the JSON keys owned by the envelope itself. Anything else
@@ -328,7 +342,12 @@ func (e *Event) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal event envelope: %w", err)
 	}
-	merged := map[string]any{}
+	// RawMessage THROUGHOUT. The merge has to happen in one flat object, so
+	// something must hold each field between marshal and marshal — and
+	// `any` was silently re-typing every number on the way through, for
+	// KNOWN payloads as much as unknown ones, since the envelope and the
+	// typed body both went round this same loop on every publish.
+	merged := map[string]json.RawMessage{}
 	if err := json.Unmarshal(raw, &merged); err != nil {
 		return nil, fmt.Errorf("remap event envelope: %w", err)
 	}
@@ -344,7 +363,7 @@ func (e *Event) MarshalJSON() ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("marshal event data (%s): %w", e.Type, err)
 		}
-		fields := map[string]any{}
+		fields := map[string]json.RawMessage{}
 		if err := json.Unmarshal(body, &fields); err != nil {
 			return nil, fmt.Errorf("remap event data (%s): %w", e.Type, err)
 		}
@@ -387,16 +406,20 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		}
 	}
 
-	known := map[string]struct{}{}
+	// GATED ON e.Data, not on registration. A registered type whose body
+	// failed to decode leaves Data nil on purpose — the fall-through above
+	// — and every wire key must then still reach Extra, or the event is
+	// silently gutted rather than carried.
+	//
+	// The field set comes from the REGISTRY, derived once at Register from
+	// the struct's own json tags, rather than from re-marshalling the body
+	// that was just decoded. Which keys a payload owns is a compile-time
+	// property of its type; learning it by re-encoding meant serialising
+	// every event's whole body a second time on every decode — tens of
+	// kilobytes of prompt text, per event, to compute a constant.
+	var known map[string]struct{}
 	if e.Data != nil {
-		if raw, err := json.Marshal(e.Data); err == nil {
-			fields := map[string]json.RawMessage{}
-			if json.Unmarshal(raw, &fields) == nil {
-				for k := range fields {
-					known[k] = struct{}{}
-				}
-			}
-		}
+		known = fieldsOf(env.Type)
 	}
 	for k, v := range all {
 		if _, reserved := envelopeKeys[k]; reserved {
@@ -405,24 +428,77 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		if _, isKnown := known[k]; isKnown {
 			continue
 		}
-		var val any
-		if err := json.Unmarshal(v, &val); err != nil {
-			continue
-		}
 		if e.Extra == nil {
-			e.Extra = map[string]any{}
+			e.Extra = map[string]json.RawMessage{}
 		}
-		e.Extra[k] = val
+		// The BYTES, verbatim. Decoding into `any` here is what turned a
+		// 19-digit id into a float64 and re-published it wrong.
+		e.Extra[k] = slices.Clone(v)
 	}
 	return nil
 }
 
 // --- registry -------------------------------------------------------------
 
+// entry is what the registry knows about one wire type: how to build its
+// body, and which JSON keys that body owns.
+//
+// The field set is derived ONCE, at registration, because it is a property of
+// the Go type rather than of any event. Computing it per decode meant
+// re-marshalling a body that had just been decoded, only to read its keys.
+type entry struct {
+	make   func() Payload
+	fields map[string]struct{}
+}
+
 var (
 	registryMu sync.RWMutex
-	registry   = map[string]func() Payload{}
+	registry   = map[string]entry{}
 )
+
+// jsonFieldsOf is the set of JSON object keys a payload type marshals to.
+//
+// Read off the struct tags rather than off an encoded instance, so it is
+// complete: an instance with a zero value in an `omitempty` field encodes
+// without that key, and a field set learned that way would send the key to
+// Extra on every event that happened to leave it empty.
+func jsonFieldsOf(t reflect.Type) map[string]struct{} {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	fields := map[string]struct{}{}
+	if t.Kind() != reflect.Struct {
+		return fields
+	}
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		name, opts, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "-" && opts == "" {
+			continue
+		}
+		// An EMBEDDED struct with no name of its own is flattened into
+		// the parent object, so its keys are the parent's too.
+		if name == "" && f.Anonymous {
+			maps.Copy(fields, jsonFieldsOf(f.Type))
+			continue
+		}
+		if name == "" {
+			name = f.Name
+		}
+		fields[name] = struct{}{}
+	}
+	return fields
+}
+
+// fieldsOf is the key set a registered type owns, or nil for an unknown one.
+func fieldsOf(t string) map[string]struct{} {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	return registry[t].fields
+}
 
 // Register associates a wire type string with a constructor for its payload:
 // events.Register[TaskAssigned]().
@@ -450,14 +526,20 @@ func Register[T any, P PayloadPtr[T]]() {
 	if _, dup := registry[t]; dup {
 		panic("events.Register: duplicate event type " + t)
 	}
-	registry[t] = func() Payload { return P(new(T)) }
+	registry[t] = entry{
+		make:   func() Payload { return P(new(T)) },
+		fields: jsonFieldsOf(reflect.TypeFor[T]()),
+	}
 }
 
 func lookup(t string) (func() Payload, bool) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
-	f, ok := registry[t]
-	return f, ok
+	e, ok := registry[t]
+	if !ok {
+		return nil, false
+	}
+	return e.make, true
 }
 
 // RegisteredTypes returns every event type this build knows, sorted. Used by
@@ -562,9 +644,9 @@ func ClipDiagnostic(text string) string {
 	if len(text) <= MaxDiagnosticBytes {
 		return text
 	}
-	cut := MaxDiagnosticBytes
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	return text[:cut] + "\n…[diagnostic truncated at 64 KiB so the event could be published]"
+	// The marker is this package's own — it names the bound and why the
+	// event needed it — so the cut is taken with [textcut.Bytes] and the
+	// note appended here, rather than with Ellipsis and its bare "…".
+	return textcut.Bytes(text, MaxDiagnosticBytes) +
+		"\n…[diagnostic truncated at 64 KiB so the event could be published]"
 }

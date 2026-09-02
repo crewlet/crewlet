@@ -6,8 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -218,11 +219,8 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 			expiry = expiryDays
 		}
 	})
-	tail := fs.Args()
-	if companyPath == "" && len(tail) == 1 {
-		companyPath, tail = tail[0], nil
-	}
-	if companyPath == "" || len(tail) > 0 {
+	companyPath, given := onePositional(fs, companyPath)
+	if given != 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet gitlab provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
@@ -539,11 +537,8 @@ func runMattermostProvision(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	tail := fs.Args()
-	if companyPath == "" && len(tail) == 1 {
-		companyPath, tail = tail[0], nil
-	}
-	if companyPath == "" || len(tail) > 0 {
+	companyPath, given := onePositional(fs, companyPath)
+	if given != 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet mattermost provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-handles a,b] "+
@@ -646,11 +641,7 @@ func printChatResult(w io.Writer, res *mattermost.Result, where string) {
 }
 
 func sortedKeys(m map[string][]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
+	out := slices.Sorted(maps.Keys(m))
 	return out
 }
 
@@ -667,11 +658,8 @@ func runMattermostDoctor(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	tail := fs.Args()
-	if companyPath == "" && len(tail) == 1 {
-		companyPath, tail = tail[0], nil
-	}
-	if companyPath == "" || len(tail) > 0 {
+	companyPath, given := onePositional(fs, companyPath)
+	if given != 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet mattermost doctor <company.yaml> [-admin-token TOKEN]")
 		return errors.New("name exactly one company document")

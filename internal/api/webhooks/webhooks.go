@@ -37,6 +37,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -338,8 +339,8 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 				"body_bytes", len(d.raw), "error", err,
 				"detail", "the delivery was verified and is too large to publish; "+
 					"refused permanently so the provider does not retry it")
-			writeJSON(w, http.StatusRequestEntityTooLarge,
-				map[string]string{"error": "delivery too large to queue"})
+			httpjson.FailWith(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge,
+				map[string]string{"detail": "too large to queue"})
 			return
 		}
 		log.Error("webhook_publish_failed", "source", d.source, "route", v.source,
@@ -489,8 +490,7 @@ func (r *Receiver) body(w http.ResponseWriter, req *http.Request) ([]byte, bool)
 	}
 	if errors.Is(err, errBodyTooLarge) {
 		log.Warn("webhook_body_too_large", "path", req.URL.Path, "limit", MaxBodyBytes)
-		writeJSON(w, http.StatusRequestEntityTooLarge,
-			map[string]string{"error": "body too large"})
+		httpjson.Fail(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge)
 		return nil, false
 	}
 	// A read that failed part way is a client that hung up or a socket
@@ -522,16 +522,9 @@ func headerOr(req *http.Request, name, fallback string) string {
 // statusOK is the answer five of the six routes give.
 var statusOK = map[string]string{"status": "ok"}
 
+// writeJSON is [httpjson.Write] under this package's own name.
 func writeJSON(w http.ResponseWriter, status int, body any) {
-	raw, err := json.Marshal(body)
-	if err != nil {
-		log.Error("webhook_encode_failed", "error", err)
-		http.Error(w, `{"error":"encode_failed"}`, http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(raw)
+	httpjson.Write(w, status, body)
 }
 
 func unavailable(w http.ResponseWriter, reason string, retryAfter time.Duration) {

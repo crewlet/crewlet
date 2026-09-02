@@ -180,6 +180,12 @@ func roleKeys(role *org.Role, ph Phase) org.ProviderKeys {
 			return role.LLMSandbox
 		}
 		return role.LLMExecute
+	case Onboarding:
+		// NO FIELD OF ITS OWN, deliberately: onboarding reads the team's
+		// pages and writes conventions once, on a seat's first turn, and
+		// an operator pointing that at a different model from the rest of
+		// the seat's work has no reason to. Nil resolves to role.LLM.
+		return nil
 	default:
 		return nil
 	}
@@ -195,4 +201,10 @@ func roleKeys(role *org.Role, ph Phase) org.ProviderKeys {
 func RoleKeys(role *org.Role, ph Phase) org.ProviderKeys { return roleKeys(role, ph) }
 
 // All is every phase, for callers that must cover the set exhaustively.
-var All = []Phase{Plan, Execute, Review, Subagent, Auxiliary, Judge, Sandbox}
+//
+// ONBOARDING IS IN IT. It was left out because it is the one phase with no
+// per-phase provider field of its own — it resolves to the role's default
+// chain — but "has no own field" is a fact about [roleKeys], not a reason to
+// be missing from the set. A caller iterating this to cover every phase was
+// silently skipping the one that runs FIRST on a seat's first turn.
+var All = []Phase{Plan, Execute, Review, Subagent, Auxiliary, Judge, Sandbox, Onboarding}

@@ -77,3 +77,17 @@ func (r *logRecorder) find(event string) []recorded {
 }
 
 func (r *logRecorder) has(event string) bool { return len(r.find(event)) > 0 }
+
+// hasAttr reports whether any record of this event carries key=value.
+//
+// Attribute-level rather than event-level, because some bugs show up as an
+// event that fires with the WRONG value rather than as one that never fires:
+// a tree reap logging pgid=0 reports success while signalling nothing.
+func (r *logRecorder) hasAttr(event, key string, value any) bool {
+	for _, rec := range r.find(event) {
+		if got, ok := rec.Attrs[key]; ok && got == value {
+			return true
+		}
+	}
+	return false
+}

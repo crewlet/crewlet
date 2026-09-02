@@ -970,12 +970,7 @@ func TestAStoredSweepDoesNotAliasTheReturnedOne(t *testing.T) {
 }
 
 func slicesContains(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }
 
 // renewCut fails only Renew, leaving claims and reads working. A store that

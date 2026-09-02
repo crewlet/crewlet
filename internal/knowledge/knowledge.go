@@ -10,9 +10,13 @@
 //
 // The container vocabulary. A caller passes a seat, a plain-text query and
 // ancestor exclusions — never a CQL fragment, a space key or a project list.
-// That is the whole point: the two backends narrow reads in completely
-// different terms, and a caller that knew either one would be a caller that
-// has to change when the company switches backends.
+//
+// ONE IMPLEMENTATION SHIPS — Confluence — and the seam is still worth having,
+// for the reason `engine.Knowledge` states: the interface is declared by its
+// CONSUMERS, so adding a second backend is one new implementation rather than
+// a rewrite of everything that searches. A knowledge base narrows reads in its
+// own terms, and a caller that knew Confluence's would be a caller that has to
+// change the day a company runs something else.
 //
 // # The rules every backend honours
 //
@@ -32,9 +36,9 @@ package knowledge
 import (
 	"context"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // AutoDraftedParent is the page every unreviewed auto-drafted skill is
@@ -298,9 +302,5 @@ func Snippet(text string, limit int) string {
 	}
 	// No space at all — a URL, a CJK run. Back up to a rune boundary
 	// rather than splitting one.
-	cut := len(head)
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	return text[:cut] + "…"
+	return textcut.Bytes(text, limit) + "…"
 }

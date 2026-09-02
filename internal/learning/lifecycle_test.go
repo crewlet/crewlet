@@ -570,11 +570,9 @@ func TestTwoNodesFoldingOneSeatWriteOneSummary(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i, l := range []*Lifecycle{a, b} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, errs[i] = l.Pass(context.Background(), "ceo", t0)
-		}()
+		})
 	}
 	wg.Wait()
 	for i, err := range errs {
@@ -1351,7 +1349,7 @@ func TestRenderClusterFlattensClampsAndCounts(t *testing.T) {
 	if !strings.Contains(got, "task: line one line two") {
 		t.Errorf("newlines were not flattened:\n%s", got)
 	}
-	if strings.Contains(got, long) || !strings.Contains(got, "xxx...") {
+	if strings.Contains(got, long) || !strings.Contains(got, "xxx…") {
 		t.Errorf("the per-turn clamp did not apply:\n%s", got)
 	}
 	// Capped at 8, and it SAYS SO. The compactor is inferring "how this
@@ -1757,5 +1755,70 @@ func TestTheToolFreeHorizonIsConfigurable(t *testing.T) {
 	}
 	if l.Options().ToolFreeMaxAge != 5*day {
 		t.Errorf("the configured horizon was overwritten: %v", l.Options().ToolFreeMaxAge)
+	}
+}
+
+// EVERY SIMILARITY DECISION IN THIS PACKAGE USES ONE FUNCTION, and they agree
+// at the boundary.
+//
+// The overlap was written twice, under two names, and the copies were free to
+// drift: `clusterByTools` and `clusterEpisodes` pooled by one of them while
+// `mostSimilar` — the near-duplicate check that decides whether a drafted
+// skill is a new one — used the other. A seat's skills clustered by one rule
+// and deduplicated by another means a draft can be rejected as a duplicate of
+// a skill it would never have been clustered with, which reads as "synthesis
+// stopped producing anything" and is invisible from either side alone.
+//
+// {x,y} and {y,z} overlap at exactly 1/3, so a threshold AT it must pool and a
+// threshold above it must not — on both paths, in the same direction.
+func TestEverySimilarityDecisionAgreesAtTheThreshold(t *testing.T) {
+	t.Parallel()
+	left, right := []string{"x", "y"}, []string{"y", "z"}
+	const atTheBoundary = 1.0 / 3.0
+	const justAbove = 0.34
+
+	for _, tc := range []struct {
+		name      string
+		threshold float64
+		same      bool
+	}{
+		{"at the boundary", atTheBoundary, true},
+		{"just above it", justAbove, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// The lifecycle fold.
+			clustered := clusterByTools([]Episode{
+				{ID: "a", ToolSequence: left}, {ID: "b", ToolSequence: right},
+			}, tc.threshold)
+			if pooled := len(clustered) == 1; pooled != tc.same {
+				t.Errorf("clusterByTools pooled = %v, want %v", pooled, tc.same)
+			}
+
+			// The skill-drafting clusterer, which its own doc calls
+			// "the same algorithm, deliberately". Its members must be
+			// raw, recent and terminal to be eligible at all.
+			since := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+			eligible := func(id string, tools []string) Episode {
+				return Episode{
+					ID: id, Kind: KindRaw, ToolSequence: tools,
+					ReviewOutcome: "done", EndedAt: since.Add(time.Hour),
+				}
+			}
+			skills := clusterEpisodes([]Episode{
+				eligible("a", left), eligible("b", right),
+			}, len(left), tc.threshold, since)
+			if pooled := len(skills) == 1; pooled != tc.same {
+				t.Errorf("clusterEpisodes pooled = %v, want %v — it disagrees with "+
+					"the lifecycle fold at the same threshold", pooled, tc.same)
+			}
+
+			// The near-duplicate check that decides whether a drafted
+			// skill is a new one.
+			if _, duplicate := mostSimilar(left, [][]string{right}, tc.threshold); duplicate != tc.same {
+				t.Errorf("mostSimilar duplicate = %v, want %v — the paths disagree",
+					duplicate, tc.same)
+			}
+		})
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -65,11 +66,15 @@ func (s *submitted[T]) Value() (T, bool) { return s.value, s.called }
 
 // planPayload is the wire shape of a submitted plan.
 type planPayload struct {
-	Decision        string   `json:"decision"`
-	Reasoning       string   `json:"reasoning"`
-	Steps           []step   `json:"steps"`
-	ToolsNeeded     []string `json:"tools_needed"`
-	SuccessCriteria []string `json:"success_criteria"`
+	// TYPED, not a bare string. It was converted to turn.PlanDecision at
+	// six call sites, one of them a value method a caller can forget —
+	// and a comparison against an untyped literal is exactly what survives
+	// a constant being renamed.
+	Decision        turn.PlanDecision `json:"decision"`
+	Reasoning       string            `json:"reasoning"`
+	Steps           []step            `json:"steps"`
+	ToolsNeeded     []string          `json:"tools_needed"`
+	SuccessCriteria []string          `json:"success_criteria"`
 }
 
 type step struct {
@@ -84,17 +89,17 @@ func decodePlan(args map[string]any) (planPayload, error) {
 	if err := remarshal(args, &p); err != nil {
 		return p, err
 	}
-	switch turn.PlanDecision(p.Decision) {
-	case turn.PlanRun, turn.PlanDirect, turn.PlanSkip:
-	case "":
+	switch {
+	case p.Decision == "":
 		// An absent decision is `plan`, not an error. It is the common
 		// case and the one every other field is written for; failing here
 		// would reject a complete plan over its most predictable omission.
-		p.Decision = string(turn.PlanRun)
-	default:
-		return p, fmt.Errorf("decision must be one of plan, direct or skip, got %q", p.Decision)
+		p.Decision = turn.PlanRun
+	case !p.Decision.Valid():
+		return p, fmt.Errorf("decision must be one of %s, %s or %s, got %q",
+			turn.PlanRun, turn.PlanDirect, turn.PlanSkip, p.Decision)
 	}
-	if turn.PlanDecision(p.Decision) != turn.PlanSkip && len(p.ToolsNeeded) == 0 && len(p.Steps) == 0 {
+	if p.Decision != turn.PlanSkip && len(p.ToolsNeeded) == 0 && len(p.Steps) == 0 {
 		// A plan that names no tools and lists no steps has decided
 		// nothing. Saying so is what makes the model try again inside the
 		// phase, instead of Execute receiving an empty plan and
@@ -112,7 +117,7 @@ func decodePlan(args map[string]any) (planPayload, error) {
 // approach makes Execute re-derive data the planner already gathered, or
 // invent it.
 func (p planPayload) Summary() string {
-	if turn.PlanDecision(p.Decision) == turn.PlanSkip {
+	if p.Decision == turn.PlanSkip {
 		if p.Reasoning != "" {
 			return "(skip) " + p.Reasoning
 		}
@@ -122,7 +127,7 @@ func (p planPayload) Summary() string {
 		if p.Reasoning != "" {
 			return p.Reasoning
 		}
-		if turn.PlanDecision(p.Decision) == turn.PlanDirect {
+		if p.Decision == turn.PlanDirect {
 			return "(direct: no explicit plan; the executor improvises)"
 		}
 		return ""
@@ -142,10 +147,10 @@ func (p planPayload) Summary() string {
 
 // reviewPayload is the wire shape of a submitted review.
 type reviewPayload struct {
-	Decision      string `json:"decision"`
-	Notes         string `json:"notes"`
-	CompletedWork string `json:"completed_work"`
-	FinalArtifact string `json:"final_artifact"`
+	Decision      phase.Decision `json:"decision"`
+	Notes         string         `json:"notes"`
+	CompletedWork string         `json:"completed_work"`
+	FinalArtifact string         `json:"final_artifact"`
 }
 
 func decodeReview(args map[string]any) (reviewPayload, error) {
@@ -153,18 +158,26 @@ func decodeReview(args map[string]any) (reviewPayload, error) {
 	if err := remarshal(args, &r); err != nil {
 		return r, err
 	}
-	switch r.Decision {
-	case "done", "self_iterate", "failed":
-	case "":
+	// AGAINST THE CONSTANTS, never their spelling. This switch listed
+	// "done", "self_iterate" and "failed" as literals, so renaming one of
+	// them left this accepting a value nothing else produces — and phase
+	// owns those names.
+	//
+	// phase.Skipped is deliberately absent: only a PLAN may conclude that
+	// nobody was asking, and a review reaching it would mean the turn ran
+	// after deciding not to.
+	switch {
+	case r.Decision == "":
 		// An absent decision is `done`. The alternative — defaulting to
 		// self_iterate — spends another whole round on a review that
 		// simply forgot a field, and the delivery gate still overturns a
 		// `done` that delivered nothing.
-		r.Decision = "done"
-	default:
-		return r, fmt.Errorf("decision must be one of done, self_iterate or failed, got %q", r.Decision)
+		r.Decision = phase.Done
+	case r.Decision != phase.Done && r.Decision != phase.SelfIterate && r.Decision != phase.Failed:
+		return r, fmt.Errorf("decision must be one of %s, %s or %s, got %q",
+			phase.Done, phase.SelfIterate, phase.Failed, r.Decision)
 	}
-	if r.Decision == "self_iterate" && strings.TrimSpace(r.Notes) == "" {
+	if r.Decision == phase.SelfIterate && strings.TrimSpace(r.Notes) == "" {
 		// A loop-back with no correction sends the next round to do
 		// exactly what the last one did. The stall guard would eventually
 		// catch it, but only after spending the rounds.

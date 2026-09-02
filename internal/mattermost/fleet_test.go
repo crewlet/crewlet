@@ -72,6 +72,11 @@ type fakeSocket struct {
 	frames chan map[string]any
 	closed chan struct{}
 	once   sync.Once
+
+	// pingErr, when set, makes every heartbeat fail — the L7 half-open a
+	// TCP-level check cannot see.
+	pingErr error
+	pings   atomic.Int64
 }
 
 func newSocket(frames ...map[string]any) *fakeSocket {
@@ -96,6 +101,21 @@ func (s *fakeSocket) Read(ctx context.Context) (map[string]any, error) {
 func (s *fakeSocket) Close() error {
 	s.once.Do(func() { close(s.closed) })
 	return nil
+}
+
+func (s *fakeSocket) Ping(ctx context.Context) error {
+	s.pings.Add(1)
+	if s.pingErr != nil {
+		return s.pingErr
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.closed:
+		return errors.New("socket closed")
+	default:
+		return nil
+	}
 }
 
 // fastBackoff keeps the reconnect PATH under test rather than the sleep:
@@ -674,5 +694,88 @@ func TestOneUnreadableTeamDoesNotLoseTheRest(t *testing.T) {
 	waitFor(t, 2, func() int { return len(rec.posts()) })
 	if got := rec.ids(); got[len(got)-1] != "g1" {
 		t.Fatalf("the healthy team's backfill was lost: %v", got)
+	}
+}
+
+// A SEAT WHOSE SERVER STOPS ANSWERING RECONNECTS, and nothing in this package
+// could previously tell that it had.
+//
+// coder/websocket answers a server's pings internally without returning from
+// Read, so a quiet channel and a dead server look identical from this side.
+// TCP keepalives rescue a genuinely dead path in about eleven minutes; an L7
+// half-open — a proxy that tore down the upstream connection while still
+// answering keepalives — never resolves at all, and the seat is deaf
+// indefinitely with no log line to say so.
+func TestASeatWhoseServerStopsAnsweringIsReconnected(t *testing.T) {
+	rec := &recorder{}
+	dead := newSocket()
+	dead.pingErr = errors.New("no pong: the upstream connection is gone")
+	live := newSocket(frame("p1", "back", nil))
+
+	var dials atomic.Int64
+	f, err := mattermost.NewFleet(mattermost.FleetOptions{
+		Publisher:    rec,
+		Backoff:      fastBackoff,
+		PingInterval: 5 * time.Millisecond,
+		PongTimeout:  50 * time.Millisecond,
+		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
+			if dials.Add(1) == 1 {
+				return dead, nil
+			}
+			return live, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewFleet: %v", err)
+	}
+	s := newServer(t)
+	if err := f.Add(t.Context(), seat, client(t, s)); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	defer f.Stop()
+
+	// The post only arrives on the SECOND socket, so receiving it is proof
+	// the first was abandoned rather than merely pinged.
+	waitFor(t, 1, func() int { return len(rec.posts()) })
+	if dead.pings.Load() == 0 {
+		t.Error("the socket was never pinged, so a dead server is undetectable")
+	}
+}
+
+// AND A HEALTHY SOCKET IS LEFT ALONE. The heartbeat exists to tell GONE from
+// QUIET, so a seat on an idle channel must not be reconnected for being idle
+// — each reconnect costs a backfill and its duplicates.
+func TestAQuietButHealthySocketIsNotReconnected(t *testing.T) {
+	rec := &recorder{}
+	sock := newSocket()
+
+	var dials atomic.Int64
+	f, err := mattermost.NewFleet(mattermost.FleetOptions{
+		Publisher:    rec,
+		Backoff:      fastBackoff,
+		PingInterval: 2 * time.Millisecond,
+		PongTimeout:  time.Second,
+		Connect: func(context.Context, mattermost.Seat, *mattermost.Client) (mattermost.Socket, error) {
+			dials.Add(1)
+			return sock, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewFleet: %v", err)
+	}
+	s := newServer(t)
+	if err := f.Add(t.Context(), seat, client(t, s)); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	defer f.Stop()
+
+	// Long enough for many ping intervals to elapse on a silent channel.
+	time.Sleep(200 * time.Millisecond)
+	if got := dials.Load(); got != 1 {
+		t.Errorf("dialled %d times on a healthy idle socket, want 1: an idle "+
+			"seat is being reconnected and backfilled for being quiet", got)
+	}
+	if sock.pings.Load() == 0 {
+		t.Error("the heartbeat never ran")
 	}
 }

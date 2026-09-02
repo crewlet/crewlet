@@ -330,7 +330,7 @@ func TestEveryAgentKeyedTableTravels(t *testing.T) {
 			t.Fatalf("scan the schema: %v", err)
 		}
 		keyed := false
-		for _, column := range strings.Split(columns, ",") {
+		for column := range strings.SplitSeq(columns, ",") {
 			switch strings.TrimSpace(column) {
 			case "agent_id", "agent_handle", "observer_handle":
 				keyed = true

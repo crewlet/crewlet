@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // In-sandbox telemetry, without handing the box a secret.
@@ -192,7 +194,7 @@ func NewOtelReceiver(opts OtelReceiverOptions) (*OtelReceiver, error) {
 	}
 	client := opts.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: OtelForwardTimeout}
+		client = httpx.Client(OtelForwardTimeout)
 	}
 	headers := make(map[string]string, len(opts.UpstreamHeaders))
 	for k, v := range opts.UpstreamHeaders {
@@ -269,14 +271,7 @@ func (r *OtelReceiver) Forward(ctx context.Context, signal string, body []byte, 
 var OtelSignals = []string{"traces", "metrics", "logs"}
 
 // ValidSignal reports a signal this receiver forwards.
-func ValidSignal(signal string) bool {
-	for _, known := range OtelSignals {
-		if signal == known {
-			return true
-		}
-	}
-	return false
-}
+func ValidSignal(signal string) bool { return slices.Contains(OtelSignals, signal) }
 
 // ParseOtelHeaders reads the OTEL_EXPORTER_OTLP_HEADERS `k=v,k2=v2` form.
 //
@@ -285,7 +280,7 @@ func ValidSignal(signal string) bool {
 // one place it is understood.
 func ParseOtelHeaders(raw string) map[string]string {
 	out := map[string]string{}
-	for _, pair := range strings.Split(raw, ",") {
+	for pair := range strings.SplitSeq(raw, ",") {
 		key, value, ok := strings.Cut(pair, "=")
 		if key = strings.TrimSpace(key); !ok || key == "" {
 			continue

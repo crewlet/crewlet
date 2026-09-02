@@ -210,24 +210,20 @@ func TestTheHubIsSafeUnderConcurrentUse(t *testing.T) {
 	var wg sync.WaitGroup
 
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 100 {
 				c := stream.NewClient()
 				h.Register(c)
 				go drain(c)
 				h.Unregister(c)
 			}
-		}()
+		})
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range 500 {
 			h.Broadcast(stream.Push(stream.KindEvent, nil, clock))
 		}
-	}()
+	})
 	wg.Wait()
 	h.Close()
 }

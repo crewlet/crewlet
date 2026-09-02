@@ -59,7 +59,7 @@ turn_engine:                            # optional — Plan/Execute/Review turn 
   subagent_budget_fraction: 0.2         # fraction of parent's remaining tokens a sub-agent may consume
                                         #   (for a batched call, the TOTAL slice shared across children)
   subagent_max_parallel: 3              # max children a batched spawn_subagent runs concurrently
-  subagent_batch_timeout_seconds: 120   # aggregate wall-clock timeout for one batched spawn_subagent call
+  subagent_batch_timeout_seconds: 600   # aggregate timeout for one batched spawn_subagent call; must be >= subagent_timeout_seconds
   subagent_min_per_child_tokens: 500    # floor on the per-child token slice; batch rejected if undercut
   executor_always_on_tools: []          # extra tools always exposed in the Execute phase
                                         #   (load_tool_skill is always-on independently)

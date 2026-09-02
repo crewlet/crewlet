@@ -50,6 +50,15 @@ type cooldowns struct {
 	stop chan struct{}
 	done chan struct{}
 	once sync.Once
+
+	// cancel ends an in-flight pull.
+	//
+	// The stop channel alone is not enough: the loop's context is
+	// DETACHED, so a pull parked inside the coordination store answers to
+	// nothing, and stopCooldownRefresh's bare `<-done` would then wait on
+	// it for ever — hanging the whole shutdown behind a broker that
+	// stopped replying.
+	cancel context.CancelFunc
 }
 
 // shareCooldowns attaches the fleet's ledger to every pool in an epoch.
@@ -110,8 +119,11 @@ func (e *Engine) startCooldownRefresh(ctx context.Context) {
 	if e.backends.Fleet == nil {
 		return
 	}
-	e.cooldowns = &cooldowns{stop: make(chan struct{}), done: make(chan struct{})}
-	go e.cooldowns.run(context.WithoutCancel(ctx), e.refreshCooldowns)
+	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	e.cooldowns = &cooldowns{
+		stop: make(chan struct{}), done: make(chan struct{}), cancel: cancel,
+	}
+	go e.cooldowns.run(loopCtx, e.refreshCooldowns)
 }
 
 // run pulls immediately and then on the tick.
@@ -141,6 +153,18 @@ func (c *cooldowns) run(ctx context.Context, pull func(context.Context)) {
 // replaces the whole provider registry, and a loop holding the boot epoch's
 // pools would be refreshing backends no turn is using.
 func (e *Engine) refreshCooldowns(ctx context.Context) {
+	// BOUNDED BY THE INTERVAL ITSELF, the same rule syncSeatMemory states:
+	// this loop's context is detached, and context.WithoutCancel strips the
+	// DEADLINE as well as the cancellation — so without a bound of its own
+	// a pull against a wedged coordination store blocks for ever. That
+	// matters more here than the lost tick: FleetStore.Since iterates keys,
+	// which the client's default per-API timeout does not cover, and
+	// stopCooldownRefresh waits on this loop. A pull that cannot finish
+	// before the next one is due has fallen behind anyway, and the next
+	// tick re-reads the whole bench, so nothing is lost by abandoning it.
+	ctx, cancel := context.WithTimeout(ctx, cooldownRefresh)
+	defer cancel()
+
 	c := e.Company()
 	if c == nil || c.Models == nil {
 		return
@@ -189,6 +213,12 @@ func (e *Engine) stopCooldownRefresh() {
 	if e.cooldowns == nil {
 		return
 	}
-	e.cooldowns.once.Do(func() { close(e.cooldowns.stop) })
+	// CANCEL INSIDE the once, before the wait: the pull is what the wait is
+	// waiting for, and on a store that has stopped answering the stop
+	// channel alone leaves it parked past its own bound's worst case.
+	e.cooldowns.once.Do(func() {
+		e.cooldowns.cancel()
+		close(e.cooldowns.stop)
+	})
 	<-e.cooldowns.done
 }

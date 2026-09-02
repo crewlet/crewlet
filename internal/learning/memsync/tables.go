@@ -1,5 +1,7 @@
 package memsync
 
+import "slices"
+
 // The tables a seat's memory is made of, and how each one travels.
 //
 // ONE REGISTRY, and it is the whole reason this package is not fifteen
@@ -60,6 +62,14 @@ type table struct {
 	// as the seat learns, a skill's state and use count move, an
 	// onboarding marker flips. Those hold a handful of rows per seat, so
 	// carrying all of them every cycle costs nothing and misses nothing.
+	//
+	// "A handful" is a claim about each table's BOUND, so each has one.
+	// synthesized_skills is capped per agent by the curator's archive
+	// horizon; agent_onboarding_markers is one row per seat by
+	// construction; counterparty_profiles is one row per person a seat has
+	// messaged and is swept at maintenance.CounterpartyRetention — it had
+	// no bound at all, which made it the one table here whose cost grew
+	// with the deployment's age rather than with its size.
 	wholeEachCycle bool
 }
 
@@ -168,20 +178,10 @@ var tables = []table{
 
 // isBlob reports whether a column carries bytes.
 func (t table) isBlob(column string) bool {
-	for _, name := range t.blobs {
-		if name == column {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(t.blobs, column)
 }
 
 // isKey reports whether a column is part of the natural key.
 func (t table) isKey(column string) bool {
-	for _, name := range t.key {
-		if name == column {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(t.key, column)
 }

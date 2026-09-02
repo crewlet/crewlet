@@ -252,7 +252,7 @@ func clusterEpisodes(eps []Episode, minTools int, threshold float64,
 		}
 		joined := false
 		for i := range clusters {
-			if jaccard(ep.ToolSequence, clusters[i].Sequence) >= threshold {
+			if toolJaccard(ep.ToolSequence, clusters[i].Sequence) >= threshold {
 				clusters[i].Episodes = append(clusters[i].Episodes, ep)
 				clusters[i].TurnIDs = append(clusters[i].TurnIDs, ep.TurnID)
 				joined = true

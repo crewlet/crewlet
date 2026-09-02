@@ -3,13 +3,15 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // TurnRef identifies the turn a detached run belongs to.
@@ -50,7 +52,7 @@ type LaunchRequest struct {
 
 	Spec       Spec
 	Setup      []SetupStep
-	MCPServers map[string]map[string]any
+	MCPServers map[string]MCPServer
 	LLM        *AgentLLM
 
 	// ReuseBox is a box this turn already has, paused from an earlier
@@ -270,14 +272,10 @@ func summarise(brief string) string {
 	if len(line) <= briefSummaryLimit {
 		return line
 	}
-	// Never through a rune: a byte slice splits whatever multi-byte
-	// character straddles the cut, and this label reaches the event store
-	// and a dashboard row as JSON.
-	cut := briefSummaryLimit
-	for cut > 0 && !utf8.RuneStart(line[cut]) {
-		cut--
-	}
-	return strings.TrimSpace(line[:cut]) + "…"
+	// Trimmed after the cut, not before: the cut routinely lands mid-word
+	// and leaves the trailing space of the previous one, which would put
+	// the marker a space away from the text it marks.
+	return strings.TrimSpace(textcut.Bytes(line, briefSummaryLimit)) + "…"
 }
 
 // buildBrief assembles what the coding agent is actually told.
@@ -300,10 +298,7 @@ func buildBrief(req LaunchRequest) string {
 			b.WriteString("- " + c + "\n")
 		}
 	}
-	names := make([]string, 0, len(req.MCPServers))
-	for name := range req.MCPServers {
-		names = append(names, name)
-	}
+	names := slices.Collect(maps.Keys(req.MCPServers))
 	b.WriteString("\n")
 	b.WriteString(EnvironmentBrief(req.Setup, names))
 	return b.String()

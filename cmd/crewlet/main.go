@@ -291,9 +291,17 @@ func (t Tier) Valid() bool {
 //
 // A filename is a convention an operator can break and routinely does — and
 // the one thing this must get right is the case where they named the file
-// something else. The two tiers share no top-level key at all, which is what
-// makes the test cheap and unambiguous: `name` and `agents` belong to a
-// company, `node`, `stream`, `store` and `coordination` to a bootstrap.
+// something else. The vocabularies come from the CONFIG STRUCTS themselves
+// (config.CompanyKeys / config.BootstrapKeys), reduced to the keys unique to
+// one tier.
+//
+// Restated by hand here, the list had drifted exactly as a restated list
+// does: it counted `agents`, which appears nowhere in this tree, the schema,
+// the examples or the docs, while omitting `roles`, `units`, `mcp_servers`,
+// `turn_engine` and `scheduling`. A document carrying only `units:` therefore
+// scored nothing on either side and was reported undecidable — the commonest
+// authoring shape, and the one a `crewlet validate -json` fix loop is most
+// often pointed at.
 //
 // An UNDECIDABLE document is an error naming -tier, never a guess. Guessing
 // wrong reports every field of the file as invalid, and an operator reading
@@ -310,11 +318,12 @@ func detectTier(raw []byte) (Tier, error) {
 	}
 	company := 0
 	bootstrap := 0
+	companyKeys, bootstrapKeys := config.CompanyKeys(), config.BootstrapKeys()
 	for key := range doc {
-		switch key {
-		case "name", "agents", "providers", "integrations", "knowledge", "learning":
+		switch {
+		case slices.Contains(companyKeys, key):
 			company++
-		case "node", "stream", "store", "coordination", "api", "secrets", "logging":
+		case slices.Contains(bootstrapKeys, key):
 			bootstrap++
 		}
 	}
@@ -393,11 +402,8 @@ func validateConfigs(args []string, stdout, stderr io.Writer) error {
 	// to parse ZERO flags, discard both tokens and validate ./crewlet.yaml
 	// and ./company.yaml instead — printing a success line about files it
 	// never opened. A fix loop reading that converges on nothing.
-	tail := fs.Args()
-	if file == "" && len(tail) == 1 {
-		file, tail = tail[0], nil
-	}
-	if len(tail) > 0 {
+	file, given := onePositional(fs, file)
+	if given > 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet validate [<file.yaml>] [-tier auto|company|bootstrap] [-json]\n"+
 				"   or: crewlet validate [-config <tier-a.yaml>] [-company <tier-b.yaml>] [-json]")
@@ -581,11 +587,8 @@ func runEngine(args []string, stderr io.Writer) error {
 	// so `crewlet run /etc/crewlet.yaml -debug` used to parse no flags at
 	// all, discard the path, and boot from ./crewlet.yaml — or from
 	// nothing — without ever mentioning the file the operator named.
-	tail := fs.Args()
-	if file == "" && len(tail) == 1 {
-		file, tail = tail[0], nil
-	}
-	if len(tail) > 0 {
+	file, given := onePositional(fs, file)
+	if given > 1 {
 		fmt.Fprintln(stderr, "usage: crewlet run [<config.yaml>] "+
 			"[-company <company.yaml>] [-roles …] [-api-host …] [-api-port …]")
 		return errors.New("name at most one config document")
@@ -890,7 +893,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		ActiveKeyID: boot.Secrets.ActiveKeyID,
 	})
 
-	app := api.New(api.Options{
+	// The contextcheck exemption is for the two PUSH TICKS this constructor
+	// registers — the roster re-send and the health frame. Both manufacture
+	// a bounded context of their own instead of inheriting one, which is
+	// what [api.tickReadBudget] and [api.App.streamHealth] both state is
+	// correct: a tick is a timer, not a request, so there is nothing to
+	// inherit, and a read that outlived the interval firing the next tick
+	// would cost a goroutine per tick for the life of the process. Nothing
+	// else reached from here creates a context.
+	app := api.New(api.Options{ //nolint:contextcheck // see the paragraph above
 		Bootstrap: boot,
 		Runtime:   engineRuntime{engine: e, reconciler: reconciler},
 		// THE ENGINE'S OWN RECEIVER, not a second one built here. In a
@@ -1018,6 +1029,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// and the listener is the one surface an unauthenticated client
 		// can reach.
 		ReadHeaderTimeout: apiReadHeaderTimeout,
+		IdleTimeout:       apiIdleTimeout,
 		BaseContext:       func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
 	}
 	go func() {
@@ -1068,6 +1080,26 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 // against a listener — costs one slot for ten seconds rather than for ever.
 const apiReadHeaderTimeout = 10 * time.Second
 
+// apiIdleTimeout bounds how long a kept-alive connection may sit between
+// requests.
+//
+// Without it net/http falls back to ReadTimeout, which is also unset here — so
+// there was NO deadline at all between keep-alive requests, and a client that
+// completed one request and then went quiet held its slot indefinitely. The
+// neighbouring ReadHeaderTimeout makes the block look complete, which is
+// exactly why this was easy to miss: it bounds the FIRST header, not the
+// silence after a response.
+//
+// Sixty seconds, which is well above any real client's think time — the
+// dashboard polls far faster and its live channel is a websocket, which leaves
+// the keep-alive pool entirely once upgraded — and far below the cost of
+// holding a slot for a client that has gone away without saying so.
+//
+// A blanket ReadTimeout is deliberately NOT the instrument: it caps the whole
+// request including the body, which would put a ceiling on `crewlet backup`
+// and on a large config import. Body reads are bounded per route instead.
+const apiIdleTimeout = 60 * time.Second
+
 // engineRuntime answers the questions only a co-located engine can.
 type engineRuntime struct {
 	engine     *engine.Engine
@@ -1103,7 +1135,7 @@ func (r engineRuntime) Tools() []api.ToolInfo {
 	return out
 }
 
-func (r engineRuntime) Snapshot() api.RuntimeState {
+func (r engineRuntime) Snapshot(ctx context.Context) api.RuntimeState {
 	host := r.engine.Node().Host()
 	state := api.RuntimeState{
 		InFlight:     r.engine.Backends().Queue.InFlightCount(),
@@ -1132,7 +1164,7 @@ func (r engineRuntime) Snapshot() api.RuntimeState {
 		// place an operator can see why a node left rotation, since
 		// /ready answers a bare 503 either way and "draining" and
 		// "cannot apply epoch 41" call for opposite responses.
-		state.Posture = string(r.reconciler.Posture(context.Background()))
+		state.Posture = string(r.reconciler.Posture(ctx))
 		state.AppliedEpoch = r.reconciler.Applied()
 	}
 	return state
@@ -1170,11 +1202,8 @@ func emitSchema(args []string, stdout, stderr io.Writer) error {
 	// holds the trailing form (`schema -o path company`) and anything left
 	// over in either form — a second tier, a typo — which must be an error
 	// rather than a silently ignored argument.
-	tail := fs.Args()
-	if name == "" && len(tail) == 1 {
-		name, tail = tail[0], nil
-	}
-	if len(tail) > 0 {
+	name, given := onePositional(fs, name)
+	if given > 1 {
 		fmt.Fprintf(stderr, "usage: crewlet schema [%s|%s] [-o path]\n",
 			config.TierCompany, config.TierBootstrap)
 		return errors.New("name at most one tier")
@@ -1357,7 +1386,7 @@ func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
 // trailing comma is not a role named "".
 func splitRoles(value string) []string {
 	var out []string
-	for _, name := range strings.Split(value, ",") {
+	for name := range strings.SplitSeq(value, ",") {
 		if name = strings.TrimSpace(name); name != "" {
 			out = append(out, name)
 		}

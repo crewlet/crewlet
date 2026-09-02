@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -111,6 +112,16 @@ func (l *Ledger) Save(path string) error {
 		_ = tmp.Close()
 		return fmt.Errorf("slack: %s: %w", path, err)
 	}
+	// DURABILITY BEFORE VISIBILITY, the rule hostbox.CopyFileAtomic states
+	// and these two did not: os.Rename is atomic against a PROCESS crash,
+	// not a machine one. A rename can be observed before the data behind it
+	// reaches disk, so a power loss between the two leaves a file that
+	// exists and is empty — and this file's own doc calls its contents the
+	// only record of a live credential.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("slack: %s: %w", path, err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("slack: %s: %w", path, err)
 	}
@@ -122,11 +133,7 @@ func (l *Ledger) Save(path string) error {
 
 // Handles names the seats the ledger knows, sorted.
 func (l *Ledger) Handles() []string {
-	out := make([]string, 0, len(l.Apps))
-	for handle := range l.Apps {
-		out = append(out, handle)
-	}
-	sort.Strings(out)
+	out := slices.Sorted(maps.Keys(l.Apps))
 	return out
 }
 

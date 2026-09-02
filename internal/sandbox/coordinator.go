@@ -558,15 +558,31 @@ func (c *Coordinator) announceFailure(ctx context.Context, run PendingRun, reaso
 }
 
 // teardown reclaims a run's box and clears the row's record of it.
+//
+// A CONTEXT OF ITS OWN, like [abandon] and [Manager.discard], and for the
+// same reason: this is reached right after a failure — settleFailed,
+// resumeAndSettle — and from the queue handler a drain cancels, so the
+// context that got us here is very often already dead. Inheriting it makes
+// both calls below no-ops, and the two failures are different and both bad.
+// On a remote provider the box is left to run out its TTL, billed, with the
+// row's record of it already cleared so nothing will ever collect it. On the
+// local one Kill's wait for the process group is what stops removeBox racing
+// the dying wrapper's writes, which is exactly what Kill's own comment says
+// the wait prevents.
+//
+// WithoutCancel rather than Background, so the warnings still carry the
+// turn's values.
 func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 	if run.SandboxID == "" {
 		return
 	}
-	if err := c.mgr().Provider().Kill(ctx, run.SandboxID); err != nil {
+	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	defer cancel()
+	if err := c.mgr().Provider().Kill(killCtx, run.SandboxID); err != nil {
 		log.WarnContext(ctx, "sandbox_teardown_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
 	}
-	if err := c.pending.ReleaseBox(ctx, run.TurnID); err != nil {
+	if err := c.pending.ReleaseBox(killCtx, run.TurnID); err != nil {
 		log.WarnContext(ctx, "sandbox_release_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 }

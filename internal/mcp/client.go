@@ -128,9 +128,6 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 	// window in between rather than about correctness at stop.
 	if c.child != nil {
 		c.child.relay.closeWriter()
-		if p := c.child.cmd.Process; p != nil {
-			c.child.pgid = p.Pid
-		}
 	}
 	if ident != nil {
 		if init := session.InitializeResult(); init != nil {
@@ -388,8 +385,9 @@ func (c *client) reapChild(cleanClose bool) {
 	}
 	// Worth an operator event: this server left something behind, which is
 	// usually a package runner's grandchild and always worth knowing about.
-	c.log.Info("server_tree_reaped", "server", c.name, "pgid", ch.pgid, "clean_close", cleanClose)
-	if err := procgroup.Kill(ch.pgid); err != nil {
+	pgid := ch.groupPID()
+	c.log.Info("server_tree_reaped", "server", c.name, "pgid", pgid, "clean_close", cleanClose)
+	if err := procgroup.Kill(pgid); err != nil {
 		c.log.Warn("server_group_kill_failed", "server", c.name, "error", err.Error())
 	}
 	if ch.relay.drained(stderrReapGrace) {

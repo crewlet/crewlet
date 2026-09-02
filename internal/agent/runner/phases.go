@@ -259,13 +259,13 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 		// rescued turn deliver nothing and report done, so the turn loop
 		// keys on the mark rather than on the synthesised word.
 		log.WarnContext(ctx, "plan_never_submitted", "round", round, "rounds_used", res.Rounds)
-		payload = planPayload{Decision: string(turn.PlanDirect), Reasoning: res.Text}
+		payload = planPayload{Decision: turn.PlanDirect, Reasoning: res.Text}
 	}
 
 	r.emitter().completed(phaseCtx, phaseRecord{
 		Phase: phase.Plan, Iteration: round, System: system, User: user,
 		Result: res.Result, Exhausted: res.Exhausted,
-		Decision: payload.Decision, Rescued: !submitted,
+		Decision: payload.Decision.String(), Rescued: !submitted,
 		Available: surface.Active(),
 		// Plan alone offers a catalogue: the names it was shown as prose,
 		// with no schemas. Sending every MCP server's tool definitions is
@@ -276,7 +276,7 @@ func (r *Runner) Plan(ctx context.Context, round int, notes string, history []le
 	})
 
 	return turn.Plan{
-		Decision:        turn.PlanDecision(payload.Decision),
+		Decision:        payload.Decision,
 		Reasoning:       payload.Reasoning,
 		Summary:         payload.Summary(),
 		ToolsNeeded:     payload.ToolsNeeded,
@@ -409,9 +409,9 @@ func (r *Runner) Review(ctx context.Context, round int, p turn.Plan, e turn.Exec
 		return rescue, nil
 	}
 	r.emitter().completed(phaseCtx, reviewRecord(round, system, r.cfg.Task, res,
-		payload.Decision, payload.Notes, false, surface))
+		payload.Decision.String(), payload.Notes, false, surface))
 	return turn.Review{
-		Decision:      phase.Decision(payload.Decision),
+		Decision:      payload.Decision,
 		Notes:         payload.Notes,
 		CompletedWork: payload.CompletedWork,
 		FinalArtifact: payload.FinalArtifact,

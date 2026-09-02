@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -72,11 +73,14 @@ func (a *App) serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbo
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxOtelBody+1))
 	if err != nil {
-		http.Error(w, "unreadable body", http.StatusBadRequest)
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeUnreadableBody)
 		return
 	}
 	if len(body) > maxOtelBody {
-		http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
+		// The SHARED spelling of a 413. This route answered "payload too
+		// large" as text/plain while two others answered JSON with two
+		// different codes.
+		httpjson.Fail(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge)
 		return
 	}
 

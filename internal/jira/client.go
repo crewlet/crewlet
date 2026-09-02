@@ -1,6 +1,7 @@
 package jira
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -10,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // The REST client.
@@ -128,7 +131,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}
 	client := opts.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: ClientTimeout}
+		client = httpx.Client(ClientTimeout)
 	}
 	return &Client{
 		base:   base,
@@ -191,7 +194,7 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 		if err != nil {
 			return fmt.Errorf("jira: encode %s: %w", path, err)
 		}
-		payload = strings.NewReader(string(encoded))
+		payload = bytes.NewReader(encoded)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, payload)
 	if err != nil {
@@ -219,7 +222,7 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, httpx.MaxResponseBody)).Decode(out); err != nil {
 		return fmt.Errorf("jira: decode %s: %w", path, err)
 	}
 	return nil

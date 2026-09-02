@@ -1,13 +1,13 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
-	"sort"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -211,14 +211,12 @@ func (b *Bridge) StopAll(ctx context.Context) (Change, error) {
 	errs := make([]error, len(entries))
 	var wg sync.WaitGroup
 	for i, e := range entries {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := e.client.stop(ctx); err != nil {
 				b.log.Error("server_stop_failed", "server", e.spec.Name, "error", err.Error())
 				errs[i] = err
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -344,11 +342,7 @@ func (b *Bridge) Has(name string) bool {
 func (b *Bridge) Servers() []string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	out := make([]string, 0, len(b.servers))
-	for name := range b.servers {
-		out = append(out, name)
-	}
-	sort.Strings(out)
+	out := slices.Sorted(maps.Keys(b.servers))
 	return out
 }
 
@@ -464,11 +458,7 @@ func (b *Bridge) release(name string) {
 // The winner is the first server by name, so it does not depend on the order
 // servers happened to be added.
 func (b *Bridge) reindexLocked(before map[string]*Tool) Change {
-	names := make([]string, 0, len(b.servers))
-	for name := range b.servers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(b.servers))
 
 	next := make(map[string]*Tool, len(b.tools))
 	for _, server := range names {
@@ -495,7 +485,7 @@ func (b *Bridge) reindexLocked(before map[string]*Tool) Change {
 		}
 	}
 	sortTools(change.Added)
-	sort.Strings(change.Removed)
+	slices.Sort(change.Removed)
 	return change
 }
 
@@ -532,12 +522,12 @@ func mergeChanges(first, second Change) Change {
 		}
 	}
 	sortTools(out.Added)
-	sort.Strings(out.Removed)
+	slices.Sort(out.Removed)
 	return out
 }
 
 func sortTools(tools []*Tool) {
-	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
+	slices.SortFunc(tools, func(a, b *Tool) int { return cmp.Compare(a.Name(), b.Name()) })
 }
 
 func toolNames(tools []*Tool) []string {

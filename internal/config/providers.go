@@ -224,7 +224,10 @@ func (p *Providers) validate(path string) error {
 // Caught here so it fails `crewlet validate` rather than at the first turn
 // of whichever seat lost the race.
 func (p *Providers) validateSharedStateDirs(path string) error {
-	type claim struct{ key, agent string }
+	type claim struct {
+		key   string
+		agent CLIAgentName
+	}
 	byDir := map[string]claim{}
 	var probs problems
 	// Sorted so the error names the same pair whichever way a map
@@ -381,7 +384,7 @@ func (l *LLMProvider) ResolvedKeys(r *Resolver) []string {
 
 func (l *LLMProvider) validate(path string) error {
 	var p problems
-	if l.Type != "" && !oneOf(l.Type, LLMProviderTypes) {
+	if l.Type != "" && !slices.Contains(LLMProviderTypes, l.Type) {
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", l.Type, names(LLMProviderTypes))
 		return p.err() // every rule below keys on the type
 	}
@@ -409,7 +412,7 @@ func (l *LLMProvider) validate(path string) error {
 					"CLI's reasoning model with `model`")
 		}
 	}
-	if l.ReasoningEffort != "" && !oneOf(l.ReasoningEffort, ReasoningEfforts) {
+	if l.ReasoningEffort != "" && !slices.Contains(ReasoningEfforts, l.ReasoningEffort) {
 		p.add(at(path, "reasoning_effort"), ErrUnknownValue, "%q (want %s)",
 			l.ReasoningEffort, names(ReasoningEfforts))
 	}
@@ -512,13 +515,43 @@ func (c CredentialCooldowns) validate(path string) error {
 
 // ---- the cli-agent backend ------------------------------------------- //
 
-// CLIAgentNames is the closed set of coding CLIs the engine knows how to
-// drive. `custom` ships no defaults at all — supply everything under
-// Overrides.
-var CLIAgentNames = []string{
-	"claude-code", "codex", "gemini-cli", "qwen-code",
-	"opencode", "cursor-agent", "copilot", "grok", "custom",
+// CLIAgentName is which coding CLI a cli-agent provider drives.
+//
+// A NAMED TYPE over a closed set, like every other closed set in this package
+// and unlike the []string this replaces. Two things followed from the bare
+// string. The generated schema emitted `"type":"string"` while its sibling
+// RoleSandbox.CodingAgent emitted an enum, so an editor blessed
+// `agent: claud-code` — which [names]'s own doc calls worse than no schema —
+// and with no `js:` tag the field could not join schema_test.go's enum table,
+// so nothing noticed.
+type CLIAgentName string
+
+// The coding CLIs the engine knows how to drive. `custom` ships no defaults
+// at all — supply everything under Overrides.
+const (
+	CLIClaudeCode  CLIAgentName = "claude-code"
+	CLICodex       CLIAgentName = "codex"
+	CLIGeminiCLI   CLIAgentName = "gemini-cli"
+	CLIQwenCode    CLIAgentName = "qwen-code"
+	CLIOpenCode    CLIAgentName = "opencode"
+	CLICursorAgent CLIAgentName = "cursor-agent"
+	CLICopilot     CLIAgentName = "copilot"
+	CLIGrok        CLIAgentName = "grok"
+	CLICustom      CLIAgentName = "custom"
+)
+
+// CLIAgentNames is the closed set.
+var CLIAgentNames = []CLIAgentName{
+	CLIClaudeCode, CLICodex, CLIGeminiCLI, CLIQwenCode,
+	CLIOpenCode, CLICursorAgent, CLICopilot, CLIGrok, CLICustom,
 }
+
+// Valid reports whether n is one the engine knows.
+//
+// Empty is NOT valid here — unlike an optional enum elsewhere — because the
+// caller checks emptiness first: an absent agent takes the provider's own
+// default rather than meaning "any".
+func (n CLIAgentName) Valid() bool { return slices.Contains(CLIAgentNames, n) }
 
 // CLIAgentAuthMode is how a cli-agent provider authenticates.
 type CLIAgentAuthMode string
@@ -565,7 +598,7 @@ type CLIAgentAuth struct {
 // CLIAgent is the cli-agent block of a providers.llm entry.
 type CLIAgent struct {
 	// Agent is which CLI to drive.
-	Agent string `yaml:"agent,omitempty" json:"agent,omitempty" desc:"Which coding CLI to drive."`
+	Agent CLIAgentName `yaml:"agent,omitempty" json:"agent,omitempty" js:"enum=claude-code|codex|gemini-cli|qwen-code|opencode|cursor-agent|copilot|grok|custom" desc:"Which coding CLI to drive."`
 
 	// StateDir is where this provider keeps its credential directory and
 	// its per-seat homes. Empty derives one per key, so unrelated
@@ -622,11 +655,16 @@ const (
 )
 
 // Name is the CLI to drive, applying the default.
+//
+// A STRING, not a CLIAgentName: the value crosses into internal/providers,
+// which does not import config, and the profile registry it keys is that
+// package's own. The type exists to bound what config ACCEPTS, which is a
+// question answered before this is called.
 func (c *CLIAgent) Name() string {
 	if c.Agent == "" {
 		return defaultCLIAgentName
 	}
-	return c.Agent
+	return string(c.Agent)
 }
 
 // Timeout is the invocation cap, applying the default.
@@ -681,18 +719,9 @@ func (c *CLIAgent) Concurrency() int {
 
 func (c *CLIAgent) validate(path string) error {
 	var p problems
-	if c.Agent != "" {
-		known := false
-		for _, n := range CLIAgentNames {
-			if c.Agent == n {
-				known = true
-				break
-			}
-		}
-		if !known {
-			p.add(at(path, "agent"), ErrUnknownValue, "%q (want %s)",
-				c.Agent, strings.Join(CLIAgentNames, ", "))
-		}
+	if c.Agent != "" && !c.Agent.Valid() {
+		p.add(at(path, "agent"), ErrUnknownValue, "%q (want %s)",
+			c.Agent, names(CLIAgentNames))
 	}
 	if c.TimeoutSeconds < 0 {
 		p.add(at(path, "timeout_seconds"), ErrOutOfRange,
@@ -704,7 +733,7 @@ func (c *CLIAgent) validate(path string) error {
 			"must be 0 (the default of %d) or positive, got %d",
 			defaultCLIMaxConcurrent, c.MaxConcurrent)
 	}
-	if c.Auth.Mode != "" && !oneOf(c.Auth.Mode, CLIAgentAuthModes) {
+	if c.Auth.Mode != "" && !slices.Contains(CLIAgentAuthModes, c.Auth.Mode) {
 		p.add(at(path, "auth.mode"), ErrUnknownValue, "%q (want %s)",
 			c.Auth.Mode, names(CLIAgentAuthModes))
 	}
@@ -754,7 +783,7 @@ func (e *EmbeddingProvider) Width() int {
 
 func (e *EmbeddingProvider) validate(path string) error {
 	var p problems
-	if e.Type != "" && !oneOf(e.Type, EmbeddingProviderTypes) {
+	if e.Type != "" && !slices.Contains(EmbeddingProviderTypes, e.Type) {
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", e.Type, names(EmbeddingProviderTypes))
 	}
 	if strings.TrimSpace(e.Model) == "" {

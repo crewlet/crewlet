@@ -597,12 +597,10 @@ func (q *Queue) Stop(ctx context.Context) error {
 	// this step instead of stranding every attachment behind it.
 	var wg sync.WaitGroup
 	for _, a := range atts {
-		wg.Add(1)
-		go func(a *attachment) {
-			defer wg.Done()
+		wg.Go(func() {
 			a.close()
 			a.wait(stopGrace)
-		}(a)
+		})
 	}
 	wg.Wait()
 

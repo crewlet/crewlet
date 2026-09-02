@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -355,7 +355,7 @@ func (w *Workspace) LoginFiles() []string {
 			out = append(out, path)
 		}
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

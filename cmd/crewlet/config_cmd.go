@@ -84,12 +84,9 @@ func runConfig(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
-	tail := fs.Args()
-	if subject == "" && len(tail) == 1 {
-		subject, tail = tail[0], nil
-	}
-	if len(tail) > 0 {
-		return fmt.Errorf("config %s takes one argument, got %d", sub, len(tail)+1)
+	subject, given := onePositional(fs, subject)
+	if given > 1 {
+		return fmt.Errorf("config %s takes one argument, got %d", sub, given)
 	}
 
 	ctx := context.Background()
@@ -153,8 +150,7 @@ func openConfigStore(ctx context.Context, bootstrapPath string) (*configStore, f
 	}
 	db, err := store.Open(ctx, boot.Store.Path, store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
-		BusyTimeout: time.Duration(
-			boot.Store.BusyTimeoutSeconds * float64(time.Second)),
+		BusyTimeout:  boot.Store.BusyTimeout(),
 	})
 	if err != nil {
 		// A LOCKED STORE HAS A ROUTE AROUND IT, and naming it here is the

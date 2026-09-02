@@ -1,10 +1,10 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
@@ -44,52 +44,13 @@ type Company struct {
 	// that gives each role its own child holding that role's credentials,
 	// and two children of one template publish the same tool names — so
 	// they cannot live in one registry without one shadowing the other and
-	// every seat calling whichever won. Per-role tools go in seatTools.
-	Tools *tools.Registry
-
-	// seatTools is one registry per seat this NODE runs, built when the
-	// seat is claimed and dropped when it is released.
+	// every seat calling whichever won.
 	//
-	// Only the seats this node holds: a fleet claims a slice of the
-	// company each, and a node that spawned every seat's children would
-	// run the whole company's MCP processes N times over. Absent means "no
-	// per-role children here", and [Company.ToolsFor] then serves the
-	// shared surface — which is the correct surface for a seat whose
-	// company declares no per-role server at all.
-	seatMu    sync.RWMutex
-	seatTools map[string]*tools.Registry
-}
-
-// ToolsFor is the surface one seat's turns run against.
-//
-// The seat's own registry when this node has claimed it, and the shared one
-// otherwise. Never nil: a seat with no per-role children still has the
-// builtins, and returning nil here would fail the turn rather than run it with
-// the tools it does have.
-func (c *Company) ToolsFor(handle string) *tools.Registry {
-	c.seatMu.RLock()
-	defer c.seatMu.RUnlock()
-	if reg, ok := c.seatTools[handle]; ok {
-		return reg
-	}
-	return c.Tools
-}
-
-// setSeatTools installs a claimed seat's own surface.
-func (c *Company) setSeatTools(handle string, reg *tools.Registry) {
-	c.seatMu.Lock()
-	defer c.seatMu.Unlock()
-	if c.seatTools == nil {
-		c.seatTools = make(map[string]*tools.Registry)
-	}
-	c.seatTools[handle] = reg
-}
-
-// dropSeatTools forgets a released seat's surface.
-func (c *Company) dropSeatTools(handle string) {
-	c.seatMu.Lock()
-	defer c.seatMu.Unlock()
-	delete(c.seatTools, handle)
+	// A seat this node has CLAIMED runs against a clone of this with its
+	// own children filed in, and that clone lives on the [Engine] rather
+	// than here: it belongs to the seat's LEASE, and an epoch is replaced
+	// wholesale by every apply. See the seatTools field in run.go.
+	Tools *tools.Registry
 }
 
 // NewCompany builds an epoch from a validated config.
@@ -174,32 +135,36 @@ func (c *Company) Seats() []placement.Seat {
 	// is not a property the org model promises, and a fleet that reshuffled
 	// its eligibility list every tick would churn seats for no reason.
 	slices.SortFunc(out, func(a, b placement.Seat) int {
-		switch {
-		case a.Handle < b.Handle:
-			return -1
-		case a.Handle > b.Handle:
-			return 1
-		default:
-			return 0
-		}
+		return cmp.Compare(a.Handle, b.Handle)
 	})
 	return out
 }
 
-// RunnerFor builds the phase runner for one seat.
+// RunnerFor builds the phase runner for one seat, against the tool surface
+// this node gives it.
 //
 // Per turn, not cached. A runner holds the turn's task and its conversation
 // history, both of which are per-turn facts; caching one per seat would carry
 // the previous turn's ask into the next one.
-func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, error) {
+//
+// reg is an explicit PARAMETER rather than something the epoch looks up,
+// because the seat's own surface is a fact about this node's leases and not
+// about the configuration: only the node that claimed the seat has its
+// per-role children. Pass [Engine.seatRegistry]; nil falls back to the
+// epoch's shared surface, which is the correct answer for a seat that
+// declares no per-role server and for any caller that holds no lease.
+func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) (*runner.Runner, error) {
 	role := c.Org.AgentSeatByHandle(handle)
 	if role == nil {
 		return nil, fmt.Errorf("engine: %q is not an agent seat in this company", handle)
 	}
+	if reg == nil {
+		reg = c.Tools
+	}
 	te := c.Config.TurnEngine
 	return runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: c.Org, Role: role},
-		Registry: c.ToolsFor(handle),
+		Registry: reg,
 		Models:   c.Models,
 		Caps: runner.Caps{
 			PlanRounds:     te.PlanMaxToolRounds,

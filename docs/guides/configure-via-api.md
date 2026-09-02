@@ -147,6 +147,11 @@ consequences worth knowing before you script against it:
   company; you get `400 validation_error` naming the field. This is the point
   of validating whole — you never see the rest of the document, so it is the
   one place that break can be caught.
+- **An unknown field is refused, not dropped.** A body carrying `gaol` where
+  you meant `goal` is `400 invalid_body` naming the field, exactly as the
+  whole-document parser refuses an unknown key. A decoder that ignored what it
+  did not recognise would answer `201` and store a seat with no goal, and this
+  is the surface most likely to be hand-edited in a hurry.
 - **A `PUT` never creates.** An id the active revision does not carry is
   `404 no_such_entity`. Naming one that is not there is far more often a typo
   than an intent to add a seat, and adding through this route would grow the

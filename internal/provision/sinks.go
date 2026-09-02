@@ -5,9 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -165,7 +166,7 @@ func NewEnvFileSink(path string) (*EnvFileSink, error) {
 	body, err := os.ReadFile(path)
 	switch {
 	case err == nil:
-		for _, line := range strings.Split(string(body), "\n") {
+		for line := range strings.SplitSeq(string(body), "\n") {
 			if name, value, ok := envfile.ParseAssignment(line); ok {
 				s.values[name] = value
 			}
@@ -248,13 +249,10 @@ func (s *EnvFileSink) NextStep() string {
 // partial write from an interrupted run would lose the ones below the cut,
 // and they would still exist at the vendor.
 func (s *EnvFileSink) rewrite() error {
-	names := make([]string, 0, len(s.values))
-	for name := range s.values {
-		names = append(names, name)
-	}
+	names := slices.Collect(maps.Keys(s.values))
 	// SORTED, so a rotation produces a diff an operator can read rather
 	// than a reshuffle of the whole file.
-	sort.Strings(names)
+	slices.Sort(names)
 
 	var body strings.Builder
 	body.WriteString("# Written by `crewlet ... provision`. Values are single-quoted\n" +
@@ -281,6 +279,16 @@ func (s *EnvFileSink) rewrite() error {
 	// and one before it would be a second statement of a guarantee the
 	// standard library already makes.
 	if _, err := io.WriteString(tmp, body.String()); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("provision: %s: %w", s.path, err)
+	}
+	// DURABILITY BEFORE VISIBILITY, the rule hostbox.CopyFileAtomic states
+	// and these two did not: os.Rename is atomic against a PROCESS crash,
+	// not a machine one. A rename can be observed before the data behind it
+	// reaches disk, so a power loss between the two leaves a file that
+	// exists and is empty — and this file's own doc calls its contents the
+	// only record of a live credential.
+	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("provision: %s: %w", s.path, err)
 	}
@@ -395,10 +403,5 @@ func (s *PrintSink) NextStep() string {
 }
 
 func contains(names []string, want string) bool {
-	for _, name := range names {
-		if name == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(names, want)
 }

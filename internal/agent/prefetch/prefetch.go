@@ -5,6 +5,7 @@ package prefetch
 
 import (
 	"context"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -133,9 +134,16 @@ type Models interface {
 }
 
 // Diary is the seat's own memory, as much of it as this package reads.
+//
+// MarkRetrieved is a WRITE, and it is here rather than on the learning side's
+// own schedule because this package is the only one that knows which entries
+// were actually USED: the trim that bounds a seat's durable memory evicts by
+// retrieval count, so an unmarked recall makes it evict by age instead —
+// exactly what the cap exists not to do.
 type Diary interface {
 	Recall(ctx context.Context, agentID string, q learning.RecallQuery, now time.Time) ([]learning.DiaryHit, error)
 	Recent(ctx context.Context, agentID string, now time.Time, limit int) ([]learning.DiaryEntry, error)
+	MarkRetrieved(ctx context.Context, ids []string, at time.Time)
 }
 
 // Episodes is the seat's record of past turns.
@@ -217,15 +225,8 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 		blocks Blocks
 		wg     sync.WaitGroup
 	)
-	spawn := func(render func()) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			render()
-		}()
-	}
 	run := func(into *string, render func() string) {
-		spawn(func() {
+		wg.Go(func() {
 			defer recoverInto(into)
 			*into = render()
 		})
@@ -234,9 +235,9 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 	run(&blocks.RelevantKnowledge, func() string { return f.relevantKnowledge(ctx, r) })
 	run(&blocks.EpisodeRecall, func() string { return f.episodeRecall(ctx, r) })
 	run(&blocks.CounterpartyProfile, func() string { return f.counterpartyProfile(ctx, r) })
-	// Its own spawn rather than a run(), because it is the one block that
+	// Its own goroutine rather than a run(), because it is the one block that
 	// reports something back besides its prose.
-	spawn(func() {
+	wg.Go(func() {
 		defer recoverSkills(&blocks.SynthesizedSkills, &blocks.SkillIDs)
 		blocks.SynthesizedSkills, blocks.SkillIDs = f.synthesizedSkills(ctx, r)
 	})
@@ -251,11 +252,11 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 // the whole PROCESS down rather than the turn — and these renderers read
 // stores, decode model output and index into slices whose length came from
 // an LLM. That is a wide enough surface that "this must never panic" is a
-// hope rather than a guarantee, and the guarantee is worth more than the
-// stack trace.
+// hope rather than a guarantee. The stack goes in the log line, so recovering
+// costs the process nothing an unrecovered panic would have told anyone.
 func recoverInto(into *string) {
 	if r := recover(); r != nil {
-		log.Error("prefetch_block_panicked", "panic", r)
+		log.Error("prefetch_block_panicked", "panic", r, "stack", string(debug.Stack()))
 		*into = ""
 	}
 }
@@ -267,7 +268,7 @@ func recoverInto(into *string) {
 // one way this list can lie to the curator.
 func recoverSkills(into *string, ids *[]string) {
 	if r := recover(); r != nil {
-		log.Error("prefetch_block_panicked", "panic", r)
+		log.Error("prefetch_block_panicked", "panic", r, "stack", string(debug.Stack()))
 		*into, *ids = "", nil
 	}
 }

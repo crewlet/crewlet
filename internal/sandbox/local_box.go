@@ -5,10 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
@@ -70,7 +69,7 @@ func flattenEnv(env map[string]string) []string {
 	for key, value := range env {
 		out = append(out, key+"="+value)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -79,17 +78,17 @@ func flattenEnv(env map[string]string) []string {
 // ---------------------------------------------------------------------
 
 // directBox is a [Sandbox] that is a process tree on the engine host.
+//
+// IT HOLDS NO HANDLE ON THE JOB IT STARTED, and that is the design rather
+// than an omission: a detached run outlives the turn that started it and is
+// torn down by a LATER process, possibly after a restart, so the only
+// addressable thing is the pid file. Close reads it (see [readPID]); an
+// *exec.Cmd on the struct could only ever be right in the one process that
+// happened to start the job.
 type directBox struct {
 	layout      boxLayout
 	env         map[string]string
 	credentials map[string]string
-
-	// mu guards job, which Close and StartBackground both touch.
-	mu sync.Mutex
-	// job is held so the Wait goroutine that reaps the detached process
-	// keeps running and the child is never left a zombie. See
-	// StartBackground.
-	job *exec.Cmd
 }
 
 var _ Sandbox = (*directBox)(nil)
@@ -191,10 +190,6 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 	// the job's OUTCOME from the marker and result files it wrote, and a
 	// non-zero exit is one of the outcomes those already describe.
 	go func() { _ = proc.Wait() }()
-
-	b.mu.Lock()
-	b.job = proc
-	b.mu.Unlock()
 
 	pid := proc.Process.Pid
 	if err := os.MkdirAll(b.layout.meta(), hostbox.DirMode); err == nil {

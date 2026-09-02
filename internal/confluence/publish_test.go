@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -244,10 +246,7 @@ func (w *wiki) serve(rw http.ResponseWriter, req *http.Request) {
 }
 
 func (w *wiki) sortedIDs() []string {
-	out := make([]string, 0, len(w.pages))
-	for id := range w.pages {
-		out = append(out, id)
-	}
+	out := slices.Collect(maps.Keys(w.pages))
 	// Insertion order is not stable across map walks; sorting keeps the
 	// fake's answer the same on every run.
 	for i := range out {

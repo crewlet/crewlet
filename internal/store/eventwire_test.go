@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"encoding/json"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -98,10 +99,6 @@ func wireKeys(t *testing.T, rec store.EventRecord) []string {
 }
 
 func sortedKeys(m map[string]any) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(m))
 	return out
 }

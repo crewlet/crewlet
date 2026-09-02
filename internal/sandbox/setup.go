@@ -3,8 +3,8 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -121,11 +121,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 	for _, step := range steps {
 		// Deterministic order: a step writing several files may depend on
 		// the directory another created, and map iteration is randomised.
-		paths := make([]string, 0, len(step.Files))
-		for path := range step.Files {
-			paths = append(paths, path)
-		}
-		sort.Strings(paths)
+		paths := slices.Sorted(maps.Keys(step.Files))
 		for _, path := range paths {
 			if err := box.WriteFile(ctx, path, []byte(step.Files[path])); err != nil {
 				return &SetupError{Step: step.Name, Detail: err.Error()}
@@ -186,7 +182,7 @@ func EnvironmentBrief(steps []SetupStep, mcpServers []string) string {
 	}
 	if len(mcpServers) > 0 {
 		names := slices.Clone(mcpServers)
-		sort.Strings(names)
+		slices.Sort(names)
 		lines = append(lines, "You also have these MCP tool servers connected: "+
 			strings.Join(names, ", ")+".")
 	}

@@ -1,8 +1,9 @@
 package queries
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -48,8 +49,8 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			"expires_in": secondsLeft(lease.ExpiresAt, now),
 		})
 	}
-	sort.Slice(seatRows, func(i, j int) bool {
-		return seatRows[i]["handle"].(string) < seatRows[j]["handle"].(string)
+	slices.SortFunc(seatRows, func(a, b map[string]any) int {
+		return cmp.Compare(a["handle"].(string), b["handle"].(string))
 	})
 
 	applied := s.applyStatus(ctx)
@@ -90,8 +91,8 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		}
 		nodeRows = append(nodeRows, row)
 	}
-	sort.Slice(nodeRows, func(i, j int) bool {
-		return nodeRows[i]["id"].(string) < nodeRows[j]["id"].(string)
+	slices.SortFunc(nodeRows, func(a, b map[string]any) int {
+		return cmp.Compare(a["id"].(string), b["id"].(string))
 	})
 
 	dutyRows := make([]map[string]any, 0, len(duties))
@@ -102,8 +103,8 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			"expires_in": secondsLeft(lease.ExpiresAt, now),
 		})
 	}
-	sort.Slice(dutyRows, func(i, j int) bool {
-		return dutyRows[i]["duty"].(string) < dutyRows[j]["duty"].(string)
+	slices.SortFunc(dutyRows, func(a, b map[string]any) int {
+		return cmp.Compare(a["duty"].(string), b["duty"].(string))
 	})
 
 	return map[string]any{
@@ -218,8 +219,8 @@ func (s Sources) unplaceable(nodes, seats []map[string]any) []map[string]any {
 			"placement": role.Placement,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i]["handle"].(string) < out[j]["handle"].(string)
+	slices.SortFunc(out, func(a, b map[string]any) int {
+		return cmp.Compare(a["handle"].(string), b["handle"].(string))
 	})
 	return out
 }
@@ -258,7 +259,7 @@ func unmannedRoles(nodes []map[string]any) []string {
 			out = append(out, string(role))
 		}
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
