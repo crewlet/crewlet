@@ -57,6 +57,14 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	state := r.cfg.Resume.State
 	answer := r.cfg.Resume.Answer
 
+	if state.AgentRun {
+		// THE STATE DECIDES, NOT THE CONFIG. A run launched as an agentic
+		// one is collected as one however the company's providers have
+		// been applied in the days it was parked — see
+		// [execstate.State.AgentRun].
+		return r.resumeAgentRun(ctx, state, answer, r.cfg.Resume.Bridged)
+	}
+
 	snapshot := r.cfg.Registry.Snapshot()
 
 	// The submission tool is rebuilt, not replayed: it is where the phase

@@ -22,10 +22,27 @@
           "minimum": 0,
           "type": "integer"
         },
+        "mode": {
+          "description": "text (a model behind the engine's tool loop) or agent (the CLI runs the executor).",
+          "enum": [
+            "text",
+            "agent"
+          ],
+          "type": "string"
+        },
         "overrides": {
           "additionalProperties": {},
           "description": "Field-wise overrides of the built-in CLI profile.",
           "type": "object"
+        },
+        "run_in": {
+          "description": "Where an agent-mode run happens. Empty = providers.sandbox.default_run_in.",
+          "enum": [
+            "direct",
+            "container",
+            "e2b"
+          ],
+          "type": "string"
         },
         "state_dir": {
           "description": "Credential + per-seat home directory. Entries sharing one share a login.",
@@ -1356,11 +1373,12 @@
           "type": "number"
         },
         "run_in": {
-          "description": "Where this seat's code work runs. Empty inherits providers.sandbox.default_run_in.",
+          "description": "Where this seat's code work runs; self = inside its own agent-mode executor run. Empty inherits providers.sandbox.default_run_in.",
           "enum": [
             "direct",
             "container",
-            "e2b"
+            "e2b",
+            "self"
           ],
           "type": "string"
         },

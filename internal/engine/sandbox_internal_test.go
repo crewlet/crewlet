@@ -301,7 +301,16 @@ func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
 // boot proves nothing. Hence a test that walks the set.
 func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 	t.Parallel()
-	for _, placement := range config.Placements {
+	// EXACTLY ONE CELL IS EXEMPT, and it is exempt because it is not a
+	// backend: `self` is the executor's own agent-mode run, so nothing
+	// builds a provider for it. Asserted rather than assumed, so a fifth
+	// cell added tomorrow cannot quietly join the exemption.
+	for _, p := range config.Placements {
+		if p.NeedsBackend() != (p != config.PlacementSelf) {
+			t.Fatalf("%q disagrees with itself about needing a backend", p)
+		}
+	}
+	for _, placement := range config.BackendPlacements() {
 		spec := &config.SandboxProvider{
 			// The one backend with a required credential of its own: the
 			// API authenticates every call, so a provider built without
@@ -352,7 +361,7 @@ func TestAnEmptyCatalogueIsNotEnabled(t *testing.T) {
 func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
 	t.Parallel()
 	spec := &config.SandboxProvider{Fake: true}
-	for _, placement := range config.Placements {
+	for _, placement := range config.BackendPlacements() {
 		provider, err := buildSandboxProvider(spec, nil, placement)
 		if err != nil {
 			t.Fatalf("the double cannot serve %q: %v", placement, err)

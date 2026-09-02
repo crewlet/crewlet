@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -18,6 +19,40 @@ import (
 // the coordination store, which is the same row the resume reads — and without
 // it a restart mid-run leaves the reviewer judging a turn whose entire tool log
 // is gone, which the delivery check reads as a turn that acted on nothing.
+
+// bridgedCalls turns a run's durable bridged-call log into the ledger shape
+// the resumed phase reads.
+//
+// THE ONLY RECORD AN AGENT-MODE RESUME HAS. The process collecting a run may
+// not be the one that launched it, so its tool surface is fresh and has
+// executed nothing: the delivery check, the submission's citations and the
+// iteration ledger all read this list. A call whose arguments cannot be
+// decoded keeps its name and loses its arguments, which renders one ledger
+// line worse — failing the resume over it would lose the whole turn.
+func bridgedCalls(logged []sandbox.BridgeCall) []ledger.Call {
+	out := make([]ledger.Call, 0, len(logged))
+	for _, call := range logged {
+		out = append(out, ledger.Call{
+			Name:   call.Name,
+			Args:   decodeBridgeArgs(call.Args),
+			Result: call.Output,
+			Failed: call.Failed,
+		})
+	}
+	return out
+}
+
+// decodeBridgeArgs reads the JSON text a bridged call was recorded with.
+func decodeBridgeArgs(raw string) map[string]any {
+	if raw == "" {
+		return nil
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return nil
+	}
+	return args
+}
 
 // bridgeLedger appends a bridged run's calls to its pending-run row.
 type bridgeLedger struct{ store sandbox.PendingStore }

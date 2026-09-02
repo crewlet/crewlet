@@ -140,8 +140,21 @@ roles:
 | `direct` | `local:` | the engine user, on the host | yes | **no** | the coding CLI installed on that host |
 | `container` | `local:` | a PID in a Docker/Podman container | yes | yes | `local.image` with the coding CLI |
 | `e2b` | `e2b:` | a fresh remote VM per run | yes | yes | `e2b.api_key` |
+| `self` | *none* | inside this seat's own executor run | — | — | an executor in [agent mode](subscription-llm-backends.md#agent-mode) |
 
-A seat that names none takes `providers.sandbox.default_run_in`, resolved at **launch** rather than at config time, so changing the catalogue reaches every seat that wrote nothing without rewriting their blocks. Validation refuses the impossible and nothing else: a `run_in` whose backend is not configured, a company default naming an unconfigured backend, an ambiguous catalogue with no default, and a seat with an enabled gate in a company with no catalogue at all — each of which otherwise reads as working configuration and does nothing.
+**`self` is the one cell with no backend**, because it *is* the
+executor's box. A seat whose executor is a coding CLI in agent mode
+already holds a shell, an editor and a checkout; provisioning a second
+box beside it would give the seat two filesystems with the work in the
+one the turn cannot see. So `run_sandbox` refuses on such a seat with a
+message saying to use the shell it already has, and nothing is
+provisioned. It is refused on any other runtime — there the seat has no
+shell of its own, and `self` would read as a working choice while
+quietly turning code work off — and it cannot be a company-wide
+`default_run_in`, which would do exactly that to every seat that is not
+in agent mode.
+
+An **agent-mode executor** is placed by its own entry's `cli.run_in` rather than by the seat's, because where that runtime runs is a property of the runtime: the CLI's subscription login is on the engine host, so a local cell reaches it directly while a remote one needs the headless token instead. A seat that names none takes `providers.sandbox.default_run_in`, resolved at **launch** rather than at config time, so changing the catalogue reaches every seat that wrote nothing without rewriting their blocks. Validation refuses the impossible and nothing else: a `run_in` whose backend is not configured, a company default naming an unconfigured backend, an ambiguous catalogue with no default, and a seat with an enabled gate in a company with no catalogue at all — each of which otherwise reads as working configuration and does nothing.
 
 **A run remembers its cell.** The placement is written onto the run's durable row *before the box exists*, and reconnect, teardown and the pause reaper all read it from there. It is not re-derived: the turn that collects a run may be a different process on a different node, days later, with the company configuration applied again in between — and reconnecting to a remote box through the local backend does not error usefully, it reports a box that has vanished, so a job that is still running would be abandoned as gone. A row written before the field existed decodes empty and takes the default, so a rolling upgrade strands nothing.
 

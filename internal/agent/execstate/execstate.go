@@ -101,6 +101,23 @@ type State struct {
 	// re-enters with the same brief rather than one rebuilt from a trigger
 	// that may no longer be readable.
 	Task string `json:"task_description"`
+
+	// AgentRun marks a suspension whose executor IS the detached run: a
+	// coding CLI in agent mode drove its own loop, so there is no engine
+	// conversation to re-enter and no dangling call to answer.
+	//
+	// It changes what the resume DOES, which is why the flag is on the
+	// state rather than re-derived from the config at resume time: the
+	// company's providers may have been applied again while the run was
+	// parked, and a run launched as an agentic one must be collected as
+	// one whatever the config says days later. The alternative — reading
+	// the seat's provider at resume — resumes an agent run into a native
+	// tool loop with no messages, which rescues a turn that in fact
+	// delivered.
+	//
+	// A false value is what every earlier row decodes to and is exactly
+	// right for them: they are all native suspensions.
+	AgentRun bool `json:"agent_run,omitempty"`
 }
 
 // ErrUnknownVersion reports a state this build cannot read.
@@ -125,6 +142,18 @@ var ErrDanglingCalls = errors.New("execstate: more than one unanswered tool call
 func (s State) Validate() error {
 	if s.Version != Version {
 		return fmt.Errorf("%w: %d (this build writes %d)", ErrUnknownVersion, s.Version, Version)
+	}
+	if s.AgentRun {
+		// AN AGENT RUN HAS NO CONVERSATION, so every invariant below is
+		// about a shape it does not have. What it must NOT have is
+		// messages: a state carrying both would be ambiguous about which
+		// resume it wants, and the ambiguity resolves differently in the
+		// two builds of a rolling upgrade.
+		if len(s.Messages) > 0 {
+			return fmt.Errorf("%w: an agent run carries no engine conversation, "+
+				"but this state has %d messages", ErrDanglingCalls, len(s.Messages))
+		}
+		return nil
 	}
 	if s.PendingCallID == "" {
 		return ErrNoPendingCall

@@ -166,7 +166,7 @@ type RoleSandbox struct {
 	// whose generated code must never touch the engine host are different
 	// seats, and the block-wide `type:` this replaced could answer only for
 	// both at once.
-	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where this seat's code work runs. Empty inherits providers.sandbox.default_run_in."`
+	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b|self" desc:"Where this seat's code work runs; self = inside its own agent-mode executor run. Empty inherits providers.sandbox.default_run_in."`
 
 	// CodingAgent overrides the provider-wide default for this seat only.
 	// Empty inherits it, resolved at LAUNCH rather than at config time, so

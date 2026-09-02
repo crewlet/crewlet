@@ -125,6 +125,12 @@ type Config struct {
 	// runner's turn a RESUME: the executor continues the saved
 	// conversation rather than starting one. See [Runner.Resume].
 	Resume *Resume
+
+	// AgentRun runs the executor as somebody else's agentic loop instead
+	// of the engine's own. Nil is the native tool loop, which is what
+	// every seat on an API provider has and what a cli-agent entry in
+	// text mode has. See agentrun.go.
+	AgentRun AgentLauncher
 }
 
 // Resume is a suspended Execute conversation plus the answer that unblocks it.
@@ -134,6 +140,15 @@ type Resume struct {
 	// Answer is what the pending run_sandbox call is answered with: the
 	// coding agent's findings, or a person's reply to its question.
 	Answer string
+
+	// Bridged is what an AGENT-MODE run called over the MCP bridge, read
+	// from the run's own durable row.
+	//
+	// It is the whole record for that shape, and it has to come from the
+	// row rather than from memory: the process resuming may not be the one
+	// that launched, so its surface is fresh and has executed nothing.
+	// Ignored by a native resume, which replays the conversation instead.
+	Bridged []ledger.Call
 }
 
 // Runner implements [turn.Phases] against real models and real tools.
@@ -211,6 +226,13 @@ func New(cfg Config) (*Runner, error) {
 // it was never shown — so it guessed, and the engine spent a whole subsystem
 // reconciling those guesses with reality.
 func (r *Runner) Execute(ctx context.Context, round int, notes string, history []ledger.Iteration) (turn.Work, turn.Surface, error) {
+	if r.cfg.AgentRun != nil {
+		// AGENT MODE. The executor is somebody else's loop, detached; see
+		// agentrun.go for what that does and does not change. The branch
+		// is here, at the top of the phase, because everything below it
+		// is the native loop's own assembly.
+		return r.executeAsAgentRun(ctx, round, notes, history)
+	}
 	snapshot := r.cfg.Registry.Snapshot()
 
 	// The submission is validated against THIS surface's live record, so
@@ -230,28 +252,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 	}
 	surface = built
 
-	system := prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
-		ToolCatalogue:  r.cfg.Registry.Catalogue(),
-		AvailableTools: snapshot.Names(),
-
-		PersonalMemory:      r.cfg.Context.PersonalMemory,
-		RelevantKnowledge:   r.cfg.Context.RelevantKnowledge,
-		EpisodeRecall:       r.cfg.Context.EpisodeRecall,
-		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
-		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
-		OnboardingHint:      r.onboardingHint(),
-		Workers:             r.workerCatalogue(),
-		// The tool-skill catalogue, offered against the surface this
-		// phase actually has — and nil where a company has published
-		// none, which keeps the prompt free of skill scaffolding rather
-		// than rendering an empty section.
-		Skills: r.catalogue(),
-	})
-	user := prompts.BuildPhaseUserMessage(prompts.UserMessage{
-		TaskDescription:     r.taskFor(notes),
-		PriorWork:           ledger.RenderIterations(history, r.cfg.SkipNames),
-		ConversationHistory: r.cfg.Conversation,
-	})
+	system, user := r.executorPrompt(round, notes, history, snapshot)
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface, system: system, user: user,
@@ -277,6 +278,44 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		submit: submit, res: res, surface: surface, snapshot: snapshot,
 		system: system, user: user,
 	})
+}
+
+// executorPrompt is the executor's opening: its system message and the turn's
+// own ask.
+//
+// ONE BUILDER FOR BOTH RUNTIMES. A native pass sends these as two messages and
+// an agent-mode run sends them as one document, because a coding CLI takes a
+// single prompt — but they are the same seat with the same catalogue, memory,
+// skills and workers, and a second builder would drift on whichever half
+// nobody re-reads. The `round` is unused today and taken anyway, so a prompt
+// that ever needs to know which iteration it is does not change this
+// signature at two call sites.
+func (r *Runner) executorPrompt(_ int, notes string, history []ledger.Iteration,
+	snapshot tools.Snapshot,
+) (system, user string) {
+	system = prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
+		ToolCatalogue:  r.cfg.Registry.Catalogue(),
+		AvailableTools: snapshot.Names(),
+
+		PersonalMemory:      r.cfg.Context.PersonalMemory,
+		RelevantKnowledge:   r.cfg.Context.RelevantKnowledge,
+		EpisodeRecall:       r.cfg.Context.EpisodeRecall,
+		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
+		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
+		OnboardingHint:      r.onboardingHint(),
+		Workers:             r.workerCatalogue(),
+		// The tool-skill catalogue, offered against the surface this
+		// phase actually has — and nil where a company has published
+		// none, which keeps the prompt free of skill scaffolding rather
+		// than rendering an empty section.
+		Skills: r.catalogue(),
+	})
+	user = prompts.BuildPhaseUserMessage(prompts.UserMessage{
+		TaskDescription:     r.taskFor(notes),
+		PriorWork:           ledger.RenderIterations(history, r.cfg.SkipNames),
+		ConversationHistory: r.cfg.Conversation,
+	})
+	return system, user
 }
 
 // work is one executor pass, assembled for reporting.

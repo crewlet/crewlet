@@ -806,6 +806,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	tel.skills = blocks.SkillIDs
 
 	reply := ReplyFor(req.Events)
+	turnIdentity := tel.runnerTurn(company, req.WorkKey, req.Depth, req.DelegationChain,
+		task, reply)
 	r, err := company.RunnerFor(req.Handle, RunnerInput{
 		Task:         task,
 		Context:      blocks,
@@ -813,10 +815,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		Reply:        reply,
 		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{}),
 		Publisher:    e.backends.Queue,
-		Turn: tel.runnerTurn(company, req.WorkKey, req.Depth, req.DelegationChain,
-			task, reply),
-		Markers: e.markers(),
-		Latch:   e.onboarded,
+		Turn:         turnIdentity,
+		// The executor's runtime, from the seat's own provider chain —
+		// see [Engine.agentRunFor].
+		AgentRun: e.agentRunFor(company, req.Handle, turnIdentity.Context),
+		Markers:  e.markers(),
+		Latch:    e.onboarded,
 		// Read off the PINNED epoch, so a revision that raises a ceiling
 		// mid-turn cannot move the limit a round is judged against.
 		Budget: e.meterFor(company, req.Handle),

@@ -46,6 +46,26 @@ func (c *capture) blocked() []*types.ToolSkillGuardBlocked {
 	return out
 }
 
+// promptsFor is the opening prompt each phase published, as the live view
+// renders it: the round with RoundNum -1 carries the whole conversation.
+func (c *capture) promptsFor(ph string) []string {
+	c.mu <- struct{}{}
+	defer func() { <-c.mu }()
+	var out []string
+	for _, ev := range c.events {
+		got, ok := events.DataAs[*types.AgentTurnProgress](ev)
+		if !ok || got.RoundNum >= 0 || string(got.Phase) != ph {
+			continue
+		}
+		joined := got.Prompt
+		for _, msg := range got.PromptMessages {
+			joined += "\n" + msg.Content
+		}
+		out = append(out, joined)
+	}
+	return out
+}
+
 func (c *capture) kinds() []string {
 	c.mu <- struct{}{}
 	defer func() { <-c.mu }()
