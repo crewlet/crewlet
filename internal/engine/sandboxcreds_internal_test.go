@@ -46,7 +46,7 @@ func creditedCompany(t *testing.T, agent string) (*Company, *org.Role) {
 func TestARemoteRunWithNoTravellingCredentialIsRefused(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompany(t, "codex")
-	err := sandboxCredentials(c, seat, sandbox.E2B, nil)
+	err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
 	if err == nil {
 		t.Fatal("a remote run with no credential that travels was launched")
 	}
@@ -73,7 +73,7 @@ func TestARemoteRunWithNoTravellingCredentialIsRefused(t *testing.T) {
 func TestTheRemedyNamesTheTokenWhereTheCLIMintsOne(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompany(t, "claude-code")
-	err := sandboxCredentials(c, seat, sandbox.E2B, nil)
+	err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
 	if err == nil {
 		t.Fatal("a remote run with no resolved token was launched")
 	}
@@ -91,12 +91,12 @@ func TestASeatThatBroughtItsOwnKeyIsNotRefused(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompany(t, "codex")
 	env := map[string]string{"OPENAI_API_KEY": "sk-not-a-real-key"}
-	if err := sandboxCredentials(c, seat, sandbox.E2B, env); err != nil {
+	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, env); err != nil {
 		t.Fatalf("a seat carrying its own key was refused: %v", err)
 	}
 	// Blank is not a value: an unresolved ${VAR} lands here as empty, and
 	// reading that as "authenticated" is the whole failure again.
-	if err := sandboxCredentials(c, seat, sandbox.E2B, map[string]string{
+	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, map[string]string{
 		"OPENAI_API_KEY": "  ",
 	}); err == nil {
 		t.Error("an empty credential variable was read as authentication")
@@ -110,8 +110,53 @@ func TestALocalRunNeedsNoTravellingCredential(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompany(t, "codex")
 	for _, placement := range []sandbox.Placement{sandbox.Direct, sandbox.Container} {
-		if err := sandboxCredentials(c, seat, placement, nil); err != nil {
+		if err := sandboxCredentials(c, seat, phase.Sandbox, placement, nil); err != nil {
 			t.Errorf("run_in %q was refused: %v", placement, err)
 		}
+	}
+}
+
+// THE GUARD READS THE ENTRY THE RUN'S MODEL COMES FROM, which is a different
+// entry for the two kinds of run: run_sandbox work runs on llm_sandbox, and an
+// agent-mode run IS the executor and runs on the seat's own llm. A guard that
+// always asked llm_sandbox answered for a model an agent-mode run never
+// touches — waving through a remote box whose CLI had no token, and refusing
+// one whose executor entry would have minted a token that travels.
+func TestTheGuardAsksTheEntryTheRunActuallyRunsOn(t *testing.T) {
+	t.Parallel()
+	subscription, err := cliagent.New(cliagent.Config{
+		Key: "sub", Agent: "codex", StateDir: t.TempDir(), Timeout: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("cliagent.New: %v", err)
+	}
+	models, err := phase.NewRegistry([]phase.Entry{
+		{Key: "sub", Provider: subscription},
+		// An API-key entry exports its key into every box; there is
+		// nothing host-bound for the guard to refuse.
+		{Key: "api", Provider: &answeringProvider{}},
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c := &Company{Models: models, Config: &config.Company{}}
+
+	// Executor on the subscription, code work on the API key.
+	seat := &org.Role{Name: "SWE", LLM: org.ProviderKeys{"sub"}, LLMSandbox: org.ProviderKeys{"api"}}
+	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil); err != nil {
+		t.Errorf("run_sandbox work on an API-key entry was refused: %v", err)
+	}
+	if err := sandboxCredentials(c, seat, phase.Execute, sandbox.E2B, nil); err == nil {
+		t.Error("an agent-mode run on a login that cannot follow it was launched " +
+			"because the guard looked at llm_sandbox instead")
+	}
+
+	// And the mirror image, or the guard could simply always refuse.
+	reversed := &org.Role{Name: "QA", LLM: org.ProviderKeys{"api"}, LLMSandbox: org.ProviderKeys{"sub"}}
+	if err := sandboxCredentials(c, reversed, phase.Execute, sandbox.E2B, nil); err != nil {
+		t.Errorf("an agent-mode run on an API-key entry was refused: %v", err)
+	}
+	if err := sandboxCredentials(c, reversed, phase.Sandbox, sandbox.E2B, nil); err == nil {
+		t.Error("run_sandbox work on a login that cannot follow it was launched")
 	}
 }

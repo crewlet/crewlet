@@ -571,7 +571,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		Env:             env,
 		CredentialFiles: credentials,
 	})
-	if err := sandboxCredentials(company, seat, spec.Placement, env); err != nil {
+	if err := sandboxCredentials(company, seat, phase.Sandbox, spec.Placement, env); err != nil {
 		return sandbox.LaunchResult{}, err
 	}
 
@@ -692,8 +692,14 @@ func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *config.R
 // different instructions, which is why both the config field and the manager's
 // input carry a pointer rather than a sentinel number. A negative value is the
 // field's earlier spelling of "inherit" and is read as one.
+//
+// NIL-SAFE, like [maxTurnsFor] and for the same seat: an agent-mode executor
+// is placed by its own providers.llm entry and runs in a box whether or not
+// role.sandbox was ever written, and reading the override off a block that
+// does not exist panicked that seat's first launch — after the bridge session
+// was opened and before anything would have closed it.
 func pauseTTL(gate *config.RoleSandbox) *time.Duration {
-	if gate.PauseTTLSeconds == nil || *gate.PauseTTLSeconds < 0 {
+	if gate == nil || gate.PauseTTLSeconds == nil || *gate.PauseTTLSeconds < 0 {
 		return nil
 	}
 	d := seconds(*gate.PauseTTLSeconds)
@@ -1169,7 +1175,14 @@ func (e *SandboxCredentialError) Error() string { return e.msg }
 // That value is in the merged run environment this is handed, so a seat that
 // brought its own credential passes — which is why the check can be a refusal
 // rather than a warning.
-func sandboxCredentials(c *Company, seat *org.Role, placement sandbox.Placement, env map[string]string) error {
+//
+// THE PHASE IS THE CALLER'S, and it is the same phase the caller resolved the
+// run's model with — see [runLLM]. A run_sandbox launch runs on llm_sandbox
+// and an agent-mode run on the executor's own entry, and a guard that always
+// asked llm_sandbox inspected the wrong provider for every agent-mode seat
+// that set both: it waved through a remote run whose CLI had no token, and
+// refused one whose executor entry would have minted one.
+func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sandbox.Placement, env map[string]string) error {
 	if placement.OnEngineHost() {
 		// A local box seeds the credential files and writes a refreshed
 		// one back, so files alone are a complete answer there.
@@ -1178,7 +1191,7 @@ func sandboxCredentials(c *Company, seat *org.Role, placement sandbox.Placement,
 	if c == nil || c.Models == nil {
 		return nil
 	}
-	member, err := c.Models.Head(seat, phase.Sandbox)
+	member, err := c.Models.Head(seat, ph)
 	if err != nil {
 		//nolint:nilerr // Deliberate: a seat with no resolvable sandbox
 		// model is the phase registry's problem — it refuses a company

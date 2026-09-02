@@ -96,7 +96,11 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		Env:             env,
 		CredentialFiles: credentials,
 	})
-	if err := sandboxCredentials(company, l.seat, spec.Placement, env); err != nil {
+	// THE EXECUTOR'S PHASE, matching executorLLM above: the guard has to
+	// inspect the entry whose login the box will actually run under, and
+	// asking it about llm_sandbox would answer for a model this run never
+	// touches.
+	if err := sandboxCredentials(company, l.seat, phase.Execute, spec.Placement, env); err != nil {
 		e.bridge.Close(l.turn.ID)
 		return err
 	}
@@ -141,11 +145,10 @@ func withBridge(servers map[string]map[string]any, endpoint string) map[string]m
 	for name, cfg := range servers {
 		out[name] = cfg
 	}
-	// The name the coding agent sees its colleague's tools under. "crewlet"
-	// rather than the seat's handle, because it reaches the CLI's own
-	// prompt and a tool called `mcp__swe__reply` reads as somebody else's
-	// tool rather than as this agent's own.
-	out["crewlet"] = map[string]any{"type": "http", "url": endpoint}
+	// Under the reserved name, which config refuses to any mcp_servers
+	// entry — so this write can never shadow a server the seat scoped into
+	// its box. See [config.BridgeServerName] for why it is not the handle.
+	out[config.BridgeServerName] = map[string]any{"type": "http", "url": endpoint}
 	return out
 }
 

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -8,10 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // modeCompany is a one-seat epoch whose executor is the named CLI in the named
@@ -273,6 +278,15 @@ func TestAnAgentModeSeatNeedsNoSandboxBlock(t *testing.T) {
 	if env["CREWLET_AGENT_HANDLE"] == "" {
 		t.Errorf("the agent identity was dropped: %v", env)
 	}
+	// EVERY per-seat override read at launch, not only the environment:
+	// the round cap was nil-guarded and the pause TTL was not, and the
+	// launch panicked on the second after passing the first.
+	if got := pauseTTL(nil); got != nil {
+		t.Errorf("pauseTTL(nil) = %v, want nil (inherit)", *got)
+	}
+	if got := maxTurnsFor(nil); got != nil {
+		t.Errorf("maxTurnsFor(nil) = %v, want nil (inherit)", *got)
+	}
 }
 
 // A SEAT'S SANDBOX BLOCK IS FOUND WHEREVER IT IS DECLARED.
@@ -315,5 +329,123 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 	// A seat with no block still answers nil, and a name nobody holds too.
 	if seatSandbox(c, "CEO") != nil || seatSandbox(c, "Nobody") != nil {
 		t.Error("a seat with no block, or no such seat, answered a block")
+	}
+}
+
+// launchReadyEngine is an engine that can take an agent-mode launch all the
+// way to a box: a remote cell served by the in-process double, a durable run
+// store, a queue for the start event and a bridge with somewhere to dial.
+func launchReadyEngine(t *testing.T, c *Company) *Engine {
+	t.Helper()
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers:          map[sandbox.Placement]sandbox.Provider{sandbox.E2B: sandbox.NewFakeProvider()},
+		Runners:            map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+		DefaultCodingAgent: "claude-code",
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	q := memory.New()
+	pending := sandbox.NewCoordStore(coordmemory.NewFleet())
+	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Queue: q, Pending: pending, Manager: manager,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	e := &Engine{
+		backends:           &Backends{Queue: q},
+		sandboxCoordinator: coordinator,
+		sandboxPending:     pending,
+		bridge: mcpbridge.New(mcpbridge.Options{
+			Key: []byte("test-key"), BaseURL: "https://engine.example.com",
+		}),
+	}
+	e.epoch.current.Store(c)
+	return e
+}
+
+// splitLoginCompany is a one-seat epoch whose executor and whose code work
+// run on DIFFERENT entries: a codex subscription — whose login cannot follow
+// a run into a remote box — and an API-key entry, whose key can. Which one
+// the seat's `llm` names and which its `llm_sandbox` names is the argument.
+func splitLoginCompany(t *testing.T, executor, coder string) (*Company, *org.Role) {
+	t.Helper()
+	codex, err := cliagent.New(cliagent.Config{
+		Key: "codex", Agent: "codex", AgentMode: true,
+		StateDir: t.TempDir(), Timeout: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("cliagent.New: %v", err)
+	}
+	models, err := phase.NewRegistry([]phase.Entry{
+		{Key: "codex", Provider: codex},
+		{Key: "api", Provider: &answeringProvider{}},
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	seat := &org.Role{
+		Name: "SWE", LLM: org.ProviderKeys{executor}, LLMSandbox: org.ProviderKeys{coder},
+	}
+	return &Company{
+		Models: models,
+		Org:    &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
+		Config: &config.Company{Providers: config.Providers{
+			LLM: map[string]config.LLMProvider{
+				"codex": {Type: config.LLMCLIAgent, CLI: &config.CLIAgent{
+					Agent: "codex", Mode: config.CLIModeAgent, RunIn: config.PlacementE2B,
+				}},
+				"api": {Type: config.LLMAnthropic, Model: "claude-golden"},
+			},
+		}},
+	}, seat
+}
+
+// THE LAUNCHER GUARDS THE EXECUTOR'S OWN LOGIN, because an agent-mode run IS
+// the executor. Asked about llm_sandbox instead, the guard inspected a model
+// the run never touches: a seat whose executor was a codex subscription and
+// whose code work was an API key launched a remote box that failed at its
+// first model call, minutes in, with the vendor's "not authenticated" — and
+// the mirror image, an API-key executor with a codex llm_sandbox, was refused
+// a run that would have worked.
+//
+// Through LaunchExecutor rather than the guard directly: the guard honours
+// whatever phase it is handed, and what is under test is which phase the
+// launcher hands it.
+func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
+	t.Parallel()
+	request := func() runner.AgentRunRequest {
+		return runner.AgentRunRequest{
+			Brief: "fix the failing test", Round: 1,
+			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
+		}
+	}
+	launcherFor := func(e *Engine, seat *org.Role) *agentLauncher {
+		return &agentLauncher{
+			engine: e, turn: &turnctx.Turn{ID: "t1", Seat: seat}, seat: seat,
+			codingAgent: "claude-code", placement: sandbox.E2B,
+		}
+	}
+
+	// Executor on the subscription, code work on the key: refused, and the
+	// session opened for the run is closed with the refusal.
+	c, seat := splitLoginCompany(t, "codex", "api")
+	e := launchReadyEngine(t, c)
+	err := launcherFor(e, seat).LaunchExecutor(t.Context(), request())
+	var credErr *SandboxCredentialError
+	if !errors.As(err, &credErr) {
+		t.Fatalf("an agent-mode run on a login that cannot follow it was launched "+
+			"(err = %v): the launcher asked the guard about llm_sandbox", err)
+	}
+	if e.bridge.Live() != 0 {
+		t.Errorf("%d bridge sessions live after a refused launch", e.bridge.Live())
+	}
+
+	// And the mirror image, or a launcher that always refused would pass.
+	c, seat = splitLoginCompany(t, "api", "codex")
+	e = launchReadyEngine(t, c)
+	if err := launcherFor(e, seat).LaunchExecutor(t.Context(), request()); err != nil {
+		t.Fatalf("an agent-mode run on an API-key executor was refused: %v", err)
 	}
 }
