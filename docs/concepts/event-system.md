@@ -227,7 +227,7 @@ TurnCompleted, EpisodeWritten, PersistDeciderCompleted
 CounterpartyProfileUpdated, ReflectionCompleted
 SkillSynthesized, SkillRefined, SkillPromoted, SkillUsed
 SkillStaled, SkillArchived, SkillRevived
-PlanPrefetchSummary, RelevantKnowledgeRefetched
+PrefetchSummary
 CompactionRequested, CompactionCompleted
 
 # system — the engine talking about itself

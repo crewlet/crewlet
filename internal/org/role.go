@@ -430,9 +430,7 @@ type Role struct {
 	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero"`
 
 	// The per-phase chains. Each falls back to LLM when unset.
-	LLMPlan    ProviderKeys `yaml:"llm_plan,omitempty" json:"llm_plan,omitzero"`
-	LLMExecute ProviderKeys `yaml:"llm_execute,omitempty" json:"llm_execute,omitzero"`
-	LLMReview  ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero"`
+	LLMReview ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero"`
 	// LLMSubagent runs ephemeral sub-agents spawned from this seat.
 	LLMSubagent ProviderKeys `yaml:"llm_subagent,omitempty" json:"llm_subagent,omitzero"`
 	// LLMAuxiliary runs the cheap work the learning subsystem drives —
@@ -445,8 +443,8 @@ type Role struct {
 	// model is the right default.
 	LLMJudge ProviderKeys `yaml:"llm_judge,omitempty" json:"llm_judge,omitzero"`
 	// LLMSandbox runs the coding agent inside the sandbox. It falls back to
-	// LLMExecute before LLM: sandboxed work IS this seat's Execute phase,
-	// just running somewhere else.
+	// LLM, because sandboxed work IS this seat's own work — just running
+	// somewhere else — and LLM is what that work runs on.
 	LLMSandbox ProviderKeys `yaml:"llm_sandbox,omitempty" json:"llm_sandbox,omitzero"`
 
 	// LearningEnabled overrides the system-wide learning setting for this
@@ -525,8 +523,6 @@ func (r *Role) humanForbidden() []string {
 		set  bool
 	}{
 		{"llm", len(r.LLM) > 0},
-		{"llm_plan", len(r.LLMPlan) > 0},
-		{"llm_execute", len(r.LLMExecute) > 0},
 		{"llm_review", len(r.LLMReview) > 0},
 		{"llm_subagent", len(r.LLMSubagent) > 0},
 		{"llm_auxiliary", len(r.LLMAuxiliary) > 0},

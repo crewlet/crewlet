@@ -17,15 +17,15 @@ func TestProviderKeysAcceptBothShapes(t *testing.T) {
 		yaml string
 		want []string
 	}{
-		{"scalar", "name: Acme\nroles:\n  - {name: CEO, llm_plan: big}\n", []string{"big"}},
-		{"list", "name: Acme\nroles:\n  - {name: CEO, llm_plan: [big, small]}\n", []string{"big", "small"}},
-		{"valueless", "name: Acme\nroles:\n  - {name: CEO, llm_plan: }\n", nil},
+		{"scalar", "name: Acme\nroles:\n  - {name: CEO, llm_review: big}\n", []string{"big"}},
+		{"list", "name: Acme\nroles:\n  - {name: CEO, llm_review: [big, small]}\n", []string{"big", "small"}},
+		{"valueless", "name: Acme\nroles:\n  - {name: CEO, llm_review: }\n", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := mustCompany(t, tc.yaml)
-			if got := []string(cfg.Roles[0].LLMPlan); !slices.Equal(got, tc.want) {
+			if got := []string(cfg.Roles[0].LLMReview); !slices.Equal(got, tc.want) {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
@@ -33,8 +33,8 @@ func TestProviderKeysAcceptBothShapes(t *testing.T) {
 }
 
 // The `llm` field takes a third shape as well: a mapping per phase, because
-// the phases do genuinely different work and splitting them by hand across
-// seven flat fields is how six end up agreeing and one goes stale.
+// the satellites do genuinely different work and splitting them by hand across
+// flat fields is how five end up agreeing and one goes stale.
 func TestPhaseLLMAcceptsAllThreeShapes(t *testing.T) {
 	t.Parallel()
 
@@ -44,8 +44,8 @@ func TestPhaseLLMAcceptsAllThreeShapes(t *testing.T) {
 		if !slices.Equal(seat.LLM, org.ProviderKeys{"fast"}) {
 			t.Fatalf("llm = %v", seat.LLM)
 		}
-		if seat.LLMPlan != nil {
-			t.Fatalf("a scalar must not fabricate per-phase chains: %v", seat.LLMPlan)
+		if seat.LLMReview != nil {
+			t.Fatalf("a scalar must not fabricate per-phase chains: %v", seat.LLMReview)
 		}
 	})
 
@@ -65,22 +65,22 @@ roles:
   - name: CEO
     llm:
       default: fast
-      plan: [big, bigger]
+      review: [big, bigger]
       judge: cheap
 `).Roles[0].Seat()
 		if !slices.Equal(seat.LLM, org.ProviderKeys{"fast"}) {
 			t.Fatalf("default = %v", seat.LLM)
 		}
-		if !slices.Equal(seat.LLMPlan, org.ProviderKeys{"big", "bigger"}) {
-			t.Fatalf("plan = %v", seat.LLMPlan)
+		if !slices.Equal(seat.LLMReview, org.ProviderKeys{"big", "bigger"}) {
+			t.Fatalf("review = %v", seat.LLMReview)
 		}
 		if !slices.Equal(seat.LLMJudge, org.ProviderKeys{"cheap"}) {
 			t.Fatalf("judge = %v", seat.LLMJudge)
 		}
 		// A phase the mapping did not name stays unset, so the runtime
 		// falls back to the default chain rather than to a fabricated one.
-		if seat.LLMExecute != nil {
-			t.Fatalf("execute = %v", seat.LLMExecute)
+		if seat.LLMSubagent != nil {
+			t.Fatalf("subagent = %v", seat.LLMSubagent)
 		}
 	})
 
@@ -90,11 +90,11 @@ roles:
 name: Acme
 roles:
   - name: CEO
-    llm: {default: fast, plan: from-mapping}
-    llm_plan: from-flat
+    llm: {default: fast, review: from-mapping}
+    llm_review: from-flat
 `).Roles[0].Seat()
-		if !slices.Equal(seat.LLMPlan, org.ProviderKeys{"from-flat"}) {
-			t.Fatalf("plan = %v", seat.LLMPlan)
+		if !slices.Equal(seat.LLMReview, org.ProviderKeys{"from-flat"}) {
+			t.Fatalf("review = %v", seat.LLMReview)
 		}
 	})
 }

@@ -6,12 +6,30 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 )
 
-func planTool() *structured.Tool[planPayload] {
-	return structured.New(SubmitPlanTool, submitPlanDescription, planSchema, decodePlan)
+// deliverySurface is a plain one-write-tool surface, which the citation check
+// judges against.
+func deliverySurface() turn.Surface {
+	return turn.Surface{
+		Catalogue:  []string{"slack_post", "slack_history", "lookup_colleague"},
+		MCPTools:   []string{"slack_post", "slack_history"},
+		KnownReads: []string{"slack_history"},
+	}
+}
+
+// workTool builds a submit_work tool over a scripted record of the turn: what
+// was called, and who is waiting. Both are facts the model does not control,
+// which is the whole point — the account a phase gives of itself is exactly
+// what a phase can get wrong.
+func workTool(reply turn.Reply, calls ...ledger.Call) *structured.Tool[workPayload] {
+	return structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
+		decodeWork(reply,
+			func() []ledger.Call { return calls },
+			func() turn.Surface { return deliverySurface() }))
 }
 
 func args(t *testing.T, blob string) map[string]any {
@@ -28,15 +46,14 @@ func TestASubmissionCapturesThePhasesAnswer(t *testing.T) {
 	// The tool does not DO anything: the phase's answer IS the arguments it
 	// was called with, so the loop's ordinary tool machinery carries it out
 	// and nothing needs a side channel.
-	tool := planTool()
+	tool := workTool(turn.ReplyTool, ledger.Call{Name: "slack_post"})
 	if _, called := tool.Value(); called {
 		t.Fatal("a fresh tool reports a submission")
 	}
 	res, err := tool.Call(context.Background(), args(t, `{
-		"decision": "plan",
-		"reasoning": "post the summary",
-		"tools_needed": ["slack_post"],
-		"steps": [{"intent": "post it", "approach": "say hello"}]
+		"outcome": "delivered",
+		"summary": "posted the weekly summary",
+		"deliveries": ["slack_post"]
 	}`))
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -48,7 +65,7 @@ func TestASubmissionCapturesThePhasesAnswer(t *testing.T) {
 	if !called {
 		t.Fatal("a valid submission was not captured")
 	}
-	if got.Decision != "plan" || len(got.ToolsNeeded) != 1 {
+	if got.Outcome != "delivered" || len(got.Deliveries) != 1 {
 		t.Errorf("captured %+v", got)
 	}
 }
@@ -58,15 +75,15 @@ func TestAnInvalidSubmissionGoesBackToTheModel(t *testing.T) {
 	// It is the one tool failure a model can reliably fix, and refusing the
 	// turn over a malformed submission throws away everything the phase
 	// already did.
-	tool := planTool()
-	res, err := tool.Call(context.Background(), args(t, `{"decision": "wat"}`))
+	tool := workTool(turn.ReplyNone)
+	res, err := tool.Call(context.Background(), args(t, `{"outcome":"wat","summary":"s"}`))
 	if err != nil {
 		t.Fatalf("Call returned a Go error: %v", err)
 	}
 	if !res.Failed {
-		t.Fatal("an invalid decision was accepted")
+		t.Fatal("an invalid outcome was accepted")
 	}
-	if !strings.Contains(res.Output, "plan, direct or skip") {
+	if !strings.Contains(res.Output, "delivered, no_action or blocked") {
 		t.Errorf("the failure does not say what is allowed: %s", res.Output)
 	}
 	if _, called := tool.Value(); called {
@@ -78,12 +95,12 @@ func TestTheLastSubmissionWins(t *testing.T) {
 	t.Parallel()
 	// A model that submits twice has corrected itself. Rejecting the second
 	// leaves the engine acting on the draft the model just replaced.
-	tool := planTool()
+	tool := workTool(turn.ReplyNone)
 	ctx := context.Background()
-	if _, err := tool.Call(ctx, args(t, `{"decision":"plan","tools_needed":["a"]}`)); err != nil {
+	if _, err := tool.Call(ctx, args(t, `{"outcome":"blocked","summary":"a","evidence":"e"}`)); err != nil {
 		t.Fatalf("Call: %v", err)
 	}
-	res, err := tool.Call(ctx, args(t, `{"decision":"plan","tools_needed":["b"]}`))
+	res, err := tool.Call(ctx, args(t, `{"outcome":"blocked","summary":"b","evidence":"e"}`))
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -91,22 +108,26 @@ func TestTheLastSubmissionWins(t *testing.T) {
 		t.Fatalf("the second submission was refused: %s", res.Output)
 	}
 	got, _ := tool.Value()
-	if len(got.ToolsNeeded) != 1 || got.ToolsNeeded[0] != "b" {
-		t.Errorf("captured %v, want the correction", got.ToolsNeeded)
+	if got.Summary != "b" {
+		t.Errorf("captured %q, want the correction", got.Summary)
 	}
 }
 
-func TestAnAbsentDecisionTakesTheCommonCase(t *testing.T) {
+func TestAnAbsentOutcomeTakesTheCommonCase(t *testing.T) {
 	t.Parallel()
-	// `plan` is what every other field is written for, and `done` is the
-	// unremarkable review. Failing on the most predictable omission would
-	// reject an otherwise complete answer.
-	p, err := decodePlan(args(t, `{"tools_needed":["slack_post"]}`))
+	// `delivered` is what every other field is written for, and `done` is
+	// the unremarkable review. Refusing the most predictable omission would
+	// throw away a round of real work — and the engine checks the delivery
+	// claim against the record either way.
+	decode := decodeWork(turn.ReplyTool,
+		func() []ledger.Call { return []ledger.Call{{Name: "slack_post"}} },
+		deliverySurface)
+	w, err := decode(args(t, `{"summary":"posted it","deliveries":["slack_post"]}`))
 	if err != nil {
-		t.Fatalf("decodePlan: %v", err)
+		t.Fatalf("decodeWork: %v", err)
 	}
-	if turn.PlanDecision(p.Decision) != turn.PlanRun {
-		t.Errorf("decision = %q, want plan", p.Decision)
+	if turn.Outcome(w.Outcome) != turn.OutcomeDelivered {
+		t.Errorf("outcome = %q, want delivered", w.Outcome)
 	}
 	r, err := decodeReview(args(t, `{"final_artifact":"done here"}`))
 	if err != nil {
@@ -117,28 +138,124 @@ func TestAnAbsentDecisionTakesTheCommonCase(t *testing.T) {
 	}
 }
 
-func TestAPlanThatDecidedNothingIsRefused(t *testing.T) {
+// A submission with no summary tells the reviewer and the next turn nothing at
+// all, and it is the one field every outcome needs.
+func TestASubmissionWithNoSummaryIsRefused(t *testing.T) {
 	t.Parallel()
-	// Saying so is what makes the model try again INSIDE the phase. Letting
-	// it through means Execute receives an empty plan and improvises
-	// against the full surface — which is the `direct` path, arrived at by
-	// accident.
-	if _, err := decodePlan(args(t, `{"decision":"plan"}`)); err == nil {
-		t.Error("a plan with no steps and no tools was accepted")
-	}
-	// A skip legitimately has neither.
-	if _, err := decodePlan(args(t, `{"decision":"skip","reasoning":"not for me"}`)); err != nil {
-		t.Errorf("a skip was refused: %v", err)
-	}
-	// And either half alone is enough.
-	for _, blob := range []string{
-		`{"decision":"plan","tools_needed":["a"]}`,
-		`{"decision":"plan","steps":[{"intent":"think"}]}`,
-	} {
-		if _, err := decodePlan(args(t, blob)); err != nil {
-			t.Errorf("%s was refused: %v", blob, err)
+	tool := workTool(turn.ReplyNone)
+	for _, blob := range []string{`{"outcome":"no_action"}`, `{"outcome":"no_action","summary":"  "}`} {
+		res, _ := tool.Call(context.Background(), args(t, blob))
+		if !res.Failed {
+			t.Errorf("%s was accepted", blob)
 		}
 	}
+}
+
+// SILENCE IS NOT A DECLINE. The requester cannot tell it from a message that
+// was lost, and the engine knows one arrived — so this is refused where the
+// model can still act on it rather than corrected a phase later.
+func TestNoActionIsRefusedOnAnAwaitedTurn(t *testing.T) {
+	t.Parallel()
+	for _, reply := range []turn.Reply{turn.ReplyTool, turn.ReplyEngine} {
+		tool := workTool(reply)
+		res, _ := tool.Call(context.Background(),
+			args(t, `{"outcome":"no_action","summary":"not for me"}`))
+		if !res.Failed {
+			t.Errorf("%s: no_action was accepted on a turn somebody asked for", reply)
+		}
+		if !strings.Contains(res.Output, "even to decline") {
+			t.Errorf("%s: the refusal does not say what to do instead: %s", reply, res.Output)
+		}
+	}
+	// The counterfactual: nobody asking makes it the right answer, and
+	// without this the assertion above passes for a decoder that refuses
+	// no_action outright.
+	tool := workTool(turn.ReplyNone)
+	if res, _ := tool.Call(context.Background(),
+		args(t, `{"outcome":"no_action","summary":"a broadcast"}`)); res.Failed {
+		t.Errorf("no_action was refused on an unaddressed turn: %s", res.Output)
+	}
+}
+
+// "Blocked" with no account of what was tried is a round the reviewer can only
+// send back blind.
+func TestBlockedNeedsEvidence(t *testing.T) {
+	t.Parallel()
+	tool := workTool(turn.ReplyNone)
+	res, _ := tool.Call(context.Background(), args(t, `{"outcome":"blocked","summary":"stuck"}`))
+	if !res.Failed {
+		t.Fatal("blocked was accepted with no evidence")
+	}
+	if !strings.Contains(res.Output, "what did you try") {
+		t.Errorf("the refusal does not say what is missing: %s", res.Output)
+	}
+	if res, _ := tool.Call(context.Background(),
+		args(t, `{"outcome":"blocked","summary":"stuck","evidence":"the channel 404s"}`)); res.Failed {
+		t.Errorf("blocked with evidence was refused: %s", res.Output)
+	}
+}
+
+// CHECKED INSIDE THE LOOP, where a wrong claim costs one bounced tool call the
+// model can fix — instead of a whole review round or a silently accepted
+// no-op.
+func TestADeliveryClaimMustNameACallThatHappened(t *testing.T) {
+	t.Parallel()
+	called := []ledger.Call{{Name: "slack_post"}, {Name: "slack_history"}}
+	decode := decodeWork(turn.ReplyTool, func() []ledger.Call { return called }, deliverySurface)
+
+	if _, err := decode(args(t, `{"outcome":"delivered","summary":"s","deliveries":["slack_post"]}`)); err != nil {
+		t.Errorf("a real delivery was refused: %v", err)
+	}
+	// A name the model MEANT to call. The refusal lists what is citable,
+	// because a bare "no" sends it round the same loop.
+	err := mustErr(t, decode, `{"outcome":"delivered","summary":"s","deliveries":["slack_postMessage"]}`)
+	if !strings.Contains(err.Error(), "slack_post") {
+		t.Errorf("the refusal does not list what is citable: %v", err)
+	}
+	// A read is not a delivery, however successfully it ran.
+	mustErr(t, decode, `{"outcome":"delivered","summary":"s","deliveries":["slack_history"]}`)
+	// And a failed call did not deliver.
+	failed := decodeWork(turn.ReplyTool,
+		func() []ledger.Call { return []ledger.Call{{Name: "slack_post", Failed: true}} },
+		deliverySurface)
+	mustErr(t, failed, `{"outcome":"delivered","summary":"s","deliveries":["slack_post"]}`)
+}
+
+// Nothing citable at all is a different message: the model has not called an
+// outward tool yet, and telling it to pick from an empty list is useless.
+func TestNothingDeliveredYetSaysSoRatherThanListingNothing(t *testing.T) {
+	t.Parallel()
+	decode := decodeWork(turn.ReplyTool,
+		func() []ledger.Call { return []ledger.Call{{Name: "slack_history"}} }, deliverySurface)
+	err := mustErr(t, decode, `{"outcome":"delivered","summary":"s","deliveries":["slack_post"]}`)
+	if !strings.Contains(err.Error(), "nothing has been delivered yet") {
+		t.Errorf("err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "list_mcp_server_tools") {
+		t.Errorf("the refusal does not say how to find the tool: %v", err)
+	}
+}
+
+// A colleague's ask is answered by the engine on the channel it opened, and an
+// unaddressed turn owes nobody a posted answer — so demanding a citation in
+// either case would loop a turn that did exactly the right thing.
+func TestOnlyAToolAwaitedTurnMustCiteACall(t *testing.T) {
+	t.Parallel()
+	for _, reply := range []turn.Reply{turn.ReplyNone, turn.ReplyEngine} {
+		decode := decodeWork(reply, func() []ledger.Call { return nil }, deliverySurface)
+		if _, err := decode(args(t, `{"outcome":"delivered","summary":"answered in prose"}`)); err != nil {
+			t.Errorf("%s: a delivery with no tool call was refused: %v", reply, err)
+		}
+	}
+}
+
+func mustErr(t *testing.T, decode func(map[string]any) (workPayload, error), blob string) error {
+	t.Helper()
+	_, err := decode(args(t, blob))
+	if err == nil {
+		t.Fatalf("%s was accepted", blob)
+	}
+	return err
 }
 
 func TestALoopBackNeedsSomethingToDoDifferently(t *testing.T) {
@@ -163,74 +280,18 @@ func TestALoopBackNeedsSomethingToDoDifferently(t *testing.T) {
 	}
 }
 
-func TestThePlanSummaryCarriesEachStepsApproach(t *testing.T) {
-	t.Parallel()
-	// The planner may have pre-composed the exact content Execute should
-	// produce, and Execute cannot see what Plan saw. Dropping the approach
-	// makes Execute re-derive data the planner already gathered, or invent
-	// it.
-	p, err := decodePlan(args(t, `{
-		"decision":"plan","tools_needed":["slack_post"],
-		"steps":[
-			{"intent":"post the summary","approach":"Weekly update: three PRs merged."},
-			{"intent":"link the doc"}
-		]}`))
-	if err != nil {
-		t.Fatalf("decodePlan: %v", err)
-	}
-	got := p.Summary()
-	for _, want := range []string{"1. post the summary", "Weekly update: three PRs merged.", "2. link the doc"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("summary is missing %q:\n%s", want, got)
-		}
-	}
-}
-
-func TestASkipSummaryCarriesItsReasoningForTheRecord(t *testing.T) {
-	t.Parallel()
-	// A skip short-circuits before Execute and Review, so this string is
-	// the only diagnostic the turn leaves behind. Without the reasoning the
-	// record is a tombstone.
-	p, _ := decodePlan(args(t, `{"decision":"skip","reasoning":"addressed to the CTO"}`))
-	got := p.Summary()
-	if !strings.Contains(got, "addressed to the CTO") {
-		t.Errorf("summary = %q, want the reasoning", got)
-	}
-	if !strings.Contains(got, "skip") {
-		t.Errorf("summary = %q, want it marked as a skip", got)
-	}
-	// And a skip with no reasoning still says what happened.
-	bare, _ := decodePlan(args(t, `{"decision":"skip"}`))
-	if bare.Summary() == "" {
-		t.Error("a bare skip summarised to nothing")
-	}
-}
-
-func TestADirectPlanWithNoStepsStillSummarisesToSomething(t *testing.T) {
-	t.Parallel()
-	// Execute reads this. An empty summary tells it nothing at all, which
-	// is worse than telling it the planner left it to improvise.
-	p, _ := decodePlan(args(t, `{"decision":"direct","tools_needed":["slack_post"]}`))
-	if p.Summary() == "" {
-		t.Error("a direct plan with no steps summarised to nothing")
-	}
-	withReasoning, _ := decodePlan(args(t, `{"decision":"direct","tools_needed":["a"],"reasoning":"just post it"}`))
-	if !strings.Contains(withReasoning.Summary(), "just post it") {
-		t.Errorf("summary = %q, want the planner's thinking", withReasoning.Summary())
-	}
-}
-
 func TestASchemaShapedSubmissionDecodesIntoItsStruct(t *testing.T) {
 	t.Parallel()
 	// The schemas are hand-written so their DESCRIPTIONS can be real prose,
 	// which means the tags and the schema can drift. This is what says they
 	// have not: every property the schema publishes is a field the struct
 	// accepts.
+	decodeAWork := decodeWork(turn.ReplyNone, func() []ledger.Call { return nil }, deliverySurface)
 	for name, pair := range map[string]struct {
 		schema map[string]any
 		decode func(map[string]any) error
 	}{
-		"plan":   {planSchema, func(m map[string]any) error { _, err := decodePlan(m); return err }},
+		"work":   {workSchema, func(m map[string]any) error { _, err := decodeAWork(m); return err }},
 		"review": {reviewSchema, func(m map[string]any) error { _, err := decodeReview(m); return err }},
 	} {
 		props, ok := pair.schema["properties"].(map[string]any)
@@ -257,19 +318,20 @@ func sampleFor(t *testing.T, phase, key string, spec any) any {
 		t.Fatalf("%s.%s: property is not an object", phase, key)
 	}
 	if enum, ok := obj["enum"].([]any); ok && len(enum) > 0 {
-		// The FIRST enum member, which for both decisions is the one with
-		// no extra requirements — self_iterate needs notes, and picking it
-		// here would fail for the right reason and hide a real drift.
+		// The LAST enum member for the work schema and the first for the
+		// review's: both are the value with no extra requirement attached.
+		// `delivered` needs a citation and `self_iterate` needs notes, so
+		// picking either would fail for the right reason and hide a real
+		// drift.
+		if phase == "work" {
+			return enum[len(enum)-1]
+		}
 		return enum[0]
 	}
 	switch obj["type"] {
 	case "string":
 		return "x"
 	case "array":
-		items, _ := obj["items"].(map[string]any)
-		if items != nil && items["type"] == "object" {
-			return []any{map[string]any{"intent": "x"}}
-		}
 		return []any{"x"}
 	case "object":
 		return map[string]any{}
@@ -284,8 +346,8 @@ func TestArgumentsThatCannotBeReEncodedFailTheSubmissionNotTheTurn(t *testing.T)
 	// A model cannot produce this through the wire, but a builtin caller
 	// could. It must come back as a failed tool result the phase can retry,
 	// not as a Go error that ends the turn.
-	tool := planTool()
-	res, err := tool.Call(context.Background(), map[string]any{"decision": make(chan int)})
+	tool := workTool(turn.ReplyNone)
+	res, err := tool.Call(context.Background(), map[string]any{"summary": make(chan int)})
 	if err != nil {
 		t.Fatalf("Call returned a Go error: %v", err)
 	}
@@ -293,11 +355,10 @@ func TestArgumentsThatCannotBeReEncodedFailTheSubmissionNotTheTurn(t *testing.T)
 		t.Fatal("an unencodable argument was accepted")
 	}
 	// The REASON matters. Swallowing the encode error leaves the payload
-	// zero-valued, which then trips the empty-plan rule — so the
-	// submission still fails, for a reason that has nothing to do with
-	// what went wrong, and the model is told to add steps it already
-	// added. Found by mutation: asserting only that it failed passed
-	// either way.
+	// zero-valued, which then trips the missing-summary rule — so the
+	// submission still fails, for a reason that has nothing to do with what
+	// went wrong, and the model is told to add a summary it already wrote.
+	// Found by mutation: asserting only that it failed passed either way.
 	if !strings.Contains(res.Output, "re-encoded") {
 		t.Errorf("the failure blames the wrong thing: %s", res.Output)
 	}
@@ -307,12 +368,13 @@ func TestATypeMismatchIsReportedAsOne(t *testing.T) {
 	t.Parallel()
 	// A model that sends a bare string where the schema says array. The
 	// reason has to be the mismatch: swallowing it leaves the payload part
-	// filled, which trips the empty-plan rule instead, and the model is
-	// told to add tools it already named.
+	// filled, which trips a content rule instead, and the model is told to
+	// fix something it got right.
 	//
 	// Found by mutation — asserting only that it failed passed either way.
-	tool := planTool()
-	res, err := tool.Call(context.Background(), args(t, `{"decision":"plan","tools_needed":"slack_post"}`))
+	tool := workTool(turn.ReplyNone)
+	res, err := tool.Call(context.Background(),
+		args(t, `{"outcome":"delivered","summary":"s","deliveries":"slack_post"}`))
 	if err != nil {
 		t.Fatalf("Call returned a Go error: %v", err)
 	}
@@ -324,23 +386,24 @@ func TestATypeMismatchIsReportedAsOne(t *testing.T) {
 	}
 }
 
-func TestALargeIDInAPlanSurvivesTheStructRoundTrip(t *testing.T) {
+func TestALargeIDInASubmissionSurvivesTheStructRoundTrip(t *testing.T) {
 	t.Parallel()
-	// The plan's own arguments go through a marshal/unmarshal to reach the
-	// struct. json.Number has to survive it, or the precision the provider
-	// layer just protected is lost one layer higher.
+	// The submission's own arguments go through a marshal/unmarshal to
+	// reach the struct. json.Number has to survive it, or the precision the
+	// provider layer just protected is lost one layer higher.
 	var m map[string]any
 	dec := json.NewDecoder(strings.NewReader(
-		`{"decision":"plan","tools_needed":["a"],"steps":[{"intent":"issue 1234567890123456789"}]}`))
+		`{"outcome":"blocked","summary":"issue 1234567890123456789","evidence":"e"}`))
 	dec.UseNumber()
 	if err := dec.Decode(&m); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	p, err := decodePlan(m)
+	decode := decodeWork(turn.ReplyNone, func() []ledger.Call { return nil }, deliverySurface)
+	w, err := decode(m)
 	if err != nil {
-		t.Fatalf("decodePlan: %v", err)
+		t.Fatalf("decodeWork: %v", err)
 	}
-	if !strings.Contains(p.Summary(), "1234567890123456789") {
-		t.Errorf("summary = %q", p.Summary())
+	if !strings.Contains(w.Summary, "1234567890123456789") {
+		t.Errorf("summary = %q", w.Summary)
 	}
 }

@@ -2,7 +2,7 @@
 key: tool:reflect_and_persist
 trigger:
   tool: reflect_and_persist
-phases: [plan]
+phases: [execute]
 title: Persisting durable facts
 summary: |
   Persist declarative facts (not instructions). Call after learning

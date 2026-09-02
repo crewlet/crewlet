@@ -86,7 +86,7 @@ As with every MCP surface, the engine hardcodes no tool names — a bundled `mcp
 
 ## How code authoring works
 
-Agents that the founder has gated with `role.sandbox.enabled` author code through the **code sandbox**, not through any GitLab tool. Execute has a `run_sandbox` tool: the planner lists it in `tools_needed`, a coding agent (Claude Code / OpenCode) runs inside an isolated E2B sandbox and opens a merge request **as the agent's own GitLab identity** (the PAT the role declares as `GITLAB_TOKEN` in `role.sandbox.env` — by convention the same PAT as its `mcp_env.gitlab` header). The call is detached — the Execute loop suspends and resumes with the result when the run completes, so the agent reports the MR in the same turn. The full design is in [Code Sandbox](../concepts/code-sandbox.md).
+Agents that the founder has gated with `role.sandbox.enabled` author code through the **code sandbox**, not through any GitLab tool. The executor has a `run_sandbox` tool: a coding agent (Claude Code / OpenCode) runs inside an isolated E2B sandbox and opens a merge request **as the agent's own GitLab identity** (the PAT the role declares as `GITLAB_TOKEN` in `role.sandbox.env` — by convention the same PAT as its `mcp_env.gitlab` header). The call is detached — the executor's loop suspends and resumes with the result when the run completes, so the agent reports the MR in the same turn. The full design is in [Code Sandbox](../concepts/code-sandbox.md).
 
 The GitLab **git-auth recipe** is example config, not engine code — the engine ships no git-auth, the same stance as GitHub. The Nimbus GitLab example (`examples/nimbus.company.yaml`) carries a scoped credential helper reading `$GITLAB_TOKEN` for the GitLab host only, `insteadOf` rewrites for SSH-style remotes, and a brief telling the coding agent to just clone. Two GitLab-specific wrinkles versus the GitHub recipe: the basic-auth **username is arbitrary** for PAT auth (GitLab ignores it — the token is the password), and the helper must match the host **including a non-standard port** when the instance runs on one (the dev compose serves `gitlab.local:8929`), so the recipe templates the host from `integrations.gitlab.url` rather than hardcoding it.
 
@@ -300,7 +300,7 @@ The prompt dispatches on the **routing reason**, not the event type, because one
 | `pipeline.failed` | Read the **job log** — the status says nothing about the cause. The prompt states plainly that the agent is being told about its own action deliberately, or a seat that has learned "I am not notified of what I did" reads its own name as a routing mistake |
 | Everything else (approvals, non-mention comments, merges, participant thread activity, and any reason a later release adds) | You are informed because you take part in this thread — which is a reason to be informed, not a request to act |
 
-Review requests, assignments, and failed pipelines are **pointer events**: they name a diff, a thread or a job log to fetch before the agent has real context, so the Plan-phase relevance prefetches skip their aux-LLM call rather than filtering against a pointer. A comment is not one — its body *is* what was said.
+Review requests, assignments, and failed pipelines are **pointer events**: they name a diff, a thread or a job log to fetch before the agent has real context, so the turn-start relevance prefetches skip their aux-LLM call rather than filtering against a pointer — the executor searches for itself once it has the context. A comment is not one — its body *is* what was said.
 
 ---
 

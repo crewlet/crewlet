@@ -47,7 +47,7 @@ func catalogue() []events.Payload {
 		AgentPhaseCompleted{}, AgentTurnProgress{}, SubagentBatched{},
 		// learning.go
 		EpisodeWritten{}, PersistDeciderCompleted{}, SkillUsed{},
-		PlanPrefetchSummary{}, RelevantKnowledgeRefetched{},
+		PrefetchSummary{},
 		CounterpartyProfileUpdated{}, SkillSynthesized{}, SkillRefined{},
 		SkillPromoted{}, SkillStaled{}, SkillArchived{}, SkillRevived{},
 		SkillTelemetryWriteFailed{}, CompactionRequested{},
@@ -99,12 +99,11 @@ var wireTypes = []string{
 	"persist_decider_completed",
 	"phase.tool_activated",
 	"phase.tool_skill_blocked",
-	"plan_prefetch_summary",
+	"prefetch_summary",
 	"prompt.size",
 	"provider_fallback",
 	"raw_webhook",
 	"reflection_completed",
-	"relevant_knowledge_refetched",
 	"role_updated",
 	"sandbox_clarification_requested",
 	"sandbox_run_completed",
@@ -449,7 +448,7 @@ func TestTriggerRidesOnPhaseEvents(t *testing.T) {
 	source.Source = "PM"
 	trigger := DescribeTrigger(source)
 
-	phase := events.New(AgentPhaseCompleted{Phase: PhasePlan, Trigger: trigger},
+	phase := events.New(AgentPhaseCompleted{Phase: PhaseExecute, Trigger: trigger},
 		events.TraceContext{})
 	raw, err := json.Marshal(phase)
 	if err != nil {

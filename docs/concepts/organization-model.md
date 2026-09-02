@@ -330,7 +330,7 @@ When a unit has direct roles and a lead is set, the lead auto-manages any role n
 
 The lead can be a **human seat** — a human manager running an AI team is a first-class pattern: agents escalate to the human with their own Slack/Jira tools (an @-mention), and the human assigns work in the PM tool. See [Humans in the Org Chart](humans-in-the-org.md).
 
-The lead's system prompt includes a **roster** of direct reports. Detailed per-member profiles (skills, backstory, responsibilities) render directly into the lead's Plan-phase prompt from the in-memory `Organization` model.
+The lead's system prompt includes a **roster** of direct reports. Detailed per-member profiles (skills, backstory, responsibilities) render directly into the lead's executor prompt from the in-memory `Organization` model.
 
 #### Lead inheritance
 
@@ -390,7 +390,7 @@ units:
 
 ## Onboarding convention
 
-Each `OrgUnit` (and the organisation root) is expected to publish a page titled exactly **`Onboarding`** in its container of the knowledge base — its Confluence space.  When an agent spawns into a role, the engine writes nothing into the prompt itself — instead the Plan-phase shows a short `## First-turn onboarding` block listing the unit chain (org → ancestor units → own unit).  The agent reads each `Onboarding` page using its knowledge backend's page-search / page-read MCP tools (`confluence_search` / `confluence_get_page`), captures the conventions that matter via `reflect_and_persist` (scope=agent), and calls `mark_onboarded` when done.  After that, the hint disappears from subsequent prompts.
+Each `OrgUnit` (and the organisation root) is expected to publish a page titled exactly **`Onboarding`** in its container of the knowledge base — its Confluence space.  When an agent spawns into a role, the engine writes nothing into the prompt itself — instead a dedicated first-turn onboarding pass runs before the executor, shown a short `## First-turn onboarding` block listing the unit chain (org → ancestor units → own unit).  The agent reads each `Onboarding` page using its knowledge backend's page-search / page-read MCP tools (`confluence_search` / `confluence_get_page`), captures the conventions that matter via `reflect_and_persist` (scope=agent), and calls `mark_onboarded` when done.  After that, the hint disappears from subsequent prompts.
 
 Re-onboarding fires automatically when the org structure changes (the role moves between units, a new ancestor unit is inserted, the role is renamed) — the engine recomputes a chain hash and the prior marker no longer matches.  Source-page content drift is **not** automatic: the agent re-reads at its own discretion, or in response to a page-update notification routed through the existing notification pipeline.
 

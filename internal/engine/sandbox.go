@@ -273,8 +273,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	r, err := company.RunnerFor(in.Turn.Handle(), RunnerInput{
 		Task:      resumeTask(in),
 		Publisher: e.backends.Queue,
-		Turn:      tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth, in.Run.DelegationChain),
-		Budget:    e.meterFor(company, in.Turn.Handle()),
+		Turn: tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth,
+			in.Run.DelegationChain, resumeTask(in), turn.Reply(in.Run.Reply)),
+		Budget: e.meterFor(company, in.Turn.Handle()),
 		// A resumed Execute loop can exhaust its rounds like any other,
 		// and it is the phase most likely to: it comes back mid-task with
 		// its budget already partly spent.
@@ -301,10 +302,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		Depth:   in.Run.DelegationDepth,
 		History: in.State.Iterations,
 		Resume:  true,
-		// The plan the suspended turn was executing, so the delivery gate
-		// judges the round against what it INTENDED. A plan that cannot be
-		// recovered downgrades the gate rather than failing the resume.
-		ResumePlan: resumePlan(in.Run),
+		// Who is waiting, carried on the row rather than re-derived: the
+		// resumed turn never sees its trigger, so without this a turn
+		// somebody asked for would come back from a coding run free to
+		// end in silence.
+		Reply: turn.Reply(in.Run.Reply),
 	})
 	e.publishTurnCompleted(ctx, tel, in.Run.TurnID, r.Spend(), res, err)
 	if err != nil {
@@ -336,7 +338,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 // back through this same frame and records then.
 func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result) {
 	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.ConversationKey,
-		in.Run.TurnID, res, e.dispatch.now())
+		in.Run.TurnID, resumeTask(in), res, e.dispatch.now())
 }
 
 // resumeTask is the brief the resumed turn re-enters with.
@@ -349,24 +351,6 @@ func resumeTask(in resumeInput) string {
 		return in.State.Task
 	}
 	return in.Run.TaskDescription
-}
-
-// resumePlan rebuilds the plan the suspended turn was executing.
-func resumePlan(run sandbox.PendingRun) turn.Plan {
-	p := turn.Plan{Summary: run.TaskDescription}
-	if len(run.Plan) > 0 {
-		if summary, ok := run.Plan["summary"].(string); ok && summary != "" {
-			p.Summary = summary
-		}
-		if tools, ok := run.Plan["tools_needed"].([]any); ok {
-			for _, t := range tools {
-				if name, ok := t.(string); ok {
-					p.ToolsNeeded = append(p.ToolsNeeded, name)
-				}
-			}
-		}
-	}
-	return p
 }
 
 // persistSuspension writes a turn's suspended conversation to its row, which
@@ -460,6 +444,22 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		return sandbox.LaunchResult{}, fmt.Errorf("this seat's sandbox is not enabled")
 	}
 
+	// THE PRE-FLIGHT BUDGET FLOOR. turn_engine.sandbox_min_budget_tokens
+	// was validated, schema'd and documented and read by nothing, so a
+	// company that set it got a new revision and no behaviour.
+	//
+	// It is checked HERE rather than in the tool, because this is the frame
+	// that holds the seat's counter — and refused as a launch error, which
+	// the tool reports back to the model as a failed call. That is the
+	// point of a floor: a coding run costs a box, a clone and a toolchain
+	// install before it produces a token, so a seat with no headroom must
+	// learn that now and fall back to its own tools rather than after the
+	// job has died mid-run having delivered nothing.
+	if err := sandboxHeadroom(ctx, e.remainingFor(company, seat.Handle()),
+		company.Config.TurnEngine.SandboxMinBudgetTokens); err != nil {
+		return sandbox.LaunchResult{}, err
+	}
+
 	// A box this turn already has, paused from an earlier call. An EMPTY id
 	// on an existing row means that box is gone — reaped past its pause TTL,
 	// or torn down under a zero TTL — so this call provisions a fresh one
@@ -472,8 +472,8 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	setup := append(manager.DefaultSetup(), setupSteps(gate.Setup)...)
 	servers := sandboxMCP(l.engine.resolver(), company, seat, gate)
 	// The seat's own model and login, resolved from llm_sandbox — which
-	// falls back to llm_execute, because sandboxed work IS this seat's
-	// Execute phase running somewhere else.
+	// falls back to `llm`, because sandboxed work IS this seat's own work
+	// running somewhere else, and `llm` is what that work runs on.
 	agentLLM, credentials, credentialEnv := sandboxLLM(company, seat)
 	env := underlay(e.sandboxEnv(seat, gate, setup), credentialEnv)
 	spec := manager.BuildSpec(sandbox.SpecInput{
@@ -516,14 +516,47 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 			// history that stopped at the moment the run detached and
 			// planned as though the coding work had never happened.
 			ConversationKey: t.ConversationKey,
+			// The brief and the delivery obligation, so the resumed turn
+			// has both when the trigger is long gone. Neither can be
+			// recovered from the row any other way.
+			Reply: t.Reply,
 		},
 		Brief:      brief,
+		Task:       t.Task,
 		Setup:      setup,
 		Spec:       spec,
 		LLM:        agentLLM,
 		MCPServers: servers,
 		ReuseBox:   reuse,
 	})
+}
+
+// sandboxHeadroom refuses a launch below turn_engine.sandbox_min_budget_tokens.
+//
+// THREE-VALUED, like every other budget read in this engine: a seat with no
+// counter is uncapped and passes, a seat below the floor is refused, and a
+// read that FAILED is refused too — launching a box on an unknown budget is
+// how a company discovers its ceiling by spending past it.
+func sandboxHeadroom(ctx context.Context, remaining runner.Remaining, floor int) error {
+	if floor <= 0 {
+		return nil
+	}
+	if remaining == nil {
+		// No counter anywhere in the epoch, which is a company with no
+		// token budget rather than a read that could not be made.
+		return nil
+	}
+	left, err := remaining.Remaining(ctx)
+	if err != nil {
+		return fmt.Errorf("this seat's remaining token budget could not be read, "+
+			"and a coding run costs a box before it produces anything: %w", err)
+	}
+	if left < floor {
+		return fmt.Errorf("this seat has %d tokens left and a coding run needs at "+
+			"least %d (turn_engine.sandbox_min_budget_tokens): do the work with "+
+			"your own tools, or report that the budget is exhausted", left, floor)
+	}
+	return nil
 }
 
 // sandboxMCP renders the seat's SCOPED coding-agent MCP surface.

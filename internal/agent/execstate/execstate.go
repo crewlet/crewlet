@@ -19,8 +19,14 @@
 // So it carries an explicit Version, and decoding an unknown one is a LOUD
 // REFUSAL that leaves the row untouched rather than a best-effort read: a
 // resumed turn acting on a half-understood conversation is worse than a run
-// that waits for a node which understands it. Evolution is additive only —
-// new fields get defaults, nothing is removed or repurposed.
+// that waits for a node which understands it.
+//
+// Evolution is additive WITHIN a version — new fields get defaults, nothing is
+// removed or repurposed — and a shape that cannot be read that way takes a new
+// version plus a permanent reader for the old one (compat_v1.go). Permanent,
+// not a migration window: nothing rewrites a parked row, and the layer that
+// holds the blob cannot decode it, so the only thing that can ever read an old
+// row is a build that still knows how.
 package execstate
 
 import (
@@ -38,7 +44,13 @@ import (
 // Bumped only for a change a previous build could MISREAD. An added field a
 // reader can default is not a bump; a changed meaning for an existing field
 // is.
-const Version = 1
+//
+// v2 is the two-stage turn: `iteration_history` holds one call list per round
+// where v1 held a plan list and an execute list, because one phase now makes
+// the calls. A v1 reader handed a v2 blob would find both of its lists empty
+// and resume a turn believing no round before the suspend had done anything —
+// so it refuses instead, and this build reads v1 through [upgradeV1].
+const Version = 2
 
 // State is a suspended Execute loop, whole.
 //
@@ -186,14 +198,40 @@ func Decode(blob map[string]any) (State, bool, error) {
 	if err != nil {
 		return State{}, false, fmt.Errorf("execstate: decode: %w", err)
 	}
-	var s State
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return State{}, false, fmt.Errorf("execstate: decode: %w", err)
+	// The version FIRST, off the raw blob, because which shape to decode
+	// into is exactly what it answers. Decoding into the current State and
+	// checking afterwards would silently zero every field an older format
+	// spells differently, and the check would then pass on a v1 blob that
+	// happened to carry a `version` this build writes.
+	version, _ := blob["version"].(float64)
+	switch int(version) {
+	case Version:
+		var s State
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return State{}, false, fmt.Errorf("execstate: decode: %w", err)
+		}
+		if err := s.Validate(); err != nil {
+			return State{}, false, err
+		}
+		return s, true, nil
+	case versionV1:
+		s, err := upgradeV1(raw)
+		if err != nil {
+			return State{}, false, err
+		}
+		if err := s.Validate(); err != nil {
+			return State{}, false, err
+		}
+		return s, true, nil
+	default:
+		// LOUD, and the row is left alone. A resume that guessed at a
+		// format it does not know would act on a half-understood
+		// conversation; refusing leaves the run for a node that
+		// understands it, which in a rolling upgrade is a node that
+		// exists.
+		return State{}, false, fmt.Errorf("%w: %d (this build reads %d and %d)",
+			ErrUnknownVersion, int(version), versionV1, Version)
 	}
-	if err := s.Validate(); err != nil {
-		return State{}, false, err
-	}
-	return s, true, nil
 }
 
 // Answer appends the tool result that answers the pending call, returning the

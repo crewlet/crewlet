@@ -55,7 +55,7 @@ type Providers struct {
 	Embeddings *EmbeddingProvider `yaml:"embeddings,omitempty" json:"embeddings,omitempty" desc:"Embedding provider for diary and episode recall."`
 
 	// Sandbox is the code-runtime backend. Nil (or type none) means no
-	// seat can run a sandboxed Execute phase, whatever its own gate says.
+	// seat can run a sandboxed coding run, whatever its own gate says.
 	Sandbox *SandboxProvider `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"Code sandbox backend. Absent = no seat runs code."`
 }
 
@@ -214,8 +214,9 @@ func (p *Providers) validate(path string) error {
 // cli.state_dir must drive the SAME CLI.
 //
 // Sharing a directory is the supported way to run several models off a
-// single login — an "opus" entry for Plan and a "sonnet" entry for Execute
-// pointed at one directory means one `crewlet llm login` instead of two.
+// single login — an "opus" entry for the executor and a "sonnet" entry for
+// the reviewer pointed at one directory means one `crewlet llm login`
+// instead of two.
 // That works only because both entries then agree on which files are
 // credentials and which are conversation memory. Two different CLIs over
 // one directory agree on neither, so each prunes the other's state and
@@ -590,7 +591,7 @@ type CLIAgent struct {
 	// MaxConcurrent is how many CLI processes this provider runs at once.
 	//
 	// Each is a full Node or Rust runtime at roughly 200-400 MB resident,
-	// so an unbounded fleet of seats entering Plan together can exhaust
+	// so an unbounded fleet of seats starting a turn together can exhaust
 	// the engine host; 4 keeps peak usage near 1.5 GB, which fits the
 	// smallest realistic host while still overlapping the calls' long I/O
 	// waits. Subscription plans also throttle concurrency well below what

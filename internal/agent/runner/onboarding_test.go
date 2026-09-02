@@ -71,7 +71,7 @@ func onboardingRunner(t *testing.T, store runner.Markers, latch *runner.Latch, p
 		Seat:     prompts.Seat{Org: organization, Role: role},
 		Registry: reg,
 		Models:   models,
-		Caps:     runner.Caps{PlanRounds: 2, ExecuteRounds: 2, ReviewRounds: 2},
+		Caps:     runner.Caps{ExecutorRounds: 2},
 		Onboarding: runner.Onboarding{
 			Markers: store, Latch: latch, Rounds: 3, Ceiling: 0,
 		},
@@ -283,9 +283,9 @@ func TestAZeroBudgetDisablesThePass(t *testing.T) {
 
 func TestTheOnboardingSurfaceCannotSubmitAPlan(t *testing.T) {
 	t.Parallel()
-	// The pass has its OWN budget precisely so it never competes with
-	// planning; a surface that could submit a plan would make it a second
-	// Plan phase with a different prompt.
+	// The pass has its OWN budget precisely so it never competes with the
+	// turn's own work; a surface that could submit work would make it a
+	// second executor with a different prompt.
 	store := &markers{claimHeld: true}
 	prov := marking()
 	r := onboardingRunner(t, store, runner.NewLatch(), prov)
@@ -297,7 +297,7 @@ func TestTheOnboardingSurfaceCannotSubmitAPlan(t *testing.T) {
 		t.Fatal("the pass never called the model")
 	}
 	for _, def := range reqs[0].Tools {
-		if def.Name == runner.SubmitPlanTool || def.Name == runner.SubmitReviewTool {
+		if def.Name == runner.SubmitWorkTool || def.Name == runner.SubmitReviewTool {
 			t.Errorf("the onboarding surface offers %s", def.Name)
 		}
 	}

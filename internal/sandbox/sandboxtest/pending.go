@@ -67,7 +67,7 @@ func run(turnID string) sandbox.PendingRun {
 	return sandbox.PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
 		CodingAgent: "claude-code", TaskDescription: "fix the flake",
-		SuccessCriteria: []string{"CI green"}, ConversationKey: "slack:C1",
+		ConversationKey: "slack:C1", Reply: "tool",
 		TraceID: "tr-1", CreatedAt: base,
 	}
 }

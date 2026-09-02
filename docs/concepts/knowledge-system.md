@@ -16,14 +16,14 @@ flowchart TD
     RP["reflect_and_persist<br/>PersistDecider<br/>(post-turn, embeds on write)"]
     DIARY["agent_diary<br/>vector index + agent_id + kind/ttl"]
     SEL["hybrid candidate selection:<br/>vector top-K ∪ recency top-K,<br/>deduped, capped at 100,<br/>then aux-LLM relevance filter"]
-    PROMPT["Plan-phase prompt prefetch blocks<br/>'## Personal memory'<br/>'## Relevant knowledge'"]
+    PROMPT["Turn-start prefetch blocks<br/>'## Personal memory'<br/>'## Relevant knowledge'"]
     KB["knowledge-base pages<br/>(live, query-time)"]
     KS["KnowledgeSearcher<br/>aux-LLM → text query → backend search API,<br/>once per turn, per-agent auth<br/>(Confluence CQL)"]
     RP --> DIARY --> SEL --> PROMPT
     KS --> KB --> PROMPT
 ```
 
-The two reads are independent: the diary is read by hybrid candidate selection (vector top-K ∪ recency top-K → aux-LLM relevance filter), scoped to the calling agent; the knowledge base is searched live, scoped to the role's accessible containers. Neither depends on the other, and each renders into its own Plan-phase prompt block.
+The two reads are independent: the diary is read by hybrid candidate selection (vector top-K ∪ recency top-K → aux-LLM relevance filter), scoped to the calling agent; the knowledge base is searched live, scoped to the role's accessible containers. Neither depends on the other, and each renders into its own block of the executor's prompt.
 
 ---
 
@@ -63,7 +63,7 @@ Contract semantics every backend honors:
 - **Best-effort**: `Search` never reports an error; every failure path returns no hits and the prompt block renders empty.
 - **`Query.ExcludeAncestors`** drops hits whose ancestor/parent chain matches any listed title. The prefetch defaults it to `["Auto-Drafted Skills"]` (`AUTO_DRAFTED_PARENT` in `internal/knowledge/knowledge.go`) so unreviewed [promotion drafts](agent-learning.md) never surface before a lead publishes them.
 
-**Selection is by integration presence, and single-homed.** Engine start constructs exactly one searcher: the Confluence searcher when `confluence` is configured. One knowledge home is what makes the Plan-phase prefetch, onboarding hints and skill promotion agree about what the company knows — two searchers would make an agent's answer depend on which was asked, and neither would be wrong. With no backend configured, the searcher stays unwired and the `## Relevant knowledge` block renders empty. A live config change that rebuilds or removes a transport re-points the running turn engine at the new searcher (or at none) via `set_knowledge_searcher`.
+**Selection is by integration presence, and single-homed.** Engine start constructs exactly one searcher: the Confluence searcher when `confluence` is configured. One knowledge home is what makes the turn-start prefetch, the `search_knowledge` builtin, onboarding hints and skill promotion agree about what the company knows — two searchers would make an agent's answer depend on which was asked, and neither would be wrong. With no backend configured, the searcher stays unwired and the `## Relevant knowledge` block renders empty. A live config change that rebuilds or removes a transport re-points the running turn engine at the new searcher (or at none) via `set_knowledge_searcher`.
 
 **The seam stays an interface with one implementation, deliberately.** `knowledge.Searcher` is declared by its consumers — the prefetch, the onboarding hint, the promotion pass — so a second backend is a new implementation rather than a rewrite of everything that searches. A seam collapsed into its last backend is what makes the next one a rewrite.
 
@@ -108,7 +108,7 @@ Shared knowledge **is** the backend — there is no separate engine-managed stor
 | `crewlet confluence import` ([below](#publishing-knowledge-docs)) | `knowledge.Searcher` (live query) | Same |
 | Agents via `reflect_and_persist` (in-flight) and `PersistDecider` (post-turn) | `agent_diary` (hybrid vector ∪ recency selection → aux-LLM filter) | The writing agent only |
 
-Static org configuration (mission, vision, policies, role profile, team roster, unit context, integration hints) is a third source, but it is not "knowledge" in the read-path sense — it renders straight into the Plan-phase system prompt via the section builders in `internal/agent`. There is no startup seed step and no reconcile pass — the prompt **is** the configuration. Documents that change frequently (procedures, ADRs, runbooks) live in the knowledge base, where humans and agents already author them.
+Static org configuration (mission, vision, policies, role profile, team roster, unit context, integration hints) is a third source, but it is not "knowledge" in the read-path sense — it renders straight into the executor's system prompt via the section builders in `internal/agent`. There is no startup seed step and no reconcile pass — the prompt **is** the configuration. Documents that change frequently (procedures, ADRs, runbooks) live in the knowledge base, where humans and agents already author them.
 
 ---
 
@@ -178,7 +178,7 @@ The two are independent: an org can have knowledge search without reflection, or
 
 ## Relevant-knowledge prefetch
 
-Beyond agents calling the backend's search tools directly, the Plan-phase prompt carries a `## Relevant knowledge` block that pre-runs a knowledge-base search for the planner. Once per turn, the auxiliary LLM generates a short plain-text search query from the trigger context, the searcher runs it live (scoped to the role's accessible containers), and the planner sees title + snippet bullets without having to think to call a tool. The `CanSearch` pre-gate skips the aux-LLM call entirely when a search could not return anything. Because the search runs as the agent's own backend user, restricted pages the agent cannot see never appear — there is no draft-page or restriction filter to apply engine-side.
+Beyond agents calling the backend's search tools directly, the executor's prompt carries a `## Relevant knowledge` block that pre-runs a knowledge-base search for the seat. Once per turn, the auxiliary LLM generates a short plain-text search query from the trigger context, the searcher runs it live (scoped to the role's accessible containers), and the executor sees title + snippet bullets without having to think to call a tool. When the block is thin — a pointer trigger gates the search off — the executor searches the same seam itself with the `search_knowledge` builtin, once it knows what the task actually needs. The `CanSearch` pre-gate skips the aux-LLM call entirely when a search could not return anything. Because the search runs as the agent's own backend user, restricted pages the agent cannot see never appear — there is no draft-page or restriction filter to apply engine-side.
 
 Full page bodies open via the backend's page-read MCP tool; further searches via its search MCP tool (`confluence_get_page` / `confluence_search`).
 
@@ -188,7 +188,7 @@ See [Agent Learning § Relevant-knowledge prefetch](agent-learning.md#relevant-k
 
 ## Onboarding markers
 
-The `mark_onboarded` builtin records that an agent has read its team's Onboarding pages so the Plan-phase onboarding hint stops re-rendering on every turn. Markers live in their own small table — `agent_onboarding_markers` — keyed by `agent_id` with UPSERT semantics (so re-onboarding never accumulates stale rows). The marker carries a `chain_hash` over the agent's org chain; a chain change (role moved units, ancestor renamed, new unit inserted) silently invalidates the marker, and the hint re-fires until the agent re-reads and re-marks.
+The `mark_onboarded` builtin records that an agent has read its team's Onboarding pages so the onboarding hint stops re-rendering on every turn. Markers live in their own small table — `agent_onboarding_markers` — keyed by `agent_id` with UPSERT semantics (so re-onboarding never accumulates stale rows). The marker carries a `chain_hash` over the agent's org chain; a chain change (role moved units, ancestor renamed, new unit inserted) silently invalidates the marker, and the hint re-fires until the agent re-reads and re-marks.
 
 A dedicated table — `is_onboarded` answers with one indexed equality lookup instead of a per-agent metadata-filter scan.
 

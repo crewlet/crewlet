@@ -105,20 +105,20 @@ func TestSummaries(t *testing.T) {
 		want:    "Dev execute [sandbox:claude-code]",
 	}, {
 		name:    "a phase reports its structured decision",
-		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhasePlan, Decision: "direct", Model: "gpt-4o", TotalTokens: 12},
-		want:    "Dev plan → direct (gpt-4o, 12 tokens)",
+		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseReview, Decision: "self_iterate", Model: "gpt-4o", TotalTokens: 12},
+		want:    "Dev review → self_iterate (gpt-4o, 12 tokens)",
 	}, {
 		name:    "a guard breach names the invariant",
 		payload: TurnGuardBreach{RoleName: "Dev", Kind: GuardStall, Detail: "unchanged artifact"},
 		want:    "Dev guard stall: unchanged artifact",
 	}, {
 		name:    "a prefetch summary counts its blocks",
-		payload: PlanPrefetchSummary{RoleName: "Dev", CounterpartyHit: true, PersonalMemoryHit: true},
-		want:    "Dev plan prefetch: 2/6 hits",
+		payload: PrefetchSummary{RoleName: "Dev", CounterpartyHit: true, PersonalMemoryHit: true},
+		want:    "Dev prefetch: 2/6 hits",
 	}, {
 		name:    "a gated prefetch says it was gated",
-		payload: PlanPrefetchSummary{RoleName: "Dev", TriggerRequiresRecon: true},
-		want:    "Dev plan prefetch: 0/6 hits (thin trigger — filters gated)",
+		payload: PrefetchSummary{RoleName: "Dev", TriggerRequiresRecon: true},
+		want:    "Dev prefetch: 0/6 hits (thin trigger — filters gated)",
 	}, {
 		name:    "a no-op persist decision",
 		payload: PersistDeciderCompleted{RoleName: "Dev", Classification: PersistNOOP},
@@ -149,8 +149,8 @@ func TestSummaries(t *testing.T) {
 		want:    "Dev working (execute, round 1)",
 	}, {
 		name:    "later rounds count on from there",
-		payload: AgentTurnProgress{RoleName: "Dev", Phase: PhasePlan, RoundNum: 2},
-		want:    "Dev working (plan, round 3)",
+		payload: AgentTurnProgress{RoleName: "Dev", Phase: PhaseReview, RoundNum: 2},
+		want:    "Dev working (review, round 3)",
 	}, {
 		name:    "a compaction pass names the seat it ran for",
 		payload: CompactionCompleted{SkippedReason: CompactionAlreadyRunning},

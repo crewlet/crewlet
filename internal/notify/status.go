@@ -32,7 +32,7 @@ import (
 // own interval.
 //
 // POSTING INTO THE CONVERSATION CLEARS IT, which covers the "agent replied"
-// half for free. The "agent gave up" half — the planner decided the message
+// half for free. The "agent gave up" half — the agent decided the message
 // was not for it, the turn failed, the budget ran out — has no backend-side
 // signal at all, so a session always clears explicitly when its last turn
 // ends.

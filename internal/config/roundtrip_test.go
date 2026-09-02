@@ -60,7 +60,7 @@ roles:
     handle: cto
     llm:
       default: fast
-      plan: [big, bigger]
+      review: [big, bigger]
 mcp_servers:
   - name: gitlab
     shared: false
@@ -118,7 +118,7 @@ func TestPhaseLLMKeepsItsAuthoredShape(t *testing.T) {
 		t.Fatalf("a scalar chain was expanded:\n%s", encoded)
 	}
 	reloaded := mustCompany(t, string(encoded))
-	if got := reloaded.Roles[2].LLM.Plan; len(got) != 2 || got[0] != "big" {
+	if got := reloaded.Roles[2].LLM.Review; len(got) != 2 || got[0] != "big" {
 		t.Fatalf("the per-phase mapping did not survive: %v", got)
 	}
 }
@@ -167,7 +167,7 @@ func TestCompanyRoundTripsThroughJSON(t *testing.T) {
 	if err := reloaded.Validate(); err != nil {
 		t.Fatalf("a JSON round trip produced an invalid config:\n%v", err)
 	}
-	if !strings.EqualFold(reloaded.Roles[2].LLM.Plan[0], "big") {
+	if !strings.EqualFold(reloaded.Roles[2].LLM.Review[0], "big") {
 		t.Fatalf("the per-phase mapping did not survive JSON: %+v", reloaded.Roles[2].LLM)
 	}
 }

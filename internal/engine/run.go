@@ -535,6 +535,14 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Pause == nil {
 		d.Pause = e.pause
 	}
+	if d.Answer == nil && e.sandboxCoordinator != nil {
+		// THE CALLER THIS METHOD NEVER HAD. TryResumeFromAnswer has been
+		// exported and tested since the clarification path was written, and
+		// nothing in the engine called it — so a coding run that asked a
+		// person a question waited out its pause TTL however promptly they
+		// replied.
+		d.Answer = e.sandboxCoordinator.TryResumeFromAnswer
+	}
 	if d.NoteDeferred == nil {
 		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred
 	}
@@ -767,29 +775,29 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	task := DescribeTrigger(req.Events)
 	// RENDERED BEFORE THE RUNNER, which is what freezes it: the runner
 	// receives strings and has nowhere to re-fetch from, so a self_iterate
-	// loop cannot move the system prompt underneath the planner. The one
-	// fetch that cannot be frozen — the knowledge search a thin trigger's
-	// gate skipped — rides the Recon seam below, keyed on a plan summary
-	// that does not exist until Plan has run.
-	prefetchReq, blocks := e.prefetchFor(ctx, company, req, task)
+	// loop cannot move the system prompt underneath the executor. Nothing
+	// is re-fetched mid-turn any more: the one case that needed it — a
+	// thin trigger whose turn-start search was skipped — is served by the
+	// executor calling search_knowledge over the same seam, on a query it
+	// writes once it knows what the task needs.
+	blocks := e.prefetchFor(ctx, company, req, task)
 	// The skills OFFERED to this turn, carried onto its completion so the
 	// curator ages a skill on when it was last put in front of a model
 	// rather than archiving the ones a seat reads every turn.
 	tel.skills = blocks.SkillIDs
-	fetcher := e.prefetcher(company)
 
+	reply := ReplyFor(req.Events)
 	r, err := company.RunnerFor(req.Handle, RunnerInput{
-		Task:    task,
-		Context: blocks,
-		Skills:  e.skills,
-		Recon: func(ctx context.Context, planSummary string) string {
-			return fetcher.AfterPlan(ctx, prefetchReq, planSummary)
-		},
+		Task:         task,
+		Context:      blocks,
+		Skills:       e.skills,
+		Reply:        reply,
 		Conversation: ledger.RenderHistory(req.History, ledger.HistoryOptions{}),
 		Publisher:    e.backends.Queue,
-		Turn:         tel.runnerTurn(company, req.WorkKey, req.Depth, req.DelegationChain),
-		Markers:      e.markers(),
-		Latch:        e.onboarded,
+		Turn: tel.runnerTurn(company, req.WorkKey, req.Depth, req.DelegationChain,
+			task, reply),
+		Markers: e.markers(),
+		Latch:   e.onboarded,
 		// Read off the PINNED epoch, so a revision that raises a ceiling
 		// mid-turn cannot move the limit a round is judged against.
 		Budget: e.meterFor(company, req.Handle),

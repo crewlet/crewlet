@@ -1,4 +1,4 @@
-// Package subagent runs the ephemeral workers a turn's Execute phase spawns.
+// Package subagent runs the ephemeral workers a turn's executor spawns.
 //
 // A sub-agent is one tool loop with a parent-written prompt, a parent-chosen
 // slice of the parent's own tools, and hard caps on rounds, wall-clock and
@@ -118,7 +118,7 @@ const ScopeSubagent = "subagent"
 //
 // A panic's message can arrive with a stack behind it and a provider error can
 // carry a whole response body; either would blow past the tool result the
-// planner reads. 500 runes holds two or three sentences — enough to say what
+// parent reads. 500 runes holds two or three sentences — enough to say what
 // stopped, never enough to bury the sibling results it is rendered next to.
 const errorLimit = 500
 
@@ -398,7 +398,7 @@ type Task struct {
 // BatchRequest is a fan-out spawn.
 //
 // One allowlist for every child, deliberately. Heterogeneous capabilities per
-// child in one call means one tool result the planner cannot reason about —
+// child in one call means one tool result the parent cannot reason about —
 // it would have to remember which index got which grant. Two calls express
 // that without ambiguity.
 type BatchRequest struct {
@@ -1049,7 +1049,7 @@ func publishBatched(ctx context.Context, cfg Config, results []Result) {
 // first-party tools by name and one-line description, MCP servers by name
 // only.
 //
-// Servers are named rather than expanded for the same reason the planner's
+// Servers are named rather than expanded for the same reason the parent's
 // catalogue names them — a real server publishes dozens of tools and a wall
 // of them is what discovery exists to avoid.
 func renderCatalogue(safe tools.Snapshot) string {
@@ -1275,7 +1275,7 @@ func (t *Tool) Call(ctx context.Context, args map[string]any) (tools.Result, err
 			return failed(err.Error()), nil
 		}
 		// The tool itself SUCCEEDED even when children failed: per-child
-		// errors ride inside the payload so the planner can pick out which
+		// errors ride inside the payload so the parent can pick out which
 		// sub-tasks need a retry. Marking the whole call failed would tell
 		// it to throw away the siblings that worked.
 		return tools.Result{Output: renderBatch(results)}, nil
@@ -1324,7 +1324,7 @@ type childReport struct {
 	Model         string   `json:"model,omitempty"`
 }
 
-// renderBatch is the batched tool's output: JSON, so the planner can read the
+// renderBatch is the batched tool's output: JSON, so the parent can read the
 // per-child split rather than a prose blob it has to re-parse.
 func renderBatch(results []Result) string {
 	reports := make([]childReport, 0, len(results))
@@ -1337,7 +1337,7 @@ func renderBatch(results []Result) string {
 	blob, err := json.Marshal(map[string]any{"results": reports})
 	if err != nil {
 		// Nothing in childReport can refuse to marshal, but returning an
-		// empty string here would hand the planner silence for a batch that
+		// empty string here would hand the parent silence for a batch that
 		// ran and cost tokens.
 		log.Error("subagent_batch_render_failed", "error", err)
 		return fmt.Sprintf("%d sub-agents ran; their results could not be rendered: %v",

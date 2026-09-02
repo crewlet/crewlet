@@ -89,7 +89,7 @@ func (r *Registry) Has(key string) bool { _, ok := r.byKey[key]; return ok }
 //
 // Four levels, in priority:
 //
-//  1. the role's per-phase chain (llm_plan, llm_execute, …) if set,
+//  1. the role's per-phase chain (llm_review, llm_judge, …) if set,
 //  2. the role's llm chain,
 //  3. the "default" key,
 //  4. the first provider in config order.
@@ -157,16 +157,13 @@ func (r *Registry) Head(role *org.Role, ph Phase) (chain.Member, error) {
 
 // roleKeys returns the role's per-phase chain for ph, before any fallback.
 //
-// Sandbox is the one phase with a two-step preference: the sandboxed coding
-// agent IS this seat's Execute work, done somewhere else, so it inherits
-// llm_execute before falling back to llm. Every other phase falls straight
-// through to llm.
+// THE EXECUTOR IS NOT HERE, and its absence is the rule: `llm` is the seat's
+// model, and the executor is what runs on it. Every phase below is a satellite
+// an operator may point somewhere cheaper — the reviewer, a spawned worker,
+// the summariser, the round-cap judge, the coding agent — and each falls
+// straight through to llm when it names nothing.
 func roleKeys(role *org.Role, ph Phase) org.ProviderKeys {
 	switch ph {
-	case Plan:
-		return role.LLMPlan
-	case Execute:
-		return role.LLMExecute
 	case Review:
 		return role.LLMReview
 	case Subagent:
@@ -176,10 +173,7 @@ func roleKeys(role *org.Role, ph Phase) org.ProviderKeys {
 	case Judge:
 		return role.LLMJudge
 	case Sandbox:
-		if len(role.LLMSandbox) > 0 {
-			return role.LLMSandbox
-		}
-		return role.LLMExecute
+		return role.LLMSandbox
 	default:
 		return nil
 	}
@@ -195,4 +189,4 @@ func roleKeys(role *org.Role, ph Phase) org.ProviderKeys {
 func RoleKeys(role *org.Role, ph Phase) org.ProviderKeys { return roleKeys(role, ph) }
 
 // All is every phase, for callers that must cover the set exhaustively.
-var All = []Phase{Plan, Execute, Review, Subagent, Auxiliary, Judge, Sandbox}
+var All = []Phase{Execute, Review, Subagent, Auxiliary, Judge, Sandbox}

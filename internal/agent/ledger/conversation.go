@@ -25,9 +25,17 @@ type Session struct {
 	// exchange and a thread that has moved on.
 	At string `json:"at,omitempty"`
 
-	Trigger       string `json:"trigger,omitempty"`
-	PlanSummary   string `json:"plan_summary,omitempty"`
-	PlanReasoning string `json:"plan_reasoning,omitempty"`
+	Trigger string `json:"trigger,omitempty"`
+
+	// Intent is what the turn set out to do, in the seat's own words.
+	//
+	// One field where there were two. The other was the planner's separate
+	// reasoning, which no longer exists as a distinct artifact — the
+	// executor decides and acts in one conversation — and which nothing
+	// ever filled: the engine wrote a Reply and a Decision and left every
+	// other field here empty, so a seat's own history read as a list of
+	// replies with no account of what produced them.
+	Intent string `json:"intent,omitempty"`
 
 	// Calls is PRE-RENDERED tool-call lines. Rendered at WRITE time so the
 	// budgets are applied once against the arguments the engine actually
@@ -58,8 +66,7 @@ type SessionInput struct {
 	TurnID        string
 	At            string
 	Trigger       string
-	PlanSummary   string
-	PlanReasoning string
+	Intent        string
 	Calls         []Call
 	Reads         []string
 	Skip          []string
@@ -74,8 +81,7 @@ func BuildSession(in SessionInput) Session {
 		TurnID:        in.TurnID,
 		At:            in.At,
 		Trigger:       elide(in.Trigger, TriggerLimit),
-		PlanSummary:   elide(in.PlanSummary, PlanSummaryLimit),
-		PlanReasoning: elide(in.PlanReasoning, ReasoningLimit),
+		Intent:        elide(in.Intent, IntentLimit),
 		Calls:         FormatCalls(in.Calls, Format(in.Skip, in.Reads)),
 		Reply:         elide(in.Reply, ReplyLimit),
 		Decision:      in.Decision,
@@ -139,8 +145,7 @@ func renderSession(e Session) string {
 	lines := []string{head}
 	for _, kv := range []struct{ label, value string }{
 		{"Triggered by: ", e.Trigger},
-		{"You planned: ", e.PlanSummary},
-		{"Your reasoning: ", e.PlanReasoning},
+		{"You set out to: ", e.Intent},
 	} {
 		if kv.value != "" {
 			lines = append(lines, kv.label+kv.value)

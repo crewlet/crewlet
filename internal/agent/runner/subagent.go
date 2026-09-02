@@ -44,10 +44,10 @@ type SubagentConfig struct {
 // spawnEntry is the sub-agent tool as it goes onto a phase surface, or the
 // zero Entry when this turn cannot spawn.
 //
-// EXECUTE ONLY. Plan is choosing what to do and Review is judging what was
-// done; a spawner on either is a phase that can spend a batch of model calls
-// on work the turn has not decided to do or has already finished. Onboarding
-// is a seat reading its own team's pages, which is not fan-out work.
+// EXECUTE ONLY. Review is judging work that is already finished, so a spawner
+// there is a phase that can spend a batch of model calls on work the turn has
+// already done. Onboarding is a seat reading its own team's pages, which is
+// not fan-out work.
 func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 	snapshot tools.Snapshot, surface func() *tools.Surface,
 ) tools.Entry {
@@ -93,15 +93,15 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 		// and what the catalogue showed must come from the same active
 		// list, and the child's does not exist until subagent builds it.
 		Guard: func(child *tools.Surface) tools.Guard {
-			return r.guardFor(phase.Subagent, child)
+			return r.guardFor(phase.Subagent, child, nil).tools()
 		},
 		Telemetry: r.emitter().nestedAt(round).subagentCompleted,
 	})
 	return tools.Entry{
 		Tool: tool, Origin: tools.OriginBuiltin,
-		// NOT a known read, or the delivery gate would count a turn that
-		// planned to act and then only spawned as having delivered
-		// nothing. NOT a shared-surface write either: a spawn is
+		// NOT a known read, or the delivery check would count a turn
+		// that only spawned as having delivered something. NOT a
+		// shared-surface write either: a spawn is
 		// in-process work under the parent's own name, and marking it one
 		// would say something about the child's effects rather than about
 		// this call. It is already on subagent's own denylist, so a child

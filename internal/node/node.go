@@ -305,7 +305,7 @@ func (n *Node) Drain(ctx context.Context) {
 	// past that point — and it has not called a model or fired a side
 	// effect, so it is the one kind of in-flight work that costs nothing
 	// to abandon. Without this, a backlog admitted before the quiesce runs
-	// full Plan → Execute → Review turns one after another through a
+	// full execute → review turns one after another through a
 	// shutdown that waits for them indefinitely.
 	n.turns.close()
 

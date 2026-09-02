@@ -40,22 +40,30 @@ const (
 // the provider's own structured blocks, which must be handed BACK verbatim on
 // the next call or the provider rejects the conversation. Flattening them
 // loses the round trip.
+// The JSON tags are a WIRE FORMAT, and they are the field names on purpose.
+// A suspended agent turn serializes its whole conversation into a durable row
+// that another BUILD reads back days later
+// ([github.com/crewlet/crewlet/internal/agent/execstate]), and untagged these
+// keys are whatever the Go field happens to be called — so a rename here is
+// an unresumable run with no compile error and no symptom but a refusal in a
+// log. Pinned to the spellings already on the wire; changing one is a format
+// change and needs a version bump on the other side.
 type Message struct {
-	Role             string
-	Content          string
-	ReasoningContent string
-	ThinkingBlocks   []ThinkingBlock
-	ToolCalls        []ToolCall
-	ToolCallID       string
-	Name             string
+	Role             string          `json:"Role,omitempty"`
+	Content          string          `json:"Content,omitempty"`
+	ReasoningContent string          `json:"ReasoningContent,omitempty"`
+	ThinkingBlocks   []ThinkingBlock `json:"ThinkingBlocks,omitempty"`
+	ToolCalls        []ToolCall      `json:"ToolCalls,omitempty"`
+	ToolCallID       string          `json:"ToolCallID,omitempty"`
+	Name             string          `json:"Name,omitempty"`
 }
 
 // ThinkingBlock is a provider's structured reasoning block, carried opaquely.
 type ThinkingBlock struct {
-	Type      string
-	Thinking  string
-	Signature string
-	Data      string
+	Type      string `json:"Type,omitempty"`
+	Thinking  string `json:"Thinking,omitempty"`
+	Signature string `json:"Signature,omitempty"`
+	Data      string `json:"Data,omitempty"`
 }
 
 // ToolDef is a tool offered to the model. Parameters is a JSON Schema object.
@@ -67,9 +75,9 @@ type ToolDef struct {
 
 // ToolCall is the model asking for a tool to run.
 type ToolCall struct {
-	ID        string
-	Name      string
-	Arguments map[string]any
+	ID        string         `json:"ID,omitempty"`
+	Name      string         `json:"Name,omitempty"`
+	Arguments map[string]any `json:"Arguments,omitempty"`
 }
 
 // Completion is one model response.

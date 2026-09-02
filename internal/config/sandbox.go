@@ -240,7 +240,7 @@ func (s *SandboxProvider) validate(path string) error {
 		// `crewlet validate` catches it: the API authenticates every call
 		// on both the cloud and a self-hosted cluster, so a run without
 		// one 401s at its first create — minutes into a turn that already
-		// spent a Plan phase.
+		// already spent its own rounds.
 		p.add(at(path, "api_key"), ErrMissing,
 			"required for type e2b — the API authenticates every call, "+
 				"including against a self-hosted cluster, where `domain` "+

@@ -257,7 +257,7 @@ type Knowledge struct {
 // validateProviderKeys holds the rule that a seat may only name a model the
 // company actually has.
 //
-// Without it a typo is invisible and permanent. `llm_plan: claude-sonet`
+// Without it a typo is invisible and permanent. `llm_review: claude-sonet`
 // resolves through the runtime's fallback — per-phase, then the role's default
 // chain, then the "default" key, then the first provider configured — so the
 // seat boots, thinks, and bills, on a model the operator never chose. Nothing
@@ -287,8 +287,8 @@ func (c *Company) validateProviderKeys() error {
 		// Both written surfaces are checked, and each is reported at the
 		// path the operator typed. Validating the RESOLVED chain instead
 		// would hide half of them: the flat field wins over the mapping,
-		// so a typo inside `llm.plan` under a role that also sets
-		// `llm_plan` never appears in the resolved value at all — and it
+		// so a typo inside `llm.review` under a role that also sets
+		// `llm_review` never appears in the resolved value at all — and it
 		// is still a typo, still in the file, and still what the operator
 		// will edit next.
 		for _, field := range []struct {
@@ -296,15 +296,11 @@ func (c *Company) validateProviderKeys() error {
 			keys ProviderKeys
 		}{
 			{at(path, "llm"), role.LLM.Default},
-			{at(at(path, "llm"), "plan"), role.LLM.Plan},
-			{at(at(path, "llm"), "execute"), role.LLM.Execute},
 			{at(at(path, "llm"), "review"), role.LLM.Review},
 			{at(at(path, "llm"), "subagent"), role.LLM.Subagent},
 			{at(at(path, "llm"), "auxiliary"), role.LLM.Auxiliary},
 			{at(at(path, "llm"), "judge"), role.LLM.Judge},
 			{at(at(path, "llm"), "sandbox"), role.LLM.Sandbox},
-			{at(path, "llm_plan"), role.LLMPlan},
-			{at(path, "llm_execute"), role.LLMExecute},
 			{at(path, "llm_review"), role.LLMReview},
 			{at(path, "llm_subagent"), role.LLMSubagent},
 			{at(path, "llm_auxiliary"), role.LLMAuxiliary},

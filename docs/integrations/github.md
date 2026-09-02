@@ -338,13 +338,13 @@ one.
 ## How code authoring works
 
 A seat the founder has gated with `role.sandbox.enabled` authors code through
-the [code sandbox](../concepts/code-sandbox.md). The planner lists
-`run_sandbox` in `tools_needed`, Execute calls it, and a coding agent runs in
-an isolated box and opens a pull request **as the agent's own GitHub
-identity** — the token the role declares in `role.sandbox.env`, by convention
-the same one as its `mcp_env.github` header. The call is detached: the
-Execute loop suspends and resumes with the result, so the agent reports the
-pull request in the same turn.
+the [code sandbox](../concepts/code-sandbox.md). `run_sandbox` is on the
+executor's surface; it calls it, and a coding agent runs in an isolated box
+and opens a pull request **as the agent's own GitHub identity** — the token
+the role declares in `role.sandbox.env`, by convention the same one as its
+`mcp_env.github` header. The call is detached: the executor loop suspends and
+resumes with the result, so the agent reports the pull request in the same
+turn.
 
 GitHub stays in the picture on the read/review/track side. Once the pull
 request exists, its `review_requested` event wakes the reviewer through
@@ -359,13 +359,13 @@ repository and number, and where the original request came from. That is the
 SHORT-tier personal memory shape — see
 [agent-learning.md](../concepts/agent-learning.md#2-agentdiary--reflect_and_persist--in-flight-personal-memory).
 
-When the review request arrives later, the Plan-phase prefetch filters that
+When the review request arrives later, the turn-start prefetch filters that
 diary against the incoming trigger, so the original ask shows up in the
 agent's `## Personal memory` block and it can report back to whoever asked
 rather than silently reviewing.
 
 Roles with GitHub credentials also see the bundled `mcp:github`
-[Tool Skill](../concepts/tool-skills.md) in their Plan prompt, which frames
+[Tool Skill](../concepts/tool-skills.md) in their executor prompt, which frames
 the GitHub tools as read/review/track tools with authoring pointed at the
 sandbox.
 

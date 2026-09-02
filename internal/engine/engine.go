@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"context"
 	"fmt"
 	"slices"
 	"sync"
@@ -201,13 +200,10 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 		Registry: c.ToolsFor(handle),
 		Models:   c.Models,
 		Caps: runner.Caps{
-			PlanRounds:     te.PlanMaxToolRounds,
-			ExecuteRounds:  te.MaxToolRounds,
-			ReviewRounds:   te.MaxToolRounds,
-			PlanCeiling:    te.PlanMaxToolRoundsCeiling,
-			ExecuteCeiling: te.ExecuteMaxToolRoundsCeiling,
-			ExtensionStep:  te.ExtensionRoundStep,
-			ExtensionOn:    te.ExtensionEnabled.Or(true),
+			ExecutorRounds:  te.MaxToolRounds,
+			ExecutorCeiling: te.ExecuteMaxToolRoundsCeiling,
+			ExtensionStep:   te.ExtensionRoundStep,
+			ExtensionOn:     te.ExtensionEnabled.Or(true),
 		},
 		Budget: in.Budget,
 		Judge:  in.Judge,
@@ -228,9 +224,8 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 		},
 		Task:         in.Task,
 		Context:      in.Context,
-		Recon:        in.Recon,
+		Reply:        in.Reply,
 		Conversation: in.Conversation,
-		AlwaysOn:     te.ExecutorAlwaysOnTools,
 		Skills:       in.Skills,
 		SkipNames:    MetaToolNames(),
 		Publisher:    in.Publisher,
@@ -255,12 +250,19 @@ type RunnerInput struct {
 	// at the moment the turn started.
 	Skills *skills.Registry
 
-	// Context is the turn's prefetched prompt blocks, and Recon recovers
-	// the knowledge block a thin trigger's gate skipped once Plan has
-	// produced a summary worth searching on. Both are per-turn because
-	// both are judged against THIS turn's trigger.
+	// Context is the turn's prefetched prompt blocks, judged against THIS
+	// turn's trigger and frozen before the runner is built.
+	//
+	// There is no re-fetch seam beside it any more. One existed for the
+	// thin-trigger case — a pointer the turn-start search could not use,
+	// re-searched between Plan and Execute on the plan summary — and with
+	// one loop there is nothing between the phases to hang it on. The
+	// executor asks instead, with search_knowledge, over the same seam.
 	Context prefetch.Blocks
-	Recon   func(ctx context.Context, planSummary string) string
+
+	// Reply says who is waiting for this turn, derived from the trigger
+	// before the turn starts. See [turn.Reply].
+	Reply turn.Reply
 
 	// Budget is the shared token counter this turn charges. Nil is the
 	// embedded single-node case, where no counter is shared with anyone.

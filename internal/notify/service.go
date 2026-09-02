@@ -408,6 +408,7 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		SalientBody:          &salient,
 		Metadata:             meta,
 		ContextRequiresRecon: prompt.RequiresRecon(r.Inbound),
+		Addressed:            prompt.Addressed(r.Inbound),
 	}
 	// The conversation key rides on the event so the inbox coalescer can
 	// partition by it without re-deriving a vendor's rule. Derived here,

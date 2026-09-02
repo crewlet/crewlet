@@ -141,7 +141,7 @@ func settledTurn() types.TurnCompleted {
 	return types.TurnCompleted{
 		Agent: "agent-uuid", AgentHandle: "dev", RoleName: "Dev", TurnID: "t1",
 		ToolSequence: []string{"search"}, ReviewOutcome: "done",
-		PlanDecision: types.PlanDecisionPlan,
+		Outcome: "delivered",
 	}
 }
 
@@ -434,12 +434,12 @@ func TestATurnThatEngagedWithNothingIsSkippedButStillAnnounced(t *testing.T) {
 		mutate  func(*types.TurnCompleted)
 		wantRun bool
 	}{
-		// The planner recognised the trigger was for somebody else.
-		{"the planner opted out", func(x *types.TurnCompleted) {
+		// The turn recognised the trigger was for somebody else.
+		{"the turn opted out", func(x *types.TurnCompleted) {
 			x.PlanDecision = types.PlanDecisionSkip
 		}, false},
-		// It MEANT to opt out, never called submit_plan, and Execute ran
-		// with the full registry and called nothing.
+		// It MEANT to opt out and never said so, so the turn finished
+		// `done` having touched nothing outside the engine.
 		{"it called nothing and called that done", func(x *types.TurnCompleted) {
 			x.ToolSequence = nil
 		}, false},

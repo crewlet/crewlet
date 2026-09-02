@@ -96,7 +96,9 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 }
 
 // runnerTurn is the identity handed to the phase runner.
-func (t turnTelemetry) runnerTurn(company *Company, workKey string, depth int, chain []string) runner.Turn {
+func (t turnTelemetry) runnerTurn(company *Company, workKey string, depth int, chain []string,
+	task string, reply turn.Reply,
+) runner.Turn {
 	return runner.Turn{
 		ID: workKey, AgentID: t.agentID, Trigger: t.trigger,
 		ConversationKey: t.convKey, Trace: t.trace,
@@ -118,6 +120,11 @@ func (t turnTelemetry) runnerTurn(company *Company, workKey string, depth int, c
 			// detaches carries it: a coding run's row is written from
 			// here, and the resumed turn reports back from the row.
 			ConversationKey: t.convKey,
+			// The brief and the delivery obligation, carried for the
+			// same reason: a resumed turn sees neither its trigger nor
+			// this frame, so both have to reach the row from here.
+			Task:  task,
+			Reply: string(reply),
 		},
 	}
 }
@@ -151,7 +158,6 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		TotalTokens:     spend.Total(),
 		ToolExecutions:  spend.ToolExecutions,
 		TurnID:          workKey,
-		PlanModel:       spend.PlanModel,
 		ExecuteModel:    spend.ExecuteModel,
 		ReviewModel:     spend.ReviewModel,
 		Iterations:      res.Rounds,
@@ -195,12 +201,17 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// and the gates fail OPEN-LOOKING: an absent tool sequence reads
 		// as "the agent engaged with nothing", which silently skips every
 		// worker on exactly the successful turns worth learning from.
-		ToolSequence:     spend.ExecuteTools,
-		PlanToolSequence: spend.PlanTools,
-		PlanDecision:     types.PlanDecision(spend.PlanDecision),
-		SkillsUsed:       t.skills,
-		Interactions:     t.interactions,
-		ConversationKey:  t.convKey,
+		ToolSequence: spend.ExecuteTools,
+		AllToolNames: spend.AllTools,
+		Outcome:      spend.Outcome,
+		// SKIP OR NOTHING. The field's only surviving reader gates on
+		// PlanDecisionSkip, and a turn that skipped is exactly the one
+		// the loop reports as phase.Skipped — so it is derived from the
+		// turn's own decision rather than from anything a model wrote.
+		PlanDecision:    skipDecision(decision),
+		SkillsUsed:      t.skills,
+		Interactions:    t.interactions,
+		ConversationKey: t.convKey,
 	}, t.trace), t.role)
 }
 
@@ -212,11 +223,11 @@ const maxTurnErrorLength = 2000
 // lastModel names the model that served the last phase to run.
 //
 // Read backwards through the loop's order rather than tracked separately: a
-// turn that ended in Plan (a skip) has no Execute or Review model, and one
-// stopped by a guard mid-Execute has no Review model. Tracking "the last one"
-// as its own field would be a fourth copy of a fact these three already carry.
+// turn stopped by a guard mid-executor has no review model, and one that never
+// reached a provider has neither. Tracking "the last one" as its own field
+// would be a third copy of a fact these two already carry.
 func lastModel(s runner.Spend) string {
-	for _, m := range []string{s.ReviewModel, s.ExecuteModel, s.PlanModel} {
+	for _, m := range []string{s.ReviewModel, s.ExecuteModel} {
 		if m != "" {
 			return m
 		}
@@ -298,4 +309,18 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 		}
 	}
 	return t
+}
+
+// skipDecision maps the turn's decision onto the one plan_decision value
+// anything still reads.
+//
+// A turn that decided nobody was asking is [types.PlanDecisionSkip]; every
+// other turn writes the empty string, which is what the field already meant
+// for a turn that produced no plan artifact. The learning gate reads exactly
+// one value, so writing a richer vocabulary here would be inventing consumers.
+func skipDecision(decision string) types.PlanDecision {
+	if decision == string(phase.Skipped) {
+		return types.PlanDecisionSkip
+	}
+	return ""
 }

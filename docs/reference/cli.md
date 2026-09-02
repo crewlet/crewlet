@@ -794,7 +794,7 @@ crewlet confluence import <company.yaml> <directory> [-space KEY] [-prune]
 
 Publishes a tree of authored markdown into Confluence. **One walk, two destinations, decided by the file**: a file whose frontmatter declares a `trigger:` is a [tool skill](../concepts/tool-skills.md) and goes to `integrations.confluence.skills_space` with the leading code block the engine parses back out; everything else is a knowledge doc, published as prose into the space its parent directory names, titled by its first `# H1`.
 
-The routing is the FILE'S, not the directory's, because a skill is identified by what it declares — an operator who files one under `ENG/` still means a skill, and publishing it there as prose would put an instruction meant for one phase of one turn into every planner's context.
+The routing is the FILE'S, not the directory's, because a skill is identified by what it declares — an operator who files one under `ENG/` still means a skill, and publishing it there as prose would put an instruction meant for one phase of one turn into every seat's context.
 
 **Every target space is checked before a single page is written.** A typo in a directory name would otherwise be discovered half way through, leaving an operator to work out which pages landed. The importer never *creates* a space: that names a container the whole company then works in, and it is not this command's guess to make.
 
@@ -814,7 +814,7 @@ The routing is the FILE'S, not the directory's, because a skill is identified by
 | `-config` | Tier A config naming this node's store and keyring, for resolving the `${VAR}`s in the company's `confluence:` block. |
 | `-dry-run` | Print the plan and write or delete nothing. |
 
-A company that has turned tool skills off (`integrations.confluence.skills_space: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every planner searches.
+A company that has turned tool skills off (`integrations.confluence.skills_space: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every seat searches.
 
 See [Confluence Integration](../integrations/confluence.md#publishing-local-pages-from-your-machine-cli).
 
@@ -831,8 +831,8 @@ Confluence skills space against a throwaway registry and prints what admitted,
 so you can see what the next boot will see. The read-only diagnostic beside
 the importer, and it exists because the registry is populated by one walk at
 boot, so a page that fails to
-admit is **invisible** — the only symptom is guidance that never appears in a
-Plan prompt.
+admit is **invisible** — the only symptom is guidance that never appears in an
+executor prompt.
 
 ```
 TS holds 12 page(s): 9 skill(s), 3 ordinary page(s).

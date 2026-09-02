@@ -15,7 +15,7 @@ The moving parts live in `internal/sandbox/` — the provider, the manager, the 
 
 ## How a coding task runs
 
-For a role gated with `role.sandbox.enabled` (and an engine-level `providers.sandbox`), the [turn engine](turn-engine.md) exposes `run_sandbox` in the Execute tool surface. The planner lists it in `tools_needed` alongside the tool it will report with; the executor calls it with a `brief` — the concrete task, naming the repository and the exact change or investigation.
+For a role gated with `role.sandbox.enabled` (and an engine-level `providers.sandbox`), the [turn engine](turn-engine.md) exposes `run_sandbox` on the executor's tool surface. The executor calls it with a `brief` — the concrete task, naming the repository and the exact change or investigation — and reports the result in the same turn.
 
 ```
 Execute loop                     Engine                         Sandbox
@@ -38,7 +38,7 @@ Execute loop                     Engine                         Sandbox
 
 The details, each load-bearing:
 
-- **Call → suspend.** `run_sandbox` provisions the box, starts the coding agent as a background command, persists a durable run record in the [coordination store](coordination.md) (the plan, success criteria, conversation key, trace context), and returns `ToolResult(suspend=True)`. The Execute loop leaves that call unanswered, the turn ends, and the agent transitions `WORKING → AWAITING_SANDBOX` in the turn's own `finally` — the state never passes through `IDLE`, so no queued event can slip a turn in between. Nothing is parked in memory; everything the resume needs is in the row.
+- **Call → suspend.** `run_sandbox` provisions the box, starts the coding agent as a background command, persists a durable run record in the [coordination store](coordination.md) (the brief, the task, the conversation key, the trace context, and whether the turn owes anybody an answer), and returns `ToolResult(suspend=True)`. The Execute loop leaves that call unanswered, the turn ends, and the agent transitions `WORKING → AWAITING_SANDBOX` in the turn's own `finally` — the state never passes through `IDLE`, so no queued event can slip a turn in between. Nothing is parked in memory; everything the resume needs is in the row.
 
   **The record lands in two writes, and the state says which one it is at.** The serialized Execute conversation — the messages, including the dangling `run_sandbox` call — cannot be written by the tool: the runner holds it only until the turn's frame unwinds, which happens *after* the call returns. So the launch opens the row as `launching` and the unwinding turn writes the conversation, flipping it to `running` in the same compare-and-swap. In between, the job is already executing and the row has nothing to resume into — so **nothing polls or claims a `launching` run**. A completion fired in that window used to be claimed against an empty conversation, and the coordinator, finding nothing to re-enter, failed the run: a coding job that finished before the turn unwound destroyed the agent's whole turn, permanently and with no retry. The window is milliseconds on an idle host and hundreds of milliseconds on a loaded one, and a trivial run is exactly the one that fits inside it.
 - **Busy while it runs.** The agent's inbox topic is paused for the duration of the run (new events stay broker backlog; deliveries already in flight are requeued and acked, so nothing is held against a broker ack window during an hours-long job). The agent runs **one coding job at a time** — only the first suspend in a loop is honored, and a busy agent starts no new turns. It is freed only while a run is parked waiting on a human answer (see [Mid-run clarification](#mid-run-clarification-crewlet-ask)).
@@ -87,7 +87,7 @@ providers:
 
 ### Per-role gate — `role.sandbox`
 
-Absent → the role never sees the sandbox option. Present with `enabled: true` → the `run_sandbox` tool appears in the role's Execute surface (and the planner is taught when to use it).
+Absent → the role never sees the sandbox option. Present with `enabled: true` → the `run_sandbox` tool appears in the role's Execute surface (and the executor is taught when to use it).
 
 ```yaml
 roles:
@@ -219,7 +219,7 @@ Two runners ship behind the `CodingAgentRunner` protocol, selected by `role.sand
 
 Runs headless — `claude -p "<brief>" --output-format json --permission-mode bypassPermissions` — and its JSON output maps directly onto the result (final text, session id, token usage, cost).
 
-Claude Code **speaks the Anthropic API only**, so it needs an Anthropic-compatible credential. The sandbox's LLM derives from the role's provider chain: `role.llm_sandbox` → `llm_execute` → `llm` → `default`. Point `role.llm_sandbox` at an `anthropic` `providers.llm` entry (a custom `base_url` on that entry becomes `ANTHROPIC_BASE_URL` — an Anthropic-API gateway works). A role whose resolved provider is *not* Anthropic-compatible cannot launch Claude Code — the launch fails with `SandboxCredentialError` (see [Failure modes](#failure-modes)) unless `ANTHROPIC_API_KEY` (or a Bedrock/Vertex/Foundry toggle) is supplied in `role.sandbox.env`.
+Claude Code **speaks the Anthropic API only**, so it needs an Anthropic-compatible credential. The sandbox's LLM derives from the role's provider chain: `role.llm_sandbox` → `llm` → `default`. Point `role.llm_sandbox` at an `anthropic` `providers.llm` entry (a custom `base_url` on that entry becomes `ANTHROPIC_BASE_URL` — an Anthropic-API gateway works). A role whose resolved provider is *not* Anthropic-compatible cannot launch Claude Code — the launch fails with `SandboxCredentialError` (see [Failure modes](#failure-modes)) unless `ANTHROPIC_API_KEY` (or a Bedrock/Vertex/Foundry toggle) is supplied in `role.sandbox.env`.
 
 **A subscription counts.** When the resolved provider is a [`cli-agent`](subscription-llm-backends.md) entry, the headless subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, minted by `crewlet llm login <key> -capture-token`) is exported into the box and Claude Code there bills your Pro/Max plan — no API key anywhere. This works on **every** backend including remote E2B, because a token is one scoped, revocable variable. The credential *files* deliberately never leave the engine host: they carry a refresh token whose rotation is shared fleet state. A CLI that mints no headless token (Codex, Gemini CLI) therefore needs [`type: local`](#local-sandboxes), where the coding agent reads the login directly.
 
@@ -372,7 +372,7 @@ The receiver **accepts and drops** when no upstream is configured: the engine's 
 The coding agent calls the LLM itself, from inside the sandbox, so the engine cannot gate it mid-stream like the native loop. The model is **cap + post-account**:
 
 - **Pre-flight floor.** A launch is refused when the agent's remaining token budget is below `turn_engine.sandbox_min_budget_tokens` (default 2000); the `run_sandbox` call returns a normal failure the executor can act on, without suspending.
-- **Self-limits.** A fraction of the remaining budget (`turn_engine.sandbox_budget_fraction`, default 0.5) is translated into the coding agent's own caps — Claude Code's `--max-turns` — so the run self-limits.
+- **Self-limits.** `role.sandbox.max_turns` becomes the coding agent's own cap — Claude Code's `--max-turns` — so the run self-limits. And a **pre-flight floor**: a seat whose remaining token budget is below `turn_engine.sandbox_min_budget_tokens` (default 2000) is refused the launch outright, because a coding run costs a box, a clone and a toolchain install before it produces a token. A budget read that FAILED is refused too — launching on an unknown budget is how a company discovers its ceiling by spending past it.
 - **Post-accounting.** On collect, reported usage is charged to the budget cascade, and the phase event carries the real usage and cost so the Tokens view rolls sandbox spend up alongside native phases. Mid-run enforcement is best-effort by design — the price of the capability; OpenCode's unreported usage stays at zero rather than being invented.
 
 ---

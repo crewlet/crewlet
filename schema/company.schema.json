@@ -1014,33 +1014,7 @@
                     }
                   ]
                 },
-                "execute": {
-                  "oneOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    }
-                  ]
-                },
                 "judge": {
-                  "oneOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    }
-                  ]
-                },
-                "plan": {
                   "oneOf": [
                     {
                       "type": "string"
@@ -1111,20 +1085,6 @@
             }
           ]
         },
-        "llm_execute": {
-          "description": "Provider chain for Execute.",
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          ]
-        },
         "llm_judge": {
           "description": "Cheap model for the round-cap extension judge.",
           "oneOf": [
@@ -1139,22 +1099,8 @@
             }
           ]
         },
-        "llm_plan": {
-          "description": "Provider chain for Plan; wins over llm.plan.",
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          ]
-        },
         "llm_review": {
-          "description": "Provider chain for Review.",
+          "description": "Provider chain for the reviewer.",
           "oneOf": [
             {
               "type": "string"
@@ -1769,7 +1715,7 @@
           "type": "array"
         },
         "execute": {
-          "description": "Lines shown during Execute.",
+          "description": "Lines shown while the agent works.",
           "items": {
             "type": "string"
           },
@@ -1782,15 +1728,8 @@
           },
           "type": "array"
         },
-        "plan": {
-          "description": "Lines shown during Plan.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "review": {
-          "description": "Lines shown during Review.",
+          "description": "Lines shown while the reviewer judges the work.",
           "items": {
             "type": "string"
           },
@@ -1811,16 +1750,9 @@
           "type": "integer"
         },
         "execute_max_tool_rounds_ceiling": {
-          "description": "Hard ceiling for Execute rounds across extensions.",
+          "description": "Hard ceiling for executor rounds across extensions.",
           "minimum": 0,
           "type": "integer"
-        },
-        "executor_always_on_tools": {
-          "description": "Tools Execute always has, whatever the plan named.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
         },
         "extension_enabled": {
           "description": "Round-cap extension judge (default on).",
@@ -1840,7 +1772,7 @@
           "type": "integer"
         },
         "max_tool_rounds": {
-          "description": "Tool rounds within one Execute run.",
+          "description": "Tool rounds within one executor run.",
           "minimum": 0,
           "type": "integer"
         },
@@ -1854,24 +1786,8 @@
           "minimum": 0,
           "type": "integer"
         },
-        "plan_max_tool_rounds": {
-          "description": "Tool rounds within one Plan run.",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "plan_max_tool_rounds_ceiling": {
-          "description": "Hard ceiling for Plan rounds across extensions.",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "sandbox_budget_fraction": {
-          "description": "Share of the seat's remaining budget a sandboxed Execute may use.",
-          "maximum": 1,
-          "minimum": 0,
-          "type": "number"
-        },
         "sandbox_min_budget_tokens": {
-          "description": "Refuse a sandboxed Execute below this remaining budget.",
+          "description": "Refuse a coding run below this remaining budget.",
           "minimum": 0,
           "type": "integer"
         },
