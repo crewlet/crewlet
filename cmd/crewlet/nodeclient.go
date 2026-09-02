@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // Talking to a running node.
@@ -66,7 +67,7 @@ const nodeRequestTimeout = 10 * time.Second
 // backup on disk that the operator has been told did not happen.
 func (c *nodeClient) patiently(limit time.Duration) *nodeClient {
 	patient := *c
-	patient.http = &http.Client{Timeout: limit}
+	patient.http = httpx.Client(limit)
 	return &patient
 }
 
@@ -89,9 +90,8 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
-	if tail := fs.Args(); bootstrapPath == "" && len(tail) == 1 {
-		bootstrapPath = tail[0]
-	} else if len(tail) > 0 {
+	bootstrapPath, given := onePositional(fs, bootstrapPath)
+	if given > 1 {
 		fmt.Fprintf(stderr, "usage: crewlet %s [<config.yaml>]\n", name)
 		return nil, errors.New("name at most one config document")
 	}
@@ -122,7 +122,7 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 	return &nodeClient{
 		base:  base,
 		token: bearer,
-		http:  &http.Client{Timeout: nodeRequestTimeout},
+		http:  httpx.Client(nodeRequestTimeout),
 	}, nil
 }
 

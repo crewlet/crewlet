@@ -83,7 +83,7 @@ func run(turnID string) sandbox.PendingRun {
 // written.
 func mustBeginLaunch(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) {
 	t.Helper()
-	if err := s.BeginLaunch(context.Background(), r, sandbox.Fence{}); err != nil {
+	if err := s.BeginLaunch(t.Context(), r, sandbox.Fence{}); err != nil {
 		t.Fatalf("begin launch %s: %v", r.TurnID, err)
 	}
 }
@@ -98,7 +98,7 @@ func mustBeginLaunch(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun)
 func mustLaunched(t *testing.T, s sandbox.PendingStore, r sandbox.PendingRun) {
 	t.Helper()
 	mustBeginLaunch(t, s, r)
-	suspended, err := s.MarkSuspended(context.Background(), r.TurnID, suspension())
+	suspended, err := s.MarkSuspended(t.Context(), r.TurnID, suspension())
 	if err != nil {
 		t.Fatalf("mark suspended %s: %v", r.TurnID, err)
 	}
@@ -120,7 +120,7 @@ func suspension() map[string]any {
 
 func mustGet(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.PendingRun {
 	t.Helper()
-	got, ok, err := s.Get(context.Background(), turnID)
+	got, ok, err := s.Get(t.Context(), turnID)
 	if err != nil {
 		t.Fatalf("get %s: %v", turnID, err)
 	}
@@ -135,7 +135,7 @@ func testASecondLaunchKeepsTheBoxItWillReattachTo(t *testing.T, s sandbox.Pendin
 	// the box on that row is the paused checkout it is about to reattach
 	// to. A launch that erased it would re-clone the work instead.
 	mustLaunched(t, s, run("t1"))
-	if err := s.AttachSandbox(context.Background(), "t1",
+	if err := s.AttachSandbox(t.Context(), "t1",
 		sandbox.BoxRef{SandboxID: "box-9", CommandID: "c-1"}, sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
@@ -201,7 +201,7 @@ func testASecondLaunchDropsTheFirstRunsBridgedCalls(t *testing.T, s sandbox.Pend
 func testALaunchNeedsATurnID(t *testing.T, s sandbox.PendingStore) {
 	// The turn id is the identity. A row without one collides with every
 	// other row that forgot the same field, and nothing could ever find it.
-	if err := s.BeginLaunch(context.Background(), run(""), sandbox.Fence{}); err == nil {
+	if err := s.BeginLaunch(t.Context(), run(""), sandbox.Fence{}); err == nil {
 		t.Error("a run with no turn id was persisted")
 	}
 }
@@ -213,7 +213,7 @@ func testALaunchingRunIsNotClaimable(t *testing.T, s sandbox.PendingStore) {
 	// nothing to resume into and fail the whole turn.
 	mustBeginLaunch(t, s, run("t1"))
 
-	if _, won, err := s.ClaimForResume(context.Background(), "t1"); err != nil || won {
+	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || won {
 		t.Fatalf("a launching run was claimed: won=%v err=%v", won, err)
 	}
 	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusLaunching {
@@ -226,7 +226,7 @@ func testSuspendingOpensTheRunToTheTail(t *testing.T, s sandbox.PendingStore) {
 	// pollable at the same instant. Two writes would leave a running row
 	// with nothing to resume into, which is the state the poll fires on.
 	mustBeginLaunch(t, s, run("t1"))
-	suspended, err := s.MarkSuspended(context.Background(), "t1", suspension())
+	suspended, err := s.MarkSuspended(t.Context(), "t1", suspension())
 	if err != nil || !suspended {
 		t.Fatalf("mark suspended: suspended=%v err=%v", suspended, err)
 	}
@@ -238,7 +238,7 @@ func testSuspendingOpensTheRunToTheTail(t *testing.T, s sandbox.PendingStore) {
 	if len(got.ExecuteState) == 0 {
 		t.Error("the run opened to the poll with no conversation on it")
 	}
-	if _, won, err := s.ClaimForResume(context.Background(), "t1"); err != nil || !won {
+	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || !won {
 		t.Errorf("a suspended run was not claimable: won=%v err=%v", won, err)
 	}
 }
@@ -249,11 +249,11 @@ func testOnlyALaunchingRunCanSuspend(t *testing.T, s sandbox.PendingStore) {
 	// second resume of a turn that is over. Reported rather than written,
 	// so the caller fails the run instead of stranding it.
 	mustLaunched(t, s, run("t1"))
-	if _, won, err := s.ClaimForResume(context.Background(), "t1"); err != nil || !won {
+	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || !won {
 		t.Fatalf("claim: won=%v err=%v", won, err)
 	}
 
-	suspended, err := s.MarkSuspended(context.Background(), "t1", suspension())
+	suspended, err := s.MarkSuspended(t.Context(), "t1", suspension())
 	if err != nil {
 		t.Fatalf("mark suspended: %v", err)
 	}
@@ -272,14 +272,14 @@ func testAttachingABoxClearsTheSnapshotStamp(t *testing.T, s sandbox.PendingStor
 	// live second run then rendered as a paused one, billing, for the rest
 	// of the turn.
 	mustLaunched(t, s, run("t1"))
-	if err := s.AttachSandbox(context.Background(), "t1",
+	if err := s.AttachSandbox(t.Context(), "t1",
 		sandbox.BoxRef{SandboxID: "box-1", CommandID: "c-1"}, sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-	if err := s.MarkBoxPaused(context.Background(), "t1", base); err != nil {
+	if err := s.MarkBoxPaused(t.Context(), "t1", base); err != nil {
 		t.Fatalf("pause: %v", err)
 	}
-	if err := s.AttachSandbox(context.Background(), "t1",
+	if err := s.AttachSandbox(t.Context(), "t1",
 		sandbox.BoxRef{SandboxID: "box-1", CommandID: "c-2"}, sandbox.Fence{}); err != nil {
 		t.Fatalf("reattach: %v", err)
 	}
@@ -294,10 +294,10 @@ func testTheTailIsClaimedExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 	// suspended loop produce two turns from one job — which the seat sees
 	// as its own work arriving twice.
 	mustLaunched(t, s, run("t1"))
-	if _, won, err := s.ClaimForResume(context.Background(), "t1"); err != nil || !won {
+	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || !won {
 		t.Fatalf("first claim: won=%v err=%v", won, err)
 	}
-	if _, won, err := s.ClaimForResume(context.Background(), "t1"); err != nil || won {
+	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || won {
 		t.Errorf("a second claim won: won=%v err=%v", won, err)
 	}
 }
@@ -312,15 +312,13 @@ func testAClaimIsExclusiveUnderContention(t *testing.T, s sandbox.PendingStore) 
 		wins int
 	)
 	for range 10 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if _, won, err := s.ClaimForResume(context.Background(), "t1"); err == nil && won {
+		wg.Go(func() {
+			if _, won, err := s.ClaimForResume(t.Context(), "t1"); err == nil && won {
 				mu.Lock()
 				wins++
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if wins != 1 {
@@ -334,11 +332,11 @@ func testAClaimReportsWhereItCameFrom(t *testing.T, s sandbox.PendingStore) {
 	// unsound: a reused run keeps its old question, so "has a question"
 	// does not mean "was parked".
 	mustLaunched(t, s, run("t1"))
-	if err := s.MarkAwaiting(context.Background(), "t1",
+	if err := s.MarkAwaiting(t.Context(), "t1",
 		sandbox.Clarification{Question: "which branch?", Audience: "requester"}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
-	got, won, err := s.ClaimForResume(context.Background(), "t1")
+	got, won, err := s.ClaimForResume(t.Context(), "t1")
 	if err != nil || !won {
 		t.Fatalf("claim: won=%v err=%v", won, err)
 	}
@@ -355,10 +353,10 @@ func testAReseedIsStillClaimable(t *testing.T, s sandbox.PendingStore) {
 	// and the work re-seeds from the pushed branch. That is the whole
 	// reason reseed is a state rather than a deletion.
 	mustLaunched(t, s, run("t1"))
-	if err := s.SetStatus(context.Background(), "t1", sandbox.StatusReseed, sandbox.Fence{}); err != nil {
+	if err := s.SetStatus(t.Context(), "t1", sandbox.StatusReseed, sandbox.Fence{}); err != nil {
 		t.Fatalf("set reseed: %v", err)
 	}
-	if _, won, err := s.ClaimForResume(context.Background(), "t1"); err != nil || !won {
+	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || !won {
 		t.Errorf("a reseeded run could not be claimed: won=%v err=%v", won, err)
 	}
 }
@@ -366,10 +364,10 @@ func testAReseedIsStillClaimable(t *testing.T, s sandbox.PendingStore) {
 func testATerminalRunIsNotClaimable(t *testing.T, s sandbox.PendingStore) {
 	for _, status := range []string{sandbox.StatusDone, sandbox.StatusFailed} {
 		mustLaunched(t, s, run(status))
-		if err := s.SetStatus(context.Background(), status, status, sandbox.Fence{}); err != nil {
+		if err := s.SetStatus(t.Context(), status, status, sandbox.Fence{}); err != nil {
 			t.Fatalf("set %s: %v", status, err)
 		}
-		if _, won, _ := s.ClaimForResume(context.Background(), status); won {
+		if _, won, _ := s.ClaimForResume(t.Context(), status); won {
 			t.Errorf("a %s run was claimed", status)
 		}
 	}
@@ -380,7 +378,7 @@ func testParkingCarriesTheBranch(t *testing.T, s sandbox.PendingStore) {
 	// days later loses nothing a re-seed cannot recover. A question parked
 	// over unpushed work is a question whose answer arrives to an empty box.
 	mustLaunched(t, s, run("t1"))
-	if err := s.MarkAwaiting(context.Background(), "t1", sandbox.Clarification{
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
 		Question: "which base branch?", Audience: "requester",
 		Branch: "wip/swe/t1", SessionID: "sess-1",
 	}); err != nil {
@@ -397,10 +395,10 @@ func testOwnershipIsNotStolenByAnOlderLease(t *testing.T, s sandbox.PendingStore
 	// A run whose epoch is HIGHER belongs to a newer lease. Taking it would
 	// put two engines on one box, both collecting, both resuming.
 	mustLaunched(t, s, run("t1"))
-	if won, err := s.ClaimOwnership(context.Background(), "t1", "node-b:2", 5); err != nil || !won {
+	if won, err := s.ClaimOwnership(t.Context(), "t1", "node-b:2", 5); err != nil || !won {
 		t.Fatalf("claim: won=%v err=%v", won, err)
 	}
-	if won, err := s.ClaimOwnership(context.Background(), "t1", "node-a:1", 3); err != nil || won {
+	if won, err := s.ClaimOwnership(t.Context(), "t1", "node-a:1", 3); err != nil || won {
 		t.Errorf("an older lease stole the run: won=%v err=%v", won, err)
 	}
 	if got := mustGet(t, s, "t1"); got.Owner != "node-b:2" || got.OwnerEpoch != 5 {
@@ -408,7 +406,7 @@ func testOwnershipIsNotStolenByAnOlderLease(t *testing.T, s sandbox.PendingStore
 	}
 	// Equal epochs pass: a node re-claiming its OWN run after a restart
 	// within one lease must not be locked out of it.
-	if won, err := s.ClaimOwnership(context.Background(), "t1", "node-b:3", 5); err != nil || !won {
+	if won, err := s.ClaimOwnership(t.Context(), "t1", "node-b:3", 5); err != nil || !won {
 		t.Errorf("a node could not re-claim its own run: won=%v err=%v", won, err)
 	}
 }
@@ -417,17 +415,17 @@ func testAStaleFenceCannotWrite(t *testing.T, s sandbox.PendingStore) {
 	// THE FENCE IS THE GUARANTEE, the ownership check only an optimisation:
 	// a node whose lease moved cannot write even if it has not noticed yet.
 	mustLaunched(t, s, run("t1"))
-	if _, err := s.ClaimOwnership(context.Background(), "t1", "node-b:2", 7); err != nil {
+	if _, err := s.ClaimOwnership(t.Context(), "t1", "node-b:2", 7); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	stale := sandbox.Fence{Owner: "node-a:1", Epoch: 3}
-	if err := s.SetStatus(context.Background(), "t1", sandbox.StatusFailed, stale); err != nil {
+	if err := s.SetStatus(t.Context(), "t1", sandbox.StatusFailed, stale); err != nil {
 		t.Fatalf("set status: %v", err)
 	}
 	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning {
 		t.Errorf("a stale fence wrote %q", got.Status)
 	}
-	if err := s.AttachSandbox(context.Background(), "t1",
+	if err := s.AttachSandbox(t.Context(), "t1",
 		sandbox.BoxRef{SandboxID: "ghost"}, stale); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
@@ -440,17 +438,17 @@ func testReleasingABoxClearsBothHalves(t *testing.T, s sandbox.PendingStore) {
 	// A paused_at pointing at no box is a snapshot the reaper looks for
 	// every tick and never finds — a warning per tick, for ever.
 	mustLaunched(t, s, run("t1"))
-	if err := s.AttachSandbox(context.Background(), "t1",
+	if err := s.AttachSandbox(t.Context(), "t1",
 		sandbox.BoxRef{SandboxID: "box-1", CommandID: "c-1"}, sandbox.Fence{}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-	if err := s.MarkBoxPaused(context.Background(), "t1", base); err != nil {
+	if err := s.MarkBoxPaused(t.Context(), "t1", base); err != nil {
 		t.Fatalf("pause: %v", err)
 	}
 	if got := mustGet(t, s, "t1"); !got.Paused() || !got.HasBox() {
 		t.Fatalf("run = %+v", got)
 	}
-	if err := s.ReleaseBox(context.Background(), "t1"); err != nil {
+	if err := s.ReleaseBox(t.Context(), "t1"); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 	got := mustGet(t, s, "t1")
@@ -465,14 +463,14 @@ func testALaunchingRunIsActive(t *testing.T, s sandbox.PendingStore) {
 	// nobody reclaims.
 	mustBeginLaunch(t, s, run("t1"))
 
-	got, err := s.ListActive(context.Background())
+	got, err := s.ListActive(t.Context())
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if len(got) != 1 || got[0].Status != sandbox.StatusLaunching {
 		t.Errorf("active = %+v, want the launching run", got)
 	}
-	seat, err := s.ListActiveForSeat(context.Background(), "swe")
+	seat, err := s.ListActiveForSeat(t.Context(), "swe")
 	if err != nil {
 		t.Fatalf("list for seat: %v", err)
 	}
@@ -502,10 +500,10 @@ func testActiveIncludesResumed(t *testing.T, s sandbox.PendingStore) {
 	// engine. Nothing else would ever look at that row again, and its paused
 	// box would leak for ever.
 	mustLaunched(t, s, run("t1"))
-	if _, _, err := s.ClaimForResume(context.Background(), "t1"); err != nil {
+	if _, _, err := s.ClaimForResume(t.Context(), "t1"); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	got, err := s.ListActive(context.Background())
+	got, err := s.ListActive(t.Context())
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -514,10 +512,10 @@ func testActiveIncludesResumed(t *testing.T, s sandbox.PendingStore) {
 	}
 
 	// A terminal run does not.
-	if err := s.SetStatus(context.Background(), "t1", sandbox.StatusDone, sandbox.Fence{}); err != nil {
+	if err := s.SetStatus(t.Context(), "t1", sandbox.StatusDone, sandbox.Fence{}); err != nil {
 		t.Fatalf("set done: %v", err)
 	}
-	if got, _ := s.ListActive(context.Background()); len(got) != 0 {
+	if got, _ := s.ListActive(t.Context()); len(got) != 0 {
 		t.Errorf("a done run is still active: %+v", got)
 	}
 }
@@ -531,12 +529,12 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 	mustLaunched(t, s, first)
 	mustLaunched(t, s, second)
 	for _, id := range []string{"t1", "t2"} {
-		if err := s.MarkAwaiting(context.Background(), id,
+		if err := s.MarkAwaiting(t.Context(), id,
 			sandbox.Clarification{Question: "?" + id}); err != nil {
 			t.Fatalf("park %s: %v", id, err)
 		}
 	}
-	got, ok, err := s.FindAwaitingByConversation(context.Background(), "swe", "slack:C1")
+	got, ok, err := s.FindAwaitingByConversation(t.Context(), "swe", "slack:C1")
 	if err != nil || !ok {
 		t.Fatalf("find: ok=%v err=%v", ok, err)
 	}
@@ -544,7 +542,7 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 		t.Errorf("matched %s, want the most recently parked question", got.TurnID)
 	}
 	// And a different seat's thread is not this seat's.
-	if _, ok, _ := s.FindAwaitingByConversation(context.Background(), "other", "slack:C1"); ok {
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "other", "slack:C1"); ok {
 		t.Error("another seat's answer matched this seat's run")
 	}
 }
@@ -554,11 +552,11 @@ func testAnAnswerWithNoConversationMatchesNothing(t *testing.T, s sandbox.Pendin
 	// run happened to be waiting — and that run would treat it as the
 	// answer to its question.
 	mustLaunched(t, s, run("t1"))
-	if err := s.MarkAwaiting(context.Background(), "t1",
+	if err := s.MarkAwaiting(t.Context(), "t1",
 		sandbox.Clarification{Question: "?"}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
-	if _, ok, _ := s.FindAwaitingByConversation(context.Background(), "swe", ""); ok {
+	if _, ok, _ := s.FindAwaitingByConversation(t.Context(), "swe", ""); ok {
 		t.Error("a message with no conversation matched a parked run")
 	}
 }
@@ -578,16 +576,16 @@ func testTheReaperSeesOnlyOldSnapshots(t *testing.T, s sandbox.PendingStore) {
 	} {
 		mustLaunched(t, s, run(tc.id))
 		if tc.hasBox {
-			if err := s.AttachSandbox(context.Background(), tc.id,
+			if err := s.AttachSandbox(t.Context(), tc.id,
 				sandbox.BoxRef{SandboxID: "box-" + tc.id}, sandbox.Fence{}); err != nil {
 				t.Fatalf("attach %s: %v", tc.id, err)
 			}
 		}
-		if err := s.MarkBoxPaused(context.Background(), tc.id, tc.paused); err != nil {
+		if err := s.MarkBoxPaused(t.Context(), tc.id, tc.paused); err != nil {
 			t.Fatalf("pause %s: %v", tc.id, err)
 		}
 	}
-	got, err := s.ListPausedBefore(context.Background(), base.Add(-time.Hour))
+	got, err := s.ListPausedBefore(t.Context(), base.Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("list paused: %v", err)
 	}
@@ -610,7 +608,7 @@ func testListingsAreStable(t *testing.T, s sandbox.PendingStore) {
 	}
 	var first []string
 	for range 5 {
-		got, err := s.ListActive(context.Background())
+		got, err := s.ListActive(t.Context())
 		if err != nil {
 			t.Fatalf("list: %v", err)
 		}
@@ -645,11 +643,9 @@ func testAPauseExpiresExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for range racers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
-			won, err := s.ExpirePause(context.Background(), "t1")
+			won, err := s.ExpirePause(t.Context(), "t1")
 			if err != nil {
 				t.Errorf("ExpirePause: %v", err)
 				return
@@ -657,7 +653,7 @@ func testAPauseExpiresExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 			if won {
 				wins.Add(1)
 			}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()
@@ -665,7 +661,7 @@ func testAPauseExpiresExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 	if got := wins.Load(); got != 1 {
 		t.Fatalf("%d of %d reapers won the flip, want exactly 1 — each winner kills a box", got, racers)
 	}
-	got, _, err := s.Get(context.Background(), "t1")
+	got, _, err := s.Get(t.Context(), "t1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -682,10 +678,10 @@ func testOnlyAParkedRunCanExpire(t *testing.T, s sandbox.PendingStore) {
 		sandbox.StatusDone, sandbox.StatusFailed, sandbox.StatusReseed,
 	} {
 		mustLaunched(t, s, run(status))
-		if err := s.SetStatus(context.Background(), status, status, sandbox.Fence{}); err != nil {
+		if err := s.SetStatus(t.Context(), status, status, sandbox.Fence{}); err != nil {
 			t.Fatalf("SetStatus: %v", err)
 		}
-		won, err := s.ExpirePause(context.Background(), status)
+		won, err := s.ExpirePause(t.Context(), status)
 		if err != nil {
 			t.Fatalf("ExpirePause(%s): %v", status, err)
 		}
@@ -701,10 +697,10 @@ func testAnAnsweredRunCannotBeExpiredUnderTheResume(t *testing.T, s sandbox.Pend
 	mustLaunched(t, s, run("t1"))
 	park(t, s, "t1")
 
-	if _, won, err := s.ClaimForResume(context.Background(), "t1"); err != nil || !won {
+	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
-	won, err := s.ExpirePause(context.Background(), "t1")
+	won, err := s.ExpirePause(t.Context(), "t1")
 	if err != nil {
 		t.Fatalf("ExpirePause: %v", err)
 	}
@@ -716,7 +712,7 @@ func testAnAnsweredRunCannotBeExpiredUnderTheResume(t *testing.T, s sandbox.Pend
 // park moves a seeded run to awaiting_clarification with a box attached.
 func park(t *testing.T, s sandbox.PendingStore, turnID string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := s.AttachSandbox(ctx, turnID, sandbox.BoxRef{
 		SandboxID: "box-" + turnID, CodingAgent: "claude-code", PauseTTLSec: 1800,
 	}, sandbox.Fence{}); err != nil {
@@ -739,11 +735,11 @@ func park(t *testing.T, s sandbox.PendingStore, turnID string) {
 func testExpiringAPauseClearsTheBoxInTheSameWrite(t *testing.T, s sandbox.PendingStore) {
 	mustLaunched(t, s, run("t1"))
 	park(t, s, "t1")
-	if err := s.MarkBoxPaused(context.Background(), "t1", base); err != nil {
+	if err := s.MarkBoxPaused(t.Context(), "t1", base); err != nil {
 		t.Fatalf("MarkBoxPaused: %v", err)
 	}
 
-	won, err := s.ExpirePause(context.Background(), "t1")
+	won, err := s.ExpirePause(t.Context(), "t1")
 	if err != nil || !won {
 		t.Fatalf("ExpirePause = %v, %v", won, err)
 	}

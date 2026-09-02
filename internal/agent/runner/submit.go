@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 )
@@ -140,10 +141,10 @@ func citations(cited []string, reply turn.Reply, calls []ledger.Call, s turn.Sur
 
 // reviewPayload is the wire shape of a submitted review.
 type reviewPayload struct {
-	Decision      string `json:"decision"`
-	Notes         string `json:"notes"`
-	CompletedWork string `json:"completed_work"`
-	FinalArtifact string `json:"final_artifact"`
+	Decision      phase.Decision `json:"decision"`
+	Notes         string         `json:"notes"`
+	CompletedWork string         `json:"completed_work"`
+	FinalArtifact string         `json:"final_artifact"`
 }
 
 func decodeReview(args map[string]any) (reviewPayload, error) {
@@ -151,18 +152,26 @@ func decodeReview(args map[string]any) (reviewPayload, error) {
 	if err := structured.Remarshal(args, &r); err != nil {
 		return r, err
 	}
-	switch r.Decision {
-	case "done", "self_iterate", "failed":
-	case "":
+	// AGAINST THE CONSTANTS, never their spelling. This switch listed
+	// "done", "self_iterate" and "failed" as literals, so renaming one of
+	// them left this accepting a value nothing else produces — and phase
+	// owns those names.
+	//
+	// phase.Skipped is deliberately absent: a skip is the ENGINE's own
+	// reading of a round nobody was waiting on (see [turn.Check]), and a
+	// reviewer reaching it would mean the turn ran after deciding not to.
+	switch {
+	case r.Decision == "":
 		// An absent decision is `done`. The alternative — defaulting to
 		// self_iterate — spends another whole round on a review that
 		// simply forgot a field, and the engine still overturns a `done`
 		// that delivered nothing.
-		r.Decision = "done"
-	default:
-		return r, fmt.Errorf("decision must be one of done, self_iterate or failed, got %q", r.Decision)
+		r.Decision = phase.Done
+	case r.Decision != phase.Done && r.Decision != phase.SelfIterate && r.Decision != phase.Failed:
+		return r, fmt.Errorf("decision must be one of %s, %s or %s, got %q",
+			phase.Done, phase.SelfIterate, phase.Failed, r.Decision)
 	}
-	if r.Decision == "self_iterate" && strings.TrimSpace(r.Notes) == "" {
+	if r.Decision == phase.SelfIterate && strings.TrimSpace(r.Notes) == "" {
 		// A loop-back with no correction sends the next round to do
 		// exactly what the last one did. The stall guard would eventually
 		// catch it, but only after spending the rounds.

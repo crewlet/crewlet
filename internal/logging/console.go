@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,16 +31,7 @@ const (
 var ColorModes = []ColorMode{ColorAuto, ColorAlways, ColorNever}
 
 // Valid reports whether m is a colour mode this build understands.
-func (m ColorMode) Valid() bool { return oneOfColor(m) }
-
-func oneOfColor(m ColorMode) bool {
-	for _, known := range ColorModes {
-		if m == known {
-			return true
-		}
-	}
-	return false
-}
+func (m ColorMode) Valid() bool { return slices.Contains(ColorModes, m) }
 
 // ParseColorMode reads $CREWLET_LOG_COLOR, with $NO_COLOR as the override
 // every other tool in a terminal already honours.

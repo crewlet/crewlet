@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
@@ -230,14 +231,14 @@ func (m RoleSandboxMCP) IsZero() bool { return len(m.Servers) == 0 }
 
 func (s *RoleSandbox) validate(path string) error {
 	var p problems
-	if s.RunIn != "" && !oneOf(s.RunIn, Placements) {
+	if s.RunIn != "" && !slices.Contains(Placements, s.RunIn) {
 		// Only the SPELLING is checked here. Whether the cell is actually
 		// configured is a question about providers.sandbox, and a seat is
 		// validated without it — see (*Company).validateSandboxPlacement.
 		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
 			s.RunIn, names(Placements))
 	}
-	if s.CodingAgent != "" && !oneOf(s.CodingAgent, CodingAgents) {
+	if s.CodingAgent != "" && !slices.Contains(CodingAgents, s.CodingAgent) {
 		p.add(at(path, "coding_agent"), ErrUnknownValue, "%q (want %s)",
 			s.CodingAgent, names(CodingAgents))
 	}

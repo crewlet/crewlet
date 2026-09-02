@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 )
 
 // MaxInFlightQueries bounds how many queries one socket may have running.
@@ -85,8 +86,12 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 			// visible, and this route answers a GET without an Upgrade
 			// header 401 (refused) or 426 (accepted, wrong protocol).
 			// That pairing is load-bearing for the dashboard's token
-			// gate — see `_probeRefusal` in static/dashboard/js/socket.js.
-			http.Error(w, `{"error":"invalid_token"}`, http.StatusUnauthorized)
+			// gate — see `probeRefusal` in dashboard/src/protocol/socket.ts.
+			// Real JSON, not http.Error: that sets text/plain AND
+			// nosniff, so a JSON literal handed to it is the one
+			// combination guaranteed to stop a strict client parsing
+			// the body it is being sent.
+			httpjson.Fail(w, http.StatusUnauthorized, "invalid_token")
 			return
 		}
 
@@ -144,12 +149,10 @@ func serveSocket(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 	defer svc.Hub().Unregister(client)
 
 	var writer sync.WaitGroup
-	writer.Add(1)
-	go func() {
-		defer writer.Done()
+	writer.Go(func() {
 		defer cancel()
 		writeLoop(ctx, conn, client)
-	}()
+	})
 
 	client.send(Push(KindSnapshot, svc.Snapshot(), time.Now().UTC()))
 	readLoop(ctx, conn, guard, client, query, operatorID)
@@ -183,7 +186,25 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 				log.ErrorContext(ctx, "stream_encode_failed", "kind", env.Kind, "error", err)
 				continue
 			}
-			if err := conn.Write(ctx, websocket.MessageText, raw); err != nil {
+			// A DEADLINE PER WRITE. A TCP peer that has vanished
+			// without a FIN — a laptop lid closed, a NAT entry
+			// dropped, a mobile network handing off — leaves this
+			// Write blocked until the kernel gives up, which is
+			// minutes with default keepalives. Until then the
+			// goroutine, the client's queue and the hub registration
+			// all stay live, so a page nobody is reading holds a slot
+			// on every broadcast.
+			//
+			// THIRTY SECONDS, not a few: QueueDepth above decides
+			// deliberately that a slow tab must not be disconnected
+			// ("a visible failure for a reader who did nothing
+			// wrong"), so this deadline is here to tell GONE from
+			// SLOW and nothing else. A tighter one would sever a
+			// mobile tab mid-snapshot and contradict that decision.
+			writeCtx, cancelWrite := context.WithTimeout(ctx, writeTimeout)
+			err = conn.Write(writeCtx, websocket.MessageText, raw)
+			cancelWrite()
+			if err != nil {
 				return
 			}
 		}
@@ -222,13 +243,18 @@ func readLoop(ctx context.Context, conn *websocket.Conn, guard *auth.Guard,
 				client.send(queryError(req, CodeUnknownQuery))
 				continue
 			}
+			// NOT running.Go: the semaphore acquire has to happen on
+			// THIS goroutine, the reader. Moving it inside the spawned
+			// one would let the reader keep spawning past the cap and
+			// the backpressure would be a queue of blocked goroutines
+			// rather than a paused reader.
 			running.Add(1)
 			slots <- struct{}{}
-			go func(req request) {
+			go func() {
 				defer running.Done()
 				defer func() { <-slots }()
 				runQuery(ctx, guard, client, query, req, operatorID)
-			}(req)
+			}()
 		default:
 			// Unknown kinds are ignored, which is what makes new ones
 			// additive on both ends.

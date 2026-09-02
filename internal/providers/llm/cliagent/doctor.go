@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // probeTimeout caps a version or status probe.
@@ -370,7 +370,7 @@ func (p *Provider) webProbe(ctx context.Context) string {
 			"Web is meant to stay on for every subscription seat: check that no vendor "+
 			"sandbox flag cuts the network and that the egress proxy reaches the child "+
 			"environment (cli.env / passthrough_env)",
-		p.agent, webProbeURL, truncate(comp.Content, 120))
+		p.agent, webProbeURL, textcut.Ellipsis(strings.TrimSpace(comp.Content), 120))
 }
 
 // reportsCurrentClock reports whether text carries a Unix timestamp within
@@ -402,18 +402,31 @@ func reportsCurrentClock(text string, now time.Time) bool {
 }
 
 // probeVersion runs the CLI's own version command.
+//
+// THROUGH run, like every other child this package spawns. It hand-rolled a
+// second exec.CommandContext with no procgroup, no Cancel and no WaitDelay —
+// so probeTimeout bounded nothing it claimed to. cmd.Output waits for the
+// output pipes to reach EOF, and a coding CLI is a launcher whose forked
+// helper inherits them: the helper holding a pipe open kept Wait blocked long
+// past the ten seconds, with `doctor` looking wedged for the exact reason it
+// was run to diagnose.
+//
+// The error contract differs from Output's and that is the point: run reports
+// a non-zero exit as (res, nil), so an empty version is a probe that produced
+// nothing rather than one that failed to start.
 func (p *Provider) probeVersion(ctx context.Context) string {
 	if len(p.profile.VersionArgs) == 0 {
 		return ""
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(probeCtx, p.profile.Binary, p.profile.VersionArgs...) //nolint:gosec // args come from a validated profile
-	out, err := cmd.Output()
-	if err != nil {
+	res, err := run(ctx, invocation{
+		binary:  p.profile.Binary,
+		args:    p.profile.VersionArgs,
+		timeout: probeTimeout,
+	})
+	if err != nil || res.exitCode != 0 {
 		return ""
 	}
-	return strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	return strings.TrimSpace(strings.SplitN(res.stdout, "\n", 2)[0])
 }
 
 // smokeTest runs a REAL completion with a REAL tool.
@@ -435,7 +448,7 @@ func (p *Provider) smokeTest(ctx context.Context) string {
 				"required":   []any{"ok"},
 			},
 		}},
-		ToolChoice: "required",
+		ToolChoice: llm.ToolChoiceRequired,
 	})
 	if err != nil {
 		return "failed — " + err.Error()
@@ -444,7 +457,7 @@ func (p *Provider) smokeTest(ctx context.Context) string {
 		return fmt.Sprintf(
 			"failed — the CLI answered but produced no parseable tool call, so seats on "+
 				"this provider will burn a corrective round every turn. It said: %q",
-			truncate(comp.Content, 200))
+			textcut.Ellipsis(strings.TrimSpace(comp.Content), 200))
 	}
 	return fmt.Sprintf("ok — %d in / %d out", comp.InputTokens, comp.OutputTokens)
 }
@@ -498,20 +511,6 @@ func orNone(s string) string {
 		return "unknown"
 	}
 	return s
-}
-
-// truncate bounds a probe's echoed output for a doctor line, never through a
-// rune: a byte slice splits whatever multi-byte character straddles the cut and
-// yields invalid UTF-8, which a JSON log encoder replaces with U+FFFD.
-func truncate(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n] + "…"
 }
 
 // LoginState is a one-word summary for `crewlet llm list`.

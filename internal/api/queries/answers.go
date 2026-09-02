@@ -50,7 +50,7 @@ type Sources struct {
 	// health: a query must never share a name with a push kind, or a
 	// reader of the protocol has to know which direction a frame was
 	// travelling to know what it means.
-	Health func() any
+	Health func(ctx context.Context) any
 
 	// Company reads the CURRENT epoch, for the questions answered from
 	// configuration rather than from a store. A function, not a value: an
@@ -123,7 +123,7 @@ type Sources struct {
 	// ask. The app populates it from its NodeRuntime; nil here is not an
 	// error and not "none route", and the integrations answer keeps those
 	// three apart rather than folding them into a boolean.
-	Routed func() []string
+	Routed func(ctx context.Context) []string
 
 	// Verifiable names the integrations whose resolved material could
 	// accept a delivery, or nil when this process cannot say. Populated
@@ -131,7 +131,7 @@ type Sources struct {
 	// same reason: "would a delivery be verified" and "would a verified
 	// delivery reach anyone" fail independently, and an operator staring at
 	// a silent integration has to know which half broke.
-	Verifiable func() []string
+	Verifiable func(ctx context.Context) []string
 
 	// NodeID names this node in the fleet answer, so a reader can tell
 	// which row is the one they are talking to.
@@ -455,8 +455,8 @@ func (s Sources) RoleHandles() map[string]string {
 }
 
 // stream answers the engine's health.
-func (s Sources) stream(_ context.Context, _ Params) (any, error) {
-	return s.Health(), nil
+func (s Sources) stream(ctx context.Context, _ Params) (any, error) {
+	return s.Health(ctx), nil
 }
 
 // events answers a page of the log.

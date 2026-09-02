@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // EpisodistSource names the worker in a pass result and in its logs.
@@ -210,7 +211,7 @@ func (w *Episodist) vector(ctx context.Context, summary string) []float32 {
 	if w.embed == nil || summary == "" {
 		return nil
 	}
-	summary = clip(summary, episodeEmbedInput)
+	summary = textcut.Bytes(summary, episodeEmbedInput)
 	ctx, cancel := context.WithTimeout(ctx, w.timeout)
 	defer cancel()
 	vector, err := w.embed(ctx, summary)

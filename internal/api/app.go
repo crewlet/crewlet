@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -172,7 +172,7 @@ func New(opts Options) *App {
 		Handles: opts.Sources.RoleHandles,
 		// The three config-derived surfaces, read live for the same
 		// reason Handles is: an apply replaces the company.
-		Roster: func() []map[string]any { return roster(opts.Sources.Company, opts.Runtime) },
+		Roster: func() []map[string]any { return rosterTick(opts.Sources.Company, opts.Runtime) },
 		Org:    func() map[string]any { return orgTree(opts.Sources.Company) },
 		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },
 		// The CONFIGURED rows only. The dispatch ledger is a store read
@@ -195,7 +195,7 @@ func New(opts Options) *App {
 	// disagreeing with nobody noticing.
 	sources := opts.Sources
 	if sources.Health == nil {
-		sources.Health = func() any { return a.health() }
+		sources.Health = func(ctx context.Context) any { return a.health(ctx) }
 	}
 	if sources.State == nil {
 		sources.State = state
@@ -204,12 +204,14 @@ func New(opts Options) *App {
 	// a standalone API, which is the honest answer rather than a confident
 	// empty list.
 	if sources.Routed == nil && opts.Runtime != nil {
-		sources.Routed = func() []string { return opts.Runtime.Snapshot().RoutedSources }
+		sources.Routed = func(ctx context.Context) []string {
+			return opts.Runtime.Snapshot(ctx).RoutedSources
+		}
 	}
 	// And only a co-located engine knows what its ${VAR}s resolved to.
 	if sources.Verifiable == nil && opts.Runtime != nil {
-		sources.Verifiable = func() []string {
-			return opts.Runtime.Snapshot().VerifiableSources
+		sources.Verifiable = func(ctx context.Context) []string {
+			return opts.Runtime.Snapshot(ctx).VerifiableSources
 		}
 	}
 	a.queries = queries.NewRegistry()
@@ -347,31 +349,23 @@ func (a *App) Start(ctx context.Context) { a.stream.StartHealthTicks(ctx) }
 // Stop ends the tick and disconnects every client.
 func (a *App) Stop() { a.stream.Stop() }
 
-func (a *App) serveHealth(w http.ResponseWriter, _ *http.Request) {
+func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	// ALWAYS 200 while the process is alive, INCLUDING through a drain: an
 	// orchestrator watching liveness must not SIGKILL a node that is
 	// finishing its in-flight turns. /ready is what steers traffic.
-	writeJSON(w, http.StatusOK, a.health())
+	writeJSON(w, http.StatusOK, a.health(r.Context()))
 }
 
-func (a *App) serveReady(w http.ResponseWriter, _ *http.Request) {
-	body, status := a.readiness()
+func (a *App) serveReady(w http.ResponseWriter, r *http.Request) {
+	body, status := a.readiness(r.Context())
 	writeJSON(w, status, body)
 }
 
-// writeJSON is the one response writer, so every route spells a body the same
-// way — including the status, which has to be written before the body or the
-// header is already gone.
+// writeJSON is [httpjson.Write] under this package's own name, kept so the
+// route bodies read the same as they always did. The rule it used to state —
+// status before body, or the header is already gone — lives with the writer.
 func writeJSON(w http.ResponseWriter, status int, body any) {
-	raw, err := json.Marshal(body)
-	if err != nil {
-		log.Error("api_encode_failed", "error", err)
-		http.Error(w, `{"error":"encode_failed"}`, http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(raw)
+	httpjson.Write(w, status, body)
 }
 
 // Queries exposes the read surface, for a caller that wants to know what this

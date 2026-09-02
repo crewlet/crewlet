@@ -513,7 +513,7 @@ func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
 				vendor, err)
 		}
 		// Every subcommand spelled in the usage must be dispatchable.
-		for _, line := range strings.Split(strings.TrimSpace(usage), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSpace(usage), "\n") {
 			// "usage: crewlet <vendor> <sub> …", and the continuation
 			// lines are the same without the lead — so the subcommand is
 			// found relative to "crewlet", not from the start of the line.

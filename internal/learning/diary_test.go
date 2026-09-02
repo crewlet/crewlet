@@ -263,7 +263,11 @@ func TestRetrievalBookkeepingNeverCostsTheRecall(t *testing.T) {
 	e.Embedding = []float32{1, 0}
 	mustWrite(t, d, e)
 
-	d.MarkRetrieved(context.Background(), []string{"a", "does-not-exist"}, base.Add(time.Hour))
+	// The unknown id must not stop the known one being counted, and the
+	// repeat must not count twice: one filter pass selecting an entry is
+	// one use, however many times its id appears in the batch.
+	d.MarkRetrieved(context.Background(),
+		[]string{"a", "does-not-exist", "a", ""}, base.Add(time.Hour))
 	got, _ := d.Recent(context.Background(), "agent-1", base.Add(time.Hour), 10)
 	if len(got) != 1 {
 		t.Fatalf("recent = %d", len(got))
@@ -344,7 +348,7 @@ func TestTheDurableDiaryIsCappedByWorthNotByAge(t *testing.T) {
 	}
 	// e0 is the OLDEST and would go first on age alone — recalling it is
 	// what proves the eviction is not an age sweep in disguise.
-	d.MarkRetrieved(ctx, []string{"e0", "e0", "e1"}, at.Add(time.Hour))
+	d.MarkRetrieved(ctx, []string{"e0", "e1"}, at.Add(time.Hour))
 
 	// Another seat, under the cap, must be untouched: the cap is per agent.
 	mustWrite(t, d, longEntry("other", "agent-b", "theirs", at))

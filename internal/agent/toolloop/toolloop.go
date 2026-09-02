@@ -313,10 +313,10 @@ type Config struct {
 	// MaxRounds bounds the provider calls. Required and positive.
 	MaxRounds int
 
-	// ToolChoice is passed to the provider. "required" additionally turns
-	// on the corrective re-prompt: a round answering with prose and no
-	// tool call is re-prompted rather than accepted.
-	ToolChoice string
+	// ToolChoice is passed to the provider. [llm.ToolChoiceRequired]
+	// additionally turns on the corrective re-prompt: a round answering
+	// with prose and no tool call is re-prompted rather than accepted.
+	ToolChoice llm.ToolChoice
 
 	// TerminateAfter names tools that end the loop once they have run
 	// SUCCESSFULLY, even if the model asked for more. A phase whose
@@ -446,7 +446,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		tools := cfg.Surface.ToolDefs()
 		choice := cfg.ToolChoice
 		if choice == "" && len(tools) > 0 {
-			choice = "auto"
+			choice = llm.ToolChoiceAuto
 		}
 
 		// ONE SPAN PER ROUND, around the provider call only. The round is
@@ -609,7 +609,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			// ignore tool_choice and some models think-then-stop, and
 			// accepting this as a clean finish is how a forced round
 			// silently produces nothing.
-			if cfg.ToolChoice == "required" && forcedRetries < maxForcedToolRetries {
+			if cfg.ToolChoice == llm.ToolChoiceRequired && forcedRetries < maxForcedToolRetries {
 				forcedRetries++
 				msgs = append(msgs, llm.Message{
 					Role:    llm.RoleUser,

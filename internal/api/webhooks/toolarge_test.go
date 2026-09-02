@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -103,5 +105,49 @@ func TestTheEncodedSizeIsWhatDecides(t *testing.T) {
 		t.Errorf("escaped/plain ratio is %.2f; the withdrawn derivation assumed "+
 			"one factor covered both, and this is the measurement that says it "+
 			"cannot", ratio)
+	}
+}
+
+// EVERY 413 ON THIS SURFACE ANSWERS ONE CODE.
+//
+// `httpjson.CodeBodyTooLarge`'s own doc calls itself "the single spelling of a
+// 413, whether what overflowed was a config document, a secret value or a
+// webhook delivery" — and a webhook delivery was the case that did not. Both
+// sites here answered prose (`delivery too large to queue`, `body too large`)
+// where every other surface answers `body_too_large`, so a client branching on
+// the code saw a 413 it could not classify from exactly the route the doc
+// names.
+func TestBothOversizeRefusalsAnswerTheOneCode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		body func(*edge) ([]byte, map[string]string)
+	}{
+		{"too large to publish", func(e *edge) ([]byte, map[string]string) {
+			e.published.fail(fmt.Errorf("publish: %w", queue.ErrTooLarge))
+			return issueBody, githubDelivery(issueBody, "gh-secret")
+		}},
+		{"too large to read", func(*edge) ([]byte, map[string]string) {
+			big := []byte(strings.Repeat("x", webhooks.MaxBodyBytes+1))
+			return big, githubDelivery(big, "gh-secret")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEdge(t)
+			body, headers := tc.body(e)
+			res := e.post(t, "/webhooks/github", body, headers)
+			if res.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("got %d, want 413: %s", res.Code, res.Body.String())
+			}
+			var got map[string]any
+			if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil {
+				t.Fatalf("the refusal is not JSON: %q", res.Body.String())
+			}
+			if got["error"] != string(httpjson.CodeBodyTooLarge) {
+				t.Errorf("error = %v, want %q — a client cannot classify a 413 "+
+					"whose code is prose", got["error"], httpjson.CodeBodyTooLarge)
+			}
+		})
 	}
 }

@@ -156,6 +156,16 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	e.epoch.current.Store(next)
 	applied = append(applied, "epoch")
 
+	// AFTER the epoch is published, because a seat registry is a clone of
+	// the CURRENT company's surface: rebuilding from `next` before it is
+	// current would hand every held seat the new revision's builtins while
+	// its turns still read the outgoing epoch — and an apply refused after
+	// this point would leave them cloned from a revision that never became
+	// current. The per-role CHILDREN are deliberately untouched: they
+	// belong to the seat's lease, not to the epoch.
+	e.refileSeatTools(ctx, next)
+	applied = append(applied, "seat_tools")
+
 	// AFTER the epoch is published, because this reads the seat list off
 	// the CURRENT company: a revision that adds a role adds a seat, and
 	// until something creates its mailbox every event published to it is

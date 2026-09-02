@@ -1,13 +1,14 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"flag"
 	"fmt"
 	"io"
 	"net/url"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -63,6 +64,16 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 			"host rather than in this shell — give an absolute path", *dir)
 	}
 
+	// DECODED INTO A SHAPE OF THIS COMMAND'S OWN rather than into
+	// backup.Manifest: the CLI reads a node's answer over HTTP, and a
+	// struct shared with the writer would make an older `crewlet backup`
+	// refuse a newer node's manifest over a field it does not print.
+	type streamRow struct {
+		Name     string `json:"name"`
+		File     string `json:"file"`
+		Bytes    int64  `json:"bytes"`
+		Messages uint64 `json:"messages"`
+	}
 	var manifest struct {
 		TakenAt    time.Time `json:"taken_at"`
 		FinishedAt time.Time `json:"finished_at"`
@@ -73,12 +84,7 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 			Bytes      int64    `json:"bytes"`
 			Migrations []string `json:"migrations"`
 		} `json:"store"`
-		Streams []struct {
-			Name     string `json:"name"`
-			File     string `json:"file"`
-			Bytes    int64  `json:"bytes"`
-			Messages uint64 `json:"messages"`
-		} `json:"streams"`
+		Streams []streamRow `json:"streams"`
 	}
 	if err := client.patiently(*wait).post(context.Background(),
 		"/backup?dir="+url.QueryEscape(*dir), &manifest); err != nil {
@@ -101,7 +107,7 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(w, "store\t—\t—\tnot on this node")
 	}
 	streams := manifest.Streams
-	sort.Slice(streams, func(i, j int) bool { return streams[i].Name < streams[j].Name })
+	slices.SortFunc(streams, func(a, b streamRow) int { return cmp.Compare(a.Name, b.Name) })
 	for _, s := range streams {
 		what := "stream"
 		if bucket, found := strings.CutPrefix(s.Name, "KV_"); found {

@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,8 +20,8 @@ type fakeRuntime struct {
 	tools []api.ToolInfo
 }
 
-func (f *fakeRuntime) Snapshot() api.RuntimeState { return f.state }
-func (f *fakeRuntime) Tools() []api.ToolInfo      { return f.tools }
+func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState { return f.state }
+func (f *fakeRuntime) Tools() []api.ToolInfo                     { return f.tools }
 
 func newApp(t *testing.T, opts api.Options) *api.App {
 	t.Helper()

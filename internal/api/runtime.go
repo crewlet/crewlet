@@ -9,6 +9,7 @@
 package api
 
 import (
+	"context"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -90,7 +91,15 @@ type RuntimeState struct {
 // know, so a client can tell "nothing is running" from "this process cannot
 // know". Without the distinction a dashboard renders a confident zero for both.
 type NodeRuntime interface {
-	Snapshot() RuntimeState
+	// Snapshot is this node's live state.
+	//
+	// It TAKES A CONTEXT because it does I/O: the posture is read from the
+	// coordination plane on every call, deliberately — a cached one is a
+	// node that reports healthy through the whole window in which it
+	// stopped being so. It was the only method on this seam with no ctx
+	// and the only one that reaches the network, and both /health and
+	// /ready spelled the discard as `_ *http.Request` while calling it.
+	Snapshot(ctx context.Context) RuntimeState
 
 	// Tools is the tool catalogue this node serves, for the dashboard's
 	// tool screen.

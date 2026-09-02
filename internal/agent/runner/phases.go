@@ -442,9 +442,9 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		return rescue, nil
 	}
 	r.emitter().completed(phaseCtx, reviewRecord(round, system, r.cfg.Task, res,
-		payload.Decision, payload.Notes, false, surface))
+		payload.Decision.String(), payload.Notes, false, surface))
 	return turn.Review{
-		Decision:      phase.Decision(payload.Decision),
+		Decision:      payload.Decision,
 		Notes:         payload.Notes,
 		CompletedWork: payload.CompletedWork,
 		FinalArtifact: payload.FinalArtifact,

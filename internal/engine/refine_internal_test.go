@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -131,12 +132,7 @@ func workerNames(workers []learning.Worker) []string {
 }
 
 func has(names []string, want string) bool {
-	for _, n := range names {
-		if n == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(names, want)
 }
 
 // THE AUTO REFINER IS WIRED BY DEFAULT — the worker whose absence made both

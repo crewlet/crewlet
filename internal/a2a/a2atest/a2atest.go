@@ -10,7 +10,6 @@
 package a2atest
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -24,27 +23,40 @@ type Factory func(t *testing.T) a2a.Store
 var base = time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
 
 // Run executes the suite.
+//
+// A SLICE, not a map. Every other conformance suite here dispatches from an
+// ordered table, and this was the one that did not: a map's range order is
+// randomised per run, so the same failure prints its siblings in a different
+// order every time and a `-run` re-run of a flake reproduces a different
+// interleaving than the one that failed. Each case builds its own store, so
+// they are also genuinely independent and run in parallel.
 func Run(t *testing.T, newStore Factory) {
 	t.Helper()
-	for name, fn := range map[string]func(*testing.T, Factory){
-		"OpenThenGet":                           testOpenThenGet,
-		"UnknownChannel":                        testUnknownChannel,
-		"CountMessage":                          testCountMessage,
-		"Close":                                 testClose,
-		"CloseIsIdempotentAndKeepsTheFirstTime": testCloseTwice,
-		"CloseIdle":                             testCloseIdle,
-		"CloseIdleSpares":                       testCloseIdleSpares,
-		"Purge":                                 testPurge,
-		"GetReturnsACopy":                       testGetReturnsACopy,
-		"ReopenIsNotAReset":                     testReopenIsNotAReset,
+	for _, tc := range []struct {
+		name string
+		fn   func(*testing.T, Factory)
+	}{
+		{"OpenThenGet", testOpenThenGet},
+		{"UnknownChannel", testUnknownChannel},
+		{"CountMessage", testCountMessage},
+		{"Close", testClose},
+		{"CloseIsIdempotentAndKeepsTheFirstTime", testCloseTwice},
+		{"CloseIdle", testCloseIdle},
+		{"CloseIdleSpares", testCloseIdleSpares},
+		{"Purge", testPurge},
+		{"GetReturnsACopy", testGetReturnsACopy},
+		{"ReopenIsNotAReset", testReopenIsNotAReset},
 	} {
-		t.Run(name, func(t *testing.T) { fn(t, newStore) })
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.fn(t, newStore)
+		})
 	}
 }
 
 func open(t *testing.T, s a2a.Store, id, requester, target string, at time.Time) {
 	t.Helper()
-	if err := s.Open(context.Background(), a2a.Channel{
+	if err := s.Open(t.Context(), a2a.Channel{
 		ID: id, Requester: requester, Target: target, OpenedAt: at, LastAt: at,
 	}); err != nil {
 		t.Fatalf("Open: %v", err)
@@ -53,7 +65,7 @@ func open(t *testing.T, s a2a.Store, id, requester, target string, at time.Time)
 
 func get(t *testing.T, s a2a.Store, id string) a2a.Channel {
 	t.Helper()
-	ch, err := s.Get(context.Background(), id)
+	ch, err := s.Get(t.Context(), id)
 	if err != nil {
 		t.Fatalf("Get(%s): %v", id, err)
 	}
@@ -80,7 +92,7 @@ func testOpenThenGet(t *testing.T, newStore Factory) {
 
 func testUnknownChannel(t *testing.T, newStore Factory) {
 	s := newStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	// All three paths must report the SAME sentinel. A reply that goes
 	// nowhere is the failure the requester experiences as "they never
 	// answered", so every route to it has to be distinguishable from a
@@ -98,7 +110,7 @@ func testUnknownChannel(t *testing.T, newStore Factory) {
 
 func testCountMessage(t *testing.T, newStore Factory) {
 	s := newStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	open(t, s, "c1", "alice", "bob", base)
 
 	later := base.Add(time.Minute)
@@ -127,7 +139,7 @@ func testClose(t *testing.T, newStore Factory) {
 	s := newStore(t)
 	open(t, s, "c1", "alice", "bob", base)
 	at := base.Add(time.Hour)
-	ch, err := s.Close(context.Background(), "c1", at)
+	ch, err := s.Close(t.Context(), "c1", at)
 	if err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -146,12 +158,12 @@ func testCloseTwice(t *testing.T, newStore Factory) {
 	s := newStore(t)
 	open(t, s, "c1", "alice", "bob", base)
 	first := base.Add(time.Hour)
-	if _, err := s.Close(context.Background(), "c1", first); err != nil {
+	if _, err := s.Close(t.Context(), "c1", first); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	// Both parties may close, and the second is not a fault — but it must
 	// not move the timestamp, because the first one is when it happened.
-	ch, err := s.Close(context.Background(), "c1", first.Add(time.Hour))
+	ch, err := s.Close(t.Context(), "c1", first.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
@@ -162,7 +174,7 @@ func testCloseTwice(t *testing.T, newStore Factory) {
 
 func testCloseIdle(t *testing.T, newStore Factory) {
 	s := newStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	open(t, s, "stale", "alice", "bob", base)
 	open(t, s, "fresh", "alice", "carol", base.Add(2*time.Hour))
 
@@ -190,7 +202,7 @@ func testCloseIdle(t *testing.T, newStore Factory) {
 
 func testCloseIdleSpares(t *testing.T, newStore Factory) {
 	s := newStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	open(t, s, "c1", "alice", "bob", base)
 	if _, err := s.Close(ctx, "c1", base.Add(time.Minute)); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -208,7 +220,7 @@ func testCloseIdleSpares(t *testing.T, newStore Factory) {
 
 func testPurge(t *testing.T, newStore Factory) {
 	s := newStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	open(t, s, "old", "alice", "bob", base)
 	open(t, s, "recent", "alice", "carol", base)
 	open(t, s, "still-open", "alice", "dave", base)
@@ -252,7 +264,7 @@ func testGetReturnsACopy(t *testing.T, newStore Factory) {
 
 func testReopenIsNotAReset(t *testing.T, newStore Factory) {
 	s := newStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	open(t, s, "c1", "alice", "bob", base)
 	if _, err := s.CountMessage(ctx, "c1", base); err != nil {
 		t.Fatalf("CountMessage: %v", err)

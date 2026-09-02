@@ -78,11 +78,16 @@ linters:
       #   reasercher — a model's typo'd worker name, and the whole input of
       #              the test that a refusal lists the workers that DO exist.
       #              Spelling it correctly would test nothing.
+      #   alwyas   — the typo in a doc comment ABOUT typos, and the fixture
+      #              that proves `typing_status: alwyas` is refused rather
+      #              than silently degraded. Correcting it would assert the
+      #              validator against a value that was never wrong.
       ignore-rules:
         - noteable
         - requred
         - reasercher
         - enginer
+        - alwyas
     revive:
       rules:
         - name: exported

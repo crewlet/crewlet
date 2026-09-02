@@ -421,3 +421,82 @@ func TestNoKnowledgeBackendIsANilInterface(t *testing.T) {
 		t.Fatalf("a company with no knowledge base got %T", got)
 	}
 }
+
+// A VENDOR A REVISION RETIRES STOPS ROUTING, AND STOPS INGESTING.
+//
+// Every reconciler converged only toward "configured", so removing a block —
+// or setting `enabled: false`, the gesture after a credential leak — applied
+// cleanly and changed nothing: the boot-time parser went on routing
+// deliveries under the credential being revoked, RoutedSources went on
+// listing the vendor as reachable, and SecretsOf never consulted Enabled so
+// the webhook route kept verifying and ingesting.
+func TestAVendorARevisionRetiresStopsRouting(t *testing.T) {
+	t.Parallel()
+	with := companyDoc + `
+integrations:
+  jira:
+    url: https://jira.example.com
+    token: t
+    webhook_secret: jira-secret
+`
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, with)})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !slices.Contains(e.RoutedSources(), "jira") {
+		t.Fatalf("the boot epoch does not route jira: %v", e.RoutedSources())
+	}
+
+	// The same company with the block removed.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if slices.Contains(e.RoutedSources(), "jira") {
+		t.Errorf("a retired vendor still routes: %v\n"+
+			"its parser is live and handling deliveries under the credential "+
+			"the revision revoked", e.RoutedSources())
+	}
+	// And the ingest half agrees: a route with nothing to verify with
+	// answers 503 rather than accepting a delivery that goes nowhere.
+	if got := e.WebhookSecrets().Jira; got != "" {
+		t.Errorf("a retired vendor still verifies deliveries with %q", got)
+	}
+}
+
+// AND `enabled: false` IS THE SAME GESTURE for the two vendors that have the
+// switch — the block stays in the document, which is what an operator
+// actually does when revoking a credential they intend to replace.
+func TestADisabledVendorStopsIngesting(t *testing.T) {
+	t.Parallel()
+	enabled := companyDoc + `
+integrations:
+  github:
+    enabled: true
+    webhook_secret: gh-secret
+`
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, enabled)})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := e.WebhookSecrets().GitHub; got != "gh-secret" {
+		t.Fatalf("the boot epoch has no github secret: %q", got)
+	}
+
+	disabled := companyDoc + `
+integrations:
+  github:
+    enabled: false
+    webhook_secret: gh-secret
+`
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, disabled)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := e.WebhookSecrets().GitHub; got != "" {
+		t.Errorf("a disabled vendor still verifies deliveries with %q: the route "+
+			"ingests what the routing half will then drop", got)
+	}
+	if slices.Contains(e.RoutedSources(), "github") {
+		t.Errorf("a disabled vendor still routes: %v", e.RoutedSources())
+	}
+}

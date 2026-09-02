@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -707,11 +708,7 @@ func (s *stub) count(path string) int {
 func (s *stub) seen() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]string, 0, len(s.paths))
-	for path := range s.paths {
-		out = append(out, path)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(s.paths))
 	return out
 }
 

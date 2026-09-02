@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -102,17 +103,24 @@ func newPlane(t *testing.T, opts ...func(*engine.ReconcilerOptions)) *plane {
 //
 // TWO STORES, which is the shape the engine itself now has: the payload goes
 // in the node's database, the pointer in the coordination store.
-func (p *plane) activate(t *testing.T, doc string) int64 {
+// activate stores a revision and points the fleet at it.
+//
+// TAKES THE CALLER'S CONTEXT rather than reaching for t.Context(). Most cases
+// pass t.Context() and nothing changes, but the concurrency case below drives
+// this from a goroutine under a cancellable context it also owns — and a
+// writer that kept activating revisions after its own cancel would be writing
+// past the window the readers are watching.
+func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 	t.Helper()
 	document := yamlToJSON(t, doc)
-	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+	id, err := p.store.Configs().InsertActive(ctx, store.Revision{
 		Source: "test", CreatedBy: "operator", Summary: "revision",
 		Payload: document, CreatedAt: pinnedNow,
 	})
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
 	}
-	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{RevisionID: id, Summary: "revision", Payload: document, At: pinnedNow})
+	published, err := p.fleet.Activate(ctx, coord.ActivationRequest{RevisionID: id, Summary: "revision", Payload: document, At: pinnedNow})
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
@@ -201,7 +209,7 @@ func TestANewRevisionReplacesTheEpoch(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
 	before := p.engine.Company()
-	epoch := p.activate(t, grownCompanyDoc)
+	epoch := p.activate(t.Context(), t, grownCompanyDoc)
 
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("tick: %v", err)
@@ -229,7 +237,7 @@ func TestTheOutcomeIsRecordedWhereEveryPeerReadsIt(t *testing.T) {
 	// because propagation takes a moment" from "behind because I cannot
 	// apply this".
 	p := newPlane(t)
-	epoch := p.activate(t, grownCompanyDoc)
+	epoch := p.activate(t.Context(), t, grownCompanyDoc)
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +263,7 @@ func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
 	// no-op check on the payload would rebuild nothing on exactly the
 	// operation an operator performs to make it rebuild.
 	p := newPlane(t)
-	first := p.activate(t, grownCompanyDoc)
+	first := p.activate(t.Context(), t, grownCompanyDoc)
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +305,7 @@ func TestAnAlreadyAppliedEpochIsNotReapplied(t *testing.T) {
 	// the epoch on each one would restart every subsystem an apply touches,
 	// four times a minute, forever.
 	p := newPlane(t)
-	p.activate(t, grownCompanyDoc)
+	p.activate(t.Context(), t, grownCompanyDoc)
 	for range 4 {
 		if err := p.recon.Tick(t.Context()); err != nil {
 			t.Fatal(err)
@@ -379,7 +387,7 @@ func TestOneEpochIsRetriedABoundedNumberOfTimes(t *testing.T) {
 
 	// The fix: activate a revision that works. The budget resets because
 	// the target moved.
-	p.activate(t, grownCompanyDoc)
+	p.activate(t.Context(), t, grownCompanyDoc)
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("the fixed revision was refused: %v", err)
 	}
@@ -457,7 +465,7 @@ func TestAReconcilerNeedsAStoreAndAnIdentity(t *testing.T) {
 func TestACurrentNodeServes(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
-	p.activate(t, grownCompanyDoc)
+	p.activate(t.Context(), t, grownCompanyDoc)
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -484,7 +492,7 @@ func TestOrdinaryPropagationLagIsNotDivergence(t *testing.T) {
 	// Shedding on that makes the fastest node the cause of a fleet-wide
 	// outage, and the faster it is the longer the outage.
 	p := newPlane(t)
-	p.activate(t, grownCompanyDoc)
+	p.activate(t.Context(), t, grownCompanyDoc)
 	// The pointer has moved and this node has not ticked.
 	if got := p.recon.Posture(t.Context()); got != configplane.PostureWait {
 		t.Errorf("posture = %q, want wait", got)
@@ -553,7 +561,7 @@ func TestAnUnreadableControlPlaneKeepsTheNodeServing(t *testing.T) {
 	// company working: the alternative takes every node out of rotation on
 	// a database blip.
 	p := newPlane(t)
-	p.activate(t, grownCompanyDoc)
+	p.activate(t.Context(), t, grownCompanyDoc)
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +599,7 @@ func TestTheNodeSeesTheNewEpochsSeats(t *testing.T) {
 	if got := len(host.CompanySeats()); got != 2 {
 		t.Fatalf("the host starts with %d seats, want the boot company's 2", got)
 	}
-	p.activate(t, grownCompanyDoc)
+	p.activate(t.Context(), t, grownCompanyDoc)
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -618,7 +626,7 @@ func TestAnApplyLeavesADurableTrail(t *testing.T) {
 	p := newPlane(t)
 	applies := subscribeApplied(t, p)
 
-	epoch := p.activate(t, companyDoc)
+	epoch := p.activate(t.Context(), t, companyDoc)
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
@@ -761,7 +769,7 @@ func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 	// the shape of a fleet, and the only thing the two share.
 	peer := newPlane(t, func(o *engine.ReconcilerOptions) { o.Fleet = author.fleet })
 
-	epoch := author.activate(t, grownCompanyDoc)
+	epoch := author.activate(t.Context(), t, grownCompanyDoc)
 	target, found, err := author.fleet.Target(t.Context())
 	if err != nil || !found {
 		t.Fatalf("Target: found=%v err=%v", found, err)
@@ -813,7 +821,7 @@ func TestAnActivationNudgeWakesTheLoop(t *testing.T) {
 	// Activated AFTER the loop is running, so the only thing that can make
 	// it converge inside the window below is the nudge — a poll is a full
 	// interval away.
-	epoch := p.activate(t, grownCompanyDoc)
+	epoch := p.activate(t.Context(), t, grownCompanyDoc)
 	ev := events.New(types.ConfigRevisionActivated{RevisionID: "any", RevisionSummary: "x"},
 		events.NewTrace())
 	// Bounded well under the reconcile interval: only the nudge can get the
@@ -856,7 +864,7 @@ func TestANodeThatHasDecidedNothingAdmitsWork(t *testing.T) {
 func TestACurrentNodeAdmitsWork(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
-	p.activate(t, grownCompanyDoc)
+	p.activate(t.Context(), t, grownCompanyDoc)
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -876,7 +884,7 @@ func TestACurrentNodeAdmitsWork(t *testing.T) {
 func TestOrdinaryLagStillAdmitsWork(t *testing.T) {
 	t.Parallel()
 	p := newPlane(t)
-	p.activate(t, grownCompanyDoc)
+	p.activate(t.Context(), t, grownCompanyDoc)
 	if got := p.recon.Posture(t.Context()); got != configplane.PostureWait {
 		t.Fatalf("posture = %q, want wait", got)
 	}
@@ -977,4 +985,71 @@ func (b *blindPlane) Target(ctx context.Context) (coord.Activation, bool, error)
 		return coord.Activation{}, false, errors.New("the control plane is unreachable")
 	}
 	return b.planeBackend.Target(ctx)
+}
+
+// THE PROGRESS TRIPLE IS READ FROM OTHER GOROUTINES THAN THE ONE THAT
+// WRITES IT, and nothing in this suite used to do both at once.
+//
+// The tick writes applied, target and attempts. Posture reads all three —
+// from the seat heartbeat via SetPosture, from the readiness probe, and from
+// every runtime-state HTTP handler. Only `applied` was atomic, with a comment
+// naming this exact hazard; the other two sat bare beside it and were a plain
+// data race that -race could not see because no test drove the two paths
+// together.
+func TestPostureIsSafeToReadWhileTheReconcilerTicks(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	p.activate(t.Context(), t, grownCompanyDoc)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	// Several readers, because one racing goroutine finds a race far less
+	// reliably than a handful hammering the same fields.
+	for range 4 {
+		wg.Go(func() {
+			for ctx.Err() == nil {
+				p.recon.Posture(ctx)
+				p.recon.Applied()
+				p.recon.Admits()
+			}
+		})
+	}
+	// And the writer, ticking against a moving target so the attempt
+	// counter and the target epoch both change under the readers.
+	wg.Go(func() {
+		defer cancel()
+		for range 40 {
+			_ = p.recon.Tick(ctx)
+			p.activate(ctx, t, grownCompanyDoc)
+		}
+	})
+	wg.Wait()
+}
+
+// AND THE TRIPLE IS NEVER TORN. Three separate atomics would silence the
+// race detector and still let a reader see an applied epoch from one moment
+// beside an attempt count from another — "converged, but still retrying",
+// which is not a state this node was ever in.
+func TestTheProgressTripleIsReadAsOneMoment(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	epoch := p.activate(t.Context(), t, grownCompanyDoc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if p.recon.Applied() != epoch {
+		t.Fatalf("applied = %d, want %d", p.recon.Applied(), epoch)
+	}
+	// A node that has reached its target reports ok, and a successful apply
+	// resets the attempt budget — so the status derived from the counter
+	// must agree with the epoch beside it.
+	row := p.fleetRow(t)
+	if row.Status != string(configplane.StatusOK) {
+		t.Errorf("status = %q for a node that reached its target", row.Status)
+	}
+	if row.Epoch != epoch {
+		t.Errorf("reported epoch = %d, want %d", row.Epoch, epoch)
+	}
 }

@@ -26,13 +26,12 @@
 package secretsapi
 
 import (
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -197,15 +196,13 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	if !s.sealed(w) {
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxValueBytes))
+	// THE SHARED READER, not a copy of it. This route answered
+	// `value_too_large` where configapi answered `body_too_large` for the
+	// same 413, and its own reader is also the one place a body arrived
+	// with no time bound on it — see [httpjson.BodyReadTimeout].
+	body, err := httpjson.ReadBody(w, r, MaxValueBytes)
 	if err != nil {
-		var overflow *http.MaxBytesError
-		if errors.As(err, &overflow) {
-			writeJSON(w, http.StatusRequestEntityTooLarge,
-				map[string]string{"error": "value_too_large"})
-			return
-		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unreadable_body"})
+		httpjson.Refuse(w, err)
 		return
 	}
 	operator, _ := auth.OperatorFrom(r.Context())
@@ -339,15 +336,7 @@ func (s *Service) fail(w http.ResponseWriter, what string, err error) {
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
 }
 
-// writeJSON is the one response writer for this surface.
+// writeJSON is [httpjson.Write] under this package's own name.
 func writeJSON(w http.ResponseWriter, status int, body any) {
-	raw, err := json.Marshal(body)
-	if err != nil {
-		log.Error("secret_encode_failed", "error", err)
-		http.Error(w, `{"error":"encode_failed"}`, http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(raw)
+	httpjson.Write(w, status, body)
 }

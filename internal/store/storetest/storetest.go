@@ -924,9 +924,7 @@ func testBackupUnderWrites(t *testing.T, db *store.DB) {
 	log := db.Events()
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := 0; ; i++ {
 			select {
 			case <-stop:
@@ -942,7 +940,7 @@ func testBackupUnderWrites(t *testing.T, db *store.DB) {
 				Time: base.Add(time.Duration(i) * time.Millisecond), Category: "task",
 			})
 		}
-	}()
+	})
 
 	dest := filepath.Join(t.TempDir(), "hot.db")
 	_, err := db.Backup(ctx, dest)

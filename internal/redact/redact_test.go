@@ -111,3 +111,20 @@ func TestContainsAnswersWithoutRewriting(t *testing.T) {
 		t.Fatal("Contains missed a known shape")
 	}
 }
+
+// AND DIRTY TEXT IS STILL REDACTED WHOLE. The guard must not turn into a
+// short-circuit that stops at the first rule that matched.
+func TestEveryMatchingRuleStillFiresWhenSeveralDo(t *testing.T) {
+	text := "glpat-" + strings.Repeat("e", 20) +
+		" and sk-ant-" + strings.Repeat("a", 40) +
+		" and password: hunter2"
+	got := redact.Secrets(text)
+	if redact.Contains(got) {
+		t.Errorf("Secrets left something behind: %q", got)
+	}
+	for _, want := range []string{"gitlab-token", "api-key", "password"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Secrets(%q) = %q, missing the %s marker", text, got, want)
+		}
+	}
+}

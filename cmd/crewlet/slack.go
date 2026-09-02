@@ -7,8 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -52,11 +53,8 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	tail := fs.Args()
-	if companyPath == "" && len(tail) == 1 {
-		companyPath, tail = tail[0], nil
-	}
-	if companyPath == "" || len(tail) > 0 {
+	companyPath, given := onePositional(fs, companyPath)
+	if given != 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet slack provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] -public-url URL "+
@@ -216,11 +214,7 @@ func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink in
 	}
 	printKept(w, res.Kept)
 	if len(res.Failed) > 0 {
-		handles := make([]string, 0, len(res.Failed))
-		for handle := range res.Failed {
-			handles = append(handles, handle)
-		}
-		sort.Strings(handles)
+		handles := slices.Sorted(maps.Keys(res.Failed))
 		fmt.Fprintf(w, "\n%d seat(s) FAILED — everything else completed and is "+
 			"recorded, so re-running resumes:\n", len(handles))
 		for _, handle := range handles {
@@ -228,11 +222,7 @@ func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink in
 		}
 	}
 	if len(res.Pending) > 0 {
-		handles := make([]string, 0, len(res.Pending))
-		for handle := range res.Pending {
-			handles = append(handles, handle)
-		}
-		sort.Strings(handles)
+		handles := slices.Sorted(maps.Keys(res.Pending))
 		fmt.Fprintf(w, "\n%d app(s) still need a workspace install — open each "+
 			"and click Allow, then re-run:\n", len(handles))
 		for _, handle := range handles {
@@ -245,7 +235,7 @@ func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink in
 // splitHandles reads the -handles list.
 func splitHandles(raw string) []string {
 	var out []string
-	for _, handle := range strings.Split(raw, ",") {
+	for handle := range strings.SplitSeq(raw, ",") {
 		if handle = strings.TrimSpace(handle); handle != "" {
 			out = append(out, handle)
 		}
@@ -260,11 +250,7 @@ func printSlackValidation(w io.Writer, res *slack.Result) {
 			len(res.Validated), strings.Join(res.Validated, ", "))
 	}
 	if len(res.Failed) > 0 {
-		handles := make([]string, 0, len(res.Failed))
-		for handle := range res.Failed {
-			handles = append(handles, handle)
-		}
-		sort.Strings(handles)
+		handles := slices.Sorted(maps.Keys(res.Failed))
 		fmt.Fprintf(w, "\n%d manifest(s) FAILED validation:\n", len(handles))
 		for _, handle := range handles {
 			fmt.Fprintf(w, "  %s: %s\n", handle, res.Failed[handle])

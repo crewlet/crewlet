@@ -356,7 +356,22 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 	// Detached, for the same reason the node's loops are: a loop bound to
 	// a signal context stops at SIGTERM, which would make its lifetime
 	// differ from every other loop's for no reason a reader could find.
+	// What ends them is stopLearning below, not this context.
 	e.learning.Start(context.WithoutCancel(ctx))
+}
+
+// stopLearning ends the background passes, waiting for an in-flight one.
+//
+// Called from [Engine.Stop] BEFORE the backends close, because every pass
+// queries the store and the compaction pass pays for a summarisation on the
+// way. The detached context Start was handed carries no cancellation, so
+// this is the only thing that ends them.
+func (e *Engine) stopLearning() {
+	if e.learning == nil {
+		return
+	}
+	e.learning.Stop()
+	e.learning = nil
 }
 
 // synthesizerOptions carries the company's synthesis knobs to the worker.

@@ -574,6 +574,20 @@ func (c *Coordinator) announceFailure(ctx context.Context, run PendingRun, reaso
 }
 
 // teardown reclaims a run's box and clears the row's record of it.
+//
+// A CONTEXT OF ITS OWN, like [abandon] and [Manager.discard], and for the
+// same reason: this is reached right after a failure — settleFailed,
+// resumeAndSettle — and from the queue handler a drain cancels, so the
+// context that got us here is very often already dead. Inheriting it makes
+// both calls below no-ops, and the two failures are different and both bad.
+// On a remote provider the box is left to run out its TTL, billed, with the
+// row's record of it already cleared so nothing will ever collect it. On the
+// local one Kill's wait for the process group is what stops removeBox racing
+// the dying wrapper's writes, which is exactly what Kill's own comment says
+// the wait prevents.
+//
+// WithoutCancel rather than Background, so the warnings still carry the
+// turn's values.
 func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 	// BEFORE THE BOX CHECK, because a run that never got one still ended —
 	// a launch that failed at create is exactly the case where a bridge
@@ -584,6 +598,8 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 	if run.SandboxID == "" {
 		return
 	}
+	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	defer cancel()
 	provider, err := c.mgr().Provider(Placement(run.Placement))
 	if err != nil {
 		// The row names a cell this company no longer configures. The box
@@ -592,11 +608,11 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 		// forever over a box that will expire on its own TTL anyway.
 		log.WarnContext(ctx, "sandbox_teardown_no_backend",
 			"turn_id", run.TurnID, "placement", run.Placement, "error", err.Error())
-	} else if err := provider.Kill(ctx, run.SandboxID); err != nil {
+	} else if err := provider.Kill(killCtx, run.SandboxID); err != nil {
 		log.WarnContext(ctx, "sandbox_teardown_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
 	}
-	if err := c.pending.ReleaseBox(ctx, run.TurnID); err != nil {
+	if err := c.pending.ReleaseBox(killCtx, run.TurnID); err != nil {
 		log.WarnContext(ctx, "sandbox_release_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
@@ -52,6 +53,9 @@ func (i *Integrations) validate(path string) error {
 	}
 	if i.GitLab != nil {
 		p.wrap(i.GitLab.validate(at(path, "gitlab")))
+	}
+	if i.Slack != nil {
+		p.wrap(i.Slack.validate(at(path, "slack")))
 	}
 	return p.err()
 }
@@ -317,6 +321,23 @@ const (
 // WorkingStatuses is the closed set.
 var WorkingStatuses = []WorkingStatus{StatusAddressed, StatusAlways, StatusOff}
 
+// validate refuses a status outside the set, at the path it was written.
+//
+// ONE RULE for both chat blocks. Mattermost's had it inline and Slack's had
+// no validator at all, so `typing_status: alwyas` validated clean and then
+// degraded silently to the default: the indicator appears on some turns and
+// not others, and the operator concludes the feature is flaky rather than
+// that they typed it wrong. Empty is valid — it is how a block takes the
+// default.
+func (w WorkingStatus) validate(path string) error {
+	if w == "" || slices.Contains(WorkingStatuses, w) {
+		return nil
+	}
+	var p problems
+	p.add(path, ErrUnknownValue, "%q (want %s)", w, names(WorkingStatuses))
+	return p.err()
+}
+
 // Slack is the org-level Slack block.
 //
 // Every CREDENTIAL is per-agent (role.integrations.slack); this block is
@@ -330,6 +351,18 @@ type Slack struct {
 
 	// StatusPhrases replaces the words the indicator shows.
 	StatusPhrases StatusPhrases `yaml:"status_phrases,omitempty" json:"status_phrases,omitzero"`
+}
+
+// validate refuses a typing_status outside the closed set.
+//
+// The block had NO validator, which is why an unknown value reached
+// [Slack.Status] and silently became the default. StatusPhrases is
+// deliberately not validated: its values are free text an operator writes to
+// complete the sentence "<seat> is …", so there is no set to check against.
+func (s *Slack) validate(path string) error {
+	var p problems
+	p.wrap(s.TypingStatus.validate(at(path, "typing_status")))
+	return p.err()
 }
 
 // Status is the indicator mode, applying the default.
@@ -431,10 +464,7 @@ type MattermostProvisioning struct {
 
 func (m *Mattermost) validate(path string) error {
 	var p problems
-	if m.TypingStatus != "" && !oneOf(m.TypingStatus, WorkingStatuses) {
-		p.add(at(path, "typing_status"), ErrUnknownValue, "%q (want %s)",
-			m.TypingStatus, names(WorkingStatuses))
-	}
+	p.wrap(m.TypingStatus.validate(at(path, "typing_status")))
 	if !m.Enabled {
 		return p.err()
 	}
@@ -697,7 +727,7 @@ func (g *GitHub) validate(path string) error {
 	}
 	pv := g.Provisioning
 	pp := at(path, "provisioning")
-	if pv.OrgWebhook != "" && !oneOf(pv.OrgWebhook, ContainerWebhookModes) {
+	if pv.OrgWebhook != "" && !slices.Contains(ContainerWebhookModes, pv.OrgWebhook) {
 		p.add(at(pp, "org_webhook"), ErrUnknownValue, "%q (want %s)",
 			pv.OrgWebhook, names(ContainerWebhookModes))
 	}
@@ -761,17 +791,17 @@ func (g *GitLab) validate(path string) error {
 	}
 	pv := g.Provisioning
 	pp := at(path, "provisioning")
-	if pv.AccessLevel != "" && !oneOf(pv.AccessLevel, GitLabAccessLevels) {
+	if pv.AccessLevel != "" && !slices.Contains(GitLabAccessLevels, pv.AccessLevel) {
 		p.add(at(pp, "access_level"), ErrUnknownValue, "%q (want %s)",
 			pv.AccessLevel, names(GitLabAccessLevels))
 	}
 	for _, handle := range sortedKeys(pv.AccessLevels) {
-		if !oneOf(pv.AccessLevels[handle], GitLabAccessLevels) {
+		if !slices.Contains(GitLabAccessLevels, pv.AccessLevels[handle]) {
 			p.add(at(at(pp, "access_levels"), handle), ErrUnknownValue, "%q (want %s)",
 				pv.AccessLevels[handle], names(GitLabAccessLevels))
 		}
 	}
-	if pv.GroupWebhook != "" && !oneOf(pv.GroupWebhook, ContainerWebhookModes) {
+	if pv.GroupWebhook != "" && !slices.Contains(ContainerWebhookModes, pv.GroupWebhook) {
 		p.add(at(pp, "group_webhook"), ErrUnknownValue, "%q (want %s)",
 			pv.GroupWebhook, names(ContainerWebhookModes))
 	}

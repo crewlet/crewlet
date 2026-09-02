@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -477,11 +477,7 @@ func joinChannels(ctx context.Context, opts Options, teamID, userID, handle stri
 	}
 	delete(wanted, "")
 
-	names := make([]string, 0, len(wanted))
-	for name := range wanted {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(wanted))
 
 	var joined []string
 	for _, name := range names {

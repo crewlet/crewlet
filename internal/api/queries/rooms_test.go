@@ -100,7 +100,7 @@ func everySeam(t *testing.T) queries.Sources {
 	return queries.Sources{
 		State:    &livestate.LiveState{},
 		Events:   &store.EventLog{},
-		Health:   func() any { return nil },
+		Health:   func(context.Context) any { return nil },
 		Company:  func() *config.Company { return cfg },
 		Coord:    coordmemory.New(),
 		Plane:    coordmemory.NewFleet(),

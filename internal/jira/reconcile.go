@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
@@ -213,41 +212,49 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 	}
 	out := make([]SeatIdentity, len(seats))
 
-	var wg sync.WaitGroup
+	// The credentials are read first so the fan-out below runs over the
+	// seats that actually have one: a seat with no credential needs no
+	// lookup, and letting it occupy a slot would idle part of the bound.
+	creds := make([]Credential, len(seats))
+	var lookups []int
 	for i, seat := range seats {
 		out[i] = SeatIdentity{
 			Handle:  seat.Handle(),
 			Project: org.NormalizeScope(seat.JiraProject),
 		}
-		cred := CredentialOf(seat, opts.Value)
-		if !cred.Held() {
+		creds[i] = CredentialOf(seat, opts.Value)
+		if !creds[i].Held() {
 			out[i].Reason = "no credential under mcp_env." +
 				strings.Join(SeatEnvs, " or mcp_env.") +
 				" — this seat receives no Jira events at all"
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			client, err := NewClient(ClientOptions{
-				URL:        opts.Client.URL(),
-				Email:      cred.Email,
-				Token:      cred.Token,
-				Deployment: opts.Client.Deployment(),
-			})
-			if err != nil {
-				out[i].Reason = err.Error()
-				return
-			}
-			id, err := client.Me(ctx)
-			if err != nil {
-				out[i].Reason = err.Error()
-				return
-			}
-			out[i].Account = id
-		}()
+		lookups = append(lookups, i)
 	}
-	wg.Wait()
+
+	// BOUNDED, at the same cap as the engine's own resolvers and for the
+	// same reason — see [provision.IdentityLookups]. This path is the
+	// operator-invoked `crewlet jira provision`, so unbounded it opened
+	// one socket per credentialled seat in a burst.
+	provision.ResolveConcurrently(len(lookups), func(n int) {
+		i := lookups[n]
+		client, err := NewClient(ClientOptions{
+			URL:        opts.Client.URL(),
+			Email:      creds[i].Email,
+			Token:      creds[i].Token,
+			Deployment: opts.Client.Deployment(),
+		})
+		if err != nil {
+			out[i].Reason = err.Error()
+			return
+		}
+		id, err := client.Me(ctx)
+		if err != nil {
+			out[i].Reason = err.Error()
+			return
+		}
+		out[i].Account = id
+	})
 	return out
 }
 

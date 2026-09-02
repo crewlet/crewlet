@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"slices"
-	"sort"
 	"strings"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,10 +18,24 @@ import (
 type childProcess struct {
 	cmd   *exec.Cmd
 	relay *stderrRelay
+}
 
-	// pgid is the process group to signal, captured after the fork. Zero when
-	// the process never started.
-	pgid int
+// groupPID is the process group to signal, read at signal time.
+//
+// DERIVED rather than captured, because the one path where a package runner's
+// grandchild is most likely to have survived is a server that never came up —
+// and a field assigned only after a successful handshake is zero exactly
+// there. procgroup.Kill(0) is refused by design and returns nil, so the reap
+// logged success while signalling nothing at all.
+//
+// The group leader is the child itself: procgroup.Set puts it in its own
+// group at fork, so its pid IS the group id. Zero when the process never
+// started, which is the one case there is genuinely nothing to signal.
+func (c *childProcess) groupPID() int {
+	if c == nil || c.cmd == nil || c.cmd.Process == nil {
+		return 0
+	}
+	return c.cmd.Process.Pid
 }
 
 // newStdioTransport builds the child and the transport that will start it.
@@ -82,8 +95,8 @@ func mergedEnv(spec Spec, log *slog.Logger) []string {
 			empty = append(empty, k)
 		}
 	}
-	sort.Strings(keys)
-	sort.Strings(empty)
+	slices.Sort(keys)
+	slices.Sort(empty)
 
 	if len(empty) > 0 {
 		// Almost always an unresolved ${VAR}: the server will come up, fail

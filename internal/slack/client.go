@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // The Web API client.
@@ -41,7 +44,7 @@ func NewClient(token string, httpClient *http.Client) (*Client, error) {
 		return nil, fmt.Errorf("slack: no bot token")
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: ClientTimeout}
+		httpClient = httpx.Client(ClientTimeout)
 	}
 	return &Client{token: token, http: httpClient}, nil
 }
@@ -80,7 +83,7 @@ func call(ctx context.Context, httpClient *http.Client, method, token string, bo
 		return fmt.Errorf("slack: encode %s: %w", method, err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		APIBase+"/"+method, strings.NewReader(string(payload)))
+		APIBase+"/"+method, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("slack: %s: %w", method, err)
 	}

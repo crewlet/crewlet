@@ -77,6 +77,29 @@ const (
 	// every inbound chat message. A cheap, self-healing miss beats an
 	// unbounded read.
 	FollowRetention = 90 * 24 * time.Hour
+
+	// CounterpartyRetention is how long a profile survives with no
+	// interaction.
+	//
+	// The table had NO horizon at all: one row per distinct human or seat a
+	// seat has ever messaged, and — unlike every other table here — it is
+	// also republished to every peer for each held seat on every
+	// memory-sync cycle, so its growth costs more than storage.
+	//
+	// A HUNDRED AND EIGHTY DAYS, twice FollowRetention above, and the
+	// factor is the reason rather than the number. A thread-follow is a
+	// live conversation, which is stale after a quarter. A counterparty
+	// profile is a durable preference — "this reviewer wants tests first" —
+	// which does not stop being true because nobody has written this
+	// quarter, so it deserves a horizon well past the point where the
+	// relationship itself has clearly lapsed.
+	//
+	// The asymmetry makes it safe: dropping one costs the interaction
+	// COUNT, which is a cadence signal rather than a fact, and the next
+	// message re-creates the row and the seat re-learns from what it
+	// observes. Keeping every profile for ever costs unbounded growth on a
+	// table the fleet copies between nodes.
+	CounterpartyRetention = 180 * 24 * time.Hour
 )
 
 // StoreJobs is the sweep for everything in the main store.
@@ -105,6 +128,14 @@ func StoreJobs(db *store.DB) []Job {
 		// every tick would only report that it had.
 		Purge("chat_thread_follows", FollowRetention, db.ThreadFollows().Purge),
 	}
+}
+
+// CounterpartyStore is the slice of the counterparty profiles this sweep
+// calls. Declared here, by the consumer, like every other seam in this tree.
+type CounterpartyStore interface {
+	// Purge drops profiles with no interaction since cutoff, reporting how
+	// many went.
+	Purge(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 // DiaryStore is the slice of the learning diary this sweep calls. Declared
@@ -155,6 +186,18 @@ func LearningJobs(d DiaryStore) []Job {
 			},
 		},
 	}
+}
+
+// CounterpartyJobs is the sweep for what a seat has learned about other
+// people.
+//
+// Separate from LearningJobs because the seam is: this reads a different
+// store, and folding it in would make LearningJobs' one parameter two.
+func CounterpartyJobs(c CounterpartyStore) []Job {
+	if c == nil {
+		return nil
+	}
+	return []Job{Purge("counterparty_profiles", CounterpartyRetention, c.Purge)}
 }
 
 // ChannelJobs is the sweep for agent-to-agent channels: close what nobody

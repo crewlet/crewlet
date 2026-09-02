@@ -3,8 +3,18 @@
 // through.
 //
 // This is the primitive every multi-node duty is built on. A node claims a
-// resource (seat:{handle}, worker:{duty}), renews it on a heartbeat, and
-// loses it by crashing or releasing.
+// resource, renews it on a heartbeat, and loses it by crashing or releasing.
+// Three prefixes name three kinds:
+//
+//   - seat:{handle} — one agent seat this node runs.
+//   - worker:{duty} — a fleet singleton: the maintenance sweep, the
+//     scheduler tick, the lifecycle pass.
+//   - node:{id} — the node's own PRESENCE, which is the kind that is easy to
+//     forget and the one the placement math counts. Membership is not work:
+//     a node holds it to say it is alive, `ListLive("node:")` is the fleet
+//     roster, and the fair-share target every node computes for itself is
+//     ceil(seats / that count). A node that stops renewing its presence is
+//     not merely idle — it raises everyone else's share.
 //
 // Three rules carry the correctness of everything above:
 //

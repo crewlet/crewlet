@@ -194,12 +194,107 @@ func TestNeitherPassFiresOnStart(t *testing.T) {
 
 // A PASS WITH NOTHING WIRED IS NOT A LOOP AT ALL, which is what a node with
 // no store or a company with learning off produces.
+//
+// The duty counter is what makes this able to fail: without it the test
+// constructs, sleeps and returns, and every guard in Start could be deleted
+// with the suite still green. ClaimDuty is the first thing any armed loop
+// touches, so a count above zero means a loop was armed that should not have
+// been. A millisecond interval means an armed loop reaches it well inside
+// the wait rather than sitting on a cadence measured in hours.
 func TestNothingWiredArmsNoLoop(t *testing.T) {
 	t.Parallel()
-	// It must not panic and must not spin: with both halves nil, Start has
+	var (
+		mu     sync.Mutex
+		claims int
+	)
+	b := learning.NewBackground(learning.BackgroundOptions{
+		CuratorInterval:   time.Millisecond,
+		LifecycleInterval: time.Millisecond,
+		ClusterInterval:   time.Millisecond,
+		PromotionInterval: time.Millisecond,
+		ClaimDuty: func(context.Context) (bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			claims++
+			return true, nil
+		},
+	})
+	// It must not panic and must not spin: with every pass nil, Start has
 	// no goroutine to launch.
-	learning.NewBackground(learning.BackgroundOptions{}).Start(t.Context())
+	b.Start(t.Context())
+	t.Cleanup(b.Stop)
+
 	time.Sleep(20 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if claims != 0 {
+		t.Fatalf("the duty was claimed %d times with no pass wired", claims)
+	}
+}
+
+// STOP IS THE ONLY EXIT the loops have. The engine starts them on a detached
+// context so they outlive the signal that begins a drain, which means the
+// ctx.Done arm of the loop never fires in production — and the caller's next
+// move after Stop returns is to close the store every pass queries.
+func TestStopEndsTheLoops(t *testing.T) {
+	t.Parallel()
+	skills, _ := skillStore(t)
+	mustInsert(t, skills, newSkill("dev", "triage", base))
+
+	var (
+		mu     sync.Mutex
+		claims int
+	)
+	// WithoutCancel is what the engine hands Start, so this exercises the
+	// case where the context genuinely cannot end the loop.
+	b := learning.NewBackground(learning.BackgroundOptions{
+		Skills:          skills,
+		Policy:          learning.CuratorPolicy{StaleAfter: time.Hour, ArchiveAfter: 2 * time.Hour},
+		CuratorInterval: time.Millisecond,
+		ClaimDuty: func(context.Context) (bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			claims++
+			return true, nil
+		},
+		Now: func() time.Time { return base.Add(60 * 24 * time.Hour) },
+	})
+	b.Start(context.WithoutCancel(t.Context()))
+
+	// Wait for the loop to prove it is running before stopping it —
+	// otherwise a Stop that does nothing would pass by racing the arm.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		got := claims
+		mu.Unlock()
+		if got > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the curator loop never claimed its duty")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	b.Stop()
+	mu.Lock()
+	after := claims
+	mu.Unlock()
+
+	// Stop waits for the in-flight pass, so nothing may claim the duty
+	// once it has returned.
+	time.Sleep(20 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if claims != after {
+		t.Fatalf("the duty was claimed %d more times after Stop returned", claims-after)
+	}
+
+	// Idempotent, and safe on a Background that was never started — the
+	// shape a node with no store produces, which Engine.Stop still calls.
+	b.Stop()
+	learning.NewBackground(learning.BackgroundOptions{}).Stop()
 }
 
 // THE ROSTER IS READ FRESH on every tick. An apply replaces it, and a pass

@@ -356,3 +356,91 @@ func TestSubjectPredicates(t *testing.T) {
 		}
 	}
 }
+
+// AN UNKEYED OBSERVATION MUST NOT DISARM THE GUARD.
+//
+// Unkeyed observations count (see TestUnkeyedObservationsAlwaysCount), but the
+// remembered key is what the redelivery guard compares against — and writing
+// "" into it left the NEXT observation with nothing to match. A redelivery of
+// a keyed interaction arriving after an unkeyed one then compared its real key
+// against "", differed, and counted a second time: exactly the double count
+// the guard exists to prevent, reachable through an ordinary interleaving.
+func TestAnUnkeyedObservationDoesNotDisarmTheRedeliveryGuard(t *testing.T) {
+	t.Parallel()
+	c := counterparties(t)
+	bob := learning.Subject{Handle: "bob"}
+
+	mustRecord(t, c, learning.Observation{
+		Observer: "ceo", Subject: bob, At: base, WorkKey: "wk-1",
+	})
+	// An unkeyed observation lands in between — a chat message with no
+	// work item behind it, which is the ordinary case.
+	mustRecord(t, c, learning.Observation{Observer: "ceo", Subject: bob, At: base})
+
+	// Now the redelivery of wk-1. It must still be recognised.
+	if mustRecord(t, c, learning.Observation{
+		Observer: "ceo", Subject: bob, At: base, WorkKey: "wk-1",
+	}) {
+		t.Error("a redelivery of the last keyed interaction was counted again: " +
+			"the unkeyed observation in between overwrote the remembered key")
+	}
+	if p := mustGet(t, c, "ceo", bob); p.InteractionCount != 2 {
+		t.Errorf("interactions = %d, want 2 (one keyed, one unkeyed)", p.InteractionCount)
+	}
+	if p := mustGet(t, c, "ceo", bob); p.LastWorkKey != "wk-1" {
+		t.Errorf("last work key = %q, want the last KEYED unit of work", p.LastWorkKey)
+	}
+}
+
+// PROFILES ARE SWEPT, and before this the table had no horizon at all: one
+// row per distinct human or seat a seat has ever messaged, republished to
+// every peer for each held seat on every memory-sync cycle, growing for the
+// life of the deployment.
+func TestStaleCounterpartyProfilesArePurged(t *testing.T) {
+	t.Parallel()
+	c := counterparties(t)
+	old := learning.Subject{Handle: "long-gone"}
+	recent := learning.Subject{Handle: "still-here"}
+
+	mustRecord(t, c, learning.Observation{
+		Observer: "ceo", Subject: old, At: base, WorkKey: "wk-old",
+	})
+	mustRecord(t, c, learning.Observation{
+		Observer: "ceo", Subject: recent, At: base.Add(200 * 24 * time.Hour), WorkKey: "wk-new",
+	})
+
+	cutoff := base.Add(100 * 24 * time.Hour)
+	dropped, err := c.Purge(context.Background(), cutoff)
+	if err != nil {
+		t.Fatalf("Purge: %v", err)
+	}
+	if dropped != 1 {
+		t.Fatalf("purged %d, want the one profile past the cutoff", dropped)
+	}
+	if _, ok, _ := c.Get(context.Background(), "ceo", old); ok {
+		t.Error("a profile with no interaction since the cutoff survived")
+	}
+	// And the live one is untouched, so the sweep is a horizon rather than
+	// a table truncation.
+	if _, ok, _ := c.Get(context.Background(), "ceo", recent); !ok {
+		t.Error("a profile interacted with after the cutoff was purged")
+	}
+}
+
+// AND A SWEEP WITH NOTHING TO DO REPORTS ZERO rather than erroring, which is
+// what the maintenance worker logs every tick on a healthy company.
+func TestAPurgeWithNothingStaleDropsNothing(t *testing.T) {
+	t.Parallel()
+	c := counterparties(t)
+	mustRecord(t, c, learning.Observation{
+		Observer: "ceo", Subject: learning.Subject{Handle: "bob"},
+		At: base, WorkKey: "wk-1",
+	})
+	dropped, err := c.Purge(context.Background(), base.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("Purge: %v", err)
+	}
+	if dropped != 0 {
+		t.Errorf("purged %d, want 0", dropped)
+	}
+}

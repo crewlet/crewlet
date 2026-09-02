@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -30,7 +31,7 @@ import (
 // Human seats are left out. They have no turn, no phase and no spend, and the
 // agent screen is about what is running; the org tree below carries them, which
 // is where a reader looks for who to talk to.
-func roster(company func() *config.Company, runtime NodeRuntime) []map[string]any {
+func roster(ctx context.Context, company func() *config.Company, runtime NodeRuntime) []map[string]any {
 	if company == nil {
 		return nil
 	}
@@ -50,14 +51,18 @@ func roster(company func() *config.Company, runtime NodeRuntime) []map[string]an
 	// not "offline", and the difference is the whole first impression a
 	// booted company gives.
 	//
-	// Only this node's, because that is all a process can answer without
-	// a coordination read, and Snapshot is documented to make none. On a
-	// fleet a peer's seat therefore reads as offline here; the fleet view
-	// answers "who holds what" from the lease table, which is the one
-	// place that knows.
+	// Only this node's, because that is all a process can answer about
+	// which seats it is RUNNING. On a fleet a peer's seat therefore reads
+	// as offline here; the fleet view answers "who holds what" from the
+	// lease table, which is the one place that knows.
+	//
+	// Snapshot does reach the coordination plane — for the posture, which
+	// this caller does not use — so it takes a context and the read is
+	// bounded. The claim that it made no coordination read was already
+	// untrue when it was written.
 	held := map[string]bool{}
 	if runtime != nil {
-		for _, handle := range runtime.Snapshot().Seats {
+		for _, handle := range runtime.Snapshot(ctx).Seats {
 			held[handle] = true
 		}
 	}
@@ -174,4 +179,23 @@ func toolRows(runtime NodeRuntime) []map[string]any {
 		})
 	}
 	return out
+}
+
+// rosterTick reads the roster for a push tick.
+//
+// A CONTEXT OF ITS OWN, like [App.streamHealth]'s and for the same reason:
+// the roster push is a timer, not a request, so there is nothing to inherit —
+// see [tickReadBudget], whose own doc names this caller. Bounded rather than
+// Background alone, because the read underneath reaches the coordination
+// plane and a push tick must not outlive the interval that will fire the next
+// one.
+//
+// A NAMED FUNCTION rather than a closure inside [New]: the two are identical
+// to run, but a closure built inside a constructor reads to contextcheck as
+// the constructor's own body — a background context created where the caller
+// had one to pass. streamHealth is a method for the same reason.
+func rosterTick(company func() *config.Company, runtime NodeRuntime) []map[string]any {
+	ctx, cancel := context.WithTimeout(context.Background(), tickReadBudget)
+	defer cancel()
+	return roster(ctx, company, runtime)
 }

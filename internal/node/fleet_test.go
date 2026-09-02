@@ -11,6 +11,7 @@ package node_test
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -286,11 +287,7 @@ func (f *fleet) nodesThatRan(handle string) []string {
 			seen[r.node] = struct{}{}
 		}
 	}
-	out := make([]string, 0, len(seen))
-	for n := range seen {
-		out = append(out, n)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(seen))
 	return out
 }
 
@@ -527,6 +524,42 @@ func TestFleet(t *testing.T) {
 				if last.node != "node-b" {
 					t.Errorf("the post-handoff turn ran on %s, want node-b", last.node)
 				}
+			})
+
+			t.Run("a_drain_under_an_expired_deadline_still_returns_the_leases", func(t *testing.T) {
+				// Drain's own doc invites a caller to bound it with a
+				// deadline, and then handed that context to step 3 — the
+				// step whose entire purpose is giving the leases back. An
+				// expired one made the release a no-op, so every seat sat
+				// dark for a full TTL: the exact cost the step exists to
+				// avoid, paid precisely when a caller took the advice.
+				//
+				// Latent only because every caller in the tree, this
+				// suite included, passes WithoutCancel.
+				f := newFleet(t, sub, "ceo")
+				f.ensureMailboxes()
+				a := f.start("node-a")
+				eventually(t, "node-a to hold the seat", func() bool {
+					return len(a.Attached()) == 1
+				})
+
+				expired, cancel := context.WithCancel(t.Context())
+				cancel()
+				a.Drain(expired)
+
+				// SYNCHRONOUSLY, straight off the coordination store, and
+				// deliberately not through eventually(): an unreleased
+				// lease lapses on its own after one TTL, so any wait long
+				// enough to be reliable is also long enough to hide the
+				// bug. The whole value of the give-back is that the seat
+				// is free the instant the drain returns.
+				if owned := f.ownersSettled(); len(owned) != 0 {
+					t.Fatalf("the drain returned no leases: %v still owned, so a "+
+						"successor must wait out a full TTL before it can claim", owned)
+				}
+				eventually(t, "node-a to let the seat go", func() bool {
+					return len(a.Attached()) == 0
+				})
 			})
 
 			t.Run("a_node_that_lost_its_lease_starts_no_turn", func(t *testing.T) {

@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // Placement is WHERE a seat's code work runs.
 //
@@ -182,7 +185,12 @@ type SandboxProvider struct {
 	// than read as "no expiry" — an unbounded pause is exactly the leak
 	// this knob exists to prevent, and a seat that wants the provider
 	// default says so with role.sandbox.pause_ttl_seconds: -1.
-	DefaultPauseTTLSeconds float64 `yaml:"default_pause_ttl_seconds,omitempty" json:"default_pause_ttl_seconds,omitempty" js:"min=0" desc:"Paused-box TTL before reap and re-seed. 0 = never pause."`
+	// A POINTER, because 0 is a valid SETTING here rather than an absent
+	// field: unset means "take the 1800s default" and 0 means "never
+	// pause". A plain float64 cannot hold both, and read as one it mapped
+	// every operator who wrote 0 onto the default — silently keeping and
+	// billing for the snapshots the setting exists to refuse.
+	DefaultPauseTTLSeconds *float64 `yaml:"default_pause_ttl_seconds,omitempty" json:"default_pause_ttl_seconds,omitempty" js:"min=0" desc:"Paused-box TTL before reap and re-seed. Unset = 1800s; 0 = never pause."`
 
 	// DefaultMaxTurns caps how many agentic rounds a coding run may take,
 	// for seats that name none.
@@ -259,15 +267,20 @@ func (s *SandboxProvider) Timeout() float64 {
 	return s.DefaultTimeoutSeconds
 }
 
-// PauseTTL is the paused-box TTL. Zero is meaningful here — never pause —
-// so it is returned as configured and only an unset field takes the
-// default. The two are told apart by the field being absent, which decodes
-// as zero; a config that wants "never pause" and one that says nothing
-// therefore agree, and the engine reads 0 as never-pause either way.
-func (s *SandboxProvider) PauseTTL() float64 {
-	if s.DefaultPauseTTLSeconds == 0 {
-		return defaultSandboxPauseTTLSeconds
-	}
+// PauseTTL is the paused-box TTL as configured, or nil when the field is
+// absent and the engine-wide default applies.
+//
+// A POINTER OUT as well as in, because collapsing the two here is what the
+// bug was: 0 is "never pause — tear the box down the moment it blocks and
+// always re-seed from the pushed branch", and absent is "take the 1800s
+// default". The old accessor mapped 0 onto the default in the same breath as
+// a comment claiming it did not, so a company that asked for zero snapshot
+// cost was billed for every paused box for half an hour.
+//
+// The caller resolves nil, so the default lives in ONE place
+// ([sandbox.DefaultPauseTTL]) rather than being re-applied by every layer
+// that touches the value.
+func (s *SandboxProvider) PauseTTL() *float64 {
 	return s.DefaultPauseTTLSeconds
 }
 
@@ -299,7 +312,7 @@ func (s *SandboxProvider) Configured(p Placement) bool {
 		return false
 	}
 	if s.Fake {
-		return oneOf(p, Placements)
+		return slices.Contains(Placements, p)
 	}
 	switch p {
 	case PlacementE2B:
@@ -378,7 +391,7 @@ func (s *SandboxProvider) validate(path string) error {
 		// remedy — see [Company.validateSandboxPlacement]. Refused here
 		// unconditionally, the remedy that message offered ("give every
 		// seat its own run_in") could never pass.
-	case !oneOf(s.DefaultRunIn, BackendPlacements()):
+	case !slices.Contains(BackendPlacements(), s.DefaultRunIn):
 		// `self` is deliberately not offerable as a COMPANY default: it
 		// is only meaningful for a seat whose executor is a coding CLI
 		// in agent mode, and a company-wide default would silently turn
@@ -392,7 +405,7 @@ func (s *SandboxProvider) validate(path string) error {
 			s.DefaultRunIn, s.DefaultRunIn.backend(), names(s.available()))
 	}
 
-	if s.DefaultCodingAgent != "" && !oneOf(s.DefaultCodingAgent, CodingAgents) {
+	if s.DefaultCodingAgent != "" && !slices.Contains(CodingAgents, s.DefaultCodingAgent) {
 		p.add(at(path, "default_coding_agent"), ErrUnknownValue, "%q (want %s)",
 			s.DefaultCodingAgent, names(CodingAgents))
 	}
@@ -405,11 +418,15 @@ func (s *SandboxProvider) validate(path string) error {
 		p.add(at(path, "default_max_turns"), ErrOutOfRange,
 			"%d (a round cap cannot be negative; 0 means uncapped)", s.DefaultMaxTurns)
 	}
-	if s.DefaultPauseTTLSeconds < 0 {
+	// The NEGATIVE refusal stays: an unbounded pause is the leak this knob
+	// exists to prevent, and -1 is a SEAT's spelling of "inherit the
+	// provider default", which is meaningless on the provider itself.
+	if s.DefaultPauseTTLSeconds != nil && *s.DefaultPauseTTLSeconds < 0 {
 		p.add(at(path, "default_pause_ttl_seconds"), ErrOutOfRange,
 			"must not be negative: an unbounded pause is the snapshot leak "+
-				"this knob exists to prevent. Use 0 to never pause; a SEAT "+
-				"asks for the provider default with -1")
+				"this knob exists to prevent. Use 0 to never pause, or omit "+
+				"the field for the 1800s default; a SEAT asks for the "+
+				"provider default with -1")
 	}
 	for i := range s.Setup {
 		p.wrap(s.Setup[i].validate(idx(at(path, "setup"), i)))
@@ -510,7 +527,7 @@ func (l *LocalSandbox) containerOnly() []struct{ field, value string } {
 
 func (l *LocalSandbox) validate(path string) error {
 	var p problems
-	if l.Runtime != "" && !oneOf(l.Runtime, ContainerRuntimes) {
+	if l.Runtime != "" && !slices.Contains(ContainerRuntimes, l.Runtime) {
 		p.add(at(path, "runtime"), ErrUnknownValue, "%q (want %s)", l.Runtime, names(ContainerRuntimes))
 	}
 	return p.err()

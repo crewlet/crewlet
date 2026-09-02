@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -520,9 +521,8 @@ func (h *Host) Start(ctx context.Context) {
 	h.renewNodePresence(ctx)
 	h.Sweep(ctx)
 
-	h.wg.Add(2)
-	go func() { defer h.wg.Done(); h.heartbeatLoop(loopCtx) }()
-	go func() { defer h.wg.Done(); h.sweepLoop(loopCtx) }()
+	h.wg.Go(func() { h.heartbeatLoop(loopCtx) })
+	h.wg.Go(func() { h.sweepLoop(loopCtx) })
 
 	log.InfoContext(ctx, "seat_host_started", "node", h.nodeID, "owner", h.owner, "held", len(h.Held()))
 }
@@ -589,8 +589,16 @@ func (h *Host) Stop(ctx context.Context) {
 	}
 	h.wg.Wait()
 
-	h.ReleaseAll(ctx, ReasonDrain)
-	h.releaseNodePresence(ctx)
+	// A BUDGET OF ITS OWN, for the reason Node.Drain gives: Stop is reached
+	// on a shutdown path whose context is routinely already cancelled, and
+	// a give-back that inherits it releases nothing — every seat then sits
+	// dark for a full TTL instead of being taken over at once, and this
+	// node's presence lingers so peers keep reserving capacity for it.
+	releaseCtx, cancel2 := context.WithTimeout(
+		context.WithoutCancel(ctx), SeatLeaseTTL/HeartbeatRatio)
+	defer cancel2()
+	h.ReleaseAll(releaseCtx, ReasonDrain)
+	h.releaseNodePresence(releaseCtx)
 
 	stranded := h.Unproven()
 	if len(stranded) > 0 {
@@ -634,11 +642,9 @@ func (h *Host) ReleaseAll(ctx context.Context, reason ReleaseReason) {
 	}
 	var wg sync.WaitGroup
 	for _, handle := range handles {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			h.Release(ctx, handle, reason)
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -849,6 +855,12 @@ func (h *Host) noteAdmission(ctx context.Context, handle string, admitted bool) 
 func callHook(name, handle string, fn func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			// LOGGED AS WELL AS RETURNED. The error reaches the caller,
+			// which is what makes the seat go undead and the teardown
+			// retry — but it carries a message, not a stack, and the
+			// panic is in somebody else's hook.
+			log.Error("seat_hook_panicked", "hook", name, "seat", handle,
+				"panic", r, "stack", string(debug.Stack()))
 			err = fmt.Errorf("seat hook %s panicked for %q: %v", name, handle, r)
 		}
 	}()
@@ -862,7 +874,8 @@ func callHook(name, handle string, fn func() error) (err error) {
 func (h *Host) safely(event string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error(event, "node", h.nodeID, "panic", r)
+			log.Error(event, "node", h.nodeID, "panic", r,
+				"stack", string(debug.Stack()))
 		}
 	}()
 	fn()

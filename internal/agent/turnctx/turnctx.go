@@ -1,7 +1,7 @@
 // Package turnctx carries what a turn IS, as an explicit argument.
 //
 // A turn has five values that want to travel ambiently — the work key, the
-// config pin, the LLM scope, the phase recorder and the log fields — and each
+// config pin, the LLM seat, the phase recorder and the log fields — and each
 // makes the same case for itself: "the consumer is a leaf and the intermediate
 // frames have no business knowing". That case is sound for a leaf value and
 // wrong for everything else, and in Go it is worse than wrong: a goroutine
@@ -9,20 +9,29 @@
 // turn that created it has finished. There is no copy-on-spawn to bound it, so
 // what would elsewhere merely obscure a dependency is a live data race.
 //
-// So a turn's inputs are an argument. The type is named
-// TurnContext there; here it is [Turn], because turnctx.TurnContext stutters and
-// the package name already says what it is.
+// So a turn's inputs are an argument: [Turn], which the package name already
+// qualifies.
 //
-// Two things stay in context.Context, because their consumers genuinely are
-// leaves called from code with no turn concept at all: the work key
-// (internal/workkey, read by store writers) and the log fields. Both are
-// immutable, and both fail SAFE when absent — an empty work key means "a turn
-// with no ledgerable trigger", which is exactly the case that skips the
-// duplicate guard. Nothing branches on their presence to decide correctness.
+// # What is still allowed to be ambient, and the bar it clears
+//
+// Three values, each read by a genuine leaf called from code with no turn
+// concept at all, each IMMUTABLE, and each failing SAFE when absent — nothing
+// branches on their presence to decide correctness:
+//
+//   - the work key (internal/workkey), read by store writers. Absent means "a
+//     turn with no ledgerable trigger", which is exactly the case that skips
+//     the duplicate guard.
+//   - the log fields, which decorate a line or do not.
+//   - the seat handle a model call belongs to (llm.WithSeat). Absent resolves
+//     to a named "shared" rather than an empty string, because the value
+//     becomes a home directory and auxiliary work — summarisation, the
+//     relevance filter — legitimately arrives unbound.
 //
 // The config pin is deliberately NOT one of them: a turn reading config through
 // an ambient channel is how a mid-turn reload gets observed halfway, which is
-// the failure immutable epochs exist to remove.
+// the failure immutable epochs exist to remove. Neither is the phase recorder,
+// whose whole job is to attribute spend to the phase that incurred it — an
+// ambient one attributes it to whichever phase last wrote the context.
 package turnctx
 
 import (

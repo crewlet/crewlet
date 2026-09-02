@@ -3,12 +3,15 @@ package mcp
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // httpMCPServer is a minimal Streamable-HTTP MCP endpoint.
@@ -329,5 +332,100 @@ func TestHTTPServerNeedsNoChildSupervision(t *testing.T) {
 	}
 	if _, err := c.callTool(t.Context(), "get_me", nil); err == nil {
 		t.Fatal("calls succeeded after stop")
+	}
+}
+
+// AN OVERSIZED ERROR BODY IS NOT BUFFERED WHOLE, and is not truncated either.
+//
+// The body must be read to be logged and replayed, and handing the SDK a
+// truncated one turns a server's clear 403 into a JSON parse error. But
+// "whole" was unbounded, so a remote server chose this process's allocation
+// size — the only unbounded io.ReadAll left in the tree, eight lines under a
+// constant whose purpose is bounding this same body. Past the cap the prefix
+// is handed back in front of the still-open body, so the SDK reads every byte
+// and nothing further is held.
+func TestAnOversizedErrorBodyIsStreamedRatherThanBuffered(t *testing.T) {
+	t.Parallel()
+	const size = (1 << 20) + 4096 // comfortably over maxBufferedErrorBody
+	payload := strings.Repeat("z", size)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, payload)
+	}))
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	rt := &httpIdentity{base: http.DefaultTransport, log: discardLogger()}
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// THE SDK STILL SEES EVERY BYTE. A cap that silently truncated would
+	// pass a length check and break the diagnostic this path exists for.
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read replayed body: %v", err)
+	}
+	if len(got) != size {
+		t.Errorf("replayed %d bytes, want the whole %d", len(got), size)
+	}
+	if string(got) != payload {
+		t.Error("the replayed body is not the one the server sent")
+	}
+}
+
+// AND A BODY WITHIN THE CAP IS REPLAYED EXACTLY, so the bound changes nothing
+// for the ordinary case it was added to protect.
+func TestAnOrdinaryErrorBodyIsReplayedWhole(t *testing.T) {
+	t.Parallel()
+	const payload = `{"error":"insufficient_scope","detail":"needs repo:write"}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, payload)
+	}))
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	rt := &httpIdentity{base: http.DefaultTransport, log: discardLogger()}
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read replayed body: %v", err)
+	}
+	if string(got) != payload {
+		t.Errorf("replayed %q, want %q", got, payload)
+	}
+}
+
+// TestIdentityWrapsTheSharedTransport is the round-tripper case internal/httpx
+// names: a wrapper carries no *http.Client of its own, so the shape that
+// signals a nil Transport elsewhere — an &http.Client{} with no field — never
+// appears, and http.DefaultTransport sits at the base looking deliberate.
+//
+// It is the worst place in the tree for two idle connections per host: a
+// company runs one of these per remote server PER SEAT, so every seat sharing
+// one vendor endpoint contends on the same two.
+func TestIdentityWrapsTheSharedTransport(t *testing.T) {
+	t.Parallel()
+	_, ident := newHTTPTransport(Spec{
+		Name: "remote", URL: "https://mcp.example.com/",
+	}, slog.New(slog.DiscardHandler))
+	if ident.base != httpx.Transport() {
+		t.Errorf("identity base = %T, want the one httpx shares", ident.base)
 	}
 }

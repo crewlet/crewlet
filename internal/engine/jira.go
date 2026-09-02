@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // The Atlassian tracker, wired.
@@ -76,30 +77,25 @@ func (j *jiraIdentities) resolve(ctx context.Context, url string, deploy jira.De
 		return
 	}
 
-	var wg sync.WaitGroup
 	found := make([]string, len(missing))
-	for i, cred := range missing {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			client, err := jira.NewClient(jira.ClientOptions{
-				URL: url, Email: cred.Email, Token: cred.Token, Deployment: deploy,
-			})
-			if err != nil {
-				log.WarnContext(ctx, "jira_seat_client_failed", "error", err.Error())
-				return
-			}
-			account, err := client.Me(ctx)
-			if err != nil {
-				log.WarnContext(ctx, "jira_seat_identity_unresolved", "error", err.Error(),
-					"detail", "this seat receives no tracker events until "+
-						"the next apply re-resolves it")
-				return
-			}
-			found[i] = account
-		}()
-	}
-	wg.Wait()
+	provision.ResolveConcurrently(len(missing), func(i int) {
+		cred := missing[i]
+		client, err := jira.NewClient(jira.ClientOptions{
+			URL: url, Email: cred.Email, Token: cred.Token, Deployment: deploy,
+		})
+		if err != nil {
+			log.WarnContext(ctx, "jira_seat_client_failed", "error", err.Error())
+			return
+		}
+		account, err := client.Me(ctx)
+		if err != nil {
+			log.WarnContext(ctx, "jira_seat_identity_unresolved", "error", err.Error(),
+				"detail", "this seat receives no tracker events until "+
+					"the next apply re-resolves it")
+			return
+		}
+		found[i] = account
+	})
 
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -223,13 +219,24 @@ func (e *Engine) startJira(ctx context.Context, c *Company, cfg *config.Jira) (*
 // that skipped it would keep routing a renamed project to its old lead.
 func (e *Engine) reconcileJira(ctx context.Context, c *Company) {
 	cfg := c.Config.Integrations.Jira
-	if cfg == nil {
-		return
-	}
 	e.notify.mu.Lock()
 	svc := e.notify.service
 	e.notify.mu.Unlock()
 	if svc == nil {
+		return
+	}
+	// RETIRED when the revision no longer declares it. Every reconciler
+	// here converged only toward "configured", so removing the `integrations.jira` block — the
+	// gesture an operator makes after a credential leak — applied
+	// cleanly, changed nothing, and left the boot-time parser routing
+	// deliveries under the credential being revoked, while RoutedSources
+	// went on listing it as reachable.
+	if cfg == nil {
+		if svc.Unregister(jira.Backend) {
+			log.InfoContext(ctx, "jira_retired",
+				"detail", "the revision no longer declares jira; its deliveries "+
+					"route to no seat")
+		}
 		return
 	}
 	parser, err := e.startJira(ctx, c, cfg)

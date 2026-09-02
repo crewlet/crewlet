@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -75,7 +76,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	company := e.Company()
 	gate := seatSandbox(company, l.seat.Name)
 	setup := manager.DefaultSetup()
-	var servers map[string]map[string]any
+	var servers map[string]sandbox.MCPServer
 	if gate != nil {
 		setup = append(setup, setupSteps(gate.Setup)...)
 		servers = sandboxMCP(e.resolver(), company, l.seat, gate)
@@ -140,15 +141,15 @@ func (l *agentLauncher) executorLLM(c *Company) (*sandbox.AgentLLM, map[string]s
 // values come from config the epoch owns, and a bridge endpoint written into
 // a shared map would follow the seat into its next run — where the token is
 // dead and every tool call fails for a reason nothing in the config explains.
-func withBridge(servers map[string]map[string]any, endpoint string) map[string]map[string]any {
-	out := make(map[string]map[string]any, len(servers)+1)
-	for name, cfg := range servers {
-		out[name] = cfg
-	}
+func withBridge(servers map[string]sandbox.MCPServer, endpoint string) map[string]sandbox.MCPServer {
+	out := make(map[string]sandbox.MCPServer, len(servers)+1)
+	maps.Copy(out, servers)
 	// Under the reserved name, which config refuses to any mcp_servers
 	// entry — so this write can never shadow a server the seat scoped into
 	// its box. See [config.BridgeServerName] for why it is not the handle.
-	out[config.BridgeServerName] = map[string]any{"type": "http", "url": endpoint}
+	out[config.BridgeServerName] = sandbox.MCPServer{
+		Name: config.BridgeServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
+	}
 	return out
 }
 

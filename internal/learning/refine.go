@@ -335,16 +335,23 @@ func parseRefinement(completion *llm.Completion) (refinementChoice, bool) {
 	if completion == nil {
 		return refinementChoice{}, false
 	}
-	raw := strings.TrimSpace(stripFence(completion.Content))
+	raw := strings.TrimSpace(completion.Content)
 	if raw == "" || raw == "{}" {
 		return refinementChoice{}, false
 	}
 	var choice refinementChoice
-	if err := json.Unmarshal([]byte(raw), &choice); err != nil {
+	decoded := false
+	for _, candidate := range modelJSONCandidates(raw) {
+		if json.Unmarshal([]byte(candidate), &choice) == nil {
+			decoded = true
+			break
+		}
+	}
+	if !decoded {
 		// UNPARSEABLE IS A DECLINE, not an error. The pass must not fail
 		// over a model that answered in prose, and there is nothing to
 		// write either way.
-		log.Debug("skill_refinement_unparseable", "error", err.Error())
+		log.Debug("skill_refinement_unparseable", "response", preview(raw, 200))
 		return refinementChoice{}, false
 	}
 	if strings.TrimSpace(choice.SkillName) == "" || strings.TrimSpace(choice.Bullet) == "" {

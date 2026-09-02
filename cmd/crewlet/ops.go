@@ -7,10 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
@@ -45,13 +44,26 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if tail := fs.Args(); bootstrapPath == "" && len(tail) == 1 {
-		bootstrapPath = tail[0]
-	} else if len(tail) > 0 && bootstrapPath != "" {
+	// THE SAME SHAPE AS `run`, because the failure is the same and worse
+	// here. The refusal used to be conjoined with `bootstrapPath != ""`,
+	// which made it unreachable on the exact input it was written for:
+	// `crewlet migrate a.yaml b.yaml` puts both names in the tail with no
+	// subject, so neither branch fired and the command silently migrated
+	// the database named by ./crewlet.yaml — a database the operator never
+	// named, and without -check it migrates it for real.
+	bootstrapPath, given := onePositional(fs, bootstrapPath)
+	if given > 1 {
 		fmt.Fprintln(stderr, "usage: crewlet migrate [<config.yaml>] [-check]")
 		return errors.New("name at most one config document")
 	}
-	if bootstrapPath == "" {
+	if bootstrapPath != "" {
+		if isFlagSet(fs, "config") {
+			return errors.New(
+				"the config document is named twice, as a positional argument " +
+					"and as -config; they would have to agree and nothing " +
+					"checks that they do")
+		}
+	} else {
 		bootstrapPath = *configPath
 	}
 
@@ -64,8 +76,7 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 	}
 	opts := store.Options{
 		MaxOpenConns: boot.Store.MaxOpenConns,
-		BusyTimeout: time.Duration(
-			boot.Store.BusyTimeoutSeconds * float64(time.Second)),
+		BusyTimeout:  boot.Store.BusyTimeout(),
 	}
 	ctx := context.Background()
 
@@ -260,7 +271,7 @@ func budgetsReset(args []string, stdout, stderr io.Writer) error {
 	// The report NAMES what was cleared. A count alone leaves an operator
 	// unable to tell "reset the seat I meant" from "reset a scope that was
 	// already empty".
-	sort.Strings(answer.Scopes)
+	slices.Sort(answer.Scopes)
 	fmt.Fprintf(stdout, "Reset %d scope(s): %s\n",
 		answer.Cleared, strings.Join(answer.Scopes, ", "))
 	return nil

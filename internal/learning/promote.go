@@ -381,7 +381,7 @@ func poolSiblings(skills []Skill, threshold float64) []SiblingCluster {
 		}
 		joined := false
 		for i := range clusters {
-			if jaccard(sk.ToolSequence, clusters[i].Sequence) >= threshold {
+			if toolJaccard(sk.ToolSequence, clusters[i].Sequence) >= threshold {
 				clusters[i].Skills = append(clusters[i].Skills, sk)
 				joined = true
 				break

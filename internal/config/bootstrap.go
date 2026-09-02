@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -546,7 +547,7 @@ func (c StreamCluster) IsZero() bool {
 
 func (s *Stream) validate(path string) error {
 	var p problems
-	if s.Type != "" && !oneOf(s.Type, StreamTypes) {
+	if s.Type != "" && !slices.Contains(StreamTypes, s.Type) {
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", s.Type, names(StreamTypes))
 		return p.err() // the rest of the rules key on the type
 	}
@@ -668,7 +669,7 @@ func (t NATSTLS) validate(path string) error {
 
 func (c *Coordination) validate(path string) error {
 	var p problems
-	if c.Type != "" && !oneOf(c.Type, CoordinationTypes) {
+	if c.Type != "" && !slices.Contains(CoordinationTypes, c.Type) {
 		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", c.Type, names(CoordinationTypes))
 	}
 	if c.LeaseTTLSeconds < 0 {

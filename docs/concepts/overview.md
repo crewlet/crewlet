@@ -212,8 +212,9 @@ internal/
 ├── tokens/               # Token accounting shared by the meter and the API
 ├── hostbox/ procgroup/   # The local sandbox host, and process-tree teardown
 ├── whsec/                # Webhook signing secrets: minting and verification
+├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
-│                         #   livestate/, configapi/, auth/
+│                         #   livestate/, configapi/, auth/, httpjson/
 ├── observe/              # The observability edge (store row + live push)
 ├── tracing/              # OpenTelemetry: one provider, W3C propagation, and
 │                         #   the bridge to the envelope's trace fields

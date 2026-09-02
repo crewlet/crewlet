@@ -1,6 +1,7 @@
 package ledgerstore
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"strings"
@@ -162,11 +163,9 @@ func (m *MemoryConversations) Threads(_ context.Context, handle string, limit in
 	// a map walk has no order, so without it this twin hands two readers
 	// different pages for the same data — which is precisely the kind of
 	// divergence a memory twin exists to NOT have against the real store.
+	// Newest first, the key breaking a tie ascending.
 	slices.SortFunc(out, func(a, b Thread) int {
-		if !a.LastAt.Equal(b.LastAt) {
-			return b.LastAt.Compare(a.LastAt)
-		}
-		return strings.Compare(a.Key, b.Key)
+		return cmp.Or(b.LastAt.Compare(a.LastAt), cmp.Compare(a.Key, b.Key))
 	})
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]

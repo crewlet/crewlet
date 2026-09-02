@@ -88,14 +88,14 @@ func claimed(t *testing.T, e *engine.Engine, seats int) {
 // surfaceOf is the tool names one seat's turns would be built against.
 func surfaceOf(t *testing.T, e *engine.Engine, handle string) []string {
 	t.Helper()
-	return e.Company().ToolsFor(handle).Names()
+	return e.ToolsFor(handle).Names()
 }
 
 // describes returns the description a tool carries, which the helper server
 // uses to report its own environment.
 func describes(t *testing.T, e *engine.Engine, handle, tool string) string {
 	t.Helper()
-	entry, ok := e.Company().ToolsFor(handle).Lookup(tool)
+	entry, ok := e.ToolsFor(handle).Lookup(tool)
 	if !ok {
 		t.Fatalf("seat %q has no tool %q; surface = %v", handle, tool, surfaceOf(t, e, handle))
 	}
@@ -249,6 +249,103 @@ func TestASharedServersToolsSurviveAConfigApply(t *testing.T) {
 	}
 }
 
+// AND SO DO A HELD SEAT'S PER-ROLE TOOLS, which is the harder half.
+//
+// A per-role registry is a CLONE of the epoch's surface, and an apply
+// publishes a new epoch — so unless the apply rebuilds them, every seat this
+// node already holds falls back to the shared surface and loses its entire
+// per-role tool set. Silent, permanent until the seat is released and
+// re-claimed, and it fires on the documented credential-rotation gesture of
+// re-activating an unchanged revision. The children are still running the
+// whole time, holding the seat's credentials, with no turn able to reach one.
+func TestAHeldSeatsPerRoleToolsSurviveAConfigApply(t *testing.T) {
+	t.Parallel()
+	doc := mcpCompany(false, "SEAT_TOKEN")
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	claimed(t, e, 2)
+
+	before := describes(t, e, "ceo", "tracker_probe")
+	if !strings.Contains(before, "ceo-secret") {
+		t.Fatalf("the boot epoch never gave the seat its own child: %q", before)
+	}
+
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	names := surfaceOf(t, e, "ceo")
+	if !slices.Contains(names, "tracker_probe") {
+		t.Fatalf("the applied epoch lost the seat's per-role tools: %v\n"+
+			"its children are still running and holding its credentials; only "+
+			"the registry the turn is built against was never rebuilt", names)
+	}
+	// STILL ITS OWN child, not a peer's and not the shared one — a rebuild
+	// that re-filed the wrong bridge would pass the check above while
+	// handing one seat another's identity.
+	if after := describes(t, e, "ceo", "tracker_probe"); !strings.Contains(after, "ceo-secret") {
+		t.Errorf("the seat's tool now resolves to %q, want its own credential", after)
+	}
+	if cto := describes(t, e, "cto", "tracker_probe"); !strings.Contains(cto, "cto-secret") {
+		t.Errorf("the peer seat's tool now resolves to %q, want its own credential", cto)
+	}
+	// AND THE BUILTINS ARE THE NEW EPOCH'S OBJECTS, not merely its names.
+	//
+	// Every apply re-registers the builtins into the new epoch's registry
+	// from that revision's own numbers, so the objects differ between
+	// epochs while the names never do. Carrying the seat's old registry
+	// across an apply would satisfy every check above and still serve the
+	// PREVIOUS revision's builtins and knobs to turns running under the
+	// new one — which is why this compares identity rather than membership.
+	for _, builtin := range []string{"lookup_colleague", "reflect_and_persist"} {
+		if !slices.Contains(names, builtin) {
+			t.Errorf("the applied epoch lost the %s builtin from the seat's "+
+				"own surface: %v", builtin, names)
+			continue
+		}
+		want, ok := e.Company().Tools.Lookup(builtin)
+		if !ok {
+			t.Fatalf("the applied epoch has no %s builtin of its own", builtin)
+		}
+		got, _ := e.ToolsFor("ceo").Lookup(builtin)
+		if got.Tool != want.Tool {
+			t.Errorf("the seat's %s comes from the outgoing epoch, so its turns "+
+				"run against the previous revision's builtins and knobs", builtin)
+		}
+	}
+}
+
+// AND THE PER-ROLE CHILD IS NOT RESTARTED BY THE REBUILD.
+//
+// A per-role child belongs to the seat's LEASE rather than to the epoch, so
+// an apply must leave it alone: restarting one would re-handshake every
+// seat's vendor credentials on every config edit, and the control-plane doc
+// states the rule. The registry is rebuilt; the process never learns an
+// apply happened.
+func TestAnApplyDoesNotRestartAHeldSeatsChild(t *testing.T) {
+	t.Parallel()
+	doc := mcpCompany(false, "SEAT_TOKEN")
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	claimed(t, e, 2)
+
+	// The tool OBJECT identifies the child behind it: a restart builds new
+	// ones, so an unchanged pointer is proof the same process is serving.
+	first, ok := e.ToolsFor("ceo").Lookup("tracker_probe")
+	if !ok {
+		t.Fatal("the boot epoch gave the seat no per-role tool to compare")
+	}
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, doc)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	second, ok := e.ToolsFor("ceo").Lookup("tracker_probe")
+	if !ok {
+		t.Fatal("the applied epoch has no per-role tool")
+	}
+	if first.Tool != second.Tool {
+		t.Error("an apply that changed nothing replaced the seat's per-role tools, " +
+			"which means it restarted a healthy child holding that seat's credentials")
+	}
+}
+
 // AND THE CHILD IS NOT RESTARTED FOR AN UNCHANGED SPEC.
 //
 // The tempting fix is to restart every server on every apply, which would
@@ -304,5 +401,41 @@ func TestAChangedServerSpecIsRestartedByAnApply(t *testing.T) {
 	if !strings.HasPrefix(got, "SEAT_TOKEN=") {
 		t.Errorf("the tool still reports %q: the edited spec never reached a "+
 			"child, so the apply reported a change it did not make", got)
+	}
+}
+
+// A SHARED SERVER A REVISION REMOVED IS RETIRED, not merely forgotten.
+//
+// The apply-time reconcile is driven by the specs the CURRENT config names,
+// so a deleted server is never visited: its tools leave the catalogue with
+// the new epoch's registry, but the CHILD — holding the company's
+// credentials — keeps running until the engine stops. A rename runs two.
+func TestASharedServerARevisionRemovedIsStopped(t *testing.T) {
+	t.Parallel()
+	with := mcpCompany(true, "PATH")
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, with)})
+
+	if !slices.Contains(e.Company().Tools.Names(), "tracker_probe") {
+		t.Fatal("the boot epoch never started the shared server")
+	}
+
+	// The same document with the whole mcp_servers block gone — the
+	// gesture an operator makes to take a leaking integration offline.
+	without := with[:strings.Index(with, "mcp_servers:")] +
+		with[strings.Index(with, "roles:"):]
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, without)); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// The catalogue losing the tool is the half that already worked.
+	if names := e.Company().Tools.Names(); slices.Contains(names, "tracker_probe") {
+		t.Errorf("the applied epoch still advertises the removed server: %v", names)
+	}
+	// The child being GONE is the half that did not. Servers() is the
+	// bridge's own record of what it is still running.
+	if running := e.SharedServers(); slices.Contains(running, "tracker") {
+		t.Errorf("the removed server is still running: %v\n"+
+			"its process holds the company's credentials and would survive "+
+			"until the engine stops", running)
 	}
 }

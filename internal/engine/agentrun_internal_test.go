@@ -46,7 +46,7 @@ func modeCompany(t *testing.T, agent string, agentMode bool, runIn config.Placem
 		Config: &config.Company{Providers: config.Providers{
 			LLM: map[string]config.LLMProvider{"sub": {
 				Type: config.LLMCLIAgent,
-				CLI:  &config.CLIAgent{Agent: agent, Mode: mode, RunIn: runIn},
+				CLI:  &config.CLIAgent{Agent: config.CLIAgentName(agent), Mode: mode, RunIn: runIn},
 			}},
 		}},
 	}, seat
@@ -145,24 +145,24 @@ func TestAgentModeIsRefusedWithNoBridge(t *testing.T) {
 // dead and every tool call fails for a reason nothing in the config explains.
 func TestTheBridgeEntryDoesNotFollowTheSeatToItsNextRun(t *testing.T) {
 	t.Parallel()
-	seatServers := map[string]map[string]any{
-		"jira": {"type": "stdio", "command": "jira-mcp"},
+	seatServers := map[string]sandbox.MCPServer{
+		"jira": {Name: "jira", Transport: sandbox.TransportStdio, Command: "jira-mcp"},
 	}
 	first := withBridge(seatServers, "https://engine.example.com/mcp/tok-1")
 	if _, leaked := seatServers["crewlet"]; leaked {
 		t.Fatal("the bridge entry was written into the seat's own map")
 	}
-	if first["crewlet"]["url"] != "https://engine.example.com/mcp/tok-1" {
+	if first["crewlet"].URL != "https://engine.example.com/mcp/tok-1" {
 		t.Errorf("the copy does not carry the endpoint: %v", first["crewlet"])
 	}
 	second := withBridge(seatServers, "https://engine.example.com/mcp/tok-2")
-	if second["crewlet"]["url"] == first["crewlet"]["url"] {
+	if second["crewlet"].URL == first["crewlet"].URL {
 		t.Error("a second run reused the first run's dead endpoint")
 	}
 	// The seat's own servers survive into both, because a bridged run
 	// still needs the credentials only its own MCP children hold.
-	for _, out := range []map[string]map[string]any{first, second} {
-		if out["jira"]["command"] != "jira-mcp" {
+	for _, out := range []map[string]sandbox.MCPServer{first, second} {
+		if out["jira"].Command != "jira-mcp" {
 			t.Errorf("the seat's own servers were dropped: %v", out)
 		}
 	}

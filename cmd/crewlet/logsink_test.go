@@ -82,16 +82,14 @@ func TestConcurrentCommandsDoNotShareABuffer(t *testing.T) {
 	cfg := unresolvedBootstrap(t)
 	var wg sync.WaitGroup
 	for i := range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			var out bytes.Buffer
 			if i%2 == 0 {
 				_ = run([]string{"help"}, &out, &out)
 				return
 			}
 			_ = run([]string{"validate", cfg}, &out, &out)
-		}()
+		})
 	}
 	wg.Wait()
 }

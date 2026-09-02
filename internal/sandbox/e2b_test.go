@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -83,12 +84,7 @@ func (s *e2bStub) record(r *http.Request) {
 func (s *e2bStub) saw(want string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, got := range s.requests {
-		if got == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s.requests, want)
 }
 
 func (s *e2bStub) body(path string) map[string]any {
@@ -306,12 +302,7 @@ func (r *toStub) RoundTrip(req *http.Request) (*http.Response, error) {
 func (r *toStub) sawHost(want string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, got := range r.hosts {
-		if got == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(r.hosts, want)
 }
 
 // A KEYLESS PROVIDER IS REFUSED AT CONSTRUCTION, so an apply fails rather

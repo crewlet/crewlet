@@ -1,12 +1,14 @@
 package learning
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
@@ -170,6 +172,17 @@ func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 	return e, nil
 }
 
+// defaultDiaryListing is how many entries [Diary.Recent] returns for a caller
+// that names no limit.
+//
+// A FLOOR, NOT A POLICY. Every production caller passes an explicit limit —
+// the Plan-phase prefetch its own recency budget, the dashboard its page size,
+// the memory tool a clamped tool argument — so this answers only a caller that
+// asked for nothing, and it answers with a screenful rather than a page: the
+// value of an unbounded default here is a seat's entire diary rendered into a
+// prompt, which is the failure the limit exists for.
+const defaultDiaryListing = 10
+
 // Recent returns a seat's most recent LIVE entries, newest first.
 //
 // Live means unexpired. An expired short entry is filtered on READ as well as
@@ -178,7 +191,7 @@ func scanDiary(rows interface{ Scan(...any) error }) (DiaryEntry, error) {
 // week ago.
 func (d *Diary) Recent(ctx context.Context, agentID string, now time.Time, limit int) ([]DiaryEntry, error) {
 	if limit <= 0 {
-		limit = 10
+		limit = defaultDiaryListing
 	}
 	rows, err := d.db.SQL().QueryContext(ctx,
 		`SELECT `+diaryColumns+` FROM agent_diary
@@ -265,18 +278,11 @@ type DiaryHit struct {
 // same total order episode recall uses, for the same reason.
 func rankDiary(hits []DiaryHit) {
 	slices.SortFunc(hits, func(a, b DiaryHit) int {
-		switch {
-		case a.Similarity > b.Similarity:
-			return -1
-		case a.Similarity < b.Similarity:
-			return 1
-		case a.Entry.CreatedAt.After(b.Entry.CreatedAt):
-			return -1
-		case a.Entry.CreatedAt.Before(b.Entry.CreatedAt):
-			return 1
-		default:
-			return -1 * compareStrings(a.Entry.ID, b.Entry.ID)
-		}
+		return cmp.Or(
+			cmp.Compare(b.Similarity, a.Similarity),
+			b.Entry.CreatedAt.Compare(a.Entry.CreatedAt),
+			cmp.Compare(b.Entry.ID, a.Entry.ID),
+		)
 	})
 }
 
@@ -286,14 +292,43 @@ func rankDiary(hits []DiaryHit) {
 // recalled a memory has had the benefit whether or not the counter moved, and
 // failing a recall because its bookkeeping failed would trade the useful half
 // of the operation for the statistical half.
+//
+// ONE STATEMENT over the whole set rather than one per id. The per-id loop
+// this replaces returned on its first error, so a single failure silently
+// abandoned every id after it — and the ids come from one filter pass, so
+// there is no reason to visit them one round trip at a time.
 func (d *Diary) MarkRetrieved(ctx context.Context, ids []string, at time.Time) {
+	if len(ids) == 0 {
+		return
+	}
+	// DEDUPED, because the count is "how many times this entry was
+	// selected", and one filter pass selecting an id twice is one use.
+	unique := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
-		if _, err := d.db.SQL().ExecContext(ctx,
-			`UPDATE agent_diary SET retrieval_count = retrieval_count + 1,
-			 last_retrieved_at = ? WHERE id = ?`, store.EncodeTime(at), id); err != nil {
-			log.WarnContext(ctx, "diary_retrieval_not_recorded", "entry", id, "error", err)
-			return
+		if id == "" {
+			continue
 		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return
+	}
+	args := make([]any, 0, len(unique)+1)
+	args = append(args, store.EncodeTime(at))
+	for _, id := range unique {
+		args = append(args, id)
+	}
+	query := `UPDATE agent_diary SET retrieval_count = retrieval_count + 1,
+		 last_retrieved_at = ? WHERE id IN (?` +
+		strings.Repeat(",?", len(unique)-1) + `)`
+	if _, err := d.db.SQL().ExecContext(ctx, query, args...); err != nil {
+		log.WarnContext(ctx, "diary_retrieval_not_recorded",
+			"entries", len(unique), "error", err)
 	}
 }
 

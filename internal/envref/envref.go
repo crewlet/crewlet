@@ -25,6 +25,7 @@
 package envref
 
 import (
+	"os"
 	"regexp"
 	"strings"
 )
@@ -107,4 +108,42 @@ func Expand(value string, lookup func(name string) (string, bool)) (expanded str
 		return v
 	})
 	return out, unresolved
+}
+
+// Resolve reads a config value that may be a WHOLE ${VAR} reference.
+//
+// A literal comes back trimmed and unchanged. A whole reference comes back as
+// the variable's value, or EMPTY when the variable is unset — never as its
+// own literal text. That last rule is the reason this is one function rather
+// than a call to [Whole] at each site: a raw "${SLACK_BOT_TOKEN_CEO}" matches
+// nothing any vendor will accept, so passing it through turns a missing
+// variable into a seat that mysteriously authenticates as nobody, at a layer
+// far away from the config that named it.
+//
+// It was written twice, byte for byte, in the Slack and Mattermost
+// transports — the second carrying a comment saying it resolved to empty
+// "for the same reason it does everywhere else", which is an author noticing
+// the duplication and copying anyway.
+//
+// A nil lookup reads the process environment, which is what every caller
+// outside a test passes.
+//
+// NOT every caller wants this policy: internal/org deliberately keeps its own
+// walk, because it also skips a reference that resolves to EMPTY — leaving
+// the previous value in place rather than blanking it — which is correct
+// there and wrong here.
+func Resolve(value string, lookup func(name string) (string, bool)) string {
+	value = strings.TrimSpace(value)
+	name, isRef := Whole(value)
+	if !isRef {
+		return value
+	}
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
+	resolved, ok := lookup(name)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(resolved)
 }

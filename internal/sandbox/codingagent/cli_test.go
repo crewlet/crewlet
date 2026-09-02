@@ -2,6 +2,7 @@ package codingagent_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -234,9 +235,16 @@ func TestTheOpenCodeConfigReferencesTheKeyRatherThanInliningIt(t *testing.T) {
 func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
-		MCPServers: map[string]map[string]any{
-			"files":  {"command": "mcp-files", "args": []any{"--root", "/src"}, "env": map[string]any{"K": "v"}},
-			"linear": {"type": "http", "url": "https://example.com/mcp", "headers": map[string]any{"H": "v"}},
+		MCPServers: map[string]sandbox.MCPServer{
+			"files": {
+				Name: "files", Transport: sandbox.TransportStdio,
+				Command: "mcp-files", Args: []string{"--root", "/src"},
+				Env: map[string]string{"K": "v"},
+			},
+			"linear": {
+				Name: "linear", Transport: sandbox.TransportHTTP,
+				URL: "https://example.com/mcp", Headers: map[string]string{"H": "v"},
+			},
 		},
 	}, codingagent.PathsFor(b))
 	if err != nil || path == "" {
@@ -245,20 +253,93 @@ func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	blob, _ := b.ReadFile(t.Context(), path)
 	var cfg struct {
 		MCP map[string]struct {
-			Type    string   `json:"type"`
-			Command []string `json:"command"`
-			URL     string   `json:"url"`
-			Enabled bool     `json:"enabled"`
+			Type        string            `json:"type"`
+			Command     []string          `json:"command"`
+			Environment map[string]string `json:"environment"`
+			URL         string            `json:"url"`
+			Headers     map[string]string `json:"headers"`
+			Enabled     bool              `json:"enabled"`
 		} `json:"mcp"`
 	}
 	if err := json.Unmarshal(blob, &cfg); err != nil {
 		t.Fatalf("unmarshal: %v\n%s", err, blob)
 	}
-	if got := cfg.MCP["files"]; got.Type != "local" || len(got.Command) != 3 || !got.Enabled {
+	// ONE ARGV: this CLI takes the whole invocation as a single array, so
+	// the binary and its arguments are joined rather than kept apart.
+	got := cfg.MCP["files"]
+	if got.Type != "local" || !got.Enabled ||
+		!slices.Equal(got.Command, []string{"mcp-files", "--root", "/src"}) {
 		t.Fatalf("stdio server = %+v", got)
 	}
-	if got := cfg.MCP["linear"]; got.Type != "remote" || got.URL == "" || !got.Enabled {
+	// The CREDENTIAL reaches the box under this CLI's own key. It is
+	// `environment` here and `env` in Claude Code's file, which is the
+	// whole reason each runner renders its own.
+	if got.Environment["K"] != "v" {
+		t.Errorf("stdio env = %v, want the seat's credential under `environment`",
+			got.Environment)
+	}
+	got = cfg.MCP["linear"]
+	if got.Type != "remote" || got.URL != "https://example.com/mcp" || !got.Enabled {
 		t.Fatalf("http server = %+v", got)
+	}
+	if got.Headers["H"] != "v" {
+		t.Errorf("http headers = %v, want the seat's credential", got.Headers)
+	}
+}
+
+// The other runner's vocabulary, from the same typed input — which is the
+// point of RenderMCP answering in server shape rather than in one CLI's keys.
+func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
+	b := sandbox.NewFakeSandbox("box-1")
+	path, err := codingagent.ClaudeCode{}.WriteConfig(t.Context(), b, sandbox.RunRequest{
+		MCPServers: map[string]sandbox.MCPServer{
+			"files": {
+				Name: "files", Transport: sandbox.TransportStdio,
+				Command: "mcp-files", Args: []string{"--root", "/src"},
+				Env: map[string]string{"K": "v"},
+			},
+			"linear": {
+				Name: "linear", Transport: sandbox.TransportHTTP,
+				URL: "https://example.com/mcp", Headers: map[string]string{"H": "v"},
+			},
+		},
+	}, codingagent.PathsFor(b))
+	if err != nil || path == "" {
+		t.Fatalf("WriteConfig = %q, %v", path, err)
+	}
+	blob, _ := b.ReadFile(t.Context(), path)
+	var cfg struct {
+		Servers map[string]struct {
+			Type    string            `json:"type"`
+			Command string            `json:"command"`
+			Args    []string          `json:"args"`
+			Env     map[string]string `json:"env"`
+			URL     string            `json:"url"`
+			Headers map[string]string `json:"headers"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(blob, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, blob)
+	}
+	// COMMAND AND ARGS STAY APART here, where OpenCode joins them.
+	got := cfg.Servers["files"]
+	if got.Command != "mcp-files" || !slices.Equal(got.Args, []string{"--root", "/src"}) {
+		t.Fatalf("stdio server = %+v", got)
+	}
+	if got.Env["K"] != "v" {
+		t.Errorf("stdio env = %v, want the seat's credential under `env`", got.Env)
+	}
+	got = cfg.Servers["linear"]
+	if got.Type != "http" || got.URL != "https://example.com/mcp" {
+		t.Fatalf("http server = %+v", got)
+	}
+	if got.Headers["H"] != "v" {
+		t.Errorf("http headers = %v, want the seat's credential", got.Headers)
+	}
+	// A stdio server carries NO url or headers and an http one no command:
+	// a transport's own fields only.
+	if got.Command != "" || len(got.Env) > 0 {
+		t.Errorf("the http server carried stdio fields: %+v", got)
 	}
 }
 

@@ -99,12 +99,12 @@ func toolsJSON(tools ...[3]string) string {
 
 func runHelper(mode string) int {
 	if script := os.Getenv(helperStderrEnv); script != "" {
-		for _, line := range strings.Split(script, "\n") {
+		for line := range strings.SplitSeq(script, "\n") {
 			fmt.Fprintln(os.Stderr, line)
 		}
 	}
 	if names := os.Getenv(helperEchoEnv); names != "" {
-		for _, k := range strings.Split(names, ",") {
+		for k := range strings.SplitSeq(names, ",") {
 			fmt.Fprintf(os.Stderr, "ENV %s=%s\n", k, os.Getenv(k))
 		}
 	}
@@ -151,6 +151,22 @@ func runHelper(mode string) int {
 			fmt.Fprintln(os.Stderr, "grandchild failed:", err)
 		}
 		serve()
+	case "spawn-grandchild-mute":
+		// The same runner, on the one path where a leftover tree is most
+		// likely: the server never completes the MCP handshake, so the
+		// startup deadline is what ends the connect and the reap runs from
+		// the FAILURE path rather than from an orderly stop.
+		grandchild := exec.Command(os.Args[0])
+		grandchild.Env = append(os.Environ(),
+			helperModeEnv+"=grandchild",
+			helperStderrEnv+"=",
+			helperEchoEnv+"=",
+			helperExitEnv+"=")
+		grandchild.Stderr = os.Stderr
+		if err := grandchild.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, "grandchild failed:", err)
+		}
+		select {}
 	default:
 		serve()
 	}

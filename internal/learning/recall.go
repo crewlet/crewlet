@@ -1,6 +1,7 @@
 package learning
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math"
@@ -216,31 +217,15 @@ func vectorProbe(db *store.DB, embedding []float32) ([]byte, int, error) {
 // Split out so it can be exercised on a shuffled slice. Through Recall the
 // database's incidental determinism masks it completely.
 func rank(hits []Hit) {
+	// EVERY KEY DESCENDS — most similar, then newest, then the higher id —
+	// so every compare takes its arguments reversed.
 	slices.SortFunc(hits, func(a, b Hit) int {
-		switch {
-		case a.Similarity > b.Similarity:
-			return -1
-		case a.Similarity < b.Similarity:
-			return 1
-		case a.Episode.EndedAt.After(b.Episode.EndedAt):
-			return -1
-		case a.Episode.EndedAt.Before(b.Episode.EndedAt):
-			return 1
-		default:
-			return -1 * compareStrings(a.Episode.ID, b.Episode.ID)
-		}
+		return cmp.Or(
+			cmp.Compare(b.Similarity, a.Similarity),
+			b.Episode.EndedAt.Compare(a.Episode.EndedAt),
+			cmp.Compare(b.Episode.ID, a.Episode.ID),
+		)
 	})
-}
-
-func compareStrings(a, b string) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	default:
-		return 0
-	}
 }
 
 // cosine returns the cosine similarity of two vectors, and false when it is

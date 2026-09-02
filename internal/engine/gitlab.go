@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/whsec"
 )
 
@@ -76,28 +77,23 @@ func (g *gitlabIdentities) resolve(ctx context.Context, url string, tokens []str
 		return
 	}
 
-	var wg sync.WaitGroup
 	found := make([]string, len(missing))
-	for i, token := range missing {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			client, err := gitlab.NewClient(gitlab.ClientOptions{URL: url, Token: token})
-			if err != nil {
-				log.WarnContext(ctx, "gitlab_seat_client_failed", "error", err.Error())
-				return
-			}
-			username, err := client.Me(ctx)
-			if err != nil {
-				log.WarnContext(ctx, "gitlab_seat_identity_unresolved", "error", err.Error(),
-					"detail", "this seat receives no code-host events until "+
-						"the next apply re-resolves it")
-				return
-			}
-			found[i] = username
-		}()
-	}
-	wg.Wait()
+	provision.ResolveConcurrently(len(missing), func(i int) {
+		token := missing[i]
+		client, err := gitlab.NewClient(gitlab.ClientOptions{URL: url, Token: token})
+		if err != nil {
+			log.WarnContext(ctx, "gitlab_seat_client_failed", "error", err.Error())
+			return
+		}
+		username, err := client.Me(ctx)
+		if err != nil {
+			log.WarnContext(ctx, "gitlab_seat_identity_unresolved", "error", err.Error(),
+				"detail", "this seat receives no code-host events until "+
+					"the next apply re-resolves it")
+			return
+		}
+		found[i] = username
+	})
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -249,13 +245,24 @@ func (e *Engine) startGitLab(ctx context.Context, c *Company, cfg *config.GitLab
 // assignees.
 func (e *Engine) reconcileGitLab(ctx context.Context, c *Company) {
 	cfg := c.Config.Integrations.GitLab
-	if cfg == nil || !cfg.Enabled {
-		return
-	}
 	e.notify.mu.Lock()
 	svc := e.notify.service
 	e.notify.mu.Unlock()
 	if svc == nil {
+		return
+	}
+	// RETIRED when the revision no longer declares it. Every reconciler
+	// here converged only toward "configured", so setting `integrations.gitlab.enabled: false` — the
+	// gesture an operator makes after a credential leak — applied
+	// cleanly, changed nothing, and left the boot-time parser routing
+	// deliveries under the credential being revoked, while RoutedSources
+	// went on listing it as reachable.
+	if cfg == nil || !cfg.Enabled {
+		if svc.Unregister(gitlab.Backend) {
+			log.InfoContext(ctx, "gitlab_retired",
+				"detail", "the revision no longer enables gitlab; its deliveries "+
+					"are refused at the webhook route and route to no seat")
+		}
 		return
 	}
 	parser, err := e.startGitLab(ctx, c, cfg)

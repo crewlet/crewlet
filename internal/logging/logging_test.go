@@ -80,7 +80,7 @@ func TestDerivedLoggersDoNotShareAttributes(t *testing.T) {
 	left.Info("left_line")
 	right.Info("right_line")
 
-	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
 		switch {
 		case strings.Contains(line, "left_line"):
 			if strings.Contains(line, "right") {
@@ -117,21 +117,17 @@ func TestConcurrentLoggingAndReconfigurationDoNotRace(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 50 {
 				packageLogger.Info("a_line", "k", "v")
 			}
-		}()
+		})
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range 20 {
 			logging.Configure(slog.LevelInfo, logging.FormatText, &syncBuffer{})
 		}
-	}()
+	})
 	wg.Wait()
 }
 

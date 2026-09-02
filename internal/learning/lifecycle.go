@@ -1,6 +1,7 @@
 package learning
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -10,11 +11,11 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -396,6 +397,12 @@ type PassResult struct {
 	// because it is the only sweep here that removes work nothing else
 	// carried forward — a summary replaces the rows it folds, and this
 	// replaces its rows with nothing.
+	//
+	// Reported under its own key on `episode_lifecycle_pass`. The
+	// CompactionCompleted event folds it into NonTerminalDropped instead,
+	// deliberately, so the count reaches an operator on the surface that
+	// can carry a new field without two builds on one stream having to
+	// agree on it.
 	ToolFreeDropped int
 
 	// OrphansDropped counts rows an existing summary already covered. Any
@@ -480,6 +487,15 @@ func (l *Lifecycle) Pass(ctx context.Context, handle string, now time.Time) (Pas
 		"agent_handle", handle,
 		"non_terminal_dropped", res.NonTerminalDropped,
 		"consolidated_dropped", res.ConsolidatedDropped,
+		// ON ITS OWN HERE, unlike on the event, where it is folded into
+		// the non-terminal drop. This is the only sweep that removes work
+		// nothing else carried forward — a summary REPLACES the rows it
+		// folds, and this replaces its rows with nothing — so it is the
+		// one whose volume an operator has to be able to see before
+		// deciding whether ToolFreeMaxAge is too aggressive. The log is
+		// the only surface that can carry it without changing an event
+		// shape two builds on one stream have to agree on.
+		"tool_free_dropped", res.ToolFreeDropped,
 		"orphans_dropped", res.OrphansDropped,
 		"clusters_compacted", res.ClustersCompacted,
 		"raw_replaced", res.RawReplaced,
@@ -917,7 +933,7 @@ func (l *Lifecycle) foldCluster(ctx context.Context, handle string, cluster []Ep
 	log.InfoContext(ctx, "episode_cluster_compacted",
 		"agent_handle", handle, "cluster_size", len(cluster),
 		"exemplars_kept", len(exemplars), "raw_deleted", deleted,
-		"pattern", truncate(row.CommonTaskPattern, 120))
+		"pattern", textcut.Ellipsis(row.CommonTaskPattern, 120))
 	return deleted, true, nil
 }
 
@@ -940,15 +956,10 @@ func splitExemplars(cluster []Episode, want int) (exemplars, doomed []Episode) {
 		want = 0
 	}
 	ordered := slices.Clone(cluster)
+	// NEWEST FIRST, ties broken by the higher id — both keys descend, so
+	// both compares take their arguments reversed.
 	slices.SortFunc(ordered, func(a, b Episode) int {
-		switch {
-		case a.EndedAt.After(b.EndedAt):
-			return -1
-		case a.EndedAt.Before(b.EndedAt):
-			return 1
-		default:
-			return -1 * compareStrings(a.ID, b.ID)
-		}
+		return cmp.Or(b.EndedAt.Compare(a.EndedAt), cmp.Compare(b.ID, a.ID))
 	})
 	exemplars = ordered[:want]
 	kept := make([]string, len(exemplars))
@@ -1090,13 +1101,21 @@ func clusterByTools(episodes []Episode, threshold float64) [][]Episode {
 	return clusters
 }
 
-// toolJaccard is set overlap between two tool sequences: shared tools over
-// distinct tools, ignoring order and repetition.
+// toolJaccard is set overlap between two tool sequences: |A∩B| / |A∪B| over
+// the distinct tools, ignoring order and repetition.
+//
+// ONE FUNCTION FOR ALL FIVE CALLERS — the two clusterers, the promoter, the
+// near-duplicate check and the lifecycle fold. It was written twice with two
+// names, and the copies could have disagreed on the threshold semantics
+// silently: a seat's skills would then have been clustered by one rule and
+// deduplicated by another, so a draft could be judged a duplicate of a skill
+// it would never have been clustered with.
 //
 // Empty on either side scores 0 rather than 1. Two turns that called no tools
 // have nothing in common that this function can see, and calling that a
 // perfect match would pool every tool-free turn a seat ever ran into one
-// cluster and summarise it as a pattern.
+// cluster and summarise it as a pattern. That guard is also what makes the
+// division below safe: with both sides non-empty the union is at least 1.
 func toolJaccard(a, b []string) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
@@ -1219,33 +1238,6 @@ func cleanStrings(in []string) []string {
 		}
 	}
 	return out
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return clip(s, n) + "..."
-}
-
-// clip cuts s to at most n bytes, never through a rune.
-//
-// A plain s[:n] splits whatever multi-byte character straddles the cut and
-// yields invalid UTF-8 — which reaches a model as a replacement character,
-// an embedding API as a rejected body, and a JSON encoder as an escaped
-// substitution. Every one of those is a bug that only appears once the text
-// stops being ASCII, which in a company's traffic is a matter of when.
-func clip(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n]
 }
 
 // ---- the model-backed summarizer ------------------------------------- //
@@ -1377,16 +1369,14 @@ func RenderCluster(c Cluster) string {
 // that does not exist.
 func oneLine(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
-	return truncate(s, perTurnDetail)
+	return textcut.Ellipsis(s, perTurnDetail)
 }
 
 // ParseSummary reads a model's answer, tolerating prose around the JSON.
 //
-// Two attempts, and the order matters: the whole text first, so a clean answer
-// parses exactly as sent, then the span between the first brace and the last,
-// which is what recovers an answer wrapped in a code fence or an apology. A
-// model told "JSON only" complies most of the time and the fallback is for the
-// rest.
+// Down [modelJSONCandidates], so a fenced answer and one wrapped in an apology
+// both recover, and a clean one parses exactly as sent.
+//
 // FIELD BY FIELD once an object is found, never all-or-nothing. The pattern
 // sentence is the only part the planner actually reads, and decoding the whole
 // object into one struct throws it away whenever any other field comes back
@@ -1394,11 +1384,7 @@ func oneLine(s string) string {
 // a list would cost the summary the LLM call just bought.
 func ParseSummary(raw string) (Summary, error) {
 	text := strings.TrimSpace(raw)
-	candidates := []string{text}
-	if start, end := strings.Index(text, "{"), strings.LastIndex(text, "}"); start >= 0 && end > start {
-		candidates = append(candidates, text[start:end+1])
-	}
-	for _, candidate := range candidates {
+	for _, candidate := range modelJSONCandidates(text) {
 		var obj map[string]json.RawMessage
 		// A nil map with no error is `null`, which is valid JSON and not an
 		// object. Without the check it would parse as a summary with every
@@ -1414,7 +1400,7 @@ func ParseSummary(raw string) (Summary, error) {
 		}, nil
 	}
 	return Summary{}, fmt.Errorf("learning: no JSON object in the compactor's answer (%s)",
-		truncate(text, 200))
+		textcut.Ellipsis(text, 200))
 }
 
 // jsonText reads one string field, answering "" for absent or wrong-typed.

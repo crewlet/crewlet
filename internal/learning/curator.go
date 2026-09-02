@@ -2,6 +2,7 @@ package learning
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -62,6 +63,16 @@ type Background struct {
 	promoteEvery   time.Duration
 	claimDuty      func(ctx context.Context) (bool, error)
 	now            func() time.Time
+
+	// cancel and running are the loops' OWNED lifetime, and they are not
+	// the context Start was handed. The caller detaches that context on
+	// purpose — these loops outlive SIGTERM like the node's do — so the
+	// context carries no stop at all and Stop is the only one there is.
+	// Without it the passes keep ticking after the engine has closed the
+	// store they query and the model they pay, which is the failure this
+	// pair exists to make impossible.
+	cancel  context.CancelFunc
+	running sync.WaitGroup
 }
 
 // BackgroundOptions configures the loops.
@@ -150,25 +161,54 @@ func NewBackground(opts BackgroundOptions) *Background {
 	return b
 }
 
-// Start arms both loops, which run until ctx is done.
+// Start arms the loops, which run until [Background.Stop] or ctx is done.
 //
 // SEPARATE TICKERS rather than one at the shorter cadence with a counter:
 // the two passes have unrelated cadences for unrelated reasons, and a
 // counter would tie the curator's schedule to the lifecycle's — so tuning
 // one would silently move the other.
+//
+// Start derives its own cancellable context rather than ticking on the
+// caller's, because the engine hands this one a DETACHED context — these
+// loops are meant to outlive the signal that starts a drain — and a loop
+// whose only exit is a context that can never be cancelled has no exit.
 func (b *Background) Start(ctx context.Context) {
+	loopCtx, cancel := context.WithCancel(ctx)
+	b.cancel = cancel
+	arm := func(name string, every time.Duration, pass func(context.Context)) {
+		b.running.Go(func() { b.loop(loopCtx, name, every, pass) })
+	}
 	if b.lifecycle != nil {
-		go b.loop(ctx, "episode_lifecycle", b.lifecycleEvery, b.compactPass)
+		arm("episode_lifecycle", b.lifecycleEvery, b.compactPass)
 	}
 	if b.skills != nil {
-		go b.loop(ctx, "skill_curator", b.curatorEvery, b.curatePass)
+		arm("skill_curator", b.curatorEvery, b.curatePass)
 	}
 	if b.cluster != nil {
-		go b.loop(ctx, "skill_clustering", b.clusterEvery, b.clusterPass)
+		arm("skill_clustering", b.clusterEvery, b.clusterPass)
 	}
 	if b.promoter != nil {
-		go b.loop(ctx, "skill_promotion", b.promoteEvery, b.promotePass)
+		arm("skill_promotion", b.promoteEvery, b.promotePass)
 	}
+}
+
+// Stop ends the loops and waits for an in-flight pass.
+//
+// WAITING rather than signalling and walking away, for the reason every
+// other loop in the engine waits: a pass mid-flight holds a store read and
+// may be inside a paid summarisation call, and the caller's next move is to
+// close that store. Returning before the pass does would run compaction
+// queries against a closed database on a process that believes it stopped.
+//
+// Idempotent, and safe on a [Background] that was never started — the shape
+// a node with no store or a company with learning off produces.
+func (b *Background) Stop() {
+	if b.cancel == nil {
+		return
+	}
+	b.cancel()
+	b.running.Wait()
+	b.cancel = nil
 }
 
 // promotePass drafts what each unit's seats converged on.

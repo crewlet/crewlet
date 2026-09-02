@@ -128,3 +128,66 @@ func TestExpandFromEnviron(t *testing.T) {
 		t.Errorf("Expand = (%q, %v), want (resolved, nil)", got, unresolved)
 	}
 }
+
+// AN UNSET REFERENCE RESOLVES TO EMPTY, never to its own literal text.
+//
+// This is the rule the two chat transports each wrote out by hand: a raw
+// "${SLACK_BOT_TOKEN_CEO}" matches nothing any vendor accepts, so passing it
+// through turns a missing variable into a seat that authenticates as nobody
+// — diagnosed far from the config that named it.
+func TestResolveYieldsEmptyForAnUnsetReference(t *testing.T) {
+	t.Parallel()
+	got := Resolve("${MISSING_TOKEN}", func(string) (string, bool) {
+		return "", false
+	})
+	if got != "" {
+		t.Errorf("Resolve = %q, want empty rather than the reference itself", got)
+	}
+}
+
+// A LITERAL IS RETURNED AS IT IS, trimmed. Most config values are literals
+// and must not be looked up.
+func TestResolveLeavesALiteralAlone(t *testing.T) {
+	t.Parallel()
+	looked := false
+	got := Resolve("  xoxb-a-real-token  ", func(string) (string, bool) {
+		looked = true
+		return "substituted", true
+	})
+	if got != "xoxb-a-real-token" {
+		t.Errorf("Resolve = %q, want the trimmed literal", got)
+	}
+	if looked {
+		t.Error("a literal was looked up in the environment")
+	}
+}
+
+// A WHOLE REFERENCE RESOLVES, and its value is trimmed too: an environment
+// variable set from a file routinely carries a trailing newline, and a token
+// with one is a token every vendor rejects.
+func TestResolveSubstitutesAndTrims(t *testing.T) {
+	t.Parallel()
+	got := Resolve("${TOKEN}", func(name string) (string, bool) {
+		if name != "TOKEN" {
+			return "", false
+		}
+		return "  xoxb-value\n", true
+	})
+	if got != "xoxb-value" {
+		t.Errorf("Resolve = %q, want the trimmed value", got)
+	}
+}
+
+// A PARTIAL reference is a literal, not a lookup: the capture contract is
+// whole-value only, so a URL with a variable embedded in it has no single
+// variable that owns the value.
+func TestResolveIgnoresAPartialReference(t *testing.T) {
+	t.Parallel()
+	const embedded = "https://example.com/${PATH_PART}/hook"
+	got := Resolve(embedded, func(string) (string, bool) {
+		return "substituted", true
+	})
+	if got != embedded {
+		t.Errorf("Resolve = %q, want the value untouched", got)
+	}
+}

@@ -143,10 +143,10 @@ type Request struct {
 	// nil check at every call site for nothing.
 	MaxTokens int
 
-	// ToolChoice is "", "auto", "required" or "none". "required" is what
-	// the turn engine's corrective re-prompt sets when a phase must end in
-	// a tool call and the model answered with prose.
-	ToolChoice string
+	// ToolChoice is how hard the model is pushed toward calling a tool.
+	// The zero value means [ToolChoiceAuto], which is also what a backend
+	// sends when the request names nothing.
+	ToolChoice ToolChoice
 
 	// OnDelta, when set, asks the backend to stream and calls this as text
 	// arrives. Nil — the common case — takes the ordinary unary path.
@@ -165,6 +165,42 @@ type Request struct {
 	// and returns the same Completion it always would; nothing above here
 	// may treat the absence of deltas as an error.
 	OnDelta func(Delta)
+}
+
+// ToolChoice is how hard a request pushes the model toward calling a tool.
+//
+// A NAMED TYPE over a closed set, because every backend has to map these onto
+// its vendor's own spelling and a bare string put that mapping one typo away
+// from silence: `"require"` fell through both switches to a warning line and
+// NO tool_choice on the wire, which reads to a caller as the model choosing
+// not to call a tool. The set is small and closed, so it is a type.
+type ToolChoice string
+
+const (
+	// ToolChoiceAuto lets the model decide. The zero value means this.
+	ToolChoiceAuto ToolChoice = "auto"
+
+	// ToolChoiceRequired says the answer must be a tool call. It is what
+	// the turn engine's corrective re-prompt sets when a phase must end in
+	// one and the model answered with prose.
+	ToolChoiceRequired ToolChoice = "required"
+
+	// ToolChoiceNone forbids a tool call for this request.
+	ToolChoiceNone ToolChoice = "none"
+)
+
+// Valid reports whether c is a choice a backend can map.
+//
+// EMPTY IS VALID and means auto, which is what a caller that says nothing
+// gets. Refusing it would make every request name a choice it does not care
+// about.
+func (c ToolChoice) Valid() bool {
+	switch c {
+	case "", ToolChoiceAuto, ToolChoiceRequired, ToolChoiceNone:
+		return true
+	default:
+		return false
+	}
 }
 
 // Delta is a fragment of a completion as it is being written.

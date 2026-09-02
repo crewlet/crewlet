@@ -54,6 +54,10 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 					if f == nil {
 						t.Fatal("newFleet returned a nil backend")
 					}
+					// NOT t.Context(), for the reason [newHarness]
+					// states: that one is cancelled before cleanup
+					// runs, and the concurrency cases join goroutines
+					// that are still mid-call at that point.
 					ctx, cancel := context.WithTimeout(context.Background(), stallBudget)
 					t.Cleanup(cancel)
 					c.fn(&fleetHarness{t: t, ctx: ctx, f: f})
@@ -202,14 +206,12 @@ var valveCases = []fleetCase{{
 		var wg sync.WaitGroup
 		passed := make(chan bool, 32)
 		for range 32 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				ok, err := h.f.Allow(h.ctx, "seat:hot", limit, time.Second, at)
 				// An error under contention is the honest third
 				// answer, and it is NOT a pass.
 				passed <- err == nil && ok
-			}()
+			})
 		}
 		wg.Wait()
 		close(passed)
@@ -281,12 +283,10 @@ var claimCases = []fleetCase{{
 		var wg sync.WaitGroup
 		won := make(chan bool, 16)
 		for range 16 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				ok, err := h.f.Claim(h.ctx, "mattermost|race", time.Minute, at)
 				won <- err == nil && ok
-			}()
+			})
 		}
 		wg.Wait()
 		close(won)
@@ -350,12 +350,10 @@ var ledgerCases = []fleetCase{{
 		var wg sync.WaitGroup
 		errs := make(chan error, 16)
 		for i := range 16 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				errs <- h.f.Record(h.ctx, "ceo", "wk-race",
 					fmt.Sprintf("turn-%d", i), h.now())
-			}()
+			})
 		}
 		wg.Wait()
 		close(errs)
@@ -604,9 +602,7 @@ var planeCases = []fleetCase{{
 		won := make(chan string, 8)
 		raced := make(chan error, 8)
 		for i := range 8 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				id := fmt.Sprintf("edit-%d", i)
 				_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 					RevisionID: id, Payload: []byte("{}"), At: h.now(),
@@ -619,7 +615,7 @@ var planeCases = []fleetCase{{
 				default:
 					h.t.Errorf("Activate: %v", err)
 				}
-			}()
+			})
 		}
 		wg.Wait()
 		close(won)
@@ -639,14 +635,12 @@ var planeCases = []fleetCase{{
 		var wg sync.WaitGroup
 		epochs := make(chan int64, 8)
 		for i := range 8 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				got, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: fmt.Sprintf("rev-%d", i), Payload: []byte("{}"), At: h.now()})
 				if err == nil {
 					epochs <- got.Epoch
 				}
-			}()
+			})
 		}
 		wg.Wait()
 		close(epochs)
@@ -684,6 +678,47 @@ var planeCases = []fleetCase{{
 		}
 		if got[0].NodeID != "node-c" {
 			h.t.Fatalf("fleet[0] = %s, want the freshest report first", got[0].NodeID)
+		}
+	},
+}, {
+	// THE TIE-BREAK IS PART OF THE CONTRACT, and it was implemented twice
+	// with nothing holding either to it. A rolling apply lands every node's
+	// report inside the same second, so a fleet view ordered by timestamp
+	// alone reshuffles between reads — and an operator watching a deploy
+	// converge would see the list jump with no node having changed.
+	//
+	// Newest first, the node id breaking the tie ASCENDING.
+	name: "one instant's reports are ordered by node id",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		// Recorded out of order, so a backend that answered in write
+		// order rather than sorting would pass a same-order assertion.
+		for _, node := range []string{"node-c", "node-a", "node-b"} {
+			if err := h.f.RecordApply(h.ctx, coord.NodeApply{
+				NodeID: node, Epoch: 7, Status: "ok", UpdatedAt: at,
+			}); err != nil {
+				h.t.Fatalf("RecordApply(%s): %v", node, err)
+			}
+		}
+		// One node reporting LATER must still sort ahead of all three,
+		// so the tie-break never outranks the timestamp.
+		if err := h.f.RecordApply(h.ctx, coord.NodeApply{
+			NodeID: "node-z", Epoch: 7, Status: "ok", UpdatedAt: at.Add(time.Second),
+		}); err != nil {
+			h.t.Fatalf("RecordApply(node-z): %v", err)
+		}
+
+		got, err := h.f.Fleet(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Fleet: %v", err)
+		}
+		ids := make([]string, len(got))
+		for i, row := range got {
+			ids[i] = row.NodeID
+		}
+		want := []string{"node-z", "node-a", "node-b", "node-c"}
+		if !slices.Equal(ids, want) {
+			h.t.Fatalf("fleet order = %v, want %v — freshest first, then by node id", ids, want)
 		}
 	},
 }, {
@@ -1018,11 +1053,9 @@ var budgetCases = []fleetCase{{
 		const callers = 8
 		var wg sync.WaitGroup
 		for range callers {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				_, _ = h.f.Charge(h.ctx, testSeat, 10, 0, 0)
-			}()
+			})
 		}
 		wg.Wait()
 		if got := h.used(coord.OrgScope); got != callers*10 {

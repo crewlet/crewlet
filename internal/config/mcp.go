@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -161,7 +162,7 @@ func (m *MCPServer) validate(path string) error {
 			"a server needs a name — it is the key seats declare credentials "+
 				"under and how its tools are labelled in every prompt")
 	}
-	if m.Transport != "" && !oneOf(m.Transport, MCPTransports) {
+	if m.Transport != "" && !slices.Contains(MCPTransports, m.Transport) {
 		p.add(at(path, "transport"), ErrUnknownValue, "%q (want %s)",
 			m.Transport, names(MCPTransports))
 		return p.err()

@@ -69,7 +69,7 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 		Runners:            sandboxRunners(),
 		DefaultCodingAgent: string(spec.DefaultCodingAgent),
 		DefaultTimeout:     seconds(spec.Timeout()),
-		DefaultPauseTTL:    seconds(spec.PauseTTL()),
+		DefaultPauseTTL:    secondsPtr(spec.PauseTTL()),
 		DefaultMaxTurns:    spec.DefaultMaxTurns,
 		DefaultSetup:       setupSteps(spec.Setup),
 		Telemetry:          otel,
@@ -214,6 +214,21 @@ func setupSteps(steps []config.SandboxSetupStep) []sandbox.SetupStep {
 
 func seconds(v float64) time.Duration { return time.Duration(v * float64(time.Second)) }
 
+// secondsPtr carries an OPTIONAL number of seconds through as a duration,
+// keeping nil distinct from zero.
+//
+// The distinction is the whole point at the two call sites that need it: a
+// pause TTL of 0 means "never pause" and an absent one means "take the
+// engine default", and every layer that collapsed the two re-applied a
+// default over a setting an operator had deliberately chosen.
+func secondsPtr(v *float64) *time.Duration {
+	if v == nil {
+		return nil
+	}
+	d := seconds(*v)
+	return &d
+}
+
 // sandboxAccountant charges a collected coding run against the shared counter.
 //
 // The charge happens AFTER the spend, which is why it cannot refuse: a
@@ -326,42 +341,43 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	tel := e.describeResume(ctx, company, in)
 	turnIdentity := tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth,
 		in.Run.DelegationChain, resumeTask(in), turn.Reply(in.Run.Reply))
-	r, err := company.RunnerFor(in.Turn.Handle(), RunnerInput{
-		Task:      resumeTask(in),
-		Publisher: e.backends.Queue,
-		Turn:      turnIdentity,
-		// THE SAME RUNTIME THE TURN SUSPENDED UNDER — supplied here for
-		// the turn's LATER rounds, not for this one: whether the phase
-		// being re-entered was agentic is the state's own answer (see
-		// [execstate.State.AgentRun]), but a turn that loops to another
-		// iteration must run that one the same way it ran the first.
-		AgentRun: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context),
-		Budget:   e.meterFor(company, in.Turn.Handle()),
-		// A resumed Execute loop can exhaust its rounds like any other,
-		// and it is the phase most likely to: it comes back mid-task with
-		// its budget already partly spent.
-		Judge:     e.judgeFor(company, in.Turn.Handle()),
-		Remaining: e.remainingFor(company, in.Turn.Handle()),
-		// THE SKILL REGISTRY, which this call site omitted. With nil
-		// Skills the runner's guardFor returns nil, so the load-before-use
-		// gate was disarmed for every resumed turn: a seat could call a
-		// tool whose required skill it had never loaded, on the one path
-		// where nobody would notice — and the two RunnerFor sites must
-		// agree or a turn changes shape by being resumed.
-		Skills: e.skills,
-		// NO onboarding on a resume. The pass is a seat's FIRST turn, and
-		// this turn already ran its first phase — running it here would
-		// spend the resumed turn's opening on orientation for a seat that
-		// is mid-task.
-		Resume: &runner.Resume{
-			State: in.State, Answer: in.Answer,
-			// THE RUN'S OWN TOOL CALLS, off its durable row. An
-			// agent-mode executor called them over the bridge, possibly
-			// in another process, so this list is the only record of
-			// what the phase did — its submission included.
-			Bridged: bridgedCalls(in.Run.BridgeCalls),
-		},
-	})
+	r, err := company.RunnerFor(in.Turn.Handle(),
+		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
+			Task:      resumeTask(in),
+			Publisher: e.backends.Queue,
+			Turn:      turnIdentity,
+			// THE SAME RUNTIME THE TURN SUSPENDED UNDER — supplied here for
+			// the turn's LATER rounds, not for this one: whether the phase
+			// being re-entered was agentic is the state's own answer (see
+			// [execstate.State.AgentRun]), but a turn that loops to another
+			// iteration must run that one the same way it ran the first.
+			AgentRun: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context),
+			Budget:   e.meterFor(company, in.Turn.Handle()),
+			// A resumed Execute loop can exhaust its rounds like any other,
+			// and it is the phase most likely to: it comes back mid-task with
+			// its budget already partly spent.
+			Judge:     e.judgeFor(company, in.Turn.Handle()),
+			Remaining: e.remainingFor(company, in.Turn.Handle()),
+			// THE SKILL REGISTRY, which this call site omitted. With nil
+			// Skills the runner's guardFor returns nil, so the load-before-use
+			// gate was disarmed for every resumed turn: a seat could call a
+			// tool whose required skill it had never loaded, on the one path
+			// where nobody would notice — and the two RunnerFor sites must
+			// agree or a turn changes shape by being resumed.
+			Skills: e.skills,
+			// NO onboarding on a resume. The pass is a seat's FIRST turn, and
+			// this turn already ran its first phase — running it here would
+			// spend the resumed turn's opening on orientation for a seat that
+			// is mid-task.
+			Resume: &runner.Resume{
+				State: in.State, Answer: in.Answer,
+				// THE RUN'S OWN TOOL CALLS, off its durable row. An
+				// agent-mode executor called them over the bridge, possibly
+				// in another process, so this list is the only record of
+				// what the phase did — its submission included.
+				Bridged: bridgedCalls(in.Run.BridgeCalls),
+			},
+		})
 	if err != nil {
 		return err
 	}
@@ -659,14 +675,14 @@ func sandboxHeadroom(ctx context.Context, remaining runner.Remaining, floor int)
 //
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
-func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *config.RoleSandbox) map[string]map[string]any {
+func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *config.RoleSandbox) map[string]sandbox.MCPServer {
 	if len(gate.MCP.Servers) == 0 {
 		return nil
 	}
 	servers := make([]sandbox.MCPServer, 0, len(c.Config.MCPServers))
 	for _, s := range c.Config.MCPServers {
 		servers = append(servers, sandbox.MCPServer{
-			Name: s.Name, Transport: string(s.Transport),
+			Name: s.Name, Transport: sandbox.Transport(s.Kind()),
 			Command: s.Command, Args: s.Args, Env: s.Env,
 			URL: s.URL, Headers: s.Headers,
 		})
@@ -723,14 +739,18 @@ func seatSandbox(c *Company, roleName string) *config.RoleSandbox {
 	// the same value a name nobody holds returns. Overloading the two
 	// meant the walk kept looking after it had its answer, and would have
 	// returned a LATER seat's block for an earlier one of the same name.
-	var gate *config.RoleSandbox
-	found := false
-	c.Config.EachRole(func(_ string, role *config.Role) {
-		if !found && role.Name == roleName {
-			gate, found = role.Sandbox, true
+	// THE FIRST MATCH, AND THEN STOP. The walk is an iterator precisely so
+	// this can break: a callback had no way to say "found it", so every
+	// launch ran the whole org chart to the end — and the only way to
+	// track the answer was the nil block itself, which cannot tell a seat
+	// that wrote none from a name nobody holds, so a later seat of the
+	// same name would have had its block returned for this one.
+	for role := range c.Config.EachRole() {
+		if role.Name == roleName {
+			return role.Sandbox
 		}
-	})
-	return gate
+	}
+	return nil
 }
 
 // sandboxEnv assembles the run environment.
@@ -974,9 +994,9 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 	// were up would run its first turn with a surface missing exactly the
 	// tools it acts through.
 	company := e.Company()
-	if reg := e.startSeatServers(ctx, company, handle); reg != nil {
-		company.setSeatTools(handle, reg)
-	}
+	// startSeatServers files the registry alongside the bridge, so the two
+	// cannot disagree about which children this seat has.
+	e.startSeatServers(ctx, company, handle)
 
 	// THE SEAT'S MEMORY, before it can take a turn. Its diary, episodes,
 	// counterparties and skills were written on whichever nodes ran it
@@ -1029,9 +1049,8 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// that seat's identity, so a child left running would let this node go
 	// on acting as a seat a peer has taken over — and the surface goes
 	// with them, so nothing here can serve a turn through a dead client.
-	company := e.Company()
+	// stopSeatServers drops the registry with the bridge, in one step.
 	e.stopSeatServers(ctx, handle)
-	company.dropSeatTools(handle)
 
 	// A LAST PUBLISH, then forget the seat. The publish is what makes a
 	// graceful handoff lossless: whatever this node learned since its last

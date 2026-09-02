@@ -349,3 +349,76 @@ func TestBudgetsRejectsAnUnknownSubcommand(t *testing.T) {
 }
 
 var _ = time.Now
+
+// TWO CONFIG DOCUMENTS IS A REFUSAL, and it must be reachable.
+//
+// The guard used to be conjoined with "a positional subject was already
+// taken", which made it unreachable on the exact input it was written for:
+// `crewlet migrate a.yaml b.yaml` puts both names in the tail with no
+// subject, so neither branch fired and the command fell through to
+// ./crewlet.yaml — migrating, for real and without -check, a database the
+// operator never named.
+func TestMigrateRefusesLeftoverPositionalArguments(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+	other := filepath.Join(dir, "other.yaml")
+	if err := os.WriteFile(other, []byte("node:\n  id: other\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"two positionals after the flag", []string{"migrate", "-check", cfg, other}},
+		{"two positionals before the flag", []string{"migrate", cfg, other, "-check"}},
+		{"two positionals, no flag at all", []string{"migrate", cfg, other}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := cli(t, tc.args...)
+			if err == nil {
+				t.Fatal("two config documents were accepted; the command silently " +
+					"acted on ./crewlet.yaml instead of either file named")
+			}
+			if !strings.Contains(err.Error(), "at most one config document") {
+				t.Errorf("error = %v, want the one-document refusal", err)
+			}
+		})
+	}
+}
+
+// AND NAMING IT TWICE, once positionally and once with -config, is refused
+// rather than silently resolved — they would have to agree and nothing
+// checks that they do. `run` already had this guard; migrate did not.
+func TestMigrateRefusesAConfigNamedTwice(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+
+	_, _, err := cli(t, "migrate", cfg, "-config", cfg, "-check")
+	if err == nil {
+		t.Fatal("the config document was accepted twice over")
+	}
+	if !strings.Contains(err.Error(), "named twice") {
+		t.Errorf("error = %v, want the named-twice refusal", err)
+	}
+}
+
+// The single positional still WORKS, so the cases above are the refusal
+// firing rather than positional support being removed.
+func TestMigrateAcceptsASinglePositionalConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfg := bootstrapForStore(t, dir)
+
+	if _, _, err := cli(t, "migrate", cfg); err != nil {
+		t.Fatalf("a single positional config was refused: %v", err)
+	}
+	applied, pending, err := store.Pending(context.Background(),
+		filepath.Join(dir, "index.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if len(applied) == 0 || len(pending) != 0 {
+		t.Errorf("applied %d, pending %d: the named document was not the one migrated",
+			len(applied), len(pending))
+	}
+}

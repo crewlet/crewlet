@@ -29,9 +29,10 @@
 package ledger
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -118,11 +119,8 @@ func fitArguments(args map[string]any, blobLimit int) string {
 	}
 	// Ties broken by name so the admitted set is stable across runs; a map
 	// range alone would make "which key got dropped" a coin flip.
-	sort.Slice(order, func(i, j int) bool {
-		if order[i].cost != order[j].cost {
-			return order[i].cost < order[j].cost
-		}
-		return order[i].key < order[j].key
+	slices.SortFunc(order, func(a, b sized) int {
+		return cmp.Or(cmp.Compare(a.cost, b.cost), cmp.Compare(a.key, b.key))
 	})
 
 	kept := make(map[string]any, len(args))
@@ -197,6 +195,12 @@ func elideTail(text string, limit int) string {
 // rune-safe trim — today the sub-agent runner, bounding the error text it
 // reports back to its parent. Two trimming functions would eventually
 // disagree about where a limit falls and whether the cut is marked.
+//
+// NOT [textcut.Ellipsis], which is the tree's other shared head cut, and the
+// difference is deliberate: that one counts BYTES and reads a limit of 0 as
+// empty, where this one counts RUNES and reads 0 as unbounded — the contract
+// Review's single-iteration evidence log depends on. See textcut's package
+// doc, which says the same thing from the other side.
 //
 // NOT for content. Every caller here bounds a string whose length is set by
 // something outside the engine; the draft, the plan and the reviewer's notes

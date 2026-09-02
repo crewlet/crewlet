@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -409,10 +410,7 @@ func (d *StatusDriver) Live() []Conversation {
 		out = append(out, Conversation{Channel: key.channel, Thread: key.thread})
 	}
 	slices.SortFunc(out, func(a, b Conversation) int {
-		if c := strings.Compare(a.Channel, b.Channel); c != 0 {
-			return c
-		}
-		return strings.Compare(a.Thread, b.Thread)
+		return cmp.Or(cmp.Compare(a.Channel, b.Channel), cmp.Compare(a.Thread, b.Thread))
 	})
 	return out
 }

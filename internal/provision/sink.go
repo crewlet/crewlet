@@ -1,17 +1,26 @@
-// Package provision is the integration-agnostic half of minting credentials.
+// Package provision is the integration-agnostic half of minting credentials,
+// and of asking a vendor who they belong to.
 //
 // Every provisioning CLI does the same thing in a different vendor's API:
 // walk the company config for `${VAR}` references that name a credential,
 // create or rotate that credential with the vendor, and record the value
 // where the engine will resolve it from. Only the middle step is
 // vendor-specific. This package is the other two.
+//
+// [ResolveConcurrently] is the same argument one step later: every vendor's
+// reconcile, and the engine's own credential resolvers, fan out one identity
+// lookup per seat, and the bound on that fan-out is a property of talking to a
+// vendor rather than of any one of them. It lives here because this is the
+// leaf all of them already share — see identity.go for what the number is
+// anchored to.
 package provision
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
@@ -208,7 +217,7 @@ type Plan struct {
 // anything.
 func (p *Plan) Add(s Seat) {
 	p.Seats = append(p.Seats, s)
-	sort.Slice(p.Seats, func(i, j int) bool { return p.Seats[i].Handle < p.Seats[j].Handle })
+	slices.SortFunc(p.Seats, func(a, b Seat) int { return cmp.Compare(a.Handle, b.Handle) })
 }
 
 // Note records a caveat.

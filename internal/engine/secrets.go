@@ -49,8 +49,8 @@ func (e *Engine) Resolve(value string) string { return e.resolver().Value(value)
 // environment alone — which is the pre-store behaviour and a supported
 // deployment, not a degraded one.
 func (e *Engine) resolver() *config.Resolver {
-	if r := e.env.Load(); r != nil && *r != nil {
-		return *r
+	if r := e.env.Load(); r != nil {
+		return r
 	}
 	return config.EnvOnly()
 }
@@ -97,8 +97,7 @@ func (e *Engine) refreshSecrets(ctx context.Context) bool {
 		// line would conclude the store is wired when it is not.
 		return false
 	}
-	resolved := config.WithStore(config.MapSource(values))
-	e.env.Store(&resolved)
+	e.env.Store(config.WithStore(config.MapSource(values)))
 	// NAMES ONLY. This is the one log line that could put a company's whole
 	// credential set into a file, so it counts them instead.
 	log.InfoContext(ctx, "secret_snapshot_loaded", "secrets", len(values))

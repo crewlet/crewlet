@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"slices"
 	"strconv"
@@ -29,6 +28,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -222,7 +222,7 @@ func matchesTag(header, tag string, wildcardMatchesExisting bool) bool {
 		return wildcardMatchesExisting
 	}
 	bare := strings.Trim(tag, `"`)
-	for _, candidate := range strings.Split(header, ",") {
+	for candidate := range strings.SplitSeq(header, ",") {
 		candidate = strings.TrimSpace(candidate)
 		candidate = strings.TrimPrefix(candidate, "W/")
 		if candidate == tag || candidate == bare {
@@ -351,21 +351,31 @@ func (s *Service) diff(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrNoActiveRevision):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_active_revision"})
 	case errors.Is(err, store.ErrNoRevision):
-		// WHICH side is missing. "The revision you asked about" and "the
-		// one you asked to compare it with" are different mistakes, and a
-		// single not_found makes the caller check both.
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": missingSide(err, r)})
+		// WHICH side is missing, read off the error rather than guessed
+		// from the request — see [missingRevision].
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": missingSide(err)})
 	default:
 		s.fail(w, "diff revisions", err)
 	}
 }
 
 // missingSide names which half of a diff could not be found.
-func missingSide(err error, r *http.Request) string {
-	if strings.Contains(err.Error(), r.PathValue("id")) {
-		return "not_found"
+//
+// It reads the side off the error. The version this replaces compared the
+// error's TEXT against the request's path value, which is wrong whenever one
+// id contains the other — and `against` is unvalidated, so
+// `?against=r-7-typo` on revision `r-7` reported the target as missing when
+// it exists and the base does not.
+//
+// A revision error from anywhere else is reported as the target's, which is
+// the honest default: every other producer of store.ErrNoRevision on this
+// path is looking up the id in the URL.
+func missingSide(err error) string {
+	var missing *missingRevision
+	if errors.As(err, &missing) {
+		return missing.side
 	}
-	return "against_not_found"
+	return sideTarget
 }
 
 // --- writes ----------------------------------------------------------------
@@ -384,29 +394,11 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		refuseBody(w, err)
 		return
 	}
-	summary, body, err := splitSummary(body)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_body", "detail": err.Error(),
-		})
-		return
-	}
-	if header := r.Header.Get("X-Summary"); header != "" {
-		// THE HEADER WINS when both are present. It is the more explicit
-		// channel — a `_summary` can survive in a document somebody keeps
-		// in version control long after it stopped describing the write.
-		summary = header
-	}
-	if summary == "" {
-		// Required, because the history is what an operator reads at 3am
-		// to find the change that broke something. A list of revisions
-		// with no summaries is a list of uuids.
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "summary_required",
-			"hint": "PUT /config needs an audit summary — the X-Summary header, " +
-				"or a top-level _summary key in the body. The revision history " +
-				"is the record of who changed what and why",
-		})
+	summary, body, ok := requireSummary(w, r, body,
+		"PUT /config needs an audit summary — the X-Summary header, "+
+			"or a top-level _summary key in the body. The revision history "+
+			"is the record of who changed what and why")
+	if !ok {
 		return
 	}
 
@@ -480,24 +472,12 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		refuseBody(w, err)
 		return
 	}
-	summary, body, err := splitSummary(body)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_body", "detail": err.Error(),
-		})
-		return
-	}
-	if header := r.Header.Get("X-Summary"); header != "" {
-		summary = header
-	}
-	if summary == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "summary_required",
-			"hint": "PATCH /config needs an audit summary — the X-Summary " +
-				"header, or a top-level _summary key in the body. A patch is " +
-				"the change least visible in a diff, so the sentence saying " +
-				"what it was for matters most here",
-		})
+	summary, body, ok := requireSummary(w, r, body,
+		"PATCH /config needs an audit summary — the X-Summary "+
+			"header, or a top-level _summary key in the body. A patch is "+
+			"the change least visible in a diff, so the sentence saying "+
+			"what it was for matters most here")
+	if !ok {
 		return
 	}
 
@@ -598,6 +578,10 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	if found {
 		parent = active.ID
 	}
+	// HEADER ONLY, and no [requireSummary]: this route reads no body, so
+	// there is no `_summary` to lift and nothing to refuse for. A revert
+	// also already knows what it did, so an unset header defaults rather
+	// than answering 400 — the one write here that can name itself.
 	summary := r.Header.Get("X-Summary")
 	if summary == "" {
 		summary = "revert to " + target.ID
@@ -878,28 +862,11 @@ func (s *Service) fail(w http.ResponseWriter, what string, err error) {
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
 }
 
-var errBodyTooLarge = errors.New("configapi: body over the limit")
-
 func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBodyBytes))
-	if err == nil {
-		return body, nil
-	}
-	var overflow *http.MaxBytesError
-	if errors.As(err, &overflow) {
-		return nil, errBodyTooLarge
-	}
-	return nil, err
+	return httpjson.ReadBody(w, r, MaxBodyBytes)
 }
 
-func refuseBody(w http.ResponseWriter, err error) {
-	if errors.Is(err, errBodyTooLarge) {
-		writeJSON(w, http.StatusRequestEntityTooLarge,
-			map[string]string{"error": "body_too_large"})
-		return
-	}
-	writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unreadable_body"})
-}
+func refuseBody(w http.ResponseWriter, err error) { httpjson.Refuse(w, err) }
 
 // parseDocument reads a config in either form the operator writes.
 //
@@ -920,15 +887,7 @@ func parseDocument(body []byte) (*config.Company, error) {
 	return cfg, nil
 }
 
-// writeJSON is the one response writer for this surface.
+// writeJSON is [httpjson.Write] under this package's own name.
 func writeJSON(w http.ResponseWriter, status int, body any) {
-	raw, err := json.Marshal(body)
-	if err != nil {
-		log.Error("config_encode_failed", "error", err)
-		http.Error(w, `{"error":"encode_failed"}`, http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(raw)
+	httpjson.Write(w, status, body)
 }

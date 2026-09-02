@@ -373,7 +373,7 @@ crewlet migrate -check                   # report pending work, apply nothing
 
 | Flag | Description |
 |------|-------------|
-| `config` | Tier A YAML (positional, or `-config`; default `./crewlet.yaml`) |
+| `config` | Tier A YAML (positional, or `-config`; default `./crewlet.yaml`). Name it **once**: a second positional, or a positional alongside `-config`, is refused rather than resolved — the two would have to agree and nothing checks that they do. |
 | `-check` | List pending migrations and exit **1** if there are any; applies nothing. This is what a deploy gate calls, and a gate that reported pending work and exited 0 would stop nothing. |
 
 Rolling out N nodes at once means N processes opening the same database and

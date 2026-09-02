@@ -3,6 +3,7 @@ package configapi
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -155,11 +156,7 @@ func union(a, b map[string]any) []string {
 	for key := range b {
 		seen[key] = struct{}{}
 	}
-	keys := make([]string, 0, len(seen))
-	for key := range seen {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
+	keys := slices.Sorted(maps.Keys(seen))
 	return keys
 }
 

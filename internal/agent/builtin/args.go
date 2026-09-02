@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -76,10 +77,6 @@ func clip(s string) string {
 func sortStrings(s []string) { slices.Sort(s) }
 
 func sortedKeys(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(m))
 	return out
 }

@@ -1,6 +1,7 @@
 package queries_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -122,7 +123,7 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 	}
 	full := registryOver(t, queries.Sources{
 		State: state, Events: db.Events(),
-		Health: func() any { return map[string]any{"status": "ok"} },
+		Health: func(context.Context) any { return map[string]any{"status": "ok"} },
 	})
 	for _, want := range []string{
 		"agent", "event", "events", "phases", "stream", "tokens", "trace", "turn",
@@ -310,7 +311,7 @@ func TestStreamAnswersHealthUnderItsOwnName(t *testing.T) {
 	// a push kind, or a reader of the protocol has to know which direction
 	// a frame was travelling to know what it means.
 	r := registryOver(t, queries.Sources{
-		Health: func() any { return map[string]any{"status": "ok"} },
+		Health: func(context.Context) any { return map[string]any{"status": "ok"} },
 	})
 	if got := ask(t, r, "stream", nil); got["status"] != "ok" {
 		t.Errorf("answer = %+v", got)

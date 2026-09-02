@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -108,7 +109,7 @@ func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 	}
 	client := opts.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: E2BClientTimeout}
+		client = httpx.Client(E2BClientTimeout)
 	}
 	return &E2BProvider{
 		api:      newE2BAPI(opts.APIKey, opts.Domain, client),

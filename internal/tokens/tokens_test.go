@@ -166,6 +166,54 @@ func TestTurnsAreNewestFirstAndCapped(t *testing.T) {
 	}
 }
 
+// TestTurnOrderIsByInstantNotByBytes is the case whole seconds cannot express.
+//
+// RFC3339Nano TRIMS trailing zeros, so a stamp that lands on a round second
+// carries no fractional part and ends in 'Z' (0x5A), where every fractional
+// stamp in that same second ends in a digit after a '.' (0x2E). Compared as
+// bytes, ...:05Z therefore sorts AFTER ...:05.9Z — so the newest-first table
+// led with a turn that ended 900ms earlier, and the cap then dropped the
+// genuinely newest one.
+//
+// The three turns below are one second apart in instants but reversed under a
+// byte compare, which is what makes this fail on the old comparison rather
+// than merely pass on the new one.
+func TestTurnOrderIsByInstantNotByBytes(t *testing.T) {
+	t.Parallel()
+	var records []tokens.Record
+	for i, at := range []string{
+		"2026-06-14T12:00:05.9Z", // the newest instant, the lowest bytes
+		"2026-06-14T12:00:05.5Z",
+		"2026-06-14T12:00:05Z", // the oldest instant, the highest bytes
+	} {
+		records = append(records, rec("CEO", "plan", "m", string(rune('a'+i)), at, 10, 0))
+	}
+
+	got := tokens.Aggregate(records, tokens.Options{RecentTurns: 3})
+	want := []string{
+		"2026-06-14T12:00:05.9Z", "2026-06-14T12:00:05.5Z", "2026-06-14T12:00:05Z",
+	}
+	for i, w := range want {
+		if got.ByTurn[i].EndedAt != w {
+			t.Errorf("by_turn[%d] ended %s, want %s — ordered by bytes, not by instant",
+				i, got.ByTurn[i].EndedAt, w)
+		}
+	}
+
+	// And the cap keeps the newest, which is the consequence an operator
+	// sees: the row they came to the panel for is the one that fell off.
+	capped := tokens.Aggregate(records, tokens.Options{RecentTurns: 1})
+	if len(capped.ByTurn) != 1 || capped.ByTurn[0].EndedAt != want[0] {
+		t.Errorf("the cap kept %+v, want only the newest (%s)", capped.ByTurn, want[0])
+	}
+
+	// The watermark is the same comparison, one call site over.
+	if got.AggregatedThrough != want[0] {
+		t.Errorf("aggregated_through = %s, want the newest instant %s",
+			got.AggregatedThrough, want[0])
+	}
+}
+
 func TestAnEmptyRollupMarshalsToArraysNotNulls(t *testing.T) {
 	t.Parallel()
 	// The client does `d.by_phase.length`, so a null throws in the browser
@@ -234,5 +282,61 @@ func TestTheWireKeysAreTheOnesTheClientReads(t *testing.T) {
 		if _, ok := arow[key]; !ok {
 			t.Errorf("a by_agent row has no %q", key)
 		}
+	}
+}
+
+// A WHOLE-SECOND STAMP IS NOT "AFTER" A FRACTIONAL ONE IN THE SAME SECOND.
+//
+// These stamps are RFC3339Nano, which TRIMS trailing zeros — so a whole
+// second has no fractional part and its 'Z' (0x5A) sorts after the '.'
+// (0x2E) of every fractional stamp in that second. Compared as bytes,
+// 03:04:05Z ordered after 03:04:05.9Z, which is backwards. The comparison's
+// own comment asserted the opposite premise and used it to justify never
+// parsing.
+func TestTheWatermarkOrdersByInstantNotByBytes(t *testing.T) {
+	t.Parallel()
+	const (
+		fractional = "2026-01-02T03:04:05.9Z"
+		wholeSec   = "2026-01-02T03:04:05Z"
+	)
+	// The byte comparison this replaces would put the whole second last.
+	if wholeSec <= fractional {
+		t.Fatal("the fixture no longer reproduces the byte ordering")
+	}
+
+	got := tokens.Aggregate([]tokens.Record{
+		{EventID: "a", Timestamp: wholeSec, TurnID: "t1", TotalTokens: 1},
+		{EventID: "b", Timestamp: fractional, TurnID: "t1", TotalTokens: 1},
+	}, tokens.Options{})
+
+	if got.AggregatedThrough != fractional {
+		t.Errorf("AggregatedThrough = %q, want the later instant %q",
+			got.AggregatedThrough, fractional)
+	}
+	if len(got.ByTurn) != 1 {
+		t.Fatalf("turns = %d, want 1", len(got.ByTurn))
+	}
+	turn := got.ByTurn[0]
+	if turn.StartedAt != wholeSec {
+		t.Errorf("StartedAt = %q, want the earlier instant %q", turn.StartedAt, wholeSec)
+	}
+	if turn.EndedAt != fractional {
+		t.Errorf("EndedAt = %q, want the later instant %q", turn.EndedAt, fractional)
+	}
+}
+
+// AND ORDINARY STAMPS STILL ORDER, so the fix is a correction rather than a
+// change of basis.
+func TestOrdinaryStampsStillOrder(t *testing.T) {
+	t.Parallel()
+	got := tokens.Aggregate([]tokens.Record{
+		{EventID: "a", Timestamp: "2026-01-02T03:04:05Z", TurnID: "t1"},
+		{EventID: "b", Timestamp: "2026-01-02T09:00:00Z", TurnID: "t1"},
+	}, tokens.Options{})
+	if got.AggregatedThrough != "2026-01-02T09:00:00Z" {
+		t.Errorf("AggregatedThrough = %q", got.AggregatedThrough)
+	}
+	if got.ByTurn[0].StartedAt != "2026-01-02T03:04:05Z" {
+		t.Errorf("StartedAt = %q", got.ByTurn[0].StartedAt)
 	}
 }

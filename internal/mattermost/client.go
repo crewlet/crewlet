@@ -10,10 +10,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // The REST client.
@@ -144,7 +147,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}
 	c := &Client{base: base, token: opts.Token, http: opts.HTTP, now: opts.Now}
 	if c.http == nil {
-		c.http = &http.Client{Timeout: DefaultTimeout}
+		c.http = httpx.Client(DefaultTimeout)
 	}
 	if c.now == nil {
 		c.now = time.Now
@@ -247,7 +250,7 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 		}
 	}
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		if err := json.NewDecoder(io.LimitReader(resp.Body, httpx.MaxResponseBody)).Decode(out); err != nil {
 			return resp.Header, fmt.Errorf("mattermost: decode %s %s: %w", method, path, err)
 		}
 	} else {
@@ -284,12 +287,7 @@ func (c *Client) mayRetry(err error, method string, repeatable bool) bool {
 // credential-minting POST safe.
 func provesNothingHappened(err error) bool {
 	if status := Status(err); status != 0 {
-		for _, s := range rejectedBeforeProcessing {
-			if status == s {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(rejectedBeforeProcessing, status)
 	}
 	var t *transportError
 	if !errors.As(err, &t) {
@@ -308,12 +306,7 @@ func provesNothingHappened(err error) bool {
 
 func retryable(err error) bool {
 	if status := Status(err); status != 0 {
-		for _, s := range RetryStatuses {
-			if status == s {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(RetryStatuses, status)
 	}
 	var t *transportError
 	return errors.As(err, &t)

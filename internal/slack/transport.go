@@ -3,14 +3,14 @@ package slack
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
-	"os"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -108,7 +108,7 @@ func NewTransport(opts TransportOptions) (*Transport, error) {
 	}
 	httpClient := opts.HTTP
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: ClientTimeout}
+		httpClient = httpx.Client(ClientTimeout)
 	}
 	t := &Transport{
 		cfg: opts.Config, registry: opts.Registry,
@@ -151,11 +151,7 @@ func (t *Transport) Status() *notify.StatusDriver { return t.status }
 func (t *Transport) Handles() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	out := make([]string, 0, len(t.seats))
-	for handle := range t.seats {
-		out = append(out, handle)
-	}
-	slices.Sort(out)
+	out := slices.Sorted(maps.Keys(t.seats))
 	return out
 }
 
@@ -198,9 +194,7 @@ func (t *Transport) Start(ctx context.Context) error {
 
 	var wg sync.WaitGroup
 	for i, cfg := range t.cfg.Seats {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			client, err := NewClient(cfg.Token, t.http)
 			if err != nil {
 				found[i].err = err
@@ -218,7 +212,7 @@ func (t *Transport) Start(ctx context.Context) error {
 				},
 				client: client,
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -408,7 +402,7 @@ func SeatsFrom(o *org.Organization, lookup org.EnvLookup) []SeatConfig {
 		if role.IsHuman() || role.Slack.IsZero() {
 			continue
 		}
-		token := resolve(role.Slack.BotToken, lookup)
+		token := envref.Resolve(role.Slack.BotToken, lookup)
 		if token == "" {
 			// A seat whose ${VAR} did not resolve is skipped rather
 			// than started with an empty token, which would fail at
@@ -419,29 +413,8 @@ func SeatsFrom(o *org.Organization, lookup org.EnvLookup) []SeatConfig {
 		out = append(out, SeatConfig{
 			Handle:  role.Handle(),
 			Token:   token,
-			Channel: resolve(role.Slack.Channel, lookup),
+			Channel: envref.Resolve(role.Slack.Channel, lookup),
 		})
 	}
 	return out
-}
-
-// resolve reads a config value that may be a whole ${VAR} reference.
-//
-// An UNRESOLVED reference yields empty rather than its literal text: a raw
-// ${VAR} matches nothing Slack will ever accept, so passing it through turns
-// a missing variable into an app that mysteriously authenticates as nobody.
-func resolve(value string, lookup org.EnvLookup) string {
-	value = strings.TrimSpace(value)
-	name, isRef := envref.Whole(value)
-	if !isRef {
-		return value
-	}
-	if lookup == nil {
-		lookup = os.LookupEnv
-	}
-	resolved, ok := lookup(name)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(resolved)
 }

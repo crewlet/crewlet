@@ -313,7 +313,7 @@ func parseDirectives(tag string) map[string]string {
 		return nil
 	}
 	out := map[string]string{}
-	for _, part := range strings.Split(tag, ";") {
+	for part := range strings.SplitSeq(tag, ";") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue

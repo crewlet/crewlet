@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -36,9 +36,22 @@ func TestCLIAgentFakeCLI(t *testing.T) {
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 	switch {
+	case os.Getenv("FAKE_STUBBORN") == "1":
+		// A CLI that ignores the polite signal and leaves a forking
+		// descendant behind — a Node or Bun runtime under a launcher, which
+		// is what every coding CLI in this package actually is. It announces
+		// the grandchild's pid so the parent can watch for its death, then
+		// holds its own process open for ever.
+		//
+		// The whole tree is signalled through the process GROUP, so an
+		// engine that only signals the process it started leaves this
+		// grandchild holding the seat's workspace and sockets.
+		fakeStubborn()
+	case os.Getenv("FAKE_GRANDCHILD") == "1":
+		fakeGrandchild()
 	case os.Getenv("FAKE_DUMP_ENV") == "1":
 		env := os.Environ()
-		sort.Strings(env)
+		slices.Sort(env)
 		fmt.Print(strings.Join(env, "\n"))
 	case os.Getenv("FAKE_ECHO_STDIN") == "1":
 		// Base64 rather than verbatim: the prompt CONTAINS the response
@@ -447,7 +460,7 @@ func decodePrompt(t *testing.T, encoded string) string {
 
 // envValue reads one variable out of a dumped environment.
 func envValue(dump, name string) string {
-	for _, line := range strings.Split(dump, "\n") {
+	for line := range strings.SplitSeq(dump, "\n") {
 		if after, ok := strings.CutPrefix(line, name+"="); ok {
 			return after
 		}

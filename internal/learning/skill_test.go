@@ -812,9 +812,7 @@ func TestConcurrentUsesLoseNoIncrements(t *testing.T) {
 		wg       sync.WaitGroup
 	)
 	for w := range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := range each {
 				use := s.MarkUsed(ctx, sk.ID, base.Add(time.Duration(w*each+i)*time.Second))
 				if use.Recorded {
@@ -823,7 +821,7 @@ func TestConcurrentUsesLoseNoIncrements(t *testing.T) {
 					mu.Unlock()
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -852,9 +850,7 @@ func TestConcurrentRefinementsKeepTheVersionChainGapFree(t *testing.T) {
 		errs []error
 	)
 	for w := range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := range each {
 				rev := sk.Revision()
 				rev.Content = fmt.Sprintf("worker %d edit %d", w, i)
@@ -870,7 +866,7 @@ func TestConcurrentRefinementsKeepTheVersionChainGapFree(t *testing.T) {
 				}
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

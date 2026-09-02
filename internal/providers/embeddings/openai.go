@@ -69,7 +69,6 @@ type Provider struct {
 	client sdk.Client
 	model  string
 	width  int
-	owned  *http.Client
 }
 
 var _ Embedder = (*Provider)(nil)
@@ -115,19 +114,18 @@ func New(cfg Config) (*Provider, error) {
 		opts = append(opts, option.WithAPIKey(key))
 	}
 
-	// A transport the caller supplied stays the caller's to close; one
-	// built here belongs to this provider.
-	var owned *http.Client
-	if cfg.HTTPClient == nil {
-		owned = httpapi.NewHTTPClient()
-		opts = append(opts, option.WithHTTPClient(owned))
-	} else {
+	// A transport the caller supplied is used as given; otherwise the
+	// engine's shared one. NOTHING HERE OWNS IT — see [httpapi.NewHTTPClient]
+	// for why this provider has no Close.
+	if cfg.HTTPClient != nil {
 		opts = append(opts, option.WithHTTPClient(cfg.HTTPClient))
+	} else {
+		opts = append(opts, option.WithHTTPClient(httpapi.NewHTTPClient()))
 	}
 
 	return &Provider{
 		client: sdk.NewClient(opts...),
-		model:  cfg.Model, width: cfg.Dimensions, owned: owned,
+		model:  cfg.Model, width: cfg.Dimensions,
 	}, nil
 }
 
@@ -166,11 +164,4 @@ func (p *Provider) Embed(ctx context.Context, text string) ([]float32, error) {
 		vector[i] = float32(v)
 	}
 	return checkedWidth(vector, p.width, p.model)
-}
-
-// Close releases a transport this provider owns.
-func (p *Provider) Close() {
-	if p != nil && p.owned != nil {
-		p.owned.CloseIdleConnections()
-	}
 }

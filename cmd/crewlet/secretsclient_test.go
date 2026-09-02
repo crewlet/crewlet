@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -407,5 +408,31 @@ func TestANodeLocalWriteSaysWhatHappensNext(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the output omits %q: %q", want, out.String())
 		}
+	}
+}
+
+// TestCLIClientsRideTheSharedTransport keeps the operator CLI on the one way
+// this tree builds an outbound client. Neither of these has any concurrency
+// to gain from the pool — a CLI holds one call in flight — but a second way
+// to build a client is the second place the next one gets built with a nil
+// Transport, which reads as a default rather than as the omission it is.
+// See internal/httpx's package doc.
+func TestCLIClientsRideTheSharedTransport(t *testing.T) {
+	t.Parallel()
+	sc, err := newSecretsClient(bootWithAPI(t, "127.0.0.1", 8080, "ops-token"), "")
+	if err != nil {
+		t.Fatalf("newSecretsClient: %v", err)
+	}
+	if sc.http.Transport != httpx.Transport() {
+		t.Errorf("secrets client transport = %T, want the one httpx shares", sc.http.Transport)
+	}
+
+	nc := &nodeClient{http: httpx.Client(nodeRequestTimeout)}
+	patient := nc.patiently(time.Hour)
+	if patient.http.Transport != httpx.Transport() {
+		t.Errorf("patiently() transport = %T, want the one httpx shares", patient.http.Transport)
+	}
+	if patient.http.Timeout != time.Hour {
+		t.Errorf("patiently(1h) timeout = %v, want 1h", patient.http.Timeout)
 	}
 }

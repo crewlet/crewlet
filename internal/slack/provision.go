@@ -4,7 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -190,11 +191,7 @@ func (r *Result) Err() error {
 	if len(r.Failed) == 0 {
 		return nil
 	}
-	handles := make([]string, 0, len(r.Failed))
-	for handle := range r.Failed {
-		handles = append(handles, handle)
-	}
-	sort.Strings(handles)
+	handles := slices.Sorted(maps.Keys(r.Failed))
 	var b strings.Builder
 	fmt.Fprintf(&b, "slack: %d of %d seat(s) could not be provisioned:", len(handles), r.attempted)
 	for _, handle := range handles {
@@ -363,7 +360,10 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 	if err != nil {
 		return err
 	}
-	fingerprint := Fingerprint(manifest)
+	fingerprint, err := Fingerprint(manifest)
+	if err != nil {
+		return fmt.Errorf("slack: %s: %w", seat.Handle, err)
+	}
 	record := o.Ledger.Apps[seat.Handle]
 
 	// A LEDGER ENTRY THAT NAMES A DEAD APP IS WORSE THAN NO ENTRY: the

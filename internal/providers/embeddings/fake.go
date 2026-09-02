@@ -51,7 +51,7 @@ func (f *Fake) Embed(_ context.Context, text string) ([]float32, error) {
 		return nil, ErrEmpty
 	}
 	vector := make([]float32, f.width)
-	for _, word := range strings.Fields(strings.ToLower(normalized)) {
+	for word := range strings.FieldsSeq(strings.ToLower(normalized)) {
 		h := fnv.New32a()
 		h.Write([]byte(word))
 		// THE MODULO IS UNSIGNED. int(h.Sum32()) is non-negative on a

@@ -402,6 +402,18 @@ func (p *Provider) runInCredentialHome(
 	cmd.Stdin = in
 	cmd.Stdout = out
 	cmd.Stderr = errOut
+	// NO procgroup.Set HERE, deliberately, and it is the one child in this
+	// package that does without: an interactive login has to read the
+	// operator's terminal, and a process in its own group is not in the
+	// tty's FOREGROUND group — so it cannot read stdin and would be stopped
+	// with SIGTTIN the moment it tried. The prompt is the whole point of
+	// this command.
+	//
+	// WaitDelay still applies. Without it, cancelling this context killed
+	// the CLI while a forked helper kept the inherited pipes open, and Wait
+	// blocked on EOF that was never coming — an operator's Ctrl+C left the
+	// command hanging.
+	cmd.WaitDelay = termGrace
 	runErr := cmd.Run()
 
 	// Synced back even on failure: a login that authenticated and then

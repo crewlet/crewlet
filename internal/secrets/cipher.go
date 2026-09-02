@@ -1,11 +1,24 @@
-// Package secrets seals configuration secrets at rest and resolves them at
-// read time.
+// Package secrets seals configuration secrets at rest.
 //
-// Two composable mechanisms share one keyring. A Cipher seals a value into a
-// self-describing envelope, used both for whole-document company-config
-// encryption and for the per-variable secret store. A Source answers ${VAR}
-// lookups ahead of the process environment, so a rotated secret takes effect
-// without anyone editing a file.
+// ONE MECHANISM: a Cipher, which seals a value into a self-describing
+// envelope, used both for whole-document company-config encryption and for
+// the per-variable secret store. Everything here is about the KEYRING and the
+// envelope; nothing here reads a value.
+//
+// # Where ${VAR} resolution lives, and why not here
+//
+// Not in this package. The chain that answers a reference — the secret store
+// first, the process environment behind it, so a rotated secret beats a stale
+// `.env` — is `config.Resolver`, because resolution is a CONFIG concern:
+// it is the resolver that knows Tier A must never source a value from the
+// store it holds the keys to, that carries the per-name shadow warning, and
+// that walks a YAML document reporting the path of every reference it could
+// not answer. None of that is expressible from behind a bare Lookup.
+//
+// This package shipped a second, unreferenced chain of its own for a while —
+// Source, Chain, MapSource, Snapshot — a complete parallel implementation
+// with no caller, kept alive by its own tests. It is gone; `config.Resolver`
+// is the one answer.
 //
 // # The envelope
 //

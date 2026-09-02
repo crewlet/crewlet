@@ -1,11 +1,12 @@
 package mattermost
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -430,7 +431,7 @@ func chatSeats(o *org.Organization) []*org.Role {
 			out = append(out, seat)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Handle() < out[j].Handle() })
+	slices.SortFunc(out, func(a, b *org.Role) int { return cmp.Compare(a.Handle(), b.Handle()) })
 	return out
 }
 

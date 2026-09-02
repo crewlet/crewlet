@@ -1,6 +1,7 @@
 package webhooks_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -151,7 +152,7 @@ func newEdge(t *testing.T, opts ...func(*webhooks.Options)) *edge {
 // post sends a request through the mux and returns the response.
 func (e *edge) post(t *testing.T, path string, body []byte, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(body)))
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -766,7 +767,7 @@ func TestAClientThatHangsUpStillLeavesARecord(t *testing.T) {
 	cancel()
 
 	req := httptest.NewRequest(http.MethodPost, "/webhooks/github",
-		strings.NewReader(string(issueBody))).WithContext(ctx)
+		bytes.NewReader(issueBody)).WithContext(ctx)
 	for k, v := range githubDelivery(issueBody, "gh-secret") {
 		req.Header.Set(k, v)
 	}

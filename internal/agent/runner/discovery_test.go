@@ -68,7 +68,7 @@ func TestAPhaseCanDiscoverAndActivateAnMCPTool(t *testing.T) {
 		t.Errorf("a continuation line was not indented under its bullet:\n%s", listing)
 	}
 	bullets := 0
-	for _, line := range strings.Split(strings.TrimSpace(listing), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(listing), "\n") {
 		if strings.HasPrefix(line, "- ") {
 			bullets++
 		}

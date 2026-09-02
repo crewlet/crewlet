@@ -183,7 +183,7 @@ func TestADiffIsRedactedAndNamesWhatMoved(t *testing.T) {
 	// THE UNCHANGED BULK IS ABSENT because a structural diff has nothing to
 	// elide: it reports only what moved. One edit is one line of output.
 	var moved int
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		if strings.HasPrefix(line, "~ ") || strings.HasPrefix(line, "+ ") ||
 			strings.HasPrefix(line, "- ") {
 			moved++
@@ -289,7 +289,7 @@ func activeRevisionID(t *testing.T, cfg string) string {
 	if err != nil {
 		t.Fatalf("revisions: %v", err)
 	}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if !strings.HasPrefix(line, "*") {
 			continue
 		}
@@ -376,5 +376,41 @@ func TestALiteralCredentialIsMaskedEverywhereItIsPrinted(t *testing.T) {
 	}
 	if !strings.Contains(full, "sk-ant-a-real-looking-literal") {
 		t.Fatalf("an unredacted export did not carry the credential:\n%s", full)
+	}
+}
+
+// THE REFUSAL NAMES THE RIGHT NUMBER.
+//
+// The count was computed as `len(tail)+1` — "the leftovers, plus the one that
+// was peeled". That is right only when a value WAS peeled. Two trailing
+// documents and no leading one leaves both in the tail, so the message said
+// "got 3" for two arguments. Wrong by one in the direction that makes an
+// operator hunt for an argument they never typed, on the command that then
+// tells them what they got wrong.
+func TestTooManyArgumentsAreCountedAsGiven(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		// Both trailing: the flag stops parsing at the first, so neither
+		// is peeled and both land in the tail.
+		{"two trailing", []string{"import", "-config", "boot.yaml", "a.yaml", "b.yaml"}, "got 2"},
+		{"three trailing", []string{"import", "-config", "b.yaml", "a.yaml", "b.yaml", "c.yaml"}, "got 3"},
+		// One peeled, one left: also two.
+		{"leading and trailing", []string{"import", "a.yaml", "-config", "boot.yaml", "b.yaml"}, "got 2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var out, errOut bytes.Buffer
+			err := runConfig(tc.args, &out, &errOut)
+			if err == nil {
+				t.Fatalf("runConfig(%v) succeeded, want a refusal", tc.args)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to say %q", err, tc.want)
+			}
+		})
 	}
 }

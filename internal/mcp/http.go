@@ -12,6 +12,8 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/crewlet/crewlet/internal/httpx"
 )
 
 // maxLoggedErrorBody bounds how much of a failing HTTP response is logged.
@@ -19,6 +21,23 @@ import (
 // covers a verbose one and refuses to put an HTML error page — or a gateway's
 // debug dump — into the log stream.
 const maxLoggedErrorBody = 8 << 10
+
+// maxBufferedErrorBody bounds how much of a failing response this process
+// holds in memory to log and replay.
+//
+// The read has to be WHOLE to be useful — handing the SDK a truncated body
+// turns a server's clear 403 into a JSON parse error — but "whole" was
+// unbounded, which let a remote server choose this process's allocation size.
+// It was the only unbounded io.ReadAll left in the tree, eight lines below a
+// constant whose entire purpose is bounding this same body.
+//
+// A MEBIBYTE, which is 128 times the logged slice above and far past any real
+// MCP error object; what it actually refuses is a gateway streaming an
+// unbounded HTML page under a 5xx. Past it nothing further is buffered: the
+// prefix already read is handed back in front of the still-open body, so the
+// SDK reads the same bytes it would have, and the response is neither
+// truncated nor held.
+const maxBufferedErrorBody = 1 << 20
 
 // protocolVersionHeader is the header the streamable transport sends on every
 // request after the handshake.
@@ -44,7 +63,7 @@ const protocolVersionHeader = "Mcp-Protocol-Version"
 // what the connection does.
 func newHTTPTransport(spec Spec, log *slog.Logger) (sdk.Transport, *httpIdentity) {
 	ident := &httpIdentity{
-		base:    http.DefaultTransport,
+		base:    httpx.Transport(),
 		headers: maps.Clone(spec.Headers),
 		server:  spec.Name,
 		log:     log,
@@ -147,11 +166,16 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 	// to pass along. There is no redaction pass on this side of the engine
 	// yet, and a log line is a permanent place to put a secret.
 	//
-	// The body is read WHOLE and only a bounded slice is logged. Handing the
-	// SDK a truncated body would turn a server's clear 403 into a JSON parse
-	// error, which is a worse diagnostic than the one this exists to produce.
-	body, readErr := io.ReadAll(resp.Body)
-	_ = resp.Body.Close() // also releases the deadline above
+	// Read whole up to maxBufferedErrorBody, and only a bounded slice is
+	// logged. Handing the SDK a truncated body would turn a server's clear
+	// 403 into a JSON parse error, which is a worse diagnostic than the one
+	// this exists to produce — so past the cap the body is not truncated
+	// either: what has been read is handed back in FRONT of the still-open
+	// original, and the SDK reads exactly the bytes it would have.
+	//
+	// One byte over the cap is read on purpose, so a body sitting exactly on
+	// it is not mistaken for an overflowing one.
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBufferedErrorBody+1))
 	if readErr != nil {
 		h.log.Error("http_error", "server", h.server, "status_code", resp.StatusCode,
 			"method", req.Method, "url", req.URL.String(), "body_error", readErr.Error())
@@ -160,6 +184,19 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 			"method", req.Method, "url", req.URL.String(),
 			"response_body", boundedBody(body))
 	}
+	if len(body) > maxBufferedErrorBody {
+		// NOT CLOSED, and that is what keeps the deadline correct: the
+		// rest of the body is still to be read, and cancelOnClose fires
+		// when the SDK closes it. Closing here would cut the response the
+		// SDK is about to read.
+		rest := resp.Body
+		resp.Body = readCloser{
+			Reader: io.MultiReader(bytes.NewReader(body), rest),
+			Closer: rest,
+		}
+		return resp, nil
+	}
+	_ = resp.Body.Close() // also releases the deadline above
 	// The body was consumed to log it; hand the SDK an identical one. The
 	// deadline is already released, which is correct: this response is
 	// complete.
@@ -180,6 +217,14 @@ func (c *cancelOnClose) Close() error {
 	err := c.ReadCloser.Close()
 	c.once.Do(c.cancel)
 	return err
+}
+
+// readCloser reads from one place and closes another — the shape needed to
+// put a buffered prefix in front of a body whose Close still has to reach the
+// original, so the request's deadline is released when the SDK is done.
+type readCloser struct {
+	io.Reader
+	io.Closer
 }
 
 func boundedBody(body []byte) string {

@@ -720,7 +720,7 @@ func (l *Local) liveContainers(ctx context.Context) (map[string]bool, error) {
 			result.ExitCode, detail)
 	}
 	names := map[string]bool{}
-	for _, line := range strings.Split(result.Stdout, "\n") {
+	for line := range strings.SplitSeq(result.Stdout, "\n") {
 		if name := strings.TrimSpace(line); name != "" {
 			names[name] = true
 		}

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"iter"
 	"maps"
 	"regexp"
 	"slices"
@@ -288,6 +289,12 @@ type Knowledge struct {
 // NOTHING still runs, and from inside resolution a name that misses and a name
 // that was never written are the same absence.
 //
+// Applied to EVERY seat in the document, at any depth. Nearly all of a real
+// company's roles live inside units, which nest arbitrarily — so a rule that
+// walked the root `roles:` list alone left the typo invisible exactly where
+// it is most likely to be written. The walk is [Company.EachRole] rather than
+// a loop here, so the next whole-document rule about seats inherits it.
+//
 // Skipped entirely when providers.llm is empty. A company with no models is a
 // documented authoring state — an org chart written before the credentials
 // exist — and it fails at the first turn, where the failure is actionable.
@@ -298,13 +305,9 @@ func (c *Company) validateProviderKeys() error {
 	if len(c.Providers.LLM) == 0 {
 		return nil
 	}
-	known := make([]string, 0, len(c.Providers.LLM))
-	for key := range c.Providers.LLM {
-		known = append(known, key)
-	}
-	slices.Sort(known)
+	known := slices.Sorted(maps.Keys(c.Providers.LLM))
 
-	c.EachRole(func(path string, role *Role) {
+	for role, path := range c.EachRole() {
 		// Both written surfaces are checked, and each is reported at the
 		// path the operator typed. Validating the RESOLVED chain instead
 		// would hide half of them: the flat field wins over the mapping,
@@ -339,11 +342,11 @@ func (c *Company) validateProviderKeys() error {
 				}
 			}
 		}
-	})
+	}
 	return p.err()
 }
 
-// EachRole visits EVERY seat in the company, at the path an operator typed:
+// EachRole yields EVERY seat in the company, with the path an operator typed:
 // the top-level `roles:` and every seat inside `units:`, to any depth.
 //
 // It exists because the walk was written inline once and covered only the
@@ -353,27 +356,40 @@ func (c *Company) validateProviderKeys() error {
 // level down is not a rule, and the seats it missed are exactly the ones whose
 // mistakes have no run-time symptom to find them by.
 //
+// AN ITERATOR rather than a callback, so a caller looking for ONE seat can
+// stop at it: the engine's per-seat sandbox lookup ran the whole org chart to
+// the end on every launch because a callback has no way to say "found it".
+//
 // EXPORTED because the ENGINE needs the same walk: a seat's sandbox block is
 // looked up by name at launch, and a lookup that stopped at the top level
 // answered nil for every seat in a unit — so run_sandbox refused each of them
 // with "this seat's sandbox is not enabled" on a seat whose block said
 // otherwise. One walker, so the two can never disagree about which seats exist.
-func (c *Company) EachRole(visit func(path string, role *Role)) {
-	for i := range c.Roles {
-		visit(idx("roles", i), &c.Roles[i])
-	}
-	var walk func(path string, units []Unit)
-	walk = func(path string, units []Unit) {
-		for i := range units {
-			unit := &units[i]
-			here := idx(path, i)
-			for j := range unit.Roles {
-				visit(idx(at(here, "roles"), j), &unit.Roles[j])
+func (c *Company) EachRole() iter.Seq2[*Role, string] {
+	return func(yield func(*Role, string) bool) {
+		for i := range c.Roles {
+			if !yield(&c.Roles[i], idx("roles", i)) {
+				return
 			}
-			walk(at(here, "children"), unit.Children)
 		}
+		var walk func(units []Unit, path string) bool
+		walk = func(units []Unit, path string) bool {
+			for i := range units {
+				unit := &units[i]
+				here := idx(path, i)
+				for j := range unit.Roles {
+					if !yield(&unit.Roles[j], idx(at(here, "roles"), j)) {
+						return false
+					}
+				}
+				if !walk(unit.Children, at(here, "children")) {
+					return false
+				}
+			}
+			return true
+		}
+		walk(c.Units, "units")
 	}
-	walk("units", c.Units)
 }
 
 // SandboxPlacements is every cell a seat could ACTUALLY land in, each mapped
@@ -406,15 +422,15 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 		}
 		reached[run] = where
 	}
-	c.EachRole(func(path string, role *Role) {
+	for role, path := range c.EachRole() {
 		gate := role.Sandbox
 		if gate == nil || !gate.Enabled || gate.RunIn == "" || !gate.RunIn.NeedsBackend() {
-			return
+			continue
 		}
 		if _, seen := reached[gate.RunIn]; !seen {
 			reached[gate.RunIn] = at(at(path, "sandbox"), "run_in")
 		}
-	})
+	}
 	// AN AGENT-MODE EXECUTOR IS A RUN TOO, placed by its entry's own
 	// cli.run_in rather than by the seat's gate — and for as long as this
 	// walk stopped at the gates, that cell was never built: an entry
@@ -450,13 +466,13 @@ func (c *Company) agentModeExecutorKeys() []string {
 		return nil
 	}
 	seen := map[string]struct{}{}
-	c.EachRole(func(_ string, role *Role) {
+	for role := range c.EachRole() {
 		key, entry, resolved := c.executorProvider(role, fallback)
 		if !resolved || !entry.CLI.AgentMode() {
-			return
+			continue
 		}
 		seen[key] = struct{}{}
-	})
+	}
 	return slices.Sorted(maps.Keys(seen))
 }
 
@@ -541,10 +557,10 @@ func (c *Company) validateSandboxPlacement() error {
 	var p problems
 	catalogue := c.Providers.Sandbox
 
-	c.EachRole(func(path string, role *Role) {
+	for role, path := range c.EachRole() {
 		gate := role.Sandbox
 		if gate == nil || !gate.Enabled {
-			return
+			continue
 		}
 		where := at(at(path, "sandbox"), "run_in")
 		if !catalogue.Enabled() {
@@ -553,7 +569,7 @@ func (c *Company) validateSandboxPlacement() error {
 					"Add providers.sandbox, or turn the seat's gate off — an "+
 					"enabled gate with no catalogue offers the seat nothing and "+
 					"says so nowhere")
-			return
+			continue
 		}
 		run := gate.RunIn
 		if run == PlacementSelf {
@@ -573,7 +589,7 @@ func (c *Company) validateSandboxPlacement() error {
 						"cell the catalogue configures (%s)",
 					key, names(catalogue.available()))
 			}
-			return
+			continue
 		}
 		if run == "" {
 			run = catalogue.RunIn()
@@ -585,7 +601,7 @@ func (c *Company) validateSandboxPlacement() error {
 					"place to do it (%s), so it has to name one — or "+
 					"providers.sandbox.default_run_in has to",
 				names(catalogue.available()))
-		case !oneOf(run, Placements):
+		case !slices.Contains(Placements, run):
 			// Spelling is the role's own rule; it already reported.
 		case !catalogue.Configured(run):
 			p.add(where, ErrConflict,
@@ -593,7 +609,7 @@ func (c *Company) validateSandboxPlacement() error {
 					"(this catalogue has %s)",
 				run, run.backend(), names(catalogue.available()))
 		}
-	})
+	}
 
 	// THE SAME THREE QUESTIONS FOR AN AGENT-MODE EXECUTOR, whose run is
 	// placed by its entry rather than by a gate: is there a catalogue at
@@ -622,7 +638,7 @@ func (c *Company) validateSandboxPlacement() error {
 					"offers more than one place to do it (%s), so this entry "+
 					"has to name one — or providers.sandbox.default_run_in has to",
 				names(catalogue.available()))
-		case !oneOf(run, BackendPlacements()):
+		case !slices.Contains(BackendPlacements(), run):
 			// Spelling is the entry's own rule; it already reported.
 		case !catalogue.Configured(run):
 			p.add(where, ErrConflict,
