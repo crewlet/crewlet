@@ -175,6 +175,22 @@ headless token instead. Want both? Make two entries and point each seat
 at the one that is right for it — the same way you already choose between
 two models. Empty takes `providers.sandbox.default_run_in`.
 
+The cell is checked like a seat's, at validation rather than at the
+seat's first turn: it must be one the catalogue configures, an empty one
+needs a default to fall to, and agent mode in a company with no
+`providers.sandbox` at all is refused outright. The backend behind the
+cell is built for it, so `run_in: container` needs `local.image` exactly
+as a seat's would. `self` is not accepted here — it is a *seat's* answer,
+meaning "my code work rides my executor's run", and an agent-mode entry
+**is** that run. Only entries some seat's executor actually resolves to
+are checked and built for; an entry nobody runs on is checked the day a
+seat points at it.
+
+The credential guard that refuses a remote run whose login cannot follow
+it (see [Code Sandbox](code-sandbox.md#failure-modes)) reads **this**
+entry for an agent-mode run — the run *is* the executor — and the seat's
+`llm_sandbox` only for `run_sandbox` work.
+
 An agent-mode run is a **detached coding run** and reuses that machinery
 whole: the executor phase suspends, the run's state goes on a durable row
 in the [coordination store](coordination.md), the completion poll collects
@@ -190,7 +206,14 @@ whole point of a sandbox is that its credentials are not the company's.
 So the box gets exactly one MCP server — on the engine, named `crewlet` —
 and every call comes back out through the *same* `tools.Surface` a native
 loop would call. A tool denied natively is denied there; the skill guard,
-the recording and the failure shape are the ones already tested.
+the recording and the failure shape are the ones already tested. That
+name is **reserved**: an `mcp_servers` entry may not use it, because the
+bridge is written into every agent-mode box's server list under it and
+would replace the entry there. The bridge advertises the seat's *live*
+tool set — a tool the coding agent activates mid-run with `activate_tool`
+is listed and callable on its next request, over the connection it already
+holds — and every MCP session the box opened is closed the moment the run
+ends, whatever ended it.
 
 The endpoint is a per-run URL carrying a signed token that expires with
 the run, and the session is closed the moment the run ends, whatever

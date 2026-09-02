@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -61,6 +62,24 @@ func (s *stubTool) seen() []map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]map[string]any(nil), s.args...)
+}
+
+// activator stands in for activate_tool: a bridged call that widens the very
+// surface it was called on, which is the only way a coding agent's active set
+// ever moves while its run is in a box.
+type activator struct {
+	surface func() *tools.Surface
+	target  string
+}
+
+func (a *activator) Name() string               { return "activate" }
+func (a *activator) Description() string        { return "activate " + a.target }
+func (a *activator) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (a *activator) Call(context.Context, map[string]any) (tools.Result, error) {
+	if a.surface().Activate(a.target) {
+		return tools.Result{Output: a.target + " is active"}, nil
+	}
+	return tools.Result{Output: "no such tool", Failed: true}, nil
 }
 
 // ledger records what a resume would read back.
@@ -121,16 +140,20 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 		}
 		byName[name] = tool
 	}
+	f := &fixture{ledger: &ledger{}, byName: byName}
+	// In the universe for every case, offered only where a case names it.
+	widen := &activator{surface: func() *tools.Surface { return f.surface }, target: "post_message"}
+	if err := reg.Register(widen, tools.OriginBuiltin); err != nil {
+		t.Fatalf("Register(activate): %v", err)
+	}
 	if len(offer) == 0 {
 		offer = []string{"read_page", "post_message"}
 	}
-	surface := tools.NewSurface("execute", reg.Snapshot(), offer)
-
-	f := &fixture{surface: surface, ledger: &ledger{}, byName: byName}
+	f.surface = tools.NewSurface("execute", reg.Snapshot(), offer)
 	f.bridge = mcpbridge.New(mcpbridge.Options{Key: []byte("test-key")})
 	f.session = &mcpbridge.Session{
 		RunID: "run-1", Handle: "dev", Role: "Engineer",
-		Surface: surface, Ledger: f.ledger,
+		Surface: f.surface, Ledger: f.ledger,
 	}
 
 	mux := http.NewServeMux()
@@ -277,7 +300,12 @@ func TestClosingTwiceIsSafe(t *testing.T) {
 // A DEPLOYMENT WHOSE API IS NOT REACHABLE FROM A BOX cannot bridge, and the
 // honest answer is an empty endpoint the caller can refuse agent mode on —
 // not a run that starts and fails on its first tool call.
-func TestNoBaseURLMintsNoEndpoint(t *testing.T) {
+//
+// AND NOTHING IS REGISTERED FOR IT. The minted token is the only way to reach
+// a session, so one registered with no endpoint is a live surface nothing can
+// dispatch to — and the caller, reading the empty answer as a refusal, never
+// launches the run whose end would have closed it.
+func TestNoBaseURLMintsNoEndpointAndHoldsNoSession(t *testing.T) {
 	t.Parallel()
 	b := mcpbridge.New(mcpbridge.Options{Key: []byte("k")})
 	if url := b.Open(&mcpbridge.Session{
@@ -285,10 +313,8 @@ func TestNoBaseURLMintsNoEndpoint(t *testing.T) {
 	}); url != "" {
 		t.Errorf("endpoint = %q, want empty", url)
 	}
-	// The session is still open, so a caller that has its own way to reach
-	// the engine is not shut out.
-	if b.Live() != 1 {
-		t.Errorf("%d sessions live", b.Live())
+	if b.Live() != 0 {
+		t.Errorf("%d sessions live for a run that was refused and will never be closed", b.Live())
 	}
 }
 
@@ -497,11 +523,14 @@ func TestARunWithNoLedgerStillDispatches(t *testing.T) {
 // so a tool the agent activates mid-run would be invisible until it ended.
 func TestTheAdvertisedToolsFollowTheLiveSurface(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, "read_page")
+	f := newFixture(t, "read_page", "activate")
 	url := f.open(t)
+	// ONE SESSION, HELD FOR THE RUN, the way a coding agent's client holds
+	// it. A fresh session per list would rebuild the server and pass for a
+	// bridge whose connected boxes never see an activation at all.
+	sess := dial(t, url)
 
 	names := func() []string {
-		sess := dial(t, url)
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		listed, err := sess.ListTools(ctx, nil)
@@ -512,16 +541,89 @@ func TestTheAdvertisedToolsFollowTheLiveSurface(t *testing.T) {
 		for _, tool := range listed.Tools {
 			out = append(out, tool.Name)
 		}
+		slices.Sort(out)
 		return out
 	}
 
-	if got := names(); len(got) != 1 || got[0] != "read_page" {
+	if got := names(); !slices.Equal(got, []string{"activate", "read_page"}) {
 		t.Fatalf("tools = %v", got)
 	}
-	f.surface.Activate("post_message")
-	got := names()
-	if len(got) != 2 {
-		t.Errorf("a tool activated mid-run is not advertised: %v", got)
+	// Activated the only way a box can activate anything: over the bridge.
+	if res := callTool(t, sess, "activate", nil); res.IsError {
+		t.Fatalf("activate failed: %s", text(res))
+	}
+	if got := names(); !slices.Contains(got, "post_message") {
+		t.Fatalf("a tool activated mid-run is not advertised on the box's own session: %v", got)
+	}
+	// Listed AND callable — the server's table is what dispatches, and a
+	// name the surface offers but the server never learned is refused as
+	// unknown before the surface is asked.
+	if res := callTool(t, sess, "post_message", map[string]any{"text": "hi"}); res.IsError {
+		t.Errorf("an activated tool is listed but not callable: %s", text(res))
+	}
+	if seen := f.byName["post_message"].seen(); len(seen) != 1 {
+		t.Errorf("post_message ran %d times, want 1", len(seen))
+	}
+}
+
+// CLOSING A RUN ENDS THE MCP SESSIONS ITS BOX HOLDS, not only the bridge's
+// own map entry. The SDK keeps every session a box opened — transport,
+// server, and through the server's handlers the seat's live surface — until
+// the client sends a DELETE or an idle clock fires, and a box torn down
+// mid-run sends nothing. Left there, each agent-mode run this process ever
+// served would pin its seat's surface for the life of the process.
+func TestClosingARunEndsTheBoxesOpenSessions(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	url := f.open(t)
+	sess := dial(t, url)
+	// AT LEAST one, not exactly one: the SDK client's capability probe
+	// (SEP-2575 server/discover, sent before initialize) opens a server
+	// session of its own that the SDK never retires — which is one more
+	// reason the close below has to reap everything the server holds.
+	if n := f.session.Connections(); n == 0 {
+		t.Fatal("no MCP session on a run with a connected box")
+	}
+
+	f.bridge.Close("run-1")
+	if n := f.session.Connections(); n != 0 {
+		t.Errorf("%d MCP sessions survive the run's close", n)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, err := sess.ListTools(ctx, nil); err == nil {
+		t.Error("a box's session outlived its run")
+	}
+}
+
+// A RUN OPENED AGAIN UNDER ITS OWN ID is a relaunch — a resumed executor
+// going back into a box under the turn id it already had — and the
+// coordinator deliberately does not end a run its own turn relaunched. So
+// the earlier session is closed HERE: a box still holding it must not keep a
+// working key to the surface the new run now owns, and nothing else would
+// ever release it.
+func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	first := f.session
+	dial(t, f.open(t))
+	if n := first.Connections(); n == 0 {
+		t.Fatal("no MCP session on the first run")
+	}
+
+	second := &mcpbridge.Session{
+		RunID: "run-1", Handle: "dev", Role: "Engineer",
+		Surface: f.surface, Ledger: f.ledger,
+	}
+	url := f.bridge.Open(second)
+	if n := first.Connections(); n != 0 {
+		t.Errorf("the relaunched run's earlier session keeps %d box connections", n)
+	}
+	if f.bridge.Live() != 1 {
+		t.Errorf("%d sessions live after a relaunch, want 1", f.bridge.Live())
+	}
+	if res := callTool(t, dial(t, url), "read_page", map[string]any{}); res.IsError {
+		t.Errorf("the relaunched run cannot dispatch: %s", text(res))
 	}
 }
 

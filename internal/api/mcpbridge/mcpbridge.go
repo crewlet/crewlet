@@ -46,6 +46,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -63,9 +64,13 @@ var log = logging.Get("api.mcpbridge")
 // nothing in the config looking wrong.
 const PathPrefix = "/mcp/"
 
-// serverName is what the bridge calls itself in the MCP handshake. It reaches
-// the coding agent's own logs, so it says which seat it belongs to.
-const serverName = "crewlet"
+// serverName is what the bridge calls itself in the MCP handshake, and the
+// key the engine writes it under in a box's server list — one name, so the
+// tool prefix a coding agent sees (`mcp__crewlet__…`) and the server its logs
+// name agree. Defined by config because config is where the name is RESERVED:
+// an mcp_servers entry called the same thing would be overwritten by the
+// bridge in every agent-mode box, silently.
+const serverName = config.BridgeServerName
 
 // Session is one run's live tool surface.
 //
@@ -91,6 +96,21 @@ type Session struct {
 	// surface alone, which is correct for a run whose whole life is one
 	// process — a test, or a host-placement run the engine is watching.
 	Ledger Ledger
+
+	// server is the ONE MCP server this session exposes, built at Open and
+	// kept for the run's life. One rather than one per request because the
+	// SDK asks for a server only when a box opens a new MCP session — every
+	// later request on that session is served by the server it was opened
+	// with — so a server built per request would advertise, to a box that
+	// connected once and stayed connected, exactly the tool set the run
+	// started with. The live set is kept current by [Session.sync] instead.
+	server *mcp.Server
+
+	mu sync.Mutex
+	// advertised is what server currently carries, by name, so sync can
+	// tell an activation from a re-read and only notify a box when
+	// something actually changed.
+	advertised map[string]struct{}
 }
 
 // Ledger is the durable record of a bridged run's calls.
@@ -170,6 +190,12 @@ func New(opts Options) *Bridge {
 // cannot bridge, and the caller's move is to refuse agent mode for that seat
 // with a message naming the setting — not to start a run that will fail on its
 // first tool call.
+//
+// NOTHING IS REGISTERED FOR AN EMPTY ANSWER. The minted token is the only way
+// to reach a session, so a session registered with no endpoint to mint is a
+// live tool surface nothing can dispatch to — and, since the caller reads the
+// empty URL as a refusal and never launches a run, nothing ever closes it
+// either.
 func (b *Bridge) Open(s *Session) string {
 	if b == nil || s == nil {
 		return ""
@@ -185,17 +211,39 @@ func (b *Bridge) Open(s *Session) string {
 			"run_id", s.RunID, "seat", s.Handle, "has_surface", s.Surface != nil)
 		return ""
 	}
-	b.mu.Lock()
-	b.sessions[s.RunID] = s
-	b.mu.Unlock()
 	if b.base == "" {
 		log.Warn("mcp_bridge_no_base_url", "run_id", s.RunID, "seat", s.Handle)
 		return ""
 	}
+	s.attach()
+	b.mu.Lock()
+	previous := b.sessions[s.RunID]
+	b.sessions[s.RunID] = s
+	b.mu.Unlock()
+	if previous != nil && previous != s {
+		// THE SAME RUN, OPENED AGAIN, is a relaunch: a resumed executor
+		// that went back into a box under the turn id it already had. The
+		// coordinator deliberately does not end a run its own turn
+		// relaunched, so nothing else closes the earlier session — and the
+		// earlier box, if it is still connected, must not keep a working
+		// key to the surface the new run now owns.
+		log.Info("mcp_bridge_session_replaced", "run_id", s.RunID, "seat", s.Handle)
+		previous.disconnect()
+	}
 	return b.base + PathPrefix + b.signer.Mint(s.RunID, b.ttl)
 }
 
-// Close ends a run's session. A token for a closed run resolves to nothing.
+// Close ends a run's session. A token for a closed run resolves to nothing,
+// and every MCP session a box opened on it is closed.
+//
+// BOTH HALVES, because the handler holds the second on its own. The route's
+// gate stops a new request the moment the map entry is gone, but the SDK keeps
+// each MCP session a box opened — its transport, its server and, through the
+// server's handlers, this session's live surface — until the client sends a
+// DELETE or an idle timeout fires, and a box torn down mid-run sends nothing.
+// Closed here, they leave the handler's table at once; left alone, every
+// agent-mode run this process ever served would pin its seat's surface for
+// the life of the process.
 //
 // IDEMPOTENT, because the paths that call it are: a run ends once, but the
 // engine cleans up on the completion path, on the failure path and on the
@@ -206,8 +254,12 @@ func (b *Bridge) Close(runID string) {
 		return
 	}
 	b.mu.Lock()
+	s := b.sessions[runID]
 	delete(b.sessions, runID)
 	b.mu.Unlock()
+	if s != nil {
+		s.disconnect()
+	}
 }
 
 // Live reports how many sessions are open. For the health surface and for a
@@ -281,13 +333,18 @@ func (b *Bridge) Miss(token string) (runID, reason string) {
 // parses of one path is how a route ends up authenticating a different string
 // from the one it dispatches on.
 func (b *Bridge) Handler() http.Handler {
+	// NO IDLE TIMEOUT, deliberately. A session's lifetime is its RUN's —
+	// [Bridge.Close] ends every MCP session the moment the run ends — and
+	// a coding agent legitimately goes quiet for as long as a build or a
+	// test suite takes, so an idle clock here would cut a live run off from
+	// its tools mid-job for no reason the run could see.
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcp.Server {
 			s := b.session(r.PathValue("token"))
 			if s == nil {
 				return nil
 			}
-			return b.serverFor(s)
+			return s.server
 		}, nil)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -310,26 +367,108 @@ func (b *Bridge) Handler() http.Handler {
 	})
 }
 
-// serverFor builds the MCP server one session exposes.
-//
-// PER REQUEST rather than cached with the session, because the surface's
-// active set MOVES: a coding agent that activates a tool mid-run must see it
-// on its next tools/list, and a server built once at Open would advertise the
-// set the run started with for its whole life.
-func (b *Bridge) serverFor(s *Session) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{
+// attach builds the MCP server this session exposes, carrying the surface's
+// current tool set.
+func (s *Session) attach() {
+	s.mu.Lock()
+	s.server = mcp.NewServer(&mcp.Implementation{
 		Name:    serverName,
 		Title:   s.Role + " (" + s.Handle + ")",
 		Version: "1",
 	}, nil)
+	s.advertised = map[string]struct{}{}
+	s.mu.Unlock()
+	s.sync()
+}
+
+// sync brings the server's tool list up to the surface's active set.
+//
+// AFTER EVERY BRIDGED CALL, because the active set MOVES and a bridged call is
+// the only thing that moves it: a coding agent activates a tool by calling
+// `activate_tool` over this same bridge, and the engine's own loop — the other
+// writer of an active set — is suspended for as long as the box runs. So a
+// sync at each call's end sees every activation the moment it lands, and
+// the SDK's list-changed notification tells a connected box to re-list.
+//
+// A server built once at Open and never touched would advertise the set the
+// run started with for its whole life, and the MCP-backed delivery tools —
+// which every run starts without and activates when it needs one — would be
+// listed as active by the surface and refused as unknown by the server.
+func (s *Session) sync() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	live := make(map[string]struct{})
 	for _, def := range s.Surface.ToolDefs() {
-		server.AddTool(&mcp.Tool{
+		live[def.Name] = struct{}{}
+		if _, have := s.advertised[def.Name]; have {
+			continue
+		}
+		s.server.AddTool(&mcp.Tool{
 			Name:        def.Name,
 			Description: def.Description,
 			InputSchema: def.Parameters,
 		}, s.handler(def.Name))
+		s.advertised[def.Name] = struct{}{}
 	}
-	return server
+	// An active set only grows today; removal is here so that the server
+	// is a rendering of the surface rather than a record of what was once
+	// added, should that ever change.
+	var gone []string
+	for name := range s.advertised {
+		if _, still := live[name]; !still {
+			gone = append(gone, name)
+		}
+	}
+	if len(gone) > 0 {
+		s.server.RemoveTools(gone...)
+		for _, name := range gone {
+			delete(s.advertised, name)
+		}
+	}
+}
+
+// disconnect closes every MCP session a box opened on this server.
+//
+// Closing a server session runs the handler's own removal hook, so the
+// session leaves the SDK's table as well as ending on the wire — which is what
+// makes [Bridge.Close] release the surface rather than merely hide it.
+func (s *Session) disconnect() {
+	s.mu.Lock()
+	server := s.server
+	s.mu.Unlock()
+	if server == nil {
+		return
+	}
+	for session := range server.Sessions() {
+		if err := session.Close(); err != nil {
+			log.Debug("mcp_bridge_session_close", "run_id", s.RunID, "error", err)
+		}
+	}
+}
+
+// Connections reports how many MCP sessions the server currently holds for
+// this run. For the health surface and for the test that has to know a close
+// reached the SDK's table and not only the bridge's own map.
+//
+// Sessions, not boxes: one client connect opens more than one — the SDK
+// client probes with a stateless server/discover before it initializes, and
+// that probe's session is never retired — so the number says "something is
+// still attached", never "how many boxes".
+func (s *Session) Connections() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	server := s.server
+	s.mu.Unlock()
+	if server == nil {
+		return 0
+	}
+	n := 0
+	for range server.Sessions() {
+		n++
+	}
+	return n
 }
 
 // handler dispatches one bridged call through the seat's own surface.
@@ -370,6 +509,8 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 		}
 
 		s.appendCall(ctx, name, args, res.Output, res.Failed)
+		// THE CALL MAY HAVE BEEN AN ACTIVATION. See [Session.sync].
+		s.sync()
 		return &mcp.CallToolResult{
 			IsError: res.Failed,
 			Content: []mcp.Content{&mcp.TextContent{Text: res.Output}},
