@@ -64,6 +64,22 @@ func newTool(c *client, def toolDef, spec Spec) *Tool {
 		ann = ann.Merge(override)
 	}
 
+	if len(def.InputSchema) > 0 {
+		if kind, ok := def.InputSchema["type"]; !ok || kind != "object" {
+			// The spec requires a tool's inputSchema to be an object
+			// schema. Repaired at the render boundary rather than here
+			// (see tools.paramsOrEmpty — one rule, one place), but said
+			// out loud once here, where the wire value arrives: a model
+			// offered a repaired schema for a tool whose server describes
+			// its arguments wrongly will call it wrongly, and nothing
+			// else would ever name the server responsible.
+			c.log.Warn("mcp_tool_schema_not_an_object",
+				"server", spec.Name, "tool", def.Name, "type", kind,
+				"hint", "the MCP spec requires inputSchema.type == \"object\"; "+
+					"the engine offers a repaired schema, so the model is not "+
+					"told what this tool's arguments are")
+		}
+	}
 	return &Tool{
 		name:        name,
 		raw:         def.Name,
