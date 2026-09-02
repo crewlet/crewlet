@@ -12,6 +12,20 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 
 ---
 
+## Request timeouts
+
+Three deadlines bound a request on **every** route below, and each covers a phase the others do not. None is configurable — they are properties of what the surface is for, not of a deployment.
+
+| Phase | Bound | What it stops |
+|---|---|---|
+| Request line and headers | 10 s | A connection opened and left silent — the cheapest denial there is against a listener. |
+| Reading the request body | 30 s | A client that *dribbles*: a body under every size cap, delivered a few bytes at a time. The size cap and this are different failures, and a cap alone stops only the first. 30 s carries the largest body any route accepts — a 25 MiB webhook delivery — at roughly 7 Mbit/s sustained, far below what any forge, CI runner or operator workstation delivers. |
+| Between keep-alive requests | 60 s | A client that completed one request and then went quiet while holding its connection slot. |
+
+A body that does not arrive inside its deadline fails the read like any other truncated delivery: `400` with `unreadable_body` (logged as `webhook_body_unreadable` on a webhook path). There is deliberately **no** whole-request timeout: it would have to be large enough for the largest body on the slowest link, which makes it no bound at all on a small one. Long-lived responses — [`WS /ws/stream`](#ws-wsstream) above all — bound themselves.
+
+---
+
 ## Routes
 
 | Method | Path | Description |
@@ -1319,19 +1333,7 @@ Receives events from the Atlassian Forge app. Every request must carry a Forge I
 
 Webhook senders enforce delivery deadlines and abort requests that respond too slowly. When a sender hangs up before the request body is fully read, the read fails part way: there is nothing to verify and nobody left to tell, so the receiver logs `webhook_body_unreadable` (`component=api.webhooks`, keyed by `path` and `error`) and still writes a `400` — a handler that returns without writing one answers `200`, telling the sender a delivery it abandoned was accepted. The aborted delivery is dropped, and whether it is redelivered is up to the sender's retry policy, so recurring `webhook_body_unreadable` warnings on a webhook path mean events are being lost because the API is answering too slowly.
 
-The body is read **whole even when the request will be refused**, and bounded at 25 MiB (`body_too_large`, then `413` — every JSON surface answers a 413 with that one code). Answering without draining leaves unread bytes in the socket and the sender sees a connection reset instead of the status — which for a `401` reads as "retry forever" rather than "your signature is wrong".
-
-### Request timeouts
-
-Three deadlines bound a request, and each covers a phase the others do not. None is configurable — they are properties of what the surface is for, not of a deployment.
-
-| Phase | Bound | What it stops |
-|---|---|---|
-| Request line and headers | 10 s | A connection opened and left silent — the cheapest denial there is against a listener. |
-| Reading the request body | 30 s | A client that *dribbles*: a body under every size cap, delivered a few bytes at a time. The size cap and this are different failures, and a cap alone stops only the first. 30 s carries a 25 MiB delivery at roughly 7 Mbit/s sustained, far below what any forge, CI runner or operator workstation delivers. |
-| Between keep-alive requests | 60 s | A client that completed one request and then went quiet while holding its connection slot. |
-
-A body that does not arrive inside its deadline fails the read like any other truncated delivery: `400` with `unreadable_body`, logged as `webhook_body_unreadable` on a webhook path. There is deliberately **no** whole-request timeout: it would have to be large enough for the largest body on the slowest link, which makes it no bound at all on a small one.
+The body is read **whole even when the request will be refused**, and bounded at 25 MiB (`body_too_large`, then `413` — every JSON surface answers a 413 with that one code) and at 30 s (see [Request timeouts](#request-timeouts)). Answering without draining leaves unread bytes in the socket and the sender sees a connection reset instead of the status — which for a `401` reads as "retry forever" rather than "your signature is wrong".
 
 ---
 
