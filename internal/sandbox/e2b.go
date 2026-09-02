@@ -100,7 +100,7 @@ func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 		// REFUSED AT CONSTRUCTION, so an apply fails rather than every
 		// coding run: a provider built without a key would report a
 		// configured sandbox and 401 at the first create, minutes into a
-		// turn that already spent a Plan phase.
+		// turn that has already spent its own rounds.
 		return nil, errors.New(
 			"e2b: providers.sandbox.api_key resolved empty — the API " +
 				"authenticates every call, including against a self-hosted " +
@@ -121,12 +121,12 @@ func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 // Kind implements [Provider].
 func (p *E2BProvider) Kind() string { return E2BKind }
 
-// templateFor is the image one run gets: the spec's, then the company's,
-// then the coding agent's own.
+// templateFor is the image one run gets: the company's, then the coding
+// agent's own.
+//
+// Sizing is a property of the TEMPLATE, so this is also where a box's vCPU,
+// RAM and disk are decided — see providers.sandbox.e2b.template.
 func (p *E2BProvider) templateFor(spec Spec) string {
-	if t := strings.TrimSpace(spec.Template); t != "" {
-		return t
-	}
 	if p.template != "" {
 		return p.template
 	}

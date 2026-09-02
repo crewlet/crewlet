@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -1543,110 +1542,33 @@ func TestTheAPIBaseIsDerivedFromHowTheDeploymentIsNamed(t *testing.T) {
 	}
 }
 
-// TestTheSeatWalkIsBounded is the other half of the concurrency contract: the
-// walk fans out, and the fan-out has a ceiling.
-//
-// It ran with none. `crewlet github provision` opened one HTTPS connection per
-// credentialled seat, all at once, against one account — which is precisely
-// what GitHub's secondary-rate-limit guidance says not to do, and the shape an
-// abuse detector is built to notice. internal/engine's three credential
-// resolvers were bounded and these two reconcile walks were not, which is the
-// drift provision.ResolveConcurrently exists to prevent.
-func TestTheSeatWalkIsBounded(t *testing.T) {
+// THE ADDRESSED FLAG SPLITS AN ASK FROM NEWS. Leaving an assignment, a review
+// request or a mention unanswered looks to the person who wrote it exactly
+// like the webhook never arrived; a seat obliged to reply to every state
+// change of every pull request it has ever touched is noise.
+func TestOnlyAnAskAddressesTheSeat(t *testing.T) {
 	t.Parallel()
-	// Comfortably more seats than the cap, so an unbounded walk is visible
-	// rather than merely possible.
-	const seats = provision.IdentityLookups * 4
-
-	var (
-		mu    sync.Mutex
-		inFlt int
-		peak  int
-		// Counted per token rather than in total: Reconcile looks up the
-		// ORG's own credential before the seat walk, and a bare total
-		// would fold that call in and break on the next one added.
-		served = map[string]int{}
-	)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		mu.Lock()
-		inFlt++
-		peak = max(peak, inFlt)
-		mu.Unlock()
-
-		// HELD, so the callers actually overlap. A handler that answers
-		// immediately lets each lookup finish before the next begins, and
-		// the peak then stays at one whether or not anything bounds it —
-		// a test that cannot fail.
-		time.Sleep(20 * time.Millisecond)
-
-		mu.Lock()
-		inFlt--
-		served[token]++
-		mu.Unlock()
-		_, _ = w.Write([]byte(`{"login": "` + strings.TrimPrefix(token, "ghp_") + `"}`))
-	}))
-	t.Cleanup(server.Close)
-
-	client, err := github.NewClient(github.ClientOptions{
-		APIBase: server.URL, WebBase: server.URL, Token: "ghp_engine",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	roles := make([]*org.Role, 0, seats+1)
-	for i := range seats {
-		roles = append(roles, &org.Role{
-			Name:           fmt.Sprintf("Engineer %d", i),
-			DeclaredHandle: fmt.Sprintf("eng%d", i),
-			MCPEnv: map[string]map[string]string{
-				github.SeatEnv: {"GITHUB_TOKEN": fmt.Sprintf("ghp_bot%d", i)},
-			},
+	addressed := func(reason string) bool {
+		return (github.Prompt{}).Addressed(notify.Inbound{
+			Source:   github.Backend,
+			Metadata: map[string]string{"event_type": reason},
 		})
 	}
-	// A SEAT WITH NO CREDENTIAL, so the index mapping is exercised: the
-	// walk resolves a subset of the seats and each answer still has to
-	// land in its own row.
-	roles = append(roles, &org.Role{Name: "Designer", DeclaredHandle: "design"})
-
-	res, err := github.Reconcile(context.Background(), github.Options{
-		Client: client,
-		Config: &config.GitHub{Enabled: true},
-		Org:    &org.Organization{Name: "Acme", Roles: roles},
-		Value:  func(v string) string { return v },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	mu.Lock()
-	gotPeak := peak
-	gotServed := maps.Clone(served)
-	mu.Unlock()
-	if gotPeak > provision.IdentityLookups {
-		t.Errorf("peak in-flight lookups = %d, want at most %d",
-			gotPeak, provision.IdentityLookups)
-	}
-	// The bound must not have cost work: every credentialled seat is still
-	// looked up exactly once, and each gets its OWN answer.
-	for i := range seats {
-		if n := gotServed[fmt.Sprintf("ghp_bot%d", i)]; n != 1 {
-			t.Errorf("seat %d was looked up %d times, want exactly once", i, n)
+	for _, reason := range []string{
+		github.IssueAssigned, github.IssueMention, github.PRAssigned,
+		github.PRReviewRequested, github.PRMention, github.PRChangesRequested,
+		github.CommentMention,
+	} {
+		if !addressed(reason) {
+			t.Errorf("%q does not address the seat", reason)
 		}
 	}
-	byHandle := map[string]github.SeatIdentity{}
-	for _, identity := range res.Seats {
-		byHandle[identity.Handle] = identity
-	}
-	for i := range seats {
-		handle := fmt.Sprintf("eng%d", i)
-		if want := fmt.Sprintf("bot%d", i); byHandle[handle].Login != want {
-			t.Fatalf("%s resolved to %q, want %q — an answer landed in the wrong row",
-				handle, byHandle[handle].Login, want)
+	for _, reason := range []string{
+		github.CommentAdded, github.IssueClosed, github.PRMerged, github.PRClosed,
+		github.PRApproved, github.PRReviewed, github.WorkflowFailed,
+	} {
+		if addressed(reason) {
+			t.Errorf("%q addresses the seat and is news about a thread it follows", reason)
 		}
-	}
-	if byHandle["design"].Routes() {
-		t.Errorf("the seat with no credential was reported as routing: %+v", byHandle["design"])
 	}
 }

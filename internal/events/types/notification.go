@@ -68,6 +68,13 @@ type CoalescedMessage struct {
 	// original flags would be unrecoverable and a worker reasoning per message
 	// would silently inherit whole-turn semantics.
 	ContextRequiresRecon bool `json:"context_requires_recon"`
+
+	// Addressed is this constituent's OWN "somebody is waiting on this
+	// seat" flag, carried per message for the same reason the recon flag
+	// is: the merged event's flat flag is an any() across constituents, so
+	// without this copy a worker reasoning per message could not tell the
+	// one direct mention in a burst from the four broadcasts around it.
+	Addressed bool `json:"addressed,omitempty"`
 }
 
 // ExternalNotification is an inbound notification from an external system, and
@@ -95,9 +102,20 @@ type ExternalNotification struct {
 	SalientBody *string           `json:"salient_body"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
 	// ContextRequiresRecon is true when Body is a POINTER (a webhook naming a
-	// thing-that-changed) rather than the context itself. The Plan-phase
+	// thing-that-changed) rather than the context itself. The turn-start
 	// relevance-filter prefetches skip their aux-LLM call when it is set.
 	ContextRequiresRecon bool `json:"context_requires_recon"`
+
+	// Addressed is true when somebody is waiting on this seat for an
+	// answer — a direct message, a personal mention, an assignment —
+	// as the source's own [notify.Prompt] reads its routing.
+	//
+	// The turn engine derives the turn's delivery obligation from it: an
+	// addressed turn may not end in silence. ABSENT MEANS UNADDRESSED, and
+	// that is the safe half in both directions — an older build's events
+	// decode as unaddressed, which is the freedom to stay silent rather
+	// than an obligation to post.
+	Addressed bool `json:"addressed,omitempty"`
 	// Messages are the constituents when this event is a COALESCED trigger.
 	//
 	// Empty — the overwhelmingly common case — means a plain single-webhook

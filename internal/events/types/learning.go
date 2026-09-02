@@ -15,8 +15,7 @@ func init() {
 	events.Register[EpisodeWritten]()
 	events.Register[PersistDeciderCompleted]()
 	events.Register[SkillUsed]()
-	events.Register[PlanPrefetchSummary]()
-	events.Register[RelevantKnowledgeRefetched]()
+	events.Register[PrefetchSummary]()
 	events.Register[CounterpartyProfileUpdated]()
 	events.Register[SkillSynthesized]()
 	events.Register[SkillRefined]()
@@ -210,11 +209,18 @@ func (e SkillUsed) SummaryFor(actor string) string {
 	return lead(actor, "used skill '"+e.SkillName+"' ("+string(e.SourceKind)+")")
 }
 
-// PlanPrefetchSummary fires once per turn after the Plan-phase prefetches
-// resolve, recording hit and rendered size for each of the six parallel blocks.
-// Operators plot per-block hit rate to validate the pipeline: a block stuck at
-// zero for one agent is a configuration or data problem, not a turn problem.
-type PlanPrefetchSummary struct {
+// PrefetchSummary fires once per turn, after the six context blocks the
+// executor's prompt is built from resolve, recording hit and rendered size for
+// each of them.
+//
+// IT IS THE ONLY VISIBILITY THIS PIPELINE HAS. Every block degrades to empty
+// on failure by design — an unreachable store, an unconfigured auxiliary
+// model and a filter that selected nothing all render the same nothing — so
+// without this event a seat running with no memory at all looks exactly like
+// a seat whose stores had nothing to say. Operators plot per-block hit rate
+// per agent: a block stuck at zero is a configuration or data problem, not a
+// turn problem.
+type PrefetchSummary struct {
 	Agent                  string `json:"agent_id"`
 	AgentHandle            string `json:"agent_handle"`
 	RoleName               string `json:"role"`
@@ -241,24 +247,25 @@ type PlanPrefetchSummary struct {
 	// personal-memory, relevant-knowledge and episode-recall prefetches skipped
 	// their aux-LLM call entirely: their hit and byte counts reflect the GATE,
 	// not a filter that ran and found nothing. This is the field that tells
-	// "empty because gated" from "the filter selected nothing".
+	// "empty because gated" from "the filter selected nothing". Such a turn
+	// searches later instead, with the executor's own search_knowledge call.
 	TriggerRequiresRecon bool `json:"trigger_requires_recon"`
 }
 
-// EventType is the "plan_prefetch_summary" wire type.
-func (PlanPrefetchSummary) EventType() string { return "plan_prefetch_summary" }
+// EventType is the "prefetch_summary" wire type.
+func (PrefetchSummary) EventType() string { return "prefetch_summary" }
 
-// Role is the seat whose Plan phase the prefetches ran for; per-block hit rate
-// is plotted per role.
-func (e PlanPrefetchSummary) Role() string { return e.RoleName }
+// Role is the seat whose turn the prefetches ran for; per-block hit rate is
+// plotted per role.
+func (e PrefetchSummary) Role() string { return e.RoleName }
 
 // AgentID is the instance whose stores were searched.
-func (e PlanPrefetchSummary) AgentID() string { return e.Agent }
+func (e PrefetchSummary) AgentID() string { return e.Agent }
 
 // SummaryFor counts hits out of six and flags a gated turn separately: without
 // the flag, a thin trigger and a genuinely empty set of stores produce the same
 // "0/6" and lead an operator to look in the wrong place.
-func (e PlanPrefetchSummary) SummaryFor(actor string) string {
+func (e PrefetchSummary) SummaryFor(actor string) string {
 	hits := 0
 	for _, hit := range []bool{
 		e.CounterpartyHit, e.SynthesizedSkillsHit, e.EpisodeRecallHit,
@@ -272,51 +279,7 @@ func (e PlanPrefetchSummary) SummaryFor(actor string) string {
 	if e.TriggerRequiresRecon {
 		gated = " (thin trigger — filters gated)"
 	}
-	return lead(actor, fmt.Sprintf("plan prefetch: %d/6 hits%s", hits, gated))
-}
-
-// RelevantKnowledgeRefetched fires when the post-Plan knowledge re-fetch runs.
-//
-// On a thin trigger the Plan-phase prefetch is gated off — embedding-searching a
-// bare pointer is noise — so once Plan has done its recon the fetch re-runs
-// keyed on the plan summary and hands the result to Execute. This event is what
-// correlates the gated prefetch with the recovered Execute block. Emitted only
-// on that active path; an ordinary turn emits nothing.
-type RelevantKnowledgeRefetched struct {
-	Agent       string `json:"agent_id"`
-	AgentHandle string `json:"agent_handle"`
-	RoleName    string `json:"role"`
-	TurnID      string `json:"turn_id"`
-	// Iteration is the turn iteration the re-fetch ran in. Plan re-runs on
-	// self-iterate and the re-fetch runs again each time, keyed on the changed
-	// plan summary, so several events per turn are expected and legitimate.
-	Iteration int `json:"iteration"`
-	// PlanDecision is what routed into Execute. Skip never reaches Execute, so
-	// the re-fetch short-circuits and emits nothing for it.
-	PlanDecision PlanDecision `json:"plan_decision"`
-	// BlockBytes non-zero with SelectionCount zero means the filter ran and
-	// rendered the empty hint (candidates existed, none matched); zero means
-	// the fetch produced nothing at all.
-	BlockBytes     int `json:"block_bytes"`
-	SelectionCount int `json:"selection_count"`
-}
-
-// EventType is the "relevant_knowledge_refetched" wire type.
-func (RelevantKnowledgeRefetched) EventType() string { return "relevant_knowledge_refetched" }
-
-// Role is the seat whose post-Plan re-fetch ran.
-func (e RelevantKnowledgeRefetched) Role() string { return e.RoleName }
-
-// AgentID is the instance the recovered block was assembled for.
-func (e RelevantKnowledgeRefetched) AgentID() string { return e.Agent }
-
-// SummaryFor reports both the selection count and the byte size, which is what
-// separates a filter that rendered picks from one that rendered only the empty
-// hint.
-func (e RelevantKnowledgeRefetched) SummaryFor(actor string) string {
-	return lead(actor, fmt.Sprintf(
-		"re-fetched relevant knowledge post-Plan: %d doc(s), %dB",
-		e.SelectionCount, e.BlockBytes))
+	return lead(actor, fmt.Sprintf("prefetch: %d/6 hits%s", hits, gated))
 }
 
 // CounterpartyProfileUpdated fires after one observation pass, whenever the

@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // Company is Tier B — founder-owned, live-editable, versioned in the store.
@@ -88,6 +90,12 @@ type Company struct {
 	// coalesced digest, so a larger backlog arrives as successive capped
 	// batches rather than one unbounded megaprompt.
 	NotificationCoalesceMaxBatch int `yaml:"notification_coalesce_max_batch,omitempty" json:"notification_coalesce_max_batch,omitempty" js:"min=1" desc:"Events merged into one digest trigger."`
+
+	// Workers are the reusable delegate templates a seat's executor hands
+	// work to, keyed by the name it types into a `delegate` call. See
+	// workers.go for why a template exists at all and why naming a tool in
+	// one grants nothing.
+	Workers map[string]Worker `yaml:"workers,omitempty" json:"workers,omitempty" desc:"Reusable delegate templates, keyed by the name an executor calls them by."`
 
 	// Roles are the seats that belong to no unit — a CEO, a cross-cutting
 	// advisor, the founder's own human seat.
@@ -188,6 +196,8 @@ func (c *Company) Validate() error {
 	p.wrap(c.Integrations.validate("integrations"))
 	p.wrap(c.validateKnowledgeBackend())
 	p.wrap(c.validateProviderKeys())
+	p.wrap(c.validateWorkers())
+	p.wrap(c.validateSandboxPlacement())
 
 	seen := make(map[string]struct{}, len(c.MCPServers))
 	for i := range c.MCPServers {
@@ -202,6 +212,18 @@ func (c *Company) Validate() error {
 			// wins wherever the engine indexes by name, so the first's
 			// tools silently vanish from every prompt.
 			p.add(at(path, "name"), ErrConflict, "duplicate MCP server name %q", name)
+		}
+		if name == BridgeServerName {
+			// The same collision one layer out: the engine writes the
+			// seat's tool bridge into every agent-mode box under this
+			// name, and a company server called the same is overwritten
+			// there — its tools gone from the run with nothing saying
+			// why. See [BridgeServerName].
+			p.add(at(path, "name"), ErrConflict,
+				"%q is reserved for the seat's own tool bridge, which every "+
+					"agent-mode box sees under that name; a server called the "+
+					"same would be replaced by it in the box. Rename the server",
+				name)
 		}
 		seen[name] = struct{}{}
 	}
@@ -259,7 +281,7 @@ type Knowledge struct {
 // validateProviderKeys holds the rule that a seat may only name a model the
 // company actually has.
 //
-// Without it a typo is invisible and permanent. `llm_plan: claude-sonet`
+// Without it a typo is invisible and permanent. `llm_review: claude-sonet`
 // resolves through the runtime's fallback — per-phase, then the role's default
 // chain, then the "default" key, then the first provider configured — so the
 // seat boots, thinks, and bills, on a model the operator never chose. Nothing
@@ -270,7 +292,7 @@ type Knowledge struct {
 // Applied to EVERY seat in the document, at any depth. Nearly all of a real
 // company's roles live inside units, which nest arbitrarily — so a rule that
 // walked the root `roles:` list alone left the typo invisible exactly where
-// it is most likely to be written. The walk is [Company.eachRole] rather than
+// it is most likely to be written. The walk is [Company.EachRole] rather than
 // a loop here, so the next whole-document rule about seats inherits it.
 //
 // Skipped entirely when providers.llm is empty. A company with no models is a
@@ -285,12 +307,12 @@ func (c *Company) validateProviderKeys() error {
 	}
 	known := slices.Sorted(maps.Keys(c.Providers.LLM))
 
-	for role, path := range c.eachRole() {
+	for role, path := range c.EachRole() {
 		// Both written surfaces are checked, and each is reported at the
 		// path the operator typed. Validating the RESOLVED chain instead
 		// would hide half of them: the flat field wins over the mapping,
-		// so a typo inside `llm.plan` under a role that also sets
-		// `llm_plan` never appears in the resolved value at all — and it
+		// so a typo inside `llm.review` under a role that also sets
+		// `llm_review` never appears in the resolved value at all — and it
 		// is still a typo, still in the file, and still what the operator
 		// will edit next.
 		for _, field := range []struct {
@@ -298,15 +320,11 @@ func (c *Company) validateProviderKeys() error {
 			keys ProviderKeys
 		}{
 			{at(path, "llm"), role.LLM.Default},
-			{at(at(path, "llm"), "plan"), role.LLM.Plan},
-			{at(at(path, "llm"), "execute"), role.LLM.Execute},
 			{at(at(path, "llm"), "review"), role.LLM.Review},
 			{at(at(path, "llm"), "subagent"), role.LLM.Subagent},
 			{at(at(path, "llm"), "auxiliary"), role.LLM.Auxiliary},
 			{at(at(path, "llm"), "judge"), role.LLM.Judge},
 			{at(at(path, "llm"), "sandbox"), role.LLM.Sandbox},
-			{at(path, "llm_plan"), role.LLMPlan},
-			{at(path, "llm_execute"), role.LLMExecute},
 			{at(path, "llm_review"), role.LLMReview},
 			{at(path, "llm_subagent"), role.LLMSubagent},
 			{at(path, "llm_auxiliary"), role.LLMAuxiliary},
@@ -328,19 +346,26 @@ func (c *Company) validateProviderKeys() error {
 	return p.err()
 }
 
-// eachRole yields every seat in the document, with the path the operator
-// typed to reach it.
+// EachRole yields EVERY seat in the company, with the path an operator typed:
+// the top-level `roles:` and every seat inside `units:`, to any depth.
 //
-// THE TRAVERSAL, not just one rule's use of it. A whole-document rule about
-// seats has to visit units, which nest to any depth — and the one that did
-// not walked c.Roles alone, so a unit role naming a provider that does not
-// exist validated clean and the typo stayed invisible and permanent. Every
-// later rule of this shape inherits the walk rather than re-deriving it.
+// It exists because the walk was written inline once and covered only the
+// top-level list, so a cross-field rule silently exempted every seat that
+// belonged to a unit — which, in a company with an org chart, is most of them.
+// A rule that holds for a seat in `roles:` and not for the identical seat one
+// level down is not a rule, and the seats it missed are exactly the ones whose
+// mistakes have no run-time symptom to find them by.
 //
-// A range-over-func rather than a slice, because a validation walk stops at
-// nothing and a caller that breaks early should not have paid to flatten the
-// whole tree first.
-func (c *Company) eachRole() iter.Seq2[*Role, string] {
+// AN ITERATOR rather than a callback, so a caller looking for ONE seat can
+// stop at it: the engine's per-seat sandbox lookup ran the whole org chart to
+// the end on every launch because a callback has no way to say "found it".
+//
+// EXPORTED because the ENGINE needs the same walk: a seat's sandbox block is
+// looked up by name at launch, and a lookup that stopped at the top level
+// answered nil for every seat in a unit — so run_sandbox refused each of them
+// with "this seat's sandbox is not enabled" on a seat whose block said
+// otherwise. One walker, so the two can never disagree about which seats exist.
+func (c *Company) EachRole() iter.Seq2[*Role, string] {
 	return func(yield func(*Role, string) bool) {
 		for i := range c.Roles {
 			if !yield(&c.Roles[i], idx("roles", i)) {
@@ -365,4 +390,305 @@ func (c *Company) eachRole() iter.Seq2[*Role, string] {
 		}
 		walk(c.Units, "units")
 	}
+}
+
+// SandboxPlacements is every cell a seat could ACTUALLY land in, each mapped
+// to the path of the first thing that named it.
+//
+// ONE COMPUTATION, TWO CALLERS, and they have to agree or the company is
+// refused for a rule the engine then breaks anyway. Validation requires a
+// container image only where a container is reached; the engine builds a
+// backend only for what is reached. Built eagerly from the catalogue instead,
+// the engine constructed a container backend for a company whose seats all run
+// direct — and failed the apply demanding an image the validator had just
+// refused as a field nothing would read.
+//
+// The DEFAULT IS ALWAYS REACHED when the catalogue is enabled: it is where a
+// seat that names nothing goes, including a seat added later by a founder
+// editing Tier B live, so a company must be able to run it before one exists.
+func (c *Company) SandboxPlacements() map[Placement]string {
+	reached := make(map[Placement]string)
+	catalogue := c.Providers.Sandbox
+	if !catalogue.Enabled() {
+		return reached
+	}
+	if run := catalogue.RunIn(); run != "" {
+		where := "providers.sandbox.default_run_in"
+		if catalogue.DefaultRunIn == "" {
+			// Resolved from the catalogue's own shape rather than
+			// written, so the message points at the block, not at a
+			// field the operator will not find.
+			where = "providers.sandbox"
+		}
+		reached[run] = where
+	}
+	for role, path := range c.EachRole() {
+		gate := role.Sandbox
+		if gate == nil || !gate.Enabled || gate.RunIn == "" || !gate.RunIn.NeedsBackend() {
+			continue
+		}
+		if _, seen := reached[gate.RunIn]; !seen {
+			reached[gate.RunIn] = at(at(path, "sandbox"), "run_in")
+		}
+	}
+	// AN AGENT-MODE EXECUTOR IS A RUN TOO, placed by its entry's own
+	// cli.run_in rather than by the seat's gate — and for as long as this
+	// walk stopped at the gates, that cell was never built: an entry
+	// naming `e2b` in a company whose seats all ran direct validated
+	// cleanly and failed at the seat's first turn, every turn, with the
+	// manager's "no backend for e2b".
+	for _, key := range c.agentModeExecutorKeys() {
+		run := c.Providers.LLM[key].CLI.RunIn
+		if run == "" || !run.NeedsBackend() {
+			continue
+		}
+		if _, seen := reached[run]; !seen {
+			reached[run] = at(agentModeEntryPath(key), "run_in")
+		}
+	}
+	return reached
+}
+
+// agentModeExecutorKeys are the providers.llm entries some seat's EXECUTOR
+// resolves to that run in agent mode, in key order.
+//
+// ONLY ENTRIES A SEAT REACHES, resolved as the phase registry resolves them
+// (see [Company.ExecutorProvider]): an agent-mode entry nobody's executor
+// runs on launches nothing, so the cell it names is not reached and the
+// backend behind it is not built — the same rule every gate here follows. It
+// is validated the day a seat points at it, like a seat added later.
+//
+// Sorted, so a message naming "the first seat" or a backend built in this
+// order is the same on every run of the same config.
+func (c *Company) agentModeExecutorKeys() []string {
+	fallback, ok := c.executorFallback()
+	if !ok {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for role := range c.EachRole() {
+		key, entry, resolved := c.executorProvider(role, fallback)
+		if !resolved || !entry.CLI.AgentMode() {
+			continue
+		}
+		seen[key] = struct{}{}
+	}
+	return slices.Sorted(maps.Keys(seen))
+}
+
+// agentModeEntryPath is where an agent-mode entry's placement is written, for
+// the messages that point at it.
+func agentModeEntryPath(key string) string {
+	return at(at(at("providers", "llm"), key), "cli")
+}
+
+// ExecutorProvider is the providers.llm entry a seat's EXECUTOR actually runs
+// on, resolved exactly as the phase registry resolves it: the seat's own `llm`
+// keys, then the entry called "default", then the first provider in
+// declaration order.
+//
+// A SECOND RESOLUTION OF THE SAME QUESTION, and normally that is the mistake
+// this codebase spends most of its rules on — but the registry's needs a
+// BUILT provider per key, which exists only once a company is constructed, and
+// this has to answer during validation, where the answer's whole value is
+// catching the mistake before anything is built. The two are held together by
+// a test that walks the same fallbacks. What must never happen is this one
+// growing a rule the registry does not have.
+//
+// The second return is false when there is no executor to resolve: a company
+// that configures no provider at all (which the registry refuses at
+// construction and this must not crash on), or a HUMAN SEAT. A human seat is
+// addressable and never spawned — it runs no phase, and `llm` is one of the
+// fields [org.Role.Validate] refuses on one — so resolving it would answer
+// with whatever entry happens to be declared first and call that entry
+// reached. It is the fallback below that makes this more than a theoretical
+// tidiness: a company whose first-declared entry was an agent-mode CLI was
+// refused for a box its founder's seat would never run in.
+func (c *Company) ExecutorProvider(role *Role) (string, LLMProvider, bool) {
+	fallback, ok := c.executorFallback()
+	if !ok {
+		return "", LLMProvider{}, false
+	}
+	return c.executorProvider(role, fallback)
+}
+
+// executorFallback is the entry a seat that names none runs on: the one
+// called "default", else the first declared. SEAT-INDEPENDENT, and resolved
+// once by a caller walking every seat — [Providers.ProviderOrder] allocates,
+// and it was allocating per seat to answer a question no seat can change.
+//
+// False when the company configures no provider at all.
+func (c *Company) executorFallback() (string, bool) {
+	if _, ok := c.Providers.LLM["default"]; ok {
+		return "default", true
+	}
+	order := c.Providers.ProviderOrder()
+	if len(order) == 0 {
+		return "", false
+	}
+	return order[0], true
+}
+
+// executorProvider is [Company.ExecutorProvider] over a resolved fallback.
+// ONE resolution rule, reachable two ways — what must never happen is this
+// growing a rule the phase registry does not have.
+func (c *Company) executorProvider(role *Role, fallback string) (string, LLMProvider, bool) {
+	if role.Kind == org.KindHuman {
+		return "", LLMProvider{}, false
+	}
+	for _, key := range role.LLM.Default {
+		if entry, ok := c.Providers.LLM[key]; ok {
+			return key, entry, true
+		}
+	}
+	return fallback, c.Providers.LLM[fallback], true
+}
+
+// validateSandboxPlacement holds the rules that need BOTH the catalogue and
+// the seats: which cells a company actually reaches, and whether the blocks
+// configuring them are there.
+//
+// Neither half can hold it alone. providers.sandbox is validated without the
+// roles, so it cannot know that `run_in: container` is reached and an image is
+// needed; a role is validated without the providers, so it cannot know that
+// the cell it names is not configured. Both failures are silent at run time —
+// the seat is offered the tool and the first coding run dies inside a turn.
+func (c *Company) validateSandboxPlacement() error {
+	var p problems
+	catalogue := c.Providers.Sandbox
+
+	for role, path := range c.EachRole() {
+		gate := role.Sandbox
+		if gate == nil || !gate.Enabled {
+			continue
+		}
+		where := at(at(path, "sandbox"), "run_in")
+		if !catalogue.Enabled() {
+			p.add(at(at(path, "sandbox"), "enabled"), ErrMissing,
+				"this seat runs code, but the company configures no sandbox. "+
+					"Add providers.sandbox, or turn the seat's gate off — an "+
+					"enabled gate with no catalogue offers the seat nothing and "+
+					"says so nowhere")
+			continue
+		}
+		run := gate.RunIn
+		if run == PlacementSelf {
+			// CODE WORK INSIDE THE EXECUTOR'S OWN RUN, which only exists
+			// when that executor is a coding CLI in agent mode. On any
+			// other runtime the seat has no shell of its own, so `self`
+			// would read as a working choice and turn code work off — a
+			// seat that plans around a sandbox it is never offered, with
+			// nothing anywhere saying why.
+			key, entry, resolved := c.ExecutorProvider(role)
+			if resolved && !entry.CLI.AgentMode() {
+				p.add(where, ErrConflict,
+					"`self` means code work rides this seat's own executor run, "+
+						"which only a coding CLI in agent mode has. This seat's "+
+						"executor is providers.llm.%s. Set `mode: agent` on a "+
+						"cli-agent entry and point the seat at it, or name a "+
+						"cell the catalogue configures (%s)",
+					key, names(catalogue.available()))
+			}
+			continue
+		}
+		if run == "" {
+			run = catalogue.RunIn()
+		}
+		switch {
+		case run == "":
+			p.add(where, ErrMissing,
+				"this seat runs code and the catalogue offers more than one "+
+					"place to do it (%s), so it has to name one — or "+
+					"providers.sandbox.default_run_in has to",
+				names(catalogue.available()))
+		case !slices.Contains(Placements, run):
+			// Spelling is the role's own rule; it already reported.
+		case !catalogue.Configured(run):
+			p.add(where, ErrConflict,
+				"%q needs the %s backend configured under providers.sandbox "+
+					"(this catalogue has %s)",
+				run, run.backend(), names(catalogue.available()))
+		}
+	}
+
+	// THE SAME THREE QUESTIONS FOR AN AGENT-MODE EXECUTOR, whose run is
+	// placed by its entry rather than by a gate: is there a catalogue at
+	// all, is the cell it names configured, and does a silent entry have a
+	// default to fall to. Each was unasked, and each failed at the seat's
+	// first turn — every turn — with a launch error naming a backend no
+	// field in the file appeared to be missing.
+	for _, key := range c.agentModeExecutorKeys() {
+		entry := c.Providers.LLM[key]
+		where := at(agentModeEntryPath(key), "run_in")
+		if !catalogue.Enabled() {
+			p.add(at(agentModeEntryPath(key), "mode"), ErrMissing,
+				"agent mode runs the executor in a box, and this company "+
+					"configures no sandbox. Add providers.sandbox, or set "+
+					"`mode: text` to keep the CLI a subprocess of the engine")
+			continue
+		}
+		run := entry.CLI.RunIn
+		if run == "" {
+			run = catalogue.RunIn()
+		}
+		switch {
+		case run == "":
+			p.add(where, ErrMissing,
+				"agent mode runs the executor in a box and the catalogue "+
+					"offers more than one place to do it (%s), so this entry "+
+					"has to name one — or providers.sandbox.default_run_in has to",
+				names(catalogue.available()))
+		case !slices.Contains(BackendPlacements(), run):
+			// Spelling is the entry's own rule; it already reported.
+		case !catalogue.Configured(run):
+			p.add(where, ErrConflict,
+				"%q needs the %s backend configured under providers.sandbox "+
+					"(this catalogue has %s)",
+				run, run.backend(), names(catalogue.available()))
+		}
+	}
+
+	reached := c.SandboxPlacements()
+	if catalogue.Enabled() && len(reached) == 0 {
+		// A CATALOGUE NOTHING CAN RUN, and it is not merely inert. The
+		// engine builds a backend only for a cell something reaches, so
+		// zero reached cells means no manager, no coordinator, and
+		// `run_sandbox` registered for nobody — and the sandbox runtime is
+		// built ONCE AT BOOT, so a founder who later adds a sandbox-enabled
+		// seat live gets a clean apply and code work that silently never
+		// happens, for the life of the process.
+		//
+		// It is only reachable on an AMBIGUOUS catalogue: any catalogue
+		// that resolves a default reaches that default, precisely so a seat
+		// added later has somewhere to go. So the remedy is the default —
+		// or a seat, which is the other thing that would reach a cell.
+		p.add(at("providers.sandbox", "default_run_in"), ErrMissing,
+			"this catalogue configures more than one place to run code (%s) and "+
+				"nothing names one, so no backend is built and no seat can ever "+
+				"run code here. Name the default, give a seat `run_in`, or remove "+
+				"the block",
+			names(catalogue.available()))
+	}
+	if local := catalogue.localBlock(); local != nil {
+		// THE IMAGE IS ONLY NEEDED WHERE A CONTAINER IS ACTUALLY RUN, and
+		// only the walk above knows that. Required unconditionally it would
+		// refuse a perfectly good direct-only company; unchecked, a seat's
+		// first coding run fails at container create, minutes into a turn.
+		if named, wanted := reached[PlacementContainer]; wanted && strings.TrimSpace(local.Image) == "" {
+			p.add("providers.sandbox.local.image", ErrMissing,
+				"%s runs in a container, so the local backend needs an image "+
+					"with the coding-agent CLI installed", named)
+		}
+		if _, wanted := reached[PlacementContainer]; !wanted {
+			for _, unread := range local.containerOnly() {
+				if strings.TrimSpace(unread.value) == "" {
+					continue
+				}
+				p.add(at("providers.sandbox.local", unread.field), ErrConflict,
+					"only a container box reads this, and no seat runs in one. "+
+						"Give a seat `run_in: container`, or remove the field")
+			}
+		}
+	}
+	return p.err()
 }

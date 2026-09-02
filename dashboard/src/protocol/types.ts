@@ -243,6 +243,8 @@ export interface SandboxRun {
   role: string;
   status: string;
   coding_agent: string;
+  /** Which configured cell the run's box is in: direct, container or e2b. */
+  placement: string;
   task_description: string;
   question: string;
   audience: string;

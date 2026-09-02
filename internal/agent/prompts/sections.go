@@ -13,10 +13,10 @@ import (
 //
 // They live in this package rather than beside the agent definition because
 // they are prompt text: the words below are as load-bearing as the phase
-// contracts, and one source of truth for them keeps the Plan prompt and any
+// contracts, and one source of truth for them keeps the executor's prompt and any
 // combined single-shot prompt from drifting apart.
 
-// BuildIdentitySection renders the professional identity for the Plan phase.
+// BuildIdentitySection renders the professional identity for the executor.
 //
 // Plan needs enough to decide *what* to do: role, company, unit, goal,
 // manager, and direct reports (for delegation decisions). The long-form

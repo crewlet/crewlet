@@ -192,7 +192,8 @@ func (t *useSkill) suggest(ctx context.Context, handle, name string) string {
 type queryEpisodes struct {
 	episodes EpisodeStore
 
-	// recall is the Plan phase's own similarity search, re-run on demand.
+	// recall is the turn-start prefetch's own similarity search, re-run on
+	// demand.
 	// Nil leaves the tool on the recency and conversation paths, which is
 	// what a company with no embeddings has.
 	recall Recaller
@@ -252,7 +253,8 @@ func (t *queryEpisodes) defaultLimit() int {
 	return clampInt(orDefault(t.limit, DefaultEpisodeLimit), 1, maxEpisodeLimit)
 }
 
-// similar runs the Plan phase's own vector recall, or explains why it cannot.
+// similar runs the turn-start prefetch's own vector recall, or explains why it
+// cannot.
 //
 // The REFUSAL is a message rather than an empty answer: "nothing resembles
 // this" and "this deployment cannot search by meaning" send a model to
@@ -425,7 +427,7 @@ func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 
 // filtered re-runs the personal-memory relevance filter against a hint.
 //
-// THE SAME FILTER the Plan phase ran, which is why this is a pull rather than
+// THE SAME FILTER the turn-start prefetch ran, which is why this is a pull rather than
 // a second implementation: the block at the top of the prompt and this tool
 // have to agree about what is relevant, and two answers to that question drift
 // in the direction nobody looks.

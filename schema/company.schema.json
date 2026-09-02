@@ -33,10 +33,27 @@
           "minimum": 0,
           "type": "integer"
         },
+        "mode": {
+          "description": "text (a model behind the engine's tool loop) or agent (the CLI runs the executor).",
+          "enum": [
+            "text",
+            "agent"
+          ],
+          "type": "string"
+        },
         "overrides": {
           "additionalProperties": {},
           "description": "Field-wise overrides of the built-in CLI profile.",
           "type": "object"
+        },
+        "run_in": {
+          "description": "Where an agent-mode run happens. Empty = providers.sandbox.default_run_in.",
+          "enum": [
+            "direct",
+            "container",
+            "e2b"
+          ],
+          "type": "string"
         },
         "state_dir": {
           "description": "Credential + per-seat home directory. Entries sharing one share a login.",
@@ -165,6 +182,71 @@
           "maximum": 86400,
           "minimum": 0,
           "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Delegation": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_fraction": {
+          "description": "Share of the parent's remaining budget one delegate call may spend.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "call_timeout_seconds": {
+          "description": "Wall-clock cap on a whole delegate call, waves included.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "max_parallel": {
+          "description": "Workers running at once within one delegate call.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_tasks_per_call": {
+          "description": "Tasks one delegate call may contain.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_turns": {
+          "description": "Tool rounds one worker may run.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_turns_ceiling": {
+          "description": "Highest max_turns a worker template may declare.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "min_tokens_per_task": {
+          "description": "Floor on one worker's token share; below it the call is refused.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "task_timeout_seconds": {
+          "description": "Wall-clock cap on one worker.",
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "E2BSandbox": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key": {
+          "description": "Remote sandbox API key; required. ${VAR} supported.",
+          "type": "string"
+        },
+        "domain": {
+          "description": "Self-hosted sandbox cluster domain; empty = vendor cloud.",
+          "type": "string"
+        },
+        "template": {
+          "description": "Box template. This is where vCPU/RAM/disk are set — at template build time.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -615,16 +697,8 @@
     "LocalSandbox": {
       "additionalProperties": false,
       "properties": {
-        "containment": {
-          "description": "direct (state isolation only) or container (host isolation).",
-          "enum": [
-            "direct",
-            "container"
-          ],
-          "type": "string"
-        },
         "image": {
-          "description": "Container image with the coding-agent CLI installed.",
+          "description": "Container image with the coding-agent CLI installed. Required for run_in: container.",
           "type": "string"
         },
         "network": {
@@ -648,7 +722,7 @@
           "type": "string"
         },
         "state_dir": {
-          "description": "Parent directory for box directories.",
+          "description": "Parent directory for box directories; used by both local placements.",
           "type": "string"
         }
       },
@@ -1015,33 +1089,7 @@
                     }
                   ]
                 },
-                "execute": {
-                  "oneOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    }
-                  ]
-                },
                 "judge": {
-                  "oneOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    }
-                  ]
-                },
-                "plan": {
                   "oneOf": [
                     {
                       "type": "string"
@@ -1112,20 +1160,6 @@
             }
           ]
         },
-        "llm_execute": {
-          "description": "Provider chain for Execute.",
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          ]
-        },
         "llm_judge": {
           "description": "Cheap model for the round-cap extension judge.",
           "oneOf": [
@@ -1140,22 +1174,8 @@
             }
           ]
         },
-        "llm_plan": {
-          "description": "Provider chain for Plan; wins over llm.plan.",
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          ]
-        },
         "llm_review": {
-          "description": "Provider chain for Review.",
+          "description": "Provider chain for the reviewer.",
           "oneOf": [
             {
               "type": "string"
@@ -1247,6 +1267,13 @@
         "unit": {
           "description": "Home unit for a root-level seat; the seat is moved into it.",
           "type": "string"
+        },
+        "workers": {
+          "description": "Delegate templates this seat may use; empty = every one.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -1346,6 +1373,16 @@
           "description": "Paused-box TTL. Unset (or negative) = provider default; 0 = never pause.",
           "type": "number"
         },
+        "run_in": {
+          "description": "Where this seat's code work runs; self = inside its own agent-mode executor run. Empty inherits providers.sandbox.default_run_in.",
+          "enum": [
+            "direct",
+            "container",
+            "e2b",
+            "self"
+          ],
+          "type": "string"
+        },
         "setup": {
           "description": "Per-seat provisioning steps, applied after the engine-wide ones.",
           "items": {
@@ -1390,10 +1427,6 @@
     "SandboxProvider": {
       "additionalProperties": false,
       "properties": {
-        "api_key": {
-          "description": "Remote sandbox API key; required for type e2b. ${VAR} supported.",
-          "type": "string"
-        },
         "default_coding_agent": {
           "description": "Coding agent for seats that name none.",
           "enum": [
@@ -1412,18 +1445,31 @@
           "minimum": 0,
           "type": "number"
         },
+        "default_run_in": {
+          "description": "Where a sandbox-enabled seat that names none runs. Required unless the catalogue names exactly one cell, or every sandbox-enabled seat and agent-mode entry names its own run_in.",
+          "enum": [
+            "direct",
+            "container",
+            "e2b"
+          ],
+          "type": "string"
+        },
         "default_timeout_seconds": {
           "description": "Box TTL/keepalive. Not a run cap — the orphan-reclaim grace.",
           "minimum": 0,
           "type": "number"
         },
-        "domain": {
-          "description": "Self-hosted sandbox cluster domain; empty = vendor cloud.",
-          "type": "string"
+        "e2b": {
+          "$ref": "#/$defs/E2BSandbox",
+          "description": "The remote backend. Absent = run_in: e2b is refused."
+        },
+        "fake": {
+          "description": "Use the in-process double for every placement. Demonstrations only.",
+          "type": "boolean"
         },
         "local": {
           "$ref": "#/$defs/LocalSandbox",
-          "description": "The local backend's block. Required for type local, refused otherwise."
+          "description": "The engine host as a backend. Absent = run_in: direct|container is refused."
         },
         "setup": {
           "description": "Provisioning steps applied to every box before per-seat extras.",
@@ -1431,20 +1477,6 @@
             "$ref": "#/$defs/SandboxSetupStep"
           },
           "type": "array"
-        },
-        "template": {
-          "description": "Box template. This is where vCPU/RAM/disk are set — at template build time.",
-          "type": "string"
-        },
-        "type": {
-          "description": "Backend: e2b, local, fake, or none. Required — there is no default.",
-          "enum": [
-            "e2b",
-            "local",
-            "fake",
-            "none"
-          ],
-          "type": "string"
         }
       },
       "type": "object"
@@ -1770,7 +1802,7 @@
           "type": "array"
         },
         "execute": {
-          "description": "Lines shown during Execute.",
+          "description": "Lines shown while the agent works.",
           "items": {
             "type": "string"
           },
@@ -1783,15 +1815,8 @@
           },
           "type": "array"
         },
-        "plan": {
-          "description": "Lines shown during Plan.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "review": {
-          "description": "Lines shown during Review.",
+          "description": "Lines shown while the reviewer judges the work.",
           "items": {
             "type": "string"
           },
@@ -1806,22 +1831,18 @@
         "conversation_session": {
           "$ref": "#/$defs/ConversationSession"
         },
+        "delegation": {
+          "$ref": "#/$defs/Delegation"
+        },
         "delegation_depth_limit": {
           "description": "Maximum depth of agent-to-agent delegation chains.",
           "minimum": 0,
           "type": "integer"
         },
         "execute_max_tool_rounds_ceiling": {
-          "description": "Hard ceiling for Execute rounds across extensions.",
+          "description": "Hard ceiling for executor rounds across extensions.",
           "minimum": 0,
           "type": "integer"
-        },
-        "executor_always_on_tools": {
-          "description": "Tools Execute always has, whatever the plan named.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
         },
         "extension_enabled": {
           "description": "Round-cap extension judge (default on).",
@@ -1836,12 +1857,12 @@
           "type": "integer"
         },
         "max_iterations": {
-          "description": "Plan/Execute/Review iterations per turn.",
+          "description": "Execute/review iterations per turn.",
           "minimum": 0,
           "type": "integer"
         },
         "max_tool_rounds": {
-          "description": "Tool rounds within one Execute run.",
+          "description": "Tool rounds within one executor run.",
           "minimum": 0,
           "type": "integer"
         },
@@ -1855,57 +1876,10 @@
           "minimum": 0,
           "type": "integer"
         },
-        "plan_max_tool_rounds": {
-          "description": "Tool rounds within one Plan run.",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "plan_max_tool_rounds_ceiling": {
-          "description": "Hard ceiling for Plan rounds across extensions.",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "sandbox_budget_fraction": {
-          "description": "Share of the seat's remaining budget a sandboxed Execute may use.",
-          "maximum": 1,
-          "minimum": 0,
-          "type": "number"
-        },
         "sandbox_min_budget_tokens": {
-          "description": "Refuse a sandboxed Execute below this remaining budget.",
+          "description": "Refuse a coding run below this remaining budget.",
           "minimum": 0,
           "type": "integer"
-        },
-        "subagent_batch_timeout_seconds": {
-          "description": "Wall-clock cap on a whole batched spawn.",
-          "minimum": 0,
-          "type": "number"
-        },
-        "subagent_budget_fraction": {
-          "description": "Share of the parent's remaining budget a sub-agent may use.",
-          "maximum": 1,
-          "minimum": 0,
-          "type": "number"
-        },
-        "subagent_max_parallel": {
-          "description": "Sub-agents run concurrently in one batch.",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "subagent_max_turns": {
-          "description": "Tool rounds one sub-agent may run.",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "subagent_min_per_child_tokens": {
-          "description": "Floor on a child's token slice; below it the batch is refused.",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "subagent_timeout_seconds": {
-          "description": "Wall-clock cap on one sub-agent.",
-          "minimum": 0,
-          "type": "number"
         }
       },
       "type": "object"
@@ -2000,6 +1974,45 @@
         }
       },
       "type": "object"
+    },
+    "Worker": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "description": "What this worker is for, written for the executor choosing one.",
+          "type": "string"
+        },
+        "max_turns": {
+          "description": "Tool rounds this worker may run; 0 takes the runtime cap.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "description": "providers.llm key for this worker; empty takes the seat's llm_subagent chain.",
+          "type": "string"
+        },
+        "output": {
+          "additionalProperties": {},
+          "description": "JSON Schema for this worker's structured answer. Absent takes the default shape.",
+          "type": "object"
+        },
+        "system_prompt": {
+          "description": "The worker's persona and standing instructions. The runtime preamble is appended.",
+          "type": "string"
+        },
+        "tools": {
+          "description": "Tools this worker asks for. Still filtered against the caller's own tools at spawn.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "description",
+        "system_prompt"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://docs.crewlet.ai/schema/company.schema.json",
@@ -2091,6 +2104,13 @@
     "vision": {
       "description": "Longer statement of where the company is going.",
       "type": "string"
+    },
+    "workers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Worker"
+      },
+      "description": "Reusable delegate templates, keyed by the name an executor calls them by.",
+      "type": "object"
     }
   },
   "required": [

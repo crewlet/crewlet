@@ -5,44 +5,186 @@ import (
 	"testing"
 )
 
-// THE REMOTE FIELDS ARE REFUSED WHERE NOTHING READS THEM.
+// A PLACEMENT NEEDS THE BACKEND THAT SERVES IT.
 //
-// `domain:` beside `type: local` reads as a cluster address and configures
-// nothing — the same silence this package spends most of its rules on, and
-// the one that let a remote-only default stand for as long as it did.
-func TestRemoteSandboxFieldsNeedTheRemoteBackend(t *testing.T) {
+// `run_in: e2b` with no `e2b:` block reads as a working choice and configures
+// nothing — the same silence this package spends most of its rules on, and the
+// one that let a remote-only default stand for as long as it did. The
+// catalogue reshape moved the failure here from a `type:` that could only ever
+// answer for the whole company.
+func TestAPlacementNeedsItsBackend(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, yaml, field string }{
-		{"an api key on a local box",
-			"type: local\n    local: {containment: direct}\n    api_key: k", "api_key"},
-		{"a cluster domain on a fake box", "type: fake\n    domain: cluster.example", "domain"},
-		{"a template on a fake box", "type: fake\n    template: custom", "template"},
+		{"a company default naming an unconfigured backend",
+			"local: {}\n    default_run_in: e2b", "providers.sandbox.default_run_in"},
+		{"a seat naming an unconfigured backend",
+			"e2b: {api_key: k}\nroles:\n  - name: SWE\n    sandbox: {enabled: true, run_in: direct}",
+			"roles[0].sandbox.run_in"},
+		// The seats inside `units:` are checked too. They were not, for as
+		// long as the walk that reaches them was written inline in one
+		// rule — which exempted most of a real company's seats from every
+		// cross-field rule there is.
+		{"a unit's seat naming an unconfigured backend",
+			"e2b: {api_key: k}\nunits:\n  - name: Platform\n    roles:\n" +
+				"      - name: SWE\n        sandbox: {enabled: true, run_in: container}",
+			"units[0].roles[0].sandbox.run_in"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    "+tc.yaml+"\n",
-				"providers.sandbox."+tc.field)
+			err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    "+tc.yaml+"\n", tc.field)
 			if !errors.Is(err, ErrConflict) {
 				t.Fatalf("want ErrConflict, got %v", err)
 			}
 		})
 	}
+}
 
-	// AND THE REMOTE BACKEND REQUIRES ITS KEY. The API authenticates every
-	// call, including against a self-hosted cluster — `domain` changes
-	// which API is talked to, not whether it authenticates — so a run
-	// without one 401s at its first create, minutes into a turn that has
-	// already spent a Plan phase.
-	err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    type: e2b\n",
-		"providers.sandbox.api_key")
+// AN AMBIGUOUS CATALOGUE HAS TO BE TOLD WHERE A SILENT SEAT RUNS — and only
+// then.
+//
+// `local:` alone is TWO cells, not one: it serves `direct`, which runs the
+// coding agent as the engine's user, and `container`, which does not. Picking
+// either for an operator who wrote neither is the default that gets discovered
+// afterwards. But the question is about the SEATS: a catalogue whose every
+// sandbox-enabled seat names its own cell has nothing left to default, and
+// that is the shape the catalogue exists for. Refused on the block alone, the
+// remedy its own message offered — "give every seat its run_in" — could never
+// pass.
+func TestAnAmbiguousCatalogueNeedsADefaultOnlyWhereASeatWouldReadIt(t *testing.T) {
+	t.Parallel()
+	const local = "name: Acme\nproviders:\n  sandbox:\n    local: {}\n"
+	const both = "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    e2b: {api_key: k}\n"
+
+	// A silent seat is refused where it is written, on either catalogue.
+	silent := "roles:\n  - name: SWE\n    sandbox: {enabled: true}\n"
+	for _, doc := range []string{local + silent, both + silent} {
+		err := rejects(t, doc, "roles[0].sandbox.run_in")
+		if !errors.Is(err, ErrMissing) {
+			t.Fatalf("want ErrMissing, got %v", err)
+		}
+	}
+
+	// Every seat naming its cell needs no default.
+	cfg := mustCompany(t, both+"roles:\n  - name: SWE\n    sandbox: {enabled: true, run_in: direct}\n"+
+		"  - name: Ops\n    sandbox: {enabled: true, run_in: e2b}\n")
+	reached := cfg.SandboxPlacements()
+	if _, ok := reached[PlacementDirect]; !ok {
+		t.Errorf("direct is not reached: %v", reached)
+	}
+	if _, ok := reached[PlacementE2B]; !ok {
+		t.Errorf("e2b is not reached: %v", reached)
+	}
+	if got := cfg.Providers.Sandbox.RunIn(); got != "" {
+		t.Errorf("a catalogue with no default resolved one anyway: %q", got)
+	}
+
+	// THE UNAMBIGUOUS ONES RESOLVE THEMSELVES, which is the direction that
+	// matters: a rule that only ever refuses would make the simplest remote
+	// catalogue unwritable.
+	cfg = mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    e2b: {api_key: \"${E2B_API_KEY}\"}\n"+silent)
+	if got := cfg.Providers.Sandbox.RunIn(); got != PlacementE2B {
+		t.Fatalf("a remote-only catalogue resolved to %q, want %q", got, PlacementE2B)
+	}
+}
+
+// A CATALOGUE NOTHING REACHES IS REFUSED, and it is the one shape "require a
+// default only where something reads it" must NOT let through.
+//
+// The engine builds a backend only for a cell something reaches, so an
+// ambiguous catalogue with no default and no seat reaches nothing, builds
+// nothing, and registers run_sandbox for nobody. That would merely be inert
+// if it could be repaired later — but the sandbox runtime is built ONCE AT
+// BOOT, so the founder who then adds a sandbox-enabled seat live gets a clean
+// apply and code work that silently never happens for the life of the
+// process. Every catalogue that resolves a default reaches it precisely so a
+// seat added later has somewhere to go.
+func TestACatalogueNothingReachesIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, doc := range []string{
+		"name: Acme\nproviders:\n  sandbox:\n    local: {}\n",
+		"name: Acme\nproviders:\n  sandbox:\n    local: {}\n    e2b: {api_key: k}\n",
+	} {
+		err := rejects(t, doc, "providers.sandbox.default_run_in")
+		if !errors.Is(err, ErrMissing) {
+			t.Fatalf("want ErrMissing, got %v", err)
+		}
+	}
+	// The three ways to reach a cell all satisfy it, or the rule would be
+	// "an ambiguous catalogue is refused" wearing a longer message.
+	for _, tail := range []string{
+		"    default_run_in: direct\n",
+		"roles:\n  - name: SWE\n    sandbox: {enabled: true, run_in: direct}\n",
+		"  llm:\n    sub:\n      type: cli-agent\n      model: sonnet\n" +
+			"      cli: {agent: claude-code, mode: agent, run_in: direct}\n" +
+			"roles:\n  - name: SWE\n    llm: sub\n",
+	} {
+		cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n"+tail)
+		if len(cfg.SandboxPlacements()) == 0 {
+			t.Errorf("nothing reached a cell, so no backend is built:\n%s", tail)
+		}
+	}
+}
+
+// THE REMOTE BACKEND REQUIRES ITS KEY. The API authenticates every call,
+// including against a self-hosted cluster — `domain` changes which API is
+// talked to, not whether it authenticates — so a run without one 401s at its
+// first create, minutes into a turn that has already spent its own rounds.
+func TestTheRemoteBackendRequiresItsKey(t *testing.T) {
+	t.Parallel()
+	err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    e2b: {}\n",
+		"providers.sandbox.e2b.api_key")
 	if !errors.Is(err, ErrMissing) {
 		t.Fatalf("want ErrMissing, got %v", err)
 	}
+	// A COMPLETE REMOTE BLOCK LOADS.
+	mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    e2b:\n"+
+		"      api_key: \"${E2B_API_KEY}\"\n      domain: cluster.example\n"+
+		"      template: crewlet-box\n")
+}
 
-	// A COMPLETE REMOTE BLOCK LOADS, which is the direction that matters:
-	// a rule that only ever refuses would be one an operator cannot
-	// satisfy.
-	mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    type: e2b\n"+
-		"    api_key: \"${E2B_API_KEY}\"\n    domain: cluster.example\n"+
-		"    template: crewlet-box\n")
+// AN EMPTY BLOCK CONFIGURES NOTHING, and it is the shape an unfinished edit
+// leaves behind: it parses, and without this rule it would apply — every
+// sandbox-enabled seat planning around a box it never gets, with code work
+// quietly never happening and nothing anywhere saying why.
+func TestAnEmptyCatalogueIsRefused(t *testing.T) {
+	t.Parallel()
+	err := rejects(t, "name: Acme\nproviders:\n  sandbox: {}\n", "providers.sandbox")
+	if !errors.Is(err, ErrMissing) {
+		t.Fatalf("want ErrMissing, got %v", err)
+	}
+}
+
+// THE DOUBLE REPLACES EVERY BACKEND rather than joining them, so a real block
+// underneath it reads as configuration and configures nothing.
+func TestTheDoubleRefusesARealBackendBesideIt(t *testing.T) {
+	t.Parallel()
+	err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    fake: true\n    local: {}\n",
+		"providers.sandbox.fake")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
+	mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    fake: true\n")
+}
+
+// A CONTAINER IMAGE IS REQUIRED WHERE A CONTAINER IS ACTUALLY RUN, and only
+// there. Required unconditionally it would refuse a perfectly good direct-only
+// company; unchecked, the seat's first coding run fails at container create,
+// minutes into a turn.
+func TestTheContainerImageIsRequiredOnlyWhereAContainerRuns(t *testing.T) {
+	t.Parallel()
+	err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n"+
+		"    default_run_in: container\n", "providers.sandbox.local.image")
+	if !errors.Is(err, ErrMissing) {
+		t.Fatalf("want ErrMissing, got %v", err)
+	}
+	// A direct-only company needs none.
+	mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n")
+	// And a container field nobody reads is reported rather than ignored:
+	// it looks like configuration and configures nothing.
+	err = rejects(t, "name: Acme\nproviders:\n  sandbox:\n"+
+		"    local: {image: \"example.invalid/box:1\"}\n    default_run_in: direct\n",
+		"providers.sandbox.local.image")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
 }

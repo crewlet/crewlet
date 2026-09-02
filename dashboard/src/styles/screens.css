@@ -616,6 +616,21 @@
 .turn-body .phase-card + .phase-card {
   margin-top: var(--space-2);
 }
+
+/* The workers a phase delegated to, rendered INSIDE it.
+   Indented and rail-marked rather than merely stacked: a fan-out of eight
+   flush against its parent's edge reads as eight more phases of the turn,
+   which is the thing nesting them was supposed to stop. The rail is the
+   phase hue of a nested call — muted, like its tag — so the indent says
+   "under this" without competing with the phase colour above it. */
+.phase-nest {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-left: var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border);
+}
 .phase-card > .phase-body {
   padding-top: var(--space-2);
 }

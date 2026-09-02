@@ -700,3 +700,130 @@ func TestTheTriggersDelegationReachesTheTurn(t *testing.T) {
 		t.Errorf("the turn carries chain %v, want the trigger's", got.DelegationChain)
 	}
 }
+
+// THE ONE WAY OUT OF THE SANDBOX PARK. A coding run that stops to ask a
+// person something leaves its seat busy, so every inbound on that seat is
+// requeued — including the person's reply. Without this seam the answer is
+// parked behind the question for ever: the run sits awaiting until its box's
+// pause TTL reclaims it, and the person who answered is never told anything
+// happened.
+func TestAnAnswerToAParkedRunIsHandledRatherThanRequeued(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, AwaitingSandbox: true}
+	}
+	var asked []string
+	d.Answer = func(_ context.Context, handle, conversation, answer string,
+		trigger *events.Event,
+	) (bool, error) {
+		asked = append(asked, handle+"/"+conversation)
+		if answer == "" || trigger == nil {
+			t.Error("the answer text and its trigger did not reach the coordinator")
+		}
+		return true, nil
+	}
+
+	got := d.Dispatch(context.Background(), "swe",
+		[]*events.Event{inThread("notification", "chat:C1")})
+	if got.Outcome != queue.OutcomeAck {
+		t.Errorf("outcome = %v, want an ack — the delivery was handled", got.Outcome)
+	}
+	if len(r.parked) != 0 {
+		t.Errorf("the answer was requeued behind the question it answers: %v", r.parked)
+	}
+	if !slices.Equal(asked, []string{"swe/chat:C1"}) {
+		t.Errorf("the coordinator was asked %v", asked)
+	}
+}
+
+// FAIL-OPEN, in every direction. A delivery that is NOT the answer, a
+// conversation the partition cannot name, a coordinator that errored, and a
+// node with no coordinator at all must each park as before: parking is
+// recoverable, and acking a message nothing handled is not.
+func TestADeliveryThatIsNotTheAnswerStillParks(t *testing.T) {
+	t.Parallel()
+	for name, answer := range map[string]func(context.Context, string, string, string, *events.Event) (bool, error){
+		"not this run's answer": func(context.Context, string, string, string, *events.Event) (bool, error) {
+			return false, nil
+		},
+		"an unreadable store": func(context.Context, string, string, string, *events.Event) (bool, error) {
+			return false, errors.New("the coordination store is unreachable")
+		},
+		"no coordinator": nil,
+	} {
+		r := &recorder{}
+		d := dispatcher(t, r)
+		d.Conditions = func(string) inbox.Conditions {
+			return inbox.Conditions{Owned: true, TurnEngineReady: true,
+				AdmitsTriggers: true, AwaitingSandbox: true}
+		}
+		d.Answer = answer
+
+		got := d.Dispatch(context.Background(), "swe",
+			[]*events.Event{inThread("notification", "chat:C1")})
+		if got.Outcome != queue.OutcomeAck {
+			t.Errorf("%s: outcome = %v, want an ack for a successful park", name, got.Outcome)
+		}
+		if len(r.parked) != 1 {
+			t.Errorf("%s: the delivery was not parked (%d parks)", name, len(r.parked))
+		}
+		if len(r.reqs) != 0 {
+			t.Errorf("%s: a turn ran on a seat parked on a coding run", name)
+		}
+	}
+}
+
+// A partition with no conversation cannot be matched against a question asked
+// in one, so it parks without asking: the coordinator's own disambiguation is
+// positional within a conversation, and offering it a key-less delivery would
+// let a scheduled fire answer somebody's question.
+func TestADeliveryWithNoConversationIsNotOfferedAsAnAnswer(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: true,
+			AdmitsTriggers: true, AwaitingSandbox: true}
+	}
+	called := false
+	d.Answer = func(context.Context, string, string, string, *events.Event) (bool, error) {
+		called = true
+		return true, nil
+	}
+	d.Dispatch(context.Background(), "swe", []*events.Event{ev("notification")})
+	if called {
+		t.Error("a delivery with no conversation was offered as an answer")
+	}
+	if len(r.parked) != 1 {
+		t.Errorf("it was not parked either (%d parks)", len(r.parked))
+	}
+}
+
+// AND ONLY THE SANDBOX PARK. Every other park is a node that cannot run the
+// turn at all — no turn engine, a shedding config posture — and offering
+// those deliveries to a coordinator would answer a question with a message
+// the seat was never able to read.
+func TestOnlyTheSandboxParkOffersItsDeliveryAsAnAnswer(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	d := dispatcher(t, r)
+	d.Conditions = func(string) inbox.Conditions {
+		return inbox.Conditions{Owned: true, TurnEngineReady: false, AdmitsTriggers: true}
+	}
+	called := false
+	d.Answer = func(context.Context, string, string, string, *events.Event) (bool, error) {
+		called = true
+		return true, nil
+	}
+	d.Dispatch(context.Background(), "swe",
+		[]*events.Event{inThread("notification", "chat:C1")})
+	if called {
+		t.Error("a park for a missing turn engine was offered as an answer")
+	}
+	if len(r.parked) != 1 {
+		t.Errorf("it was not parked (%d parks)", len(r.parked))
+	}
+}

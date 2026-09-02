@@ -102,6 +102,16 @@ type Screening struct {
 	// requeue).
 	Events []*events.Event
 
+	// AwaitingSandbox marks the ONE park a caller may answer instead of
+	// requeuing: the seat is parked on a detached coding run, and that run
+	// may be waiting on a person's reply that this very delivery carries.
+	//
+	// Named rather than inferred from Reason, which is prose for a log: a
+	// caller matching on the sentence would break silently the first time
+	// it was reworded, and the failure mode is a clarification answer
+	// requeued for ever behind the question it answers.
+	AwaitingSandbox bool
+
 	// NoteDeferred asks the seat host to record that this consumer stopped,
 	// so the next successful renew resumes it.
 	//
@@ -181,7 +191,10 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 	case !c.TurnEngineReady:
 		return Screening{Action: ActionPauseAndPark, Reason: "no turn engine", Events: evs}
 	case c.AwaitingSandbox:
-		return Screening{Action: ActionPark, Reason: "awaiting a detached sandbox run", Events: evs}
+		return Screening{
+			Action: ActionPark, Reason: "awaiting a detached sandbox run",
+			AwaitingSandbox: true, Events: evs,
+		}
 	case !c.AdmitsTriggers:
 		return Screening{Action: ActionDefer, Reason: "config posture refuses new work", NoteDeferred: true}
 	}

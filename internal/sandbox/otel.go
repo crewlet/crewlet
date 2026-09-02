@@ -3,19 +3,15 @@ package sandbox
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
 // In-sandbox telemetry, without handing the box a secret.
@@ -39,107 +35,35 @@ import (
 // trace-scoped, short-lived token in the URL — which means the exporter needs
 // no header configuration at all.
 //
-// It is SIGNED AND SELF-DESCRIBING rather than a key into a map, because
-// minting and verifying happen in DIFFERENT PROCESSES whenever the API runs
-// on its own host: the engine mints when it launches a run, and the API
-// verifies when the box exports. An in-memory store makes those the same
-// process by assumption, and the documented split deployment then answers 503
-// to every trace from every coding run — visible only as exporter retry noise
-// inside a sandbox nobody is watching.
-//
-// Expiry rides in the token, so nothing is reaped and a restart does not
-// invalidate a live run's endpoint.
-
-// otelTokenVersion prefixes every token, so a future format can be told from
-// this one rather than failing as a bad signature.
-const otelTokenVersion = "v1"
+// The token itself is [runtoken], which is where the format, the signature
+// and the expiry live — the MCP bridge carries the same credential shape for
+// the same reason, and two copies would have to agree about five decisions
+// nothing compares.
 
 // OtelTokens mints and validates per-run OTLP tokens.
 //
-// SAFE FOR CONCURRENT USE, and holds no state to protect: a token is a
-// function of the key, the trace and the clock.
-type OtelTokens struct {
-	key []byte
-	now func() time.Time
-}
+// A thin type over the shared signer, kept because the SUBJECT is this
+// receiver's own: an OTLP token is scoped to a TRACE, and naming that at the
+// type boundary is what stops a caller passing a run id and getting a token
+// the receiver will happily validate into the wrong thing.
+type OtelTokens struct{ signer *runtoken.Signer }
 
-// OtelTokenOptions configure [NewOtelTokens].
-type OtelTokenOptions struct {
-	// Key signs every token and MUST be the same in every process that
-	// mints or verifies one. Empty takes a random per-process key, which
-	// is correct for a single process and cannot work across two.
-	Key []byte
-
-	// Now is the clock. Nil takes wall-clock time.
-	//
-	// WALL CLOCK, NOT MONOTONIC, because the expiry travels between
-	// processes and a monotonic reading's epoch is per-boot — meaningless
-	// anywhere but where it was taken.
-	Now func() time.Time
-}
+// OtelTokenOptions configure [NewOtelTokens]. See [runtoken.Options].
+type OtelTokenOptions = runtoken.Options
 
 // NewOtelTokens builds the minter.
 func NewOtelTokens(opts OtelTokenOptions) *OtelTokens {
-	key := opts.Key
-	if len(key) == 0 {
-		key = make([]byte, 32)
-		// A read from crypto/rand cannot fail on any platform this runs
-		// on, and a key that silently stayed zero would make every token
-		// forgeable — so the error is not ignored, it is impossible.
-		if _, err := rand.Read(key); err != nil {
-			panic("sandbox: no randomness for the OTLP signing key: " + err.Error())
-		}
-	}
-	now := opts.Now
-	if now == nil {
-		now = time.Now
-	}
-	return &OtelTokens{key: key, now: now}
+	return &OtelTokens{signer: runtoken.New(opts)}
 }
 
 // Mint returns a token scoped to one trace, valid for ttl.
 func (t *OtelTokens) Mint(traceID string, ttl time.Duration) string {
-	if ttl < time.Second {
-		ttl = time.Second
-	}
-	payload := otelTokenVersion + "." + traceID + "." +
-		strconv.FormatInt(t.now().Add(ttl).Unix(), 10)
-	return payload + "." + t.sign(payload)
+	return t.signer.Mint(traceID, ttl)
 }
 
 // Validate returns the token's trace id, or empty for one that is forged,
 // malformed or expired.
-//
-// A THREE-WAY ANSWER COLLAPSED TO TWO ON PURPOSE. The caller's only move for
-// any of them is to refuse the export, and telling a box which of its tokens
-// was wrong is telling an attacker the same.
-func (t *OtelTokens) Validate(token string) string {
-	parts := strings.Split(token, ".")
-	if len(parts) != 4 || parts[0] != otelTokenVersion {
-		return ""
-	}
-	payload := strings.Join(parts[:3], ".")
-	// CONSTANT TIME. A byte-by-byte compare leaks the signature one byte
-	// at a time to anyone who can time the endpoint, and this endpoint is
-	// deliberately reachable without other credentials.
-	if !hmac.Equal([]byte(parts[3]), []byte(t.sign(payload))) {
-		return ""
-	}
-	expiry, err := strconv.ParseInt(parts[2], 10, 64)
-	if err != nil || !t.now().Before(time.Unix(expiry, 0)) {
-		return ""
-	}
-	return parts[1]
-}
-
-func (t *OtelTokens) sign(payload string) string {
-	mac := hmac.New(sha256.New, t.key)
-	mac.Write([]byte(payload))
-	// URL-SAFE and unpadded, because the token is a path segment: standard
-	// base64's `+` and `/` would need escaping, and a `=` in a path is
-	// legal but normalised differently by enough proxies to matter.
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-}
+func (t *OtelTokens) Validate(token string) string { return t.signer.Validate(token) }
 
 // OtelReceiver mints a run's endpoint and forwards what the box exports.
 type OtelReceiver struct {
@@ -310,13 +234,14 @@ func OtelSigningKey(material []string) []byte {
 				"the other process minted. `crewlet secrets keygen` fixes it")
 		return nil
 	}
-	// SORTED, so two processes reading the same keyring in a different
-	// order derive the same key — a map iteration or a re-ordered config
-	// would otherwise silently split a fleet in two.
-	ordered := slices.Sorted(slices.Values(material))
-	sum := sha256.Sum256([]byte("crewlet.otlp.v1|" + strings.Join(ordered, "")))
-	return sum[:]
+	return runtoken.KeyFrom(OtelKeyDomain, material)
 }
+
+// OtelKeyDomain separates this endpoint's tokens from the tool bridge's.
+//
+// Without a domain, a token minted for one would validate at the other: both
+// are HMACs over the same fleet key, and the subject is just a string.
+const OtelKeyDomain = "crewlet.otlp.v1"
 
 // RunEnv is the OTel environment one run's box receives.
 //

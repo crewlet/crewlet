@@ -5,7 +5,7 @@ trigger:
     - tool: query_episodes
     - mcp_server: atlassian
     - tool: refresh_memory
-phases: [plan]
+phases: [execute]
 required: false
 title: Re-querying memory & knowledge after recon
 summary: |

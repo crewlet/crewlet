@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -154,6 +155,11 @@ type Engine struct {
 	// depend on happening to be configured.
 	sandboxOtel *sandbox.OtelReceiver
 
+	// bridge serves a running seat's tool surface to a coding agent over
+	// MCP. Nil where no bridge URL is configured, which is every
+	// deployment that runs no agent mode.
+	bridge *mcpbridge.Bridge
+
 	// reflector is the learning write side: one dispatcher for the life of
 	// the process, whose org and workers an apply swaps. On the ENGINE
 	// rather than on an epoch because its redelivery ring is process
@@ -275,6 +281,10 @@ type Options struct {
 	// [sandbox.BuildOtelReceiver].
 	OtelReceiver *sandbox.OtelReceiver
 
+	// Bridge serves a seat's tools to a coding agent. Nil builds one from
+	// the environment; see [mcpbridge.Build].
+	Bridge *mcpbridge.Bridge
+
 	// Backends may be supplied by a caller that already opened them — the
 	// API process and the engine share one broker when they run merged.
 	// Nil opens them from the bootstrap config, and the engine then owns
@@ -352,12 +362,21 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		}
 		otel = built
 	}
+	// SAME KEY MATERIAL, DIFFERENT DOMAIN, and for the same reason the
+	// receiver above is built here: a split deployment mints in this
+	// process and verifies in another, so both derive their key from the
+	// fleet's keyring rather than from a per-process random.
+	bridge := opts.Bridge
+	if bridge == nil {
+		bridge = mcpbridge.Build(os.Getenv, keyMaterial(opts.Bootstrap))
+	}
 
 	e := &Engine{
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
 		mcp:         mcp.NewBridge(nil),
 		sandboxOtel: otel,
+		bridge:      bridge,
 		startedAt:   time.Now().UTC(),
 		// Built before equip, which is what writes the company's own
 		// numbers into it, and before node.New, which hands the same
@@ -561,6 +580,14 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	}
 	if d.Pause == nil {
 		d.Pause = e.pause
+	}
+	if d.Answer == nil && e.sandboxCoordinator != nil {
+		// THE CALLER THIS METHOD NEVER HAD. TryResumeFromAnswer has been
+		// exported and tested since the clarification path was written, and
+		// nothing in the engine called it — so a coding run that asked a
+		// person a question waited out its pause TTL however promptly they
+		// replied.
+		d.Answer = e.sandboxCoordinator.TryResumeFromAnswer
 	}
 	if d.NoteDeferred == nil {
 		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred
@@ -800,24 +827,25 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	task := DescribeTrigger(req.Events)
 	// RENDERED BEFORE THE RUNNER, which is what freezes it: the runner
 	// receives strings and has nowhere to re-fetch from, so a self_iterate
-	// loop cannot move the system prompt underneath the planner. The one
-	// fetch that cannot be frozen — the knowledge search a thin trigger's
-	// gate skipped — rides the Recon seam below, keyed on a plan summary
-	// that does not exist until Plan has run.
-	prefetchReq, blocks := e.prefetchFor(ctx, company, req, task)
+	// loop cannot move the system prompt underneath the executor. Nothing
+	// is re-fetched mid-turn any more: the one case that needed it — a
+	// thin trigger whose turn-start search was skipped — is served by the
+	// executor calling search_knowledge over the same seam, on a query it
+	// writes once it knows what the task needs.
+	blocks := e.prefetchFor(ctx, company, req, task)
 	// The skills OFFERED to this turn, carried onto its completion so the
 	// curator ages a skill on when it was last put in front of a model
 	// rather than archiving the ones a seat reads every turn.
 	tel.skills = blocks.SkillIDs
-	fetcher := e.prefetcher(company)
 
+	reply := ReplyFor(req.Events)
+	turnIdentity := tel.runnerTurn(company, req.WorkKey, req.Depth, req.DelegationChain,
+		task, reply)
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
 		Context: blocks,
 		Skills:  e.skills,
-		Recon: func(ctx context.Context, planSummary string) string {
-			return fetcher.AfterPlan(ctx, prefetchReq, planSummary)
-		},
+		Reply:   reply,
 		// BOUNDED AT RENDER, never at write. The stored row is the only copy
 		// of the turn; what a prompt shows is a display decision, and this
 		// one drops whole entries oldest-first and says how many.
@@ -825,9 +853,12 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 			MaxChars: ledger.InjectedMaxChars,
 		}),
 		Publisher: e.backends.Queue,
-		Turn:      tel.runnerTurn(company, req.WorkKey, req.Depth, req.DelegationChain),
-		Markers:   e.markers(),
-		Latch:     e.onboarded,
+		Turn:      turnIdentity,
+		// The executor's runtime, from the seat's own provider chain —
+		// see [Engine.agentRunFor].
+		AgentRun: e.agentRunFor(company, req.Handle, turnIdentity.Context),
+		Markers:  e.markers(),
+		Latch:    e.onboarded,
 		// Read off the PINNED epoch, so a revision that raises a ceiling
 		// mid-turn cannot move the limit a round is judged against.
 		Budget: e.meterFor(company, req.Handle),
@@ -1007,6 +1038,13 @@ func (e *Engine) notifyApplied(ctx context.Context) {
 // against, and so a SPLIT one is visibly missing it rather than answering 401
 // with a key nobody shares.
 func (e *Engine) OtelReceiver() *sandbox.OtelReceiver { return e.sandboxOtel }
+
+// Bridge is this node's MCP tool bridge, or nil.
+//
+// Exposed for the same reason the receiver is: the API process serves the
+// route, and on a merged deployment it is handed this engine's own — one
+// object, so a session opened by a run is the session the route resolves.
+func (e *Engine) Bridge() *mcpbridge.Bridge { return e.bridge }
 
 // keyMaterial is the Tier A keyring, as the OTLP token key is derived from.
 //

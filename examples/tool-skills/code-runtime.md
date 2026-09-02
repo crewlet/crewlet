@@ -2,27 +2,27 @@
 key: skill:code_runtime
 trigger:
   mcp_server: gitlab
-phases: [plan]
+phases: [execute]
 required: false
 title: Running code work in the sandbox
 summary: |
   For real code work, call the run_sandbox tool: a coding agent
   implements in an isolated checkout and opens an MR. Write a clear
-  brief + success criteria; report the MR back with your native tools.
+  brief; report the MR back with your native tools.
 ---
 
 When a task needs you to **implement or modify code, run tests, reproduce a
-bug, or run a script**, and your role is sandbox-enabled, list `run_sandbox`
-in `tools_needed` and call it during Execute with a concrete `brief`.
+bug, or run a script**, and your role is sandbox-enabled, call `run_sandbox`
+with a concrete `brief`.
 
 How to brief it well:
 
 - Name the repository and the concrete change in the `brief`. The coding
   agent has its own shell, git, and code-host token — it clones, edits, runs
   tests, pushes a branch, and opens the MR **as your own identity**.
-- Write real `success_criteria` in your plan: the coding agent and the
-  Review judge measure against the same bar, so "endpoint returns 200 and
-  tests pass" beats "do the thing".
+- Say what DONE means inside the brief itself: the coding agent and the
+  reviewer measure against the same bar, so "endpoint returns 200 and tests
+  pass" beats "do the thing".
 
 What the sandbox delivers and doesn't:
 

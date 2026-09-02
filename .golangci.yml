@@ -75,6 +75,9 @@ linters:
       #              that proves a misspelled frontmatter key is refused.
       #   enginer  — a fuzzy-match test input; spelling it correctly would
       #              stop testing the fuzzy match.
+      #   reasercher — a model's typo'd worker name, and the whole input of
+      #              the test that a refusal lists the workers that DO exist.
+      #              Spelling it correctly would test nothing.
       #   alwyas   — the typo in a doc comment ABOUT typos, and the fixture
       #              that proves `typing_status: alwyas` is refused rather
       #              than silently degraded. Correcting it would assert the
@@ -82,6 +85,7 @@ linters:
       ignore-rules:
         - noteable
         - requred
+        - reasercher
         - enginer
         - alwyas
     revive:

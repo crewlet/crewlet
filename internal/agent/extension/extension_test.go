@@ -187,27 +187,40 @@ func TestTheJudgeIsToldWhatItMayActuallyGrant(t *testing.T) {
 
 func TestTheFinishHintMatchesHowThePhaseEnds(t *testing.T) {
 	t.Parallel()
-	// Plan exits by calling its submission tool; Execute exits by returning
-	// text with no tool calls. A phase told the wrong way to finish spends
-	// its granted rounds trying to leave through a door it does not have —
-	// the exact failure the extension was granted to avoid.
-	planHint := extension.FinishHint(phase.Plan)
-	if !strings.Contains(planHint, "submit_plan") {
-		t.Errorf("the Plan hint does not name its exit: %q", planHint)
-	}
-	execHint := extension.FinishHint(phase.Execute)
-	if strings.Contains(execHint, "submit_plan") {
-		t.Errorf("the Execute hint names Plan's exit: %q", execHint)
-	}
-	if !strings.Contains(execHint, "stop calling tools") {
-		t.Errorf("the Execute hint does not name its exit: %q", execHint)
+	// Each phase leaves by a different door: the executor through
+	// `submit_work`, the reviewer through `submit_review`, onboarding
+	// through `mark_onboarded`, and only a sub-agent by returning text with
+	// no tool call. A phase told the wrong way to finish spends its granted
+	// rounds trying to leave through a door it does not have — the exact
+	// failure the extension was granted to avoid.
+	//
+	// ONBOARDING IS THE CASE THAT WAS MISSING, and the one that was silent:
+	// told to stop calling tools, an extended onboarding pass never reaches
+	// mark_onboarded, so the marker is never stamped and the pass re-runs on
+	// every turn that seat ever takes.
+	for _, tc := range []struct {
+		ph        phase.Phase
+		want, not string
+	}{
+		{phase.Execute, "submit_work", "submit_review"},
+		{phase.Review, "submit_review", "submit_work"},
+		{phase.Onboarding, "mark_onboarded", "submit_work"},
+		{phase.Subagent, "stop calling tools", "submit_work"},
+	} {
+		hint := extension.FinishHint(tc.ph)
+		if !strings.Contains(hint, tc.want) {
+			t.Errorf("the %s hint does not name its exit: %q", tc.ph, hint)
+		}
+		if strings.Contains(hint, tc.not) {
+			t.Errorf("the %s hint names another phase's exit: %q", tc.ph, hint)
+		}
 	}
 }
 
 func TestTheNudgeCarriesTheGrantAndTheReason(t *testing.T) {
 	t.Parallel()
 	got := extension.Nudge(phase.Execute, 3, "making steady progress")
-	for _, want := range []string{"3 additional tool-call rounds", "making steady progress", "stop calling tools"} {
+	for _, want := range []string{"3 additional tool-call rounds", "making steady progress", "submit_work"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the nudge is missing %q:\n%s", want, got)
 		}
@@ -219,7 +232,7 @@ func TestTheNudgeCarriesTheGrantAndTheReason(t *testing.T) {
 		t.Errorf("a single round was pluralised:\n%s", one)
 	}
 	// A judge that gave no reason still produces a readable line.
-	if none := extension.Nudge(phase.Plan, 2, ""); !strings.Contains(none, "(none)") {
+	if none := extension.Nudge(phase.Review, 2, ""); !strings.Contains(none, "(none)") {
 		t.Errorf("an absent reason left a dangling label:\n%s", none)
 	}
 }

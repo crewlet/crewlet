@@ -70,7 +70,7 @@ func skillUsed(turn *turnctx.Turn, name, skillID, file string,
 	}
 }
 
-// Recaller is the Plan phase's own semantic search, reachable as a tool.
+// Recaller is the turn-start prefetch's own semantic search, reachable as a tool.
 //
 // Satisfied by *prefetch.Fetcher, and declared here as the two methods this
 // package needs rather than imported as that type: a builtin that could reach

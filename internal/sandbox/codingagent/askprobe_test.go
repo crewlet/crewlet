@@ -12,7 +12,7 @@ import (
 // script the engine wrote, so it needs a real shell to prove anything.
 func TestTheAskShimRecordsAQuestionFromInsideARealBox(t *testing.T) {
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{
-		Containment: sandbox.Direct, StateDir: t.TempDir(),
+		Placement: sandbox.Direct, StateDir: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("NewLocal: %v", err)

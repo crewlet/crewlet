@@ -200,3 +200,29 @@ func TestANodeWithNoSandboxDoesNotAnswerTheQuestion(t *testing.T) {
 		t.Fatal("a node with no sandbox answered the question")
 	}
 }
+
+// WHERE A RUN IS RUNNING IS AN OPERATOR QUESTION now that providers.sandbox is
+// a catalogue: one company runs some seats on the engine host and others in a
+// remote box, and this board is the only surface that could answer it.
+//
+// A row written before the field existed answers empty rather than failing —
+// a rolling upgrade has one build writing the placement and another not.
+func TestTheBoardSaysWhereEachRunIs(t *testing.T) {
+	store := seedRuns(t,
+		sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe", Role: "SWE",
+			Placement: "e2b", Status: sandbox.StatusRunning, CreatedAt: runBase},
+		sandbox.PendingRun{TurnID: "t2", AgentHandle: "swe", Role: "SWE",
+			Placement: "direct", Status: sandbox.StatusRunning, CreatedAt: runBase},
+		sandbox.PendingRun{TurnID: "t3", AgentHandle: "swe", Role: "SWE",
+			Status: sandbox.StatusRunning, CreatedAt: runBase},
+	)
+	where := make(map[string]any)
+	for _, row := range askRuns(t, store) {
+		where[row["turn_id"].(string)] = row["placement"]
+	}
+	for turn, want := range map[string]string{"t1": "e2b", "t2": "direct", "t3": ""} {
+		if got := where[turn]; got != want {
+			t.Errorf("run %s reports placement %v, want %q", turn, got, want)
+		}
+	}
+}

@@ -88,6 +88,20 @@ type CoordinatorOptions struct {
 	// Account post-charges collected tokens. Nil skips accounting.
 	Account Accountant
 
+	// Ended is called once for every run this node finishes with, whatever
+	// finished it: collected, failed, torn down or reaped.
+	//
+	// It exists for credentials a run HOLDS rather than for its own state.
+	// An agent-mode run's box dials the engine's tool bridge with a
+	// per-run token, and a session left open is a box that outlived its
+	// run keeping a working key to a live seat's whole surface. The token
+	// expires on its own clock, so this is the difference between a
+	// credential that dies with the job and one that dies in four hours.
+	//
+	// A PARKED run is deliberately not ended: it is waiting on a person,
+	// not finished, and its box will resume into the same session.
+	Ended func(runID string)
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -114,6 +128,7 @@ type Coordinator struct {
 	manager *Manager
 	resume  Resumer
 	account Accountant
+	ended   func(runID string)
 	now     func() time.Time
 
 	// mu guards busy, the seat-level "is a detached run in flight?" answer
@@ -135,7 +150,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	}
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
-		resume: opts.Resume, account: opts.Account, now: opts.Now,
+		resume: opts.Resume, account: opts.Account, ended: opts.Ended,
+		now:  opts.Now,
 		busy: map[string]int{},
 	}
 	if c.now == nil {
@@ -305,7 +321,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 // same checkout, and re-provisioning would throw away the working tree.
 func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, error) {
 	manager := c.mgr()
-	box, runner, err := manager.Reconnect(ctx, run.SandboxID, run.CodingAgent)
+	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.CodingAgent)
 	if err != nil {
 		return Result{}, err
 	}
@@ -573,12 +589,26 @@ func (c *Coordinator) announceFailure(ctx context.Context, run PendingRun, reaso
 // WithoutCancel rather than Background, so the warnings still carry the
 // turn's values.
 func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
+	// BEFORE THE BOX CHECK, because a run that never got one still ended —
+	// a launch that failed at create is exactly the case where a bridge
+	// session was opened and nothing else will ever close it.
+	if c.ended != nil {
+		c.ended(run.TurnID)
+	}
 	if run.SandboxID == "" {
 		return
 	}
 	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
-	if err := c.mgr().Provider().Kill(killCtx, run.SandboxID); err != nil {
+	provider, err := c.mgr().Provider(Placement(run.Placement))
+	if err != nil {
+		// The row names a cell this company no longer configures. The box
+		// is unreachable and cannot be reclaimed here, so the row is still
+		// released below — leaving it open would hold the seat's busy count
+		// forever over a box that will expire on its own TTL anyway.
+		log.WarnContext(ctx, "sandbox_teardown_no_backend",
+			"turn_id", run.TurnID, "placement", run.Placement, "error", err.Error())
+	} else if err := provider.Kill(killCtx, run.SandboxID); err != nil {
 		log.WarnContext(ctx, "sandbox_teardown_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
 	}

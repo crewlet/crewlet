@@ -9,6 +9,8 @@
 package sandboxtest
 
 import (
+	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,6 +30,7 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 	}{
 		{"ASecondLaunchKeepsTheBoxItWillReattachTo", testASecondLaunchKeepsTheBoxItWillReattachTo},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
+		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
 		{"ALaunchingRunIsNotClaimable", testALaunchingRunIsNotClaimable},
 		{"SuspendingOpensTheRunToTheTail", testSuspendingOpensTheRunToTheTail},
@@ -53,6 +56,10 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"OnlyAParkedRunCanExpire", testOnlyAParkedRunCanExpire},
 		{"AnAnsweredRunCannotBeExpiredUnderTheResume", testAnAnsweredRunCannotBeExpiredUnderTheResume},
 		{"ExpiringAPauseClearsTheBoxInTheSameWrite", testExpiringAPauseClearsTheBoxInTheSameWrite},
+		{"BridgeCallsAreAppendedInOrder", testBridgeCallsAreAppendedInOrder},
+		{"BridgeCallsSurviveWithoutAFence", testBridgeCallsSurviveWithoutAFence},
+		{"BridgeCallsForAMissingRunAreDropped", testBridgeCallsForAMissingRunAreDropped},
+		{"BridgeCallsDropTheMiddleNotTheStart", testBridgeCallsDropTheMiddleNotTheStart},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,7 +73,7 @@ func run(turnID string) sandbox.PendingRun {
 	return sandbox.PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
 		CodingAgent: "claude-code", TaskDescription: "fix the flake",
-		SuccessCriteria: []string{"CI green"}, ConversationKey: "slack:C1",
+		ConversationKey: "slack:C1", Reply: "tool",
 		TraceID: "tr-1", CreatedAt: base,
 	}
 }
@@ -155,6 +162,39 @@ func testASecondLaunchDropsTheFirstSuspension(t *testing.T, s sandbox.PendingSto
 	}
 	if len(got.ExecuteState) != 0 {
 		t.Errorf("the first call's suspension survived the relaunch: %+v", got.ExecuteState)
+	}
+}
+
+// A SECOND LAUNCH UNDER ONE TURN ID IS A SECOND ROUND, and its tool log starts
+// empty.
+//
+// The bridged log is the whole record an agent-mode resume rebuilds its phase
+// from. A reviewer's self_iterate launches another executor run under the same
+// turn id, and the first round's log left in place is not merely stale: a
+// round that in fact submitted nothing would report the PREVIOUS round's
+// outcome instead of being rescued as incomplete, and the previous round's
+// deliveries would satisfy this round's delivery check. The same reset the
+// suspension beside it gets, for the same reason.
+func testASecondLaunchDropsTheFirstRunsBridgedCalls(t *testing.T, s sandbox.PendingStore) {
+	first := run("t-relaunch-bridge")
+	mustBeginLaunch(t, s, first)
+	if _, err := s.AppendBridgeCall(context.Background(), first.TurnID, sandbox.BridgeCall{
+		Name: "submit_work", Args: `{"outcome":"delivered"}`, At: base,
+	}); err != nil {
+		t.Fatalf("AppendBridgeCall: %v", err)
+	}
+	if got := mustGet(t, s, first.TurnID); len(got.BridgeCalls) != 1 {
+		t.Fatalf("the first round recorded %d calls, want 1", len(got.BridgeCalls))
+	}
+
+	mustBeginLaunch(t, s, run("t-relaunch-bridge"))
+	got := mustGet(t, s, first.TurnID)
+	if len(got.BridgeCalls) != 0 {
+		t.Errorf("the second round inherited %d calls from the first: %+v",
+			len(got.BridgeCalls), got.BridgeCalls)
+	}
+	if got.BridgeCallsElided != 0 {
+		t.Errorf("the elision count survived the relaunch: %d", got.BridgeCallsElided)
 	}
 }
 
@@ -718,5 +758,117 @@ func testExpiringAPauseClearsTheBoxInTheSameWrite(t *testing.T, s sandbox.Pendin
 	if got.Question == "" || got.Branch == "" {
 		t.Fatalf("the reseed lost what the answer needs: question=%q branch=%q",
 			got.Question, got.Branch)
+	}
+}
+
+// --- the bridged run's durable tool log ------------------------------------
+
+// A BRIDGED RUN'S CALLS HAVE NOWHERE ELSE TO LIVE. A native tool loop keeps
+// them on a surface in memory and the turn writes them when it ends; a bridged
+// run's are made by a process outside the engine and can outlive the node. A
+// reviewer of a resumed run with no log judges a turn that reads as having
+// acted on nothing.
+func testBridgeCallsAreAppendedInOrder(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bridge")
+	mustLaunched(t, s, r)
+
+	for _, name := range []string{"read_page", "post_message", "read_page"} {
+		ok, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{
+			Name: name, Args: `{"id":1}`, Output: name + " ok",
+		})
+		if err != nil || !ok {
+			t.Fatalf("AppendBridgeCall(%s) = %v, %v", name, ok, err)
+		}
+	}
+
+	got := mustGet(t, s, r.TurnID)
+	if len(got.BridgeCalls) != 3 {
+		t.Fatalf("%d calls recorded: %+v", len(got.BridgeCalls), got.BridgeCalls)
+	}
+	want := []string{"read_page", "post_message", "read_page"}
+	for i, name := range want {
+		if got.BridgeCalls[i].Name != name {
+			t.Errorf("call %d = %q, want %q", i, got.BridgeCalls[i].Name, name)
+		}
+	}
+	// The ARGUMENTS and the OUTCOME ride along, because a log of bare
+	// names does not tell a reviewer whether the turn delivered anything.
+	if got.BridgeCalls[0].Args != `{"id":1}` || got.BridgeCalls[0].Output != "read_page ok" {
+		t.Errorf("the call does not carry what it did: %+v", got.BridgeCalls[0])
+	}
+	// STAMPED, so a reader can see the shape of a run that stalled.
+	if got.BridgeCalls[0].At.IsZero() {
+		t.Error("the call has no timestamp")
+	}
+}
+
+// NO FENCE, unlike every other mutation on this row. The call already ran and
+// its effect already happened; refusing to record it because the seat's lease
+// moved mid-run would lose evidence of something that is true either way.
+func testBridgeCallsSurviveWithoutAFence(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bridge-fence")
+	mustLaunched(t, s, r)
+	// Move the run under a NEWER owner, so the caller's own view of the
+	// lease is stale by any measure.
+	if ok, err := s.ClaimOwnership(ctx, r.TurnID, "node-b", 99); err != nil || !ok {
+		t.Fatalf("ClaimOwnership = %v, %v", ok, err)
+	}
+
+	ok, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{Name: "read_page"})
+	if err != nil || !ok {
+		t.Fatalf("a log append was refused by ownership: %v, %v", ok, err)
+	}
+	if got := mustGet(t, s, r.TurnID); len(got.BridgeCalls) != 1 {
+		t.Errorf("%d calls recorded", len(got.BridgeCalls))
+	}
+}
+
+// A LATE CALL FROM A BOX THAT IS SHUTTING DOWN is the ordinary shape here, and
+// it must not be an error: the caller cannot fail the box's call over a log
+// row, so false and true have to be equally safe to ignore.
+func testBridgeCallsForAMissingRunAreDropped(t *testing.T, s sandbox.PendingStore) {
+	ok, err := s.AppendBridgeCall(t.Context(), "never-existed",
+		sandbox.BridgeCall{Name: "read_page"})
+	if err != nil {
+		t.Fatalf("a missing run was an error: %v", err)
+	}
+	if ok {
+		t.Error("an append onto no row reported success")
+	}
+}
+
+// THE MIDDLE IS WHAT GETS DROPPED. How a run began and how it ended are what
+// explain it, and a log truncated to its last N loses the former entirely.
+func testBridgeCallsDropTheMiddleNotTheStart(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	r := run("t-bridge-cap")
+	mustLaunched(t, s, r)
+
+	total := sandbox.MaxBridgeCalls + 10
+	for i := range total {
+		if _, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeCall{
+			Name: fmt.Sprintf("call-%03d", i),
+		}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+
+	got := mustGet(t, s, r.TurnID)
+	if len(got.BridgeCalls) != sandbox.MaxBridgeCalls {
+		t.Fatalf("%d calls kept, want %d", len(got.BridgeCalls), sandbox.MaxBridgeCalls)
+	}
+	if first := got.BridgeCalls[0].Name; first != "call-000" {
+		t.Errorf("the first call was dropped: %q — a log cut to its tail loses how the run began", first)
+	}
+	last := got.BridgeCalls[len(got.BridgeCalls)-1].Name
+	if want := fmt.Sprintf("call-%03d", total-1); last != want {
+		t.Errorf("the last call = %q, want %q", last, want)
+	}
+	// AND THE GAP IS REPORTED: a log that silently skips is a log that
+	// lies about what the run did.
+	if got.BridgeCallsElided != 10 {
+		t.Errorf("elided = %d, want 10", got.BridgeCallsElided)
 	}
 }

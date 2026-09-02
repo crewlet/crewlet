@@ -78,6 +78,7 @@ func (p Profile) clone() Profile {
 	}
 	out.LimitMarkers = append([]LimitMarker(nil), p.LimitMarkers...)
 	out.AuthMarkers = append([]AuthMarker(nil), p.AuthMarkers...)
+	out.SeedFiles = append([]SeedFile(nil), p.SeedFiles...)
 	out.ConfigEnv = cloneMap(p.ConfigEnv)
 	out.Env = cloneMap(p.Env)
 	if p.StdinLogin != nil {

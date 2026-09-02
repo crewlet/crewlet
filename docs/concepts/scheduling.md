@@ -26,7 +26,7 @@ A single loop ticks on a short interval (default 10s). Each tick:
    (`crewlet.agent.{handle}.inbox`).
 
 Because it reuses the existing `TaskAssigned` event, the agent runtime
-path is **unchanged** — a scheduled turn runs Plan → Execute → Review like
+path is **unchanged** — a scheduled turn runs executor → reviewer like
 any other, and the **full learning loop** (episodes, diary, reflection)
 runs on it. Periodic work is *more* worth learning from, not less.
 
@@ -44,7 +44,7 @@ Scheduler loop (every tick_seconds)
    publish TaskAssigned → crewlet.agent.{handle}.inbox  (+ ScheduledTaskFired)
         │
         ▼
-   normal Plan → Execute → Review turn (with a hard wall-clock cap)
+   normal executor → reviewer turn (with a hard wall-clock cap)
 ```
 
 ---
@@ -231,7 +231,7 @@ a schedule to opt out entirely.
 
 Each scheduled turn carries `timeout_seconds` (default 180), on the fire's own
 `task_assigned` payload. The turn engine checks it **between rounds**: a turn
-past the cap starts no further Plan → Execute → Review round and ends `failed`
+past the cap starts no further executor → reviewer round and ends `failed`
 with `error_kind: scheduled_timeout` on its `turn_completed` event, so a
 runaway loop can't monopolise the runner. A failing or timed-out run never
 blocks the next tick.

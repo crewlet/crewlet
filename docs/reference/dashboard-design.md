@@ -27,7 +27,7 @@ So colour is spent in exactly four places:
 | | What it means | How many |
 |---|---|---|
 | **Status** | positive · caution · critical · info | 4, fixed |
-| **Phase** | plan · execute · review | 3, fixed |
+| **Phase** | onboarding · execute · review | 3, fixed |
 | **Accent** | *where the reader is* — the active nav row, the primary button, the focus ring, the on filter | 1 |
 | **Data** | a chart series, inside a chart that carries a legend | 5 + a neutral residual |
 

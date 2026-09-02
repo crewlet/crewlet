@@ -13,112 +13,77 @@ import (
 
 var log = logging.Get("agent.turn")
 
-// PlanDecision is what the planner concluded about the trigger.
-type PlanDecision string
-
-const (
-	// PlanRun — run these steps through Execute, then Review.
-	PlanRun PlanDecision = "plan"
-
-	// PlanDirect — a one-tool task with no multi-step plan. Execute runs
-	// against the full surface and Review is skipped, subject to the
-	// engine's own safety net: see [phase.Gate.MustReview].
-	PlanDirect PlanDecision = "direct"
-
-	// PlanSkip — nobody was asking this seat to do anything. The turn ends
-	// immediately and nothing is posted back.
-	//
-	// Deliberately NOT the way to decline. A seat that was mentioned,
-	// assigned or asked and is saying no must do that as a plan with one
-	// reply step, so the requester learns the message was received rather
-	// than waiting in silence for an answer that is never coming.
-	PlanSkip PlanDecision = "skip"
-)
-
-// Valid reports whether d is one of the three a planner may conclude.
+// Work is what the executor phase produced.
 //
-// EMPTY IS NOT VALID. An absent decision on the wire means [PlanRun] — it is
-// the common case and the one every other field is written for — but that
-// default is applied where the payload is decoded, not here: a predicate that
-// blessed "" would let an unset field travel as though the planner had chosen.
-func (d PlanDecision) Valid() bool {
-	switch d {
-	case PlanRun, PlanDirect, PlanSkip:
-		return true
-	default:
-		return false
-	}
-}
+// ONE PHASE DECIDES AND ACTS. The turn used to plan in one conversation and
+// act in another, which cost it everything the planner learned: the executor
+// could not see what the plan had read, so content was smuggled through the
+// plan's own steps, and the planner had to NAME the tools it expected — on a
+// catalogue it was never shown, so it guessed. Every guess that missed became
+// a "phantom" the engine then had to reason about, and the delivery gate was
+// built entirely out of reconciling those guesses against reality.
+type Work struct {
+	// Outcome is the executor's own account of the round. Engine-checked
+	// against the record before anything acts on it — see [Check].
+	Outcome Outcome
 
-func (d PlanDecision) String() string { return string(d) }
+	// Summary is what the executor says it did, in its own words. It is
+	// the intent line the next round and the reviewer read.
+	Summary string
 
-// Plan is what the Plan phase produced.
-type Plan struct {
-	Decision  PlanDecision
-	Reasoning string
-	Summary   string
+	// Deliveries are the tools the executor cites as having delivered.
+	// Reported rather than trusted: the record is what [Check] reads.
+	Deliveries []string
 
-	// ToolsNeeded is every tool Execute will call, as the planner named
-	// them — research AND the final delivery tool. Kept RAW: the split
-	// into resolved and phantom happens against the live catalogue, and
-	// the raw list is what says whether the plan intended to act at all.
-	ToolsNeeded []string
+	// Evidence is what the executor tried and what stopped it, required
+	// when the outcome is blocked. It reaches the reviewer, which is the
+	// whole point of demanding it: "blocked" with no account of what was
+	// tried is a round the reviewer can only send back blind.
+	Evidence string
 
-	SuccessCriteria []string
+	// OpenQuestions is whatever the executor thinks the reviewer or the
+	// next round should know that the summary does not cover.
+	OpenQuestions string
 
-	// Calls is what Plan itself called during recon.
-	Calls []ledger.Call
+	// Text is the phase's final prose — the answer, when the answer is
+	// prose, and the fallback artifact when the reviewer names none.
+	Text string
 
-	// Rescued marks a decision the ENGINE synthesised because the planner
-	// never submitted one.
-	//
-	// It is not decoration. `direct` is the one decision that skips
-	// Review, and skipping it is only safe when a planner CHOSE it — that
-	// choice is the planner saying "Execute finishes this in one shot".
-	// A rescued plan carries the same word without the commitment behind
-	// it, and it also carries no ToolsNeeded, so the delivery gate that
-	// would otherwise force Review reads it as a turn that intended
-	// nothing and lets it through. Observed: a seat was addressed on
-	// chat, ran a full turn, produced an answer, called nothing, and
-	// reported done — a silent no-op, which is the exact failure the gate
-	// exists to prevent.
-	Rescued bool
-}
-
-// Execution is what the Execute phase produced.
-type Execution struct {
-	Text  string
+	// Calls is what the phase actually invoked, engine-recorded.
 	Calls []ledger.Call
 
 	// MissingTools are names the phase called that the surface did not
-	// have. Surfaced to Review, which is what turns "the model hallucinated
-	// a tool" into a re-plan naming the real one.
+	// have. Surfaced to the reviewer, which is what turns "the model
+	// hallucinated a tool" into a next round naming the real one.
 	MissingTools []string
 
-	// ExhaustedRounds marks a phase that hit its round cap. Review sees it
-	// and normally iterates.
+	// ExhaustedRounds marks a phase that hit its round cap.
 	ExhaustedRounds bool
 
-	// Suspended marks an Execute that parked on a detached sandbox run. The
-	// turn ends here and its completion starts a new one, so the loop must
-	// hand the accumulated ledger back rather than treat this as an ending.
+	// Suspended marks an executor that parked on a detached sandbox run.
+	// The turn ends here and its completion resumes it, so the loop hands
+	// the accumulated ledger back rather than treating this as an ending.
 	Suspended bool
+
+	// Rescued marks an outcome the ENGINE synthesised because the executor
+	// never submitted one. See [OutcomeIncomplete].
+	Rescued bool
 }
 
-// Review is what the Review phase produced.
+// Review is what the reviewer produced.
 type Review struct {
 	Decision phase.Decision
 	Notes    string
 
 	// CompletedWork is what already landed, in the reviewer's own words —
 	// the semantic layer over the engine-built call ledger. Empty whenever
-	// Review never chose self_iterate itself, above all on the engine's
-	// done→self_iterate override, which is exactly why the ledger and not
-	// this field carries the guarantee.
+	// the reviewer never chose self_iterate itself, above all on the
+	// engine's done→self_iterate override, which is exactly why the ledger
+	// and not this field carries the guarantee.
 	CompletedWork string
 
-	// FinalArtifact is what Review wants returned. Empty reuses Execute's
-	// text.
+	// FinalArtifact is what the reviewer wants returned. Empty reuses the
+	// executor's text.
 	FinalArtifact string
 }
 
@@ -135,26 +100,26 @@ type Surface struct {
 // Phases is the model-facing work the loop drives. Everything that needs a
 // provider, a tool registry or a network lives behind it.
 type Phases interface {
-	// Plan runs the planning pass. Round is 1-based.
-	Plan(ctx context.Context, round int, notes string, history []ledger.Iteration) (Plan, Surface, error)
+	// Execute runs the executor: one agentic pass that decides what to do
+	// and does it. Round is 1-based; notes carry the previous round's
+	// correction.
+	//
+	// The surface it reports is the one the delivery check judges against,
+	// which is why it comes back from the phase rather than being assumed:
+	// activating a tool mid-run changes the catalogue, and judging a real
+	// delivery against a stale one reads it as no delivery at all.
+	Execute(ctx context.Context, round int, notes string, history []ledger.Iteration) (Work, Surface, error)
 
-	// Execute runs the plan. The surface it reports is the one the delivery
-	// gate judges against, which is why it comes back from the phase rather
-	// than being assumed from Plan's: activating a tool mid-Execute changes
-	// it, and judging against a stale catalogue turns a real delivery into
-	// a phantom.
-	Execute(ctx context.Context, round int, p Plan, history []ledger.Iteration) (Execution, Surface, error)
+	// Review judges the round against the engine's record of it.
+	Review(ctx context.Context, round int, w Work, history []ledger.Iteration) (Review, error)
 
-	// Review judges the round. It is not called when the loop skips Review.
-	Review(ctx context.Context, round int, p Plan, e Execution, history []ledger.Iteration) (Review, error)
-
-	// Resume re-enters an Execute phase that suspended on a detached sandbox
+	// Resume re-enters an executor that suspended on a detached sandbox
 	// run, with the run's result spliced in as the pending call's reply.
 	//
-	// Called INSTEAD OF Plan and Execute for the first round of a resumed
-	// turn — a resumed turn that re-planned would re-derive a plan for work
-	// already half-done. Everything after that round is an ordinary turn.
-	Resume(ctx context.Context, history []ledger.Iteration) (Execution, Surface, error)
+	// Called INSTEAD OF Execute for the first round of a resumed turn. A
+	// resumed turn that started over would re-derive work already half
+	// done; everything after that round is an ordinary round.
+	Resume(ctx context.Context, history []ledger.Iteration) (Work, Surface, error)
 }
 
 // Input is one turn's starting state.
@@ -164,23 +129,20 @@ type Input struct {
 	// Depth is the delegation depth this turn inherited.
 	Depth int
 
+	// Reply says who is waiting for this turn — the engine's own reading
+	// of the trigger, and the half of the delivery question a model cannot
+	// get wrong. See [Reply].
+	Reply Reply
+
 	// History is the ledger carried across a sandbox suspend. The resumed
 	// turn re-enters mid-loop, so without this it would forget every round
 	// the suspended one closed and could re-fire their deliveries.
 	History []ledger.Iteration
 
-	// Resume re-enters a suspended Execute phase rather than starting from
-	// Plan. The SAME turn id continues: the resumed conversation is
-	// the one the sandbox call left waiting, not a fresh turn that would
-	// re-plan and re-investigate from scratch.
+	// Resume re-enters a suspended executor rather than starting a fresh
+	// round. The SAME turn id continues: the resumed conversation is the
+	// one the sandbox call left waiting.
 	Resume bool
-
-	// ResumePlan is the plan the suspended turn was executing, so the
-	// delivery gate and Review judge the round against what it INTENDED
-	// rather than against nothing. Rebuilt from the pending row; a zero
-	// value means the plan could not be recovered, which downgrades the
-	// gate rather than failing the resume.
-	ResumePlan Plan
 }
 
 // Settings is the turn's pinned configuration.
@@ -189,7 +151,7 @@ type Input struct {
 // contract is then visible in its signature, and a caller cannot accidentally
 // hand it a live cell.
 type Settings struct {
-	// MaxIterations caps Plan→Execute→Review rounds. 0 or less means one
+	// MaxIterations caps executor→reviewer rounds. 0 or less means one
 	// round, because a turn that runs no rounds cannot be what anyone
 	// configured — and treating it as unbounded would let a misconfiguration
 	// spend a company's whole budget on one trigger.
@@ -197,10 +159,6 @@ type Settings struct {
 
 	// DelegationDepthLimit caps colleague-to-colleague chains. 0 disables.
 	DelegationDepthLimit int
-
-	// StallThreshold is how many identical rounds end the turn. 0 takes the
-	// detector's own default.
-	StallThreshold int
 
 	// SkipNames are meta-tools filtered from the ledger — never a delivery,
 	// so pure noise in a record of what already happened that matters.
@@ -248,16 +206,20 @@ type Result struct {
 	// fired.
 	Iterations []ledger.Iteration
 
-	// Rounds is how many Plan passes actually ran.
+	// Rounds is how many executor passes actually ran.
 	Rounds int
 
 	// Breach names the guard that ended the turn, if one did.
 	Breach *Breach
 
-	// LastReview is the reviewer's last word. A `done` round appends no
-	// ledger entry, so without this the reviewer's own prose about what
-	// landed never reaches the conversation ledger written at turn end.
+	// LastReview is the reviewer's last word, and LastWork the executor's.
+	//
+	// A `done` round appends no ledger entry — it ends the turn instead —
+	// so without these two the last round is invisible to everything after
+	// the loop, and the conversation ledger written at turn end recorded a
+	// reply with no account of what produced it.
 	LastReview *Review
+	LastWork   *Work
 
 	// Suspended marks a turn parked on a detached sandbox run.
 	Suspended bool
@@ -284,7 +246,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 	}
 
 	res := Result{Decision: phase.Failed, Iterations: slices.Clone(in.History)}
-	stall := StallDetector{Threshold: set.StallThreshold}
+	stall := StallDetector{}
 	notes := ""
 	maxRounds := set.iterations()
 
@@ -309,125 +271,86 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		res.Rounds = round
 
 		var (
-			p           Plan
-			planSurface Surface
-			exec        Execution
-			execSurface Surface
-			err         error
+			work    Work
+			surface Surface
+			err     error
 		)
 		if resuming {
 			// The first round of a resumed turn re-enters the suspended
-			// Execute conversation. Plan is skipped, and only for this
-			// round: if the resumed executor self-iterates, round two is an
-			// ordinary planned round again.
+			// conversation, and only this round: if the resumed executor
+			// loops back, round two is an ordinary round.
 			resuming = false
-			p = in.ResumePlan
-			exec, execSurface, err = ph.Resume(ctx, res.Iterations)
+			work, surface, err = ph.Resume(ctx, res.Iterations)
 			if err != nil {
 				return res, fmt.Errorf("turn: resume round %d: %w", round, err)
 			}
 		} else {
-			p, planSurface, err = ph.Plan(ctx, round, notes, res.Iterations)
-			if err != nil {
-				return res, fmt.Errorf("turn: plan round %d: %w", round, err)
-			}
-
-			if p.Decision == PlanSkip {
-				// Nothing was being asked. The turn ends with the planner's
-				// reasoning as its output and nothing reaches the requester.
-				log.InfoContext(ctx, "turn_skipped", "turn_id", in.TurnID, "reason", p.Reasoning)
-				res.Decision = phase.Skipped
-				res.Artifact = p.Reasoning
-				return res, nil
-			}
-
-			exec, execSurface, err = ph.Execute(ctx, round, p, res.Iterations)
+			work, surface, err = ph.Execute(ctx, round, notes, res.Iterations)
 			if err != nil {
 				return res, fmt.Errorf("turn: execute round %d: %w", round, err)
 			}
 		}
-		if exec.Suspended {
-			// The turn parks here and its completion starts a new one. The
+
+		if work.Suspended {
+			// The turn parks here and its completion resumes it. The
 			// ledger goes out so that turn inherits it — this round is NOT
-			// closed and must not be appended, because its Review has not
+			// closed and must not be appended, because its review has not
 			// run and appending it would tell the resumed turn a delivery
 			// was judged when nothing judged it.
 			log.InfoContext(ctx, "turn_suspended", "turn_id", in.TurnID, "round", round)
 			res.Suspended = true
 			res.Decision = phase.SelfIterate
-			res.Artifact = exec.Text
+			res.Artifact = work.Text
 			return res, nil
 		}
 
-		// The gate judges against the surface EXECUTE reported. Activating a
-		// tool mid-phase changes the catalogue, and judging a real delivery
-		// against Plan's stale view reads it as a phantom.
-		surface := execSurface
-		if len(surface.Catalogue) == 0 {
-			surface = planSurface
-		}
-		resolved, phantom := phase.ResolvePlanned(p.ToolsNeeded, surface.Catalogue)
-		gate := phase.Gate{
-			// Keyed off the RAW list: a plan naming only tools that do not
-			// exist still intended to act, and reading it as intending
-			// nothing turns a failed delivery into a clean turn.
-			ExpectedAction:  len(p.ToolsNeeded) > 0,
-			PlannedResolved: resolved,
-			PlannedPhantom:  phantom,
-			PlanCalled:      names(p.Calls),
-			ExecuteCalled:   names(exec.Calls),
-			MCPTools:        surface.MCPTools,
-			KnownReads:      surface.KnownReads,
-		}
-
-		// A RESCUED plan never skips Review. The engine wrote that
-		// `direct`, not the planner, so there is no commitment to honour
-		// — and because a rescue names no tools, the gate below cannot
-		// catch it either: ExpectedAction is false, so a rescued turn
-		// that delivered nothing would complete as done.
-		skipReview := p.Decision == PlanDirect && !p.Rescued
-		if p.Decision == PlanDirect && p.Rescued {
-			log.WarnContext(ctx, "review_forced_plan_was_rescued",
-				"turn_id", in.TurnID, "round", round,
-				"detail", "the planner never submitted a decision, so the engine "+
-					"cannot honour one; Review judges what Execute actually did")
-		}
-		if skipReview && gate.MustReview() {
-			log.WarnContext(ctx, "review_forced_execute_skipped_delivery",
-				"turn_id", in.TurnID, "round", round,
-				"tools_needed", p.ToolsNeeded, "phantom", phantom,
-				"called", gate.ExecuteCalled)
-			skipReview = false
-		}
-		if skipReview {
-			log.InfoContext(ctx, "review_skipped_per_plan", "turn_id", in.TurnID, "round", round)
-			res.Decision = phase.Done
-			res.Artifact = exec.Text
+		// The engine's own reading of the round, from the record rather
+		// than from the executor's account of it. Two of its three answers
+		// cost no model call at all.
+		verdict := Check(work, in.Reply, surface)
+		if verdict.Skip {
+			log.InfoContext(ctx, "turn_no_action", "turn_id", in.TurnID,
+				"round", round, "summary", work.Summary)
+			res.Decision = phase.Skipped
+			res.Artifact = work.Summary
 			return res, nil
 		}
 
-		rev, err := ph.Review(ctx, round, p, exec, res.Iterations)
-		if err != nil {
-			return res, fmt.Errorf("turn: review round %d: %w", round, err)
+		var rev Review
+		if verdict.Correction != "" {
+			// The executor's own account failed the check, so the round is
+			// sent back WITHOUT spending a review call on it. Recorded as
+			// the reviewer's word for the ledger's sake — the next round
+			// has to read a correction from somewhere — but marked as the
+			// engine's, since no model judged it.
+			log.WarnContext(ctx, "round_corrected_before_review",
+				"turn_id", in.TurnID, "round", round, "outcome", string(work.Outcome),
+				"correction", verdict.Correction)
+			rev = Review{Decision: phase.SelfIterate, Notes: verdict.Correction}
+		} else {
+			rev, err = ph.Review(ctx, round, work, res.Iterations)
+			if err != nil {
+				return res, fmt.Errorf("turn: review round %d: %w", round, err)
+			}
 		}
 		res.LastReview = &rev
+		res.LastWork = &work
 
 		decision := rev.Decision
 		notes = rev.Notes
 		artifact := rev.FinalArtifact
 		if artifact == "" {
-			artifact = exec.Text
+			artifact = work.Text
 		}
 		res.Artifact = artifact
 
 		if decision == phase.Done {
-			if override, correction := gate.OverrideDone(); override {
+			if override, correction := OverrideDone(work, in.Reply, surface); override {
 				log.WarnContext(ctx, "review_done_overridden_undelivered",
 					"turn_id", in.TurnID, "round", round,
-					"tools_needed", p.ToolsNeeded, "phantom", phantom,
-					"called", gate.Called())
+					"cited", work.Deliveries, "called", names(work.Calls))
 				decision = phase.SelfIterate
-				notes = phase.AppendCorrection(notes, correction)
+				notes = AppendCorrection(notes, correction)
 			}
 		}
 
@@ -453,25 +376,24 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 			return res, nil
 		}
 
-		// A closed round. Two layers, deliberately: the call lists are
-		// ENGINE-recorded so they cannot be forgotten — which matters most
-		// on the override path just above, where Review said done and wrote
-		// no completed_work at all, yet is exactly where a partial delivery
-		// may already have landed — and CompletedWork is the reviewer's
-		// prose gloss the mechanical log cannot express.
+		// A closed round. Two layers, deliberately: the call list is
+		// ENGINE-recorded so it cannot be forgotten — which matters most
+		// on the override path just above, where the reviewer said done
+		// and wrote no completed_work at all, yet is exactly where a
+		// partial delivery may already have landed — and CompletedWork is
+		// the reviewer's prose gloss the mechanical log cannot express.
 		res.Iterations = append(res.Iterations, ledger.Iteration{
-			Iteration:    round,
-			PlanSummary:  p.Summary,
-			PlanCalls:    p.Calls,
-			ExecuteCalls: exec.Calls,
+			Iteration: round,
+			Intent:    work.Summary,
+			Calls:     work.Calls,
 			// Only the reads actually CALLED, not the whole surface's
 			// annotation set. Rendering is a membership test either way,
 			// so the block reads the same — but the row is persisted
 			// across a sandbox suspend, and carrying every read-only tool
 			// on a large MCP surface makes it grow with the catalogue
 			// rather than with what the round did.
-			Reads:         calledReads(p.Calls, exec.Calls, surface.KnownReads),
-			ExecuteText:   exec.Text,
+			Reads:         calledReads(work.Calls, surface.KnownReads),
+			Text:          work.Text,
 			ReviewNotes:   notes,
 			CompletedWork: rev.CompletedWork,
 		})
@@ -481,7 +403,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 	res.Decision = phase.Failed
 	res.Breach = &Breach{
 		Kind: BreachMaxIterations,
-		Detail: fmt.Sprintf("plan/execute/review loop exhausted at %d rounds without done",
+		Detail: fmt.Sprintf("executor/review loop exhausted at %d rounds without done",
 			maxRounds),
 	}
 	return res, nil
@@ -489,10 +411,10 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 
 // calledReads narrows a surface's read-only annotations to the ones this
 // round actually used.
-func calledReads(planCalls, execCalls []ledger.Call, known []string) []string {
+func calledReads(calls []ledger.Call, known []string) []string {
 	var out []string
 	seen := make(map[string]bool, len(known))
-	for _, c := range slices.Concat(planCalls, execCalls) {
+	for _, c := range calls {
 		if !seen[c.Name] && slices.Contains(known, c.Name) {
 			seen[c.Name] = true
 			out = append(out, c.Name)

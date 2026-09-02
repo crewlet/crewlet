@@ -63,6 +63,9 @@ type Config struct {
 	Model string
 	// Agent names the built-in profile.
 	Agent string
+	// AgentMode runs a seat's executor as the CLI's own agentic run
+	// rather than as a text completion. See [Provider.AgentMode].
+	AgentMode bool
 	// StateDir is the resolved credential + per-seat home directory.
 	StateDir string
 	// Overrides are the operator's profile edits.
@@ -84,14 +87,15 @@ type Config struct {
 
 // Provider is a coding CLI behind the language-model contract.
 type Provider struct {
-	key     string
-	model   string
-	agent   string
-	profile Profile
-	ws      *Workspace
-	env     map[string]string
-	auth    Auth
-	timeout time.Duration
+	key       string
+	model     string
+	agent     string
+	agentMode bool
+	profile   Profile
+	ws        *Workspace
+	env       map[string]string
+	auth      Auth
+	timeout   time.Duration
 
 	// slots caps concurrent child processes. A buffered channel rather
 	// than a semaphore type because acquisition has to be selectable
@@ -133,15 +137,16 @@ func New(cfg Config) (*Provider, error) {
 		slots = 1
 	}
 	p := &Provider{
-		key:     cfg.Key,
-		model:   cfg.Model,
-		agent:   cfg.Agent,
-		profile: profile,
-		ws:      ws,
-		env:     cfg.Env,
-		auth:    cfg.Auth,
-		timeout: cfg.Timeout,
-		slots:   make(chan struct{}, slots),
+		key:       cfg.Key,
+		model:     cfg.Model,
+		agent:     cfg.Agent,
+		agentMode: cfg.AgentMode,
+		profile:   profile,
+		ws:        ws,
+		env:       cfg.Env,
+		auth:      cfg.Auth,
+		timeout:   cfg.Timeout,
+		slots:     make(chan struct{}, slots),
 	}
 	if p.timeout <= 0 {
 		return nil, fmt.Errorf("cli-agent %q: timeout is zero — a CLI call with no "+
@@ -162,6 +167,25 @@ func New(cfg Config) (*Provider, error) {
 
 // Model is the configured model identity.
 func (p *Provider) Model() string { return p.model }
+
+// AgentMode reports whether this entry runs a seat's executor as the CLI's own
+// agentic run rather than as a text completion behind the engine's tool loop.
+//
+// The provider is still a full [llm.Provider] in agent mode, and deliberately:
+// every OTHER phase — the reviewer, a worker, the summariser, the round-cap
+// judge — is a text call, and a seat pointing `llm` at an agent-mode entry
+// must not lose them. Only the executor branches, and only the engine knows
+// where that branch is.
+func (p *Provider) AgentMode() bool { return p.agentMode }
+
+// CodingAgent is the sandbox runner that drives this CLI in agent mode.
+//
+// It is the CLI's own name, because the runner registry is keyed on exactly
+// that: agent mode reuses the coding-agent runners rather than growing a
+// second way to invoke the same binary with the same flags. A CLI with no
+// registered runner is refused where the run is built, by a message that
+// names what IS registered — see [sandbox.Manager.RunnerFor].
+func (p *Provider) CodingAgent() string { return p.agent }
 
 // Profile is the resolved profile, for `crewlet llm doctor`.
 func (p *Provider) Profile() Profile { return p.profile }

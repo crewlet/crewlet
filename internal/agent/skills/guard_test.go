@@ -103,13 +103,14 @@ func TestTheGuardNeverBlocksWhatWouldBrickTheSession(t *testing.T) {
 	// exemption exists for.
 	everything := skills.Trigger{AnyOf: []skills.Trigger{
 		{Tool: "load_tool_skill"}, {Tool: "activate_tool"},
-		{Tool: "list_mcp_server_tools"}, {Tool: "submit_plan"},
-		{Tool: "submit_review"}, {Tool: "create_mr"},
+		{Tool: "list_mcp_server_tools"}, {Tool: "submit_work"},
+		{Tool: "submit_review"}, {Tool: "mark_onboarded"},
+		{Tool: "create_mr"},
 	}}
 	r := registry(t, skill("greedy", everything, true))
-	g := skills.NewGuard(r, prompts.PhasePlan,
+	g := skills.NewGuard(r, prompts.PhaseExecute,
 		withLoader([]string{"activate_tool", "list_mcp_server_tools",
-			"submit_plan", "submit_review", "create_mr"}))
+			"submit_work", "submit_review", "mark_onboarded", "create_mr"}))
 
 	for _, exempt := range skills.ExemptTools {
 		if got := g.Check(exempt, ""); got != "" {

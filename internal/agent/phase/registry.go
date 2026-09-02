@@ -80,6 +80,17 @@ func (r *Registry) All() iter.Seq2[string, llm.Provider] {
 	}
 }
 
+// Provider resolves ONE configured key, with no chain and no fallback.
+//
+// For a caller that was given an explicit model name — a worker template, a
+// delegate task — where falling back would defeat the point of naming it. A
+// key that misses is (nil, false) rather than a substitution, so the caller
+// can refuse and say which keys exist.
+func (r *Registry) Provider(key string) (llm.Provider, bool) {
+	p, ok := r.byKey[key]
+	return p, ok
+}
+
 // Has reports whether a key is configured. The config validator uses it to
 // reject a role naming a provider that does not exist — which is where that
 // typo should die, rather than here where it can only be survived.
@@ -89,7 +100,7 @@ func (r *Registry) Has(key string) bool { _, ok := r.byKey[key]; return ok }
 //
 // Four levels, in priority:
 //
-//  1. the role's per-phase chain (llm_plan, llm_execute, …) if set,
+//  1. the role's per-phase chain (llm_review, llm_judge, …) if set,
 //  2. the role's llm chain,
 //  3. the "default" key,
 //  4. the first provider in config order.
@@ -157,16 +168,13 @@ func (r *Registry) Head(role *org.Role, ph Phase) (chain.Member, error) {
 
 // roleKeys returns the role's per-phase chain for ph, before any fallback.
 //
-// Sandbox is the one phase with a two-step preference: the sandboxed coding
-// agent IS this seat's Execute work, done somewhere else, so it inherits
-// llm_execute before falling back to llm. Every other phase falls straight
-// through to llm.
+// THE EXECUTOR IS NOT HERE, and its absence is the rule: `llm` is the seat's
+// model, and the executor is what runs on it. Every phase below is a satellite
+// an operator may point somewhere cheaper — the reviewer, a spawned worker,
+// the summariser, the round-cap judge, the coding agent — and each falls
+// straight through to llm when it names nothing.
 func roleKeys(role *org.Role, ph Phase) org.ProviderKeys {
 	switch ph {
-	case Plan:
-		return role.LLMPlan
-	case Execute:
-		return role.LLMExecute
 	case Review:
 		return role.LLMReview
 	case Subagent:
@@ -176,10 +184,7 @@ func roleKeys(role *org.Role, ph Phase) org.ProviderKeys {
 	case Judge:
 		return role.LLMJudge
 	case Sandbox:
-		if len(role.LLMSandbox) > 0 {
-			return role.LLMSandbox
-		}
-		return role.LLMExecute
+		return role.LLMSandbox
 	case Onboarding:
 		// NO FIELD OF ITS OWN, deliberately: onboarding reads the team's
 		// pages and writes conventions once, on a seat's first turn, and
@@ -207,4 +212,4 @@ func RoleKeys(role *org.Role, ph Phase) org.ProviderKeys { return roleKeys(role,
 // chain — but "has no own field" is a fact about [roleKeys], not a reason to
 // be missing from the set. A caller iterating this to cover every phase was
 // silently skipping the one that runs FIRST on a seat's first turn.
-var All = []Phase{Plan, Execute, Review, Subagent, Auxiliary, Judge, Sandbox, Onboarding}
+var All = []Phase{Execute, Review, Subagent, Auxiliary, Judge, Sandbox, Onboarding}

@@ -12,9 +12,11 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
 
 // `crewlet llm` — the operator's window onto the subscription CLI backends.
@@ -39,12 +41,20 @@ import (
 // the tool-call envelope, which costs every seat a corrective round for ever.
 // Only a real completion with a real tool proves the last one, so `doctor`
 // runs one.
+//
+// Two of the profile's claims are measured the same way, because a flag that
+// stopped working is silent in both directions. The shell probe asks the CLI
+// to run a command on the engine host and reports whether it did — a profile
+// that denies local tools and a CLI that ran one is a hole where the isolation
+// was assumed. The web probe asks it to fetch a URL, because web is the one
+// local tool every profile keeps ON and a vendor's sandbox flag can cut it
+// without saying so.
 
 const llmUsage = `crewlet llm — subscription CLI backends: logins, health and tokens
 
 Usage:
   crewlet llm list                        Providers, agent, model and login state
-  crewlet llm doctor [KEY]                Verify end to end (-no-smoke skips the real call)
+  crewlet llm doctor [KEY]                Verify end to end (-no-smoke skips the real calls)
   crewlet llm login KEY                   Broker the vendor's own interactive login
   crewlet llm login KEY -from-host        Adopt a login already on this machine
   crewlet llm login KEY -capture-token    Mint a headless token into the secret store
@@ -62,7 +72,7 @@ Flags:
   -company PATH  Tier B, the company document naming the providers (default %q)
   -config PATH   Tier A, carrying the store and the secret keyring (default %q)
   -home PATH     Read a host login from somewhere other than this user's home
-  -no-smoke      Skip doctor's real completion
+  -no-smoke      Skip doctor's real completions (the tool call and both probes)
   -print-token   Write a captured token to stdout instead of the store (login only)
 `
 
@@ -98,7 +108,7 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 	secretStore := fs.Bool("secret-store", false,
 		"write the bundle into the encrypted secret store (export only)")
 	noSmoke := fs.Bool("no-smoke", false,
-		"skip the real completion (doctor only)")
+		"skip the real completions — the tool call and both isolation probes (doctor only)")
 	printToken := fs.Bool("print-token", false,
 		"write a captured token to stdout instead of storing it (login only)")
 	if err := fs.Parse(rest); err != nil {
@@ -256,7 +266,15 @@ func doctorLLM(ctx context.Context, providers []cliAgentProvider, key string, sm
 		if i > 0 {
 			fmt.Fprintln(stdout)
 		}
-		d := p.provider.Diagnose(ctx, smoke)
+		d := p.provider.Diagnose(ctx, cliagent.DiagnoseOptions{
+			Smoke: smoke,
+			// THE ENGINE'S OWN ANSWERS, not the provider's guess at them:
+			// which runners this build registers and what a sandbox can
+			// dial are facts about the process, and both decide whether
+			// an agent-mode entry works at all.
+			AgentRunners: codingagent.Names(),
+			BridgeURL:    os.Getenv(mcpbridge.BaseURLVar),
+		})
 		d.Render(stdout)
 		if !d.Healthy() {
 			unhealthy++

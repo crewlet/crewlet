@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -66,4 +67,40 @@ func TestTuningBatchingWithoutAnythingToTuneIsHarmless(t *testing.T) {
 	(&Engine{}).tuneBatching(&Company{Config: &config.Company{}})
 	(&Engine{batch: queue.DefaultBatchOptions()}).tuneBatching(nil)
 	(&Engine{batch: queue.DefaultBatchOptions()}).tuneBatching(&Company{})
+}
+
+// THE GATE READS CONFIG; THE SEARCHER IS RESOLVED PER CALL.
+//
+// Those cannot be the same read. equip runs BEFORE an apply reconciles the
+// knowledge base, so a searcher captured here is the PREVIOUS epoch's — its
+// lead map is the old org chart and its credential is the pre-rotation one.
+// Capturing it would give a seat a tool that reads the company it used to be,
+// silently, since a stale-credential search returns an empty result exactly
+// like a real one.
+func TestSearchKnowledgeIsGatedOnConfigAndResolvedPerCall(t *testing.T) {
+	t.Parallel()
+	// A NIL INTERFACE with no knowledge block, not a live adapter over a
+	// nil searcher: the tool is omitted rather than registered-and-empty,
+	// so a seat is never offered a search its company cannot serve.
+	bare := &Company{Config: &config.Company{}}
+	if got := knowledgeSearch(&Engine{}, bare); got != nil {
+		t.Errorf("a company with no knowledge base got %v", got)
+	}
+
+	wired := &Company{Config: &config.Company{
+		Integrations: config.Integrations{Confluence: &config.Confluence{}},
+	}}
+	got := knowledgeSearch(&Engine{}, wired)
+	if got == nil {
+		t.Fatal("a company with a knowledge block got no search tool")
+	}
+	// And with nothing started yet it answers CLOSED rather than
+	// panicking: a configured backend that failed to start is a real
+	// state, and one the seat can act on.
+	if got.CanSearch(nil, nil) {
+		t.Error("an unstarted knowledge base reported itself searchable")
+	}
+	if hits := got.Search(t.Context(), knowledge.Query{Text: "x"}); hits != nil {
+		t.Errorf("an unstarted knowledge base returned %v", hits)
+	}
 }

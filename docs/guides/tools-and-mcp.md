@@ -270,7 +270,7 @@ Environment variables and HTTP header values support `${VAR}` references that re
 
 ### Tool annotation overrides
 
-The engine derives some behaviour from a tool's [capabilities](../concepts/tool-capabilities.md) — for example, the sub-agent guard denies tools that write to a shared surface, classified from the MCP `readOnlyHint` / `destructiveHint` / `openWorldHint` annotations the server advertises. Most servers advertise these; for one that doesn't, supply them per server via `tool_annotations` (keyed by bare tool name):
+The engine derives some behaviour from a tool's [capabilities](../concepts/tool-capabilities.md) — for example, the worker guard denies tools that write to a shared surface, classified from the MCP `readOnlyHint` / `destructiveHint` / `openWorldHint` annotations the server advertises. Most servers advertise these; for one that doesn't, supply them per server via `tool_annotations` (keyed by bare tool name):
 
 ```yaml
 mcp_servers:

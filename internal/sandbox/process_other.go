@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// The local backend is POSIX-only, and deliberately so: every containment
+// The local backend is POSIX-only, and deliberately so: every local placement
 // property it offers is a POSIX primitive with no equivalent elsewhere —
 // process groups and killpg for reaching a coding agent's whole tree,
 // SIGSTOP/SIGCONT for the clarification pause, /proc start times for the

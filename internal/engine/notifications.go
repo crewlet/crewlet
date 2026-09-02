@@ -47,7 +47,7 @@ type notifications struct {
 	// searcher and the skills-space reader. No lifecycle, for the same
 	// reason the tracker has none — it is inbound-only, so there is no
 	// connection to lose and an unreachable instance degrades the reads
-	// that enrich a Plan phase without taking a surface down.
+	// that enrich a turn without taking a surface down.
 	confluence confluenceParts
 
 	// jira remembers which account each seat credential authenticates as.
@@ -284,7 +284,7 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 			// WITHOUT its knowledge base rather than not at all.
 			log.ErrorContext(ctx, "confluence_unavailable", "error", err.Error(),
 				"detail", "the company is running without its knowledge base, "+
-					"so every Plan phase gets an empty knowledge block")
+					"so every turn gets an empty knowledge block")
 		}
 		if parts.parser != nil {
 			e.notify.mu.Lock()

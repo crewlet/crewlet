@@ -51,21 +51,23 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 	if spec == nil || !spec.Enabled() {
 		return nil, nil
 	}
-	provider, err := buildSandboxProvider(spec, env)
+	// ONLY THE CELLS THE COMPANY ACTUALLY REACHES, from the same computation
+	// validation reads. Building the whole catalogue eagerly constructed a
+	// container backend for a company whose seats all run direct, and failed
+	// the apply demanding an image the validator had just refused as a field
+	// nothing would read.
+	providers, err := buildSandboxProviders(spec, env, c.SandboxPlacements())
 	if err != nil {
 		return nil, err
 	}
-	if provider == nil {
+	if len(providers) == 0 {
 		return nil, nil
 	}
 	return sandbox.NewManager(sandbox.ManagerOptions{
-		Provider: provider,
-		Runners: map[string]sandbox.Runner{
-			codingagent.ClaudeCodeName: codingagent.NewClaudeCode(),
-			codingagent.OpenCodeName:   codingagent.NewOpenCode(),
-		},
+		Providers:          providers,
+		DefaultPlacement:   sandbox.Placement(spec.RunIn()),
+		Runners:            sandboxRunners(),
 		DefaultCodingAgent: string(spec.DefaultCodingAgent),
-		DefaultTemplate:    spec.Template,
 		DefaultTimeout:     seconds(spec.Timeout()),
 		DefaultPauseTTL:    secondsPtr(spec.PauseTTL()),
 		DefaultMaxTurns:    spec.DefaultMaxTurns,
@@ -74,14 +76,76 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 	})
 }
 
-func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver) (sandbox.Provider, error) {
-	switch spec.Type {
-	case config.SandboxE2B:
+// sandboxRunners is every coding agent this build can drive.
+//
+// A FUNCTION rather than a literal at the one call site, because a second
+// reader needs the same list: `crewlet llm doctor` refuses an agent-mode entry
+// whose CLI has no runner, and it checks against codingagent.Names(). A test
+// holds the two together — a drift would have the doctor pass an entry the
+// engine then refuses at the seat's first turn.
+func sandboxRunners() map[string]sandbox.Runner {
+	return map[string]sandbox.Runner{
+		codingagent.ClaudeCodeName: codingagent.NewClaudeCode(),
+		codingagent.OpenCodeName:   codingagent.NewOpenCode(),
+	}
+}
+
+// buildSandboxProviders turns the catalogue into one backend per placement it
+// configures.
+//
+// THE CLOSED SET AND THIS FUNCTION ARE THE SAME LIST, asserted by a test,
+// because nothing else connects them: the last time they disagreed the
+// config's default named a backend with no case here, so a company validated
+// cleanly, reported a configured sandbox on the dashboard, and failed at its
+// first coding run.
+//
+// ONE LOCAL BACKEND PER LOCAL PLACEMENT, not one shared between them: the two
+// differ in exactly one option, and a single instance would have to be told
+// which cell it was serving on every call — which is the block-wide mode this
+// whole reshape removed, reintroduced one layer down.
+func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, reached map[config.Placement]string) (map[sandbox.Placement]sandbox.Provider, error) {
+	built := make(map[sandbox.Placement]sandbox.Provider, len(reached))
+	// WALKED IN THE CLOSED SET'S ORDER, not the map's: a map iterates
+	// randomly, and an error naming whichever backend happened to come
+	// first would differ between two runs of the same broken config.
+	for _, placement := range config.BackendPlacements() {
+		if _, want := reached[placement]; !want {
+			continue
+		}
+		if !spec.Configured(placement) {
+			// Refused by validation, so this is the belt to that brace: an
+			// embedder building a company by hand reaches it, and a
+			// silently missing backend would offer run_sandbox to a seat
+			// whose runs can never start.
+			return nil, fmt.Errorf("providers.sandbox: %q is reached by %s and "+
+				"has no backend configured", placement, reached[placement])
+		}
+		provider, err := buildSandboxProvider(spec, env, placement)
+		if err != nil {
+			return nil, err
+		}
+		built[sandbox.Placement(placement)] = provider
+	}
+	return built, nil
+}
+
+func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, placement config.Placement) (sandbox.Provider, error) {
+	if spec.Fake {
+		// The in-process double, for a deployment demonstrating the flow
+		// without a real box. Named in config rather than inferred, so
+		// nobody runs one by accident — and it answers every placement,
+		// so a demonstration config differs from a real one in exactly
+		// one line.
+		return sandbox.NewFakeProvider(), nil
+	}
+	switch placement {
+	case config.PlacementE2B:
+		e2b := spec.E2B
 		// RESOLVED HERE, at the moment the provider is built, which is
 		// the only place the key's value exists in this process. Tier B
 		// stores its references verbatim — that is what keeps an exported
 		// revision free of resolved secrets — so a backend handed
-		// spec.APIKey directly would authenticate with the literal
+		// e2b.APIKey directly would authenticate with the literal
 		// "${E2B_API_KEY}" and get a 401 naming the vendor rather than
 		// the misconfiguration.
 		//
@@ -90,38 +154,28 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver) (s
 		// with a different variable, and passing the reference through
 		// would point every box at a host called "${E2B_DOMAIN}".
 		return sandbox.NewE2B(sandbox.E2BOptions{
-			APIKey:   resolvedOr(env, spec.APIKey),
-			Domain:   resolvedOr(env, spec.Domain),
-			Template: spec.Template,
+			APIKey:   resolvedOr(env, e2b.APIKey),
+			Domain:   resolvedOr(env, e2b.Domain),
+			Template: e2b.Template,
 		})
-	case config.SandboxLocal:
+	case config.PlacementDirect, config.PlacementContainer:
 		local := spec.Local
-		if local == nil {
-			local = &config.LocalSandbox{}
-		}
 		return sandbox.NewLocal(sandbox.LocalOptions{
-			Containment: sandbox.Containment(local.Containment),
-			StateDir:    local.StateDir,
-			Image:       local.Image,
-			Runtime:     string(local.Runtime),
-			Network:     local.Network,
-			RunArgs:     local.RunArgs,
+			Placement: sandbox.Placement(placement),
+			StateDir:  local.StateDir,
+			Image:     local.Image,
+			Runtime:   string(local.Runtime),
+			Network:   local.Network,
+			RunArgs:   local.RunArgs,
 		})
-	case config.SandboxFake:
-		// The in-process double, for a deployment demonstrating the flow
-		// without a real box. Named in config rather than inferred, so
-		// nobody runs one by accident.
-		return sandbox.NewFakeProvider(), nil
 	default:
 		// UNREACHABLE THROUGH A PARSED CONFIG, because the closed set and
-		// this switch are the same list — asserted by a test, because
-		// nothing else connects them and the last time they disagreed the
-		// config's default named a backend with no case here.
+		// this switch are the same list.
 		//
 		// Answered rather than panicked: an embedder building a spec by
 		// hand is a caller, not an operator to be crashed at.
-		return nil, fmt.Errorf("providers.sandbox.type %q is not one of %v",
-			spec.Type, config.SandboxTypes)
+		return nil, fmt.Errorf("providers.sandbox: %q is not one of %v",
+			placement, config.Placements)
 	}
 }
 
@@ -285,12 +339,20 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 
 	company := e.Company()
 	tel := e.describeResume(ctx, company, in)
+	turnIdentity := tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth,
+		in.Run.DelegationChain, resumeTask(in), turn.Reply(in.Run.Reply))
 	r, err := company.RunnerFor(in.Turn.Handle(),
 		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
 			Task:      resumeTask(in),
 			Publisher: e.backends.Queue,
-			Turn:      tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth, in.Run.DelegationChain),
-			Budget:    e.meterFor(company, in.Turn.Handle()),
+			Turn:      turnIdentity,
+			// THE SAME RUNTIME THE TURN SUSPENDED UNDER — supplied here for
+			// the turn's LATER rounds, not for this one: whether the phase
+			// being re-entered was agentic is the state's own answer (see
+			// [execstate.State.AgentRun]), but a turn that loops to another
+			// iteration must run that one the same way it ran the first.
+			AgentRun: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context),
+			Budget:   e.meterFor(company, in.Turn.Handle()),
 			// A resumed Execute loop can exhaust its rounds like any other,
 			// and it is the phase most likely to: it comes back mid-task with
 			// its budget already partly spent.
@@ -307,7 +369,14 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// this turn already ran its first phase — running it here would
 			// spend the resumed turn's opening on orientation for a seat that
 			// is mid-task.
-			Resume: &runner.Resume{State: in.State, Answer: in.Answer},
+			Resume: &runner.Resume{
+				State: in.State, Answer: in.Answer,
+				// THE RUN'S OWN TOOL CALLS, off its durable row. An
+				// agent-mode executor called them over the bridge, possibly
+				// in another process, so this list is the only record of
+				// what the phase did — its submission included.
+				Bridged: bridgedCalls(in.Run.BridgeCalls),
+			},
 		})
 	if err != nil {
 		return err
@@ -320,10 +389,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		Depth:   in.Run.DelegationDepth,
 		History: in.State.Iterations,
 		Resume:  true,
-		// The plan the suspended turn was executing, so the delivery gate
-		// judges the round against what it INTENDED. A plan that cannot be
-		// recovered downgrades the gate rather than failing the resume.
-		ResumePlan: resumePlan(in.Run),
+		// Who is waiting, carried on the row rather than re-derived: the
+		// resumed turn never sees its trigger, so without this a turn
+		// somebody asked for would come back from a coding run free to
+		// end in silence.
+		Reply: turn.Reply(in.Run.Reply),
 	})
 	e.publishTurnCompleted(ctx, tel, in.Run.TurnID, r.Spend(), res, err)
 	if err != nil {
@@ -335,7 +405,27 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	if res.Suspended {
 		e.persistSuspension(ctx, r, in.Run.TurnID)
 	}
+	e.recordResume(ctx, in, res)
 	return nil
+}
+
+// recordResume files a finished resumed turn against the conversation it was
+// serving when it detached.
+//
+// ONLY THE DISPATCHER WROTE THIS, so a turn that ended here — which is every
+// turn that did code work — left the conversation ledger untouched. The
+// thread's history then stopped at the moment the run detached, and the
+// seat's next turn on it read a conversation in which the coding work had
+// never happened: no record of what was built, and nothing to stop it being
+// planned again.
+//
+// A turn that suspended again records nothing — [Dispatcher.RecordSession]
+// declines it, for both paths and for the same reason: it has not finished,
+// so there is no reply to file. The completion that eventually lands comes
+// back through this same frame and records then.
+func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result) {
+	e.dispatch.RecordSession(ctx, in.Turn.Handle(), in.Run.ConversationKey,
+		in.Run.TurnID, resumeTask(in), res, e.dispatch.now())
 }
 
 // resumeTask is the brief the resumed turn re-enters with.
@@ -348,24 +438,6 @@ func resumeTask(in resumeInput) string {
 		return in.State.Task
 	}
 	return in.Run.TaskDescription
-}
-
-// resumePlan rebuilds the plan the suspended turn was executing.
-func resumePlan(run sandbox.PendingRun) turn.Plan {
-	p := turn.Plan{Summary: run.TaskDescription}
-	if len(run.Plan) > 0 {
-		if summary, ok := run.Plan["summary"].(string); ok && summary != "" {
-			p.Summary = summary
-		}
-		if tools, ok := run.Plan["tools_needed"].([]any); ok {
-			for _, t := range tools {
-				if name, ok := t.(string); ok {
-					p.ToolsNeeded = append(p.ToolsNeeded, name)
-				}
-			}
-		}
-	}
-	return p
 }
 
 // persistSuspension writes a turn's suspended conversation to its row, which
@@ -458,6 +530,34 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		// lose its gate across an apply mid-turn.
 		return sandbox.LaunchResult{}, fmt.Errorf("this seat's sandbox is not enabled")
 	}
+	if gate.RunIn == config.PlacementSelf {
+		// `self` means this seat's code work rides its own executor run,
+		// which is a coding CLI in agent mode and already holds a shell,
+		// an editor and a checkout. A second box beside it would give the
+		// seat two filesystems with the work in the one the turn cannot
+		// see — so the tool refuses and says which shell to use, rather
+		// than provisioning a box whose output is invisible.
+		return sandbox.LaunchResult{}, fmt.Errorf(
+			"this seat runs its code work in its own agent session (role.sandbox.run_in: " +
+				"self) — use the shell and editor you already have rather than " +
+				"starting a second box")
+	}
+
+	// THE PRE-FLIGHT BUDGET FLOOR. turn_engine.sandbox_min_budget_tokens
+	// was validated, schema'd and documented and read by nothing, so a
+	// company that set it got a new revision and no behaviour.
+	//
+	// It is checked HERE rather than in the tool, because this is the frame
+	// that holds the seat's counter — and refused as a launch error, which
+	// the tool reports back to the model as a failed call. That is the
+	// point of a floor: a coding run costs a box, a clone and a toolchain
+	// install before it produces a token, so a seat with no headroom must
+	// learn that now and fall back to its own tools rather than after the
+	// job has died mid-run having delivered nothing.
+	if err := sandboxHeadroom(ctx, e.remainingFor(company, seat.Handle()),
+		company.Config.TurnEngine.SandboxMinBudgetTokens); err != nil {
+		return sandbox.LaunchResult{}, err
+	}
 
 	// A box this turn already has, paused from an earlier call. An EMPTY id
 	// on an existing row means that box is gone — reaped past its pause TTL,
@@ -471,17 +571,25 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	setup := append(manager.DefaultSetup(), setupSteps(gate.Setup)...)
 	servers := sandboxMCP(l.engine.resolver(), company, seat, gate)
 	// The seat's own model and login, resolved from llm_sandbox — which
-	// falls back to llm_execute, because sandboxed work IS this seat's
-	// Execute phase running somewhere else.
+	// falls back to `llm`, because sandboxed work IS this seat's own work
+	// running somewhere else, and `llm` is what that work runs on.
 	agentLLM, credentials, credentialEnv := sandboxLLM(company, seat)
 	env := underlay(e.sandboxEnv(seat, gate, setup), credentialEnv)
 	spec := manager.BuildSpec(sandbox.SpecInput{
+		// The seat's cell, empty inheriting providers.sandbox's default.
+		// Resolved at LAUNCH rather than at config time, for the same
+		// reason coding_agent is: a catalogue change reaches every seat
+		// that named nothing without rewriting their blocks.
+		Placement:       sandbox.Placement(gate.RunIn),
 		CodingAgent:     string(gate.CodingAgent),
 		PauseTTL:        pauseTTL(gate),
 		MaxTurns:        gate.MaxTurns,
 		Env:             env,
 		CredentialFiles: credentials,
 	})
+	if err := sandboxCredentials(company, seat, phase.Sandbox, spec.Placement, env); err != nil {
+		return sandbox.LaunchResult{}, err
+	}
 
 	agentID := ""
 	if id, ok := company.Org.AgentIDFor(seat); ok {
@@ -507,14 +615,55 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 			TurnID: t.ID, AgentID: agentID, AgentHandle: t.Handle(), Role: seat.Name,
 			Depth: t.Depth, Chain: t.Chain,
 			TraceID: runTrace.TraceID, SpanID: runTrace.SpanID,
+			// THE CONVERSATION THE WORK CAME FROM, which nothing set
+			// either. The row has carried this field since it was
+			// written, and with it empty a resumed turn had no way to
+			// say where its answer belonged: it left no conversation
+			// entry at all, so the next turn on that thread re-read
+			// history that stopped at the moment the run detached and
+			// planned as though the coding work had never happened.
+			ConversationKey: t.ConversationKey,
+			// The brief and the delivery obligation, so the resumed turn
+			// has both when the trigger is long gone. Neither can be
+			// recovered from the row any other way.
+			Reply: t.Reply,
 		},
 		Brief:      brief,
+		Task:       t.Task,
 		Setup:      setup,
 		Spec:       spec,
 		LLM:        agentLLM,
 		MCPServers: servers,
 		ReuseBox:   reuse,
 	})
+}
+
+// sandboxHeadroom refuses a launch below turn_engine.sandbox_min_budget_tokens.
+//
+// THREE-VALUED, like every other budget read in this engine: a seat with no
+// counter is uncapped and passes, a seat below the floor is refused, and a
+// read that FAILED is refused too — launching a box on an unknown budget is
+// how a company discovers its ceiling by spending past it.
+func sandboxHeadroom(ctx context.Context, remaining runner.Remaining, floor int) error {
+	if floor <= 0 {
+		return nil
+	}
+	if remaining == nil {
+		// No counter anywhere in the epoch, which is a company with no
+		// token budget rather than a read that could not be made.
+		return nil
+	}
+	left, err := remaining.Remaining(ctx)
+	if err != nil {
+		return fmt.Errorf("this seat's remaining token budget could not be read, "+
+			"and a coding run costs a box before it produces anything: %w", err)
+	}
+	if left < floor {
+		return fmt.Errorf("this seat has %d tokens left and a coding run needs at "+
+			"least %d (turn_engine.sandbox_min_budget_tokens): do the work with "+
+			"your own tools, or report that the budget is exhausted", left, floor)
+	}
+	return nil
 }
 
 // sandboxMCP renders the seat's SCOPED coding-agent MCP surface.
@@ -559,8 +708,14 @@ func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *config.R
 // different instructions, which is why both the config field and the manager's
 // input carry a pointer rather than a sentinel number. A negative value is the
 // field's earlier spelling of "inherit" and is read as one.
+//
+// NIL-SAFE, like [maxTurnsFor] and for the same seat: an agent-mode executor
+// is placed by its own providers.llm entry and runs in a box whether or not
+// role.sandbox was ever written, and reading the override off a block that
+// does not exist panicked that seat's first launch — after the bridge session
+// was opened and before anything would have closed it.
 func pauseTTL(gate *config.RoleSandbox) *time.Duration {
-	if gate.PauseTTLSeconds == nil || *gate.PauseTTLSeconds < 0 {
+	if gate == nil || gate.PauseTTLSeconds == nil || *gate.PauseTTLSeconds < 0 {
 		return nil
 	}
 	d := seconds(*gate.PauseTTLSeconds)
@@ -572,9 +727,27 @@ func seatSandbox(c *Company, roleName string) *config.RoleSandbox {
 	if c == nil || c.Config == nil {
 		return nil
 	}
-	for i := range c.Config.Roles {
-		if c.Config.Roles[i].Name == roleName {
-			return c.Config.Roles[i].Sandbox
+	// EVERY SEAT, AT ANY DEPTH. This walked only the top-level `roles:`,
+	// so a seat declared under `units:` — which, in a company with an org
+	// chart, is most of them — always answered nil. The tool then refused
+	// it with "this seat's sandbox is not enabled" on a seat whose block
+	// says otherwise: code work was silently unavailable to every unit
+	// member, and the message pointed at the one thing that was correct.
+	//
+	// A SEPARATE found FLAG, not the block itself as a sentinel: a seat
+	// that exists and wrote no `sandbox:` block is a nil block, which is
+	// the same value a name nobody holds returns. Overloading the two
+	// meant the walk kept looking after it had its answer, and would have
+	// returned a LATER seat's block for an earlier one of the same name.
+	// THE FIRST MATCH, AND THEN STOP. The walk is an iterator precisely so
+	// this can break: a callback had no way to say "found it", so every
+	// launch ran the whole org chart to the end — and the only way to
+	// track the answer was the nil block itself, which cannot tell a seat
+	// that wrote none from a name nobody holds, so a later seat of the
+	// same name would have had its block returned for this one.
+	for role := range c.Config.EachRole() {
+		if role.Name == roleName {
+			return role.Sandbox
 		}
 	}
 	return nil
@@ -603,8 +776,14 @@ func (e *Engine) sandboxEnv(seat *org.Role, gate *config.RoleSandbox, setup []sa
 	for key, value := range sandbox.SetupEnv(setup) {
 		env[key] = value
 	}
-	for key, value := range gate.Env {
-		env[key] = value
+	// NIL-SAFE, because a seat legitimately has no block: an agent-mode
+	// executor is placed by its own providers.llm entry, so it runs in a
+	// box whether or not role.sandbox was ever written. Ranging over a nil
+	// pointer's field panicked the seat's first launch.
+	if gate != nil {
+		for key, value := range gate.Env {
+			env[key] = value
+		}
 	}
 
 	// RESOLVED EXACTLY ONCE, here, at launch — not at load. These values
@@ -678,12 +857,18 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 		Queue: e.backends.Queue, Pending: e.sandboxPending, Manager: manager,
 		Resume:  &resumer{engine: e},
 		Account: e.sandboxAccountant(),
+		// The per-run tool bridge dies with the run — see
+		// [sandbox.CoordinatorOptions.Ended]. Idempotent, and reached
+		// from every settle path, so a run that failed before it ever
+		// had a box closes its session too.
+		Ended: e.bridge.Close,
 	})
 	if err != nil {
 		return err
 	}
 	e.sandboxCoordinator = coordinator
-	log.Info("sandbox_enabled", "provider", manager.Provider().Kind(),
+	log.Info("sandbox_enabled", "placements", manager.Placements(),
+		"default_run_in", string(manager.DefaultPlacement()),
 		"coding_agent", manager.DefaultCodingAgent())
 	return nil
 }
@@ -938,12 +1123,26 @@ func (e *Engine) AwaitingSandbox(handle string) bool {
 // registry already refuses a company with no models at build, and a run whose
 // agent reads its credential from the environment needs none of this.
 func sandboxLLM(c *Company, seat *org.Role) (*sandbox.AgentLLM, map[string]string, map[string]string) {
+	return runLLM(c, seat, phase.Sandbox)
+}
+
+// runLLM is [sandboxLLM] over an explicit phase.
+//
+// TWO CALLERS, TWO PHASES, and the difference is load-bearing. A run_sandbox
+// call is CODE WORK the executor delegated, so it runs on llm_sandbox — a seat
+// legitimately points that at a cheaper or more code-shaped model than the one
+// it thinks with. An AGENT-MODE run is the executor ITSELF, so it runs on the
+// executor's own entry: sending it to llm_sandbox would run a seat's whole turn
+// on the model it chose for a subordinate job, silently, on any seat that set
+// both.
+func runLLM(c *Company, seat *org.Role, ph phase.Phase) (*sandbox.AgentLLM, map[string]string, map[string]string) {
 	if c == nil || c.Models == nil {
 		return nil, nil, nil
 	}
-	member, err := c.Models.Head(seat, phase.Sandbox)
+	member, err := c.Models.Head(seat, ph)
 	if err != nil {
-		log.Warn("sandbox_llm_unresolved", "seat", seat.Handle(), "error", err)
+		log.Warn("sandbox_llm_unresolved", "seat", seat.Handle(),
+			"phase", ph.String(), "error", err)
 		return nil, nil, nil
 	}
 	spec, ok := c.Config.Providers.LLM[member.Key]
@@ -970,6 +1169,88 @@ func sandboxLLM(c *Company, seat *org.Role) (*sandbox.AgentLLM, map[string]strin
 	// agent at an endpoint nothing is serving.
 	out.BaseURL = ""
 	return out, agent.SandboxCredentials(), agent.SandboxEnv()
+}
+
+// SandboxCredentialError reports a coding run whose box could never
+// authenticate, refused before the box is minted.
+//
+// A distinct type because the two remedies are different config edits and an
+// operator has to be told which one is theirs — and because this is the one
+// launch failure that is a CONFIGURATION mistake rather than a provider
+// outage, so it must not be retried as if the vendor were down.
+type SandboxCredentialError struct{ msg string }
+
+func (e *SandboxCredentialError) Error() string { return e.msg }
+
+// sandboxCredentials refuses a run whose coding agent has nothing to
+// authenticate with inside its box.
+//
+// THE FAILURE THIS CLOSES IS SILENT AND EXPENSIVE. A subscription CLI that
+// mints no headless token (Codex, Gemini CLI) authenticates from credential
+// FILES, and those deliberately never leave the engine host: they carry a
+// refresh token whose rotation is shared fleet state. So a seat on such a
+// provider running in a remote cell provisions a box, installs the agent,
+// applies every setup step, starts the job — and the agent fails at its first
+// model call with the vendor's own "not authenticated", minutes in, naming
+// nothing an operator could act on. The documented error existed in the docs
+// and in no code at all.
+//
+// IT ASKS THE PROFILE WHICH NAMES COUNT rather than recognising a credential
+// by inspection, because the engine names no tool-specific variable of its own
+// and an operator legitimately declares their own key in role.sandbox.env.
+// That value is in the merged run environment this is handed, so a seat that
+// brought its own credential passes — which is why the check can be a refusal
+// rather than a warning.
+//
+// THE PHASE IS THE CALLER'S, and it is the same phase the caller resolved the
+// run's model with — see [runLLM]. A run_sandbox launch runs on llm_sandbox
+// and an agent-mode run on the executor's own entry, and a guard that always
+// asked llm_sandbox inspected the wrong provider for every agent-mode seat
+// that set both: it waved through a remote run whose CLI had no token, and
+// refused one whose executor entry would have minted one.
+func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sandbox.Placement, env map[string]string) error {
+	if placement.OnEngineHost() {
+		// A local box seeds the credential files and writes a refreshed
+		// one back, so files alone are a complete answer there.
+		return nil
+	}
+	if c == nil || c.Models == nil {
+		return nil
+	}
+	member, err := c.Models.Head(seat, ph)
+	if err != nil {
+		//nolint:nilerr // Deliberate: a seat with no resolvable model for
+		// this phase is the phase registry's problem — it refuses a
+		// company with no models at build — and [runLLM], which resolved
+		// the same seat and phase to pick the run's model moments ago,
+		// has already logged it. Returning the error here would refuse a
+		// run over a question this guard does not ask.
+		return nil
+	}
+	agent, isCLI := member.Provider.(*cliagent.Provider)
+	if !isCLI {
+		// An api-key entry exports its key into the run environment on
+		// every backend; there is no host-bound half to strand.
+		return nil
+	}
+	for _, name := range agent.CredentialEnvNames() {
+		if strings.TrimSpace(env[name]) != "" {
+			return nil
+		}
+	}
+	remedy := fmt.Sprintf("give this seat a local cell — role.sandbox.run_in: %q or %q",
+		sandbox.Direct, sandbox.Container)
+	if agent.MintsHeadlessToken() {
+		remedy = fmt.Sprintf("mint a token that travels with `crewlet llm login %s "+
+			"-capture-token`, or give this seat a local cell (role.sandbox.run_in: %q or %q)",
+			member.Key, sandbox.Direct, sandbox.Container)
+	}
+	return &SandboxCredentialError{msg: fmt.Sprintf(
+		"seat %q runs code in %q, where the %q subscription login cannot follow it: "+
+			"the credential files stay on the engine host because they carry a refresh "+
+			"token whose rotation is fleet state, and nothing in this run's environment "+
+			"authenticates. %s",
+		seat.Handle(), placement, member.Key, remedy)}
 }
 
 // underlay adds defaults to env WITHOUT overwriting what is already there.

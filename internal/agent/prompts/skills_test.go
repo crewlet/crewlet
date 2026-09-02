@@ -15,19 +15,19 @@ func allSkills() *fakeCatalogue {
 			key: "skill:platform_mentions", mcpServer: "atlassian",
 			summary: "Per-platform mention markup for the tracker and chat.",
 			body:    "MENTIONS-BODY",
-			phases:  []Phase{PhasePlan, PhaseExecute, PhaseReview, PhaseSubagent},
+			phases:  []Phase{PhaseExecute, PhaseReview, PhaseSubagent},
 		},
 		{
 			key: "mcp:github", mcpServer: "github",
 			summary: "GitHub MCP tools incl. Copilot delegation.",
 			body:    "GITHUB-BODY",
-			phases:  []Phase{PhasePlan, PhaseExecute, PhaseSubagent},
+			phases:  []Phase{PhaseExecute, PhaseSubagent},
 		},
 		{
 			key: "tool:refresh_memory", tool: "refresh_memory",
 			summary: "Re-filter personal memory after recon changed the picture.",
 			body:    "MEMORY-BODY",
-			phases:  []Phase{PhasePlan},
+			phases:  []Phase{PhaseExecute},
 		},
 	}}
 }
@@ -40,11 +40,10 @@ func TestNoPhaseInlinesSkillBodies(t *testing.T) {
 	cat := allSkills()
 	s := engineer()
 	for name, p := range map[string]string{
-		"plan": BuildPlan(s, PlanInput{
+		"executor": BuildExecutor(s, ExecutorInput{
 			AvailableTools: []string{"refresh_memory"}, Skills: cat,
 		}),
-		"execute": BuildExecute(s, ExecuteInput{PlanSummary: "…", Skills: cat}),
-		"review":  BuildReview(s, ReviewInput{Skills: cat}),
+		"review": BuildReview(s, ReviewInput{Skills: cat}),
 		"subagent": BuildSubagent(s, SubagentInput{
 			ParentSystemPrompt: "P", Skills: cat,
 		}),
@@ -67,10 +66,10 @@ func TestPlanCatalogueFiresOnToolsAndServers(t *testing.T) {
 	cat := allSkills()
 
 	// A tool-keyed skill needs its tool in the surface.
-	without := BuildPlan(engineer(), PlanInput{Skills: cat})
+	without := BuildExecutor(engineer(), ExecutorInput{Skills: cat})
 	excludes(t, without, "tool:refresh_memory")
 
-	with := BuildPlan(engineer(), PlanInput{
+	with := BuildExecutor(engineer(), ExecutorInput{
 		AvailableTools: []string{"refresh_memory"}, Skills: cat,
 	})
 	contains(t, with, "## Tool skills", "tool:refresh_memory",
@@ -81,7 +80,7 @@ func TestPlanCatalogueFiresOnToolsAndServers(t *testing.T) {
 	contains(t, without, "mcp:github", "skill:platform_mentions")
 
 	// The Engineering Lead carries neither server.
-	excludes(t, BuildPlan(lead(), PlanInput{Skills: cat}),
+	excludes(t, BuildExecutor(lead(), ExecutorInput{Skills: cat}),
 		"mcp:github", "skill:platform_mentions")
 }
 
@@ -91,7 +90,7 @@ func TestPlanCatalogueFiresOnToolsAndServers(t *testing.T) {
 // downstream would report it as anything but a larger bill.
 func TestCatalogueOrdersEntriesByKey(t *testing.T) {
 	t.Parallel()
-	p := BuildPlan(engineer(), PlanInput{
+	p := BuildExecutor(engineer(), ExecutorInput{
 		AvailableTools: []string{"refresh_memory"}, Skills: allSkills(),
 	})
 	order(t, p, "- `mcp:github`", "- `skill:platform_mentions`", "- `tool:refresh_memory`")
@@ -105,7 +104,7 @@ func TestCatalogueCollapsesAMultilineSummary(t *testing.T) {
 		key: "skill:multiline", tool: "anything",
 		summary: "First sentence here.\nSecond sentence here.\n",
 	}}}
-	p := BuildPlan(engineer(), PlanInput{
+	p := BuildExecutor(engineer(), ExecutorInput{
 		AvailableTools: []string{"anything"}, Skills: cat,
 	})
 	contains(t, p, "- `skill:multiline` — First sentence here. Second sentence here.")
@@ -121,7 +120,7 @@ func TestCatalogueSubstitutesSkillVariables(t *testing.T) {
 		skills: []fakeSkill{{key: "tool:x", tool: "x", summary: "base is ${wiki_base_url}"}},
 		vars:   map[string]string{"wiki_base_url": "https://acme.example.com/wiki"},
 	}
-	p := BuildPlan(engineer(), PlanInput{AvailableTools: []string{"x"}, Skills: cat})
+	p := BuildExecutor(engineer(), ExecutorInput{AvailableTools: []string{"x"}, Skills: cat})
 	contains(t, p, "base is https://acme.example.com/wiki")
 	excludes(t, p, "${wiki_base_url}")
 }
@@ -131,7 +130,7 @@ func TestCatalogueSubstitutesSkillVariables(t *testing.T) {
 func TestSkillCatalogueLandsImmediatelyBeforeTheToolCatalogue(t *testing.T) {
 	t.Parallel()
 	cat := &fakeCatalogue{skills: []fakeSkill{{key: "tool:x", tool: "x", summary: "Tight summary of X."}}}
-	p := BuildPlan(engineer(), PlanInput{
+	p := BuildExecutor(engineer(), ExecutorInput{
 		ToolCatalogue: "- x: does x", AvailableTools: []string{"x"}, Skills: cat,
 	})
 	order(t, p, "## Tool skills", "## Available tools")
@@ -150,18 +149,17 @@ func TestRequiredSkillsAreMarkedInEnforceablePhases(t *testing.T) {
 		{
 			key: "mcp:github", mcpServer: "github", required: true,
 			summary: "GITHUB-SUMMARY",
-			phases:  []Phase{PhasePlan, PhaseExecute, PhaseReview, PhaseSubagent},
+			phases:  []Phase{PhaseExecute, PhaseReview, PhaseSubagent},
 		},
 		{
 			key: "skill:platform_mentions", mcpServer: "atlassian",
 			summary: "MENTIONS-SUMMARY",
-			phases:  []Phase{PhasePlan, PhaseExecute, PhaseReview, PhaseSubagent},
+			phases:  []Phase{PhaseExecute, PhaseReview, PhaseSubagent},
 		},
 	}}
 	s := engineer()
 	for name, p := range map[string]string{
-		"plan":     BuildPlan(s, PlanInput{Skills: cat}),
-		"execute":  BuildExecute(s, ExecuteInput{PlanSummary: "…", Skills: cat}),
+		"executor": BuildExecutor(s, ExecutorInput{Skills: cat}),
 		"subagent": BuildSubagent(s, SubagentInput{ParentSystemPrompt: "P", Skills: cat}),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -180,7 +178,7 @@ func TestRequiredSkillsAreMarkedInEnforceablePhases(t *testing.T) {
 	excludes(t, rv, "(required — load before use)", "engine rejects calls")
 
 	// No enforcement note when nothing catalogued is required.
-	advisory := BuildPlan(s, PlanInput{Skills: &fakeCatalogue{skills: []fakeSkill{
+	advisory := BuildExecutor(s, ExecutorInput{Skills: &fakeCatalogue{skills: []fakeSkill{
 		{key: "mcp:github", mcpServer: "github", summary: "GITHUB-SUMMARY"},
 	}}})
 	contains(t, advisory, "## Tool skills")
@@ -195,11 +193,10 @@ func TestNoRegistryMeansNoSkillScaffolding(t *testing.T) {
 	s := engineer()
 	empty := &fakeCatalogue{}
 	for name, p := range map[string]string{
-		"plan/nil": BuildPlan(s, PlanInput{AvailableTools: []string{
+		"executor/nil": BuildExecutor(s, ExecutorInput{AvailableTools: []string{
 			"reflect_and_persist", "refine_skill", "query_knowledge", "refresh_memory",
 		}}),
-		"plan/empty":     BuildPlan(s, PlanInput{Skills: empty}),
-		"execute/empty":  BuildExecute(s, ExecuteInput{PlanSummary: "…", Skills: empty}),
+		"executor/empty": BuildExecutor(s, ExecutorInput{Skills: empty}),
 		"review/empty":   BuildReview(s, ReviewInput{Skills: empty}),
 		"subagent/empty": BuildSubagent(s, SubagentInput{ParentSystemPrompt: "P", Skills: empty}),
 	} {
@@ -216,7 +213,7 @@ func TestNoRegistryMeansNoSkillScaffolding(t *testing.T) {
 func TestExecuteCatalogueIsScopedToThePlannedSurface(t *testing.T) {
 	t.Parallel()
 	cat := allSkills()
-	p := BuildExecute(engineer(), ExecuteInput{PlanSummary: "…", Skills: cat})
+	p := BuildExecutor(engineer(), ExecutorInput{Skills: cat})
 	excludes(t, p, "tool:refresh_memory")
 	// Server-keyed skills still fire: they key on the role, not the plan.
 	contains(t, p, "mcp:github")

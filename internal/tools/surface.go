@@ -44,6 +44,10 @@ type Surface struct {
 	mu     sync.Mutex
 	active []string
 	called []Call
+	// revision counts the changes to active, so a renderer can tell a
+	// surface that moved from one that did not without rebuilding what it
+	// renders to find out. See [Surface.Revision].
+	revision uint64
 }
 
 // Guard decides whether a tool may be called yet.
@@ -195,7 +199,26 @@ func (s *Surface) Activate(name string) bool {
 		return true
 	}
 	s.active = append(s.active, name)
+	s.revision++
 	return true
+}
+
+// Revision counts the changes to the active set.
+//
+// For a renderer that has to keep an EXTERNAL copy of what is offered and
+// cannot see when the set moved: the MCP bridge holds one MCP server per run
+// and re-renders after every bridged call, since a bridged `activate_tool` is
+// the only thing that can widen a surface while the engine's own loop is
+// suspended. Almost none of those calls change anything, and [Surface.ToolDefs]
+// deep-clones every active tool's JSON Schema — so asking costs one integer
+// where finding out costs the whole rendering.
+//
+// A COUNTER RATHER THAN A DIRTY FLAG, because there is more than one reader
+// and a flag the first one cleared would hide the change from the second.
+func (s *Surface) Revision() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.revision
 }
 
 // Active returns the currently offered names, in activation order.
@@ -417,5 +440,29 @@ func paramsOrEmpty(p map[string]any) map[string]any {
 	if len(p) == 0 {
 		return map[string]any{"type": "object", "properties": map[string]any{}}
 	}
-	return maps.Clone(p)
+	out := maps.Clone(p)
+	// AN OBJECT SCHEMA OR NOTHING. A tool's parameters reach two consumers
+	// that both require the top-level `type: "object"` the MCP spec
+	// mandates — a vendor's tool-definition API, which rejects the whole
+	// request, and the MCP server the bridge builds, whose AddTool PANICS —
+	// and for an MCP tool this map came off a third-party server's wire
+	// verbatim. A value off the wire must be a value rather than a panic,
+	// and the panic's blast radius is the seat: it is raised on the turn
+	// goroutine that opens the bridge, so the wake naks, redelivers and
+	// panics again until the seat dead-letters.
+	//
+	// A missing type is the ordinary malformation and the properties are
+	// still good, so it is filled in. A type that is present and says
+	// something else describes something that cannot be a tool's argument
+	// object at all, so the schema is replaced rather than believed —
+	// leaving the tool callable with whatever the model sends, which is
+	// what the surface's own dispatch does with it in any case.
+	switch out["type"] {
+	case "object":
+	case nil:
+		out["type"] = "object"
+	default:
+		return map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+	return out
 }

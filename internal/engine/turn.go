@@ -54,6 +54,20 @@ type Dispatcher struct {
 	// copies buffer on the queue rather than looping straight back.
 	Pause func(ctx context.Context, handle, reason string) error
 
+	// Answer offers a delivery to a parked coding run as the reply to the
+	// question it asked, and reports whether it was the answer.
+	//
+	// THE ONE WAY OUT OF THE SANDBOX PARK. A run that stops to ask a person
+	// something leaves its seat busy, so every inbound on that seat is
+	// requeued — including the person's reply. Without this seam the answer
+	// is parked behind the question for ever: the run sits in
+	// [sandbox.StatusAwaiting] until its box's pause TTL reclaims it, and
+	// the person who answered is never told anything happened.
+	//
+	// Nil is a node with no coordinator, where a park is the whole answer.
+	Answer func(ctx context.Context, handle, conversation, answer string,
+		trigger *events.Event) (bool, error)
+
 	// NoteDeferred tells the seat host a consumer stopped, so the next
 	// successful renew resumes it.
 	NoteDeferred func(handle string)
@@ -171,6 +185,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 		}
 		return d.park(ctx, handle, screening)
 	case inbox.ActionPark:
+		if screening.AwaitingSandbox && d.answered(ctx, handle, screening.Events) {
+			// The delivery WAS the answer, and the resume it triggered has
+			// already run. Acking is what stops it being requeued behind
+			// the question it just answered.
+			return queue.Ack()
+		}
 		return d.park(ctx, handle, screening)
 	}
 
@@ -252,6 +272,44 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	return queue.Ack()
 }
 
+// answered offers a parked seat's delivery to its waiting coding run.
+//
+// FAIL-OPEN, in both senses. A missing seam, a partition with no conversation
+// key and a failed lookup all report false, and the delivery is parked as it
+// would have been — which is recoverable, where acking a message nothing
+// handled is not.
+//
+// The conversation key is the disambiguation: the coordinator matches on the
+// conversation the question was asked in, so a delivery on any other thread is
+// not this run's answer and parks like the rest.
+func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.Event) bool {
+	if d.Answer == nil {
+		return false
+	}
+	conversation := conversationKeyOf(evs)
+	if conversation == "" {
+		return false
+	}
+	handled, err := d.Answer(ctx, handle, conversation, DescribeTrigger(evs), first(evs))
+	if err != nil {
+		log.WarnContext(ctx, "sandbox_answer_dispatch_failed",
+			"agent_handle", handle, "conversation_key", conversation, "error", err)
+		return false
+	}
+	return handled
+}
+
+// first is the partition's leading event, which is the one a resume is traced
+// under — the same event [DescribeTrigger] leads with.
+func first(evs []*events.Event) *events.Event {
+	for _, ev := range evs {
+		if ev != nil {
+			return ev
+		}
+	}
+	return nil
+}
+
 func (d *Dispatcher) park(ctx context.Context, handle string, s inbox.Screening) queue.Result {
 	if d.Park == nil {
 		// No park path wired. Acking would drop the work; NAK returns it
@@ -319,15 +377,63 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 			}
 		}
 	}
-	policy := d.conversationPolicy()
-	if d.Conversations == nil || req.ConversationKey == "" || !policy.Records() {
+	d.RecordSession(ctx, handle, req.ConversationKey, req.WorkKey,
+		DescribeTrigger(req.Events), res, now)
+}
+
+// RecordSession appends what this turn said to the conversation it served.
+//
+// EXPORTED AND SEPARATE because a turn has two ways of ending and both owe
+// the conversation an entry. An ordinary turn ends here, in the dispatcher.
+// A turn that suspended on a detached coding run ends somewhere else
+// entirely — in another process, on another node, days later — and that path
+// recorded nothing at all: the thread's history stopped at the moment the run
+// detached, so the seat's next turn on it re-read a conversation in which the
+// coding work had never happened and planned it again.
+//
+// Fails open, like the completion write beside it: a turn whose bookkeeping
+// failed has already delivered, and refusing to admit it happened is the
+// worse of the two errors.
+func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation, workKey, trigger string,
+	res turn.Result, now time.Time,
+) {
+	if d == nil {
 		return
 	}
-	entry := ledger.BuildSession(ledger.SessionInput{
+	policy := d.conversationPolicy()
+	if d.Conversations == nil || conversation == "" || !policy.Records() {
+		return
+	}
+	// A SUSPENDED TURN HAS SAID NOTHING YET. It parked on a detached coding
+	// run, and its Result carries the self_iterate the suspend returns and
+	// an empty artifact — so filing it wrote the seat's "reply" to the
+	// thread as a decision it never made and an answer it never gave, and
+	// the next turn on that thread read it back as what this one had done.
+	// The completion ledger's write at the same moment IS right: the
+	// trigger has been worked, it is simply not finished. The finish comes
+	// back through the resume, which records then.
+	if res.Suspended {
+		return
+	}
+	// EVERY FIELD THE ENTRY RENDERS, not just the reply. Only Reply and
+	// Decision were ever filled, so a seat re-reading its own history on the
+	// next turn of a thread saw a list of answers with no account of what
+	// produced them — no trigger, no intent, no calls — and the renderer's
+	// other three sections never appeared at all.
+	in := ledger.SessionInput{
+		TurnID:   workKey,
 		At:       now.Format(time.RFC3339),
+		Trigger:  trigger,
 		Reply:    res.Artifact,
 		Decision: res.Decision.String(),
-	})
+		Skip:     MetaToolNames(),
+	}
+	if w := res.LastWork; w != nil {
+		// The LAST round's, which is the one the reply came out of. The
+		// earlier rounds are the turn's own business and end with it.
+		in.Intent, in.Calls = w.Summary, w.Calls
+	}
+	entry := ledger.BuildSession(in)
 	if res.LastReview != nil {
 		entry.CompletedWork = res.LastReview.CompletedWork
 	}
@@ -336,10 +442,10 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 	// conversation key is the whole channel and therefore never stops
 	// receiving entries — bounded nothing, and the table grew for the life
 	// of the deployment.
-	if err := d.Conversations.Append(ctx, handle, req.ConversationKey, entry,
-		req.WorkKey, now, policy.MaxEntries); err != nil {
+	if err := d.Conversations.Append(ctx, handle, conversation, entry,
+		workKey, now, policy.MaxEntries); err != nil {
 		log.WarnContext(ctx, "conversation_not_recorded", "seat", handle,
-			"conversation", req.ConversationKey, "error", err)
+			"conversation", conversation, "error", err)
 	}
 }
 
@@ -373,8 +479,14 @@ func (d *Dispatcher) ledgered(eventType string) bool {
 	return d.Ledgered(eventType)
 }
 
+// now is the dispatcher's clock, injectable for tests.
+//
+// Nil-tolerant on the receiver, like [Dispatcher.RecordSession] beside it: a
+// caller reaching a dispatcher that was never built — a partially wired
+// engine, a test driving one method — asks the wall clock rather than
+// panicking on the way to a write the same nil check is about to decline.
 func (d *Dispatcher) now() time.Time {
-	if d.Now == nil {
+	if d == nil || d.Now == nil {
 		return time.Now().UTC()
 	}
 	return d.Now()
@@ -583,4 +695,85 @@ func triggerTrace(evs []*events.Event) events.TraceContext {
 		}
 	}
 	return events.TraceContext{}
+}
+
+// ReplyFor says who is waiting for the turn a partition wakes, and how they
+// get an answer.
+//
+// DERIVED FROM THE TRIGGER, before the turn starts and from nothing the model
+// says. It is the half of the delivery question a model cannot get wrong: the
+// old engine asked the planner to declare its own intent, and a turn that
+// declared `skip` on a direct @mention read to the person who sent it exactly
+// like the message never arriving.
+//
+// STRONGEST WINS across a coalesced partition, whatever order the events
+// arrived in. A partition is one conversation, and if any part of it asked
+// this seat something, the turn owes an answer — a merge must not be able to
+// launder an obligation. The strength order is [turn.ReplyTool] over
+// [turn.ReplyEngine] over [turn.ReplyNone]: a tool obligation is the one the
+// engine ENFORCES ([turn.Check] and [turn.OverrideDone] send a round back
+// until a tool delivered), while an A2A ask is answered by the engine from the
+// turn's artifact whichever value this returns. So where both were owed, tool
+// loses nothing for the asker and keeps the check; engine would let the turn
+// end in text the tool-side requester never sees.
+//
+// Today the inbox never builds such a partition — every type but a
+// notification burst keys uniquely and arrives alone (see [inbox.Route]) — so
+// the ranking is a contract held for the key scheme that would, rather than a
+// path that runs. It is held anyway, because the alternative is a function
+// whose answer depends on which event a broker happened to deliver first.
+//
+// The default is [turn.ReplyNone], and it is the safe half. A seat wrongly
+// told nobody is waiting keeps the freedom to end a turn having done nothing,
+// which is what makes triage cheap; a seat wrongly told somebody is must post
+// on every broadcast it observes.
+func ReplyFor(evs []*events.Event) turn.Reply {
+	out := turn.ReplyNone
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		var owed turn.Reply
+		switch ev.Type {
+		case types.A2ARequestType:
+			// A colleague asked, and the ENGINE answers: engine/a2a.go
+			// returns the turn's artifact on the channel the ask opened.
+			// Nothing here calls a tool to deliver, so demanding one
+			// for the ask alone would loop every colleague exchange to
+			// exhaustion.
+			owed = turn.ReplyEngine
+
+		case types.TaskAssigned{}.EventType():
+			// Work was assigned to this seat. The answer lives wherever
+			// the tracker is, and only a tool puts it there.
+			owed = turn.ReplyTool
+
+		case types.ExternalNotification{}.EventType():
+			// The vendor's own reading of its routing — see
+			// [notify.Prompt.Addressed]. Absent decodes as false, so an
+			// event written by a build that predates the field is
+			// unaddressed rather than an obligation nobody recorded.
+			if addressed, _ := ev.Payload["addressed"].(bool); addressed {
+				owed = turn.ReplyTool
+			}
+
+			// types.A2AMessageType is deliberately absent: that hop wakes
+			// the REQUESTER with an answer it asked for, on a channel that
+			// is already closed. Nobody is waiting on what this turn does
+			// with it.
+		}
+		if replyRank[owed] > replyRank[out] {
+			out = owed
+		}
+	}
+	return out
+}
+
+// replyRank orders the obligations for [ReplyFor]: the one the engine
+// enforces outranks the one it answers itself, and both outrank none. A
+// value not in the map ranks zero, below every real obligation.
+var replyRank = map[turn.Reply]int{
+	turn.ReplyNone:   1,
+	turn.ReplyEngine: 2,
+	turn.ReplyTool:   3,
 }

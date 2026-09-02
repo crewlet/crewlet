@@ -11,11 +11,12 @@ import (
 
 // The two discovery meta-tools.
 //
-// They exist because a planner is shown SERVER NAMES, not tool names: a real
-// MCP server publishes dozens of tools and a planner handed all of them plans
-// against a wall of text. Discovery being a tool call is also what keeps the
-// prompt prefix stable while a server's catalogue changes underneath, which is
-// what makes provider prompt caching worth anything.
+// They exist because the executor is shown SERVER NAMES, not tool names: a
+// real MCP server publishes dozens of tools, and handing a model all of them
+// buries the ones that matter under a wall of schemas nobody reads.
+// Discovery being a tool call is also what keeps the prompt prefix stable
+// while a server's catalogue changes underneath, which is what makes provider
+// prompt caching worth anything.
 //
 // They are per-PHASE, like the submission tools, because activation mutates
 // one surface. Registering them into the shared registry would let one phase's
@@ -123,10 +124,9 @@ func (t *activateTool) Description() string {
 		"directly from the next round on. Its schema appears in your tools then; " +
 		"there is no need to activate twice.\n\n" +
 		"Use it for first-party tools and for MCP tools whose names you got from " +
-		"`" + ListMCPToolsTool + "`. In Plan, activate the read-only recon tools " +
-		"you want before submitting — action and write tools belong in the plan's " +
-		"tools_needed so Execute runs them under Review. In Execute, activate " +
-		"anything the planner missed."
+		"`" + ListMCPToolsTool + "`. Activate a tool the moment you need it — " +
+		"there is no separate planning step to name it in, and nothing is " +
+		"cheaper about activating it earlier."
 }
 
 func (t *activateTool) Parameters() map[string]any {

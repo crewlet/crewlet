@@ -122,32 +122,40 @@ func renderArgs(args map[string]any, opts FormatOptions) string {
 	return fitArguments(elided, opts.BlobLimit)
 }
 
-// Iteration is one completed Plan → Execute → Review round of a single turn.
+// Iteration is one completed executor → reviewer round of a single turn.
 //
-// Appended by the turn engine immediately before a self_iterate loops back to
-// Plan, so it is a CLOSED snapshot: the phases it describes have all finished
-// and none of them will run again. Every record describes a self_iterate round
-// — the done and failed branches end the turn instead of appending — so the
-// review decision is implied and is not stored.
+// Appended by the turn engine immediately before a self_iterate loops back, so
+// it is a CLOSED snapshot: the phases it describes have finished and none of
+// them will run again. Every record describes a self_iterate round — the done
+// and failed branches end the turn instead of appending — so the review
+// decision is implied and is not stored.
+//
+// ONE CALL LIST, because one phase makes the calls. It was two while the turn
+// planned in one conversation and acted in another, and the split was
+// load-bearing then: the delivery gate took a different view of each. Nothing
+// takes two views of one list.
 //
 // JSON tags are load-bearing, not decoration: a detached sandbox run ends the
 // turn and its completion starts a NEW one, so without round-tripping the
 // ledger through the pending run's persisted state the resumed turn would
 // forget every earlier round and could re-fire its deliveries.
 type Iteration struct {
-	Iteration    int    `json:"iteration"`
-	PlanSummary  string `json:"plan_summary,omitempty"`
-	PlanCalls    []Call `json:"plan_tool_calls,omitempty"`
-	ExecuteCalls []Call `json:"execute_tool_calls,omitempty"`
+	Iteration int `json:"iteration"`
+
+	// Intent is what the round set out to do, in the executor's own words.
+	Intent string `json:"intent,omitempty"`
+
+	// Calls is everything the round invoked, engine-recorded.
+	Calls []Call `json:"tool_calls,omitempty"`
 
 	// Reads are the names among the calls above that MCP annotations
-	// positively mark read-only, as resolved by the delivery gate. Carried
-	// per-record rather than looked up at render time because the surface
-	// can change between rounds, and a read re-classified as a write would
-	// retroactively rewrite what the ledger says happened.
+	// positively mark read-only. Carried per-record rather than looked up
+	// at render time because the surface can change between rounds, and a
+	// read re-classified as a write would retroactively rewrite what the
+	// ledger says happened.
 	Reads []string `json:"read_only_names,omitempty"`
 
-	ExecuteText string `json:"execute_text,omitempty"`
+	Text        string `json:"text,omitempty"`
 	ReviewNotes string `json:"review_notes,omitempty"`
 
 	// CompletedWork is reviewer-authored prose naming what already landed.
@@ -163,9 +171,10 @@ type Iteration struct {
 // Returns "" when there is nothing to show — the first round of every turn —
 // so callers drop the whole section rather than emit an empty heading.
 //
-// Section HEADINGS are the caller's: Plan and Execute frame this as "already
-// done, do not repeat" while Review frames it as duplicate-delivery evidence,
-// so engine prose stays in the prompt package and this stays a renderer.
+// Section HEADINGS are the caller's: the executor frames this as "already
+// done, do not repeat" while the reviewer frames it as duplicate-delivery
+// evidence, so engine prose stays in the prompt package and this stays a
+// renderer.
 func RenderIterations(records []Iteration, skip []string) string {
 	if len(records) == 0 {
 		return ""
@@ -173,25 +182,16 @@ func RenderIterations(records []Iteration, skip []string) string {
 	blocks := make([]string, 0, len(records))
 	for _, rec := range records {
 		lines := []string{"### Iteration " + itoa(rec.Iteration)}
-		if rec.PlanSummary != "" {
-			lines = append(lines, "Planned: "+rec.PlanSummary)
+		if rec.Intent != "" {
+			lines = append(lines, "Set out to: "+rec.Intent)
 		}
-		opts := Format(skip, rec.Reads)
-		for _, group := range []struct {
-			label string
-			calls []Call
-		}{
-			{"Plan called:", rec.PlanCalls},
-			{"Execute called:", rec.ExecuteCalls},
-		} {
-			lines = append(lines, group.label, FormatCalls(group.calls, opts))
-		}
-		if rec.ExecuteText != "" {
+		lines = append(lines, "Called:", FormatCalls(rec.Calls, Format(skip, rec.Reads)))
+		if rec.Text != "" {
 			// TAIL-ELIDED at render, whole in the record. See
 			// RenderedArtifactLimit: this text is a whole tool loop's
 			// assistant output, one per iteration, re-sent on every round
 			// of every later phase — and its deliverable is at the end.
-			lines = append(lines, "Produced: "+elideTail(rec.ExecuteText, RenderedArtifactLimit))
+			lines = append(lines, "Produced: "+elideTail(rec.Text, RenderedArtifactLimit))
 		}
 		if rec.CompletedWork != "" {
 			lines = append(lines, "Reviewer, on what already landed: "+rec.CompletedWork)

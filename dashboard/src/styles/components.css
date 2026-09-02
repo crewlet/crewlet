@@ -289,9 +289,9 @@
   padding: 1px var(--space-2);
   border-radius: var(--r-xs);
 }
-.phase-tag[data-phase="plan"] {
-  color: var(--phase-plan-ink);
-  background: color-mix(in srgb, var(--phase-plan) 14%, transparent);
+.phase-tag[data-phase="onboarding"] {
+  color: var(--phase-onboarding-ink);
+  background: color-mix(in srgb, var(--phase-onboarding) 14%, transparent);
 }
 .phase-tag[data-phase="execute"] {
   color: var(--phase-execute-ink);
@@ -301,6 +301,15 @@
   color: var(--phase-review-ink);
   background: color-mix(in srgb, var(--phase-review) 14%, transparent);
 }
+/* The NESTED calls, muted: a sub-agent, the round-cap judge and a learning
+   worker all run UNDER one of the three phases above, and giving them a hue
+   of their own would put four or five categorical colours on one turn card
+   and make the phase a reader is tracking harder, not easier to find. They
+   were previously unstyled rather than muted, which left them transparent —
+   the same tag rendered as a badge beside `execute` and as bare text beside
+   `auxiliary`. */
+.phase-tag[data-phase="subagent"],
+.phase-tag[data-phase="judge"],
 .phase-tag[data-phase="auxiliary"],
 .phase-tag[data-phase="turn"] {
   color: var(--text-muted);

@@ -35,22 +35,21 @@ var PhasePhrases = map[string][]string{
 		"is finding the coffee machine...",
 		"is unpacking its desk...",
 	},
-	"plan": {
+	// One pool where there were two. The turn's own work is one phase now,
+	// and it thinks and acts inside it — so the planning lines are not
+	// stale, they are the first half of what `execute` covers, and both
+	// pools are merged rather than one of them dropped.
+	"execute": {
 		"is crewleting...",
+		"is crewing...",
 		"is thinking...",
 		"is scheming...",
 		"is thinking it through...",
 		"is mulling it over...",
-		"is assembling a cunning plan...",
 		"is putting the pieces together...",
-		"is thinking about thinking...",
-	},
-	"execute": {
-		"is crewing...",
 		"is working on it...",
 		"is doing the doing...",
 		"is rolling up its sleeves...",
-		"is executing the cunning plan...",
 		"is cracking on...",
 		"is making things happen...",
 		"is getting it done...",

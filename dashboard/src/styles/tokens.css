@@ -16,9 +16,9 @@
    So there are exactly four places colour is allowed to mean something:
 
      1. STATUS   — positive / caution / critical / info. Four, fixed.
-     2. PHASE    — plan / execute / review. Three, fixed, because a phase is the
-                   one recurring categorical dimension a reader tracks across
-                   every screen in the product.
+     2. PHASE    — onboarding / execute / review. Three, fixed, because a phase
+                   is the one recurring categorical dimension a reader tracks
+                   across every screen in the product.
      3. ACCENT   — one brand violet, spent on the current selection and nothing
                    else: the active nav row, the primary button, the focus ring.
      4. VIZ      — five data hues plus a neutral residual, usable ONLY inside a
@@ -211,11 +211,16 @@
   --info-soft: rgba(26, 102, 181, 0.11);
 
   /* ---- Colour: phase ----------------------------------------------------
-     Plan / Execute / Review. Three, and they are the only categorical
+     Onboarding / Execute / Review. Three, and they are the only categorical
      identity outside a chart, because they are what a reader actually tracks
-     across the Model, Seat, Activity and Trace screens. */
-  --phase-plan: #12558f;
-  --phase-plan-ink: #134e83;
+     across the Model, Seat, Activity and Trace screens.
+
+     Onboarding is a seat's first-turn pass and runs at most once per seat, so
+     its hue is rare on screen by design — but a turn that HAS one is exactly
+     the turn a reader is trying to explain, and an unhued row would read as a
+     phase the product does not know about. */
+  --phase-onboarding: #12558f;
+  --phase-onboarding-ink: #134e83;
   --phase-execute: #7d54e8;
   --phase-execute-ink: #6a3fd6;
   --phase-review: #0f7a5f;
@@ -317,8 +322,8 @@
     --info-ink: #7fb8f2;
     --info-soft: rgba(69, 144, 216, 0.16);
 
-    --phase-plan: #2f7ec4;
-    --phase-plan-ink: #7fb8f2;
+    --phase-onboarding: #2f7ec4;
+    --phase-onboarding-ink: #7fb8f2;
     --phase-execute: #b3a0ff;
     --phase-execute-ink: #c3b3ff;
     --phase-review: #3fa688;
@@ -388,8 +393,8 @@
   --info-ink: #7fb8f2;
   --info-soft: rgba(69, 144, 216, 0.16);
 
-  --phase-plan: #2f7ec4;
-  --phase-plan-ink: #7fb8f2;
+  --phase-onboarding: #2f7ec4;
+  --phase-onboarding-ink: #7fb8f2;
   --phase-execute: #b3a0ff;
   --phase-execute-ink: #c3b3ff;
   --phase-review: #3fa688;

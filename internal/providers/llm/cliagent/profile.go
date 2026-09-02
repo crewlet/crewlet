@@ -2,6 +2,7 @@ package cliagent
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -103,6 +104,87 @@ type LimitMarker struct {
 	// ResetUnit is how to read the value after the separator: "epoch" for
 	// Unix seconds, "seconds" for a delta.
 	ResetUnit string `yaml:"reset_unit,omitempty"`
+}
+
+// LocalTools says what a profile does about the CLI's OWN tools — its shell,
+// its file editor, its browser.
+//
+// In text mode the engine uses none of them: Crewlet's tools ride the prompt
+// envelope, and a CLI editing files in its own sandbox is invisible to the
+// tool registry, the permission model, redaction and the event stream. The
+// shell is the one that matters: hostbox isolates a seat's HOME and
+// environment, not the filesystem, so a CLI with a shell on the engine host
+// reads whatever the engine user can read. A profile therefore DENIES local
+// tools wherever the vendor offers a way to, and says so here, so that
+// `crewlet llm doctor` can print the claim next to what its probe measured.
+//
+// Web is the deliberate exception and is never denied: a seat on a
+// subscription must not have less reach than the same CLI at a terminal, and
+// a fetch is a read — it never gates delivery.
+type LocalTools string
+
+const (
+	// LocalToolsDenied means the profile's flags or seeded files turn the
+	// CLI's shell and file tools off. The doctor's shell probe is expected
+	// to be refused.
+	LocalToolsDenied LocalTools = "denied"
+	// LocalToolsVendorDefault means the vendor offers no way to deny
+	// them, so the CLI runs with whatever its non-interactive default
+	// admits. The profile's local_tools_note says why, and the doctor
+	// reports the probe's measurement as a finding rather than a pass.
+	LocalToolsVendorDefault LocalTools = "vendor-default"
+)
+
+// Valid reports whether t is a stance this package knows.
+func (t LocalTools) Valid() bool {
+	return t == LocalToolsDenied || t == LocalToolsVendorDefault
+}
+
+// SeedScope is where a seeded file lands.
+type SeedScope string
+
+const (
+	// SeedHome writes the file under the seat's HOME, once per seat
+	// generation, beside the credentials. Settings a CLI reads from its
+	// user directory go here.
+	SeedHome SeedScope = "home"
+	// SeedWork writes the file into the per-call working directory, on
+	// every call. Settings a CLI reads from the project it is run in go
+	// here — the scratch directory is that project.
+	SeedWork SeedScope = "work"
+)
+
+// Valid reports whether s is a scope this package knows.
+func (s SeedScope) Valid() bool { return s == SeedHome || s == SeedWork }
+
+// SeedFile is a settings file the engine writes for the CLI before a call.
+//
+// Some vendors take their tool policy from a file rather than a flag —
+// Gemini's settings.json, OpenCode's opencode.json, Cursor's cli.json — and
+// the seat HOME and the per-call working directory are both places the engine
+// controls, so the file is simply put where the CLI will look. Content is
+// written verbatim at 0600.
+type SeedFile struct {
+	// Path is relative to the scope's root. Never absolute, never
+	// escaping it.
+	Path string `yaml:"path,omitempty"`
+	// In is the scope: home (default) or work.
+	In SeedScope `yaml:"in,omitempty"`
+	// Content is the file's bytes.
+	Content string `yaml:"content,omitempty"`
+}
+
+// seedValidationRoot is the stand-in a seed path's shape is checked against
+// at load time. Any ordinary directory does; what is proved is that the path
+// is relative and climbs out of nothing.
+var seedValidationRoot = filepath.Join(string(filepath.Separator), "seat")
+
+// scope is the seed scope with its default applied.
+func (f SeedFile) scope() SeedScope {
+	if f.In == "" {
+		return SeedHome
+	}
+	return f.In
 }
 
 // AuthMarker recognises a login the CLI has stopped honouring.
@@ -235,6 +317,21 @@ type Profile struct {
 	// own home directory, for `crewlet llm login --from-host` to adopt.
 	// Paths are relative to that home.
 	HostCredentialPaths []string `yaml:"host_credential_paths,omitempty"`
+
+	// LocalTools is the profile's stance on the CLI's own tools — see
+	// [LocalTools]. Empty means the profile has not said, which the doctor
+	// reports as such rather than assuming either way.
+	LocalTools LocalTools `yaml:"local_tools,omitempty"`
+
+	// LocalToolsNote explains a vendor-default stance: which flag is
+	// missing, or which flag would also cut the web. Printed by the
+	// doctor beside the probe result.
+	LocalToolsNote string `yaml:"local_tools_note,omitempty"`
+
+	// SeedFiles are the settings files written for the CLI before a call
+	// — the vendors that take their tool policy from a file rather than a
+	// flag. See [SeedFile].
+	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
 }
 
 // credentialish matches an environment variable name that carries a secret.
@@ -306,6 +403,36 @@ func (p *Profile) validate(name string) error {
 	}
 	if p.StdinLogin != nil && len(p.StdinLogin.Args) == 0 {
 		add("stdin_login.args is empty")
+	}
+	if p.LocalTools != "" && !p.LocalTools.Valid() {
+		add("local_tools %q (want denied or vendor-default)", p.LocalTools)
+	}
+	if p.LocalTools == LocalToolsVendorDefault && strings.TrimSpace(p.LocalToolsNote) == "" {
+		// A stance that admits the CLI's tools without saying why is
+		// exactly the silent hole the field exists to make visible.
+		add("local_tools is vendor-default but local_tools_note is empty — say which " +
+			"denial the vendor lacks")
+	}
+	for i, f := range p.SeedFiles {
+		if strings.TrimSpace(f.Path) == "" {
+			add("seed_files[%d].path is empty", i)
+			continue
+		}
+		if f.In != "" && !f.In.Valid() {
+			add("seed_files[%d].in %q (want home or work)", i, f.In)
+		}
+		// underRoot against a stand-in root proves the same two things
+		// seeding will: relative, and not escaping the scope. No seat
+		// home exists at load time, and the root directory itself will
+		// not do — nothing can sit "inside" it by this test.
+		if _, err := underRoot(seedValidationRoot, f.Path); err != nil {
+			add("seed_files[%d].path %q must be relative and stay inside the %s directory",
+				i, f.Path, f.scope())
+		}
+		if f.Content == "" {
+			add("seed_files[%d].content is empty — a settings file with nothing in it "+
+				"configures nothing", i)
+		}
 	}
 	if len(bad) == 0 {
 		return nil

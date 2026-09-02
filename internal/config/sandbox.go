@@ -5,39 +5,98 @@ import (
 	"strings"
 )
 
-// SandboxType is the code-runtime backend.
-type SandboxType string
+// Placement is WHERE a seat's code work runs.
+//
+// # One axis, four cells
+//
+// This replaces a `type:` on the provider block, and the reason is that the
+// old shape could express only ONE answer for a whole company. A company has
+// exactly one `providers.sandbox`, so choosing `local` for the seat that needs
+// the operator's own subscription login meant choosing it for the seat whose
+// work must never touch the engine host. There was no way to say "this seat
+// remotely, that seat here" — and the two are different security decisions
+// about different work.
+//
+// So the provider block becomes a CATALOGUE — configure `e2b:`, `local:`, or
+// both — and the choice moves to the seat, as `role.sandbox.run_in`.
+type Placement string
 
 const (
-	// SandboxE2B is a remote box — the vendor cloud, or a self-hosted
-	// cluster named by `domain`. A fresh machine per run that is not the
-	// engine's, which is what makes it the right choice for anything
-	// shared.
-	SandboxE2B SandboxType = "e2b"
-	// SandboxLocal is the ENGINE HOST as a backend, so code work can use
-	// the subscription CLI login `crewlet llm login` already established,
-	// with no remote account and no API key.
-	SandboxLocal SandboxType = "local"
-	// SandboxFake is in-process stubs for tests. It runs no real coding
-	// agent and no real MCP.
-	SandboxFake SandboxType = "fake"
-	// SandboxNone disables code work entirely.
-	SandboxNone SandboxType = "none"
+	// PlacementDirect runs a process tree on the ENGINE HOST in a per-box
+	// directory, with HOME and the XDG variables pointed at it and an
+	// allowlisted environment. That isolates STATE — no box sees another's
+	// checkout, memory or credentials — but NOT THE HOST: the coding agent
+	// runs as the engine user, so it reads what that user reads and
+	// reaches what its credentials reach. Right for a workstation or a
+	// dedicated VM; wrong for a shared host.
+	PlacementDirect Placement = "direct"
+
+	// PlacementContainer runs each box in its own container on the engine
+	// host, with the box directory bind-mounted at /home/user — real host
+	// isolation, and the same in-box paths a remote box uses.
+	PlacementContainer Placement = "container"
+
+	// PlacementE2B runs the work in a remote box: a fresh machine per run
+	// that is not the engine's, which is what makes it the right choice
+	// for anything shared.
+	PlacementE2B Placement = "e2b"
+
+	// PlacementSelf runs code work INSIDE the seat's own executor run,
+	// which is only possible when that executor is a coding CLI in agent
+	// mode: it already holds a shell, an editor and a checkout, so
+	// provisioning a second box beside it would give the seat two
+	// filesystems and make the one doing the work invisible to the other.
+	//
+	// It is the one value that needs no backend, because it IS the
+	// executor's box. A seat that names it is simply not offered
+	// run_sandbox — there is nothing to launch.
+	PlacementSelf Placement = "self"
 )
 
-// SandboxTypes is the closed set — THE ONES THIS ENGINE CAN BUILD.
+// Placements is the closed set — every value a `run_in` may take.
 //
-// `e2b` was once in this set, was the DEFAULT, and had nothing behind it:
-// buildSandboxProvider had a case that refused it by name. So a company that
-// wrote `providers.sandbox:` and no type validated cleanly, reported a
-// configured sandbox on the dashboard, and failed at its first coding run —
-// an operator surface saying yes and a runtime saying no, which is the
-// distance this closed set exists to close. It is back because the backend
-// is, not because the value was restored.
+// The three that need a BACKEND are walked against the switch that builds them
+// by a test, because the list and the switch have disagreed before: `e2b` was
+// once the default with no case behind it, so a company that wrote
+// `providers.sandbox:` and no type validated cleanly, reported a configured
+// sandbox on the dashboard, and failed at its first coding run.
+var Placements = []Placement{PlacementDirect, PlacementContainer, PlacementE2B, PlacementSelf}
+
+// NeedsBackend reports whether a cell has a provider behind it.
 //
-// A value here is a backend `buildSandboxProvider` constructs, and a test
-// walks this list against that switch.
-var SandboxTypes = []SandboxType{SandboxE2B, SandboxLocal, SandboxFake, SandboxNone}
+// Only `self` does not, and it is worth a method rather than an equality test
+// at each site: three separate walks decide what to build, what to validate
+// and what to report, and each one silently does the wrong thing for a cell
+// that is the executor's own box rather than a box the engine mints.
+func (p Placement) NeedsBackend() bool { return p != PlacementSelf }
+
+// backend names the catalogue entry a placement needs, for the message a
+// refusal carries: an operator who wrote `run_in: container` with no `local:`
+// block needs to be told which block to add, not which value to change.
+func (p Placement) backend() string {
+	if p == PlacementE2B {
+		return "`e2b:`"
+	}
+	return "`local:`"
+}
+
+// BackendPlacements are the cells a provider is built for, in closed-set
+// order — every value of [Placements] but `self`.
+//
+// Exported because three surfaces outside this file need exactly this list and
+// must not each filter it themselves: the engine's build switch, the schema
+// enum for the two fields that name a BACKEND cell (a company default and an
+// agent-mode runtime, neither of which can be the executor's own box), and the
+// test that holds those two together.
+func BackendPlacements() []Placement {
+	out := make([]Placement, 0, len(Placements))
+	for _, p := range Placements {
+		if p.NeedsBackend() {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 // CodingAgent is which coding CLI runs inside a box.
 type CodingAgent string
@@ -51,62 +110,59 @@ const (
 // CodingAgents is the closed set.
 var CodingAgents = []CodingAgent{CodingAgentClaudeCode, CodingAgentOpenCode}
 
-// SandboxProvider is the engine-wide code-runtime provider.
+// SandboxProvider is the engine-wide code-runtime CATALOGUE.
 //
-// A sandbox-enabled seat runs real code work as a coding agent inside an
-// isolated box, through the run_sandbox Execute tool. This block is the
-// backend; the per-seat gate is role.sandbox, and a seat without one never
-// sees the tool.
+// A sandbox-enabled seat runs real code work as a coding agent inside a box,
+// through the run_sandbox tool. This block says WHICH BOXES EXIST; the per-seat
+// gate is role.sandbox, and `role.sandbox.run_in` picks the cell. A seat with
+// no role.sandbox never sees the tool at all.
+//
+// BOTH BACKENDS MAY BE CONFIGURED AT ONCE, which is the whole point of the
+// reshape: the seat that should use the operator's own subscription login and
+// the seat whose work must never touch the engine host are different seats,
+// and a company-wide `type:` could only ever answer for both.
 type SandboxProvider struct {
-	// Type is the backend, and it is REQUIRED whenever a sandbox: block is
-	// present.
-	//
-	// THERE IS NO DEFAULT, and the absence of one is the whole point.
-	// Every candidate default is wrong in a way that is silent:
-	//
-	//   - `local` runs the coding agent on the ENGINE HOST. Its `direct`
-	//     containment runs as the engine's user with the engine's
-	//     filesystem access, which is a deliberate trade an operator makes
-	//     for their own machine and must never be made for them.
-	//   - `none` reads as "code work is on" in the config and off in the
-	//     engine, which is the silence a whole class of bugs here comes
-	//     from.
-	//   - A REMOTE backend was the default, and the engine had no code to
-	//     build one. `providers.sandbox: {}` therefore validated, reported
-	//     a configured sandbox on every operator surface, and failed at the
-	//     first coding run with an error naming a type nobody had written.
-	//
-	// A block with no type is an operator who has not decided, and the
-	// honest answer is to ask rather than to pick.
-	Type SandboxType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=e2b|local|fake|none" desc:"Backend: e2b, local, fake, or none. Required — there is no default."`
+	// E2B configures the remote backend. Absent means no seat may name
+	// `run_in: e2b`.
+	E2B *E2BSandbox `yaml:"e2b,omitempty" json:"e2b,omitempty" desc:"The remote backend. Absent = run_in: e2b is refused."`
 
-	// Local is the local backend's block. Required when Type is local and
-	// refused otherwise: type local without it would silently take the
-	// `direct` containment, which runs the coding agent as the engine user
-	// with no host isolation and must be a deliberate choice.
-	Local *LocalSandbox `yaml:"local,omitempty" json:"local,omitempty" desc:"The local backend's block. Required for type local, refused otherwise."`
-
-	// APIKey authenticates the remote provider, and is REQUIRED for it —
-	// including against a self-hosted cluster, where Domain changes which
-	// API is talked to and never whether it authenticates.
-	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"Remote sandbox API key; required for type e2b. ${VAR} supported."`
-
-	// Domain points at a self-hosted cluster. Empty is the vendor cloud.
+	// Local configures the engine host as a backend, so code work can use
+	// the subscription CLI login `crewlet llm login` already established,
+	// with no remote account and no API key. Absent means no seat may name
+	// `run_in: direct` or `run_in: container`.
 	//
-	// ONE FIELD IS THE WHOLE CLOUD-TO-SELF-HOSTED SWITCH: the control-plane
-	// address and every box's own hostname are both derived from it, so
-	// there is no second address that can disagree with the first.
-	Domain string `yaml:"domain,omitempty" json:"domain,omitempty" desc:"Self-hosted sandbox cluster domain; empty = vendor cloud."`
+	// It carries no containment of its own any more — `run_in` IS the
+	// containment, per seat. A block-wide one could only say the same
+	// thing for every seat, which is the limitation this reshape removes.
+	Local *LocalSandbox `yaml:"local,omitempty" json:"local,omitempty" desc:"The engine host as a backend. Absent = run_in: direct|container is refused."`
 
-	// Template is the box image.
+	// Fake wires the in-process double: no real box, no real coding agent,
+	// no real MCP. For a deployment demonstrating the flow, and named in
+	// config rather than inferred so nobody runs one by accident.
 	//
-	// It is also HOW A BOX IS SIZED. vCPU, RAM and disk are properties of
-	// the template, fixed when it is built; the create API accepts no
-	// resource arguments at all. To give agents bigger boxes, build a
-	// template with the resources you want and name it here — there is
-	// deliberately no engine-side limits knob, because the engine could
-	// not honour one.
-	Template string `yaml:"template,omitempty" json:"template,omitempty" desc:"Box template. This is where vCPU/RAM/disk are set — at template build time."`
+	// It answers EVERY placement, because it is not a placement — it is
+	// the absence of one, and a double that answered only `direct` would
+	// make a demo config differ from a real one in a second place.
+	Fake bool `yaml:"fake,omitempty" json:"fake,omitempty" desc:"Use the in-process double for every placement. Demonstrations only."`
+
+	// DefaultRunIn is where a sandbox-enabled seat that names none runs.
+	//
+	// THERE IS NO IMPLICIT DEFAULT WHENEVER MORE THAN ONE CELL IS
+	// CONFIGURED, and the absence of one is the point: `direct` runs the
+	// coding agent as the engine user with the engine's filesystem access
+	// and `e2b` bills a remote account, so neither may be chosen for an
+	// operator who did not say which they meant. `local:` alone is two
+	// cells, not one — it serves both `direct` and `container` — so it
+	// needs this field as much as a catalogue with both backends does.
+	// Only `e2b:` alone, and the double, resolve on their own.
+	//
+	// REQUIRED ONLY WHERE SOMETHING WOULD READ IT. A catalogue whose every
+	// sandbox-enabled seat, and every agent-mode entry a seat's executor
+	// runs on, names its own cell has nothing left to default — that is
+	// the shape the catalogue exists for — so the refusal is written at
+	// the seat or entry that named none, never on this field alone. See
+	// [Company.validateSandboxPlacement].
+	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a sandbox-enabled seat that names none runs. Required unless the catalogue names exactly one cell, or every sandbox-enabled seat and agent-mode entry names its own run_in."`
 
 	// DefaultCodingAgent is what a seat that names none runs.
 	DefaultCodingAgent CodingAgent `yaml:"default_coding_agent,omitempty" json:"default_coding_agent,omitempty" js:"enum=claude-code|opencode" desc:"Coding agent for seats that name none."`
@@ -155,6 +211,47 @@ type SandboxProvider struct {
 	Setup []SandboxSetupStep `yaml:"setup,omitempty" json:"setup,omitempty" desc:"Provisioning steps applied to every box before per-seat extras."`
 }
 
+// E2BSandbox is the remote backend's block.
+type E2BSandbox struct {
+	// APIKey authenticates the remote provider, and is REQUIRED —
+	// including against a self-hosted cluster, where Domain changes which
+	// API is talked to and never whether it authenticates.
+	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"Remote sandbox API key; required. ${VAR} supported."`
+
+	// Domain points at a self-hosted cluster. Empty is the vendor cloud.
+	//
+	// ONE FIELD IS THE WHOLE CLOUD-TO-SELF-HOSTED SWITCH: the control-plane
+	// address and every box's own hostname are both derived from it, so
+	// there is no second address that can disagree with the first.
+	Domain string `yaml:"domain,omitempty" json:"domain,omitempty" desc:"Self-hosted sandbox cluster domain; empty = vendor cloud."`
+
+	// Template is the box image.
+	//
+	// It is also HOW A BOX IS SIZED. vCPU, RAM and disk are properties of
+	// the template, fixed when it is built; the create API accepts no
+	// resource arguments at all. To give agents bigger boxes, build a
+	// template with the resources you want and name it here — there is
+	// deliberately no engine-side limits knob, because the engine could
+	// not honour one.
+	Template string `yaml:"template,omitempty" json:"template,omitempty" desc:"Box template. This is where vCPU/RAM/disk are set — at template build time."`
+}
+
+func (e *E2BSandbox) validate(path string) error {
+	var p problems
+	if strings.TrimSpace(e.APIKey) == "" {
+		// REQUIRED, and checked here rather than at construction so a
+		// `crewlet validate` catches it: the API authenticates every call
+		// on both the cloud and a self-hosted cluster, so a run without
+		// one 401s at its first create — minutes into a turn that has
+		// already spent its own rounds.
+		p.add(at(path, "api_key"), ErrMissing,
+			"required — the API authenticates every call, including against "+
+				"a self-hosted cluster, where `domain` changes which API is "+
+				"talked to and not whether it authenticates")
+	}
+	return p.err()
+}
+
 // Sandbox defaults. The TTL is the orphan-reclaim grace and the pause TTL
 // trades a bounded snapshot bill against exact conversational resume.
 const (
@@ -188,77 +285,124 @@ func (s *SandboxProvider) PauseTTL() *float64 {
 }
 
 // Enabled reports whether any seat could run code at all.
+//
+// A catalogue with nothing in it is not enabled: the block was written and
+// configures no box, so run_sandbox is never offered.
 func (s *SandboxProvider) Enabled() bool {
-	return s != nil && s.Type != SandboxNone
+	if s == nil {
+		return false
+	}
+	return s.Fake || s.E2B != nil || s.Local != nil
+}
+
+// Configured reports whether this catalogue can actually run p.
+//
+// The FAKE answers every placement, because it is not a backend that happens
+// to sit somewhere — it is the absence of one, and a double that answered only
+// `direct` would make a demonstration config differ from the real one in a
+// second place nobody would think to change back.
+func (s *SandboxProvider) Configured(p Placement) bool {
+	if s == nil {
+		return false
+	}
+	if !p.NeedsBackend() {
+		// `self` is the executor's own box. Nothing in the catalogue
+		// serves it, and nothing has to — which is why the question
+		// "does this company configure it" has no bearing on it.
+		return false
+	}
+	if s.Fake {
+		return slices.Contains(Placements, p)
+	}
+	switch p {
+	case PlacementE2B:
+		return s.E2B != nil
+	case PlacementDirect, PlacementContainer:
+		return s.Local != nil
+	}
+	return false
+}
+
+// RunIn is where a sandbox-enabled seat that names no placement runs, or
+// empty when the catalogue cannot answer that on its own.
+//
+// EMPTY IS A REAL ANSWER, not a failure to compute one: `direct` runs the
+// coding agent as the engine user with the engine's own filesystem access,
+// and `e2b` bills a remote account. Guessing either for an operator who wrote
+// neither is the kind of default that is discovered afterwards. Validation
+// turns the empty answer into a message naming both fields that would fix it.
+func (s *SandboxProvider) RunIn() Placement {
+	if s == nil {
+		return ""
+	}
+	if s.DefaultRunIn != "" {
+		return s.DefaultRunIn
+	}
+	switch {
+	case s.Fake:
+		// The double runs nowhere, so nothing is being chosen on the
+		// operator's behalf and the cell only names itself in events.
+		return PlacementDirect
+	case s.E2B != nil && s.Local == nil:
+		return PlacementE2B
+	}
+	// `local:` alone is still two answers — direct and container are
+	// different security decisions about the same host — so it does not
+	// resolve. Neither does a catalogue with both backends.
+	return ""
 }
 
 func (s *SandboxProvider) validate(path string) error {
 	var p problems
 	switch {
-	case s.Type == "":
-		// REQUIRED, AND REPORTED AS A CHOICE rather than as a missing
-		// field, because the three answers do materially different
-		// things to the machine the engine runs on. See [SandboxProvider].
-		p.add(at(path, "type"), ErrMissing,
-			"a sandbox block has to name its backend (%s) — there is no "+
-				"default, because `local` runs the coding agent on this host "+
-				"and `none` turns code work off, and neither may be chosen "+
-				"for an operator who has not said which they meant. Remove "+
-				"the block entirely to leave the sandbox unconfigured",
-			names(SandboxTypes))
+	case !s.Enabled():
+		// A block that names no backend is an unfinished edit, and it
+		// validates and applies cleanly: every sandbox-enabled seat plans
+		// around a box it never gets, and the only symptom is code work
+		// that quietly never happens.
+		p.add(path, ErrMissing,
+			"a sandbox block configures nothing: give it `e2b:`, `local:`, or "+
+				"`fake: true`. Remove the block entirely to leave code work off")
 		return p.err()
-	case !slices.Contains(SandboxTypes, s.Type):
-		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", s.Type, names(SandboxTypes))
+	case s.Fake && (s.E2B != nil || s.Local != nil):
+		// The double is not a third backend beside the real two — it
+		// replaces every one of them, so a real block underneath it reads
+		// as configuration and configures nothing.
+		p.add(at(path, "fake"), ErrConflict,
+			"the in-process double answers every placement, so `e2b:` and "+
+				"`local:` beside it are never read. Remove one side")
 		return p.err()
 	}
-	kind := s.Type
 
-	switch {
-	case kind == SandboxLocal && s.Local == nil:
-		p.add(at(path, "local"), ErrMissing,
-			"type local needs a `local:` block choosing a containment mode, "+
-				"e.g. `local: {containment: direct}`. `direct` runs the coding "+
-				"agent as the engine user with no host isolation, so it is "+
-				"never assumed")
-	case kind != SandboxLocal && s.Local != nil:
-		p.add(at(path, "local"), ErrConflict,
-			"`local:` only applies to type local (this is type %q). Remove "+
-				"the block, or change the type", kind)
-	case s.Local != nil:
+	if s.E2B != nil {
+		p.wrap(s.E2B.validate(at(path, "e2b")))
+	}
+	if s.Local != nil {
 		p.wrap(s.Local.validate(at(path, "local")))
 	}
 
-	// THE REMOTE FIELDS ONLY MEAN ANYTHING TO THE REMOTE BACKEND, and a
-	// value that means nothing where it is written is the silence this
-	// package spends most of its rules on: `domain` beside `type: local`
-	// reads as a cluster address and configures nothing.
-	if kind != SandboxE2B {
-		for _, unread := range []struct {
-			field, value string
-		}{
-			{"api_key", s.APIKey},
-			{"domain", s.Domain},
-			{"template", s.Template},
-		} {
-			if strings.TrimSpace(unread.value) == "" {
-				continue
-			}
-			p.add(at(path, unread.field), ErrConflict,
-				"only applies to type e2b (this is type %q), so nothing "+
-					"would read it. Remove it, or change the type", kind)
-		}
-	}
-	if kind == SandboxE2B && strings.TrimSpace(s.APIKey) == "" {
-		// REQUIRED, and checked here rather than at construction so a
-		// `crewlet validate` catches it: the API authenticates every call
-		// on both the cloud and a self-hosted cluster, so a run without
-		// one 401s at its first create — minutes into a turn that already
-		// spent a Plan phase.
-		p.add(at(path, "api_key"), ErrMissing,
-			"required for type e2b — the API authenticates every call, "+
-				"including against a self-hosted cluster, where `domain` "+
-				"changes which API is talked to and not whether it "+
-				"authenticates")
+	switch {
+	case s.DefaultRunIn == "":
+		// NOT REFUSED HERE, even when the catalogue is ambiguous: whether
+		// a default is NEEDED is a question about the seats, and this
+		// block cannot see them. A seat, or an agent-mode entry, that
+		// names no cell against an ambiguous catalogue is refused where it
+		// is written, with a message offering this field as the other
+		// remedy — see [Company.validateSandboxPlacement]. Refused here
+		// unconditionally, the remedy that message offered ("give every
+		// seat its own run_in") could never pass.
+	case !slices.Contains(BackendPlacements(), s.DefaultRunIn):
+		// `self` is deliberately not offerable as a COMPANY default: it
+		// is only meaningful for a seat whose executor is a coding CLI
+		// in agent mode, and a company-wide default would silently turn
+		// code work off for every seat that is not.
+		p.add(at(path, "default_run_in"), ErrUnknownValue, "%q (want %s)",
+			s.DefaultRunIn, names(BackendPlacements()))
+	case !s.Configured(s.DefaultRunIn):
+		p.add(at(path, "default_run_in"), ErrConflict,
+			"%q needs the %s backend configured under providers.sandbox (this "+
+				"catalogue has %s)",
+			s.DefaultRunIn, s.DefaultRunIn.backend(), names(s.available()))
 	}
 
 	if s.DefaultCodingAgent != "" && !slices.Contains(CodingAgents, s.DefaultCodingAgent) {
@@ -290,26 +434,30 @@ func (s *SandboxProvider) validate(path string) error {
 	return p.err()
 }
 
-// Containment is how far a local box is separated from the engine host.
-type Containment string
+// localBlock is the configured local backend, nil-safe on the catalogue so a
+// company with no providers.sandbox at all reads as "no block" rather than
+// panicking inside a cross-field rule that has to run either way.
+func (s *SandboxProvider) localBlock() *LocalSandbox {
+	if s == nil {
+		return nil
+	}
+	return s.Local
+}
 
-const (
-	// ContainmentDirect runs a process tree in a per-box directory with
-	// HOME and the XDG variables pointed at it and an allowlisted
-	// environment. That isolates STATE — no box sees another's checkout,
-	// memory or credentials — but NOT THE HOST: the coding agent runs as
-	// the engine user, so it can read what that user can read and reach
-	// what its credentials reach. Right for a workstation or a dedicated
-	// VM; wrong for a shared host.
-	ContainmentDirect Containment = "direct"
-	// ContainmentContainer runs each box in its own container with the box
-	// directory bind-mounted at /home/user, giving real host isolation and
-	// the same in-box paths a remote provider uses.
-	ContainmentContainer Containment = "container"
-)
-
-// Containments is the closed set.
-var Containments = []Containment{ContainmentDirect, ContainmentContainer}
+// available is the placements this catalogue can run, in the canonical order,
+// for the message a refusal carries.
+func (s *SandboxProvider) available() []Placement {
+	if s == nil {
+		return nil
+	}
+	out := make([]Placement, 0, len(Placements))
+	for _, p := range BackendPlacements() {
+		if s.Configured(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 // ContainerRuntime is which container CLI to drive.
 type ContainerRuntime string
@@ -328,20 +476,26 @@ var ContainerRuntimes = []ContainerRuntime{RuntimeAuto, RuntimeDocker, RuntimePo
 
 // LocalSandbox is the local backend's block: the engine host as a code
 // runtime, so code work can use the subscription login already established.
+//
+// IT CARRIES NO CONTAINMENT OF ITS OWN. `run_in: direct` and `run_in:
+// container` are both served by this one block, per seat, because they are a
+// choice about ONE SEAT'S WORK rather than about the host: the seat that needs
+// the operator's own login and the seat whose generated code must not see the
+// engine's filesystem are different seats on the same machine. A block-level
+// mode could only ever answer for both.
 type LocalSandbox struct {
-	Containment Containment `yaml:"containment,omitempty" json:"containment,omitempty" js:"enum=direct|container" desc:"direct (state isolation only) or container (host isolation)."`
-
-	// Image is the container image for containment: container. Required
-	// there, with deliberately no default: a box whose image lacks the
+	// Image is the container image, required for any seat that runs in a
+	// container, with deliberately no default: a box whose image lacks the
 	// coding-agent CLI fails only once an agent tries to use it.
-	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image with the coding-agent CLI installed."`
+	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image with the coding-agent CLI installed. Required for run_in: container."`
 
 	Runtime ContainerRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty" js:"enum=auto|docker|podman" desc:"Container CLI to drive."`
 
 	// StateDir is the parent directory for box directories. Boxes are
 	// removed at teardown, and orphans from a crashed engine are reaped on
-	// the next create.
-	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Parent directory for box directories."`
+	// the next create. It applies to both placements — a direct box is a
+	// directory under it too.
+	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Parent directory for box directories; used by both local placements."`
 
 	// Network is the container network. Empty uses the runtime's default.
 	// Setting `none` cuts the box off entirely — which also cuts off the
@@ -354,38 +508,27 @@ type LocalSandbox struct {
 	RunArgs []string `yaml:"run_args,omitempty" json:"run_args,omitempty" desc:"Extra container run arguments. This is where a local box is sized."`
 }
 
+// containerOnly are the fields no direct box reads, named as an operator
+// wrote them. A value that means nothing where it is written is the silence
+// this package spends most of its rules on, and the check that reports it
+// needs the SEATS — see (*Company).validateSandboxPlacement.
+func (l *LocalSandbox) containerOnly() []struct{ field, value string } {
+	args := ""
+	if len(l.RunArgs) > 0 {
+		args = "set"
+	}
+	return []struct{ field, value string }{
+		{"image", l.Image},
+		{"runtime", string(l.Runtime)},
+		{"network", l.Network},
+		{"run_args", args},
+	}
+}
+
 func (l *LocalSandbox) validate(path string) error {
 	var p problems
-	if l.Containment != "" && !slices.Contains(Containments, l.Containment) {
-		p.add(at(path, "containment"), ErrUnknownValue, "%q (want %s)",
-			l.Containment, names(Containments))
-		return p.err()
-	}
-	mode := l.Containment
-	if mode == "" {
-		mode = ContainmentDirect
-	}
-	if mode == ContainmentContainer && strings.TrimSpace(l.Image) == "" {
-		p.add(at(path, "image"), ErrMissing,
-			"containment container needs an image with the coding-agent CLI installed")
-	}
-	if mode == ContainmentDirect && l.Image != "" {
-		p.add(at(path, "image"), ErrConflict,
-			"image only applies to containment container. Remove it, or switch containment")
-	}
 	if l.Runtime != "" && !slices.Contains(ContainerRuntimes, l.Runtime) {
 		p.add(at(path, "runtime"), ErrUnknownValue, "%q (want %s)", l.Runtime, names(ContainerRuntimes))
-	}
-	if mode == ContainmentDirect {
-		if l.Network != "" {
-			p.add(at(path, "network"), ErrConflict,
-				"network only applies to containment container; a direct box "+
-					"shares the engine host's network")
-		}
-		if len(l.RunArgs) > 0 {
-			p.add(at(path, "run_args"), ErrConflict,
-				"run_args are container run arguments; a direct box launches no container")
-		}
 	}
 	return p.err()
 }

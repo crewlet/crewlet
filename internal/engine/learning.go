@@ -28,7 +28,7 @@ import (
 //
 // # It is the half that was missing
 //
-// The read side — the Plan-phase prefetch's memory, recall, profile and
+// The read side — the turn-start prefetch's memory, recall, profile and
 // skill blocks — was wired first and looked healthy: it queried, found
 // nothing, and rendered nothing, which is indistinguishable from a young
 // company. Nothing wrote, so nothing was ever going to be found.
@@ -103,7 +103,7 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	}
 
 	// THE SYNTHESIZER, which is what makes synthesized_skills a table with
-	// rows in it. Everything that reads a skill — use_skill, the Plan-phase
+	// rows in it. Everything that reads a skill — use_skill, the executor's
 	// catalogue, refine_skill, the curator — shipped before anything wrote
 	// one, so all of it ran correctly over an empty table.
 	if cfg.SkillSynthesis.Enabled.Or(true) {
@@ -112,7 +112,7 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 		if err != nil {
 			log.Warn("skill_synthesizer_unavailable", "error", err,
 				"detail", "no skill will ever be drafted, so use_skill and the "+
-					"Plan-phase skill catalogue stay empty")
+					"skill catalogue stay empty")
 		} else {
 			workers = append(workers, synth)
 		}

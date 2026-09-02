@@ -245,8 +245,7 @@ export function afkReason(reason: string | undefined): string {
 
 const PHASE_DOING: Record<string, string> = {
   onboarding: "reading the team's onboarding pages",
-  plan: "planning the work",
-  execute: "carrying out the plan",
+  execute: "working on the task",
   review: "reviewing its own work",
 };
 

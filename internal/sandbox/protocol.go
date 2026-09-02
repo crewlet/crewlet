@@ -1,5 +1,5 @@
 // Package sandbox is the code-work runtime: a sandbox-enabled seat runs its
-// Execute phase as a coding agent inside an isolated box instead of the native
+// executor phase as a coding agent inside an isolated box instead of the native
 // tool loop.
 //
 // The shape that matters is that a coding run is DETACHED. The tool starts it,
@@ -70,23 +70,27 @@ type Limits struct {
 
 // Spec is what it takes to mint and drive one box.
 //
-// The REPO IS NOT HERE. Which repository to work in is task context the planner
+// The REPO IS NOT HERE. Which repository to work in is task context the executor
 // puts in the brief, and the coding agent clones it with the token the config
 // injects — a spec field for it would make one repo per role a structural fact
 // when it is a per-turn one.
 //
-// There are deliberately NO CPU, MEMORY OR DISK FIELDS. A box's resources are a
-// property of its TEMPLATE, fixed when the template is built, and the create
-// APIs accept no resource arguments. Sizing is done by pointing Template at one
-// built with the resources you want, not by a per-run field that would silently
-// do nothing.
+// There are deliberately NO CPU, MEMORY OR DISK FIELDS, and no TEMPLATE either.
+// A remote box's resources are a property of its template, fixed when the
+// template is built, and the create APIs accept no resource arguments; a local
+// box is sized by providers.sandbox.local.run_args. Both are configured on the
+// BACKEND, once, so a spec field for either would be a second answer to a
+// question the catalogue has already settled — and the last one, Template, was
+// set by nobody while looking exactly like a wired knob.
 type Spec struct {
+	// Placement is WHICH configured backend runs this box. Resolved from
+	// role.sandbox.run_in over providers.sandbox.default_run_in, and carried
+	// here rather than chosen by the caller so the launch, the pending row
+	// and the reconnect all name the same cell.
+	Placement Placement
+
 	// CodingAgent names the runner: "claude-code", "opencode", …
 	CodingAgent string
-
-	// Template is the provider's image or template id. Empty takes the
-	// provider's default.
-	Template string
 
 	// TimeoutSec is NOT a run deadline: it is the box's initial TTL, which
 	// the waiter refreshes every tick, so a running job is never killed by

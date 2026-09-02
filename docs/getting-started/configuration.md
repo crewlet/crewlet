@@ -42,31 +42,34 @@ notification_coalesce_window_seconds: 0 # optional — inbox linger window (seco
                                         #   See concepts/event-system.md § Inbox batching.
 notification_coalesce_max_batch: 20     # optional — max events merged into one digest trigger
 
-policies:                               # optional — org-wide policies (full text renders into the Plan prompt)
+policies:                               # optional — org-wide policies (full text renders into the executor's prompt)
   - "All code must be reviewed before merging"
   - "Communicate decisions in writing"
+
+workers: {...}                          # optional — reusable delegate templates (see below)
 
 roles: [...]                            # optional — root-level org-wide agents (see below)
 units: [...]                            # optional — org structure tree (see below)
 
-turn_engine:                            # optional — Plan/Execute/Review turn config
+turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
-  max_tool_rounds: 20                   # max tool-call rounds within a single Execute-phase run
-  plan_max_tool_rounds: 16              # max tool-call rounds within a single Plan-phase run
-  onboarding_max_tool_rounds: 10        # dedicated first-turn onboarding pass before Plan (0 = disabled)
-  subagent_max_turns: 20                # maximum tool rounds per spawn_subagent call
-  subagent_timeout_seconds: 120         # wall-clock timeout per sub-agent
-  subagent_budget_fraction: 0.2         # fraction of parent's remaining tokens a sub-agent may consume
-                                        #   (for a batched call, the TOTAL slice shared across children)
-  subagent_max_parallel: 3              # max children a batched spawn_subagent runs concurrently
-  subagent_batch_timeout_seconds: 600   # aggregate timeout for one batched spawn_subagent call; must be >= subagent_timeout_seconds
-  subagent_min_per_child_tokens: 500    # floor on the per-child token slice; batch rejected if undercut
-  executor_always_on_tools: []          # extra tools always exposed in the Execute phase
-                                        #   (load_tool_skill is always-on independently)
+  max_tool_rounds: 24                   # max tool-call rounds within one executor run
+                                        #   (the reviewer has no knob: it holds one
+                                        #   submission tool, so its budget is structural)
+  onboarding_max_tool_rounds: 10        # dedicated first-turn onboarding pass (0 = disabled)
+  delegation:                           # bounds on every `delegate` call — see Turn Engine § Workers
+    max_parallel: 3                     # workers running at once within one call
+    max_tasks_per_call: 8               # tasks one call may contain; over it the call is REFUSED
+    max_turns: 20                       # tool rounds one worker may run (a request above it is clamped)
+    max_turns_ceiling: 40               # highest max_turns a worker template may declare
+    budget_fraction: 0.2                # ONE slice for the whole call, shared by every task in it
+    min_tokens_per_task: 500            # call refused up front if the per-task share falls below this
+    task_timeout_seconds: 300           # wall-clock cap on one worker
+    call_timeout_seconds: 900           # wall-clock cap on the whole call, dependency waves included
+  sandbox_min_budget_tokens: 2000       # refuse a coding run below this remaining budget
   delegation_depth_limit: 3             # max colleague-handoff chain depth before depth_cap guard breach
-  extension_enabled: true               # round-cap extension judge (Plan + Execute + onboarding)
-  plan_max_tool_rounds_ceiling: 32      # hard ceiling for Plan rounds across extensions (2x base 16)
-  execute_max_tool_rounds_ceiling: 40   # hard ceiling for Execute rounds across extensions (2x base 20)
+  extension_enabled: true               # round-cap extension judge (executor + onboarding)
+  execute_max_tool_rounds_ceiling: 48   # hard ceiling for executor rounds across extensions (2x base 24)
   onboarding_max_tool_rounds_ceiling: 20  # hard ceiling for onboarding rounds across extensions (2x base 10)
   extension_round_step: 8               # max rounds the judge may grant per extension call
   conversation_session:                 # what this seat already said in ONE thread / issue / PR,
@@ -170,12 +173,12 @@ extension-judge model:
 ```yaml
 roles:
   - name: Engineer
-    llm: claude-sonnet                  # main model for plan/execute/review
+    llm: claude-sonnet                  # the seat's own model — what the executor runs on
     llm_auxiliary: gpt-4o-mini          # cheap/fast model for reflection
     llm_judge: gpt-4o-mini              # cheap/fast model for the round-cap extension judge
 ```
 
-`llm_judge` is invoked when Plan or Execute exhausts its tool-round cap;
+`llm_judge` is invoked when the executor or the onboarding pass exhausts its tool-round cap;
 it decides whether the agent is making progress (extend) or thrashing
 (fall through to rescue).  Falls back to `llm` -> `"default"` if unset.
 See the [Turn Engine extension judge](../concepts/turn-engine.md#round-cap-extension-judge)
@@ -321,7 +324,7 @@ than adapt:
 Everything else about an embedding failure is cheap: a timed-out or refused
 call is *no vector*, which every caller reads as "no similarity search this
 turn" and carries on with recency. Nothing here retries — the caller's
-degradation costs less than a retry spent inside a Plan-phase prefetch
+degradation costs less than a retry spent inside a turn-start prefetch
 somebody is waiting on.
 
 Tier A (`crewlet.yaml`, restart-only) says where this node's stream, store and
@@ -500,8 +503,8 @@ units:
 | `availability` | string | no | Human seats only — free-text availability rendered into rosters and `lookup_colleague` results |
 | `goal` | string | no | Individual mission statement |
 | `backstory` | string | no | Personality, background, expertise |
-| `llm` | string or dict | no | Named LLM provider key. Dict form takes `default`, `plan`, `execute`, `review`, `subagent` keys for per-phase [Turn Engine](../concepts/turn-engine.md#per-phase-llm-models) model split |
-| `llm_plan` / `llm_execute` / `llm_review` / `llm_subagent` | string | no | Per-phase overrides (alternative to the dict-shaped `llm`) |
+| `llm` | string or dict | no | Named LLM provider key — **the executor's**, and so the seat's own model. Dict form adds `default`, `review`, `subagent`, `auxiliary`, `judge`, `sandbox` keys for the [per-phase model split](../concepts/turn-engine.md#per-phase-llm-models); there is no `execute` key, because `llm` is it |
+| `llm_review` / `llm_subagent` / `llm_sandbox` | string | no | Per-phase overrides (alternative to the dict-shaped `llm`) |
 | `llm_auxiliary` | string | no | Cheap/fast model used by reflection workers (PersistDecider, episode summariser) |
 | `llm_judge` | string | no | Cheap/fast model used by the [round-cap extension judge](../concepts/turn-engine.md#round-cap-extension-judge); falls back to `llm` |
 | `token_budget` | int | no | Per-agent token limit (0 = unlimited) |
@@ -515,7 +518,40 @@ units:
 | `integrations.mattermost` | dict | no | Per-agent Mattermost **transport** identity (`bot_token`, optional `username`, optional `channel`). One credential, three readers: the same token is named as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess, and the inbound websocket for this seat authenticates with it too |
 | `integrations.jira.project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.JiraProject` / `org.Role.JiraProject`). The team's Jira project as integration identity: an issue that names nobody in the org chart routes to the unit lead, and it is the project the team files work under. **Not** an MCP credential, and it does **not** scope knowledge reads |
 | `integrations.confluence.space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.ConfluenceSpace` / `org.Role.ConfluenceSpace`). The team's Confluence space as integration identity: a page change that names nobody routes to the unit lead, and it is where the team writes. It does **not** scope reads — read scope is the org-wide `knowledge.confluence_spaces` only |
+| `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
+
+### Worker templates
+
+`workers:` holds the reusable delegates a seat's executor hands work to with the `delegate` tool, keyed by the name it types into that call. A template carries the half of a worker that does not change per task — the persona, the tool set, the model, and the shape of the answer — so a seat writes only the task.
+
+```yaml
+workers:
+  researcher:
+    description: reads sources and reports findings with citations
+    system_prompt: |
+      You research things carefully and report only what you can point at.
+    tools: [confluence_search, confluence_get_page]   # a REQUEST, not a grant — see below
+    model: fast                                       # a providers.llm key; omit for llm_subagent
+    max_turns: 12                                     # omit for turn_engine.delegation.max_turns
+    output:                                           # omit for the default {result, notes}
+      type: object
+      properties:
+        findings:  {type: string}
+        citations: {type: array, items: {type: string}}
+      required: [findings]
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `description` | string | yes | What this worker is for, written for the **executor choosing one** rather than for the operator. It is the only part of the template that reaches the parent's prompt |
+| `system_prompt` | string | yes | The worker's persona and standing instructions. The runtime preamble (no nesting, no colleague contact, how to answer) is appended, so a template never restates the boundary and cannot weaken it by forgetting to |
+| `tools` | list[string] | no | The tools this worker asks for. Empty means none at all, which is the right shape for a summariser. **Naming a tool grants nothing**: every name still passes the worker filter — the caller's own live tools, minus the engine-control denylist, minus shared-surface writes — so `workers:` is never a privilege-escalation path |
+| `model` | string | no | A `providers.llm` key. An explicit key gets **no fallback chain**: an operator's cheap-model choice that quietly ran somewhere else is worse than a refusal. Omit to take the seat's `llm_subagent` chain |
+| `max_turns` | int | no | Tool rounds this worker may run. Refused at load — not clamped — above `turn_engine.delegation.max_turns_ceiling`: a template is an edit, and an operator overruled by a number nothing in the file mentions writes it again next time |
+| `output` | dict | no | The JSON Schema the worker's `submit_result` publishes, so the answer comes back as fields the parent can index rather than prose it re-parses. Must be an object schema with 1–12 named properties, at most 3 levels deep, whose `required` entries are properties it actually has; keywords the engine does not read are passed through to the provider untouched |
+
+See [Turn Engine — Workers](../concepts/turn-engine.md#workers) for what a `delegate` call looks like and how dependency waves work.
 
 ### Schedules
 
@@ -623,7 +659,7 @@ integrations:
 
 - **`forge_app_id`** — verifies the Forge Invocation Token (FIT) on Cloud webhooks against Atlassian's JWKS; the `aud` claim must match. Required when Jira Cloud delivers through the Forge app.
 - **`jira`** — the Atlassian tracker, served end to end. Give `url` **or** `cloud_id`, never both — they are two ways to name one instance and `crewlet validate` refuses the ambiguity. `token` is the org read account (an issue's watchers are the one routing input a webhook never carries); `email` switches authentication to Cloud's Basic scheme; `site_url` is the human base for links when the instance is named by a cloud id. `webhook_secret` is **required for Data Center** and unused on Cloud, whose events arrive through the Forge app instead. Each seat's own credential lives in `mcp_env.atlassian` (or `mcp_env.jira`) and is what the engine resolves its account id from — see [Jira](../integrations/jira.md).
-- **`confluence`** — the knowledge base, and the **query-time search** behind every Plan phase's "Relevant knowledge" block. Same address rule as `jira`: `url` **or** `cloud_id`, never both. `token` is the org read account a seat with no Confluence credential of its own searches under; a seat WITH one searches as itself and Confluence enforces its page permissions natively. `webhook_secret` is required for Data Center and unused on Cloud. The knowledge backend is **single-homed** — the engine wires exactly one `knowledge.Searcher`, because two would make an agent's answer to "what do we already know about this" depend on which one was asked. Scope reads with `knowledge.confluence_spaces`; publish with [`crewlet confluence import`](../reference/cli.md#crewlet-confluence-import). See [Confluence](../integrations/confluence.md).
+- **`confluence`** — the knowledge base, and the **query-time search** behind every turn's "Relevant knowledge" block and the `search_knowledge` tool. Same address rule as `jira`: `url` **or** `cloud_id`, never both. `token` is the org read account a seat with no Confluence credential of its own searches under; a seat WITH one searches as itself and Confluence enforces its page permissions natively. `webhook_secret` is required for Data Center and unused on Cloud. The knowledge backend is **single-homed** — the engine wires exactly one `knowledge.Searcher`, because two would make an agent's answer to "what do we already know about this" depend on which one was asked. Scope reads with `knowledge.confluence_spaces`; publish with [`crewlet confluence import`](../reference/cli.md#crewlet-confluence-import). See [Confluence](../integrations/confluence.md).
 - **`slack`** — the hosted chat backend. The org-level block carries **no credentials at all**: Slack gives each agent its OWN app, so the token and signing secret live on each role's `integrations.slack`, and this block holds only the working-indicator settings. **`typing_status`** takes `off` / `addressed` / `always` and defaults to `addressed` — the opposite of Mattermost's default, because Slack's indicator renders TEXT and a phase change is something the person waiting can actually read, which is also what makes `status_phrases` worth having here. Inbound events arrive per seat at `/webhooks/slack/{handle}`, verified against that seat's own signing secret. Provision with [`crewlet slack provision`](../reference/cli.md#crewlet-slack-provision). See [Slack Integration](../integrations/slack.md).
 - **`mattermost`** — the self-hosted chat backend, and the one integration that is **both** inbound and outbound: enabling it starts the outbound transport *and* the websocket fleet that holds one connection per agent seat (Mattermost has no usable inbound webhook, so nothing has to reach the engine — no public URL, no tunnel). `url` and `team` are both **required** when enabled. Per-agent identity lives on each role's `integrations.mattermost.bot_token`, named again as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess. **`typing_status`** takes `off` / `addressed` / `always` and defaults to `off`, and there is deliberately no `status_phrases`: Mattermost renders a fixed client-side indicator with no API for the text. The `provisioning:` sub-block is read only by [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision), not the engine. A company may run Mattermost and Slack together — they are different workspaces with different people in them, and an org migrating from one to the other runs both for a while. See [Mattermost Integration](../integrations/mattermost.md).
 - **`github`** — the hosted code host, served end to end. `url` is **optional**: leave it unset for github.com, whose API lives on a different host rather than a path on the web UI, and name an Enterprise Server there — the REST base is derived either way. `webhook_secret` is **required** when enabled, and takes any string (GitHub signs with it verbatim, so unlike GitLab's there is no shape to get wrong). The optional `token` is a read credential for **participant fan-out** — a payload carries the author, assignees and requested reviewers but not who has commented or reviewed — and it is what `crewlet github provision` registers webhooks with. Each seat's own credential lives in `mcp_env.github` and is what the engine resolves its login from; a human seat is reached by `contact.github_login` instead. The `provisioning:` sub-block is read only by [`crewlet github provision`](../reference/cli.md#crewlet-github-provision): `org_webhook: auto` takes one organization-level hook where the credential may (covering repositories created later) and falls back to one per repository where it may not. A company may run GitHub and GitLab together — they are two hosts with different repositories on them. See [GitHub Integration](../integrations/github.md).
@@ -674,7 +710,7 @@ mcp_servers:
     request_timeout_seconds: 300        # optional — one tool call
 ```
 
-Full field reference: `name` (required), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`.
+Full field reference: `name` (required; `crewlet` is reserved — it is the name every agent-mode box sees the seat's own [tool bridge](../concepts/subscription-llm-backends.md#the-tool-bridge) under, and a server called the same would be replaced by it there), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`.
 
 ### Timeouts
 

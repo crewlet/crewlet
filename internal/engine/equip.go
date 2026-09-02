@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -43,6 +44,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	deps := builtin.Deps{
 		A2A:               e.a2aFor(c),
 		Sandbox:           e.sandboxLauncher(),
+		Knowledge:         knowledgeSearch(e, c),
 		Events:            e.telemetry(),
 		Recall:            e.prefetcher(c),
 		EpisodeLimit:      c.Config.Learning.Episodic.RetrievalLimit,
@@ -223,4 +225,43 @@ func (e *Engine) tuneBatching(c *Company) {
 	}
 	e.batch.Set(c.Config.NotificationCoalesceWindowSeconds,
 		c.Config.NotificationCoalesceMaxBatch)
+}
+
+// knowledgeSearch wires search_knowledge, or nil where the company has no
+// knowledge base at all.
+//
+// The GATE reads the company's config; the SEARCHER is resolved per call.
+// Those cannot be the same read: this runs before an apply reconciles the
+// knowledge base (see [Engine.reconcileConfluence]), so a searcher captured
+// here is the PREVIOUS epoch's — its lead map is the old org chart and its
+// credential is the pre-rotation one. Capturing it would give a seat a tool
+// that reads the company it used to be, silently, since a stale-credential
+// search returns an empty result exactly like a real one.
+func knowledgeSearch(e *Engine, c *Company) builtin.KnowledgeSearcher {
+	if c.Config.Integrations.Confluence == nil {
+		// A NIL INTERFACE, not a live adapter over a nil searcher: the
+		// tool is omitted rather than registered-and-empty, so a seat is
+		// never offered a search its company cannot serve.
+		return nil
+	}
+	return liveKnowledge{engine: e}
+}
+
+// liveKnowledge resolves the node's current knowledge searcher per call.
+type liveKnowledge struct{ engine *Engine }
+
+// CanSearch answers false while nothing is wired, which is what the tool
+// reports to the model — a company whose knowledge block is configured but
+// whose backend failed to start is a real state, and one the seat can act on.
+func (k liveKnowledge) CanSearch(seat *org.Role, o *org.Organization) bool {
+	s := k.engine.Knowledge()
+	return s != nil && s.CanSearch(seat, o)
+}
+
+func (k liveKnowledge) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
+	s := k.engine.Knowledge()
+	if s == nil {
+		return nil
+	}
+	return s.Search(ctx, q)
 }

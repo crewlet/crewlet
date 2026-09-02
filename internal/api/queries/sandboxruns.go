@@ -50,11 +50,17 @@ func (s Sources) sandboxRuns(ctx context.Context, _ Params) (any, error) {
 
 func serialiseRun(run sandbox.PendingRun) map[string]any {
 	return map[string]any{
-		"turn_id":          run.TurnID,
-		"agent_handle":     run.AgentHandle,
-		"role":             run.Role,
-		"status":           run.Status,
-		"coding_agent":     run.CodingAgent,
+		"turn_id":      run.TurnID,
+		"agent_handle": run.AgentHandle,
+		"role":         run.Role,
+		"status":       run.Status,
+		"coding_agent": run.CodingAgent,
+		// WHERE the run is, which became an operator question the moment
+		// providers.sandbox became a catalogue: one company now runs some
+		// seats on the engine host and others in a remote box, and "is
+		// this job on my machine" has no other surface. Empty on a row
+		// written before the field existed.
+		"placement":        run.Placement,
 		"task_description": run.TaskDescription,
 		"question":         run.Question,
 		"audience":         run.Audience,

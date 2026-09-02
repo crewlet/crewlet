@@ -12,17 +12,17 @@ import (
 func TestHumanSeatsAreMarkedInBothIdentityRenderings(t *testing.T) {
 	t.Parallel()
 	s := seatIn(mixedAcme(), "Engineer")
-	contains(t, BuildPlan(s, PlanInput{}), "**Reports to:** Sarah Chen (human)")
+	contains(t, BuildExecutor(s, ExecutorInput{}), "**Reports to:** Sarah Chen (human)")
 	contains(t, BuildIdentityLine(s), "Sarah Chen (human)")
 }
 
 func TestHumanColleaguesNoteAppearsOnlyInMixedOrgs(t *testing.T) {
 	t.Parallel()
-	mixed := BuildPlan(seatIn(mixedAcme(), "Engineer"), PlanInput{})
+	mixed := BuildExecutor(seatIn(mixedAcme(), "Engineer"), ExecutorInput{})
 	contains(t, mixed, "## Human colleagues", "NOT on A2A", "asynchronously")
 
 	// A pure-agent company's prompts are unchanged by the feature existing.
-	excludes(t, BuildPlan(engineer(), PlanInput{}), "## Human colleagues")
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{}), "## Human colleagues")
 }
 
 // A human member's roster block renders their external identities, their
@@ -52,7 +52,7 @@ func TestRosterRendersHumanMemberBlock(t *testing.T) {
 	}
 	o.Name = "Acme"
 	o.Normalize()
-	p := BuildPlan(seatIn(o, "Lead"), PlanInput{})
+	p := BuildExecutor(seatIn(o, "Lead"), ExecutorInput{})
 
 	contains(t, p, "**Sarah Chen** (sarah-chen) — **human teammate**")
 	// Identities render generically, labelled by transport. The shared
@@ -91,12 +91,12 @@ func TestRosterOmitsUnresolvedContactReferences(t *testing.T) {
 	o.Normalize()
 	seat := seatIn(o, "Lead")
 
-	excludes(t, BuildPlan(seat, PlanInput{}), "${SARAH_SLACK_ID}", "Slack ID:")
+	excludes(t, BuildExecutor(seat, ExecutorInput{}), "${SARAH_SLACK_ID}", "Slack ID:")
 
 	seat.Env = func(name string) (string, bool) {
 		return "U0RESOLVED", name == "SARAH_SLACK_ID"
 	}
-	contains(t, BuildPlan(seat, PlanInput{}), "Slack ID: U0RESOLVED")
+	contains(t, BuildExecutor(seat, ExecutorInput{}), "Slack ID: U0RESOLVED")
 }
 
 // A seat missing its chart renders the phase contract and no identity,
@@ -105,11 +105,10 @@ func TestRosterOmitsUnresolvedContactReferences(t *testing.T) {
 func TestZeroSeatRendersTheContractWithoutPanicking(t *testing.T) {
 	t.Parallel()
 	var s Seat
-	contains(t, BuildPlan(s, PlanInput{}), "## PLAN phase")
-	contains(t, BuildExecute(s, ExecuteInput{}), "## EXECUTE phase")
+	contains(t, BuildExecutor(s, ExecutorInput{}), "## Your turn")
 	contains(t, BuildReview(s, ReviewInput{}), "## REVIEW phase")
 	contains(t, BuildOnboarding(s, OnboardingInput{}), "## ONBOARDING phase")
-	excludes(t, BuildPlan(s, PlanInput{}), "# Your Identity")
+	excludes(t, BuildExecutor(s, ExecutorInput{}), "# Your Identity")
 }
 
 func TestCapitalizeMatchesPythonSemantics(t *testing.T) {

@@ -1,9 +1,9 @@
 /**
  * One turn: its phases, in the order they ran.
  *
- * A turn is read FORWARDS — plan, then execute, then review — which is the
- * opposite of the feed it sits in. The turn list is newest first; inside a
- * turn, oldest first.
+ * A turn is read FORWARDS — execute, then review, with a first-turn
+ * onboarding pass ahead of both — which is the opposite of the feed it sits
+ * in. The turn list is newest first; inside a turn, oldest first.
  *
  * The card's open state is latched, like a phase's. The previous surface
  * derived it (`isLive || is the newest failed turn`), recomputed on every
@@ -96,7 +96,12 @@ export function TurnCard({
       {open && (
         <div className="turn-body">
           {group.phases.map((p, i) => (
-            <PhaseCard key={p.key} record={p} defaultOpen={i === 0 && group.phases.length === 1} />
+            <PhaseCard
+              key={p.key}
+              record={p}
+              nested={group.nested.get(p.key)}
+              defaultOpen={i === 0 && group.phases.length === 1}
+            />
           ))}
           <footer className="phase-foot">
             <a className="t-caption mono" href={href(["turns", group.turnId])}>

@@ -263,3 +263,21 @@ func TestThePromptIsRegisteredForItsSource(t *testing.T) {
 		t.Error("the spine did not dispatch to the Jira prompt")
 	}
 }
+
+// A MENTION OR AN ASSIGNMENT IS AN ASK; a watcher is following the issue and
+// the lead fallback is the ticket landing somewhere rather than on somebody.
+// A seat obliged to answer either would comment on every field change in its
+// unit's projects.
+func TestOnlyAMentionOrAnAssignmentAddressesTheSeat(t *testing.T) {
+	t.Parallel()
+	for _, via := range []string{jira.ViaMention, jira.ViaAssignee} {
+		if !(jira.Prompt{}).Addressed(inbound(via, "jira:issue_updated", nil)) {
+			t.Errorf("%q does not address the seat", via)
+		}
+	}
+	for _, via := range []string{jira.ViaWatcher, jira.ViaLeadFallback, ""} {
+		if (jira.Prompt{}).Addressed(inbound(via, "jira:issue_updated", nil)) {
+			t.Errorf("%q addresses the seat and is a subscription, not an ask", via)
+		}
+	}
+}

@@ -116,7 +116,7 @@ func overrides() map[reflect.Type]map[string]any {
 	toggle := map[string]any{"type": []any{"boolean", "null"}}
 
 	phases := map[string]any{}
-	for _, name := range []string{"default", "plan", "execute", "review", "subagent", "auxiliary", "judge", "sandbox"} {
+	for _, name := range []string{"default", "review", "subagent", "auxiliary", "judge", "sandbox"} {
 		phases[name] = map[string]any{"oneOf": []any{str, strList}}
 	}
 

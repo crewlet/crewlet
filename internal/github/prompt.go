@@ -62,6 +62,32 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 	return reconEvents[n.Metadata["event_type"]]
 }
 
+// addressedEvents are the reasons that are an ASK of this seat rather than
+// news about something it follows.
+//
+// An assignment, a review request and a mention each name the seat as the
+// one who has to act; leaving any of them unanswered looks to the person who
+// wrote it exactly like the webhook never arrived.
+//
+// A COMMENT THAT DID NOT MENTION ANYBODY IS NOT IN HERE, nor is a merge, a
+// close, an approval or a failed run. Those reach the seat because it
+// subscribes to the thread, and a seat obliged to reply to every one of them
+// would post on every state change of every pull request it has ever touched.
+var addressedEvents = map[string]bool{
+	IssueAssigned:      true,
+	IssueMention:       true,
+	PRAssigned:         true,
+	PRReviewRequested:  true,
+	PRMention:          true,
+	PRChangesRequested: true,
+	CommentMention:     true,
+}
+
+// Addressed implements [notify.Prompt].
+func (Prompt) Addressed(n notify.Inbound) bool {
+	return addressedEvents[n.Metadata["event_type"]]
+}
+
 // WakesActor implements [notify.Prompt]: only a failed workflow run.
 //
 // THE ONE REAL EXCEPTION TO THE SELF-ACTION RULE, shared with the

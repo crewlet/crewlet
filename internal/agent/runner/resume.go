@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -39,74 +40,101 @@ func (r *Runner) Suspended() (Suspension, bool) {
 // Resume re-enters the suspended Execute phase with the sandbox result spliced
 // in as the pending call's reply.
 //
-// THE SAME TURN CONTINUES. Plan is skipped — a resumed turn that re-planned
-// would re-derive a plan for work already half-done — and the tool surface and
-// skill-guard state are REPLAYED from the state rather than rebuilt, because a
-// phase that rebuilt its surface from the plan would lose every activation the
-// pre-suspend rounds made.
+// THE SAME TURN CONTINUES. The executor is re-entered rather than restarted —
+// a resumed turn that started over would re-derive work already half done —
+// and the tool surface and skill-guard state are REPLAYED from the state
+// rather than rebuilt, because a phase that rebuilt its surface would lose
+// every activation the pre-suspend rounds made.
 //
 // The phase record it publishes covers only the POST-resume slice of the
 // conversation: the earlier rounds are already recorded, and re-emitting them
 // would redraw a turn the dashboard already has. Their token counters do carry
 // forward, because those are the turn's total.
-func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.Execution, turn.Surface, error) {
+func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.Work, turn.Surface, error) {
 	if r.cfg.Resume == nil {
-		return turn.Execution{}, turn.Surface{}, fmt.Errorf("runner: resume with no suspended state")
+		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: resume with no suspended state")
 	}
 	state := r.cfg.Resume.State
 	answer := r.cfg.Resume.Answer
 
-	snapshot := r.cfg.Registry.Snapshot()
-	surface, err := r.surfaceWith(ctx, phase.Execute, state.Round, snapshot, nil, state.ActiveTools)
-	if err != nil {
-		return turn.Execution{}, turn.Surface{}, err
+	if state.AgentRun {
+		// THE STATE DECIDES, NOT THE CONFIG. A run launched as an agentic
+		// one is collected as one however the company's providers have
+		// been applied in the days it was parked — see
+		// [execstate.State.AgentRun].
+		return r.resumeAgentRun(ctx, state, answer, r.cfg.Resume.Bridged)
 	}
+
+	snapshot := r.cfg.Registry.Snapshot()
+
+	// The submission tool is rebuilt, not replayed: it is where the phase
+	// ENDS, and the re-entered conversation has not ended yet. Its checks
+	// read the resumed surface's own record, which resumedCalls widens to
+	// the whole phase — so a delivery made before the suspend is citable
+	// after it, and is never demanded twice.
+	var surface *tools.Surface
+	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
+		decodeWork(r.cfg.Reply,
+			func() []ledger.Call { return resumedCalls(surface, state) },
+			func() turn.Surface { return describe(surface) }))
+
+	built, err := r.surfaceWith(ctx, phase.Execute, state.Round, snapshot, submit,
+		state.ActiveTools, state.LoadedSkills...)
+	if err != nil {
+		return turn.Work{}, turn.Surface{}, err
+	}
+	surface = built
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface,
-		rounds: r.cfg.Caps.ExecuteRounds, ceiling: r.cfg.Caps.ExecuteCeiling,
-		iteration: state.Round,
-		seed:      state.Answer(answer),
-		// A resumed Execute can suspend AGAIN: the executor may call
-		// run_sandbox a second time to continue in the same box.
+		rounds: r.cfg.Caps.ExecutorRounds, ceiling: r.cfg.Caps.ExecutorCeiling,
+		iteration:      state.Round,
+		seed:           state.Answer(answer),
+		terminateAfter: []string{SubmitWorkTool},
+		// A resumed executor can suspend AGAIN: it may call run_sandbox a
+		// second time to continue in the same box.
 		allowSuspend: true,
 		spent: toolloop.Result{
 			InputTokens: state.InputTokens, OutputTokens: state.OutputTokens,
 		},
 	})
 	if err != nil {
-		return turn.Execution{}, turn.Surface{}, err
+		return turn.Work{}, turn.Surface{}, err
 	}
 
-	missing := missingTools(surface, snapshot)
-	r.emitter().completed(phaseCtx, phaseRecord{
-		Phase: phase.Execute, Iteration: state.Round,
-		// No system or user prompt: this phase did not open a conversation,
-		// it re-entered one. Publishing the original opening again would
-		// show the reader a prompt that was not sent this time.
-		Result: res.Result, Exhausted: res.Exhausted,
-		Notes:     missingNote(missing),
-		Available: surface.Active(),
-	})
+	if res.Suspended {
+		r.recordSuspension(state.Round, surface, res.Result, history)
+		return turn.Work{
+			Text: res.Text, Calls: resumedCalls(surface, state), Suspended: true,
+		}, describe(surface), nil
+	}
 
-	return turn.Execution{
-		Text:  res.Text,
-		Calls: resumedCalls(surface, state),
-		// A resumed phase can suspend AGAIN: the executor may call
-		// run_sandbox a second time to continue in the same box.
-		Suspended:       res.Suspended,
-		MissingTools:    missing,
-		ExhaustedRounds: res.Exhausted,
-	}, describe(surface), nil
+	// The same finish as a fresh pass, including the rescue: an executor
+	// that came back from a coding run and then stopped without reporting
+	// is exactly as unjudged as one that never started.
+	//
+	// No system or user prompt on the record: this phase did not open a
+	// conversation, it re-entered one, and publishing the original opening
+	// again would show a reader a prompt that was not sent this time.
+	work, described, err := r.finishWork(phaseCtx, state.Round, work{
+		submit: submit, res: res, surface: surface, snapshot: snapshot,
+	})
+	if err != nil {
+		return turn.Work{}, turn.Surface{}, err
+	}
+	// The WHOLE phase's calls, pre-suspend rounds included — see
+	// resumedCalls.
+	work.Calls = resumedCalls(surface, state)
+	return work, described, nil
 }
 
-// resumedCalls is what the WHOLE Execute phase called, pre-suspend rounds
+// resumedCalls is what the WHOLE executor phase called, pre-suspend rounds
 // included.
 //
-// The delivery gate and the iteration ledger both read this list, and both are
-// about the turn rather than about one re-entry: a resumed turn whose gate saw
-// only the post-resume calls would read a delivery made before the suspend as
-// never having happened, and re-fire it.
+// The delivery check, the submission's own citations and the iteration ledger
+// all read this list, and all three are about the turn rather than about one
+// re-entry: a resumed turn that saw only the post-resume calls would read a
+// delivery made before the suspend as never having happened, and re-fire it.
 func resumedCalls(s *tools.Surface, state execstate.State) []ledger.Call {
 	prior := make([]ledger.Call, 0, len(state.ToolExecutions))
 	for _, exec := range state.ToolExecutions {
@@ -157,6 +185,12 @@ func (r *Runner) recordSuspension(round int, surface *tools.Surface,
 		ToolExecutions:  toolExecutions(res.Executions),
 		Iterations:      history,
 		Task:            r.cfg.Task,
+		// THE SKILL-GUARD STATE, which the field declared and nothing ever
+		// wrote. With it empty, a resumed executor was told to load the
+		// skills it had already loaded — the bodies were in the very
+		// transcript it was re-entering — and every required tool it had
+		// unlocked before the suspend was refused again.
+		LoadedSkills: r.loadedSkills(),
 	}
 	if err := state.Validate(); err != nil {
 		log.Error("execute_suspension_invalid", "round", round, "error", err.Error())
@@ -184,4 +218,13 @@ func decodeArgs(raw string) map[string]any {
 		return nil
 	}
 	return args
+}
+
+// loadedSkills is what the running phase's guard has unlocked, or nil where
+// this turn arms none.
+func (r *Runner) loadedSkills() []string {
+	r.mu.Lock()
+	guard := r.guard
+	r.mu.Unlock()
+	return guard.LoadedKeys()
 }

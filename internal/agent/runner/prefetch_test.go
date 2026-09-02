@@ -9,7 +9,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -21,10 +20,8 @@ import (
 // left to get wrong is which phase is shown which block, and that is exactly
 // what these pin.
 
-// withContext builds a runner over the given blocks and recon seam.
-func withContext(t *testing.T, prov *scriptedProvider, blocks prefetch.Blocks,
-	recon func(context.Context, string) string,
-) *runner.Runner {
+// withContext builds a runner over the given blocks.
+func withContext(t *testing.T, prov *scriptedProvider, blocks prefetch.Blocks) *runner.Runner {
 	t.Helper()
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
 	if err != nil {
@@ -35,9 +32,9 @@ func withContext(t *testing.T, prov *scriptedProvider, blocks prefetch.Blocks,
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: tools.NewRegistry(),
 		Models:   models,
-		Caps:     runner.Caps{PlanRounds: 4, ExecuteRounds: 4, ReviewRounds: 3},
+		Caps:     runner.Caps{ExecutorRounds: 4},
 		Task:     "post the weekly summary",
-		Context:  blocks, Recon: recon,
+		Context:  blocks,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -60,112 +57,75 @@ func systemOf(t *testing.T, prov *scriptedProvider, phaseName string) string {
 	return ""
 }
 
-// Every block the prefetch renders reaches the PLAN prompt under its own
-// heading. A block rendered and not shown is work spent on nothing.
-func TestEveryPrefetchedBlockReachesThePlanPrompt(t *testing.T) {
+// Every block the prefetch renders reaches the executor's prompt under its own
+// heading. A block rendered and not shown is work spent on nothing — and there
+// is only ONE prompt to reach now, which is the point: the frame that decides
+// is the frame that acts, so nothing has to be forwarded from one to another.
+func TestEveryPrefetchedBlockReachesTheExecutorsPrompt(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{plan: []llm.Completion{text("planning")}}
+	prov := &scriptedProvider{execute: []llm.Completion{text("working")}}
 	r := withContext(t, prov, prefetch.Blocks{
 		PersonalMemory:      "- always use semantic commits",
 		RelevantKnowledge:   "- **Staging runbook**: how the proxy is wired",
 		EpisodeRecall:       "- fixed a redirect loop before",
-		CounterpartyProfile: "Subject: Ana Ruiz",
-		SynthesizedSkills:   "- **ship-a-fix**: the release checklist",
-	}, nil)
-	if _, _, err := r.Plan(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Plan: %v", err)
-	}
-
-	system := systemOf(t, prov, "plan")
-	for _, want := range []string{
-		"## Personal memory", "always use semantic commits",
-		"## Relevant knowledge", "Staging runbook",
-		"## Similar prior work", "fixed a redirect loop before",
-		"## Known counterparty", "Subject: Ana Ruiz",
-		"## Synthesized skills", "ship-a-fix",
-	} {
-		if !strings.Contains(system, want) {
-			t.Fatalf("the plan prompt is missing %q", want)
-		}
-	}
-}
-
-// THE COUNTERPARTY PROFILE IS FORWARDED TO EXECUTE. The executor needs the
-// requester's observed traits even where the plan describes the action
-// abstractly — "reply in the counterparty's preferred register" is a plan
-// step that cannot be carried out by somebody who cannot see the register.
-func TestTheCounterpartyProfileReachesTheExecutor(t *testing.T) {
-	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{text("posted")}}
-	r := withContext(t, prov, prefetch.Blocks{
 		CounterpartyProfile: "Subject: Ana Ruiz\nObserved by you:\n  - tone: terse",
-		// The memory block is NOT forwarded, and that is the contrast:
-		// Execute is running a decided plan, and a paragraph of standing
-		// memory in front of it competes with the plan for attention.
-		PersonalMemory: "- always use semantic commits",
-	}, nil)
-	if _, _, err := r.Execute(context.Background(), 1,
-		turn.Plan{Decision: turn.PlanDirect, Summary: "reply to Ana"}, nil); err != nil {
+		SynthesizedSkills:   "- **ship-a-fix**: the release checklist",
+	})
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
 	system := systemOf(t, prov, "execute")
-	if !strings.Contains(system, "tone: terse") {
-		t.Fatalf("the executor was not given the counterparty:\n%s", system)
-	}
-	if strings.Contains(system, "always use semantic commits") {
-		t.Fatalf("the executor was handed the Plan-phase memory block:\n%s", system)
+	for _, want := range []string{
+		"## Personal memory", "always use semantic commits",
+		"## Relevant knowledge", "Staging runbook",
+		"## Similar prior work", "fixed a redirect loop before",
+		"## Known counterparty", "tone: terse",
+		"## Synthesized skills", "ship-a-fix",
+	} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("the executor's prompt is missing %q", want)
+		}
 	}
 }
 
-// THE RECON SEAM is the one mid-turn fetch, and it is keyed on the plan
-// summary — which does not exist until Plan has run.
-func TestTheReconSeamIsKeyedOnThePlanSummary(t *testing.T) {
+// THE REVIEWER GETS NONE OF IT. Its question is whether this round's work is
+// right, and standing memory, the team's docs and the requester's traits are
+// what the executor needed to DO the work — in front of a reviewer they
+// compete with the evidence it is meant to judge.
+func TestTheReviewerIsNotHandedThePrefetch(t *testing.T) {
 	t.Parallel()
-	var asked []string
-	prov := &scriptedProvider{execute: []llm.Completion{text("posted")}}
-	r := withContext(t, prov, prefetch.Blocks{}, func(_ context.Context, summary string) string {
-		asked = append(asked, summary)
-		return "- **Staging runbook**: recovered after recon"
+	prov := &scriptedProvider{
+		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+	}
+	r := withContext(t, prov, prefetch.Blocks{
+		PersonalMemory:      "- always use semantic commits",
+		RelevantKnowledge:   "- **Staging runbook**: how the proxy is wired",
+		CounterpartyProfile: "Subject: Ana Ruiz",
 	})
-	if _, _, err := r.Execute(context.Background(), 1,
-		turn.Plan{Decision: turn.PlanRun, Summary: "fix the staging redirect"}, nil); err != nil {
-		t.Fatalf("Execute: %v", err)
+	if _, err := r.Review(context.Background(), 1, workFor("reply to Ana"), nil); err != nil {
+		t.Fatalf("Review: %v", err)
 	}
-
-	if len(asked) != 1 || asked[0] != "fix the staging redirect" {
-		t.Fatalf("the recon seam was asked %v", asked)
-	}
-	if system := systemOf(t, prov, "execute"); !strings.Contains(system, "recovered after recon") {
-		t.Fatalf("the recovered block did not reach the executor:\n%s", system)
-	}
-}
-
-// A runner with no recon seam is the ordinary case — a company with no
-// knowledge backend — and Execute must not care.
-func TestExecuteRunsWithNoReconSeam(t *testing.T) {
-	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{text("posted")}}
-	r := withContext(t, prov, prefetch.Blocks{}, nil)
-	if _, _, err := r.Execute(context.Background(), 1,
-		turn.Plan{Decision: turn.PlanDirect}, nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if system := systemOf(t, prov, "execute"); strings.Contains(system, "## Relevant knowledge") {
-		t.Fatalf("an empty recovery rendered a heading:\n%s", system)
+	system := systemOf(t, prov, "review")
+	for _, unwanted := range []string{
+		"always use semantic commits", "Staging runbook", "Subject: Ana Ruiz",
+	} {
+		if strings.Contains(system, unwanted) {
+			t.Fatalf("the reviewer was handed the executor's context: %q", unwanted)
+		}
 	}
 }
 
-// AN EMPTY BLOCK RENDERS NO HEADING. A heading with nothing under it tells
-// the planner it has a memory, or a knowledge base, that it cannot read.
+// AN EMPTY BLOCK RENDERS NO HEADING. A heading with nothing under it tells the
+// agent it has a memory, or a knowledge base, that it cannot read.
 func TestAnEmptyBlockRendersNoHeading(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{plan: []llm.Completion{text("planning")}}
-	r := withContext(t, prov, prefetch.Blocks{}, nil)
-	if _, _, err := r.Plan(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Plan: %v", err)
+	prov := &scriptedProvider{execute: []llm.Completion{text("working")}}
+	r := withContext(t, prov, prefetch.Blocks{})
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
 	}
-	system := systemOf(t, prov, "plan")
+	system := systemOf(t, prov, "execute")
 	for _, heading := range []string{
 		"## Personal memory", "## Relevant knowledge", "## Similar prior work",
 		"## Known counterparty", "## Synthesized skills", "## First-turn onboarding",

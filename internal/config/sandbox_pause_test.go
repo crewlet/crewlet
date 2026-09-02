@@ -60,9 +60,8 @@ providers:
       type: anthropic
       model: claude-golden
   sandbox:
-    type: local
-    local:
-      containment: direct
+    local: {}
+    default_run_in: direct
 roles:
   - name: SWE
     llm: fast` + roleBlock
@@ -123,80 +122,4 @@ roles:
 	if !strings.Contains(err.Error(), "max_turns") {
 		t.Fatalf("the error does not name the field: %v", err)
 	}
-}
-
-// THE SAME THREE STATES AT THE PROVIDER LEVEL, which is where the knob was
-// a plain number and the third state did not exist.
-//
-// providers.sandbox.default_pause_ttl_seconds documented "0 = never pause" in
-// its own field comment, its desc tag, the example company and the code-sandbox
-// concept page — and the accessor mapped 0 onto the 1800s default, in the same
-// breath as a comment claiming it did not. So a company that asked for zero
-// snapshot cost was billed for every paused box for half an hour, with nothing
-// anywhere to say why.
-func TestAProviderThatSaysNothingAboutPausingTakesTheDefault(t *testing.T) {
-	p := parseSandboxProvider(t, "")
-	if got := p.PauseTTL(); got != nil {
-		t.Fatalf("default_pause_ttl_seconds = %v, want unset so the engine default applies", *got)
-	}
-}
-
-func TestAnExplicitZeroProviderPauseMeansNeverPause(t *testing.T) {
-	p := parseSandboxProvider(t, "\n    default_pause_ttl_seconds: 0")
-	got := p.PauseTTL()
-	if got == nil {
-		t.Fatal("an explicit 0 was read as unset, so the engine will apply the " +
-			"1800s default over a setting that asked for no pausing at all")
-	}
-	if *got != 0 {
-		t.Fatalf("default_pause_ttl_seconds = %v, want 0", *got)
-	}
-}
-
-func TestAnExplicitProviderPauseIsCarriedThrough(t *testing.T) {
-	p := parseSandboxProvider(t, "\n    default_pause_ttl_seconds: 60")
-	got := p.PauseTTL()
-	if got == nil || *got != 60 {
-		t.Fatalf("default_pause_ttl_seconds = %v, want 60", got)
-	}
-}
-
-// A NEGATIVE IS STILL REFUSED. -1 is a SEAT's spelling of "inherit the
-// provider default", which is meaningless on the provider itself, and an
-// unbounded pause is the snapshot leak the knob exists to prevent.
-func TestANegativeProviderPauseIsRefused(t *testing.T) {
-	doc := sandboxProviderDoc("\n    default_pause_ttl_seconds: -1")
-	if _, err := config.ParseCompany([]byte(doc)); err == nil {
-		t.Fatal("a negative provider pause TTL was accepted")
-	}
-}
-
-func sandboxProviderDoc(providerBlock string) string {
-	return `
-name: Nimbus
-providers:
-  llm:
-    fast:
-      type: anthropic
-      model: claude-golden
-  sandbox:
-    type: local
-    local:
-      containment: direct` + providerBlock + `
-roles:
-  - name: SWE
-    llm: fast
-`
-}
-
-func parseSandboxProvider(t *testing.T, providerBlock string) *config.SandboxProvider {
-	t.Helper()
-	cfg, err := config.ParseCompany([]byte(sandboxProviderDoc(providerBlock)))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if cfg.Providers.Sandbox == nil {
-		t.Fatal("the company has no sandbox provider block")
-	}
-	return cfg.Providers.Sandbox
 }

@@ -392,7 +392,7 @@ func (p *Provider) params(req llm.Request) (sdk.MessageNewParams, error) {
 
 // cacheBreakpoint marks the (tools + system) prefix cacheable.
 //
-// That prefix is the large static part of every Plan, Execute and Review
+// That prefix is the large static part of every executor and reviewer
 // round: without the breakpoint it is re-billed in full on every round of
 // every turn. Anthropic silently ignores a breakpoint on a prefix below the
 // cacheable minimum, so setting it is always safe.

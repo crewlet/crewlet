@@ -2,7 +2,6 @@ package engine
 
 import (
 	"cmp"
-	"context"
 	"fmt"
 	"slices"
 	"time"
@@ -162,41 +161,44 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		reg = c.Tools
 	}
 	te := c.Config.TurnEngine
+	del := te.Delegation
 	return runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: c.Org, Role: role},
 		Registry: reg,
 		Models:   c.Models,
 		Caps: runner.Caps{
-			PlanRounds:     te.PlanMaxToolRounds,
-			ExecuteRounds:  te.MaxToolRounds,
-			ReviewRounds:   te.MaxToolRounds,
-			PlanCeiling:    te.PlanMaxToolRoundsCeiling,
-			ExecuteCeiling: te.ExecuteMaxToolRoundsCeiling,
-			ExtensionStep:  te.ExtensionRoundStep,
-			ExtensionOn:    te.ExtensionEnabled.Or(true),
+			ExecutorRounds:  te.MaxToolRounds,
+			ExecutorCeiling: te.ExecuteMaxToolRoundsCeiling,
+			ExtensionStep:   te.ExtensionRoundStep,
+			ExtensionOn:     te.ExtensionEnabled.Or(true),
 		},
 		Budget: in.Budget,
 		Judge:  in.Judge,
-		// The company's own sub-agent caps, from the SAME pinned epoch as
-		// the round caps above, so a revision landing mid-turn cannot move
-		// a cap a spawn is judged against. Every one of these six was
-		// declared, defaulted, validated, schema'd and read by nobody.
+		// The company's own delegation caps AND the seat's visible worker
+		// templates, from the SAME pinned epoch as the round caps above,
+		// so a revision landing mid-turn cannot move a cap a call is
+		// judged against or add a worker to a graph that is already
+		// planned.
 		Subagent: &runner.SubagentConfig{
 			Limits: subagent.Limits{
-				MaxTurns:          te.SubagentMaxTurns,
-				Timeout:           seconds(te.SubagentTimeoutSeconds),
-				BatchTimeout:      seconds(te.SubagentBatchTimeoutSeconds),
-				MaxParallel:       te.SubagentMaxParallel,
-				BudgetFraction:    te.SubagentBudgetFraction,
-				MinPerChildTokens: te.SubagentMinPerChildTokens,
+				MaxTurns:         del.MaxTurns,
+				MaxTasksPerCall:  del.MaxTasksPerCall,
+				TaskTimeout:      seconds(del.TaskTimeoutSeconds),
+				CallTimeout:      seconds(del.CallTimeoutSeconds),
+				MaxParallel:      del.MaxParallel,
+				BudgetFraction:   del.BudgetFraction,
+				MinTokensPerTask: del.MinTokensPerTask,
 			},
+			// CLONED, because the live config cell is replaced wholesale
+			// by an apply and a turn holding the old map would otherwise
+			// be reading a schema the next apply is free to mutate.
+			Workers:   config.CloneWorkers(c.Config.WorkersFor(handle)),
 			Remaining: in.Remaining,
 		},
 		Task:         in.Task,
 		Context:      in.Context,
-		Recon:        in.Recon,
+		Reply:        in.Reply,
 		Conversation: in.Conversation,
-		AlwaysOn:     te.ExecutorAlwaysOnTools,
 		Skills:       in.Skills,
 		SkipNames:    MetaToolNames(),
 		Publisher:    in.Publisher,
@@ -207,6 +209,12 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 			Ceiling: te.OnboardingMaxToolRoundsCeiling,
 		},
 		Resume: in.Resume,
+		// The executor's RUNTIME: nil for the native tool loop, non-nil
+		// for a coding CLI in agent mode. Supplied by the caller rather
+		// than resolved here, because building it needs the engine and
+		// the turn — and there is one helper behind both call sites, so
+		// a turn cannot change runtime by being resumed.
+		AgentRun: in.AgentRun,
 	})
 }
 
@@ -221,12 +229,19 @@ type RunnerInput struct {
 	// at the moment the turn started.
 	Skills *skills.Registry
 
-	// Context is the turn's prefetched prompt blocks, and Recon recovers
-	// the knowledge block a thin trigger's gate skipped once Plan has
-	// produced a summary worth searching on. Both are per-turn because
-	// both are judged against THIS turn's trigger.
+	// Context is the turn's prefetched prompt blocks, judged against THIS
+	// turn's trigger and frozen before the runner is built.
+	//
+	// There is no re-fetch seam beside it any more. One existed for the
+	// thin-trigger case — a pointer the turn-start search could not use,
+	// re-searched between Plan and Execute on the plan summary — and with
+	// one loop there is nothing between the phases to hang it on. The
+	// executor asks instead, with search_knowledge, over the same seam.
 	Context prefetch.Blocks
-	Recon   func(ctx context.Context, planSummary string) string
+
+	// Reply says who is waiting for this turn, derived from the trigger
+	// before the turn starts. See [turn.Reply].
+	Reply turn.Reply
 
 	// Budget is the shared token counter this turn charges. Nil is the
 	// embedded single-node case, where no counter is shared with anyone.
@@ -248,6 +263,13 @@ type RunnerInput struct {
 	// rather than epoch configuration.
 	Publisher queue.Publisher
 	Turn      runner.Turn
+
+	// AgentRun runs this turn's executor as a coding CLI's own agentic
+	// run. Nil is the native tool loop. Built by [Engine.agentRunFor],
+	// which BOTH RunnerFor call sites use — a turn whose executor ran as
+	// an agentic loop and came back to a native one would rebuild a
+	// surface for a conversation that never existed.
+	AgentRun runner.AgentLauncher
 
 	// Markers and Latch drive the first-turn onboarding pass. Nil markers
 	// disable it: without somewhere to mark, the pass would run every turn
