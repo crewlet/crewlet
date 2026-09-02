@@ -6,6 +6,7 @@ package mattermost
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -301,14 +302,7 @@ func targeting(body map[string]any, channelKind, ownID string) notify.Targeting 
 // D(irect) and G(roup DM), against O(pen) and P(rivate) for rooms.
 var DirectKinds = []string{"D", "G"}
 
-func isDirect(kind string) bool {
-	for _, d := range DirectKinds {
-		if kind == d {
-			return true
-		}
-	}
-	return false
-}
+func isDirect(kind string) bool { return slices.Contains(DirectKinds, kind) }
 
 // SkipReason says why a post must NOT wake an agent, or "" for a real
 // user-authored message.

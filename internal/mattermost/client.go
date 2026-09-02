@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -286,12 +287,7 @@ func (c *Client) mayRetry(err error, method string, repeatable bool) bool {
 // credential-minting POST safe.
 func provesNothingHappened(err error) bool {
 	if status := Status(err); status != 0 {
-		for _, s := range rejectedBeforeProcessing {
-			if status == s {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(rejectedBeforeProcessing, status)
 	}
 	var t *transportError
 	if !errors.As(err, &t) {
@@ -310,12 +306,7 @@ func provesNothingHappened(err error) bool {
 
 func retryable(err error) bool {
 	if status := Status(err); status != 0 {
-		for _, s := range RetryStatuses {
-			if status == s {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(RetryStatuses, status)
 	}
 	var t *transportError
 	return errors.As(err, &t)

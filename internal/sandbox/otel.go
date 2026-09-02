@@ -271,14 +271,7 @@ func (r *OtelReceiver) Forward(ctx context.Context, signal string, body []byte, 
 var OtelSignals = []string{"traces", "metrics", "logs"}
 
 // ValidSignal reports a signal this receiver forwards.
-func ValidSignal(signal string) bool {
-	for _, known := range OtelSignals {
-		if signal == known {
-			return true
-		}
-	}
-	return false
-}
+func ValidSignal(signal string) bool { return slices.Contains(OtelSignals, signal) }
 
 // ParseOtelHeaders reads the OTEL_EXPORTER_OTLP_HEADERS `k=v,k2=v2` form.
 //
