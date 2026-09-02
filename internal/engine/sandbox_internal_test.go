@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,9 +115,10 @@ roles:
 	}
 }
 
-// llm_sandbox falls back to llm_execute before llm, because sandboxed work IS
-// this seat's Execute phase running somewhere else.
-func TestTheSandboxModelFallsBackThroughExecute(t *testing.T) {
+// llm_sandbox falls back to `llm`, which IS the seat's own model: the turn's
+// work happens in one conversation, so there is no separate executor key to
+// inherit — sandboxed work is that same work, done somewhere else.
+func TestTheSandboxModelFallsBackToTheSeatsOwn(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	c := companyFor(t, `
 name: Acme
@@ -132,11 +136,33 @@ roles:
   - name: Engineer
     handle: eng
     llm: big
-    llm_execute: coder
 `)
 	got, _, _ := sandboxLLM(c, seatNamed(t, c, "Engineer"))
+	if got == nil || got.Model != "gpt-4o" {
+		t.Fatalf("the sandbox model = %+v, want the seat's own model", got)
+	}
+	// And its own key still wins, or the fallback would be the only path.
+	c = companyFor(t, `
+name: Acme
+providers:
+  llm:
+    big:
+      type: openai
+      model: gpt-4o
+      api_keys: ["${OPENAI_API_KEY}"]
+    coder:
+      type: openai
+      model: gpt-4o-coder
+      api_keys: ["${OPENAI_API_KEY}"]
+roles:
+  - name: Engineer
+    handle: eng
+    llm: big
+    llm_sandbox: coder
+`)
+	got, _, _ = sandboxLLM(c, seatNamed(t, c, "Engineer"))
 	if got == nil || got.Model != "gpt-4o-coder" {
-		t.Fatalf("the sandbox model = %+v, want the seat's Execute model", got)
+		t.Fatalf("the sandbox model = %+v, want llm_sandbox's own", got)
 	}
 }
 
@@ -376,5 +402,54 @@ func TestTheWaiterDutyTTLFollowsItsCadenceAndItsBucket(t *testing.T) {
 				t.Fatal("the duty asks to outlive its bucket; the KV refuses that on every claim")
 			}
 		})
+	}
+}
+
+// leftover is a seat's remaining allowance, or a counter that cannot be read.
+type leftover struct {
+	left int
+	err  error
+}
+
+func (l leftover) Remaining(context.Context) (int, error) { return l.left, l.err }
+
+// THE PRE-FLIGHT FLOOR, three-valued like every other budget read in this
+// engine. turn_engine.sandbox_min_budget_tokens was validated, schema'd and
+// documented and read by nothing, so a company that set it got a new revision
+// and no behaviour.
+func TestACodingRunIsRefusedBelowTheBudgetFloor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Below the floor: refused, and the message says what to do instead —
+	// a coding run costs a box, a clone and a toolchain install before it
+	// produces a token.
+	err := sandboxHeadroom(ctx, leftover{left: 500}, 2000)
+	if err == nil {
+		t.Fatal("a seat with 500 tokens launched a run needing 2000")
+	}
+	for _, want := range []string{"500", "2000", "your own tools"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal is missing %q: %v", want, err)
+		}
+	}
+
+	// A READ THAT FAILED is refused too: launching a box on an unknown
+	// budget is how a company discovers its ceiling by spending past it.
+	if err := sandboxHeadroom(ctx,
+		leftover{err: errors.New("the coordination store is unreachable")}, 2000); err == nil {
+		t.Error("a run launched on a budget nobody could read")
+	}
+
+	// And the two states that legitimately pass, or the assertions above
+	// hold for a floor that refuses everything.
+	if err := sandboxHeadroom(ctx, leftover{left: 50_000}, 2000); err != nil {
+		t.Errorf("a seat with headroom was refused: %v", err)
+	}
+	if err := sandboxHeadroom(ctx, nil, 2000); err != nil {
+		t.Errorf("a company with no token budget was refused: %v", err)
+	}
+	if err := sandboxHeadroom(ctx, leftover{left: 0}, 0); err != nil {
+		t.Errorf("an unset floor refused a run: %v", err)
 	}
 }

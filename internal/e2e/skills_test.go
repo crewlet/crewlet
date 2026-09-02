@@ -20,7 +20,7 @@ import (
 func pagesFor(in []skills.Skill) []skills.Page {
 	out := make([]skills.Page, 0, len(in))
 	for _, s := range in {
-		phases := []string{"plan", "execute"}
+		phases := []string{"execute", "review"}
 		required := "true"
 		if !s.Required {
 			required = "false"
@@ -55,7 +55,7 @@ func toolSkill(key, tool string, required bool) skills.Skill {
 // A PUBLISHED PAGE BECOMES A CATALOGUE ENTRY. The point of sourcing skills
 // from the knowledge base is that publishing one is a wiki edit — no
 // restart, no deploy, no config push.
-func TestAPublishedSkillReachesThePlanPrompt(t *testing.T) {
+func TestAPublishedSkillReachesTheExecutorsPrompt(t *testing.T) {
 	n := start(t)
 	waitForSeat(t, n, "ceo")
 	publish(t, n, toolSkill("recall-conventions", "query_episodes", true))
@@ -63,7 +63,7 @@ func TestAPublishedSkillReachesThePlanPrompt(t *testing.T) {
 	n.wake(t, "ceo", "How did the week go?")
 	waitForTurn(t, n)
 
-	system := planPrompt(t, n)
+	system := executorPrompt(t, n)
 	for _, want := range []string{
 		"## Tool skills", "recall-conventions",
 		"how this company uses query_episodes",
@@ -73,7 +73,7 @@ func TestAPublishedSkillReachesThePlanPrompt(t *testing.T) {
 		"(required — load before use)", "load_tool_skill(key)",
 	} {
 		if !strings.Contains(system, want) {
-			t.Fatalf("the plan prompt is missing %q:\n%s", want, tail(system))
+			t.Fatalf("the executor prompt is missing %q:\n%s", want, tail(system))
 		}
 	}
 	// The BODY is not inlined — the catalogue is a menu, and a company
@@ -93,7 +93,7 @@ func TestASkillForAnAbsentToolIsNotOffered(t *testing.T) {
 	n.wake(t, "ceo", "How did the week go?")
 	waitForTurn(t, n)
 
-	if system := planPrompt(t, n); strings.Contains(system, "jira-conventions") {
+	if system := executorPrompt(t, n); strings.Contains(system, "jira-conventions") {
 		t.Fatalf("a skill for an absent tool was offered:\n%s", tail(system))
 	}
 }
@@ -107,7 +107,7 @@ func TestNoSkillsMeansNoCatalogue(t *testing.T) {
 	n.wake(t, "ceo", "How did the week go?")
 	waitForTurn(t, n)
 
-	if system := planPrompt(t, n); strings.Contains(system, "## Tool skills") {
+	if system := executorPrompt(t, n); strings.Contains(system, "## Tool skills") {
 		t.Fatalf("a company with no skills got a catalogue:\n%s", tail(system))
 	}
 }
@@ -169,7 +169,7 @@ func TestOperatorVariablesAreSubstitutedIntoASkill(t *testing.T) {
 	if !strings.Contains(body, "the nimbus workspace") {
 		t.Fatalf("the variable was not substituted:\n%s", body)
 	}
-	offered := n.engine.Skills().SkillsFor(prompts.PhasePlan,
+	offered := n.engine.Skills().SkillsFor(prompts.PhaseExecute,
 		prompts.Surface{Tools: []string{"query_episodes"}})
 	if len(offered) != 1 {
 		t.Fatalf("offered %+v", offered)

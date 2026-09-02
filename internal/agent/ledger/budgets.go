@@ -32,12 +32,13 @@ const (
 	// takes. Enforced by dropping whole keys; see fitArguments.
 	BlobLimit = 800
 
-	// PlanSummaryLimit caps the previous plan's steps. A realistic 6-step
-	// plan renders ~850 runes, so 1200 covers ~8 steps: past anything a
-	// planner emits, while still bounding a runaway 20-step plan. Cutting
-	// lower chopped a routine plan mid-step, which reads as a SHORTER plan
-	// rather than a truncated one — worse than omitting it.
-	PlanSummaryLimit = 1200
+	// IntentLimit caps the round's own account of what it set out to do.
+	// A realistic multi-step account renders ~850 runes, so 1200 covers
+	// ~8 steps: past anything an executor writes, while still bounding a
+	// runaway one. Cutting lower chopped a routine account mid-step, which
+	// reads as a SHORTER intent rather than a truncated one — worse than
+	// omitting it.
+	IntentLimit = 1200
 
 	// ArtifactLimit caps the draft Review judged. The next round has to
 	// improve that draft, so anything Review had enough of to judge, Plan
@@ -59,14 +60,6 @@ const (
 	// round can log dozens of calls; 12 covers the recon a normal round does
 	// while keeping one block skimmable.
 	MaxReadCalls = 12
-
-	// ReasoningLimit caps the planner's own stated reasoning, carried so a
-	// later turn inherits WHY rather than only what. 600 is two or three
-	// sentences: the useful residue of a phase's thinking at a fraction of
-	// the cost of replaying it. (Raw extended thinking cannot be replayed
-	// anyway — only its flattened text is persisted, and vendors refuse
-	// replayed thinking without signatures nothing stores.)
-	ReasoningLimit = 600
 
 	// TriggerLimit caps what triggered the turn: sender plus the opening of
 	// what they said. Enough to recognise the message in a thread, never the

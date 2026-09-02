@@ -134,15 +134,24 @@ type PendingRun struct {
 	Owner      string `json:"owner"`
 	OwnerEpoch int64  `json:"owner_epoch"`
 
-	Plan            map[string]any `json:"plan"`
-	TaskDescription string         `json:"task_description"`
-	SuccessCriteria []string       `json:"success_criteria"`
+	// TaskDescription is the ask the suspended turn was working on, so a
+	// resume days later has the brief even when the trigger that produced
+	// it is long gone.
+	TaskDescription string `json:"task_description"`
+
+	// Reply is who is waiting for the suspended turn — [turn.Reply]'s wire
+	// value, written as a plain string because this row crosses builds.
+	//
+	// It has to be persisted rather than re-derived: the resumed turn does
+	// not see the trigger, so without this a turn somebody was waiting on
+	// would come back from its coding run free to end in silence. An empty
+	// value decodes as "nobody is waiting", which is the safe half — see
+	// [turn.Reply].
+	Reply string `json:"reply,omitempty"`
 
 	// ConversationKey is where to report back AND what matches a person's
-	// answer to this run. NotificationMetadata carries the trigger's channel
-	// and thread, so the reply lands in the conversation that asked.
-	ConversationKey      string         `json:"conversation_key"`
-	NotificationMetadata map[string]any `json:"notification_metadata"`
+	// answer to this run.
+	ConversationKey string `json:"conversation_key"`
 
 	// Branch is the pushed WIP branch: the durable half of the work, and
 	// what a re-seeded run starts from when its snapshot is gone.
@@ -158,7 +167,6 @@ type PendingRun struct {
 	TraceID string `json:"trace_id"`
 	SpanID  string `json:"span_id"`
 
-	BudgetRemaining int      `json:"budget_remaining"`
 	DelegationDepth int      `json:"delegation_depth"`
 	DelegationChain []string `json:"delegation_chain"`
 

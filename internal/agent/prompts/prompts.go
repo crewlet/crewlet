@@ -2,18 +2,17 @@
 //
 // Each phase gets only what it needs. Org-config context (mission / vision /
 // policies / role profile / unit context / team roster) renders directly into
-// the Plan-phase prompt from the in-memory org chart — no DB seed step, no
+// the executor's prompt from the in-memory org chart — no DB seed step, no
 // per-turn knowledge round-trip. Static org config is in the prompt;
 // agent-written diary memory and team knowledge-base docs arrive as the
 // "## Personal memory" / "## Relevant knowledge" prefetch blocks.
 //
-//   - Plan — identity + role profile + unit context + org mission/vision +
+//   - Executor — identity + role profile + unit context + org mission/vision +
 //     full policies + roster (with team-member profiles for leads) +
-//     tool-skills catalogue + tool catalogue + the plan-phase contract.
-//   - Execute — one-line identity + plan summary + the execute contract. No
-//     policies (Plan already decided the action surface), no roster.
-//   - Review — one-line identity + plan summary + the evidence logs + the
-//     decision enum. Same trim-down as Execute.
+//     tool-skills catalogue + tool catalogue + the executor's contract.
+//   - Review — one-line identity + the round's evidence + the decision enum.
+//     No policies, no roster, no catalogue: the reviewer judges one round's
+//     record and needs nothing else.
 //   - Onboarding — one-line identity + the one-time setup contract.
 //   - Sub-agent — parent-provided task prompt + the mandated runtime preamble.
 //
@@ -57,10 +56,16 @@ import (
 // not an internal enum.
 type Phase string
 
-// The four passes a prompt is built for. Plan, Execute and Review are the
-// turn; Subagent is the short-lived worker one of them spawned.
+// The three passes a prompt is built for. Execute and Review are the turn's
+// own two; Subagent is the short-lived worker one of them spawned.
+//
+// `execute` keeps its wire string although the pass it names now decides as
+// well as acts: it is what operators have written in every tool skill's
+// `phases:` list, and renaming it would silently stop matching every one of
+// them. `plan` is gone from the vocabulary entirely — see
+// [github.com/crewlet/crewlet/internal/agent/skills].ParsePhases, which names
+// the set an unknown value is refused against.
 const (
-	PhasePlan     Phase = "plan"
 	PhaseExecute  Phase = "execute"
 	PhaseReview   Phase = "review"
 	PhaseSubagent Phase = "subagent"
@@ -200,7 +205,7 @@ const requiredMarker = " (required — load before use)"
 //
 // Bodies are NOT inlined: the model sees `key — summary` lines and decides
 // whether to load the full body via load_tool_skill, which is always
-// available in Plan, Execute and Sub-agent.
+// available to the executor and to a sub-agent.
 //
 // Required skills (the default; advisory skills opt out) carry a visible
 // marker and an enforcement note after the header, so the model learns the

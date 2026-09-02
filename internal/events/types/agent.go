@@ -31,15 +31,22 @@ func init() {
 // build does not know must survive rather than fail.
 type Phase string
 
-// The phases a turn can report. The first three are the legs of the loop itself,
-// in the order they run; PhaseSubagent, PhaseAuxiliary and PhaseJudge are nested
-// calls made under one of those, and never appear without a host phase around
-// them.
+// The phases a turn can report. PhaseOnboarding, PhaseExecute and PhaseReview
+// are the legs of the turn itself, in the order they run; PhaseSubagent,
+// PhaseAuxiliary and PhaseJudge are nested calls made under one of those, and
+// never appear without a host phase around them.
+//
+// The retired `plan` value has NO CONSTANT here, and that is not an oversight:
+// Phase is a plain string precisely so a value this build does not produce
+// still decodes, round-trips and renders. Every event a pre-redesign node
+// wrote carries it, and nothing in this build switches on it.
 const (
-	PhasePlan     Phase = "plan"
-	PhaseExecute  Phase = "execute"
-	PhaseReview   Phase = "review"
-	PhaseSubagent Phase = "subagent"
+	// PhaseOnboarding is the dedicated first-turn pass, at iteration 0,
+	// before the executor's first round.
+	PhaseOnboarding Phase = "onboarding"
+	PhaseExecute    Phase = "execute"
+	PhaseReview     Phase = "review"
+	PhaseSubagent   Phase = "subagent"
 	// PhaseAuxiliary is a learning worker's own LLM call, nested under a host
 	// phase; PhaseJudge is the round-cap extension judge.
 	PhaseAuxiliary Phase = "auxiliary"
@@ -58,18 +65,21 @@ const (
 	BackendSandbox ExecuteBackend = "sandbox"
 )
 
-// PlanDecision is the planner's top-level verdict.
+// PlanDecision is the turn-level opt-out, on the wire under `plan_decision`.
+//
+// ONE VALUE SURVIVES. It used to carry a planner's three-way verdict; with no
+// planner the only fact a reader still gates on is whether the turn opted out
+// entirely, and that is derived from the turn's own decision rather than from
+// anything a model wrote. The type and the wire name are kept because the
+// field is a column in the episode store, and renaming it would migrate a
+// value to buy a better word.
 type PlanDecision string
 
-// The three verdicts a planner can reach. PlanDecisionPlan produced a plan for
-// Execute to work through; PlanDecisionDirect skips planning and acts;
-// PlanDecisionSkip opts the turn out entirely — the planner decided the trigger
-// was not for this agent, which is why learning short-circuits on it.
-const (
-	PlanDecisionPlan   PlanDecision = "plan"
-	PlanDecisionDirect PlanDecision = "direct"
-	PlanDecisionSkip   PlanDecision = "skip"
-)
+// PlanDecisionSkip opts the turn out entirely — nobody was asking this seat to
+// do anything, which is why learning short-circuits on it. A pre-redesign node
+// also wrote `plan` and `direct` here; both decode as an unrecognised value,
+// which is exactly how every reader already treats anything that is not skip.
+const PlanDecisionSkip PlanDecision = "skip"
 
 // PromptMessage is one message of the conversation a phase sent to the model.
 type PromptMessage struct {
@@ -125,9 +135,13 @@ type AgentTurnCompleted struct {
 	// and empty are the same fact — not an A2A turn — so no pointer.
 	A2AContext map[string]any `json:"a2a_context,omitempty"`
 
-	// The turn engine's own summary of the three-phase loop.
-	TurnID         string `json:"turn_id"`
-	PlanModel      string `json:"plan_model"`
+	// The turn engine's own summary of the loop.
+	TurnID string `json:"turn_id"`
+	// PlanModel is NO LONGER WRITTEN: there is no plan phase. It stays on
+	// the type because the event store holds rows an earlier build wrote,
+	// and a reader that dropped the field would render those turns as
+	// though the model that served their planning had never been recorded.
+	PlanModel      string `json:"plan_model,omitempty"`
 	ExecuteModel   string `json:"execute_model"`
 	ReviewModel    string `json:"review_model"`
 	SubagentCount  int    `json:"subagent_count"`
@@ -182,8 +196,8 @@ func (e AgentTurnCompleted) SummaryFor(actor string) string {
 	return lead(actor, "completed a turn"+tag)
 }
 
-// TurnCompleted is the Plan/Execute/Review-shaped record the learning subsystem
-// consumes to build an episode and update counterparty profiles. Distinct from
+// TurnCompleted is the turn-shaped record the learning subsystem consumes to
+// build an episode and update counterparty profiles. Distinct from
 // AgentTurnCompleted, which is the dashboard's single-phase summary of the same
 // turn.
 type TurnCompleted struct {
@@ -198,25 +212,48 @@ type TurnCompleted struct {
 	EndedAt     time.Time `json:"ended_at"`
 	DurationMS  int       `json:"duration_ms"`
 	TaskSummary string    `json:"task_summary"`
-	PlanSummary string    `json:"plan_summary"`
-	// ToolSequence is the tools called during the Execute phase of the FINAL
-	// iteration. Execute-scoped by design: the reflect engine's no-action gate
-	// and the single-turn skill-synthesis trigger both reason about Execute
-	// work specifically.
+	// PlanSummary is what the turn set out to do, in the agent's own
+	// words — the executor's submitted summary, or the reviewer's account
+	// of what landed. It keeps its wire name: it is a column in the
+	// episode store and the heading every learning worker renders, and
+	// renaming it would migrate a value to buy a better word.
+	PlanSummary string `json:"plan_summary"`
+	// ToolSequence is the tools called during the FINAL executor round.
+	// Last-round-scoped by design: the reflect engine's no-action gate and
+	// the single-turn skill-synthesis trigger both reason about the work
+	// the agent stood behind, not the rounds it judged incomplete.
 	ToolSequence []string `json:"tool_sequence,omitempty"`
-	// PlanToolSequence is the tools called during the Plan phase(s),
-	// accumulated across self-iterate loops. Plan-only builtins never appear in
-	// ToolSequence, and the reflect engine reads this to skip the post-turn
-	// persist decision when the LLM already self-persisted in flight.
+	// AllToolNames is every tool called in every round of the turn.
+	//
+	// The whole-turn view ToolSequence deliberately is not: a builtin
+	// fired in round 1 is a fact about the turn, and the reflect engine
+	// reads this to skip the post-turn persist decision when the agent
+	// already self-persisted in flight.
+	AllToolNames []string `json:"all_tool_names,omitempty"`
+	// PlanToolSequence is NO LONGER WRITTEN — it was the Plan phase's own
+	// calls, and there is no Plan phase. AllToolNames replaces it. It stays
+	// on the type, and the reflect engine keeps reading it, because the
+	// event store holds rows an earlier build wrote and a mixed fleet is
+	// still writing them: dropping it would make a turn that self-persisted
+	// look like one that did not, and run the persist decision twice.
 	PlanToolSequence []string `json:"plan_tool_sequence,omitempty"`
 	SkillsUsed       []string `json:"skills_used,omitempty"`
 	ReviewOutcome    string   `json:"review_outcome"`
 	Iterations       int      `json:"iterations"`
-	// PlanDecision is empty when the turn never produced a Plan artifact (an
-	// infrastructure failure before Plan ran). Learning short-circuits on
-	// PlanDecisionSkip: the planner explicitly opted out, so there is nothing
-	// the agent engaged with to learn from, and persisting facts read off the
-	// trigger would teach it things directed at someone else.
+	// Outcome is the executor's own last word on the turn — `delivered`,
+	// `no_action`, `blocked`, or the engine-written `incomplete`. Empty on
+	// a turn that never reached an executor at all.
+	Outcome string `json:"outcome,omitempty"`
+	// PlanDecision now carries only PlanDecisionSkip, and only for a turn
+	// that ended having decided nobody was asking it to do anything —
+	// which is the one thing every reader of this field gates on.
+	//
+	// Kept rather than replaced by Outcome because a mixed fleet writes
+	// both: an older node still publishes plan/direct/skip here, and a
+	// reader switched to Outcome alone would treat those turns as having
+	// no outcome. Learning short-circuits on PlanDecisionSkip: nothing the
+	// agent engaged with, so persisting facts read off the trigger would
+	// teach it things directed at someone else.
 	PlanDecision PlanDecision `json:"plan_decision"`
 	// Interactions carries each trigger message's sender and body when
 	// identifiable. Usually one entry; a coalesced trigger carries one per
@@ -228,7 +265,7 @@ type TurnCompleted struct {
 }
 
 // EventType is the "turn_completed" wire type, the learning subsystem's
-// Plan/Execute/Review-shaped record.
+// record of one turn.
 func (TurnCompleted) EventType() string { return "turn_completed" }
 
 // Role is the seat whose episode this becomes.
@@ -247,7 +284,7 @@ func (e TurnCompleted) SummaryFor(actor string) string {
 	return lead(actor, "completed turn")
 }
 
-// AgentPhaseStarted opens each Plan / Execute / Review phase.
+// AgentPhaseStarted opens each onboarding / execute / review phase.
 //
 // A lightweight live signal: the matching AgentPhaseCompleted carries the full
 // picture, but until it fires nothing tells a dashboard WHICH phase a working
@@ -325,20 +362,21 @@ type AgentPhaseCompleted struct {
 	ExhaustedRounds bool             `json:"exhausted_rounds"`
 	Decision        string           `json:"decision"`
 	// RescueFired is true when the phase's submit tool was not called on the
-	// first run of the loop, prompting a constrained rescue call. Plan and
-	// Review can rescue; Execute and sub-agent phases never set this.
+	// first run of the loop, prompting a constrained rescue call. The
+	// executor and the reviewer both can; sub-agent phases never set this.
 	RescueFired bool `json:"rescue_fired"`
 	// Notes is free text kept short: review's notes, rejected sub-agent tools,
 	// missing tool names from Execute.
 	Notes string `json:"notes"`
 	// ToolsAvailable is the tools whose JSON schemas were actually passed in
-	// the call — what the model could invoke this round. Plan starts with only
-	// its meta-tools here, because sending full schemas for the whole catalogue
-	// is what made planning expensive; a tool the planner activates joins the
-	// list from that round on.
+	// the call — what the model could invoke this round. The executor starts
+	// with every first-party tool and NO MCP tool, because sending full
+	// schemas for every server's catalogue is what made a turn expensive; a
+	// tool it activates through discovery joins the list from that round on.
 	ToolsAvailable []string `json:"tools_available,omitempty"`
-	// ToolCatalogue is the tools offered as prose in the Plan prompt, with no
-	// schema. Empty for every phase other than Plan.
+	// ToolCatalogue is the tools offered as prose in the executor's prompt,
+	// with no schema — builtin names and MCP server names. Empty for every
+	// phase other than execute.
 	ToolCatalogue []string `json:"tool_catalogue,omitempty"`
 	// Backend is BackendSandbox only on an Execute phase that ran in one, so
 	// the dashboard renders the sandbox badge precisely where it applies. Note

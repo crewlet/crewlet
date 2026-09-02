@@ -26,16 +26,16 @@ func waitForSeat(t *testing.T, n *node, handle string) {
 	})
 }
 
-// waitForTurn blocks until the seat has planned, which is the only phase
-// these tests assert about.
+// waitForTurn blocks until the seat's executor has run, which is the only
+// phase these tests assert about.
 func waitForTurn(t *testing.T, n *node) {
 	t.Helper()
-	waitFor(t, "the plan phase to run", func() bool {
-		return slices.Contains(n.model.seen(), "plan")
+	waitFor(t, "the executor to run", func() bool {
+		return slices.Contains(n.model.seen(), "execute")
 	})
 }
 
-// The Plan-phase prefetch, end to end: a memory this seat wrote reaches the
+// The turn-start prefetch, end to end: a memory this seat wrote reaches the
 // prompt of the turn it bears on.
 //
 // The claim being tested is NOT "the block rendered" — the prefetch suite
@@ -63,20 +63,20 @@ func remember(t *testing.T, n *node, content string) {
 	}
 }
 
-// planPrompt is the system prompt of the call that planned.
-func planPrompt(t *testing.T, n *node) string {
+// executorPrompt is the system prompt of the call that did the work.
+func executorPrompt(t *testing.T, n *node) string {
 	t.Helper()
 	phases, systems := n.model.seen(), n.model.systemPrompts()
 	for i, phase := range phases {
-		if phase == "plan" && i < len(systems) {
+		if phase == "execute" && i < len(systems) {
 			return systems[i]
 		}
 	}
-	t.Fatalf("no plan call was made; phases = %v", phases)
+	t.Fatalf("no executor call was made; phases = %v", phases)
 	return ""
 }
 
-func TestASeatsOwnMemoryReachesThePlanPrompt(t *testing.T) {
+func TestASeatsOwnMemoryReachesTheExecutorsPrompt(t *testing.T) {
 	n := start(t)
 	waitForSeat(t, n, "ceo")
 	remember(t, n, "always use semantic commit messages on this repository")
@@ -84,9 +84,9 @@ func TestASeatsOwnMemoryReachesThePlanPrompt(t *testing.T) {
 	n.wake(t, "ceo", "How did the week go?")
 	waitForTurn(t, n)
 
-	system := planPrompt(t, n)
+	system := executorPrompt(t, n)
 	if !strings.Contains(system, "## Personal memory") {
-		t.Fatalf("the plan prompt has no memory section:\n%s", tail(system))
+		t.Fatalf("the executor prompt has no memory section:\n%s", tail(system))
 	}
 	// The scripted model answers every auxiliary call with the same
 	// canned response, so what reaches the prompt is whichever memory the
@@ -107,7 +107,7 @@ func TestAFreshSeatGetsNoMemorySection(t *testing.T) {
 	n.wake(t, "ceo", "How did the week go?")
 	waitForTurn(t, n)
 
-	if system := planPrompt(t, n); strings.Contains(system, "## Personal memory") {
+	if system := executorPrompt(t, n); strings.Contains(system, "## Personal memory") {
 		t.Fatalf("a seat with nothing stored got a memory section:\n%s", tail(system))
 	}
 }
@@ -131,7 +131,7 @@ func TestASeatThatJustOnboardedIsNotToldToOnboard(t *testing.T) {
 	if phases := n.model.seen(); !slices.Contains(phases, "onboarding") {
 		t.Fatalf("the onboarding pass did not run; phases = %v", phases)
 	}
-	if system := planPrompt(t, n); strings.Contains(system, "## First-turn onboarding") {
+	if system := executorPrompt(t, n); strings.Contains(system, "## First-turn onboarding") {
 		t.Fatalf("a seat that just onboarded was nagged:\n%s", tail(system))
 	}
 }
@@ -224,8 +224,9 @@ func wakeWithPointer(t *testing.T, n *node, handle string) {
 	}
 }
 
-// THE WHOLE RECON PATH: a pointer trigger gates the Plan-time search off,
-// and the plan summary then recovers it for Execute.
+// THE WHOLE RECON PATH: a pointer trigger gates the turn-start search off,
+// and the executor recovers it by ASKING — with a query it writes once it
+// knows what the task actually needs.
 //
 // Neither half is observable without a knowledge backend, which is why this
 // test stands one up: with no searcher the gate and the recovery both render
@@ -235,34 +236,35 @@ func TestAPointerTriggerDefersTheKnowledgeSearchToTheExecutor(t *testing.T) {
 	n := startWith(t, wikiCompany(wiki.url))
 	waitForSeat(t, n, "ceo")
 
+	n.model.searchOnExecute("staging login redirect proxy")
 	wakeWithPointer(t, n, "ceo")
 	waitForTurn(t, n)
-	waitFor(t, "the execute phase to run", func() bool {
-		return slices.Contains(n.model.seen(), "execute")
+
+	// THE PROMPT says to look again rather than carrying pages found by
+	// searching "PR !42 got a comment".
+	system := executorPrompt(t, n)
+	if !strings.Contains(system, "no team documents surfaced at turn start") {
+		t.Fatalf("the gated prompt does not say to search later:\n%s", tail(system))
+	}
+	// And it names the tool that does the looking, or the instruction
+	// points at nothing.
+	if !strings.Contains(system, "search_knowledge") {
+		t.Fatalf("the prompt does not offer the search tool:\n%s", tail(system))
+	}
+
+	// THE TOOL RESULT carries what the search found, spliced back into the
+	// same conversation.
+	waitFor(t, "the search result to reach the executor", func() bool {
+		for _, m := range n.model.toolResults() {
+			if strings.Contains(m, "Staging runbook") {
+				return true
+			}
+		}
+		return false
 	})
 
-	// THE PLAN PROMPT says to look again rather than carrying pages found
-	// by searching "PR !42 got a comment".
-	plan := planPrompt(t, n)
-	if !strings.Contains(plan, "no team documents surfaced at turn start") {
-		t.Fatalf("the gated plan prompt does not say to search later:\n%s", tail(plan))
-	}
-
-	// THE EXECUTE PROMPT carries what the recovery found.
-	phases, systems := n.model.seen(), n.model.systemPrompts()
-	var execute string
-	for i, phase := range phases {
-		if phase == "execute" && i < len(systems) {
-			execute = systems[i]
-			break
-		}
-	}
-	if !strings.Contains(execute, "Staging runbook") {
-		t.Fatalf("the executor did not receive the recovered knowledge:\n%s", tail(execute))
-	}
-
-	// And the search really did run on the PLAN SUMMARY rather than on the
-	// pointer: the original task is boilerplate on a thin trigger and
+	// And the search really did run on the executor's OWN query rather than
+	// on the pointer: the original task is boilerplate on a thin trigger and
 	// would only dilute the one good query this turn has.
 	searched := wiki.searched()
 	if len(searched) == 0 {
@@ -275,23 +277,20 @@ func TestAPointerTriggerDefersTheKnowledgeSearchToTheExecutor(t *testing.T) {
 	}
 }
 
-// A SUBSTANTIVE TRIGGER searches at Plan time and does NOT search again for
-// Execute: the Plan-time prefetch already ran against a real trigger, and
-// running anyway would spend a model call and a search to produce the block
-// the planner already read.
-func TestASubstantiveTriggerSearchesOnceAtPlanTime(t *testing.T) {
+// A SUBSTANTIVE TRIGGER searches once at turn start and the executor does not
+// ask again: the prefetch already ran against a real trigger, and searching
+// anyway would spend a model call and a search to produce the block the agent
+// has already read.
+func TestASubstantiveTriggerSearchesOnceAtTurnStart(t *testing.T) {
 	wiki := fakeWiki(t)
 	n := startWith(t, wikiCompany(wiki.url))
 	waitForSeat(t, n, "ceo")
 
 	n.wake(t, "ceo", "the staging login redirect keeps looping, can you look")
 	waitForTurn(t, n)
-	waitFor(t, "the execute phase to run", func() bool {
-		return slices.Contains(n.model.seen(), "execute")
-	})
 
-	if plan := planPrompt(t, n); !strings.Contains(plan, "Staging runbook") {
-		t.Fatalf("the planner did not receive the knowledge block:\n%s", tail(plan))
+	if system := executorPrompt(t, n); !strings.Contains(system, "Staging runbook") {
+		t.Fatalf("the executor did not receive the knowledge block:\n%s", tail(system))
 	}
 	if got := len(wiki.searched()); got != 1 {
 		t.Fatalf("a substantive trigger ran %d searches, want exactly one", got)

@@ -13,7 +13,7 @@ import (
 // can be registered once per epoch: a store or a service is the same for every
 // seat, while the SEAT is what varies per call and arrives on the turn (see
 // tools.SeatCallable). Getting that backwards would mean one registration per
-// seat, and a planner's catalogue listing every builtin once per colleague.
+// seat, and an agent's catalogue listing every builtin once per colleague.
 //
 // EVERY FIELD IS OPTIONAL. A node without a store, a company without agent-to-
 // agent messaging, a `validate` run with neither — each is a real deployment,
@@ -57,7 +57,7 @@ type Deps struct {
 	// apply its own default.
 	SkillVersionsKept int
 
-	// Recall is the Plan phase's semantic search, re-run on demand. Nil
+	// Recall is the turn-start prefetch's semantic search, re-run on demand. Nil
 	// leaves query_episodes on recency and conversation and refresh_memory
 	// on recency — which is what a company with no embeddings has, and what
 	// EVERY company had while the tools declared no way to search at all.
@@ -78,8 +78,14 @@ type Deps struct {
 	// Sandbox launches a detached coding run. Nil omits run_sandbox, which
 	// is what a build with no providers.sandbox has — and omitting it is
 	// the point: a seat offered a code tool that cannot start a box would
-	// plan around one and fail at the call.
+	// reach for one and fail at the call.
 	Sandbox SandboxLauncher
+
+	// Knowledge searches the team knowledge base on demand. Nil omits
+	// search_knowledge, which is what a company with no knowledge backend
+	// has — and it is the same seam the turn-start prefetch reads, so the
+	// two can never disagree about scope, exclusions or credentials.
+	Knowledge KnowledgeSearcher
 }
 
 // Register adds every builtin the given dependencies can support.
@@ -127,6 +133,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&markOnboarded{onboarding: deps.Onboarding}, deps.Onboarding != nil},
 		{&runSandbox{launcher: deps.Sandbox}, deps.Sandbox != nil},
 		{&loadToolSkill{skills: deps.ToolSkills, events: deps.Events}, deps.ToolSkills != nil},
+		{&searchKnowledge{search: deps.Knowledge}, deps.Knowledge != nil},
 	}
 
 	var names []string
@@ -145,9 +152,9 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 
 // annotationsFor classifies a builtin for the delivery gate.
 //
-// THE GATE IS WHY THIS MATTERS. A turn that planned to act and then only read
-// is a turn that delivered nothing, and the gate can only see that if it knows
-// which calls were reads. Unannotated counts as NOT a known read — the safe
+// THE DELIVERY CHECK IS WHY THIS MATTERS. A turn that set out to act and then
+// only read is a turn that delivered nothing, and the check can only see that
+// if it knows which calls were reads. Unannotated counts as NOT a known read — the safe
 // default for an MCP server nobody has classified — so a read-only builtin
 // left unannotated would make every recall look like a delivery.
 //
@@ -159,7 +166,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 func annotationsFor(name string) tools.Annotations {
 	switch name {
 	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,
-		LoadToolSkillTool:
+		LoadToolSkillTool, SearchKnowledgeTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing, which is what lets a phase retry one safely.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}

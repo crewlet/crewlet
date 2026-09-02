@@ -75,6 +75,20 @@ type Turn struct {
 	// trigger, which may be long gone, so the launch writes it onto the
 	// run's own row and the resumed turn reads it back.
 	ConversationKey string
+
+	// Task is the ask this turn is working on, and Reply says who is
+	// waiting for it — [turn.Reply]'s wire value, carried as a plain
+	// string so this package does not import the turn engine it is
+	// carried through.
+	//
+	// Both travel for the same reason ConversationKey does: work this turn
+	// STARTS can outlive it. A detached coding run is resumed in another
+	// process, days later, with no trigger left to re-read — so the launch
+	// writes both onto the run's row, and without them the resumed turn
+	// would come back with no brief and free to end in silence on a
+	// request somebody is still waiting for.
+	Task  string
+	Reply string
 }
 
 // Handle is the acting seat's handle, or "" when there is no seat.

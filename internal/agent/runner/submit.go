@@ -14,8 +14,10 @@ package runner
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 )
@@ -23,85 +25,117 @@ import (
 // The names of the two structured-output tools. A phase ENDS by calling its
 // own; that is what turns free prose into a decision the engine can act on.
 const (
-	SubmitPlanTool   = "submit_plan"
+	SubmitWorkTool   = "submit_work"
 	SubmitReviewTool = "submit_review"
 )
 
-// planPayload is the wire shape of a submitted plan.
-type planPayload struct {
-	Decision        string   `json:"decision"`
-	Reasoning       string   `json:"reasoning"`
-	Steps           []step   `json:"steps"`
-	ToolsNeeded     []string `json:"tools_needed"`
-	SuccessCriteria []string `json:"success_criteria"`
+// workPayload is the wire shape of a submitted piece of work.
+type workPayload struct {
+	Outcome       string   `json:"outcome"`
+	Summary       string   `json:"summary"`
+	Deliveries    []string `json:"deliveries"`
+	Evidence      string   `json:"evidence"`
+	OpenQuestions string   `json:"open_questions"`
 }
 
-type step struct {
-	Intent    string   `json:"intent"`
-	Approach  string   `json:"approach"`
-	Tools     []string `json:"tools"`
-	OnFailure string   `json:"on_failure"`
-}
-
-func decodePlan(args map[string]any) (planPayload, error) {
-	var p planPayload
-	if err := structured.Remarshal(args, &p); err != nil {
-		return p, err
-	}
-	switch turn.PlanDecision(p.Decision) {
-	case turn.PlanRun, turn.PlanDirect, turn.PlanSkip:
-	case "":
-		// An absent decision is `plan`, not an error. It is the common
-		// case and the one every other field is written for; failing here
-		// would reject a complete plan over its most predictable omission.
-		p.Decision = string(turn.PlanRun)
-	default:
-		return p, fmt.Errorf("decision must be one of plan, direct or skip, got %q", p.Decision)
-	}
-	if turn.PlanDecision(p.Decision) != turn.PlanSkip && len(p.ToolsNeeded) == 0 && len(p.Steps) == 0 {
-		// A plan that names no tools and lists no steps has decided
-		// nothing. Saying so is what makes the model try again inside the
-		// phase, instead of Execute receiving an empty plan and
-		// improvising against the full surface.
-		return p, fmt.Errorf("a %q decision needs steps or tools_needed", p.Decision)
-	}
-	return p, nil
-}
-
-// Summary renders the plan as the prose Execute and Review read.
+// decodeWork validates a submission against the engine's own record of the
+// turn.
 //
-// It carries each step's APPROACH as well as its intent, because the planner
-// may have pre-composed the exact content Execute should produce — the reply
-// text, the comment body — and Execute cannot see what Plan saw. Dropping the
-// approach makes Execute re-derive data the planner already gathered, or
-// invent it.
-func (p planPayload) Summary() string {
-	if turn.PlanDecision(p.Decision) == turn.PlanSkip {
-		if p.Reasoning != "" {
-			return "(skip) " + p.Reasoning
+// A CLOSURE over that record, not a plain function, because the two questions
+// worth asking cannot be answered from the arguments alone: whether a cited
+// tool was really called, and whether anybody is waiting for this turn. The
+// first is the engine's log; the second is the trigger's own type. Both are
+// facts the model does not control, which is the whole point — the account a
+// phase gives of itself is exactly what a phase can get wrong.
+//
+// Checking HERE rather than after the phase means a wrong claim costs one
+// bounced tool call inside the loop, which the model can fix, instead of a
+// whole review round or a silently accepted no-op.
+func decodeWork(reply turn.Reply, called func() []ledger.Call, surface func() turn.Surface,
+) func(map[string]any) (workPayload, error) {
+	return func(args map[string]any) (workPayload, error) {
+		var w workPayload
+		if err := structured.Remarshal(args, &w); err != nil {
+			return w, err
 		}
-		return "(skip: not addressed to me)"
+		switch turn.Outcome(w.Outcome) {
+		case turn.OutcomeDelivered, turn.OutcomeNoAction, turn.OutcomeBlocked:
+		case "":
+			// An absent outcome is `delivered`, the common case and the
+			// one every other field is written for. It is also the safe
+			// default: the engine checks a delivery claim against the
+			// record either way, so a forgotten field costs a correction
+			// at worst, while refusing the submission outright throws
+			// away a round of real work over the most predictable
+			// omission.
+			w.Outcome = string(turn.OutcomeDelivered)
+		default:
+			return w, fmt.Errorf(
+				"outcome must be one of delivered, no_action or blocked, got %q", w.Outcome)
+		}
+		if strings.TrimSpace(w.Summary) == "" {
+			return w, fmt.Errorf("summary is required: say what you did")
+		}
+		switch turn.Outcome(w.Outcome) {
+		case turn.OutcomeNoAction:
+			if reply.Awaited() {
+				// SILENCE IS NOT A DECLINE. The requester cannot tell it
+				// from a message that was lost, and the engine knows one
+				// arrived — so this is refused where the model can still
+				// act on it rather than corrected a phase later.
+				return w, fmt.Errorf("this turn was asked for directly, so no_action is not " +
+					"available: reply where you were asked — even to decline — and report " +
+					"that as delivered")
+			}
+		case turn.OutcomeBlocked:
+			if strings.TrimSpace(w.Evidence) == "" {
+				return w, fmt.Errorf("blocked needs evidence: what did you try, and what " +
+					"stopped you")
+			}
+		case turn.OutcomeDelivered:
+			if err := citations(w.Deliveries, reply, called(), surface()); err != nil {
+				return w, err
+			}
+		}
+		return w, nil
 	}
-	if len(p.Steps) == 0 {
-		if p.Reasoning != "" {
-			return p.Reasoning
-		}
-		if turn.PlanDecision(p.Decision) == turn.PlanDirect {
-			return "(direct: no explicit plan; the executor improvises)"
-		}
-		return ""
+}
+
+// citations checks that a delivery claim names calls that actually happened.
+//
+// Only where a TOOL was the way to deliver. A colleague's ask is answered by
+// the engine on the channel it opened, and an unaddressed turn owes nobody a
+// posted answer, so demanding a citation in either case would loop a turn that
+// did exactly the right thing.
+//
+// The refusal lists what IS citable, because the failure this catches is
+// usually a model naming the tool it meant to call rather than one it did, and
+// a bare "no" sends it round the same loop.
+func citations(cited []string, reply turn.Reply, calls []ledger.Call, s turn.Surface) error {
+	if reply != turn.ReplyTool {
+		return nil
 	}
-	var b strings.Builder
-	for i, s := range p.Steps {
-		if i > 0 {
-			b.WriteString("\n")
-		}
-		fmt.Fprintf(&b, "%d. %s", i+1, s.Intent)
-		if s.Approach != "" {
-			b.WriteString("\n   " + s.Approach)
+	var eligible []string
+	for _, c := range calls {
+		if !c.Failed && turn.Deliverable(c.Name, s) && !slices.Contains(eligible, c.Name) {
+			eligible = append(eligible, c.Name)
 		}
 	}
-	return b.String()
+	for _, name := range cited {
+		if slices.Contains(eligible, name) {
+			return nil
+		}
+	}
+	slices.Sort(eligible)
+	if len(eligible) == 0 {
+		return fmt.Errorf("nothing has been delivered yet: no tool that acts outside the " +
+			"engine has been called successfully in this turn. Call the one that delivers " +
+			"on the surface this arrived from — `list_mcp_server_tools` and " +
+			"`activate_tool` will find it — before reporting the work delivered")
+	}
+	return fmt.Errorf("deliveries names no call that delivered: cite one of %s, "+
+		"or report the outcome honestly if none of them is the delivery",
+		strings.Join(eligible, ", "))
 }
 
 // reviewPayload is the wire shape of a submitted review.
@@ -122,8 +156,8 @@ func decodeReview(args map[string]any) (reviewPayload, error) {
 	case "":
 		// An absent decision is `done`. The alternative — defaulting to
 		// self_iterate — spends another whole round on a review that
-		// simply forgot a field, and the delivery gate still overturns a
-		// `done` that delivered nothing.
+		// simply forgot a field, and the engine still overturns a `done`
+		// that delivered nothing.
 		r.Decision = "done"
 	default:
 		return r, fmt.Errorf("decision must be one of done, self_iterate or failed, got %q", r.Decision)

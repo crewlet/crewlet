@@ -599,9 +599,9 @@ type Record struct {
 // SandboxRuns is the fleet's record of detached coding runs.
 //
 // THE ONE CONTRACT HERE WHOSE VALUE IS OPAQUE, and the reason is that its
-// record has twenty-five fields of which coordination understands none: the
-// suspended Execute conversation, the box and command ids, the plan, the
-// question a person is being asked. Every decision taken on those fields —
+// record has fields of which coordination understands none: the suspended
+// executor conversation, the box and command ids, the brief, the question a
+// person is being asked. Every decision taken on those fields —
 // the at-most-once tail claim, the epoch fence, the conditional pause expiry —
 // is sandbox's, lives in internal/sandbox where its suite is, and would be
 // nothing but duplication here. So this holds bytes and a version, and the

@@ -2,7 +2,7 @@
 key: mcp:gitlab
 trigger:
   mcp_server: gitlab
-phases: [plan, execute]
+phases: [execute]
 title: GitLab tools
 summary: |
   Read / search code + issues + MRs; review, comment, and track work.

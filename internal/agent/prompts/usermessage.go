@@ -49,12 +49,16 @@ const ConversationHistoryHeader = "## Earlier in this conversation" +
 	" current state — the task below is the newest thing said, and where" +
 	" the two disagree the task wins."
 
-// UserMessage is the per-round content of a Plan or Execute turn.
+// UserMessage is the per-round content of an executor turn.
 //
 // This is the half of the prompt that is ALLOWED to move. Both ledgers grow
 // as a turn iterates, so putting either in a system prompt would invalidate
 // the provider's prefix cache on every loop — which is the whole reason the
 // system prompts above take no ledger at all.
+//
+// The reviewer does not use it: its evidence is assembled once per round and
+// is a system-prompt fact, not something that accumulates as its own loop
+// runs.
 type UserMessage struct {
 	// TaskDescription is the ask. Rendered as "(no description)" when
 	// empty, so the model is told there is no task rather than being handed
@@ -73,8 +77,7 @@ type UserMessage struct {
 	ConversationHistory string
 }
 
-// BuildPhaseUserMessage renders the user message shared by the Plan and
-// Execute phases.
+// BuildPhaseUserMessage renders the executor's user message.
 //
 // The three parts run oldest to newest — earlier turns of this conversation,
 // then the ask, then earlier rounds of THIS turn (which happened after the

@@ -283,3 +283,33 @@ func TestTheChatPromptSatisfiesTheInterface(t *testing.T) {
 		t.Fatalf("a bare prompt has no collectives:\n%s", got)
 	}
 }
+
+// ONE IMPLEMENTATION with the working-status indicator, deliberately: the
+// indicator says "this agent is working on your message" and the delivery
+// check says "this agent owes your message an answer". The two disagreeing
+// would raise a spinner on a turn allowed to end in silence, or end one in
+// silence after raising a spinner.
+func TestTheChatPromptAddressesTheSameMessagesTheIndicatorDoes(t *testing.T) {
+	t.Parallel()
+	for name, mutate := range map[string]func(map[string]string){
+		"a direct message":     func(m map[string]string) { m["channel_type"] = "D" },
+		"a group DM":           func(m map[string]string) { m["channel_type"] = "G" },
+		"a mention it follows": func(m map[string]string) { m["thread_follow_reason"] = "mention" },
+		"a thread it follows":  func(m map[string]string) { m["thread_following"] = "yes" },
+	} {
+		n := chatNote(mutate)
+		if !chatPrompt.Addressed(n) {
+			t.Errorf("%s does not address the seat", name)
+		}
+		// The two answers are the SAME rule, read through both doors.
+		if got := notify.Addressed(n.Metadata, chatPrompt.DMPrefix); !got {
+			t.Errorf("%s: the indicator and the prompt disagree", name)
+		}
+	}
+	// A passive channel message is the counterfactual: every bot in the
+	// room wakes on one, and a seat obliged to answer each would post N
+	// replies to traffic nobody addressed to any of them.
+	if chatPrompt.Addressed(chatNote(nil)) {
+		t.Error("a passive channel message addresses the seat")
+	}
+}

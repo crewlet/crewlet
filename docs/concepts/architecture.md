@@ -87,7 +87,7 @@ act through, and every other one still routes end to end.
 | MCP servers | In practice | The agents' hands — chat, tracker, wiki, code host | Agents have only the [builtins](agent-runtime.md#built-in-tools) |
 | Chat · tracker · code host | No, each | Where triggers arrive and work is delivered | That surface simply routes nothing |
 | Embeddings provider | No | Vector recall over `agent_diary` and `episodes` | Recall degrades to recency; episodes render nothing |
-| Code sandbox | No | Code authoring as a detached Execute phase | No `run_sandbox`; agents still read and review code over MCP |
+| Code sandbox | No | Code authoring as a detached, suspended executor phase | No `run_sandbox`; agents still read and review code over MCP |
 | OTLP collector | No | Exported traces | Trace ids are still minted and still stored on every event row |
 | External NATS | No | The stream for a fleet that will not embed it | The process embeds its own — the default |
 
@@ -117,7 +117,7 @@ flowchart TB
             CLAIM["<b>Seat host</b><br/>claims seat leases, attaches the mailbox<br/><i>acquire → equip → THEN attach</i>"]
             MBOX["<b>Per-seat mailbox</b><br/>durable consumer on<br/>crewlet.agent.HANDLE.inbox<br/>+ .control for sandbox resumes"]
             BATCH["<b>Inbox batching</b><br/>drain · partition by conversation<br/>· one digest turn per partition"]
-            TURN["<b>Turn engine</b><br/>Plan → Execute → Review<br/><i>one per running turn, gated by<br/>node.max_concurrent</i>"]
+            TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>one per running turn, gated by<br/>node.max_concurrent</i>"]
             REG["<b>Per-seat tool registry + bridge</b><br/>the shared catalogue, CLONED, plus this<br/>role's own MCP children — two seats' children<br/>of one template publish the same tool names"]
             PROV["<b>Provider chain</b><br/>fallback chain over a<br/>credential pool"]
         end
@@ -264,7 +264,7 @@ sequenceDiagram
     S->>O: the seat's durable consumer,<br/>group agent-HANDLE
     O->>O: drain the backlog, partition by<br/>conversation key, one digest per partition
     O->>O: take a slot at node.max_concurrent
-    O->>M: Plan → Execute → Review
+    O->>M: executor → reviewer
     M-->>O: the reply is posted by the agent's<br/>own Slack tool, as itself
     O->>S: turn events → crewlet.events.*
     O->>S: ack the delivery
@@ -322,81 +322,86 @@ onward is identical again.
 
 ## 4. The path a turn takes
 
-Every trigger that reaches a seat runs the same three-phase turn. What varies
-is which phases run, and whether the turn survives its own process.
+Every trigger that reaches a seat runs the same two-stage turn. What varies is
+how many rounds it takes, and whether the turn survives its own process.
 
 ```mermaid
 flowchart TB
     IN["<b>A batch of triggers</b><br/>one conversation, one turn"]
-    PRE["<b>Plan-phase prefetch</b> — six blocks, rendered<br/>concurrently BEFORE the turn starts<br/>personal memory · relevant knowledge · similar prior<br/>work · known counterparty · synthesized skills ·<br/>first-turn onboarding"]
-    PLAN{"<b>Plan</b><br/>what is this, and<br/>what would deliver it?"}
-    SKIP["<b>skipped</b><br/>nobody was asking<br/>this seat to do anything"]
-    EXEC["<b>Execute</b><br/>the tool loop:<br/>model → tool → result → model"]
+    PRE["<b>Turn-start prefetch</b> — six blocks, rendered<br/>concurrently BEFORE the turn starts<br/>personal memory · relevant knowledge · similar prior<br/>work · known counterparty · synthesized skills ·<br/>first-turn onboarding"]
+    WHO["<b>Who is waiting?</b><br/>derived from the trigger's own type,<br/>before any model runs"]
+    EXEC["<b>Executor</b><br/>one agentic loop: decide, discover,<br/>act, then account for it"]
     SUSP["<b>Suspended</b><br/>a detached coding run:<br/>the loop is serialized into<br/>the pending-run record and left"]
-    REV{"<b>Review</b><br/>did it meet the plan's<br/>success criteria?"}
-    GATE["<b>Delivery gate</b><br/>a turn that planned to act and<br/>called nothing is not done"]
+    CHECK{"<b>Engine check</b><br/>does the record support<br/>what it says it did?"}
+    SKIP["<b>skipped</b><br/>nobody was asking<br/>this seat to do anything"]
+    REV{"<b>Reviewer</b><br/>is the work any good?"}
+    OVER["<b>Override</b><br/>a `done` that answered in text<br/>on a turn somebody is waiting for"]
     DONE["<b>done</b>"]
     FAIL["<b>failed</b>"]
     AFTER["<b>What the turn leaves behind</b><br/>events · episode · diary entries ·<br/>conversation-ledger entry · token spend"]
 
-    IN --> PRE --> PLAN
-    PLAN -->|skip| SKIP
-    PLAN -->|"direct — one-tool task"| EXEC
-    PLAN -->|plan| EXEC
+    IN --> PRE --> WHO --> EXEC
     EXEC -->|run_sandbox| SUSP
     SUSP -->|"minutes or days later,<br/>possibly on another node"| EXEC
-    EXEC --> GATE
-    GATE -->|"direct, and it delivered"| DONE
-    GATE --> REV
-    REV -->|done| DONE
-    REV -->|"self_iterate — carrying the<br/>prior-work ledger"| PLAN
+    EXEC --> CHECK
+    CHECK -->|"no_action, and nothing acted"| SKIP
+    CHECK -->|"a claim the record refutes"| EXEC
+    CHECK --> REV
+    REV -->|done| OVER
+    OVER -->|delivered| DONE
+    OVER -->|"nothing reached anybody"| EXEC
+    REV -->|"self_iterate — carrying the<br/>prior-work ledger"| EXEC
     REV -->|failed| FAIL
     DONE --> AFTER
     FAIL --> AFTER
 ```
 
-**Two nested loops, not one.** The outer loop is the turn: Plan → Execute →
-Review, re-entered on `self_iterate` up to `turn_engine.max_iterations`. The
-inner loop is the model↔tool round trip *inside each phase*, bounded by its own
-cap (`plan_max_tool_rounds`, `max_tool_rounds`). A turn is therefore up to
-`max_iterations × (Plan rounds + Execute rounds + Review rounds)` priced model
-calls, which is the number to reason about when sizing a budget — not "one call
-per turn".
+**Two nested loops, not one.** The outer loop is the turn: executor → reviewer,
+re-entered on `self_iterate` up to `turn_engine.max_iterations`. The inner loop
+is the model↔tool round trip *inside each phase*, bounded by its own cap
+(`max_tool_rounds` for the executor; a constant for the reviewer, which holds
+one submission tool). A turn is therefore up to `max_iterations × (executor
+rounds + review rounds)` priced model calls, which is the number to reason
+about when sizing a budget — not "one call per turn".
 
-**Each phase gets its own prompt, its own tool surface and its own model.** The
-planner is the only phase making ownership, delegation and policy-sensitive
-decisions, so it carries the richest context — identity, policies, the team
-roster, the six prefetched blocks above. Execute and Review run against the plan's
-explicit `success_criteria` and do not re-derive them. A frontier model can plan
-while a cheap one summarizes; see [Turn Engine](turn-engine.md).
+**One loop where there were two, and that is the point.** The engine used to
+plan in one conversation and act in another; the actor lost everything the
+planner had read, and the planner had to name its tools in advance against a
+catalogue it was never shown. The executor decides and acts in one place, so it
+carries the whole picture — identity, policies, the team roster, the six
+prefetched blocks above. The reviewer's question is narrower and its prompt is
+smaller: is this round's work right, given the record. A frontier model can do
+the work while a cheap one reviews; see [Turn Engine](turn-engine.md).
 
 **Tools are discovered, not enumerated.** A role with 50–150 MCP tools would
-push 15–25 KB of catalogue into every prompt, so Plan and Execute see *server
-names* and walk `list_mcp_server_tools` → `activate_tool` to promote what they
-actually need. From the model's side a builtin and an MCP tool are the same
+push 15–25 KB of catalogue into every prompt, so the executor sees *server
+names* and walks `list_mcp_server_tools` → `activate_tool` to promote what it
+actually needs. From the model's side a builtin and an MCP tool are the same
 thing: a function it can ask the engine to call.
 
 **A suspended turn is the reason there is no parked goroutine anywhere.** A
-detached coding run stops the Execute loop mid-round with its `run_sandbox` call
-*unanswered*, and the conversation is serialized into the pending-run record
-rather than held in memory. The run outlives the process: it may be resumed
-after a restart, on a different node, days later once a person answers the
-agent's question. The record carries an explicit version, and a build that does
-not understand it refuses loudly and leaves the row untouched.
+detached coding run stops the executor's loop mid-round with its `run_sandbox`
+call *unanswered*, and the conversation is serialized into the pending-run
+record rather than held in memory. The run outlives the process: it may be
+resumed after a restart, on a different node, days later once a person answers
+the agent's question. The record carries an explicit version, a permanent
+reader for the previous one, and a build that understands neither refuses
+loudly and leaves the row untouched.
 
-**The delivery gate is the engine's own judgement, between the phases.** Review
-says whether the criteria were met; the gate says whether anything was actually
-*delivered*, by comparing what the plan promised against what each phase called
-and what the surface says those tools do. It has teeth in both directions: it
-forces a Review over a `direct` plan whose Execute delivered nothing, and it
-overturns a `done` into `self_iterate` with a correction. The two failure modes
-it exists for are a seat that composed a reply and never posted it, and a seat
-that posted it twice.
+**Whether anything was DELIVERED is the engine's judgement, not a model's.**
+Who is waiting comes from the trigger's own type before the turn starts; what
+actually ran is the tool loop's own record. The two are checked three times, in
+increasing cost: a delivery claim is refused at decode time where one bounced
+tool call fixes it; a claim the record refutes loops the round back without
+spending a review call; and a reviewer's `done` on a turn that answered in text
+where a tool was owed is overturned. The two failure modes this exists for are
+a seat that composed a reply and never posted it, and a seat that posted it
+twice.
 
 **Nothing about a turn's shape is ambient.** The configuration a turn reads is
 taken by value at the top of the turn from one immutable epoch, so a config
-apply landing mid-turn cannot change the round cap between Plan and Execute. A
-turn holds the company it started under until it ends.
+apply landing mid-turn cannot change the round cap between the executor and the
+reviewer. A turn holds the company it started under until it ends.
 
 ---
 
@@ -591,7 +596,7 @@ here.
 | Seat leases, placement, acquire and release | `internal/seat`, `internal/node` | [Seat ownership](seat-ownership.md) |
 | Leases, buckets, the three-valued answer | `internal/coord` | [Coordination](coordination.md) |
 | The activation pointer and node postures | `internal/configplane` | [Control plane](control-plane.md) |
-| Plan → Execute → Review, sub-agents | `internal/agent/turn`, `runner`, `toolloop` | [Turn engine](turn-engine.md) · [Agent runtime](agent-runtime.md) |
+| The executor/reviewer loop, sub-agents | `internal/agent/turn`, `runner`, `toolloop` | [Turn engine](turn-engine.md) · [Agent runtime](agent-runtime.md) |
 | The tool registry, MCP children, A2A | `internal/tools`, `internal/mcp`, `internal/a2a` | [Tools & MCP](../guides/tools-and-mcp.md) · [Tool capabilities](tool-capabilities.md) |
 | Knowledge-base-sourced prompt fragments | `internal/agent/skills` | [Tool skills](tool-skills.md) |
 | Live knowledge search | `internal/knowledge` | [Knowledge system](knowledge-system.md) |

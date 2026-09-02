@@ -58,29 +58,27 @@ func ArtifactHash(text string) string {
 // looping without making progress and is terminated as failed rather than
 // spending its remaining iterations re-deriving the same output.
 //
-// The zero value is usable and defaults to a threshold of 2: two identical
-// rounds is the earliest point at which "unchanged" is a fact rather than a
-// single sample.
+// The threshold is a CONSTANT, not a knob. It was a field the loop's settings
+// were meant to fill and never did, so every turn ran on the fallback anyway —
+// and the value is not an operator preference: two identical rounds is the
+// earliest point at which "unchanged" is a fact rather than a single sample,
+// and the round cap already bounds how long a turn that IS changing may run.
 type StallDetector struct {
-	Threshold int
-	history   []string
+	history []string
 }
 
-func (s *StallDetector) threshold() int {
-	if s.Threshold <= 0 {
-		return 2
-	}
-	return s.Threshold
-}
+// stallThreshold is how many consecutive identical artifacts end a turn.
+const stallThreshold = 2
 
 // Observe records one round's artifact.
 func (s *StallDetector) Observe(artifact string) {
 	s.history = append(s.history, ArtifactHash(artifact))
 }
 
-// ShouldAbort reports whether the last Threshold observations are identical.
+// ShouldAbort reports whether the last [stallThreshold] observations are
+// identical.
 func (s *StallDetector) ShouldAbort() bool {
-	n := s.threshold()
+	n := stallThreshold
 	if len(s.history) < n {
 		return false
 	}

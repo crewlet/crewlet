@@ -15,31 +15,32 @@ import (
 
 func TestAPhaseCanDiscoverAndActivateAnMCPTool(t *testing.T) {
 	t.Parallel()
-	// The whole reason discovery exists: a planner is shown SERVER names,
-	// not tool names, and the delivery gate's own correction for a
+	// The whole reason discovery exists: the executor is shown SERVER names,
+	// not tool names, and the delivery check's own correction for a
 	// wrong-guessed name tells the model to use exactly these two tools. If
 	// they are not on the surface, that advice is a lie.
 	r, prov, _ := fixture(t, &scriptedProvider{
-		plan: []llm.Completion{
+		execute: []llm.Completion{
 			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "list_mcp_server_tools",
 				Arguments: map[string]any{"server": "slack"}}}},
 			{ToolCalls: []llm.ToolCall{{ID: "b", Name: "activate_tool",
 				Arguments: map[string]any{"name": "slack_post"}}}},
-			submitCall(t, runner.SubmitPlanTool,
-				`{"decision":"plan","tools_needed":["slack_post"],"steps":[{"intent":"post"}]}`),
+			submitWork(t),
 		},
 	})
-	p, _, err := r.Plan(context.Background(), 1, "", nil)
+	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
-		t.Fatalf("Plan: %v", err)
+		t.Fatalf("Execute: %v", err)
 	}
-	if p.Decision != turn.PlanRun {
-		t.Fatalf("decision = %s", p.Decision)
+	// The fixture activates but never posts, so the honest outcome is
+	// blocked — the subject here is the discovery round trip, not delivery.
+	if w.Outcome != turn.OutcomeBlocked {
+		t.Fatalf("outcome = %s", w.Outcome)
 	}
 
-	reqs := prov.requestsFor("plan")
+	reqs := prov.requestsFor("execute")
 	if len(reqs) < 3 {
-		t.Fatalf("Plan made %d model calls, want the discovery round trip", len(reqs))
+		t.Fatalf("the executor made %d model calls, want the discovery round trip", len(reqs))
 	}
 	// The listing named the server's real tools.
 	var listing string
@@ -76,9 +77,9 @@ func TestAPhaseCanDiscoverAndActivateAnMCPTool(t *testing.T) {
 	if slices.Contains(toolNames(reqs[0].Tools), "slack_post") {
 		t.Errorf("the tool was offered before it was activated: %v", toolNames(reqs[0].Tools))
 	}
-	// The calls are recorded, so the ledger and the delivery gate see them.
-	if !slices.Contains(callNames(p.Calls), "activate_tool") {
-		t.Errorf("the discovery calls were not recorded: %v", callNames(p.Calls))
+	// The calls are recorded, so the ledger and the delivery check see them.
+	if !slices.Contains(callNames(w.Calls), "activate_tool") {
+		t.Errorf("the discovery calls were not recorded: %v", callNames(w.Calls))
 	}
 }
 
@@ -89,18 +90,17 @@ func TestAnUnknownServerListsTheOnesThatExist(t *testing.T) {
 	// "you have the name wrong". Listing what exists turns the second into
 	// a recoverable round.
 	r, prov, _ := fixture(t, &scriptedProvider{
-		plan: []llm.Completion{
+		execute: []llm.Completion{
 			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "list_mcp_server_tools",
 				Arguments: map[string]any{"server": "slacck"}}}},
-			submitCall(t, runner.SubmitPlanTool,
-				`{"decision":"plan","tools_needed":["slack_post"],"steps":[{"intent":"post"}]}`),
+			submitWork(t),
 		},
 	})
-	if _, _, err := r.Plan(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Plan: %v", err)
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
 	}
 	var reply string
-	for _, m := range prov.requestsFor("plan")[1].Messages {
+	for _, m := range prov.requestsFor("execute")[1].Messages {
 		if m.Role == llm.RoleTool && m.Name == "list_mcp_server_tools" {
 			reply = m.Content
 		}
@@ -116,18 +116,17 @@ func TestActivatingAGuessedNameSaysHowToFindTheRealOne(t *testing.T) {
 	// naming the way to find the real one, is the difference between a
 	// recoverable round and a phase that keeps guessing.
 	r, prov, _ := fixture(t, &scriptedProvider{
-		plan: []llm.Completion{
+		execute: []llm.Completion{
 			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "activate_tool",
 				Arguments: map[string]any{"name": "slack_send_msg"}}}},
-			submitCall(t, runner.SubmitPlanTool,
-				`{"decision":"plan","tools_needed":["slack_post"],"steps":[{"intent":"post"}]}`),
+			submitWork(t),
 		},
 	})
-	if _, _, err := r.Plan(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Plan: %v", err)
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
 	}
 	var reply string
-	for _, m := range prov.requestsFor("plan")[1].Messages {
+	for _, m := range prov.requestsFor("execute")[1].Messages {
 		if m.Role == llm.RoleTool && m.Name == "activate_tool" {
 			reply = m.Content
 		}
@@ -145,31 +144,33 @@ func TestOneSurfacesActivationDoesNotLeakIntoAnother(t *testing.T) {
 	// The discovery pair is per-PHASE for the same reason the submission
 	// tools are: activation mutates one surface, and a shared registry
 	// would carry one phase's activation into the next — or into the next
-	// turn.
+	// turn. A self_iterate builds a fresh surface, which is correct: its
+	// LLM context started over too.
 	r, prov, _ := fixture(t, &scriptedProvider{
-		plan: []llm.Completion{
+		execute: []llm.Completion{
 			{ToolCalls: []llm.ToolCall{{ID: "a", Name: "activate_tool",
 				Arguments: map[string]any{"name": "slack_history"}}}},
-			submitCall(t, runner.SubmitPlanTool,
-				`{"decision":"plan","tools_needed":["slack_post"],"steps":[{"intent":"post"}]}`),
+			submitWork(t),
 		},
-		execute: []llm.Completion{text("posted")},
 	})
-	p, _, err := r.Plan(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Plan: %v", err)
-	}
-	if _, _, err := r.Execute(context.Background(), 1, p, nil); err != nil {
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	// Execute gets the plan's tools plus the always-on set plus discovery —
-	// NOT Plan's activation.
-	offered := toolNames(prov.requestsFor("execute")[0].Tools)
-	if slices.Contains(offered, "slack_history") {
-		t.Errorf("Plan's activation leaked into Execute: %v", offered)
+	if _, _, err := r.Execute(context.Background(), 2, "try again", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
 	}
-	if !slices.Contains(offered, "slack_post") {
-		t.Errorf("Execute lost its own tools: %v", offered)
+	reqs := prov.requestsFor("execute")
+	// Round 1 activated it, so round 1's LAST request has it...
+	if !slices.Contains(toolNames(reqs[1].Tools), "slack_history") {
+		t.Errorf("the activation did not reach its own surface: %v", toolNames(reqs[1].Tools))
+	}
+	// ...and the next turn round starts clean.
+	last := toolNames(reqs[len(reqs)-1].Tools)
+	if slices.Contains(last, "slack_history") {
+		t.Errorf("an activation leaked into the next round: %v", last)
+	}
+	if !slices.Contains(last, runner.SubmitWorkTool) {
+		t.Errorf("the next round lost its own tools: %v", last)
 	}
 }
 
@@ -206,20 +207,19 @@ func TestDiscoveryRefusesAnEmptyArgument(t *testing.T) {
 	// empty — and activating an empty name reports no tool called "", which
 	// says nothing at all.
 	r, prov, _ := fixture(t, &scriptedProvider{
-		plan: []llm.Completion{
+		execute: []llm.Completion{
 			{ToolCalls: []llm.ToolCall{
 				{ID: "a", Name: "list_mcp_server_tools", Arguments: map[string]any{"server": "  "}},
 				{ID: "b", Name: "activate_tool", Arguments: map[string]any{}},
 			}},
-			submitCall(t, runner.SubmitPlanTool,
-				`{"decision":"plan","tools_needed":["slack_post"],"steps":[{"intent":"post"}]}`),
+			submitWork(t),
 		},
 	})
-	if _, _, err := r.Plan(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Plan: %v", err)
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
 	}
 	replies := map[string]string{}
-	for _, m := range prov.requestsFor("plan")[1].Messages {
+	for _, m := range prov.requestsFor("execute")[1].Messages {
 		if m.Role == llm.RoleTool {
 			replies[m.Name] = m.Content
 		}

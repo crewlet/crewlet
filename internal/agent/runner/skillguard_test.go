@@ -11,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
-	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -59,7 +58,7 @@ func (c *capture) kinds() []string {
 
 var _ queue.Publisher = (*capture)(nil)
 
-// guardedRunner builds a runner whose Execute surface carries one required
+// guardedRunner builds a runner whose executor surface carries one required
 // skill covering the tool the model will reach for.
 func guardedRunner(t *testing.T, prov *scriptedProvider, pub queue.Publisher) *runner.Runner {
 	t.Helper()
@@ -92,9 +91,8 @@ func guardedRunner(t *testing.T, prov *scriptedProvider, pub queue.Publisher) *r
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: reg, Models: models, Skills: registry,
-		Caps:      runner.Caps{PlanRounds: 3, ExecuteRounds: 3, ReviewRounds: 3},
+		Caps:      runner.Caps{ExecutorRounds: 3},
 		Task:      "post the summary",
-		AlwaysOn:  []string{"slack_post", builtin.LoadToolSkillTool},
 		Publisher: pub,
 		Turn:      runner.Turn{ID: "t-guard", AgentID: "agent-1"},
 	})
@@ -107,7 +105,7 @@ func guardedRunner(t *testing.T, prov *scriptedProvider, pub queue.Publisher) *r
 // THE GUARD REFUSES A COVERED TOOL, at the dispatch point every call goes
 // through. Asking harder in the prompt does not stop a model going straight
 // for the tool.
-func TestTheExecutorIsRefusedATooBeforeItsSkillIsLoaded(t *testing.T) {
+func TestTheExecutorIsRefusedAToolBeforeItsSkillIsLoaded(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{execute: []llm.Completion{
 		submitCall(t, "slack_post", `{"text":"hi"}`),
@@ -116,12 +114,9 @@ func TestTheExecutorIsRefusedATooBeforeItsSkillIsLoaded(t *testing.T) {
 	pub := newCapture()
 	r := guardedRunner(t, prov, pub)
 
-	res, _, err := r.Execute(context.Background(), 1,
-		turn.Plan{Decision: turn.PlanDirect}, nil)
-	if err != nil {
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	_ = res
 
 	// The refusal names the exact call to make, because the error IS the
 	// recovery path.
@@ -152,8 +147,7 @@ func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 	pub := newCapture()
 	r := guardedRunner(t, prov, pub)
 
-	if _, _, err := r.Execute(context.Background(), 1,
-		turn.Plan{Decision: turn.PlanDirect}, nil); err != nil {
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
@@ -186,8 +180,7 @@ func TestLoadingTheSkillUnlocksTheTool(t *testing.T) {
 	pub := newCapture()
 	r := guardedRunner(t, prov, pub)
 
-	if _, _, err := r.Execute(context.Background(), 1,
-		turn.Plan{Decision: turn.PlanDirect}, nil); err != nil {
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if got := pub.blocked(); len(got) != 0 {

@@ -131,7 +131,6 @@ func (r *Runner) emitter() emitter {
 type Spend struct {
 	// The model that actually served each phase, which is not necessarily
 	// the configured one: a fallback chain records who answered.
-	PlanModel    string
 	ExecuteModel string
 	ReviewModel  string
 
@@ -145,24 +144,30 @@ type Spend struct {
 	// ToolExecutions is every call the turn made, in order across phases.
 	ToolExecutions []types.ToolExecution
 
-	// PlanTools and ExecuteTools are the tool NAMES, split the way the
+	// ExecuteTools and AllTools are the tool NAMES, split the way the
 	// learning workers reason about them and accumulated differently on
 	// purpose.
 	//
-	// Plan accumulates across self-iterate rounds, because a Plan-phase
-	// builtin firing in round 1 is a fact about the whole turn — the
+	// ExecuteTools keeps only the LAST round: the earlier rounds were
+	// re-attempted work the agent itself judged incomplete, and a skill
+	// drafted from their calls would be drafted from a sequence the agent
+	// then chose not to stand behind. AllTools accumulates across every
+	// round, because some calls are a fact about the WHOLE turn — the
 	// reflect dispatcher reads it to see that the agent already wrote its
-	// own memory, and a later round that did not call it again does not
-	// undo that. Execute keeps only the LAST round: the earlier rounds
-	// were re-attempted work the agent itself judged incomplete, and a
-	// skill drafted from their calls would be drafted from a sequence the
-	// agent then chose not to stand behind.
-	PlanTools    []string
+	// own memory, and a later round that did not call reflect_and_persist
+	// again does not undo that.
+	//
+	// Two fields where the three-phase engine had two phases to split on:
+	// the executor's rounds are now the only place either fact can come
+	// from, so the split has to be made explicitly rather than fall out of
+	// which phase ran.
 	ExecuteTools []string
+	AllTools     []string
 
-	// PlanDecision is the planner's verdict — the LAST one, for the same
-	// reason: a turn that self-iterated ends on the decision it acted on.
-	PlanDecision string
+	// Outcome is the executor's own last word on the turn — delivered,
+	// no_action, blocked, or the engine-written `incomplete`. The LAST
+	// one, because a turn that looped ends on the account it stood behind.
+	Outcome string
 }
 
 // Total is the turn's token count.
@@ -174,8 +179,6 @@ func (r *Runner) Spend() Spend { return r.spend }
 // record folds one completed phase into the turn's tally.
 func (s *Spend) record(rec phaseRecord) {
 	switch rec.Phase {
-	case phase.Plan:
-		s.PlanModel = rec.Result.Model
 	case phase.Execute:
 		s.ExecuteModel = rec.Result.Model
 	case phase.Review:
@@ -187,15 +190,14 @@ func (s *Spend) record(rec phaseRecord) {
 		s.Response = rec.Result.Text
 	}
 	s.ToolExecutions = append(s.ToolExecutions, toolExecutions(rec.Result.Executions)...)
-	switch rec.Phase {
-	case phase.Plan:
-		s.PlanTools = append(s.PlanTools, toolNames(rec.Result.Executions)...)
-		if rec.Decision != "" {
-			s.PlanDecision = rec.Decision
-		}
-	case phase.Execute:
+	if rec.Phase == phase.Execute {
+		names := toolNames(rec.Result.Executions)
 		// REPLACED, not appended — see the field's own note.
-		s.ExecuteTools = toolNames(rec.Result.Executions)
+		s.ExecuteTools = names
+		s.AllTools = append(s.AllTools, names...)
+		if rec.Decision != "" {
+			s.Outcome = rec.Decision
+		}
 	}
 }
 
@@ -303,20 +305,24 @@ type phaseRecord struct {
 	Result    toolloop.Result
 	Exhausted bool
 
-	// Decision is the phase's structured verdict: the plan's decision, the
-	// review's. Empty for Execute, which reaches none.
+	// Decision is the phase's structured verdict: the executor's outcome,
+	// the reviewer's decision, "done" on a marked onboarding pass.
 	Decision string
 
 	// Rescued marks a phase whose submit tool never fired, so its payload
-	// was synthesised. Plan and Review can rescue; Execute never does.
+	// was synthesised. The executor and the reviewer both can; a sub-agent
+	// answers in prose and has nothing to rescue.
 	Rescued bool
 
-	// Notes is short free text: review's notes, Execute's missing tools.
+	// Notes is short free text: the reviewer's notes, the executor's
+	// missing tools.
 	Notes string
 
 	// Available is the tools whose schemas were actually passed in the
-	// call — what the model could invoke. Catalogue is the prose list
-	// offered in the Plan prompt, with no schema, and is Plan's alone.
+	// call — what the model could invoke. Catalogue is the prose list of
+	// names the executor was shown, with no schemas: sending every MCP
+	// server's tool definitions is what made a turn expensive, and this is
+	// what replaced it.
 	Available []string
 	Catalogue []string
 

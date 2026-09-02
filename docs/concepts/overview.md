@@ -61,7 +61,7 @@ flowchart TB
     subgraph proc["<b>crewlet run</b> — one process by default; node.roles picks the groups"]
         direction TB
         API["<b>ingress — API + dashboard</b><br/>webhook routes · REST · /config · /secrets<br/>/ws/stream · OTLP ingest · /health · /ready"]
-        SEAT["<b>seats — the agents</b><br/>Seat host: leases, mailboxes, MCP children<br/>Turn engine: Plan → Execute → Review, one per running turn<br/>Tool registry: builtins · per-role MCP · a2a_ask<br/>Provider chain: fallback models over a credential pool"]
+        SEAT["<b>seats — the agents</b><br/>Seat host: leases, mailboxes, MCP children<br/>Turn engine: executor → reviewer, one per running turn<br/>Tool registry: builtins · per-role MCP · a2a_ask<br/>Provider chain: fallback models over a credential pool"]
         DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · retention sweep · skill curator"]
         CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · reflection · observability edge"]
     end
@@ -172,7 +172,7 @@ internal/
 ├── config/               # The two config tiers → typed structs → JSON Schema
 ├── org/                  # Organization model (hierarchy, roles, seat identity)
 ├── agent/                # The agent runtime, one package per hard part:
-│                         #   turn/ (the three-phase loop), toolloop/ (the
+│                         #   turn/ (the two-stage loop), toolloop/ (the
 │                         #   model↔tool round-trip and its suspend),
 │                         #   inbox/ (what wakes a seat, and what must not
 │                         #   wake it twice), ledger/ (iteration, conversation

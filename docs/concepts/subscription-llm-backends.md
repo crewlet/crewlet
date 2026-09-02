@@ -466,8 +466,8 @@ through.
 ## Per-phase models
 
 Nothing changes. Phase selection resolves by `providers.llm` **key**,
-and the resolver never looks at a provider's type — so `llm_plan`,
-`llm_execute`, `llm_review`, `llm_subagent`, `llm_auxiliary`,
+and the resolver never looks at a provider's type — so `llm`,
+`llm_review`, `llm_subagent`, `llm_auxiliary`,
 `llm_judge` and `llm_sandbox` all behave exactly as they do for API
 entries, including mixing the two kinds in one role and including
 list-form fallback chains. See
@@ -495,8 +495,8 @@ providers:
 
 roles:
   - name: Engineer
-    llm_plan: opus-sub              # deep reasoning on the subscription
-    llm_execute: [sonnet-sub, cheap]  # subscription first, key when spent
+    llm: [opus-sub, cheap]          # the executor: subscription first, key when spent
+    llm_review: sonnet-sub          # the reviewer, on a cheaper subscription model
     llm_auxiliary: cheap            # see the latency note below
 ```
 
@@ -518,7 +518,7 @@ processes, so two entries at the default of 4 can run 8 CLI processes at
 once. Size them together against the engine host's memory.
 
 **Auxiliary work is the one phase to think twice about.** Every
-reflection, summarisation and Plan-phase relevance prefetch goes through
+reflection, summarisation and the turn-start relevance prefetch goes through
 `llm_auxiliary`, and each one pays a process launch on this backend.
 Point it at a cheap API model unless you have no key at all. (Crewlet
 does handle the latency: the auxiliary call's 60-second deadline is

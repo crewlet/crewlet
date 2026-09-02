@@ -9,7 +9,7 @@ ledger) — nothing was keyed to the conversation itself.
 The **conversation session ledger** closes that. Every completed turn appends
 a structured entry to its conversation, and the next turn of that same
 conversation gets those entries back as an `## Earlier in this conversation`
-block on its Plan and Execute user messages.
+block on the executor's user message.
 
 It is the cross-turn counterpart of the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds),
 and it deliberately follows the same doctrine one scope wider.
@@ -63,8 +63,7 @@ because a summariser that drops the line naming the reply the seat already
 sent re-creates the duplicate-answer bug in a place nothing else can catch.
 
 - **Triggered by** — who said what (the last constituent of a coalesced digest)
-- **You planned** — the plan summary
-- **Your reasoning** — the planner's own `reasoning` field
+- **You set out to** — the executor's own summary of what it did
 - **You called** — the tool-call lines, writes always recorded, reads marked `(read)`
 - **You replied** — the turn's final text
 - **Reviewer** — `completed_work`, the prose on what already landed
@@ -137,7 +136,7 @@ ticket) and each keeps its own ledger.
 ## What the next turn sees
 
 The block is resolved **once** at turn start and frozen for the whole turn —
-the same rule the Plan prefetches follow, so a `self_iterate` loop cannot
+the same rule the turn-start prefetches follow, so a `self_iterate` loop cannot
 invalidate the provider prompt cache. It rides the **user** message, never the
 frozen system prefix, alongside the prior-work ledger:
 
@@ -159,25 +158,25 @@ explicitly: do not repeat a reply already given,
 `(read)` calls may be stale, everything else already took effect, and where
 the history and the task disagree the task wins.
 
-Review does **not** receive the block. It judges *this* turn's delivery
-against the plan, and its duplicate-delivery rule is already served by the
-within-turn ledger; feeding it prior turns invites judging work this turn
-never promised.
+Review does **not** receive the block. It judges *this* turn's record —
+what the executor said it set out to do against what the tool log says ran —
+and its duplicate-delivery rule is already served by the within-turn ledger;
+feeding it prior turns invites judging work this turn never promised.
 
 ---
 
 ## Cost
 
-The block is re-sent on every round of every phase, and Anthropic bills cache
+The block is re-sent on every executor round, and Anthropic bills cache
 reads at full token value, so its cost multiplies by rounds used. That product
 is what `injected_max_chars` bounds. The default (~1.5k tokens) is the order of
 one iteration of the prior-work ledger; the `prompt.size` telemetry event
 records the delta fleet-wide.
 
 Against that: the re-recon it displaces costs a `list_mcp_server_tools` round,
-an `activate_tool` round and the read itself, in Plan **and again** in Execute,
-on every turn of the conversation — and recovers only what was *posted*, never
-the agent's own plan, reasoning, or the results it gathered.
+an `activate_tool` round and the read itself, on every turn of the
+conversation — and recovers only what was *posted*, never the agent's own
+intent or the results it gathered.
 
 ---
 

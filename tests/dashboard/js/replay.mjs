@@ -113,7 +113,7 @@ if (!sawLiveCall) {
   problems.push("no in-flight call ever reached a seat row: a turn would go " +
     "from idle to done with nothing on screen in between");
 }
-for (const want of ["plan", "execute", "review"]) {
+for (const want of ["execute", "review"]) {
   if (!phases.has(want)) {
     problems.push(`no live call named the ${want} phase (saw ${[...phases].join(", ") || "none"})`);
   }

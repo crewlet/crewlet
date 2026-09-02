@@ -2,7 +2,7 @@
 
 The agent runtime (`internal/agent`) manages agent lifecycle, execution, and memory.
 
-> **Per-turn execution:** every agent turn runs through the three-phase **Plan → Execute → Review** [Turn Engine](turn-engine.md). Every agent turn described on this page dispatches into `turn.Engine.Run`, which owns concurrency, OTel context restoration, phase dispatch with the iteration cap and stall detection, ephemeral sub-agent spawning, and the runtime invariants (delegation-depth cap, sub-agent tool allowlist, budget cascade). The sections below describe the surrounding lifecycle; the turn-engine doc describes what happens inside a turn.
+> **Per-turn execution:** every agent turn runs through the two-stage **Executor → Reviewer** [Turn Engine](turn-engine.md). Every agent turn described on this page dispatches into `turn.Engine.Run`, which owns concurrency, OTel context restoration, phase dispatch with the iteration cap and stall detection, ephemeral sub-agent spawning, and the runtime invariants (delegation-depth cap, sub-agent tool allowlist, budget cascade). The sections below describe the surrounding lifecycle; the turn-engine doc describes what happens inside a turn.
 
 ---
 
@@ -34,7 +34,7 @@ flowchart LR
     R -->|builds| D --> I
 ```
 
-For team lead agents, the system prompt includes a **team roster** — a summary of each direct report's name and handle. Detailed per-member profiles (skills, backstory, tools) render directly into the lead's Plan-phase prompt from the in-memory `Organization` model when the lead needs to reason about assignment.
+For team lead agents, the system prompt includes a **team roster** — a summary of each direct report's name and handle. Detailed per-member profiles (skills, backstory, tools) render directly into the lead's executor prompt from the in-memory `Organization` model when the lead needs to reason about assignment.
 
 ---
 
@@ -60,41 +60,37 @@ stateDiagram-v2
 
 ## Agent Execution Loop
 
-Each agent, when triggered (by event or task assignment), executes a **turn** through the three-phase [Turn Engine](turn-engine.md):
+Each agent, when triggered (by event or task assignment), executes a **turn** through the two-stage [Turn Engine](turn-engine.md):
 
 ```
-1. Collect context (task, knowledge, trigger event, delegation chain)
+1. Collect context (task, knowledge, trigger event, delegation chain),
+   and derive from the trigger WHO IS WAITING for this turn
 
-2. Plan phase
-   ├── Planner LLM sees a slim catalogue (builtin tool names + MCP
-   │     server names) in its system prompt
-   ├── Meta-tools: submit_plan, activate_tool, list_mcp_server_tools,
-   │     load_tool_skill
+2. Executor phase
+   ├── Tool surface = every first-party tool except mark_onboarded,
+   │     plus submit_work, activate_tool, list_mcp_server_tools
+   ├── The system prompt carries a slim catalogue: builtin tool names
+   │     and MCP SERVER names, never the 50-150 MCP tool schemas
    ├── To use an MCP tool: list_mcp_server_tools(server) to discover
-   │     names, then activate_tool(name) to promote into tools=[...].
-   │     Reserve activation for read-only recon (Slack thread reads,
-   │     Jira fetches, agent lookup); action / write tools should not
-   │     be activated here -- name them in tools_needed for Execute.
-   └── Emits a Plan: reasoning, steps, tools needed, success criteria
+   │     names, then activate_tool(name) to promote it into tools=[...]
+   │     so its schema arrives on the next round. Nothing is named in
+   │     advance, so nothing has to be reconciled afterwards.
+   └── Ends by calling submit_work: outcome, summary, deliveries,
+         checked against the engine's own record of the turn
 
-3. Execute phase
-   ├── Tool surface = plan.tools_needed ∪ executor_always_on_tools
-   │     ∪ {activate_tool, list_mcp_server_tools}
-   ├── Same slim catalogue Plan sees, same discover-then-activate flow
-   │     -- the executor can recover when the planner missed a tool
-   │     by calling list_mcp_server_tools + activate_tool mid-run.
-   │     Successful activations fire phase.tool_activated events.
-   └── Tool-call loop drives the LLM through the plan
+3. Engine check (no model call)
+   ├── no_action nobody asked for and nothing acted on -> the turn ends
+   └── a claim the record refutes -> loop back with a correction
 
-4. Review phase
-   ├── submit_review emits a ReviewOutcome
-   └── done | self_iterate (loop back to Plan, carrying the
-         prior-work ledger so the next pass plans only the gap)
+4. Reviewer phase
+   ├── submit_review emits a decision
+   └── done | self_iterate (loop back, carrying the prior-work ledger
+         so the next round does only the gap) | failed
 
 5. Emit events, update memory, return to Idle
 ```
 
-The Plan and Execute phases can run on different LLM models — see the [Turn Engine](turn-engine.md#per-phase-llm-models) doc.
+The executor and the reviewer can run on different LLM models — see the [Turn Engine](turn-engine.md#per-phase-llm-models) doc.
 
 ---
 
@@ -104,7 +100,7 @@ The LLM is an external HTTP service — it cannot access local code, MCP servers
 
 ```mermaid
 flowchart TD
-    subgraph machine["YOUR MACHINE — run_tool_loop (Plan / Execute / Review / sub-agent)"]
+    subgraph machine["YOUR MACHINE — the tool loop (executor / review / sub-agent)"]
         direction TB
         S1["1. Build messages + tool definitions (JSON schemas)"]
         S2["2. Request"]
@@ -135,24 +131,23 @@ Both builtin and MCP tools produce identical tool definition schemas. From the L
 
 ## System Prompts (per phase)
 
-Under the three-phase [Turn Engine](turn-engine.md), each phase builds its own narrow system prompt — there is no single monolithic prompt for a turn. Each builder lives in `internal/agent/prompts/`; the detail layer is in `internal/agent/prompts/sections.go`. Founder-defined role/org context (mission, vision, policies, backstory, responsibilities, behavioral guidelines, team roster) renders **directly from the in-memory `Organization` model into the Plan prompt** via the section builders in `internal/agent` — no DB seed step, no reconcile pass.
+Under the two-stage [Turn Engine](turn-engine.md), each phase builds its own narrow system prompt — there is no single monolithic prompt for a turn. Each builder lives in `internal/agent/prompts/`; the detail layer is in `internal/agent/prompts/sections.go`. Founder-defined role/org context (mission, vision, policies, backstory, responsibilities, behavioral guidelines, team roster) renders **directly from the in-memory `Organization` model into the executor's prompt** via the section builders — no DB seed step, no reconcile pass.
 
 | Phase | What's in the prompt |
 |---|---|
-| **Plan** | Identity (role, unit, goal, manager, direct reports, Slack channel), full policy text, role profile (backstory + responsibilities + behavioral guidelines), unit context (purpose + goals), team roster with per-member profile (leads only), compact plan-phase contract, [Tool Skills](tool-skills.md) **catalogue** (one-line summary per triggered skill), **slim** tool catalogue (builtin tool names + MCP server names; MCP tool names hidden behind ``list_mcp_server_tools``). Plus the five learning prefetches: ``## Similar prior work`` (episodes), ``## Personal memory`` (diary), ``## Synthesized skills you've learned``, ``## Relevant knowledge`` (live knowledge-base search — the aux LLM generates a plain-text query from the trigger, run against Confluence), ``## First-turn onboarding`` (until ``mark_onboarded`` fires). On iterations after the first, the user message also carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) as ``## Already done earlier in this turn``. |
-| **Execute** | One-line identity, plan summary, execute contract (which now describes the discover-then-activate flow), [Tool Skills](tool-skills.md) catalogue scoped to ``plan.tools_needed``, optional counterparty profile block, optional ``## Relevant knowledge`` block (the [post-Plan re-fetch](agent-learning.md#post-plan-re-fetch-thin-triggers) — present only on thin-trigger turns where the Plan-phase prefetch was gated off), and the same slim tool catalogue Plan carries so the executor knows what discovery surface is available. Skill bodies arrive on demand via the always-on ``load_tool_skill`` builtin. Its user message carries the same ``## Already done earlier in this turn`` [ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) Plan gets — Execute is what actually fires side effects. No policies, no roster. |
-| **Review** | One-line identity, plan summary + Plan tool log + Execute tool log, decision-enum contract, [Tool Skills](tool-skills.md) catalogue for MCP-server-keyed skills (operator-scoped to the Review phase). Both phase tool logs render as separate sections (`## What Plan did` / `## What Execute did`) so the reviewer can tell which phase delivered each side effect — without the Plan log, a side effect fired during in-Plan recon looks like missing delivery and the reviewer self-iterates a turn that already shipped. On iterations after the first, a `## Earlier iterations (already delivered)` section carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) so the duplicate-delivery rule holds turn-wide. No tool catalogue, no policies, no roster. |
+| **Executor** | Identity (role, unit, goal, manager, direct reports, chat channel), full policy text, role profile (backstory + responsibilities + behavioral guidelines), unit context (purpose + goals), team roster with per-member profile (leads only), the executor's contract, [Tool Skills](tool-skills.md) **catalogue** (one-line summary per triggered skill), **slim** tool catalogue (builtin tool names + MCP server names; MCP tool names hidden behind ``list_mcp_server_tools``). Plus the five learning prefetches: ``## Similar prior work`` (episodes), ``## Personal memory`` (diary), ``## Synthesized skills you've learned``, ``## Relevant knowledge`` (a knowledge-base search built from the trigger), ``## First-turn onboarding`` (until ``mark_onboarded`` fires). On rounds after the first, the user message also carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) as ``## Already done earlier in this turn``. |
+| **Review** | One-line identity, the round's own account of what it set out to do, the outcome word (and who wrote it), the verbatim tool log, the text it produced, the decision-enum contract, and the [Tool Skills](tool-skills.md) catalogue for MCP-server-keyed skills (operator-scoped to the review phase). On rounds after the first, a `## Earlier rounds (already delivered)` section carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) so the duplicate-delivery rule holds turn-wide. No tool catalogue, no policies, no roster, no prefetch. |
 | **Sub-agent** | Parent-provided task prompt, [Tool Skills](tool-skills.md) catalogue scoped to the parent-passed tool allowlist, then the mandated runtime preamble (no further sub-agents, no colleague contact, concise final answer). |
 
-Why the split: the planner is the only phase making ownership / delegation / policy-sensitive decisions, so it gets the richest context. Execute and Review run against the plan's explicit `success_criteria` — they don't need to re-derive those from policies or backstory.
+Why the split: the executor is the frame making every ownership / delegation / policy-sensitive decision AND acting on it, so it gets the whole picture — the two-prompt engine's real cost was never the tokens saved by splitting them, it was sending the identity scaffold twice and throwing away everything the planner had read. The reviewer's question is narrower: is this round's work right, given what the record says it did. Standing memory, the team's docs and the requester's traits are what the executor needed to DO the work; in front of a reviewer they compete with the evidence it is meant to judge.
 
 ### Built-in engine scaffolding
 
-Engine guardrails ("event triage framework", "escalation judgement", "tool usage instructions", "knowledge-system usage") are carried by tool descriptions (`confluence_search`, colleague-surface tools) and by the plan/review contracts themselves — not by dedicated prompt prose. Each tool's one-line description tells the LLM when to use it; the per-phase contract tells the LLM what output shape is expected. There is no special escalation mechanism — when stuck, an agent reaches its manager with the same colleague-surface tools it uses for any other collaboration (a Slack mention, a Jira comment, `a2a_ask`); Review routes a blocked turn back through `self_iterate` so Plan adds that outreach step (no `escalate` tool, and no `ask_colleague` decision).
+Engine guardrails ("event triage framework", "escalation judgement", "tool usage instructions", "knowledge-system usage") are carried by tool descriptions (`search_knowledge`, colleague-surface tools) and by the executor/review contracts themselves — not by dedicated prompt prose. Each tool's one-line description tells the LLM when to use it; the per-phase contract tells the LLM what output shape is expected. There is no special escalation mechanism — when stuck, an agent reaches its manager with the same colleague-surface tools it uses for any other collaboration (a Slack mention, a Jira comment, `a2a_ask`); the reviewer routes a blocked turn back through `self_iterate` so the next round makes that outreach (no `escalate` tool, and no `ask_colleague` decision).
 
 Tool- and MCP-server-specific guidance (when to call ``reflect_and_persist``, how to mention teammates on Jira vs Slack, when to author code via the [code sandbox](code-sandbox.md) and what the GitHub tools are for) lives in the [Tool Skills](tool-skills.md) registry — modular knowledge-base-sourced fragments (Confluence pages) where each skill carries a short **summary** (always inline in the per-phase catalogue) and a rich **body** that loads on demand via the always-on ``load_tool_skill`` builtin. The engine ships no skill prose; operators seed the skills container with ``crewlet confluence import`` and edit pages in the backend's editor thereafter.
 
-There is no single monolithic system prompt to read: `internal/agent/prompts` builds one PER PHASE (`BuildOnboarding`, `BuildPlan`, `BuildExecute`, `BuildReview`) from the same identity sections, and each phase sees only the guidance and the tool catalogue that phase is meant to act on.
+There is no single monolithic system prompt to read: `internal/agent/prompts` builds one PER PHASE (`BuildOnboarding`, `BuildExecutor`, `BuildReview`, `BuildSubagent`) from the same identity sections, and each phase sees only the guidance and the tool catalogue that phase is meant to act on.
 
 ---
 
@@ -178,12 +173,12 @@ Decisions use the agent's Slack MCP tools and team channel — see [Decision Fra
 
 ### MCP Tools
 
-MCP tools (Jira, Slack, GitHub, etc.) are dynamically discovered from configured MCP servers at engine boot and registered alongside builtins. Plan and Execute do **not** see every MCP tool name in their system prompts (a role with 50–150 MCP tools would push 15–25 KB of catalogue into every prompt); instead the prompt lists *MCP server names* and the LLM walks the discover-then-activate flow:
+MCP tools (Jira, Slack, GitHub, etc.) are dynamically discovered from configured MCP servers at engine boot and registered alongside builtins. The executor does **not** see every MCP tool name in its system prompt (a role with 50–150 MCP tools would push 15–25 KB of catalogue into every prompt); instead the prompt lists *MCP server names* and the LLM walks the discover-then-activate flow:
 
 1. `list_mcp_server_tools(server)` — returns the `name: description` listing for one server.
 2. `activate_tool(name)` — promotes a tool from the catalogue into `tools=[...]` so the LLM can call it on the next round.
 
-Both meta-tools are available in Plan and Execute. Sub-agents have a fixed parent-chosen surface and cannot discover or activate tools (`activate_tool` / `list_mcp_server_tools` are on the sub-agent denylist).
+Both meta-tools are available to the executor and to onboarding. Sub-agents have a fixed parent-chosen surface and cannot discover or activate tools (`activate_tool` / `list_mcp_server_tools` are on the sub-agent denylist).
 
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](code-sandbox.md). See [GitHub Integration](../integrations/github.md).
 
@@ -273,7 +268,7 @@ flowchart TD
 6. **API server exits** — the dashboard is served through the whole drain,
    and is brought down only after the engine has fully stopped.
 
-**Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute Plan → Execute → Review turns one after another during a shutdown that waits for them indefinitely.
+**Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute executor → reviewer turns one after another during a shutdown that waits for them indefinitely.
 
 **No engine-level timeout on the drain.** Step 3 waits as long as in-flight turns need. We don't try to second-guess "too long" — the host already provides that cutoff:
 
@@ -281,7 +276,7 @@ flowchart TD
 - **Kubernetes:** `terminationGracePeriodSeconds` (default 30 s) — after which the kubelet sends SIGKILL.
 - **systemd:** `TimeoutStopSec` (default 90 s) — same SIGKILL fallback.
 
-Embedding our own grace window would duplicate that decision in two places and inevitably disagree. Size the orchestrator's grace period to cover your expected turn length (a multi-tool Plan → Execute → Review can comfortably take 2–5 minutes).
+Embedding our own grace window would duplicate that decision in two places and inevitably disagree. Size the orchestrator's grace period to cover your expected turn length (a multi-tool executor → reviewer turn can comfortably take 2–5 minutes).
 
 **Force stop (second signal).** The first signal starts the drain and
 *hands the signals back to the operating system*, so a second SIGINT or
@@ -311,4 +306,4 @@ you opted into by sending the second signal.
 
 The console shows the same story: the first Ctrl+C prints what is being waited for and how to escalate, and the engine logs `drain_in_progress` with the in-flight count every 10 seconds until the drain converges (`drain_complete`).
 
-Per-agent visibility is finer-grained: each working agent's row carries `current_phase` (`plan` / `execute` / `review`) plus the iteration number, derived from `AgentPhaseStarted` events the turn engine emits at the top of each phase.
+Per-agent visibility is finer-grained: each working agent's row carries `current_phase` (`onboarding` / `execute` / `review`) plus the round number, derived from `AgentPhaseStarted` events the turn engine emits at the top of each phase.

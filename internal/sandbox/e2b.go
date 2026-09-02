@@ -99,7 +99,7 @@ func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 		// REFUSED AT CONSTRUCTION, so an apply fails rather than every
 		// coding run: a provider built without a key would report a
 		// configured sandbox and 401 at the first create, minutes into a
-		// turn that already spent a Plan phase.
+		// turn that has already spent its own rounds.
 		return nil, errors.New(
 			"e2b: providers.sandbox.api_key resolved empty — the API " +
 				"authenticates every call, including against a self-hosted " +

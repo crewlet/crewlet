@@ -13,19 +13,19 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The dedicated first-turn onboarding pass, which runs BEFORE Plan.
+// The dedicated first-turn onboarding pass, which runs BEFORE the executor.
 //
-// It used to happen INSIDE Plan, driven by a hint injected into the Plan
-// prompt. On a genuine first turn that spent the Plan round budget on reading
-// the team's pages and persisting conventions, and could starve submit_plan
-// entirely — a seat's first ever turn was the one most likely to produce no
-// plan at all.
+// It used to happen inside the turn's own thinking pass, driven by a hint
+// injected into that prompt. On a genuine first turn that spent the whole
+// round budget on reading the team's pages and persisting conventions, and
+// could starve the submission entirely — a seat's first ever turn was the one
+// most likely to end having decided nothing at all.
 //
 // So it is its own phase with its own budget
 // (turn_engine.onboarding_max_tool_rounds), and onboarding never competes with
-// planning. Its surface is the onboarding builtins plus the discovery
-// meta-tools, so the agent can find its knowledge-base server the same way
-// Plan does — on a separate budget.
+// the work. Its surface is the onboarding builtins plus the discovery
+// meta-tools, so the agent can find its knowledge-base server the same way the
+// executor does — on a separate budget.
 //
 // NO REQUIRED-SKILL GUARD, deliberately: onboarding is a fixed read → persist
 // → mark workflow and the hint is its own guidance, so the load-before-use tax
@@ -126,7 +126,8 @@ type Onboarding struct {
 	// Latch is the process-local memory of who is already onboarded.
 	Latch *Latch
 
-	// Rounds and Ceiling are the pass's own budget, separate from Plan's.
+	// Rounds and Ceiling are the pass's own budget, separate from the
+	// executor's.
 	Rounds  int
 	Ceiling int
 
@@ -137,8 +138,8 @@ type Onboarding struct {
 // Onboard runs the first-turn pass if this seat still needs it.
 //
 // It reports whether the pass RAN, which the caller uses to suppress the
-// Plan-prompt hint for the turn: a seat that has just been through the pass
-// should not also be told to onboard.
+// executor prompt's onboarding hint for the turn: a seat that has just been
+// through the pass should not also be told to onboard.
 //
 // FIVE GATES, and every one of them exists because onboarding must run until
 // it marks and then never again for the same chain:
@@ -224,10 +225,11 @@ func (r *Runner) Onboard(ctx context.Context) (bool, error) {
 
 // onboardingPass is the LLM pass itself, under the lease.
 //
-// ITERATION 0, so a dashboard groups it under the turn BEFORE the first Plan,
-// which runs at iteration 1. The phase events, the extension judge and the
-// failure path all come from runPhase — the same machinery Plan and Execute
-// use, which is what stops onboarding drifting into a second turn engine.
+// ITERATION 0, so a dashboard groups it under the turn BEFORE the first
+// executor round, which runs at iteration 1. The phase events, the extension
+// judge and the failure path all come from runPhase — the same machinery the
+// executor and the reviewer use, which is what stops onboarding drifting into
+// a second turn engine.
 func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error) {
 	snapshot := r.cfg.Registry.Snapshot()
 	surface, err := r.surfaceWith(ctx, phase.Onboarding, 0, snapshot, nil, onboardingAlwaysOn)
@@ -268,7 +270,7 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	onboardingLog.InfoContext(ctx, "onboarding_phase_complete",
 		"agent", r.cfg.Seat.Role.Handle(), "turn_id", r.cfg.Turn.ID,
 		"marked", marked, "rounds", res.Rounds, "chain", chain)
-	// RECORDED HERE, not left to the caller. The Plan prompt carries an
+	// RECORDED HERE, not left to the caller. The executor's prompt carries an
 	// onboarding hint rendered BEFORE this pass ran — the prefetch is
 	// frozen at turn start, and at that moment the seat genuinely had not
 	// onboarded — so without this a seat that onboards on this very turn
@@ -281,7 +283,8 @@ func (r *Runner) onboardingPass(ctx context.Context, chain string) (bool, error)
 	return marked, nil
 }
 
-// onboardingIteration groups the pass under the turn, before Plan's round 1.
+// onboardingIteration groups the pass under the turn, before the executor's
+// round 1.
 const onboardingIteration = 0
 
 // calledSuccessfully reports whether a named tool ran and did not fail.

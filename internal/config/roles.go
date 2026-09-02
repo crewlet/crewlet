@@ -74,9 +74,13 @@ type Role struct {
 	// The flat per-phase fields. Each WINS over the same phase inside the
 	// mapping form, so a seat can take a shared mapping and override one
 	// phase without restating the block.
-	LLMPlan      ProviderKeys `yaml:"llm_plan,omitempty" json:"llm_plan,omitzero" desc:"Provider chain for Plan; wins over llm.plan."`
-	LLMExecute   ProviderKeys `yaml:"llm_execute,omitempty" json:"llm_execute,omitzero" desc:"Provider chain for Execute."`
-	LLMReview    ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero" desc:"Provider chain for Review."`
+	//
+	// There is no executor entry, and that is not an omission: `llm` IS the
+	// executor's chain. The turn's work happens in one conversation, so a
+	// second field naming the model that conversation runs on would be two
+	// spellings of one setting — and the phases that remain here are the
+	// SATELLITES an operator points somewhere cheaper.
+	LLMReview    ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero" desc:"Provider chain for the reviewer."`
 	LLMSubagent  ProviderKeys `yaml:"llm_subagent,omitempty" json:"llm_subagent,omitzero" desc:"Provider chain for spawned sub-agents."`
 	LLMAuxiliary ProviderKeys `yaml:"llm_auxiliary,omitempty" json:"llm_auxiliary,omitzero" desc:"Cheap model for reflection and summaries."`
 	LLMJudge     ProviderKeys `yaml:"llm_judge,omitempty" json:"llm_judge,omitzero" desc:"Cheap model for the round-cap extension judge."`
@@ -382,8 +386,6 @@ func (r *Role) Seat() *org.Role {
 		BehavioralGuidelines: append([]string(nil), r.BehavioralGuidelines...),
 		TokenBudget:          r.TokenBudget,
 		LLM:                  r.LLM.Default,
-		LLMPlan:              pick(r.LLMPlan, r.LLM.Plan),
-		LLMExecute:           pick(r.LLMExecute, r.LLM.Execute),
 		LLMReview:            pick(r.LLMReview, r.LLM.Review),
 		LLMSubagent:          pick(r.LLMSubagent, r.LLM.Subagent),
 		LLMAuxiliary:         pick(r.LLMAuxiliary, r.LLM.Auxiliary),

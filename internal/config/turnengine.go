@@ -47,32 +47,27 @@ type TurnEngine struct {
 	// refused up front rather than starving every child.
 	SubagentMinPerChildTokens int `yaml:"subagent_min_per_child_tokens,omitempty" json:"subagent_min_per_child_tokens,omitempty" js:"min=0" desc:"Floor on a child's token slice; below it the batch is refused."`
 
-	// ExecutorAlwaysOnTools are available in Execute regardless of what
-	// the plan named.
-	//
-	// The default is the rich-body skill fetch: a read-only,
-	// side-effect-free read the executor frequently wants and cannot get
-	// later if the planner forgot to name it. Adding to this list is easy
-	// and hard to reverse — prefer having the planner name the tool.
-	ExecutorAlwaysOnTools []string `yaml:"executor_always_on_tools,omitempty" json:"executor_always_on_tools,omitempty" desc:"Tools Execute always has, whatever the plan named."`
-
 	// DelegationDepthLimit caps colleague-to-colleague chains. A turn
 	// triggered by another agent inherits its depth plus one; on breach
 	// the turn is terminated as failed.
 	DelegationDepthLimit int `yaml:"delegation_depth_limit,omitempty" json:"delegation_depth_limit,omitempty" js:"min=0" desc:"Maximum depth of agent-to-agent delegation chains."`
 
-	// MaxToolRounds caps rounds within one Execute run. A round is one LLM
-	// call plus the tools it emits. On breach Execute exits and Review
-	// sees the exhaustion, which typically forces another iteration.
-	MaxToolRounds int `yaml:"max_tool_rounds,omitempty" json:"max_tool_rounds,omitempty" js:"min=0" desc:"Tool rounds within one Execute run."`
-
-	// PlanMaxToolRounds caps rounds within one Plan run. Plan needs fewer
-	// than Execute because it only calls meta-tools.
-	PlanMaxToolRounds int `yaml:"plan_max_tool_rounds,omitempty" json:"plan_max_tool_rounds,omitempty" js:"min=0" desc:"Tool rounds within one Plan run."`
+	// MaxToolRounds caps rounds within one executor run. A round is one LLM
+	// call plus the tools it emits. On breach the executor exits and the
+	// reviewer sees the exhaustion, which typically forces another
+	// iteration.
+	//
+	// It is the ONE round cap a turn's own work has now: the executor
+	// plans, discovers and acts in one conversation, so the budget the
+	// three-phase engine split across plan_max_tool_rounds (16) and
+	// max_tool_rounds (20) is one number. The reviewer has no knob — it
+	// holds a single submission tool, so its budget is a structural fact
+	// rather than an operator preference.
+	MaxToolRounds int `yaml:"max_tool_rounds,omitempty" json:"max_tool_rounds,omitempty" js:"min=0" desc:"Tool rounds within one executor run."`
 
 	// OnboardingMaxToolRounds is the dedicated first-turn onboarding
-	// pass's own budget. It runs BEFORE Plan with its own rounds so
-	// onboarding never starves the plan submission on a first turn.
+	// pass's own budget. It runs BEFORE the executor with its own rounds
+	// so onboarding never starves the work submission on a first turn.
 	// 0 disables the dedicated pass.
 	OnboardingMaxToolRounds int `yaml:"onboarding_max_tool_rounds,omitempty" json:"onboarding_max_tool_rounds,omitempty" js:"min=0" desc:"Rounds for the first-turn onboarding pass; 0 disables it."`
 
@@ -85,8 +80,7 @@ type TurnEngine struct {
 	// The ceilings the judge may grant up to, per phase. Setting one equal
 	// to that phase's base round count disables extensions for that phase
 	// without disabling them for the others.
-	PlanMaxToolRoundsCeiling       int `yaml:"plan_max_tool_rounds_ceiling,omitempty" json:"plan_max_tool_rounds_ceiling,omitempty" js:"min=0" desc:"Hard ceiling for Plan rounds across extensions."`
-	ExecuteMaxToolRoundsCeiling    int `yaml:"execute_max_tool_rounds_ceiling,omitempty" json:"execute_max_tool_rounds_ceiling,omitempty" js:"min=0" desc:"Hard ceiling for Execute rounds across extensions."`
+	ExecuteMaxToolRoundsCeiling    int `yaml:"execute_max_tool_rounds_ceiling,omitempty" json:"execute_max_tool_rounds_ceiling,omitempty" js:"min=0" desc:"Hard ceiling for executor rounds across extensions."`
 	OnboardingMaxToolRoundsCeiling int `yaml:"onboarding_max_tool_rounds_ceiling,omitempty" json:"onboarding_max_tool_rounds_ceiling,omitempty" js:"min=0" desc:"Hard ceiling for onboarding rounds across extensions."`
 
 	// ExtensionRoundStep caps what one judge call may grant. Repeated
@@ -94,17 +88,10 @@ type TurnEngine struct {
 	// per extension rather than per turn.
 	ExtensionRoundStep int `yaml:"extension_round_step,omitempty" json:"extension_round_step,omitempty" js:"min=0" desc:"Maximum rounds one extension call may grant."`
 
-	// SandboxBudgetFraction is the share of a seat's remaining budget a
-	// sandboxed Execute may consume, used to derive the coding agent's own
-	// in-agent caps. Best-effort: the coding agent calls the LLM itself,
-	// so this is a cap plus post-accounting, not the mid-stream gate the
-	// native loop has.
-	SandboxBudgetFraction float64 `yaml:"sandbox_budget_fraction,omitempty" json:"sandbox_budget_fraction,omitempty" js:"min=0;max=1" desc:"Share of the seat's remaining budget a sandboxed Execute may use."`
-
 	// SandboxMinBudgetTokens is a pre-flight floor: refuse to launch a
-	// sandboxed Execute below it, rather than launching one that dies
-	// mid-run having produced nothing.
-	SandboxMinBudgetTokens int `yaml:"sandbox_min_budget_tokens,omitempty" json:"sandbox_min_budget_tokens,omitempty" js:"min=0" desc:"Refuse a sandboxed Execute below this remaining budget."`
+	// coding run below it, rather than launching one that dies mid-run
+	// having produced nothing.
+	SandboxMinBudgetTokens int `yaml:"sandbox_min_budget_tokens,omitempty" json:"sandbox_min_budget_tokens,omitempty" js:"min=0" desc:"Refuse a coding run below this remaining budget."`
 
 	// ConversationSession is the cross-turn ledger. It is nested here
 	// rather than beside it because the turn engine reads it on every
@@ -123,19 +110,22 @@ func DefaultTurnEngine() TurnEngine {
 		SubagentMaxParallel:         3,
 		SubagentBatchTimeoutSeconds: 120,
 		SubagentMinPerChildTokens:   500,
-		ExecutorAlwaysOnTools:       []string{"load_tool_skill"},
 		DelegationDepthLimit:        3,
-		MaxToolRounds:               20,
-		PlanMaxToolRounds:           16,
-		OnboardingMaxToolRounds:     10,
+		// 24 = the 16 the planner had plus the 20 the actor had, minus
+		// the round each spent on its own submission and the re-reads the
+		// actor made of what the planner had already fetched. One
+		// conversation does the discovery once: measured against the
+		// three-phase engine's own logs, a turn that took 16+20 spends
+		// closer to 20 when the plan is not thrown away between them, and
+		// 24 leaves headroom before the extension judge is consulted.
+		MaxToolRounds:           24,
+		OnboardingMaxToolRounds: 10,
 		// 2x each phase's base, which is what an extension is for: a phase
 		// that is genuinely progressing gets a second budget, and one that
 		// is thrashing hits a wall an operator can see in the numbers.
-		PlanMaxToolRoundsCeiling:       32,
-		ExecuteMaxToolRoundsCeiling:    40,
+		ExecuteMaxToolRoundsCeiling:    48,
 		OnboardingMaxToolRoundsCeiling: 20,
 		ExtensionRoundStep:             8,
-		SandboxBudgetFraction:          0.5,
 		SandboxMinBudgetTokens:         2000,
 		ConversationSession:            DefaultConversationSession(),
 	}
@@ -157,7 +147,6 @@ func (t *TurnEngine) validate(path string) error {
 		{"subagent_max_parallel", t.SubagentMaxParallel},
 		{"delegation_depth_limit", t.DelegationDepthLimit},
 		{"max_tool_rounds", t.MaxToolRounds},
-		{"plan_max_tool_rounds", t.PlanMaxToolRounds},
 		{"extension_round_step", t.ExtensionRoundStep},
 	}
 	for _, f := range positive {
@@ -203,7 +192,6 @@ func (t *TurnEngine) validate(path string) error {
 		value float64
 	}{
 		{"subagent_budget_fraction", t.SubagentBudgetFraction},
-		{"sandbox_budget_fraction", t.SandboxBudgetFraction},
 	}
 	for _, f := range fractions {
 		if f.value <= 0 || f.value > 1 {
@@ -221,7 +209,6 @@ func (t *TurnEngine) validate(path string) error {
 		name, baseName string
 		value, base    int
 	}{
-		{"plan_max_tool_rounds_ceiling", "plan_max_tool_rounds", t.PlanMaxToolRoundsCeiling, t.PlanMaxToolRounds},
 		{"execute_max_tool_rounds_ceiling", "max_tool_rounds", t.ExecuteMaxToolRoundsCeiling, t.MaxToolRounds},
 		{"onboarding_max_tool_rounds_ceiling", "onboarding_max_tool_rounds", t.OnboardingMaxToolRoundsCeiling, t.OnboardingMaxToolRounds},
 	}
@@ -239,8 +226,8 @@ func (t *TurnEngine) validate(path string) error {
 
 // ConversationSession is the per-conversation ledger: what a seat already
 // did in one conversation — a chat thread, an issue, a pull request —
-// carried into the NEXT turn of that conversation as a block on the Plan
-// and Execute messages.
+// carried into the NEXT turn of that conversation as a block on the
+// executor's user message.
 //
 // The cross-turn counterpart of the within-turn prior-work ledger, and
 // deliberately STRUCTURED rather than a transcript replay.

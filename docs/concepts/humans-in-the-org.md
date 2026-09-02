@@ -101,7 +101,7 @@ agent.
 - **Lead roster** — human members render as a distinct block: handle +
   "human teammate" marker, contact IDs, availability, and hand-off
   guidance (assign in the PM tool + mention; no engine turn expected).
-- **`## Human colleagues` contract block** — appears in the Plan prompt
+- **`## Human colleagues` contract block** — appears in the executor prompt
   (and the monolithic introspection prompt) *only when the org contains
   human seats*: reach humans on external surfaces, never via `a2a_ask`; they
   reply asynchronously — leave full context and end the turn; their

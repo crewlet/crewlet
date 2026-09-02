@@ -24,15 +24,13 @@ type headroom struct {
 
 func (h headroom) Remaining(context.Context) (int, error) { return h.left, h.err }
 
-// spawnRunner builds a runner whose Execute phase answers with plain text, so
-// the test's subject is the SURFACE rather than the loop.
+// spawnRunner builds a runner whose executor submits immediately, so the
+// test's subject is the SURFACE rather than the loop.
 func spawnRunner(t *testing.T, sub *runner.SubagentConfig) *runner.Runner {
 	t.Helper()
 	prov := &scriptedProvider{
-		plan: []llm.Completion{submitCall(t, runner.SubmitPlanTool, `{
-			"decision":"plan","reasoning":"go","tools_needed":[],
-			"steps":[{"intent":"x","approach":"y"}],"success_criteria":["z"]}`)},
-		execute: []llm.Completion{{Content: "done"}},
+		execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool,
+			`{"outcome":"no_action","summary":"nothing to fan out"}`)},
 		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"done","final_artifact":"a"}`)},
 	}
@@ -45,7 +43,7 @@ func spawnRunner(t *testing.T, sub *runner.SubagentConfig) *runner.Runner {
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: tools.NewRegistry(),
 		Models:   models,
-		Caps:     runner.Caps{PlanRounds: 4, ExecuteRounds: 6, ReviewRounds: 3},
+		Caps:     runner.Caps{ExecutorRounds: 6},
 		Task:     "fan this out",
 		Subagent: sub,
 	})
@@ -62,59 +60,47 @@ func shipped() subagent.Limits {
 	}
 }
 
-// executeOffers reports what the Execute surface actually carried.
+// executeOffers reports what the executor's surface actually carried.
 func executeOffers(t *testing.T, r *runner.Runner) []string {
 	t.Helper()
-	p, _, err := r.Plan(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Plan: %v", err)
-	}
-	_, surface, err := r.Execute(context.Background(), 1, p, nil)
+	_, surface, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	return surface.Catalogue
 }
 
-// THE SPAWNER REACHES THE EXECUTE SURFACE.
+// THE SPAWNER REACHES THE EXECUTOR'S SURFACE.
 //
 // The regression this exists for: internal/agent/subagent was imported by
 // nothing outside its own test, so spawn_subagent was never registered on any
 // surface and all six turn_engine.subagent_* knobs were validated, schema'd,
 // documented and read by nobody. The package's whole contract — the grant, the
 // caps, the batch, the panic containment — could not run.
-func TestTheSpawnerReachesTheExecuteSurface(t *testing.T) {
+func TestTheSpawnerReachesTheExecutorsSurface(t *testing.T) {
 	t.Parallel()
 	r := spawnRunner(t, &runner.SubagentConfig{Limits: shipped()})
 	if got := executeOffers(t, r); !slices.Contains(got, subagent.ToolName) {
-		t.Errorf("Execute was offered %v, without the spawner", got)
+		t.Errorf("the executor was offered %v, without the spawner", got)
 	}
 }
 
 // AND NOWHERE ELSE.
 //
-// Plan is choosing what to do and Review is judging what was done; a spawner
-// on either can spend a batch of model calls on work the turn has not decided
-// to do or has already finished.
-func TestOnlyExecuteMaySpawn(t *testing.T) {
+// The reviewer is judging what was done; a spawner there can spend a batch of
+// model calls on work the turn has already finished.
+func TestOnlyTheExecutorMaySpawn(t *testing.T) {
 	t.Parallel()
 	r := spawnRunner(t, &runner.SubagentConfig{Limits: shipped()})
 
-	p, planSurface, err := r.Plan(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Plan: %v", err)
-	}
-	if slices.Contains(planSurface.Catalogue, subagent.ToolName) {
-		t.Error("the planner was offered a spawner")
-	}
-	exec, _, err := r.Execute(context.Background(), 1, p, nil)
+	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	// Review's own surface is not returned, so this asserts the rule from
-	// the other end: a Review that ran at all did so without the spawner
-	// being reachable, because spawnEntry gates on the phase.
-	if _, err := r.Review(context.Background(), 1, p, exec, nil); err != nil {
+	// The reviewer's own surface is not returned, so this asserts the rule
+	// from the other end: a review that ran at all did so without the
+	// spawner being reachable, because spawnEntry gates on the phase.
+	if _, err := r.Review(context.Background(), 1, w, nil); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
 }

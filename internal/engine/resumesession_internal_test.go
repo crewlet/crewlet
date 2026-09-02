@@ -104,7 +104,7 @@ func TestASuspendedTurnFilesNothingAgainstItsConversation(t *testing.T) {
 	d := &Dispatcher{Conversations: conversations}
 	ctx := context.Background()
 
-	d.RecordSession(ctx, "swe", "slack:C1", "wk-1", turn.Result{
+	d.RecordSession(ctx, "swe", "slack:C1", "wk-1", "@ana: fix CI", turn.Result{
 		Suspended: true, Decision: phase.SelfIterate,
 	}, time.Now().UTC())
 
@@ -169,21 +169,29 @@ func (failingResumeConversations) Threads(context.Context, string, int) ([]ledge
 
 func (failingResumeConversations) Purge(context.Context, time.Time) (int64, error) { return 0, nil }
 
-// The conversation key has to REACH the row for any of the above to fire: the
-// launch is the only place that knows it, and the resume — another process,
-// days later — cannot recover it from a trigger that may be long gone.
-func TestTheTurnCarriesItsConversationToWorkItDetaches(t *testing.T) {
+// THREE FACTS HAVE TO REACH THE ROW for any of the above to fire, and the
+// launch is the only place that knows them: the conversation to report back
+// to, the brief the turn was working on, and who is waiting for it. The
+// resume — another process, days later — cannot recover any of them from a
+// trigger that may be long gone.
+func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 	t.Parallel()
 	tel := turnTelemetry{handle: "swe", convKey: "slack:C1"}
 	company := &Company{Org: &org.Organization{
 		Name:  "Acme",
 		Roles: []*org.Role{{Name: "Engineer", DeclaredHandle: "swe"}},
 	}}
-	got := tel.runnerTurn(company, "wk-1", 0, nil)
+	got := tel.runnerTurn(company, "wk-1", 0, nil, "fix the failing test", turn.ReplyTool)
 	if got.Context == nil {
 		t.Fatal("the runner turn carries no turn context")
 	}
 	if got.Context.ConversationKey != "slack:C1" {
 		t.Errorf("turn context conversation = %q, want the trigger's", got.Context.ConversationKey)
+	}
+	if got.Context.Task != "fix the failing test" {
+		t.Errorf("turn context task = %q", got.Context.Task)
+	}
+	if got.Context.Reply != string(turn.ReplyTool) {
+		t.Errorf("turn context reply = %q, want the delivery obligation", got.Context.Reply)
 	}
 }

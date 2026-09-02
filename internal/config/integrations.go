@@ -183,8 +183,8 @@ type Confluence struct {
 	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"HMAC secret for Data Center webhooks."`
 
 	// SkillsSpace holds the tool-skill pages. Excluded from routing and
-	// from knowledge search alike: those pages are machinery, and a
-	// planner told to read one would follow an instruction written for a
+	// from knowledge search alike: those pages are machinery, and a seat
+	// told to read one would follow an instruction written for a
 	// different phase of a different turn.
 	//
 	// A POINTER because all three states are real settings and the zero
@@ -353,16 +353,15 @@ func (s *Slack) Status() WorkingStatus {
 // checking Jira...") is a claim that is false most of the time it shows.
 type StatusPhrases struct {
 	Onboarding []string `yaml:"onboarding,omitempty" json:"onboarding,omitempty" desc:"Lines shown during the first-turn onboarding pass."`
-	Plan       []string `yaml:"plan,omitempty" json:"plan,omitempty" desc:"Lines shown during Plan."`
-	Execute    []string `yaml:"execute,omitempty" json:"execute,omitempty" desc:"Lines shown during Execute."`
-	Review     []string `yaml:"review,omitempty" json:"review,omitempty" desc:"Lines shown during Review."`
+	Execute    []string `yaml:"execute,omitempty" json:"execute,omitempty" desc:"Lines shown while the agent works."`
+	Review     []string `yaml:"review,omitempty" json:"review,omitempty" desc:"Lines shown while the reviewer judges the work."`
 	// Default covers any phase added later that has no pool of its own.
 	Default []string `yaml:"default,omitempty" json:"default,omitempty" desc:"Lines for any phase with no pool of its own."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (s StatusPhrases) IsZero() bool {
-	return len(s.Onboarding) == 0 && len(s.Plan) == 0 && len(s.Execute) == 0 &&
+	return len(s.Onboarding) == 0 && len(s.Execute) == 0 &&
 		len(s.Review) == 0 && len(s.Default) == 0
 }
 

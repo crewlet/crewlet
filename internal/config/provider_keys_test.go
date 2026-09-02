@@ -44,12 +44,12 @@ func TestARoleMayOnlyNameAConfiguredProvider(t *testing.T) {
 	// operator never chose. Nothing downstream can catch it — from inside
 	// resolution a name that misses and a name never written are the same
 	// absence.
-	err := validateDoc(t, "    llm_plan: claude-sonet")
+	err := validateDoc(t, "    llm_review: claude-sonet")
 	if err == nil {
 		t.Fatal("a role naming an unconfigured provider validated cleanly")
 	}
 	msg := err.Error()
-	for _, want := range []string{"roles[0].llm_plan", "claude-sonet", "default", "fast"} {
+	for _, want := range []string{"roles[0].llm_review", "claude-sonet", "default", "fast"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the error does not mention %q:\n%s", want, msg)
 		}
@@ -60,22 +60,22 @@ func TestAConfiguredKeyValidates(t *testing.T) {
 	t.Parallel()
 	// The counterfactual. Without it the assertion above passes for a rule
 	// that rejects every role.
-	if err := validateDoc(t, "    llm_plan: [fast, default]"); err != nil {
+	if err := validateDoc(t, "    llm_review: [fast, default]"); err != nil {
 		t.Errorf("a role naming configured providers was rejected: %v", err)
 	}
 }
 
 func TestTheMappingFormIsCheckedTooAndNamedWhereItWasWritten(t *testing.T) {
 	t.Parallel()
-	// The flat field WINS over the mapping, so a typo inside llm.plan under
-	// a role that also sets llm_plan never appears in the resolved chain —
-	// and is still a typo, still in the file, and still what the operator
-	// edits next. Validating the resolved value would hide it.
-	err := validateDoc(t, "    llm_plan: fast\n    llm:\n      plan: [bigg]")
+	// The flat field WINS over the mapping, so a typo inside llm.review
+	// under a role that also sets llm_review never appears in the resolved
+	// chain — and is still a typo, still in the file, and still what the
+	// operator edits next. Validating the resolved value would hide it.
+	err := validateDoc(t, "    llm_review: fast\n    llm:\n      review: [bigg]")
 	if err == nil {
 		t.Fatal("a shadowed typo in the mapping form validated cleanly")
 	}
-	if !strings.Contains(err.Error(), "roles[0].llm.plan") {
+	if !strings.Contains(err.Error(), "roles[0].llm.review") {
 		t.Errorf("the error does not point at the mapping form:\n%s", err)
 	}
 }
@@ -85,7 +85,7 @@ func TestEveryPerPhaseFieldIsCovered(t *testing.T) {
 	// A field left out of the check is a field where the typo stays
 	// invisible, and there is no way to notice that from the outside.
 	for _, field := range []string{
-		"llm", "llm_plan", "llm_execute", "llm_review",
+		"llm", "llm_review",
 		"llm_subagent", "llm_auxiliary", "llm_judge", "llm_sandbox",
 	} {
 		if err := validateDoc(t, "    "+field+": nope"); err == nil {
@@ -93,7 +93,7 @@ func TestEveryPerPhaseFieldIsCovered(t *testing.T) {
 		}
 	}
 	for _, key := range []string{
-		"default", "plan", "execute", "review", "subagent", "auxiliary", "judge", "sandbox",
+		"default", "review", "subagent", "auxiliary", "judge", "sandbox",
 	} {
 		if err := validateDoc(t, "    llm:\n      "+key+": nope"); err == nil {
 			t.Errorf("llm.%s: an unconfigured provider validated cleanly", key)
@@ -112,7 +112,7 @@ name: Acme
 roles:
   - name: CEO
     handle: ceo
-    llm_plan: whatever
+    llm_review: whatever
 `))
 	if err != nil {
 		t.Fatalf("an org chart authored before its providers failed to parse: %v", err)

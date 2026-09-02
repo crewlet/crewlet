@@ -25,9 +25,9 @@ type TurnRef struct {
 	TraceID         string
 	SpanID          string
 
-	// Metadata is the notification routing the resumed turn's reply tools
-	// need, so a report lands on the conversation the task came from.
-	Metadata map[string]any
+	// Reply is who is waiting for this turn, persisted so the resumed turn
+	// inherits the same delivery obligation. See [PendingRun.Reply].
+	Reply string
 
 	// Depth and Chain are the delegation state a resumed turn inherits.
 	Depth int
@@ -43,9 +43,9 @@ type LaunchRequest struct {
 	// task, its success criteria, and what its environment provides.
 	Brief string
 
-	// Task and Criteria come from the plan the turn already made.
-	Task     string
-	Criteria []string
+	// Task is the ask the suspended turn was working on, carried onto the
+	// row so a resume has the brief when the trigger is long gone.
+	Task string
 
 	Spec       Spec
 	Setup      []SetupStep
@@ -103,12 +103,11 @@ func Launch(ctx context.Context, m *Manager, store PendingStore, q Publisher, re
 	if err := store.BeginLaunch(ctx, PendingRun{
 		TurnID: req.Turn.TurnID, AgentHandle: req.Turn.AgentHandle,
 		AgentID: req.Turn.AgentID, Role: req.Turn.Role,
-		CodingAgent:          req.Spec.CodingAgent,
-		TaskDescription:      req.Task,
-		SuccessCriteria:      req.Criteria,
-		ConversationKey:      req.Turn.ConversationKey,
-		NotificationMetadata: req.Turn.Metadata,
-		TraceID:              req.Turn.TraceID, SpanID: req.Turn.SpanID,
+		CodingAgent:     req.Spec.CodingAgent,
+		TaskDescription: req.Task,
+		ConversationKey: req.Turn.ConversationKey,
+		Reply:           req.Turn.Reply,
+		TraceID:         req.Turn.TraceID, SpanID: req.Turn.SpanID,
 		DelegationDepth: req.Turn.Depth, DelegationChain: req.Turn.Chain,
 		CreatedAt: now(),
 	}, req.Fence); err != nil {
@@ -274,23 +273,22 @@ func summarise(brief string) string {
 
 // buildBrief assembles what the coding agent is actually told.
 //
-// FOUR PARTS, in the order an engineer reads them: the concrete task the
-// executor asked for, the wider goal it serves, what "done" means, and what
-// the environment already provides. The last is the setup steps' own briefs —
-// the mechanism and the hint together, so the agent does not spend rounds
-// rediscovering that git auth is already wired.
+// THREE PARTS, in the order an engineer reads them: the concrete task the
+// executor asked for, the wider goal it serves, and what the environment
+// already provides. The last is the setup steps' own briefs — the mechanism
+// and the hint together, so the agent does not spend rounds rediscovering
+// that git auth is already wired.
+//
+// There is no success-criteria section any more. It came from the planner's
+// declared criteria, and with one loop there is no separate plan to declare
+// them: what "done" means is the executor's own brief, written by the frame
+// that will read the answer.
 func buildBrief(req LaunchRequest) string {
 	var b strings.Builder
 	b.WriteString(req.Brief)
 	if req.Task != "" && req.Task != req.Brief {
 		b.WriteString("\n\n## The wider task\n")
 		b.WriteString(req.Task)
-	}
-	if len(req.Criteria) > 0 {
-		b.WriteString("\n\n## Success criteria\n")
-		for _, c := range req.Criteria {
-			b.WriteString("- " + c + "\n")
-		}
 	}
 	names := make([]string, 0, len(req.MCPServers))
 	for name := range req.MCPServers {

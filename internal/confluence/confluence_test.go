@@ -971,3 +971,25 @@ func TestAHumanSeatIsNeitherSubscribedNorWoken(t *testing.T) {
 		}
 	})
 }
+
+// A MENTION IS THE ONE ROUTING THAT IS AN ASK. A watcher is subscribed to a
+// page it once touched and a space lead is being told its team's
+// documentation moved; a seat obliged to answer either would comment on every
+// edit in every space its unit owns.
+func TestOnlyAMentionAddressesTheSeat(t *testing.T) {
+	t.Parallel()
+	addressed := func(via string) bool {
+		return (confluence.Prompt{}).Addressed(notify.Inbound{
+			Source:   confluence.Backend,
+			Metadata: map[string]string{confluence.RoutedViaField: via},
+		})
+	}
+	if !addressed(confluence.ViaMention) {
+		t.Error("a mention does not address the seat")
+	}
+	for _, via := range []string{confluence.ViaWatcher, confluence.ViaSpaceLead, ""} {
+		if addressed(via) {
+			t.Errorf("%q addresses the seat and is a subscription, not an ask", via)
+		}
+	}
+}

@@ -128,7 +128,7 @@ Each Role defines a unique individual agent — not a pool of interchangeable in
 
 There are no algorithmic assignment strategies — no role-based, hierarchical, or claim-based auto-routing. Task assignment is a **team lead reasoning decision**: the lead agent assigns the work item in the external PM tool (Jira, GitLab issues, …) through that tool's own MCP tools.
 
-The team lead's Plan-phase system prompt includes a compact team roster (names + handles), plus a per-member detail block (backstory, goal, responsibilities, Jira identity, skills) rendered directly from the in-memory `Organization` model so the lead has full context when reasoning about an assignment.
+The team lead's executor system prompt includes a compact team roster (names + handles), plus a per-member detail block (backstory, goal, responsibilities, Jira identity, skills) rendered directly from the in-memory `Organization` model so the lead has full context when reasoning about an assignment.
 
 ---
 
@@ -193,7 +193,7 @@ that list, and the two bullets below are why.
 ## One Knowledge Backend, Behind a Seam That Keeps It Swappable
 
 The knowledge base is **single-homed**: the engine wires exactly one
-`knowledge.Searcher`, and every consumer — the Plan-phase `## Relevant
+`knowledge.Searcher`, and every consumer — the `## Relevant
 knowledge` prefetch, the first-turn onboarding hint, the cross-agent
 skill-promotion pass — reads through it. Two searchers would make an agent's
 answer to "what do we already know about this" depend on which one was asked,

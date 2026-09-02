@@ -215,17 +215,16 @@ providers:
           projects your brief names: each project has exactly one owning
           seat.
 
-# Turn engine — Plan/Execute/Review settings.  Includes the round-cap
-# extension judge: when Plan or Execute exhausts its base round cap
-# without finishing, a cheap LLM judge inspects the tool log and
-# decides whether to grant more rounds (the agent is making progress)
-# or fall through to the existing rescue path (the agent is thrashing).
-# Extensions chain up to the per-phase ceilings.  See
+# Turn engine — executor/reviewer settings.  Includes the round-cap
+# extension judge: when the executor exhausts its base round cap without
+# finishing, a cheap LLM judge inspects the tool log and decides whether
+# to grant more rounds (the agent is making progress) or fall through to
+# the existing rescue path (the agent is thrashing).  Extensions chain up
+# to the per-phase ceilings.  See
 # docs/concepts/turn-engine.md#round-cap-extension-judge.
 turn_engine:
-  extension_enabled: true                 # round-cap extension judge (Plan + Execute)
-  plan_max_tool_rounds_ceiling: 32        # hard ceiling for Plan rounds with extensions
-  execute_max_tool_rounds_ceiling: 40     # hard ceiling for Execute rounds with extensions
+  extension_enabled: true                 # round-cap extension judge
+  execute_max_tool_rounds_ceiling: 48     # hard ceiling for executor rounds with extensions
   extension_round_step: 8                 # max rounds the judge may grant per call
   # llm_judge per role is not set — the judge falls back to the role's
   # main ``llm`` (here: the org-wide ``default`` provider).

@@ -2,7 +2,7 @@
 key: tool:refine_skill
 trigger:
   tool: refine_skill
-phases: [plan]
+phases: [execute]
 title: Skill refinement
 summary: |
   Patch a loaded synthesized skill when you find it stale or wrong.

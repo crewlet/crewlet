@@ -1,5 +1,5 @@
 // Package sandbox is the code-work runtime: a sandbox-enabled seat runs its
-// Execute phase as a coding agent inside an isolated box instead of the native
+// executor phase as a coding agent inside an isolated box instead of the native
 // tool loop.
 //
 // The shape that matters is that a coding run is DETACHED. The tool starts it,
@@ -70,7 +70,7 @@ type Limits struct {
 
 // Spec is what it takes to mint and drive one box.
 //
-// The REPO IS NOT HERE. Which repository to work in is task context the planner
+// The REPO IS NOT HERE. Which repository to work in is task context the executor
 // puts in the brief, and the coding agent clones it with the token the config
 // injects — a spec field for it would make one repo per role a structural fact
 // when it is a per-turn one.
