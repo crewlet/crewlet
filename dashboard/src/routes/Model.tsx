@@ -44,7 +44,7 @@ const PAGE = 60;
 // Stable identity for the settled list. Named rather than inline so the
 // hook's dependencies do not change identity on every render.
 const phaseRecordKey = (r: PhaseRecord) => r.key;
-const PHASES = ["plan", "execute", "review", "auxiliary"] as const;
+const PHASES = ["execute", "review", "onboarding", "subagent", "auxiliary"] as const;
 
 export function ModelActivity() {
   const { socket } = useClient();

@@ -105,34 +105,38 @@ describe("ordering", () => {
     // `…:07.42Z` on a raw string compare — it compares 'Z' (0x5A) against '.'
     // (0x2E) and orders the LATER instant first. Store rows are additionally
     // microsecond-truncated while live rows keep nanoseconds.
-    const earlier = fromPhaseEvent(phaseEvent({ phase: "plan" }, "2026-01-01T00:00:07Z"))!;
+    const earlier = fromPhaseEvent(phaseEvent({ phase: "execute" }, "2026-01-01T00:00:07Z"))!;
     const later = fromPhaseEvent(phaseEvent({ phase: "review" }, "2026-01-01T00:00:07.42Z"))!;
     const merged = mergePhases([earlier, later], []);
-    expect(merged.map((r) => r.phase)).toEqual(["review", "plan"]);
+    expect(merged.map((r) => r.phase)).toEqual(["review", "execute"]);
   });
 
   test("the comparator is transitive and returns 0 for equal rows", () => {
     // `(a, b) => a.lastTs < b.lastTs ? 1 : -1` returns -1 for equal operands,
     // so cmp(a,b) === cmp(b,a) === -1 and equal rows genuinely trade places
     // between renders under V8's TimSort.
-    const a = fromPhaseEvent(phaseEvent({ phase: "plan", iteration: 1 }, "2026-01-01T00:00:07Z"))!;
-    const b = fromPhaseEvent(phaseEvent({ phase: "plan", iteration: 1 }, "2026-01-01T00:00:07Z"))!;
+    const a = fromPhaseEvent(
+      phaseEvent({ phase: "execute", iteration: 1 }, "2026-01-01T00:00:07Z"),
+    )!;
+    const b = fromPhaseEvent(
+      phaseEvent({ phase: "execute", iteration: 1 }, "2026-01-01T00:00:07Z"),
+    )!;
     const once = mergePhases([a, b], []).map((r) => r.key);
     const twice = mergePhases([b, a], []).map((r) => r.key);
     expect(once).toEqual(twice);
   });
 
   test("a turn is read FORWARDS while the list of turns is newest first", () => {
-    const plan = fromPhaseEvent(phaseEvent({ phase: "plan" }, "2026-01-01T00:00:01Z"))!;
+    const onboarding = fromPhaseEvent(phaseEvent({ phase: "onboarding" }, "2026-01-01T00:00:01Z"))!;
     const exec = fromPhaseEvent(phaseEvent({ phase: "execute" }, "2026-01-01T00:00:02Z"))!;
     const review = fromPhaseEvent(phaseEvent({ phase: "review" }, "2026-01-01T00:00:03Z"))!;
     const older = fromPhaseEvent(
-      phaseEvent({ turn_id: "t0", phase: "plan" }, "2025-12-31T00:00:00Z"),
+      phaseEvent({ turn_id: "t0", phase: "execute" }, "2025-12-31T00:00:00Z"),
     )!;
 
-    const groups = groupTurns([review, plan, exec, older]);
+    const groups = groupTurns([review, onboarding, exec, older]);
     expect(groups.map((g) => g.turnId)).toEqual(["t1", "t0"]);
-    expect(groups[0]?.phases.map((p) => p.phase)).toEqual(["plan", "execute", "review"]);
+    expect(groups[0]?.phases.map((p) => p.phase)).toEqual(["onboarding", "execute", "review"]);
   });
 
   test("a turn group reports live and failed from its phases", () => {
@@ -212,12 +216,29 @@ describe("presentation rules", () => {
   });
 
   test("a decision is rendered as what it MEANS", () => {
-    // `plan`, `direct`, `skip`, `done` and `self_iterate` were on the wire and
-    // rendered nowhere, so the single most useful fact about a phase — what it
-    // decided — was invisible.
-    expect(decisionLabel("plan", "direct")).toBe("answered directly, no plan needed");
-    expect(decisionLabel("review", "self_iterate")).toBe("sent the turn back to Plan");
+    // The outcome and the review decision are on the wire and rendered
+    // nowhere else, so the single most useful fact about a phase — what it
+    // decided — would otherwise be invisible.
+    expect(decisionLabel("execute", "delivered")).toBe("delivered the work");
+    expect(decisionLabel("review", "self_iterate")).toBe("sent the turn back for another round");
     expect(decisionLabel("execute", "")).toBe("");
+  });
+
+  test("an engine-written outcome is not dressed up as the model's own word", () => {
+    // `incomplete` is the one outcome the executor never says: the engine
+    // writes it when nothing was submitted at all. Rendered as a peer of
+    // `delivered`, it would read as a commitment the model never made — and
+    // every rescue path in the turn engine turns on telling those apart.
+    expect(decisionLabel("execute", "incomplete")).toContain("the engine marked it");
+    expect(decisionLabel("execute", "delivered")).not.toContain("engine");
+  });
+
+  test("a decision this build does not know still renders as itself", () => {
+    // Store rows outlive the bundle that reads them: the retired plan phase's
+    // verdicts are in every event log written before the redesign, and a
+    // label that dropped them would blank the one column explaining the row.
+    expect(decisionLabel("plan", "direct")).toBe("direct");
+    expect(decisionLabel("execute", "teleported")).toBe("teleported");
   });
 
   test("a payload-free event yields no record rather than a blank one", () => {
