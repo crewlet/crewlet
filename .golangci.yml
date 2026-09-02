@@ -75,9 +75,13 @@ linters:
       #              that proves a misspelled frontmatter key is refused.
       #   enginer  — a fuzzy-match test input; spelling it correctly would
       #              stop testing the fuzzy match.
+      #   reasercher — a model's typo'd worker name, and the whole input of
+      #              the test that a refusal lists the workers that DO exist.
+      #              Spelling it correctly would test nothing.
       ignore-rules:
         - noteable
         - requred
+        - reasercher
         - enginer
     revive:
       rules:

@@ -295,12 +295,12 @@ func run(t *testing.T, cfg subagent.Config, req subagent.Request) []subagent.Res
 // one drives a single-task call and returns that task's result.
 func one(t *testing.T, cfg subagent.Config, req subagent.Request) subagent.Result {
 	t.Helper()
-	return oneOn(t, t.Context(), cfg, req)
+	return oneOn(t.Context(), t, cfg, req)
 }
 
 // oneOn is [one] under a caller-supplied context, for the cases about what a
 // torn-down parent does to a task in flight.
-func oneOn(t *testing.T, ctx context.Context, cfg subagent.Config, req subagent.Request) subagent.Result {
+func oneOn(ctx context.Context, t *testing.T, cfg subagent.Config, req subagent.Request) subagent.Result {
 	t.Helper()
 	results, err := subagent.Run(ctx, cfg, req)
 	if err != nil {
@@ -808,7 +808,7 @@ func TestACancelledParentIsNotReportedAsATimeout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { <-started; cancel() }()
-	res := oneOn(t, ctx, cfg, request("read_file"))
+	res := oneOn(ctx, t, cfg, request("read_file"))
 	// A torn-down turn is not an exceeded cap. A planner told "timed out"
 	// helpfully retries with a smaller task against an engine that is
 	// shutting down.

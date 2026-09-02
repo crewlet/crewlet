@@ -1180,8 +1180,11 @@ func sandboxCredentials(c *Company, seat *org.Role, placement sandbox.Placement,
 	}
 	member, err := c.Models.Head(seat, phase.Sandbox)
 	if err != nil {
-		// Already logged by sandboxLLM, and a seat with no resolvable
-		// sandbox model is the phase registry's problem, not this one's.
+		//nolint:nilerr // Deliberate: a seat with no resolvable sandbox
+		// model is the phase registry's problem — it refuses a company
+		// with no models at build — and sandboxLLM has already logged
+		// this one. Returning the error here would refuse a run over a
+		// question this guard does not ask.
 		return nil
 	}
 	agent, isCLI := member.Provider.(*cliagent.Provider)

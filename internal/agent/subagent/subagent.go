@@ -626,6 +626,7 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 	var surface *tools.Surface
 	if cfg.Discovery != nil {
 		for _, meta := range cfg.Discovery(func() *tools.Surface { return surface }) {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			next, err := universe.With(tools.Entry{Tool: meta, Origin: tools.OriginBuiltin})
 			if err != nil {
 				// A meta-tool colliding with a granted name would shadow the
