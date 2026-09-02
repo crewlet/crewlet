@@ -336,8 +336,16 @@ func TestAnExecutorThatNeverSubmittedIsRescuedAsIncomplete(t *testing.T) {
 	if w.Outcome != turn.OutcomeIncomplete {
 		t.Errorf("outcome = %s, want incomplete", w.Outcome)
 	}
-	if !strings.Contains(w.Summary, "posted something") {
-		t.Errorf("the phase's own text was discarded: %q", w.Summary)
+	if !strings.Contains(w.Text, "posted something") {
+		t.Errorf("the phase's own text was discarded: %q", w.Text)
+	}
+	// AS TEXT, NOT AS INTENT. The executor gave no account of itself, and
+	// Summary is the intent line — rendered whole to every later round and
+	// kept whole in the conversation ledger — so the transcript copied into
+	// it went out unbounded, twice per round, under a heading calling it
+	// the executor's own account.
+	if w.Summary != "" {
+		t.Errorf("a rescue wrote an intent the executor never gave: %q", w.Summary)
 	}
 	// AND IT SAYS SO. Without the mark, the word is indistinguishable from
 	// one the executor chose — and every fast path in the loop turns on

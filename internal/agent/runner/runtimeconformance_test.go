@@ -113,7 +113,7 @@ func conformanceCases() []scenario {
 			text:    "I looked around and ran out of road",
 			want: turn.Work{
 				Outcome: turn.OutcomeIncomplete,
-				Summary: "I looked around and ran out of road",
+				Text:    "I looked around and ran out of road",
 				Rescued: true,
 			},
 		},
@@ -214,8 +214,16 @@ func assertWork(t *testing.T, runtime string, got, want turn.Work) {
 	if want.Summary != "" && got.Summary != want.Summary {
 		t.Errorf("%s: summary = %q, want %q", runtime, got.Summary, want.Summary)
 	}
+	if want.Text != "" && got.Text != want.Text {
+		t.Errorf("%s: text = %q, want %q", runtime, got.Text, want.Text)
+	}
 	if got.Rescued != want.Rescued {
 		t.Errorf("%s: rescued = %v, want %v", runtime, got.Rescued, want.Rescued)
+	}
+	if want.Rescued && got.Summary != "" {
+		// The executor gave no account of itself; the engine must not
+		// write one for it — see the rescue path in finishWork.
+		t.Errorf("%s: a rescue carries an intent nobody gave: %q", runtime, got.Summary)
 	}
 	if len(want.Deliveries) > 0 && len(got.Deliveries) != len(want.Deliveries) {
 		t.Errorf("%s: deliveries = %v, want %v", runtime, got.Deliveries, want.Deliveries)

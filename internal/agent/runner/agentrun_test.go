@@ -204,8 +204,11 @@ func TestAnAgentRunThatNeverSubmittedIsRescued(t *testing.T) {
 	if !w.Rescued {
 		t.Error("the work is not marked rescued, so a fast path could act on a claim nobody made")
 	}
-	if w.Summary != "I had a look around and then ran out of turns" {
-		t.Errorf("the rescue lost the run's own text: %q", w.Summary)
+	if w.Text != "I had a look around and then ran out of turns" {
+		t.Errorf("the rescue lost the run's own text: %q", w.Text)
+	}
+	if w.Summary != "" {
+		t.Errorf("a rescue wrote an intent the run never gave: %q", w.Summary)
 	}
 }
 
