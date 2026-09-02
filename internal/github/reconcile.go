@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
@@ -182,34 +181,44 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 	}
 	out := make([]SeatIdentity, len(seats))
 
-	var wg sync.WaitGroup
+	// The credentials are read first so the fan-out below runs over the
+	// seats that actually have one: a seat with no token needs no lookup,
+	// and letting it occupy a slot would idle part of the bound.
+	tokens := make([]string, len(seats))
+	var lookups []int
 	for i, seat := range seats {
 		out[i] = SeatIdentity{Handle: seat.Handle()}
-		token := CredentialOf(seat, opts.Value)
-		if token == "" {
+		tokens[i] = CredentialOf(seat, opts.Value)
+		if tokens[i] == "" {
 			out[i].Reason = "no credential under mcp_env." + SeatEnv +
 				" — this seat receives no GitHub events at all"
 			continue
 		}
-		wg.Go(func() {
-			client, err := NewClient(ClientOptions{
-				APIBase: opts.Client.APIBase(),
-				WebBase: opts.Client.WebBase(),
-				Token:   token,
-			})
-			if err != nil {
-				out[i].Reason = err.Error()
-				return
-			}
-			login, err := client.Me(ctx)
-			if err != nil {
-				out[i].Reason = err.Error()
-				return
-			}
-			out[i].Login = login
-		})
+		lookups = append(lookups, i)
 	}
-	wg.Wait()
+
+	// BOUNDED, at the same cap as the engine's own resolvers and for the
+	// same reason — see [provision.IdentityLookups]. This path is the
+	// operator-invoked `crewlet github provision`, so unbounded it opened
+	// one socket per credentialled seat in a burst.
+	provision.ResolveConcurrently(len(lookups), func(n int) {
+		i := lookups[n]
+		client, err := NewClient(ClientOptions{
+			APIBase: opts.Client.APIBase(),
+			WebBase: opts.Client.WebBase(),
+			Token:   tokens[i],
+		})
+		if err != nil {
+			out[i].Reason = err.Error()
+			return
+		}
+		login, err := client.Me(ctx)
+		if err != nil {
+			out[i].Reason = err.Error()
+			return
+		}
+		out[i].Login = login
+	})
 	return out
 }
 

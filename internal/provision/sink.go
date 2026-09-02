@@ -1,10 +1,18 @@
-// Package provision is the integration-agnostic half of minting credentials.
+// Package provision is the integration-agnostic half of minting credentials,
+// and of asking a vendor who they belong to.
 //
 // Every provisioning CLI does the same thing in a different vendor's API:
 // walk the company config for `${VAR}` references that name a credential,
 // create or rotate that credential with the vendor, and record the value
 // where the engine will resolve it from. Only the middle step is
 // vendor-specific. This package is the other two.
+//
+// [ResolveConcurrently] is the same argument one step later: every vendor's
+// reconcile, and the engine's own credential resolvers, fan out one identity
+// lookup per seat, and the bound on that fan-out is a property of talking to a
+// vendor rather than of any one of them. It lives here because this is the
+// leaf all of them already share — see identity.go for what the number is
+// anchored to.
 package provision
 
 import (

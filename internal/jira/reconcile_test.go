@@ -3,15 +3,18 @@ package jira_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // instance is a Jira the reconcile can be run against.
@@ -24,6 +27,9 @@ type instance struct {
 
 	// accounts maps an Authorization header to the account it is.
 	accounts map[string]string
+	// onLookup, when set, runs on each /myself request OUTSIDE the
+	// instance lock, so a test can observe how many are in flight at once.
+	onLookup func()
 	// projects the instance has.
 	projects map[string]string
 	hooks    []map[string]any
@@ -43,22 +49,41 @@ func newInstance(t *testing.T) *instance {
 	return inst
 }
 
-func (i *instance) serve(w http.ResponseWriter, req *http.Request) {
+// account reads one credential's identity, holding the lock only for the read.
+func (i *instance) account(auth string) (string, bool) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	account, ok := i.accounts[auth]
+	return account, ok
+}
+
+func (i *instance) serve(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	path := req.URL.Path
 
-	switch {
-	case strings.HasSuffix(path, "/myself"):
-		account, ok := i.accounts[req.Header.Get("Authorization")]
+	// /myself is served WITHOUT the instance lock held for the whole
+	// handler, because the seat walk is the one concurrent caller here: a
+	// handler that serialises every request makes the walk look sequential
+	// no matter what it does, so a test of the fan-out's bound could not
+	// fail. Everything below is provisioning, which is sequential anyway.
+	if strings.HasSuffix(path, "/myself") {
+		account, ok := i.account(req.Header.Get("Authorization"))
+		if i.onLookup != nil {
+			i.onLookup()
+		}
 		if !ok {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"errorMessages":["Client must be authenticated"]}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"accountId":"` + account + `"}`))
+		return
+	}
 
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	switch {
 	case strings.Contains(path, "/project/"):
 		key := path[strings.LastIndex(path, "/")+1:]
 		name, ok := i.projects[key]
@@ -523,4 +548,90 @@ func (s *sink) value(name string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.values[name]
+}
+
+// TestTheSeatWalkIsBounded is the other half of the walk's concurrency
+// contract: it fans out, and the fan-out has a ceiling.
+//
+// It ran with none. `crewlet jira provision` opened one HTTPS connection per
+// credentialled seat, all at once, against one instance. internal/engine's
+// three credential resolvers were bounded and this walk was not, which is
+// exactly the drift provision.ResolveConcurrently exists to prevent.
+func TestTheSeatWalkIsBounded(t *testing.T) {
+	t.Parallel()
+	// Comfortably more seats than the cap, so an unbounded walk is visible
+	// rather than merely possible.
+	const seats = provision.IdentityLookups * 4
+
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+
+	roles := make([]*org.Role, 0, seats+1)
+	for i := range seats {
+		token := fmt.Sprintf("bot%d-token", i)
+		inst.accounts["Bearer "+token] = fmt.Sprintf("acct-%d", i)
+		roles = append(roles, &org.Role{
+			Name:           fmt.Sprintf("Engineer %d", i),
+			DeclaredHandle: fmt.Sprintf("eng%d", i),
+			MCPEnv:         map[string]map[string]string{"jira": {"JIRA_TOKEN": token}},
+		})
+	}
+	// A SEAT WITH NO CREDENTIAL, so the index mapping is exercised: the
+	// walk resolves a subset of the seats and each answer still has to land
+	// in its own row.
+	roles = append(roles, &org.Role{Name: "QA", DeclaredHandle: "qa"})
+
+	var (
+		mu    sync.Mutex
+		inFlt int
+		peak  int
+	)
+	inst.onLookup = func() {
+		mu.Lock()
+		inFlt++
+		peak = max(peak, inFlt)
+		mu.Unlock()
+
+		// HELD, so the callers actually overlap. A hook that returns
+		// immediately lets each lookup finish before the next begins, and
+		// the peak then stays at one whether or not anything bounds it —
+		// a test that cannot fail.
+		time.Sleep(20 * time.Millisecond)
+
+		mu.Lock()
+		inFlt--
+		mu.Unlock()
+	}
+
+	company := &org.Organization{Name: "nimbus", Roles: roles}
+	company.Normalize()
+	res, err := run(t, inst, func(o *jira.Options) { o.Org = company })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	gotPeak := peak
+	mu.Unlock()
+	if gotPeak > provision.IdentityLookups {
+		t.Errorf("peak in-flight lookups = %d, want at most %d",
+			gotPeak, provision.IdentityLookups)
+	}
+
+	// The bound must not have cost work: every credentialled seat still
+	// resolves, to ITS OWN account rather than a neighbour's.
+	byHandle := map[string]jira.SeatIdentity{}
+	for _, seat := range res.Seats {
+		byHandle[seat.Handle] = seat
+	}
+	for i := range seats {
+		handle := fmt.Sprintf("eng%d", i)
+		if want := fmt.Sprintf("acct-%d", i); byHandle[handle].Account != want {
+			t.Fatalf("%s resolved to %q, want %q — an answer landed in the wrong row",
+				handle, byHandle[handle].Account, want)
+		}
+	}
+	if byHandle["qa"].Account != "" {
+		t.Errorf("the seat with no credential resolved to %q", byHandle["qa"].Account)
+	}
 }

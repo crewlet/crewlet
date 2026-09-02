@@ -1,4 +1,4 @@
-package engine
+package provision
 
 import (
 	"sync"
@@ -8,11 +8,12 @@ import (
 
 // THE FAN-OUT IS BOUNDED, and nothing bounded it.
 //
-// Three resolvers — GitHub, GitLab, Jira — each open one HTTPS call per
-// distinct seat credential, on the config-apply path. A company of thirty
-// seats therefore opened thirty simultaneous connections to one vendor at
-// every boot and every apply. github.go's comment asserted a bound that was
-// not a bound on anything the host controls.
+// Five call sites — internal/engine's GitHub, GitLab and Jira credential
+// resolvers, plus internal/github's and internal/jira's reconcile — each open
+// one HTTPS call per seat credential. A company of thirty seats therefore
+// opened thirty simultaneous connections to one vendor at every boot, every
+// apply and every `crewlet <vendor> provision`. engine/github.go's comment
+// asserted a bound that was not a bound on anything the host controls.
 func TestIdentityLookupsRunAtMostTheCapAtOnce(t *testing.T) {
 	t.Parallel()
 	const work = 64
@@ -23,7 +24,7 @@ func TestIdentityLookupsRunAtMostTheCapAtOnce(t *testing.T) {
 		peak     int
 		done     int
 	)
-	resolveConcurrently(work, func(int) {
+	ResolveConcurrently(work, func(int) {
 		mu.Lock()
 		inFlight++
 		peak = max(peak, inFlight)
@@ -46,8 +47,8 @@ func TestIdentityLookupsRunAtMostTheCapAtOnce(t *testing.T) {
 	if done != work {
 		t.Errorf("ran %d of %d lookups: the bound must not drop work", done, work)
 	}
-	if peak > identityLookups {
-		t.Errorf("peak in-flight = %d, want at most %d", peak, identityLookups)
+	if peak > IdentityLookups {
+		t.Errorf("peak in-flight = %d, want at most %d", peak, IdentityLookups)
 	}
 }
 
@@ -60,7 +61,7 @@ func TestEveryIdentityIndexIsVisitedOnce(t *testing.T) {
 	seen := make([]int, work)
 	var mu sync.Mutex
 
-	resolveConcurrently(work, func(i int) {
+	ResolveConcurrently(work, func(i int) {
 		mu.Lock()
 		defer mu.Unlock()
 		seen[i]++
@@ -79,7 +80,7 @@ func TestEveryIdentityIndexIsVisitedOnce(t *testing.T) {
 func TestNoCredentialsResolvesNothing(t *testing.T) {
 	t.Parallel()
 	called := false
-	resolveConcurrently(0, func(int) { called = true })
+	ResolveConcurrently(0, func(int) { called = true })
 	if called {
 		t.Error("a resolve with no missing credentials still ran a lookup")
 	}

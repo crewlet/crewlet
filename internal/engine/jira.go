@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // The Atlassian tracker, wired.
@@ -77,7 +78,7 @@ func (j *jiraIdentities) resolve(ctx context.Context, url string, deploy jira.De
 	}
 
 	found := make([]string, len(missing))
-	resolveConcurrently(len(missing), func(i int) {
+	provision.ResolveConcurrently(len(missing), func(i int) {
 		cred := missing[i]
 		client, err := jira.NewClient(jira.ClientOptions{
 			URL: url, Email: cred.Email, Token: cred.Token, Deployment: deploy,

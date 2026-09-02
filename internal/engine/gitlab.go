@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/whsec"
 )
 
@@ -77,7 +78,7 @@ func (g *gitlabIdentities) resolve(ctx context.Context, url string, tokens []str
 	}
 
 	found := make([]string, len(missing))
-	resolveConcurrently(len(missing), func(i int) {
+	provision.ResolveConcurrently(len(missing), func(i int) {
 		token := missing[i]
 		client, err := gitlab.NewClient(gitlab.ClientOptions{URL: url, Token: token})
 		if err != nil {

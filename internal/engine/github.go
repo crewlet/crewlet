@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // The hosted code host, wired.
@@ -76,7 +77,7 @@ func (g *githubIdentities) resolve(ctx context.Context, api, web string, tokens 
 	}
 
 	found := make([]string, len(missing))
-	resolveConcurrently(len(missing), func(i int) {
+	provision.ResolveConcurrently(len(missing), func(i int) {
 		token := missing[i]
 		client, err := github.NewClient(github.ClientOptions{
 			APIBase: api, WebBase: web, Token: token,
