@@ -531,6 +531,9 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		Env:             env,
 		CredentialFiles: credentials,
 	})
+	if err := sandboxCredentials(company, seat, spec.Placement, env); err != nil {
+		return sandbox.LaunchResult{}, err
+	}
 
 	agentID := ""
 	if id, ok := company.Org.AgentIDFor(seat); ok {
@@ -1062,6 +1065,77 @@ func sandboxLLM(c *Company, seat *org.Role) (*sandbox.AgentLLM, map[string]strin
 	// agent at an endpoint nothing is serving.
 	out.BaseURL = ""
 	return out, agent.SandboxCredentials(), agent.SandboxEnv()
+}
+
+// SandboxCredentialError reports a coding run whose box could never
+// authenticate, refused before the box is minted.
+//
+// A distinct type because the two remedies are different config edits and an
+// operator has to be told which one is theirs — and because this is the one
+// launch failure that is a CONFIGURATION mistake rather than a provider
+// outage, so it must not be retried as if the vendor were down.
+type SandboxCredentialError struct{ msg string }
+
+func (e *SandboxCredentialError) Error() string { return e.msg }
+
+// sandboxCredentials refuses a run whose coding agent has nothing to
+// authenticate with inside its box.
+//
+// THE FAILURE THIS CLOSES IS SILENT AND EXPENSIVE. A subscription CLI that
+// mints no headless token (Codex, Gemini CLI) authenticates from credential
+// FILES, and those deliberately never leave the engine host: they carry a
+// refresh token whose rotation is shared fleet state. So a seat on such a
+// provider running in a remote cell provisions a box, installs the agent,
+// applies every setup step, starts the job — and the agent fails at its first
+// model call with the vendor's own "not authenticated", minutes in, naming
+// nothing an operator could act on. The documented error existed in the docs
+// and in no code at all.
+//
+// IT ASKS THE PROFILE WHICH NAMES COUNT rather than recognising a credential
+// by inspection, because the engine names no tool-specific variable of its own
+// and an operator legitimately declares their own key in role.sandbox.env.
+// That value is in the merged run environment this is handed, so a seat that
+// brought its own credential passes — which is why the check can be a refusal
+// rather than a warning.
+func sandboxCredentials(c *Company, seat *org.Role, placement sandbox.Placement, env map[string]string) error {
+	if placement.OnEngineHost() {
+		// A local box seeds the credential files and writes a refreshed
+		// one back, so files alone are a complete answer there.
+		return nil
+	}
+	if c == nil || c.Models == nil {
+		return nil
+	}
+	member, err := c.Models.Head(seat, phase.Sandbox)
+	if err != nil {
+		// Already logged by sandboxLLM, and a seat with no resolvable
+		// sandbox model is the phase registry's problem, not this one's.
+		return nil
+	}
+	agent, isCLI := member.Provider.(*cliagent.Provider)
+	if !isCLI {
+		// An api-key entry exports its key into the run environment on
+		// every backend; there is no host-bound half to strand.
+		return nil
+	}
+	for _, name := range agent.CredentialEnvNames() {
+		if strings.TrimSpace(env[name]) != "" {
+			return nil
+		}
+	}
+	remedy := fmt.Sprintf("give this seat a local cell — role.sandbox.run_in: %q or %q",
+		sandbox.Direct, sandbox.Container)
+	if agent.MintsHeadlessToken() {
+		remedy = fmt.Sprintf("mint a token that travels with `crewlet llm login %s "+
+			"-capture-token`, or give this seat a local cell (role.sandbox.run_in: %q or %q)",
+			member.Key, sandbox.Direct, sandbox.Container)
+	}
+	return &SandboxCredentialError{msg: fmt.Sprintf(
+		"seat %q runs code in %q, where the %q subscription login cannot follow it: "+
+			"the credential files stay on the engine host because they carry a refresh "+
+			"token whose rotation is fleet state, and nothing in this run's environment "+
+			"authenticates. %s",
+		seat.Handle(), placement, member.Key, remedy)}
 }
 
 // underlay adds defaults to env WITHOUT overwriting what is already there.

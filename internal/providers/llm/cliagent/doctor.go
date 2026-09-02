@@ -508,3 +508,21 @@ func (p *Provider) SandboxEnv() map[string]string {
 func (p *Provider) MintsHeadlessToken() bool {
 	return p.profile.TokenEnv != "" && len(p.profile.CaptureTokenArgs) > 0
 }
+
+// CredentialEnvNames are the variables that authenticate this CLI inside a
+// box: the headless token's and the API key's.
+//
+// Exported because the launch has to answer a question only it can — whether
+// ANYTHING in the run environment authenticates, including a value the
+// OPERATOR declared in role.sandbox.env. The engine names no tool-specific
+// variable of its own, so it cannot recognise a credential by inspection; what
+// it can do is ask the profile which names count and look for those.
+func (p *Provider) CredentialEnvNames() []string {
+	names := make([]string, 0, 2)
+	for _, name := range []string{p.profile.TokenEnv, p.profile.APIKeyEnv} {
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
