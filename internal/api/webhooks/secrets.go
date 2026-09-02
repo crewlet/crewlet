@@ -24,6 +24,13 @@ type Secrets struct {
 	Jira       string
 	Confluence string
 
+	// Datadog is a shared TOKEN, not a signing key, and the difference
+	// is the provider's: a Datadog webhook attaches headers with fixed
+	// values only, so there is nothing varying with the body to sign.
+	// It is compared constant-time against the header a delivery
+	// carries, which is the strongest check available here.
+	Datadog string
+
 	// ForgeAppID is the audience claim a Forge invocation token must
 	// carry. It is not a shared secret — the signature is checked against
 	// Atlassian's published keys — but it plays the same role here: with no
@@ -63,6 +70,7 @@ func (s Secrets) Verifiable() []string {
 		{"github", s.GitHub},
 		{"jira", s.Jira},
 		{"confluence", s.Confluence},
+		{"datadog", s.Datadog},
 		{"forge", s.ForgeAppID},
 	} {
 		if pair.secret != "" {
@@ -132,6 +140,9 @@ func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) stri
 		}
 		if in.Confluence != nil {
 			s.Confluence = resolve(in.Confluence.WebhookSecret)
+		}
+		if in.Datadog != nil && in.Datadog.Enabled {
+			s.Datadog = resolve(in.Datadog.WebhookToken)
 		}
 	}
 	if o == nil {

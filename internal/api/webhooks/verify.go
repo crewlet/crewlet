@@ -3,6 +3,7 @@ package webhooks
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"strconv"
@@ -167,4 +168,21 @@ func equalHex(presented string, want []byte) bool {
 		return false
 	}
 	return hmac.Equal(got, want)
+}
+
+// verifyDatadog compares the shared token a delivery carries.
+//
+// NOT an HMAC, and not a weaker version of one by choice: a Datadog webhook
+// attaches headers with fixed values only, so there is nothing varying with
+// the body to sign. The token IS the authentication, which is why the compare
+// is constant-time and why the config documents it as a signing key.
+//
+// The body is taken and ignored so this fits the same shape as its
+// neighbours; a scheme that cannot read the payload is exactly the fact
+// worth keeping visible at the call site.
+func verifyDatadog(_ []byte, secret, token string) bool {
+	if token == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(secret)) == 1
 }

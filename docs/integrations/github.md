@@ -50,6 +50,20 @@ integrations:
   **503** rather than accepting the delivery. Unlike GitLab's, this secret
   has no required shape — GitHub takes any string and signs with it verbatim
   — so there is no wrong *shape* to catch, only a wrong value.
+- **`POST /webhooks/github/{handle}`** is the same route, addressed to one
+  seat, and is what a per-agent GitHub App should point at.
+
+  GitHub delivers to **every** app installed on a repository, each delivery
+  carrying its own `X-GitHub-Delivery`. A repository five agents work
+  therefore produces five deliveries of one comment. Those are not
+  duplicates to collapse — they are five agents being told, which is the
+  point of each holding its own app — and without the seat in the path
+  nothing downstream can tell them apart from a redelivery of one. The
+  handle travels on the published event as `handle`.
+
+  The bare `POST /webhooks/github` stays for a single app serving a whole
+  organisation, where a delivery names no seat. Both forms verify
+  identically; the seat is not a way past the signature check.
 - **`token` (optional, but effectively required)** is a read credential for
   **participant fan-out**. A webhook payload carries the author, the
   assignees and the requested reviewers; it does not carry who has

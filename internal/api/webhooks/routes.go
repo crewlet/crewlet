@@ -25,6 +25,18 @@ import (
 // Both say so at the line.
 
 func (r *Receiver) github(w http.ResponseWriter, req *http.Request) {
+	// PER SEAT WHEN ADDRESSED TO ONE. GitHub delivers to every app
+	// installed on a repository, each delivery carrying its own id, so a
+	// repository five agents work produces five deliveries of one
+	// comment. Those are not duplicates to collapse — they are five
+	// agents being told, which is the point of each holding its own app —
+	// and without the handle nothing downstream can tell them apart from
+	// a redelivery of one.
+	//
+	// Empty for a single app serving a whole organisation, which names no
+	// seat and must still be accepted.
+	handle := req.PathValue("handle")
+
 	raw, ok := r.body(w, req)
 	if !ok {
 		return
@@ -52,6 +64,46 @@ func (r *Receiver) github(w http.ResponseWriter, req *http.Request) {
 		// every retry and on a redelivery an operator triggers from the
 		// provider UI. Without it every one of those woke the seat again.
 		key:     req.Header.Get("X-GitHub-Delivery"),
+		handle:  handle,
+		headers: safeHeaders(req.Header),
+	}, statusOK)
+}
+
+// datadog is the one route whose credential is not a signature.
+//
+// Datadog's Webhooks integration can attach headers, but only with fixed
+// values, so there is no HMAC to check and the shared token IS the
+// authentication. Everything else about the route is identical to its
+// neighbours, deliberately: the same five steps, the same 503 when there is
+// nothing to check against, the same claim before the wake.
+func (r *Receiver) datadog(w http.ResponseWriter, req *http.Request) {
+	raw, ok := r.body(w, req)
+	if !ok {
+		return
+	}
+	event := headerOr(req, "X-Datadog-Event", "monitor")
+	if !r.serving(w, "datadog", event) {
+		return
+	}
+	v, ok := r.authenticate(w, "datadog", r.secrets().Datadog,
+		req.Header.Get("X-Crewlet-Token"), raw, verifyDatadog)
+	if !ok {
+		return
+	}
+	body, ok := parseBody(w, raw)
+	if !ok {
+		return
+	}
+	r.accept(w, req, v, delivery{
+		source:  "datadog",
+		label:   "webhook:" + event,
+		summary: datadogSummary(body),
+		body:    body,
+		raw:     raw,
+		// Datadog stamps a notification id that survives its own
+		// retries. Without one there is nothing stable to claim on, and
+		// delivering twice beats dropping a firing monitor.
+		key:     str(body, "id"),
 		headers: safeHeaders(req.Header),
 	}, statusOK)
 }

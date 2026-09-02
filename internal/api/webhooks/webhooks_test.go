@@ -119,7 +119,8 @@ func newEdge(t *testing.T, opts ...func(*webhooks.Options)) *edge {
 	secrets := &webhooks.Secrets{
 		GitHub: "gh-secret", GitLab: gitlabSecret,
 		Jira: "jira-secret", Confluence: "conf-secret", ForgeAppID: "app-123",
-		Slack: map[string]string{"ceo": "slack-secret"},
+		Datadog: "dd-token",
+		Slack:   map[string]string{"ceo": "slack-secret"},
 	}
 	configured := true
 	e := &edge{
