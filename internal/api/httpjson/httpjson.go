@@ -19,6 +19,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"encoding/json"
 )
@@ -114,7 +115,31 @@ func FailWith(w http.ResponseWriter, status int, code Code, extra map[string]str
 	Write(w, status, body)
 }
 
-// ReadBody reads at most max bytes of a request body.
+// BodyReadTimeout bounds how long a client may take to deliver its body.
+//
+// A size cap is not a time bound, and the two failures are different: the size
+// cap stops a client sending 25 MiB, and this stops one sending 25 bytes a
+// minute apart. Without it a request that dribbles holds a handler goroutine
+// and a connection slot for as long as the client cares to keep dribbling —
+// the cheapest denial there is against a listener, and the listener is the one
+// surface an unauthenticated caller can reach.
+//
+// It is NOT the server's ReadTimeout, which is why that field is still unset:
+// ReadTimeout covers the whole exchange from the first header byte, so any
+// value large enough for a 25 MiB webhook on a slow link is also large enough
+// to be no bound at all on a small one. A deadline taken HERE starts when the
+// handler asks for the body, so it bounds the body alone.
+//
+// THIRTY SECONDS, from the largest thing this reads: webhooks.MaxBodyBytes is
+// 25 MiB, which needs roughly 7 Mbit/s sustained to arrive inside the bound —
+// far below what any CI runner, forge or operator workstation delivers, and
+// far above the trickle this exists to cut off. The server's own
+// ReadHeaderTimeout (10 s) and IdleTimeout (60 s) bound the other two phases;
+// this is the third.
+const BodyReadTimeout = 30 * time.Second
+
+// ReadBody reads at most max bytes of a request body, within
+// [BodyReadTimeout].
 //
 // It reads the WHOLE body even when the request will be refused. An HTTP
 // server that answers without draining leaves unread bytes in the socket and
@@ -122,8 +147,20 @@ func FailWith(w http.ResponseWriter, status int, code Code, extra map[string]str
 // for a 401 means "retry forever" rather than "your signature is wrong".
 //
 // Over the cap it returns [ErrTooLarge]; anything else is the read's own
-// error.
+// error — a blown deadline included, since a body that never arrived and one
+// that was cut off are the same thing to a caller.
 func ReadBody(w http.ResponseWriter, r *http.Request, max int64) ([]byte, error) {
+	// http.ErrNotSupported is IGNORED rather than reported: a
+	// ResponseWriter that cannot carry a deadline is a recorder or a
+	// wrapper, never a real connection, so there is nothing to bound and
+	// nothing a caller could do about it. Failing the read there would
+	// break every handler under httptest for a property the test has no
+	// way to violate.
+	if err := http.NewResponseController(w).
+		SetReadDeadline(time.Now().Add(BodyReadTimeout)); err != nil &&
+		!errors.Is(err, http.ErrNotSupported) {
+		return nil, err
+	}
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, max))
 	if err == nil {
 		return raw, nil

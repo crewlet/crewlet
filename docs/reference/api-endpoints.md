@@ -1321,6 +1321,18 @@ Webhook senders enforce delivery deadlines and abort requests that respond too s
 
 The body is read **whole even when the request will be refused**, and bounded at 25 MiB (`body_too_large`, then `413` — every JSON surface answers a 413 with that one code). Answering without draining leaves unread bytes in the socket and the sender sees a connection reset instead of the status — which for a `401` reads as "retry forever" rather than "your signature is wrong".
 
+### Request timeouts
+
+Three deadlines bound a request, and each covers a phase the others do not. None is configurable — they are properties of what the surface is for, not of a deployment.
+
+| Phase | Bound | What it stops |
+|---|---|---|
+| Request line and headers | 10 s | A connection opened and left silent — the cheapest denial there is against a listener. |
+| Reading the request body | 30 s | A client that *dribbles*: a body under every size cap, delivered a few bytes at a time. The size cap and this are different failures, and a cap alone stops only the first. 30 s carries a 25 MiB delivery at roughly 7 Mbit/s sustained, far below what any forge, CI runner or operator workstation delivers. |
+| Between keep-alive requests | 60 s | A client that completed one request and then went quiet while holding its connection slot. |
+
+A body that does not arrive inside its deadline fails the read like any other truncated delivery: `400` with `unreadable_body`, logged as `webhook_body_unreadable` on a webhook path. There is deliberately **no** whole-request timeout: it would have to be large enough for the largest body on the slowest link, which makes it no bound at all on a small one.
+
 ---
 
 ## Running

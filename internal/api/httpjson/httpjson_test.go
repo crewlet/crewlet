@@ -2,10 +2,12 @@ package httpjson_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 )
@@ -151,5 +153,91 @@ func TestOnlyTheDeclaredCodesAreValid(t *testing.T) {
 	}
 	if httpjson.Code("value_too_large").Valid() {
 		t.Error("a spelling this package does not define reported Valid")
+	}
+}
+
+// A DRIBBLING CLIENT IS CUT OFF, which a size cap cannot do.
+//
+// The cap stops a client sending too much; nothing stopped one sending very
+// little, very slowly. A request that stays under every byte limit and simply
+// never finishes held a handler goroutine and a connection slot for as long as
+// the client cared to keep it — on the one surface an unauthenticated caller
+// can reach.
+//
+// Asserted by CAPTURING the deadline rather than by waiting for it to fire:
+// waiting would put [httpjson.BodyReadTimeout] of wall clock into every run of
+// the suite to re-prove something net/http already guarantees. What is this
+// package's own is that the deadline is set at all, and when.
+func TestTheBodyReadCarriesADeadline(t *testing.T) {
+	t.Parallel()
+	w := &deadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"a":1}`))
+
+	before := time.Now()
+	if _, err := httpjson.ReadBody(w, r, 1<<20); err != nil {
+		t.Fatalf("ReadBody: %v", err)
+	}
+	if w.deadline.IsZero() {
+		t.Fatal("the body was read with no read deadline: a client that " +
+			"dribbles holds the handler and its connection slot indefinitely")
+	}
+	// Bounded on both sides, so a deadline of "now" or of an hour would
+	// both fail: the first cuts off every real client, the second is not a
+	// bound on the trickle this exists to stop.
+	if got := w.deadline.Sub(before); got < httpjson.BodyReadTimeout ||
+		got > httpjson.BodyReadTimeout+time.Second {
+		t.Errorf("read deadline set %v out, want %v", got, httpjson.BodyReadTimeout)
+	}
+}
+
+// A READ DEADLINE THAT CANNOT BE SET IS REPORTED, not swallowed.
+//
+// Only http.ErrNotSupported is ignorable — it means the writer has no
+// connection. Any other failure is a connection in a state the read should not
+// be attempted on.
+func TestADeadlineFailureRefusesTheRead(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("connection is gone")
+	w := &deadlineWriter{ResponseRecorder: httptest.NewRecorder(), err: boom}
+	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"a":1}`))
+
+	if _, err := httpjson.ReadBody(w, r, 1<<20); !errors.Is(err, boom) {
+		t.Errorf("ReadBody = %v, want the deadline failure", err)
+	}
+}
+
+// deadlineWriter is a recorder that can carry a read deadline, which is what
+// http.NewResponseController looks for.
+type deadlineWriter struct {
+	*httptest.ResponseRecorder
+	deadline time.Time
+	err      error
+}
+
+func (w *deadlineWriter) SetReadDeadline(t time.Time) error {
+	if w.err != nil {
+		return w.err
+	}
+	w.deadline = t
+	return nil
+}
+
+// A RECORDER HAS NO CONNECTION, and that must not fail the read.
+//
+// http.NewResponseController reports http.ErrNotSupported for a
+// ResponseWriter that cannot carry a deadline — every httptest.ResponseRecorder
+// and every wrapping writer in the tree. Treating that as a read failure would
+// break every handler under test for a property a recorder cannot violate.
+func TestAWriterWithNoDeadlineStillReads(t *testing.T) {
+	t.Parallel()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"a":1}`))
+
+	got, err := httpjson.ReadBody(w, r, 1<<20)
+	if err != nil {
+		t.Fatalf("ReadBody against a recorder: %v", err)
+	}
+	if string(got) != `{"a":1}` {
+		t.Errorf("read %q, want the whole body", got)
 	}
 }

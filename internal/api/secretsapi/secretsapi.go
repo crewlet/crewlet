@@ -27,7 +27,6 @@ package secretsapi
 
 import (
 	"errors"
-	"io"
 	"net/http"
 	"time"
 
@@ -197,18 +196,13 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	if !s.sealed(w) {
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxValueBytes))
+	// THE SHARED READER, not a copy of it. This route answered
+	// `value_too_large` where configapi answered `body_too_large` for the
+	// same 413, and its own reader is also the one place a body arrived
+	// with no time bound on it — see [httpjson.BodyReadTimeout].
+	body, err := httpjson.ReadBody(w, r, MaxValueBytes)
 	if err != nil {
-		var overflow *http.MaxBytesError
-		if errors.As(err, &overflow) {
-			// The SHARED spelling. This route used to answer
-			// `value_too_large` where configapi answered
-			// `body_too_large` for the same 413.
-			httpjson.Fail(w, http.StatusRequestEntityTooLarge,
-				httpjson.CodeBodyTooLarge)
-			return
-		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unreadable_body"})
+		httpjson.Refuse(w, err)
 		return
 	}
 	operator, _ := auth.OperatorFrom(r.Context())
