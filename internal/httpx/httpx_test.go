@@ -1,7 +1,11 @@
 package httpx_test
 
 import (
+	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,5 +85,64 @@ func TestEachClientKeepsItsOwnTimeout(t *testing.T) {
 	}
 	if got := httpx.Client(0).Timeout; got != 0 {
 		t.Errorf("Timeout = %v, want none", got)
+	}
+}
+
+// CLOSING ONE CLIENT'S IDLE CONNECTIONS CLOSES EVERY CLIENT'S.
+//
+// http.Client.CloseIdleConnections forwards to its transport, and here that is
+// the process's ONE transport — so there is no such thing as "the idle
+// connections this client holds". Three providers had a Close that believed
+// otherwise, and calling one on a config swap would have dropped the warm
+// connections of every other provider, all seven vendor clients, every remote
+// MCP server and the sandbox control plane.
+//
+// The property is not a defect to fix — it is the unavoidable other side of
+// one shared pool, and the reason nothing may call the method. Pinned here so
+// the next caller finds a failing test rather than a plausible-looking
+// cleanup.
+func TestClosingIdleConnectionsIsProcessWide(t *testing.T) {
+	// Not parallel: it closes the shared transport's idle connections, which
+	// is precisely what it is here to demonstrate.
+	var conns atomic.Int64
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	get := func(c *http.Client) {
+		t.Helper()
+		resp, err := c.Get(srv.URL)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		if err := resp.Body.Close(); err != nil {
+			t.Fatalf("close body: %v", err)
+		}
+	}
+
+	victim := httpx.Client(0)
+	get(victim)
+	get(victim)
+	if got := conns.Load(); got != 1 {
+		t.Fatalf("two sequential calls opened %d connections, want the pool to "+
+			"have reused one", got)
+	}
+
+	// A DIFFERENT client — another provider, another vendor — closes what it
+	// would reasonably believe are its own idle connections.
+	httpx.Client(0).CloseIdleConnections()
+
+	get(victim)
+	if got := conns.Load(); got != 2 {
+		t.Errorf("conns = %d after another client's CloseIdleConnections; if this "+
+			"is 1 the pool is no longer shared, and every doc in this package "+
+			"saying it is has become wrong", got)
 	}
 }

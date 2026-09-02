@@ -95,7 +95,6 @@ func provider(t *testing.T, s *server, width int) *embeddings.Provider {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	t.Cleanup(p.Close)
 	return p
 }
 

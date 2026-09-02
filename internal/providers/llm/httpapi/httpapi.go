@@ -60,6 +60,17 @@ var log = logging.Get("providers.llm")
 // No client-level Timeout is set. The per-call deadline belongs to the SDK's
 // own request option, which is the one that produces a context.DeadlineExceeded
 // this package can classify as KindTimeout rather than as an unknown failure.
+//
+// NOTHING RETURNED HERE MAY BE CLOSED, and that is the cost of sharing the
+// pool. http.Client.CloseIdleConnections forwards to its transport, which is
+// the process's ONE transport — so a provider "reclaiming its own idle
+// sockets" on a config swap drops the warm connections of every other
+// provider, all seven vendor clients, every remote MCP server and the sandbox
+// control plane. All three providers had exactly that method; none had a
+// caller outside its own tests, and the shared transport's 90-second
+// IdleConnTimeout is what reaps a connection nobody wants. On a shared pool a
+// swap that replaces a provider pointing at the same vendor WANTS the warm
+// connection anyway.
 func NewHTTPClient() *http.Client {
 	return httpx.Client(0)
 }

@@ -121,7 +121,6 @@ type Provider struct {
 	temperature float64
 	reasoning   bool
 	effort      shared.ReasoningEffort
-	owned       *http.Client
 
 	// noStream latches once this endpoint has answered a streaming request
 	// without streaming. Atomic: one Provider serves every seat
@@ -171,14 +170,13 @@ func New(cfg Config) (*Provider, error) {
 		// See the package doc. Not negotiable.
 		option.WithMaxRetries(0),
 	}
-	// A transport the caller supplied stays the caller's to close; one built
-	// here is this provider's, and Close reclaims its idle sockets.
-	var owned *http.Client
-	if cfg.HTTPClient == nil {
-		owned = httpapi.NewHTTPClient()
-		opts = append(opts, option.WithHTTPClient(owned))
-	} else {
+	// A transport the caller supplied is used as given; otherwise the
+	// engine's shared one. NOTHING HERE OWNS IT — see [httpapi.NewHTTPClient]
+	// for why this provider has no Close.
+	if cfg.HTTPClient != nil {
 		opts = append(opts, option.WithHTTPClient(cfg.HTTPClient))
+	} else {
+		opts = append(opts, option.WithHTTPClient(httpapi.NewHTTPClient()))
 	}
 
 	return &Provider{
@@ -190,7 +188,6 @@ func New(cfg Config) (*Provider, error) {
 		temperature: temperature,
 		reasoning:   cfg.Reasoning,
 		effort:      shared.ReasoningEffort(cfg.ReasoningEffort),
-		owned:       owned,
 	}, nil
 }
 
@@ -199,18 +196,6 @@ func (p *Provider) Model() string { return p.model }
 
 // Pool exposes the credential pool's public state for operator surfaces.
 func (p *Provider) Pool() *credential.Pool { return p.pool }
-
-// Close releases the idle connections this provider opened. A transport the
-// caller supplied is left alone — it may still be serving somebody else.
-//
-// Nothing breaks if it is never called: the transport reaps its own idle
-// connections. It exists so a config swap that replaces a provider does not
-// leave the old one's sockets open until that timer fires.
-func (p *Provider) Close() {
-	if p.owned != nil {
-		p.owned.CloseIdleConnections()
-	}
-}
 
 // Complete calls chat completions once per live credential until one answers.
 func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {

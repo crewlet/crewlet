@@ -255,7 +255,7 @@ func (c *countingTransport) count() int {
 	return c.calls
 }
 
-func TestASuppliedHTTPClientIsUsedAndNotClosed(t *testing.T) {
+func TestASuppliedHTTPClientIsTheOneUsed(t *testing.T) {
 	t.Parallel()
 	_, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("hi")) })
 	counter := &countingTransport{inner: &http.Client{}}
@@ -266,36 +266,28 @@ func TestASuppliedHTTPClientIsUsedAndNotClosed(t *testing.T) {
 	if counter.count() != 1 {
 		t.Fatalf("the supplied client saw %d calls, want 1", counter.count())
 	}
-	// A transport the caller supplied may still be serving somebody else.
-	p.Close()
 	if _, err := p.Complete(context.Background(), userTurn("hi")); err != nil {
-		t.Fatalf("Complete after Close: %v", err)
+		t.Fatalf("second Complete: %v", err)
 	}
 	if counter.count() != 2 {
-		t.Fatalf("the supplied client saw %d calls after Close, want 2", counter.count())
+		t.Fatalf("the supplied client saw %d calls, want 2", counter.count())
 	}
 }
 
-func TestCloseOnAProviderOwnedTransportIsSafe(t *testing.T) {
-	t.Parallel()
-	_, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("hi")) })
-	p := newProvider(t, url, nil)
-	if _, err := p.Complete(context.Background(), userTurn("hi")); err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	p.Close()
-	p.Close() // idempotent: a config swap may close what shutdown closes again
-	// Closing idle connections is not closing the client; the provider still
-	// works, it just re-dials.
-	if _, err := p.Complete(context.Background(), userTurn("hi")); err != nil {
-		t.Fatalf("Complete after Close: %v", err)
-	}
-}
-
-// Close's actual effect — dropping the idle connections this provider holds —
-// needs a server that can see connections, not just requests. Without this the
-// method could be an empty body and every other test would still pass.
-func TestCloseDropsIdleConnections(t *testing.T) {
+// THE CONNECTION IS REUSED, which needs a server that can see connections
+// rather than only requests.
+//
+// This is the whole reason internal/httpx exists: on http.DefaultTransport's
+// two idle connections per host the second call past the cap re-handshakes,
+// and against a self-hosted HTTP/1.1 endpoint that is a full round trip on the
+// hot path of every phase.
+//
+// It used to go on to assert that Close dropped the connection. That method is
+// gone: the client here is on the engine's ONE shared transport, so what it
+// closed was every other client's connections too — see httpapi.NewHTTPClient.
+// The flake this test showed under load WAS that bug, one parallel test's
+// Close dropping this one's warm connection.
+func TestTheConnectionIsReusedAcrossCalls(t *testing.T) {
 	t.Parallel()
 	var conns atomic.Int64
 	api := &fakeAPI{handle: func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okMessage("hi")) }}
@@ -316,14 +308,6 @@ func TestCloseDropsIdleConnections(t *testing.T) {
 	}
 	if got := conns.Load(); got != 1 {
 		t.Fatalf("two sequential calls opened %d connections, want the second to reuse the first", got)
-	}
-
-	p.Close()
-	if _, err := p.Complete(context.Background(), userTurn("hi")); err != nil {
-		t.Fatalf("Complete after Close: %v", err)
-	}
-	if got := conns.Load(); got != 2 {
-		t.Fatalf("opened %d connections after Close, want the idle one to have been dropped", got)
 	}
 }
 
