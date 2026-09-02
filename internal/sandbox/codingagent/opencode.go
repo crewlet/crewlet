@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // OpenCodeName is this runner's config name.
@@ -148,35 +148,35 @@ func openCodeProvider(llm sandbox.AgentLLM) map[string]any {
 }
 
 // openCodeMCP translates the generic launch specs into OpenCode's schema.
-func openCodeMCP(servers map[string]sandbox.LaunchSpec) map[string]any {
+func openCodeMCP(servers map[string]sandbox.MCPServer) map[string]any {
 	out := make(map[string]any, len(servers))
-	for name, spec := range servers {
+	for name, s := range servers {
 		entry := map[string]any{"enabled": true}
-		if kind, _ := spec["type"].(string); kind == "http" {
+		if s.Transport == sandbox.TransportHTTP {
 			entry["type"] = "remote"
-			entry["url"], _ = spec["url"].(string)
-			if headers, ok := spec["headers"]; ok {
-				entry["headers"] = headers
+			entry["url"] = s.URL
+			if len(s.Headers) > 0 {
+				entry["headers"] = s.Headers
 			}
-		} else {
-			cmd := []string{}
-			if c, ok := spec["command"].(string); ok && c != "" {
-				cmd = append(cmd, c)
+			out[name] = entry
+			continue
+		}
+		// ONE ARGV, not a command and its arguments: this CLI takes the
+		// whole invocation as a single array, which is the one place its
+		// vocabulary differs structurally rather than in spelling.
+		cmd := make([]string, 0, len(s.Args)+1)
+		if s.Command != "" {
+			cmd = append(cmd, s.Command)
+		}
+		for _, a := range s.Args {
+			if a != "" {
+				cmd = append(cmd, a)
 			}
-			if args, ok := spec["args"].([]string); ok {
-				cmd = append(cmd, args...)
-			} else if args, ok := spec["args"].([]any); ok {
-				for _, a := range args {
-					if s, ok := a.(string); ok && s != "" {
-						cmd = append(cmd, s)
-					}
-				}
-			}
-			entry["type"] = "local"
-			entry["command"] = cmd
-			if env, ok := spec["env"]; ok {
-				entry["environment"] = env
-			}
+		}
+		entry["type"] = "local"
+		entry["command"] = cmd
+		if len(s.Env) > 0 {
+			entry["environment"] = s.Env
 		}
 		out[name] = entry
 	}
@@ -372,9 +372,9 @@ func firstLine(s string, limit int) string {
 	if limit <= 0 || len(line) <= limit {
 		return line
 	}
-	cut := max(limit-len("…"), 0)
-	for cut > 0 && !utf8.RuneStart(line[cut]) {
-		cut--
-	}
-	return line[:cut] + "…"
+	// Not [textcut.Ellipsis]: that one does not count its marker against
+	// max, and this limit bounds what reaches the phase event, marker
+	// included. So the budget is reduced first and the cut taken with
+	// [textcut.Bytes].
+	return textcut.Bytes(line, max(limit-len("…"), 0)) + "…"
 }

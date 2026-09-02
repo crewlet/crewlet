@@ -36,9 +36,9 @@ package knowledge
 import (
 	"context"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // AutoDraftedParent is the page every unreviewed auto-drafted skill is
@@ -302,9 +302,5 @@ func Snippet(text string, limit int) string {
 	}
 	// No space at all — a URL, a CJK run. Back up to a rune boundary
 	// rather than splitting one.
-	cut := len(head)
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	return text[:cut] + "…"
+	return textcut.Bytes(text, limit) + "…"
 }

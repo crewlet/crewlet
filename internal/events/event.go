@@ -36,9 +36,10 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // Payload is the typed body of an event. Implementations are plain structs
@@ -643,9 +644,9 @@ func ClipDiagnostic(text string) string {
 	if len(text) <= MaxDiagnosticBytes {
 		return text
 	}
-	cut := MaxDiagnosticBytes
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	return text[:cut] + "\n…[diagnostic truncated at 64 KiB so the event could be published]"
+	// The marker is this package's own — it names the bound and why the
+	// event needed it — so the cut is taken with [textcut.Bytes] and the
+	// note appended here, rather than with Ellipsis and its bare "…".
+	return textcut.Bytes(text, MaxDiagnosticBytes) +
+		"\n…[diagnostic truncated at 64 KiB so the event could be published]"
 }

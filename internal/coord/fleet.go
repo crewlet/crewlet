@@ -6,7 +6,8 @@ import (
 	"errors"
 	"slices"
 	"time"
-	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The FLEET-SHARED state, beyond ownership.
@@ -346,14 +347,7 @@ const MaxApplyErrorLength = 2000
 // path or an accented message reached the fleet view garbled rather than
 // merely shortened.
 func TruncateApplyError(detail string) string {
-	if len(detail) <= MaxApplyErrorLength {
-		return detail
-	}
-	cut := MaxApplyErrorLength
-	for cut > 0 && !utf8.RuneStart(detail[cut]) {
-		cut--
-	}
-	return detail[:cut] + "…"
+	return textcut.Ellipsis(detail, MaxApplyErrorLength)
 }
 
 // NodeApply is one node's last word about an epoch.
