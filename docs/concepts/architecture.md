@@ -110,6 +110,7 @@ flowchart TB
             REST["<b>REST + config plane</b><br/>/config · /secrets · /agents · /org<br/>/tools · /query · /backup · /budgets/reset"]
             WS["<b>/ws/stream</b><br/><i>the dashboard's only data channel:<br/>live pushes + a query channel</i>"]
             OTLP["<b>/otlp/{token}/v1/{signal}</b><br/><i>signed-token trace ingest</i>"]
+            MCPB["<b>/mcp/{token}</b><br/><i>signed-token tool bridge:<br/>a seat's own surface, to a coding agent</i>"]
             PROBE["<b>/health · /ready</b>"]
         end
 

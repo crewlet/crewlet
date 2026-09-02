@@ -264,6 +264,52 @@ func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 	return err
 }
 
+// AppendBridgeCall records one tool call a bridged run made.
+//
+// NO FENCE, and that is deliberate. Every other mutation here is an ownership
+// decision — a claim, a status flip, a pause — and a node whose lease has
+// moved must not make one. This is a LOG APPEND: the call already ran and its
+// effect already happened, and refusing to record it because the seat moved
+// mid-run would lose evidence of something that is true either way. The row's
+// own version still guards the write, so two concurrent appends serialise
+// rather than clobbering each other.
+//
+// A run whose row is gone is not an error: the run ended while a late call was
+// in flight, which is the ordinary shape of a box shutting down. The append is
+// simply dropped, and the caller — which must not fail the box's call over
+// telemetry — treats false the same as true.
+func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, call BridgeCall) (bool, error) {
+	if call.At.IsZero() {
+		call.At = s.clock()
+	}
+	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		run.BridgeCalls, run.BridgeCallsElided = appendBounded(
+			run.BridgeCalls, run.BridgeCallsElided, call)
+		return true
+	})
+	return won, err
+}
+
+// appendBounded adds one call and drops from the MIDDLE past the cap.
+//
+// The start and the end are what explain a run — how it set about the work and
+// how it finished — so a log truncated to its last N loses the half a reader
+// most often needs. The count of what was dropped rides along, because a log
+// that silently skips is a log that lies about what the run did.
+func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCall, int) {
+	calls = append(calls, next)
+	if len(calls) <= MaxBridgeCalls {
+		return calls, elided
+	}
+	head := MaxBridgeCalls / 2
+	tail := MaxBridgeCalls - head
+	dropped := len(calls) - MaxBridgeCalls
+	kept := make([]BridgeCall, 0, MaxBridgeCalls)
+	kept = append(kept, calls[:head]...)
+	kept = append(kept, calls[len(calls)-tail:]...)
+	return kept, elided + dropped
+}
+
 // MarkSuspended writes the suspended Execute loop and opens the run to the
 // completion poll. See the contract on [PendingStore].
 func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, state map[string]any) (bool, error) {

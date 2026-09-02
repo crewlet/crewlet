@@ -898,6 +898,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// two receivers would sign with two per-process keys unless a
 		// keyring happened to be configured.
 		OtelReceiver: e.OtelReceiver(),
+		// THE ENGINE'S OWN, not a second one. A run's session lives in
+		// the object that opened it, so an API holding a different
+		// bridge would resolve every token to no session and answer 401
+		// to a box whose run is perfectly healthy.
+		Bridge:       e.Bridge(),
 		QueueBackend: e.Backends().Queue.Backend(),
 		// The read surface answers from this node's OWN store. A
 		// question it has no source for comes back unknown rather than

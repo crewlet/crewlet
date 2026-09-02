@@ -321,6 +321,27 @@ Two practical caveats:
 
 ---
 
+## The tool bridge — a seat's own tools, from inside a box
+
+A coding agent doing code work has the servers above rendered into its box. A coding agent running its seat's **executor** — see [Subscription LLM backends](subscription-llm-backends.md) — needs something different: the seat's *whole* tool surface, including the engine's own builtins and the delivery tools the turn is judged on. Those cannot be shipped in. Most are MCP children holding the **seat's** credentials, several are engine control, and handing either to a box running generated code is the failure the sandbox exists to prevent.
+
+So the box gets **one** MCP server, on the engine, and every call comes back out:
+
+```
+box ──MCP/streamable-HTTP──▶  POST /mcp/{token}  ──▶  the seat's live tools.Surface
+                                                        (grant · skill guard · recording)
+```
+
+**The dispatch is the seat's own.** A bridged call goes through the same `tools.Surface.Execute` a native tool loop calls, so the grant, the [required-skill guard](tool-skills.md), the failure shape and the recording are all the ones an operator already knows. `internal/api/mcpbridge` never grows a second idea of whether a tool is allowed — a second copy would drift, and it would drift on the security half.
+
+**The credential is per-run and expires with it.** The box holds no API token; what admits a request is a signed token in the endpoint's own path, the same shape the OTLP receiver uses (`internal/runtoken`). Two gates stand behind it: the signature says this fleet minted it, and the session map says the run it names is still going — so a box that outlived its run keeps no working key. Set `CREWLET_MCP_BRIDGE_URL` to the engine API base the sandbox can reach; unset, no bridge is mounted and agent mode is refused for the seat rather than starting a run that cannot call anything.
+
+**Every call is written down where a resume can read it.** A native tool loop keeps its calls in memory and the turn writes them at the end; a bridged run's calls are made by a process outside the engine, minutes apart, possibly across a restart. Each one is appended to the run's own coordination row, bounded, dropping from the *middle* rather than the start — how a run began and how it ended are what explain it. Without that, the reviewer of a resumed run judges a turn whose entire tool log is gone, which the delivery check reads as a turn that acted on nothing.
+
+**A split deployment works** because the token is signed rather than stored: the engine opens the session and mints the endpoint, and whichever process is externally reachable verifies. Both derive the signing key from Tier A `secrets.keys`, under a domain that separates bridge tokens from telemetry tokens. With no keyring the key is per-process — fine merged, and logged loudly, because a split API would then reject every token the engine minted.
+
+---
+
 ## Mid-run clarification (`crewlet-ask`)
 
 Once it is in the code, the coding agent may hit something only a person can answer — an ambiguous spec, a design decision above its remit. Headless coding agents can't pause to ask interactively, so every box gets a shim, **`crewlet-ask`** (`internal/sandbox/codingagent/ask.go`), and the brief instructs: *don't guess — commit and push your WIP branch, run `crewlet-ask "<question>" --to <audience>`, and stop.* The audience is `requester`, `team`, `manager`, or a named teammate — the brief carries the unit roster and lead so the agent can name a real person.

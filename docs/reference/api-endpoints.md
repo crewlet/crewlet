@@ -21,7 +21,7 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 > serve without one unless `api.auth.allow_anonymous_read: false` is set, at
 > which point they need the same token — `/ws/stream` included, and it accepts
 > `?token=…` too since browsers cannot set headers on a WebSocket. Never
-> guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, and the
+> guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, `/mcp/*`, and the
 > dashboard shell (`/`, `/dashboard`, `/static/*`). See
 > [Configuration § Auth](../concepts/configuration.md#auth).
 >
@@ -82,6 +82,7 @@ plane (see [`WS /ws/stream`](#ws-wsstream)).
 | `POST` | `/webhooks/confluence` | Receive Confluence Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
+| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
 
 Plus the two always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated) and [`/secrets/*`](#secrets--the-companys-credentials-auth-gated).
 
