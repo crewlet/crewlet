@@ -774,9 +774,15 @@ func (c *CLIAgent) validate(path string) error {
 		p.add(at(path, "run_in"), ErrConflict,
 			"only agent mode runs somewhere: a text-mode CLI is a subprocess of "+
 				"this engine. Set `mode: agent`, or remove the field")
-	case c.RunIn != "" && !oneOf(c.RunIn, Placements):
+	case c.RunIn != "" && !oneOf(c.RunIn, BackendPlacements()):
+		// BACKEND CELLS ONLY. `self` is a seat's answer — "my code work
+		// rides my executor's run" — and an agent-mode entry IS that
+		// run, so it has no executor of its own to ride and no backend
+		// resolves it. Accepted here it validated cleanly and failed at
+		// the seat's first turn, every turn, with the manager's "no
+		// backend for self".
 		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
-			c.RunIn, names(Placements))
+			c.RunIn, names(BackendPlacements()))
 	}
 	return p.err()
 }

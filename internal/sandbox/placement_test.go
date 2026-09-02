@@ -3,6 +3,7 @@ package sandbox
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -13,22 +14,45 @@ func catalogue(t *testing.T, opts ManagerOptions) (*Manager, error) {
 	return NewManager(opts)
 }
 
-// A CATALOGUE WITH MORE THAN ONE CELL AND NO DEFAULT IS REFUSED, never
-// resolved.
+// A CATALOGUE WITH MORE THAN ONE CELL AND NO DEFAULT RESOLVES NOTHING BY
+// ITSELF — and is not refused, because it is the shape a company takes when
+// every seat and every agent-mode entry names its own cell, which is what the
+// catalogue exists for.
 //
-// Resolving it means taking whichever key the map happened to yield — and map
-// order is randomised per run, so the company would run its silent seats on
-// the engine host one restart and in a remote box the next, with nothing in
-// the config changing and nothing anywhere saying which.
-func TestAnAmbiguousCatalogueIsRefusedRatherThanResolved(t *testing.T) {
+// What it must never do is resolve a run that names none by taking whichever
+// key the map happened to yield: map order is randomised per run, so the
+// company would run that seat on the engine host one restart and in a remote
+// box the next, with nothing in the config changing and nothing anywhere
+// saying which. Config validation refuses the silent seat; this is the belt
+// to that brace for a row or a spec built by hand.
+func TestACatalogueWithNoDefaultNeverPicksOne(t *testing.T) {
 	t.Parallel()
-	_, err := catalogue(t, ManagerOptions{Providers: map[Placement]Provider{
+	m, err := catalogue(t, ManagerOptions{Providers: map[Placement]Provider{
 		Direct: NewFakeProvider(),
 		E2B:    NewFakeProvider(),
 	}})
+	if err != nil {
+		t.Fatalf("a catalogue whose callers name their cells was refused: %v", err)
+	}
+	if got := m.DefaultPlacement(); got != "" {
+		t.Fatalf("default placement = %q, want none", got)
+	}
+	if spec := m.BuildSpec(SpecInput{}); spec.Placement != "" {
+		t.Errorf("BuildSpec guessed %q for a run that named no cell", spec.Placement)
+	}
+	_, err = m.Provider("")
 	var cfgErr *ConfigError
 	if !errors.As(err, &cfgErr) {
-		t.Fatalf("two backends and no default were accepted: %v", err)
+		t.Fatalf("a run naming no cell was resolved by map order: %v", err)
+	}
+	if !strings.Contains(err.Error(), "default_run_in") || !strings.Contains(err.Error(), "run_in") {
+		t.Errorf("the refusal does not name the fields that settle it: %v", err)
+	}
+	// The cells that ARE named resolve as ever.
+	for _, placement := range []Placement{Direct, E2B} {
+		if _, err := m.Provider(placement); err != nil {
+			t.Errorf("Provider(%q): %v", placement, err)
+		}
 	}
 }
 

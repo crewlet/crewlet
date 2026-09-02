@@ -139,17 +139,23 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	}
 	if m.placement == "" && len(m.providers) == 1 {
 		// One backend is not a choice, so nothing is being decided for the
-		// operator. More than one without a default is, and is refused
-		// below rather than resolved by map order — which is random, so the
-		// company would run somewhere different on every restart.
+		// operator. More than one without a default is a catalogue whose
+		// EVERY CALLER NAMES ITS CELL — config validation holds that for
+		// each seat and each agent-mode entry — and it is never resolved
+		// by map order here: that order is random, so the company would
+		// run somewhere different on every restart. A caller that names
+		// none against such a catalogue is refused by [Manager.Provider]
+		// at its launch, naming the field to set.
 		for placement := range m.providers {
 			m.placement = placement
 		}
 	}
-	if _, ok := m.providers[m.placement]; !ok {
-		return nil, &ConfigError{msg: fmt.Sprintf(
-			"providers.sandbox.default_run_in %q has no backend configured (have: %v)",
-			m.placement, slices.Sorted(maps.Keys(m.providers)))}
+	if m.placement != "" {
+		if _, ok := m.providers[m.placement]; !ok {
+			return nil, &ConfigError{msg: fmt.Sprintf(
+				"providers.sandbox.default_run_in %q has no backend configured (have: %v)",
+				m.placement, slices.Sorted(maps.Keys(m.providers)))}
+		}
 	}
 	if m.timeout == 0 {
 		m.timeout = DefaultBoxTimeout
@@ -178,6 +184,18 @@ func (m *Manager) Provider(placement Placement) (Provider, error) {
 	if placement == "" {
 		placement = m.placement
 	}
+	if placement == "" {
+		// A caller that named no cell against a catalogue with no
+		// default. Validation refuses this company, so reaching it means
+		// a row or a spec built by hand — and the honest answer names
+		// both fields that would have settled it, not "no backend for
+		// the empty string".
+		return nil, &ConfigError{msg: fmt.Sprintf(
+			"no cell named for this run and providers.sandbox names no "+
+				"default_run_in (configured: %v): set one, or name the cell "+
+				"on the seat's role.sandbox.run_in or the entry's cli.run_in",
+			slices.Sorted(maps.Keys(m.providers)))}
+	}
 	provider, ok := m.providers[placement]
 	if !ok {
 		return nil, &ConfigError{msg: fmt.Sprintf(
@@ -187,7 +205,10 @@ func (m *Manager) Provider(placement Placement) (Provider, error) {
 	return provider, nil
 }
 
-// DefaultPlacement is where a seat that names none runs.
+// DefaultPlacement is where a seat that names none runs. Empty when the
+// catalogue names no default and holds more than one cell — a company whose
+// every seat names its own — and then [Manager.Provider] refuses a run that
+// names none rather than picking one.
 func (m *Manager) DefaultPlacement() Placement { return m.placement }
 
 // Placements are the cells this company configured, for the operator surface.

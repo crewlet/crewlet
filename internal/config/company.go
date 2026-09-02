@@ -1,6 +1,7 @@
 package config
 
 import (
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -209,6 +210,18 @@ func (c *Company) Validate() error {
 			// tools silently vanish from every prompt.
 			p.add(at(path, "name"), ErrConflict, "duplicate MCP server name %q", name)
 		}
+		if name == BridgeServerName {
+			// The same collision one layer out: the engine writes the
+			// seat's tool bridge into every agent-mode box under this
+			// name, and a company server called the same is overwritten
+			// there — its tools gone from the run with nothing saying
+			// why. See [BridgeServerName].
+			p.add(at(path, "name"), ErrConflict,
+				"%q is reserved for the seat's own tool bridge, which every "+
+					"agent-mode box sees under that name; a server called the "+
+					"same would be replaced by it in the box. Rename the server",
+				name)
+		}
 		seen[name] = struct{}{}
 	}
 
@@ -400,7 +413,51 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 			reached[gate.RunIn] = at(at(path, "sandbox"), "run_in")
 		}
 	})
+	// AN AGENT-MODE EXECUTOR IS A RUN TOO, placed by its entry's own
+	// cli.run_in rather than by the seat's gate — and for as long as this
+	// walk stopped at the gates, that cell was never built: an entry
+	// naming `e2b` in a company whose seats all ran direct validated
+	// cleanly and failed at the seat's first turn, every turn, with the
+	// manager's "no backend for e2b".
+	for _, key := range c.agentModeExecutorKeys() {
+		run := c.Providers.LLM[key].CLI.RunIn
+		if run == "" || !run.NeedsBackend() {
+			continue
+		}
+		if _, seen := reached[run]; !seen {
+			reached[run] = at(agentModeEntryPath(key), "run_in")
+		}
+	}
 	return reached
+}
+
+// agentModeExecutorKeys are the providers.llm entries some seat's EXECUTOR
+// resolves to that run in agent mode, in key order.
+//
+// ONLY ENTRIES A SEAT REACHES, resolved as the phase registry resolves them
+// (see [Company.ExecutorProvider]): an agent-mode entry nobody's executor
+// runs on launches nothing, so the cell it names is not reached and the
+// backend behind it is not built — the same rule every gate here follows. It
+// is validated the day a seat points at it, like a seat added later.
+//
+// Sorted, so a message naming "the first seat" or a backend built in this
+// order is the same on every run of the same config.
+func (c *Company) agentModeExecutorKeys() []string {
+	seen := map[string]struct{}{}
+	c.EachRole(func(_ string, role *Role) {
+		key, entry, resolved := c.ExecutorProvider(role)
+		if !resolved || !entry.CLI.AgentMode() {
+			return
+		}
+		seen[key] = struct{}{}
+	})
+	return slices.Sorted(maps.Keys(seen))
+}
+
+// agentModeEntryPath is where an agent-mode entry's placement is written, for
+// the messages that point at it.
+func agentModeEntryPath(key string) string {
+	return at(at(at("providers", "llm"), key), "cli")
 }
 
 // ExecutorProvider is the providers.llm entry a seat's EXECUTOR actually runs
@@ -500,6 +557,43 @@ func (c *Company) validateSandboxPlacement() error {
 				run, run.backend(), names(catalogue.available()))
 		}
 	})
+
+	// THE SAME THREE QUESTIONS FOR AN AGENT-MODE EXECUTOR, whose run is
+	// placed by its entry rather than by a gate: is there a catalogue at
+	// all, is the cell it names configured, and does a silent entry have a
+	// default to fall to. Each was unasked, and each failed at the seat's
+	// first turn — every turn — with a launch error naming a backend no
+	// field in the file appeared to be missing.
+	for _, key := range c.agentModeExecutorKeys() {
+		entry := c.Providers.LLM[key]
+		where := at(agentModeEntryPath(key), "run_in")
+		if !catalogue.Enabled() {
+			p.add(at(agentModeEntryPath(key), "mode"), ErrMissing,
+				"agent mode runs the executor in a box, and this company "+
+					"configures no sandbox. Add providers.sandbox, or set "+
+					"`mode: text` to keep the CLI a subprocess of the engine")
+			continue
+		}
+		run := entry.CLI.RunIn
+		if run == "" {
+			run = catalogue.RunIn()
+		}
+		switch {
+		case run == "":
+			p.add(where, ErrMissing,
+				"agent mode runs the executor in a box and the catalogue "+
+					"offers more than one place to do it (%s), so this entry "+
+					"has to name one — or providers.sandbox.default_run_in has to",
+				names(catalogue.available()))
+		case !oneOf(run, BackendPlacements()):
+			// Spelling is the entry's own rule; it already reported.
+		case !catalogue.Configured(run):
+			p.add(where, ErrConflict,
+				"%q needs the %s backend configured under providers.sandbox "+
+					"(this catalogue has %s)",
+				run, run.backend(), names(catalogue.available()))
+		}
+	}
 
 	reached := c.SandboxPlacements()
 	if local := catalogue.localBlock(); local != nil {

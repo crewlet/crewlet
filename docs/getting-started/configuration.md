@@ -710,7 +710,7 @@ mcp_servers:
     request_timeout_seconds: 300        # optional — one tool call
 ```
 
-Full field reference: `name` (required), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`.
+Full field reference: `name` (required; `crewlet` is reserved — it is the name every agent-mode box sees the seat's own [tool bridge](../concepts/subscription-llm-backends.md#the-tool-bridge) under, and a server called the same would be replaced by it there), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`.
 
 ### Timeouts
 

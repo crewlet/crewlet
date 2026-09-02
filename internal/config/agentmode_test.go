@@ -151,3 +151,100 @@ func TestTheExecutorEntryResolvesLikeThePhaseRegistry(t *testing.T) {
 		t.Error("a company with no providers resolved an executor entry")
 	}
 }
+
+// AN AGENT-MODE ENTRY IS A RUN, placed by its own cli.run_in, and it gets the
+// same three questions a seat's gate gets: is there a catalogue, is the cell
+// it names configured, and does a silent entry have a default to fall to.
+// Each was unasked, and each failed at the seat's first turn — every turn —
+// with a launch error naming a backend no field in the file appeared to lack.
+func TestAnAgentModeEntryIsPlacedLikeASeat(t *testing.T) {
+	t.Parallel()
+	entry := func(runIn string) string {
+		cli := "cli: {agent: claude-code, mode: agent}"
+		if runIn != "" {
+			cli = "cli: {agent: claude-code, mode: agent, run_in: " + runIn + "}"
+		}
+		return "  llm:\n    sub:\n      type: cli-agent\n      model: sonnet\n      " + cli + "\n" +
+			"roles:\n  - name: SWE\n    llm: sub\n"
+	}
+
+	t.Run("no catalogue at all", func(t *testing.T) {
+		t.Parallel()
+		err := rejects(t, "name: Acme\nproviders:\n"+entry(""), "providers.llm.sub.cli.mode")
+		if !errors.Is(err, ErrMissing) {
+			t.Fatalf("want ErrMissing, got %v", err)
+		}
+	})
+	t.Run("a cell the catalogue does not hold", func(t *testing.T) {
+		t.Parallel()
+		err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n"+
+			entry("e2b"), "providers.llm.sub.cli.run_in")
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("want ErrConflict, got %v", err)
+		}
+	})
+	t.Run("a silent entry on an ambiguous catalogue", func(t *testing.T) {
+		t.Parallel()
+		err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n"+entry(""),
+			"providers.llm.sub.cli.run_in")
+		if !errors.Is(err, ErrMissing) {
+			t.Fatalf("want ErrMissing, got %v", err)
+		}
+	})
+	t.Run("the cell it names is reached and built for", func(t *testing.T) {
+		t.Parallel()
+		cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    e2b: {api_key: k}\n"+
+			"    default_run_in: direct\n"+entry("e2b"))
+		if where := cfg.SandboxPlacements()[PlacementE2B]; where != "providers.llm.sub.cli.run_in" {
+			t.Errorf("the entry's cell is reached by %q, want the entry itself", where)
+		}
+		// And what reaching a cell implies follows: a container run
+		// needs an image whether a seat or an entry asked for it.
+		err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n"+
+			entry("container"), "providers.sandbox.local.image")
+		if !errors.Is(err, ErrMissing) {
+			t.Fatalf("want ErrMissing, got %v", err)
+		}
+	})
+	t.Run("an entry no seat runs on reaches nothing", func(t *testing.T) {
+		t.Parallel()
+		// The same entry, with the seat on another model: it launches
+		// nothing, so its cell is not built and its questions are not
+		// asked — the day a seat points at it, they are.
+		cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n"+
+			"  llm:\n    main:\n      type: anthropic\n      model: claude-golden\n"+
+			"    sub:\n      type: cli-agent\n      model: sonnet\n"+
+			"      cli: {agent: claude-code, mode: agent, run_in: e2b}\n"+
+			"roles:\n  - name: SWE\n    llm: main\n")
+		if _, reached := cfg.SandboxPlacements()[PlacementE2B]; reached {
+			t.Error("an unused entry's cell was reached")
+		}
+	})
+}
+
+// `self` IS A SEAT'S ANSWER, NOT AN ENTRY'S. It means "my code work rides my
+// executor's own run", and an agent-mode entry IS that run — it has no other
+// run to ride and no backend resolves it. Accepted, it validated cleanly and
+// failed at the seat's first turn, every turn.
+func TestSelfIsNotACellAnAgentModeEntryCanName(t *testing.T) {
+	t.Parallel()
+	err := rejects(t, "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    sub:\n"+
+		"      type: cli-agent\n      model: sonnet\n      cli: {agent: claude-code, mode: agent, run_in: self}\n",
+		"providers.llm.sub.cli.run_in")
+	if !errors.Is(err, ErrUnknownValue) {
+		t.Fatalf("want ErrUnknownValue, got %v", err)
+	}
+}
+
+// THE BRIDGE'S NAME IS RESERVED. The engine writes the seat's tool bridge into
+// every agent-mode box's server list under it, so a company server of the
+// same name would be replaced there — its tools gone from the run with no
+// error and no log line saying why.
+func TestTheBridgeServerNameIsReserved(t *testing.T) {
+	t.Parallel()
+	err := rejects(t, "name: Acme\nmcp_servers:\n  - name: "+BridgeServerName+"\n    command: npx\n",
+		"mcp_servers[0].name")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
+}

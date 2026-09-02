@@ -39,29 +39,51 @@ func TestAPlacementNeedsItsBackend(t *testing.T) {
 	}
 }
 
-// AN AMBIGUOUS CATALOGUE HAS TO BE TOLD WHERE A SILENT SEAT RUNS.
+// AN AMBIGUOUS CATALOGUE HAS TO BE TOLD WHERE A SILENT SEAT RUNS — and only
+// then.
 //
 // `local:` alone is TWO cells, not one: it serves `direct`, which runs the
 // coding agent as the engine's user, and `container`, which does not. Picking
 // either for an operator who wrote neither is the default that gets discovered
-// afterwards.
-func TestAnAmbiguousCatalogueNeedsAnExplicitDefault(t *testing.T) {
+// afterwards. But the question is about the SEATS: a catalogue whose every
+// sandbox-enabled seat names its own cell has nothing left to default, and
+// that is the shape the catalogue exists for. Refused on the block alone, the
+// remedy its own message offered — "give every seat its run_in" — could never
+// pass.
+func TestAnAmbiguousCatalogueNeedsADefaultOnlyWhereASeatWouldReadIt(t *testing.T) {
 	t.Parallel()
-	err := rejects(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n",
-		"providers.sandbox.default_run_in")
-	if !errors.Is(err, ErrMissing) {
-		t.Fatalf("want ErrMissing, got %v", err)
+	const local = "name: Acme\nproviders:\n  sandbox:\n    local: {}\n"
+	const both = "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    e2b: {api_key: k}\n"
+
+	// A silent seat is refused where it is written, on either catalogue.
+	silent := "roles:\n  - name: SWE\n    sandbox: {enabled: true}\n"
+	for _, doc := range []string{local + silent, both + silent} {
+		err := rejects(t, doc, "roles[0].sandbox.run_in")
+		if !errors.Is(err, ErrMissing) {
+			t.Fatalf("want ErrMissing, got %v", err)
+		}
 	}
-	// Both backends is the same ambiguity, one cell wider.
-	err = rejects(t, "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    e2b: {api_key: k}\n",
-		"providers.sandbox.default_run_in")
-	if !errors.Is(err, ErrMissing) {
-		t.Fatalf("want ErrMissing, got %v", err)
+
+	// Every seat naming its cell needs no default — and no seat at all
+	// needs none either, since nothing would read it.
+	mustCompany(t, local)
+	cfg := mustCompany(t, both+"roles:\n  - name: SWE\n    sandbox: {enabled: true, run_in: direct}\n"+
+		"  - name: Ops\n    sandbox: {enabled: true, run_in: e2b}\n")
+	reached := cfg.SandboxPlacements()
+	if _, ok := reached[PlacementDirect]; !ok {
+		t.Errorf("direct is not reached: %v", reached)
 	}
+	if _, ok := reached[PlacementE2B]; !ok {
+		t.Errorf("e2b is not reached: %v", reached)
+	}
+	if got := cfg.Providers.Sandbox.RunIn(); got != "" {
+		t.Errorf("a catalogue with no default resolved one anyway: %q", got)
+	}
+
 	// THE UNAMBIGUOUS ONES RESOLVE THEMSELVES, which is the direction that
 	// matters: a rule that only ever refuses would make the simplest remote
 	// catalogue unwritable.
-	cfg := mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    e2b: {api_key: \"${E2B_API_KEY}\"}\n")
+	cfg = mustCompany(t, "name: Acme\nproviders:\n  sandbox:\n    e2b: {api_key: \"${E2B_API_KEY}\"}\n"+silent)
 	if got := cfg.Providers.Sandbox.RunIn(); got != PlacementE2B {
 		t.Fatalf("a remote-only catalogue resolved to %q, want %q", got, PlacementE2B)
 	}

@@ -1435,7 +1435,7 @@
           "type": "number"
         },
         "default_run_in": {
-          "description": "Where a sandbox-enabled seat that names none runs. Required unless the catalogue names exactly one cell.",
+          "description": "Where a sandbox-enabled seat that names none runs. Required unless the catalogue names exactly one cell, or every sandbox-enabled seat and agent-mode entry names its own run_in.",
           "enum": [
             "direct",
             "container",

@@ -305,8 +305,10 @@ see the [Code Sandbox](../concepts/code-sandbox.md) concept page.
 `e2b:` and `local:` together and give each seat its own `run_in` — the seat
 that needs the host's subscription login runs `direct`, the seat whose
 generated code must never touch that host runs `e2b`. Where a seat that names
-none goes is `default_run_in`, which is required whenever the catalogue offers
-more than one cell (and `local:` alone offers two).
+none goes is `default_run_in`, which is required whenever some seat (or
+agent-mode entry) would fall to it on a catalogue offering more than one cell
+(and `local:` alone offers two); a company whose every seat names its own
+needs none.
 
 Coding-agent choice: **OpenCode** is provider-agnostic (reuses any
 OpenAI-compatible provider you already configured — no extra secret);

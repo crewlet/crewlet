@@ -152,7 +152,14 @@ type SandboxProvider struct {
 	// cells, not one — it serves both `direct` and `container` — so it
 	// needs this field as much as a catalogue with both backends does.
 	// Only `e2b:` alone, and the double, resolve on their own.
-	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a sandbox-enabled seat that names none runs. Required unless the catalogue names exactly one cell."`
+	//
+	// REQUIRED ONLY WHERE SOMETHING WOULD READ IT. A catalogue whose every
+	// sandbox-enabled seat, and every agent-mode entry a seat's executor
+	// runs on, names its own cell has nothing left to default — that is
+	// the shape the catalogue exists for — so the refusal is written at
+	// the seat or entry that named none, never on this field alone. See
+	// [Company.validateSandboxPlacement].
+	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a sandbox-enabled seat that names none runs. Required unless the catalogue names exactly one cell, or every sandbox-enabled seat and agent-mode entry names its own run_in."`
 
 	// DefaultCodingAgent is what a seat that names none runs.
 	DefaultCodingAgent CodingAgent `yaml:"default_coding_agent,omitempty" json:"default_coding_agent,omitempty" js:"enum=claude-code|opencode" desc:"Coding agent for seats that name none."`
@@ -332,11 +339,6 @@ func (s *SandboxProvider) RunIn() Placement {
 	return ""
 }
 
-// Ambiguous reports whether the catalogue needs an explicit default_run_in.
-func (s *SandboxProvider) Ambiguous() bool {
-	return s.Enabled() && s.RunIn() == ""
-}
-
 func (s *SandboxProvider) validate(path string) error {
 	var p problems
 	switch {
@@ -368,17 +370,14 @@ func (s *SandboxProvider) validate(path string) error {
 
 	switch {
 	case s.DefaultRunIn == "":
-		if s.Ambiguous() {
-			// REPORTED AS A CHOICE rather than a missing field, because
-			// the cells do materially different things to the machine the
-			// engine runs on. See [SandboxProvider.RunIn].
-			p.add(at(path, "default_run_in"), ErrMissing,
-				"this catalogue configures more than one place to run code (%s), "+
-					"so a seat that names none has no answer. Name the default "+
-					"here, or give every sandbox-enabled seat its own "+
-					"role.sandbox.run_in",
-				names(s.available()))
-		}
+		// NOT REFUSED HERE, even when the catalogue is ambiguous: whether
+		// a default is NEEDED is a question about the seats, and this
+		// block cannot see them. A seat, or an agent-mode entry, that
+		// names no cell against an ambiguous catalogue is refused where it
+		// is written, with a message offering this field as the other
+		// remedy — see [Company.validateSandboxPlacement]. Refused here
+		// unconditionally, the remedy that message offered ("give every
+		// seat its own run_in") could never pass.
 	case !oneOf(s.DefaultRunIn, BackendPlacements()):
 		// `self` is deliberately not offerable as a COMPANY default: it
 		// is only meaningful for a seat whose executor is a coding CLI
