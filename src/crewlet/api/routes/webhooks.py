@@ -722,7 +722,17 @@ async def _claim_delivery(request: Request, source: str, key: str) -> bool:
 
 
 async def github_webhook(request: Request) -> JSONResponse:
-    """POST /webhooks/github — publish to EventQueue."""
+    """POST /webhooks/github/{handle} — verify then publish to EventQueue.
+
+    The seat is in the path because GitHub delivers to every app
+    installed on a repository, each with its own delivery id. One issue
+    comment on a repository five agents work therefore arrives five
+    times, and they are not duplicates: they are five agents being told,
+    which is the whole point of giving each its own identity. Without
+    the handle the engine cannot say which agent a delivery was for, and
+    dedupe cannot tell the five apart from a redelivery of one.
+    """
+    handle = request.path_params.get("handle", "")
     body_raw = await request.body()
 
     webhook_secret: str | None = getattr(
@@ -758,7 +768,7 @@ async def github_webhook(request: Request) -> JSONResponse:
             logger.debug("github_delivery_duplicate", delivery_id=delivery_id)
             return JSONResponse({"status": "duplicate"})
 
-        logger.info("github_webhook_received", github_event=gh_event)
+        logger.info("github_webhook_received", github_event=gh_event, handle=handle)
         github_summary = _build_github_summary(gh_event, body_data)
         await _log_event(
             request,
@@ -778,6 +788,7 @@ async def github_webhook(request: Request) -> JSONResponse:
                     "body": body_data,
                     "headers": _safe_headers(request),
                     "body_raw_b64": base64.b64encode(body_raw).decode(),
+                    "handle": handle,
                 },
             ),
         )
@@ -909,6 +920,93 @@ async def gitlab_webhook(request: Request) -> JSONResponse:
             ),
         )
     return JSONResponse({"status": "ok"})
+
+
+async def datadog_webhook(request: Request) -> JSONResponse:
+    """POST /webhooks/datadog — check the shared token, then publish.
+
+    Datadog cannot sign a body: its Webhooks integration attaches
+    headers with fixed values only, so there is no HMAC to verify and
+    the strongest check available is a constant-time comparison of a
+    shared token. That is weaker than every other route here — a
+    replayed delivery is indistinguishable from a fresh one — and it is
+    the provider's ceiling, not a shortcut.
+    """
+    body_raw = await request.body()
+
+    secret: str | None = getattr(request.app.state, "datadog_webhook_secret", None)
+    if not secret:
+        return _no_secret_response("datadog")
+
+    sent = request.headers.get("x-crewlet-token", "")
+    if not sent or not hmac.compare_digest(sent, secret):
+        logger.warning("datadog_webhook_token_invalid")
+        return JSONResponse({"error": "invalid token"}, status_code=401)
+
+    body_data = _parse_json_object(body_raw)
+    if body_data is None:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+    dd_event = body_data.get("alert_type", "") or body_data.get("event_type", "monitor")
+
+    dropped = _webhook_unconfigured_response(
+        request, source="datadog", event_type=dd_event
+    )
+    if dropped is not None:
+        return dropped
+
+    with tracer.start_as_current_span(
+        "webhook.datadog",
+        attributes={"webhook.source": "datadog", "datadog.event": dd_event},
+    ):
+        # Datadog stamps each notification with an id that is stable
+        # across its own retries, which is what makes dedupe possible
+        # at all on a route with no signature.
+        delivery_id = str(body_data.get("id", "") or body_data.get("alert_id", ""))
+        if delivery_id and not await _claim_delivery(request, "datadog", delivery_id):
+            logger.debug("datadog_delivery_duplicate", delivery_id=delivery_id)
+            return JSONResponse({"status": "duplicate"})
+
+        logger.info("datadog_webhook_received", datadog_event=dd_event)
+        await _log_event(
+            request,
+            f"webhook:{dd_event}",
+            "datadog",
+            payload=body_data,
+            summary=_build_datadog_summary(body_data),
+        )
+
+        eq = _event_queue(request)
+        await eq.publish(
+            INBOUND_TOPIC,
+            Event(
+                type="raw_webhook",
+                source="datadog",
+                payload={
+                    "body": body_data,
+                    "headers": _safe_headers(request),
+                    "body_raw_b64": base64.b64encode(body_raw).decode(),
+                },
+            ),
+        )
+    return JSONResponse({"status": "ok"})
+
+
+def _build_datadog_summary(body: dict[str, Any]) -> str:
+    """A one-line gloss of a Datadog alert, for the event feed."""
+    title = body.get("title", "") or body.get("alert_title", "")
+    priority = body.get("priority", "")
+    transition = body.get("alert_transition", "") or body.get("alert_type", "")
+
+    parts = ["Datadog"]
+    if transition:
+        parts.append(str(transition))
+    if title:
+        parts.append(str(title))
+    if priority:
+        parts.append(f"(P{priority})")
+
+    return " · ".join(parts)
 
 
 # Plane's scheme is a fixed 64-char SHA-256 hexdigest — anything else

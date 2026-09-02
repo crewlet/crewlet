@@ -2624,6 +2624,46 @@ class ConfluenceConfig(BaseModel):
         return self.site_url or self.url
 
 
+class DatadogConfig(BaseModel):
+    """Organisation-level Datadog integration configuration.
+
+    Datadog reaches Crewlet through its Webhooks integration, which
+    posts a monitor's payload to a URL. Unlike every other inbound
+    integration here, it **cannot sign the body**: a Datadog webhook can
+    attach headers, but only with fixed values, so there is no HMAC to
+    verify. Verification is therefore a constant-time comparison of a
+    shared token sent in ``X-Crewlet-Token``.
+
+    That is weaker than an HMAC and the difference is real — a replayed
+    delivery is indistinguishable from a fresh one — so the token is
+    the whole of the authentication and must be treated as a secret.
+    It is not a design choice Crewlet made; it is the strongest scheme
+    the provider offers.
+
+    Example YAML::
+
+        integrations:
+          datadog:
+            enabled: true
+            webhook_secret: "${DATADOG_WEBHOOK_SECRET}"
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    webhook_secret: str | None = None
+    """Shared token compared against ``X-Crewlet-Token``. Required when
+    enabled: with nothing to check, the route would accept anything."""
+
+    @model_validator(mode="after")
+    def _require_secret(self) -> DatadogConfig:
+        if self.enabled and not self.webhook_secret:
+            raise ValueError(
+                "datadog.webhook_secret is required when datadog is enabled"
+            )
+        return self
+
+
 class IntegrationsConfig(BaseModel):
     """External-system integrations — the inbound / notification side.
 
@@ -2648,6 +2688,7 @@ class IntegrationsConfig(BaseModel):
     github: GitHubConfig | None = None
     gitlab: GitLabConfig | None = None
     plane: PlaneConfig | None = None
+    datadog: DatadogConfig | None = None
     forge_app_id: str = ""
     """Forge app ID for verifying Forge Invocation Tokens (FIT).
 

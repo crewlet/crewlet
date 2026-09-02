@@ -66,6 +66,7 @@ Connecting the external surfaces agents work on:
 - **[GitHub](integrations/github.md)** — Per-role remote MCP tools for read/review/track; sandbox code authoring
 - **[Slack](integrations/slack.md)** — One-app-per-agent setup with automated app provisioning via `crewlet slack provision` (App Manifest APIs), thread routing, and the per-phase working indicator
 - **[Mattermost](integrations/mattermost.md)** — Self-hosted open-source chat: one bot account per agent, `crewlet mattermost provision`, a websocket event fleet instead of webhooks (no public URL needed), and thread routing
+- **[Datadog](integrations/datadog.md)** — Monitor alerts as inbound events via the Webhooks integration; shared-token verification, because Datadog cannot sign a body
 - **[Custom Transports](integrations/custom-transports.md)** — Build your own notification transport
 
 ## Guides

@@ -17,6 +17,14 @@ integrations:
 
 `webhook_secret` is **required** when GitHub is enabled. Inbound webhook requests to `POST /webhooks/github` are verified using **HMAC-SHA256** against the `x-hub-signature-256` header. Requests with invalid or missing signatures are rejected with 401. Set the same secret in your GitHub repository's webhook settings.
 
+### Addressing a seat
+
+`POST /webhooks/github/{handle}` names the agent a delivery is for, and is the form a per-agent GitHub App should point at.
+
+GitHub delivers to **every** app installed on a repository, each delivery carrying its own `x-github-delivery`. A repository five agents work therefore produces five deliveries of one comment. Those are not duplicates and must not be collapsed: they are five agents being told, which is the whole point of each holding its own identity. The handle in the path is what says which agent a delivery belongs to, and it travels on the published event as `handle`.
+
+The bare `POST /webhooks/github` stays for a single app serving a whole organisation, where a delivery names no seat. Both forms verify identically.
+
 Declare the GitHub **MCP tool server** once in `mcp_servers` as a `shared: false` `http` server. Each agent supplies its token in `role.mcp_env.github` as an `Authorization: Bearer <token>` header:
 
 ```yaml

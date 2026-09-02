@@ -26,6 +26,7 @@ from crewlet.api.routes.tokens import get_tokens_breakdown
 from crewlet.api.routes.webhooks import (
     _log_event,
     confluence_webhook,
+    datadog_webhook,
     forge_webhook,
     github_webhook,
     gitlab_webhook,
@@ -67,9 +68,15 @@ def build_routes() -> list[Route | WebSocketRoute]:
         Route("/webhooks/forge", forge_webhook, methods=["POST"]),
         Route("/webhooks/jira", jira_webhook, methods=["POST"]),
         Route("/webhooks/confluence", confluence_webhook, methods=["POST"]),
+        # The seat is in the path: GitHub delivers to every app on a
+        # repository, so the address is what says which agent a
+        # delivery is for. The bare form stays for the shared app,
+        # whose deliveries name no seat.
         Route("/webhooks/github", github_webhook, methods=["POST"]),
+        Route("/webhooks/github/{handle}", github_webhook, methods=["POST"]),
         Route("/webhooks/gitlab", gitlab_webhook, methods=["POST"]),
         Route("/webhooks/plane", plane_webhook, methods=["POST"]),
+        Route("/webhooks/datadog", datadog_webhook, methods=["POST"]),
         Route("/otlp/{token}/v1/{signal}", sandbox_otel, methods=["POST"]),
         # Outside the /webhooks/slack/{handle} namespace on purpose: any
         # agent handle (including a literal "oauth") stays a valid

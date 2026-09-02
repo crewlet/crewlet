@@ -210,6 +210,31 @@
       "title": "CredentialCooldownConfig",
       "type": "object"
     },
+    "DatadogConfig": {
+      "additionalProperties": false,
+      "description": "Organisation-level Datadog integration configuration.\n\nDatadog reaches Crewlet through its Webhooks integration, which\nposts a monitor's payload to a URL. Unlike every other inbound\nintegration here, it **cannot sign the body**: a Datadog webhook can\nattach headers, but only with fixed values, so there is no HMAC to\nverify. Verification is therefore a constant-time comparison of a\nshared token sent in ``X-Crewlet-Token``.\n\nThat is weaker than an HMAC and the difference is real \u2014 a replayed\ndelivery is indistinguishable from a fresh one \u2014 so the token is\nthe whole of the authentication and must be treated as a secret.\nIt is not a design choice Crewlet made; it is the strongest scheme\nthe provider offers.\n\nExample YAML::\n\n    integrations:\n      datadog:\n        enabled: true\n        webhook_secret: \"${DATADOG_WEBHOOK_SECRET}\"",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "webhook_secret": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Webhook Secret"
+        }
+      },
+      "title": "DatadogConfig",
+      "type": "object"
+    },
     "EmbeddingProviderConfig": {
       "additionalProperties": false,
       "description": "Configuration for an embedding provider.",
@@ -555,6 +580,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/PlaneConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "datadog": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DatadogConfig"
             },
             {
               "type": "null"

@@ -4,6 +4,7 @@
 The API holds only serialised state (``app.state.org_data``,
 ``agent_roles``, ``tools_data``, ``github_webhook_secret``,
 ``gitlab_signing_secret``, ``plane_webhook_secret``,
+``datadog_webhook_secret``,
 ``confluence_webhook_secret``, ``jira_webhook_secret``,
 ``slack_signing_secrets``,
 ``forge_app_id``)
@@ -441,7 +442,8 @@ def _set_webhook_secrets(app: Any, payload: dict[str, Any]) -> None:
 
     ``payload`` is the fully-decrypted config (the whole document is
     decrypted at the read boundary before this runs), so each webhook
-    secret (GitHub / GitLab / Plane / Confluence / Jira) is a plaintext
+    secret (GitHub / GitLab / Plane / Confluence / Jira / Datadog) is a
+    plaintext
     value or
     a ``${VAR}`` reference resolved from the environment — never
     ciphertext.  The Forge app id is likewise ``${VAR}``-resolved.
@@ -459,6 +461,8 @@ def _set_webhook_secrets(app: Any, payload: dict[str, Any]) -> None:
     raw_confluence = confluence.get("webhook_secret") or ""
     jira = integrations.get("jira") or {}
     raw_jira = jira.get("webhook_secret") or ""
+    datadog = integrations.get("datadog") or {}
+    raw_datadog = datadog.get("webhook_secret") or ""
 
     app.state.github_webhook_secret = str(_resolve_env_value(raw_secret))
     app.state.forge_app_id = str(_resolve_env_value(raw_forge))
@@ -468,6 +472,7 @@ def _set_webhook_secrets(app: Any, payload: dict[str, Any]) -> None:
         str(_resolve_env_value(raw_confluence)) or None
     )
     app.state.jira_webhook_secret = str(_resolve_env_value(raw_jira)) or None
+    app.state.datadog_webhook_secret = str(_resolve_env_value(raw_datadog)) or None
     app.state.slack_signing_secrets = _slack_signing_secrets(payload)
 
 
