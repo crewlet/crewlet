@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -81,6 +82,7 @@ const probeSkew = 5 * time.Minute
 type Diagnosis struct {
 	Provider   string
 	Agent      string
+	Mode       string
 	Model      string
 	Binary     string
 	BinaryPath string
@@ -106,7 +108,33 @@ type Diagnosis struct {
 	// Web is whether the CLI's own fetch tool reached the web, measured.
 	Web string
 
+	// AgentRuntime is what an AGENT-MODE entry needs beyond a login, and
+	// is empty for a text-mode one. Each half of it fails at a seat's
+	// first turn and nowhere earlier: a CLI with no coding-agent runner
+	// has nothing to drive, and a box with no bridge to dial gets none of
+	// the seat's tools.
+	AgentRuntime []string
+
 	Problems []string
+}
+
+// DiagnoseOptions are the facts a provider cannot see about itself.
+//
+// Both belong to the PROCESS rather than to the provider — which runners this
+// build registers, and what a sandbox can dial — and both decide whether agent
+// mode works. Passed in rather than read here, so `doctor` reports the engine's
+// own answers instead of this package's guess at them.
+type DiagnoseOptions struct {
+	// Smoke runs the real completion and the two tool probes.
+	Smoke bool
+
+	// AgentRunners are the coding-agent runner names this build has. An
+	// agent-mode entry naming a CLI outside them cannot run at all.
+	AgentRunners []string
+
+	// BridgeURL is CREWLET_MCP_BRIDGE_URL as this process sees it. Empty
+	// means agent mode is refused at launch.
+	BridgeURL string
 }
 
 // Diagnose measures one provider end to end.
@@ -114,12 +142,14 @@ type Diagnosis struct {
 // It never returns an error: every failure it can find is a LINE in the
 // report, because an operator running `doctor` wants the whole picture, and a
 // command that stopped at the first problem would hide the three behind it.
-func (p *Provider) Diagnose(ctx context.Context, smoke bool) Diagnosis {
+func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis {
+	smoke := opts.Smoke
 	d := Diagnosis{
-		Provider: p.key, Agent: p.agent, Model: p.model,
+		Provider: p.key, Agent: p.agent, Mode: p.modeName(), Model: p.model,
 		Binary: p.profile.Binary, WrittenFor: p.profile.WrittenFor,
 		StateDir: p.ws.Root(),
 	}
+	d.AgentRuntime, d.Problems = p.agentRuntime(opts)
 
 	path, err := exec.LookPath(p.profile.Binary)
 	switch {
@@ -210,6 +240,66 @@ func (p *Provider) Diagnose(ctx context.Context, smoke bool) Diagnosis {
 	}
 	return d
 }
+
+// modeName is how this entry runs, for the report.
+func (p *Provider) modeName() string {
+	if p.agentMode {
+		return "agent (the CLI runs the executor)"
+	}
+	return "text (a model behind the engine's tool loop)"
+}
+
+// agentRuntime measures what an agent-mode entry needs beyond a login.
+//
+// BOTH HALVES FAIL AT A SEAT'S FIRST TURN AND NOWHERE EARLIER, which is the
+// whole reason they are here: an entry naming a CLI this build has no runner
+// for validates cleanly and reports a configured provider, and an engine with
+// no reachable bridge URL refuses every agent-mode launch at the moment a seat
+// finally has work. `doctor` is what a deploy script gates on, so it is the
+// last place either can be caught before an agent is waiting.
+//
+// A TEXT-MODE ENTRY REPORTS NOTHING HERE, rather than reporting that it would
+// not work in a mode it is not in. It runs as a subprocess of this engine and
+// needs neither.
+func (p *Provider) agentRuntime(opts DiagnoseOptions) (lines, problems []string) {
+	if !p.agentMode {
+		return nil, nil
+	}
+	if slices.Contains(opts.AgentRunners, p.agent) {
+		lines = append(lines, fmt.Sprintf("runner: %q is registered", p.agent))
+	} else {
+		lines = append(lines, fmt.Sprintf("runner: none for %q", p.agent))
+		problems = append(problems, fmt.Sprintf(
+			"agent mode drives %q through a coding-agent runner and this build "+
+				"registers none for it (has: %s) — set `mode: text` on "+
+				"providers.llm.%s, or point it at a CLI that has one",
+			p.agent, strings.Join(opts.AgentRunners, ", "), p.key))
+	}
+	if strings.TrimSpace(opts.BridgeURL) != "" {
+		lines = append(lines, "tool bridge: "+opts.BridgeURL)
+	} else {
+		lines = append(lines, "tool bridge: unset")
+		problems = append(problems, fmt.Sprintf(
+			"agent mode hands the seat's tools to the box over an MCP bridge and "+
+				"%s is unset, so every launch is refused — a coding agent with "+
+				"none of the seat's tools cannot answer anybody or submit its "+
+				"work. Set it to a URL a sandbox can reach",
+			bridgeURLVar))
+	}
+	return lines, problems
+}
+
+// bridgeURLVar is the variable an agent-mode box dials the engine on.
+//
+// SPELLED HERE RATHER THAN IMPORTED, because importing the API package into a
+// provider would be a dependency from a leaf onto an edge for one string —
+// and a test asserts the two agree, which is the same guard for none of the
+// cost.
+const bridgeURLVar = "CREWLET_MCP_BRIDGE_URL"
+
+// BridgeURLVar exposes that spelling, for the one test that holds it against
+// the package which actually reads the variable.
+func BridgeURLVar() string { return bridgeURLVar }
 
 // localToolsStance renders the profile's declared stance.
 func (p *Provider) localToolsStance() string {
@@ -368,6 +458,7 @@ func (d Diagnosis) Render(w io.Writer) {
 	}
 	line("provider", d.Provider)
 	line("cli agent", d.Agent)
+	line("mode", d.Mode)
 	if d.Model != "" {
 		line("model", d.Model)
 	}
@@ -384,6 +475,13 @@ func (d Diagnosis) Render(w io.Writer) {
 	line("smoke test", d.Smoke)
 	line("local tools", d.LocalTools)
 	line("web", d.Web)
+	for i, entry := range d.AgentRuntime {
+		label := ""
+		if i == 0 {
+			label = "agent runtime"
+		}
+		line(label, entry)
+	}
 	if d.Healthy() {
 		line("problems", "none")
 		return

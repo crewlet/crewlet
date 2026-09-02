@@ -52,6 +52,17 @@ backend, or via a local cell (`providers.sandbox.local` plus `run_in:
 direct`), which runs the coding agent on the engine host against the same
 login.
 
+**And a subscription CLI can run the turn itself.** `cli.mode: agent` makes
+the seat's executor the CLI's own agentic loop — a real shell, a real editor,
+a real checkout — with the seat's tools reaching it over an MCP bridge, as a
+detached run that outlives the turn. It needs more than a login: a CLI with a
+coding-agent runner (`claude-code` or `opencode`), a `providers.sandbox`
+catalogue to place the run in, and `CREWLET_MCP_BRIDGE_URL` set to something a
+box can dial. `crewlet llm doctor` checks all three. Text mode stays the
+default and is the better answer when you want the tool log to be the
+engine's own. See
+[Subscription LLM Backends § Two modes](../concepts/subscription-llm-backends.md#two-modes-a-text-model-or-the-agent-itself).
+
 **Embeddings** (`providers.embeddings`) power the agent-learning subsystem
 (personal diary + episode recall). Any OpenAI-compatible embeddings endpoint
 works via `base_url` — including a self-hosted one. Without an embeddings
