@@ -149,7 +149,7 @@ func TestABadTokenFailsTheHandshakeRatherThanOpeningAndDying(t *testing.T) {
 // answer an unauthenticated GET 400, or 500, or that let a bad token through
 // to the upgrade attempt, would not fail any socket test — it would silently
 // strand every reader holding a stale token on a page that says "retrying"
-// for ever. That is the bug this asserts against; see _probeRefusal in
+// for ever. That is the bug this asserts against; see probeRefusal in
 // dashboard/src/protocol/socket.ts.
 func TestAPlainGETSeparatesARefusedCredentialFromAnAcceptedOne(t *testing.T) {
 	t.Parallel()

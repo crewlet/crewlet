@@ -339,8 +339,8 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 				"body_bytes", len(d.raw), "error", err,
 				"detail", "the delivery was verified and is too large to publish; "+
 					"refused permanently so the provider does not retry it")
-			writeJSON(w, http.StatusRequestEntityTooLarge,
-				map[string]string{"error": "delivery too large to queue"})
+			httpjson.FailWith(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge,
+				map[string]string{"detail": "too large to queue"})
 			return
 		}
 		log.Error("webhook_publish_failed", "source", d.source, "route", v.source,
@@ -490,8 +490,7 @@ func (r *Receiver) body(w http.ResponseWriter, req *http.Request) ([]byte, bool)
 	}
 	if errors.Is(err, errBodyTooLarge) {
 		log.Warn("webhook_body_too_large", "path", req.URL.Path, "limit", MaxBodyBytes)
-		writeJSON(w, http.StatusRequestEntityTooLarge,
-			map[string]string{"error": "body too large"})
+		httpjson.Fail(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge)
 		return nil, false
 	}
 	// A read that failed part way is a client that hung up or a socket

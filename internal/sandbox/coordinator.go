@@ -559,7 +559,7 @@ func (c *Coordinator) announceFailure(ctx context.Context, run PendingRun, reaso
 
 // teardown reclaims a run's box and clears the row's record of it.
 //
-// A CONTEXT OF ITS OWN, like [reclaim] and [Manager.discard], and for the
+// A CONTEXT OF ITS OWN, like [abandon] and [Manager.discard], and for the
 // same reason: this is reached right after a failure — settleFailed,
 // resumeAndSettle — and from the queue handler a drain cancels, so the
 // context that got us here is very often already dead. Inheriting it makes

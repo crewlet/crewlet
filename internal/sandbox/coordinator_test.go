@@ -948,7 +948,7 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 // nothing will ever collect it; on the local one Kill's wait for the process
 // group is what stops removeBox racing the dying wrapper's writes.
 //
-// The two siblings — reclaim() and Manager.discard() — already detach, with
+// The two siblings — abandon() and Manager.discard() — already detach, with
 // comments saying why. This one did not.
 func TestAFailedRunsBoxIsReclaimedOnADeadContext(t *testing.T) {
 	rig := newCoordRig(t)

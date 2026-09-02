@@ -196,6 +196,12 @@ func elideTail(text string, limit int) string {
 // reports back to its parent. Two trimming functions would eventually
 // disagree about where a limit falls and whether the cut is marked.
 //
+// NOT [textcut.Ellipsis], which is the tree's other shared head cut, and the
+// difference is deliberate: that one counts BYTES and reads a limit of 0 as
+// empty, where this one counts RUNES and reads 0 as unbounded — the contract
+// Review's single-iteration evidence log depends on. See textcut's package
+// doc, which says the same thing from the other side.
+//
 // NOT for content. Every caller here bounds a string whose length is set by
 // something outside the engine; the draft, the plan and the reviewer's notes
 // are carried whole (see budgets.go).
