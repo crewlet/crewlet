@@ -285,6 +285,11 @@ func inboundPath(kind string) string {
 		return "" // one outbound websocket per seat; nothing arrives here
 	case "slack":
 		return "/webhooks/slack/{handle}"
+	case "github":
+		// Both forms are served. The seat one is what a per-agent app
+		// points at, and naming it here is what tells an operator the
+		// path is meant to carry a handle.
+		return "/webhooks/github/{handle}"
 	case "forge":
 		return "/webhooks/forge"
 	default:

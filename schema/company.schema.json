@@ -169,6 +169,20 @@
       },
       "type": "object"
     },
+    "Datadog": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Turn the integration on.",
+          "type": "boolean"
+        },
+        "webhook_token": {
+          "description": "Shared token compared against X-Crewlet-Token; required when enabled.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "EmbeddingProvider": {
       "additionalProperties": false,
       "properties": {
@@ -436,6 +450,10 @@
         "confluence": {
           "$ref": "#/$defs/Confluence",
           "description": "Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."
+        },
+        "datadog": {
+          "$ref": "#/$defs/Datadog",
+          "description": "Datadog monitor alerts delivered as inbound events. Absent = disabled."
         },
         "forge_app_id": {
           "description": "Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud.",

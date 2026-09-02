@@ -29,6 +29,7 @@ type Integrations struct {
 	Mattermost *Mattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"Mattermost instance and team. Absent = disabled."`
 	GitHub     *GitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"GitHub.com or Enterprise Server, webhook secret and provisioning. Absent = disabled."`
 	GitLab     *GitLab     `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"GitLab instance, webhook signing and provisioning. Absent = disabled."`
+	Datadog    *Datadog    `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"Datadog monitor alerts delivered as inbound events. Absent = disabled."`
 
 	// ForgeAppID verifies the Forge app's invocation tokens: the JWT's
 	// audience claim must match it. Required when the Forge app is used —
@@ -41,6 +42,9 @@ func (i *Integrations) validate(path string) error {
 
 	if i.Jira != nil {
 		p.wrap(i.Jira.validate(at(path, "jira")))
+	}
+	if i.Datadog != nil {
+		p.wrap(i.Datadog.validate(at(path, "datadog")))
 	}
 	if i.Confluence != nil {
 		p.wrap(i.Confluence.validate(at(path, "confluence")))
@@ -814,3 +818,39 @@ func (g *GitLab) validate(path string) error {
 // a bad username fails on the line that authored it rather than midway
 // through a provisioning run that has already created half the fleet.
 var mattermostUsername = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// Datadog turns monitor alerts into inbound events, so a firing monitor can
+// wake a seat the same way a comment on a merge request does.
+//
+// It is the one inbound integration that CANNOT SIGN A BODY. Datadog's
+// Webhooks integration attaches custom headers, but only with fixed values,
+// so there is nothing varying with the payload to compute an HMAC over. The
+// strongest check the provider offers is a shared token sent in a header, and
+// that is what this verifies.
+//
+// The difference from every other route here is real and worth naming: a
+// replayed delivery is indistinguishable from a fresh one, and anyone holding
+// the token can forge an alert. Treat WebhookToken as a signing key — it is
+// doing that job with none of the guarantees.
+type Datadog struct {
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Turn the integration on."`
+
+	// WebhookToken is compared against the X-Crewlet-Token header.
+	// Required when enabled, on the same terms as every other secret
+	// here: a route with nothing to check against cannot tell a real
+	// delivery from anyone's POST.
+	WebhookToken string `secret:"true" yaml:"webhook_token,omitempty" json:"webhook_token,omitempty" desc:"Shared token compared against X-Crewlet-Token; required when enabled."`
+}
+
+func (d *Datadog) validate(path string) error {
+	var p problems
+
+	if d.Enabled && strings.TrimSpace(d.WebhookToken) == "" {
+		p.add(at(path, "webhook_token"), ErrMissing,
+			"required when datadog is enabled — every delivery is checked "+
+				"against it, and a route with nothing to check against "+
+				"answers 503 rather than accepting one")
+	}
+
+	return p.err()
+}

@@ -175,8 +175,12 @@ func New(opts Options) *Receiver {
 // two places that have to agree.
 func (r *Receiver) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /webhooks/github", r.github)
+	// The seat form, for an app belonging to one agent. Same handler:
+	// what differs is only whether the path names a seat.
+	mux.HandleFunc("POST /webhooks/github/{handle}", r.github)
 	mux.HandleFunc("POST /webhooks/gitlab", r.gitlab)
 	mux.HandleFunc("POST /webhooks/jira", r.jira)
+	mux.HandleFunc("POST /webhooks/datadog", r.datadog)
 	mux.HandleFunc("POST /webhooks/confluence", r.confluence)
 	mux.HandleFunc("POST /webhooks/slack/{handle}", r.slack)
 	mux.HandleFunc("POST /webhooks/forge", r.forgeWebhook)
