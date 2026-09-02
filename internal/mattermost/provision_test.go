@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -167,6 +169,118 @@ func chatClient(t *testing.T, srv *chatServer) *mattermost.Client {
 
 // chatClientWithout points a client at the fake with NO credential, which
 // is how an operator runs the doctor having minted nothing.
+// The listing a DESTRUCTIVE decision is made from. It asked for one page of
+// 200 and took whatever came back, so on an instance with more bots than that
+// every managed account past the first page was invisible to a decommission
+// sweep and stayed live for ever — with the run reporting success.
+func TestBotsAreWalkedToExhaustion(t *testing.T) {
+	t.Parallel()
+	var pages []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pages = append(pages, r.URL.Query().Get("page"))
+		// A full page, then a short one: the walk must ask twice.
+		if r.URL.Query().Get("page") == "0" {
+			rows := make([]string, 0, 200)
+			for i := range 200 {
+				rows = append(rows, fmt.Sprintf(`{"user_id":"u%d","username":"bot-%d"}`, i, i))
+			}
+			_, _ = fmt.Fprintf(w, "[%s]", strings.Join(rows, ","))
+			return
+		}
+		_, _ = w.Write([]byte(`[{"user_id":"last","username":"bot-last"}]`))
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := mattermost.NewClient(mattermost.ClientOptions{
+		URL: server.URL, Token: "t", HTTP: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	got, err := client.Bots(context.Background())
+	if err != nil {
+		t.Fatalf("Bots: %v", err)
+	}
+	if len(got) != 201 {
+		t.Errorf("bots = %d, want both pages (201)", len(got))
+	}
+	if len(pages) < 2 || pages[0] != "0" || pages[1] != "1" {
+		t.Errorf("pages requested = %v, want the walk to continue past a full page", pages)
+	}
+	if got[len(got)-1].Username != "bot-last" {
+		t.Error("the bot on the second page was not returned, so a sweep cannot see it")
+	}
+}
+
+// The ceiling is a NON-CONVERGENCE guard, so it has to let a converging walk
+// through — the same boundary internal/github's hook walk carries. Compared
+// with >= it refuses an instance holding EXACTLY the ceiling, with an error
+// saying it has "more than" that many bots though its next page is empty. The
+// listing a DECOMMISSION reads is then unavailable rather than short, which is
+// the better of the two failures but still a sweep that cannot run.
+//
+// The limit is read back out of the error rather than hardcoded, so this
+// tracks the constant instead of pinning a copy of it.
+func TestABotWalkStopsPastItsCeilingAndNotAtIt(t *testing.T) {
+	t.Parallel()
+	full := func(w http.ResponseWriter, page int) {
+		rows := make([]string, 0, 200)
+		for i := range 200 {
+			rows = append(rows, fmt.Sprintf(
+				`{"user_id":"u%d-%d","username":"bot-%d-%d"}`, page, i, page, i))
+		}
+		_, _ = fmt.Fprintf(w, "[%s]", strings.Join(rows, ","))
+	}
+	clientFor := func(h http.HandlerFunc) *mattermost.Client {
+		t.Helper()
+		server := httptest.NewServer(h)
+		t.Cleanup(server.Close)
+		client, err := mattermost.NewClient(mattermost.ClientOptions{
+			URL: server.URL, Token: "t", HTTP: server.Client(),
+		})
+		if err != nil {
+			t.Fatalf("NewClient: %v", err)
+		}
+		return client
+	}
+
+	// An instance that never converges must be refused rather than walked for
+	// ever, and the refusal must name the limit it hit.
+	endless := clientFor(func(w http.ResponseWriter, r *http.Request) {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		full(w, page)
+	})
+	_, err := endless.Bots(context.Background())
+	if err == nil {
+		t.Fatal("a walk that never converges was not refused")
+	}
+	m := regexp.MustCompile(`more than (\d+)`).FindStringSubmatch(err.Error())
+	if m == nil {
+		t.Fatalf("the refusal does not name the limit it hit: %v", err)
+	}
+	ceiling, _ := strconv.Atoi(m[1])
+
+	// And an instance holding EXACTLY that many is listed. Pages are
+	// zero-based here, so the empty page that ends the walk is page
+	// ceiling/200.
+	pages := ceiling / 200
+	exact := clientFor(func(w http.ResponseWriter, r *http.Request) {
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if page >= pages {
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		full(w, page)
+	})
+	got, err := exact.Bots(context.Background())
+	if err != nil {
+		t.Fatalf("an instance holding exactly the %d-bot ceiling was refused: %v", ceiling, err)
+	}
+	if len(got) != ceiling {
+		t.Errorf("bots = %d, want the whole %d", len(got), ceiling)
+	}
+}
+
 func chatClientWithout(t *testing.T, srv *chatServer) *mattermost.Client {
 	t.Helper()
 	return chatClientAs(t, srv, "")

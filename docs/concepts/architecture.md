@@ -19,6 +19,10 @@ Everything Crewlet needs to *run* is inside the process. Everything it needs to
 be *useful* is outside it — the surfaces your company already works on, the
 models that think, and the tool servers that act.
 
+Two things about that outside half are easy to miss and are the whole design, so
+it takes two pictures. The first is the round trip — work arrives on those
+surfaces, and it is delivered back to the same ones.
+
 ```mermaid
 flowchart TB
     subgraph people["People"]
@@ -26,45 +30,20 @@ flowchart TB
         HUMANS["<b>Teammates</b><br/>colleagues, some of them<br/>holding seats in the org chart"]
     end
 
-    subgraph surfaces["Where the work happens — all optional, all independent"]
-        CHAT["<b>Chat</b><br/>Slack · Mattermost"]
-        TRACK["<b>Tracker + knowledge base</b><br/>Jira · Confluence"]
-        CODE["<b>Code host</b><br/>GitHub · GitLab"]
-    end
-
     subgraph proc["<b>crewlet run</b> — one process, one binary"]
         NODE["<b>A node</b><br/>ingress · seats · workers<br/><i>embedded event stream · local store file</i>"]
     end
 
-    subgraph supply["What a turn consumes"]
-        LLM["<b>LLM API</b><br/>Anthropic · OpenAI · any<br/>OpenAI-compatible endpoint<br/><i>or a coding CLI on your own subscription</i>"]
-        EMB["<b>Embeddings API</b><br/><i>optional — without it, recall<br/>falls back to recency</i>"]
-        MCPS["<b>MCP servers</b><br/>stdio children this process supervises,<br/>or remote http endpoints"]
-        BOX["<b>Code sandbox</b><br/>an E2B VM, or this host"]
-    end
+    MCPS["<b>MCP servers</b><br/>stdio children this process supervises,<br/>or remote http endpoints"]
 
-    OTEL["<b>OTLP collector</b><br/><i>optional — Jaeger, Tempo, …</i>"]
-    NATS["<b>External NATS cluster</b><br/><i>optional — a fleet may dial one<br/>instead of embedding the stream</i>"]
+    SURF["<b>Where the work happens</b><br/><i>all optional, all independent</i><br/><b>Chat</b> — Slack · Mattermost<br/><b>Tracker + knowledge base</b> — Jira · Confluence<br/><b>Code host</b> — GitHub · GitLab"]
 
     FOUNDER -->|"YAML seed · REST · dashboard"| NODE
-    HUMANS --- CHAT
-    HUMANS --- TRACK
-    HUMANS --- CODE
-    CHAT -->|"webhook / websocket"| NODE
-    TRACK -->|webhook| NODE
-    CODE -->|webhook| NODE
+    HUMANS --- SURF
+    SURF -->|"webhook — or, for Mattermost,<br/>an outbound websocket"| NODE
     NODE -->|"tool calls, made as each agent"| MCPS
-    MCPS -->|"the agent's own credentials"| CHAT
-    MCPS --> TRACK
-    MCPS --> CODE
-    NODE -->|"per phase, per role"| LLM
-    NODE --> EMB
-    NODE -->|"detached coding runs"| BOX
-    NODE -.->|traces| OTEL
-    NODE -.->|"stream + coordination"| NATS
+    MCPS -->|"the agent's own credentials"| SURF
 ```
-
-Two things in that picture are easy to miss and are the whole design.
 
 **The engine never calls a vendor's API on its own account.** It calls MCP
 servers, and each seat's server carries *that seat's* credentials
@@ -74,7 +53,33 @@ service account fronting for it. The engine's own vendor packages exist for the
 provisioning and the chat working-indicator. See [Tool
 capabilities](tool-capabilities.md) for why no engine prompt names a vendor tool.
 
-**Nothing in the supply column is a hard dependency except a model.** No
+The second picture is the supply — what a node reaches out to while a turn runs.
+Its MCP servers are the ones above; the two dashed edges are the process-level
+connections a deployment may never make at all.
+
+```mermaid
+flowchart LR
+    NODE["<b>A node</b><br/><i>crewlet run</i>"]
+
+    subgraph supply["What a turn consumes"]
+        LLM["<b>LLM API</b><br/>Anthropic · OpenAI · any<br/>OpenAI-compatible endpoint<br/><i>or a coding CLI on your own subscription</i>"]
+        EMB["<b>Embeddings API</b><br/><i>optional — without it, recall<br/>falls back to recency</i>"]
+        MCPS["<b>MCP servers</b><br/><i>the agents' hands</i>"]
+        BOX["<b>Code sandbox</b><br/>an E2B VM, or this host"]
+    end
+
+    OTEL["<b>OTLP collector</b><br/><i>optional — Jaeger, Tempo, …</i>"]
+    NATS["<b>External NATS cluster</b><br/><i>optional — a fleet may dial one<br/>instead of embedding the stream</i>"]
+
+    NODE -->|"per phase, per role"| LLM
+    NODE --> EMB
+    NODE -->|"tool calls, made as each agent"| MCPS
+    NODE -->|"detached coding runs"| BOX
+    NODE -.->|traces| OTEL
+    NODE -.->|"stream + coordination"| NATS
+```
+
+**Nothing outside the boundary is a hard dependency except a model.** No
 embeddings means no similarity search — the diary's candidate pool falls back to
 recency and the "similar prior work" block renders nothing, both first-class
 states rather than failures. No sandbox means no `run_sandbox` tool. No chat,
@@ -102,69 +107,34 @@ the dashboard, running every agent, and performing the company-wide duties.
 
 ```mermaid
 flowchart TB
-    subgraph node["One process — node.roles decides which groups are live"]
-        direction TB
+    ING["<b>ingress</b> — terminate inbound traffic<br/><i>webhooks · REST · /ws/stream · OTLP · MCP bridge · probes</i>"]
+    ALWAYS["<b>Always on, whatever the roles</b><br/><i>notifications · reconciler · presence ·<br/>reflection · observability edge</i>"]
+    SEATS["<b>seats</b> — run agents<br/><i>mailbox → batching → turn engine</i>"]
+    WORK["<b>workers</b> — company-wide singletons<br/><i>each on a worker:DUTY lease</i>"]
+    STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream, an embedded<br/>cluster, or an external one</i>")]
+    KV[("<b>Coordination KV</b><br/><i>rides the stream's own connection</i>")]
+    DB[("<b>Store</b><br/><i>one local file this<br/>process owns exclusively</i>")]
 
-        subgraph ingress["<b>ingress</b> — terminate inbound traffic"]
-            WH["<b>Webhook routes</b><br/>/webhooks/slack/HANDLE · /webhooks/github<br/>/webhooks/gitlab · /webhooks/jira<br/>/webhooks/confluence · /webhooks/forge<br/><i>verified, then claimed once per fleet</i>"]
-            REST["<b>REST + config plane</b><br/>/config · /secrets · /agents · /org<br/>/tools · /query · /backup · /budgets/reset"]
-            WS["<b>/ws/stream</b><br/><i>the dashboard's only data channel:<br/>live pushes + a query channel</i>"]
-            OTLP["<b>/otlp/{token}/v1/{signal}</b><br/><i>signed-token trace ingest</i>"]
-            MCPB["<b>/mcp/{token}</b><br/><i>signed-token tool bridge:<br/>a seat's own surface, to a coding agent</i>"]
-            PROBE["<b>/health · /ready</b>"]
-        end
-
-        subgraph seats["<b>seats</b> — run agents"]
-            CLAIM["<b>Seat host</b><br/>claims seat leases, attaches the mailbox<br/><i>acquire → equip → THEN attach</i>"]
-            MBOX["<b>Per-seat mailbox</b><br/>durable consumer on<br/>crewlet.agent.HANDLE.inbox<br/>+ .control for sandbox resumes"]
-            BATCH["<b>Inbox batching</b><br/>drain · partition by conversation<br/>· one digest turn per partition"]
-            TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>one per running turn, gated by<br/>node.max_concurrent</i>"]
-            REG["<b>Per-seat tool registry + bridge</b><br/>the shared catalogue, CLONED, plus this<br/>role's own MCP children — two seats' children<br/>of one template publish the same tool names"]
-            PROV["<b>Provider chain</b><br/>fallback chain over a<br/>credential pool"]
-        end
-
-        subgraph workers["<b>workers</b> — company-wide singletons, each on a worker:DUTY lease"]
-            SCHED["<b>worker:scheduler</b><br/>role- and unit-scoped cron"]
-            WAIT["<b>worker:sandbox-waiter</b><br/>polls detached runs, resumes turns<br/><i>the same tick is the box keepalive</i>"]
-            SWEEP["<b>worker:maintenance</b><br/>the retention sweep"]
-            CURATE["<b>worker:skill-curator</b><br/>every learning background pass:<br/>skill ageing, episode compaction, clustering"]
-        end
-
-        subgraph always["Always on, whatever the roles"]
-            RECON["<b>Config reconciler</b><br/>polls the activation pointer,<br/>applies an epoch, reports status"]
-            PRESENCE["<b>Node presence</b><br/>node:ID lease + posture heartbeat"]
-            NOTIF["<b>Notification service</b><br/><i>one fleet-wide group:</i> notify-inbound<br/>parse → resolve → valve → wake"]
-            REFLECT["<b>Reflection worker</b><br/><i>consumes turn_completed,<br/>one delivery at a time</i>"]
-            OBS["<b>Observability edge</b><br/>publish listener → store row<br/>projector → live push"]
-        end
-
-        subgraph backends["Backends — opened together, closed together"]
-            STREAM[("<b>Event stream</b><br/>embedded NATS JetStream, an<br/>embedded cluster, or an external one")]
-            KV[("<b>Coordination KV</b><br/><i>rides the stream's own connection</i>")]
-            DB[("<b>Store</b><br/>one local file this<br/>process owns exclusively")]
-        end
-    end
-
-    WH --> NOTIF
-    NOTIF -->|"publish to the seat's inbox"| STREAM
-    STREAM --> MBOX
-    MBOX --> BATCH --> TURN
-    TURN --> REG
-    TURN --> PROV
-    TURN -->|events| STREAM
-    CLAIM --> MBOX
-    CLAIM --> KV
-    SCHED --> STREAM
-    WAIT --> STREAM
-    RECON --> KV
-    PRESENCE --> KV
-    OBS --> DB
-    OBS --> WS
-    REFLECT --> DB
-    SWEEP --> DB
-    REST --> KV
-    REST --> DB
+    ING --> ALWAYS --> STREAM --> SEATS
+    SEATS -->|events| STREAM
+    SEATS --> KV
+    WORK --> STREAM
+    WORK --> DB
+    ALWAYS -->|"live push"| ING
+    ALWAYS --> KV
+    ALWAYS --> DB
+    ING --> KV
+    ING --> DB
 ```
+
+That is one `crewlet run` process. `node.roles` picks from `ingress`, `seats`
+and `workers` — declare none and you get all three — and the always-on set runs
+on every node whatever it says. The three backends are opened together and
+closed together.
+
+Three of those four groups are **inventories, not pipelines**: no box inside
+`ingress`, `workers` or the always-on set hands work to another box in the same
+group. They are named here rather than drawn.
 
 **Two slots and a file.** The stream and coordination are the two *chosen*
 backends, validated together — a multi-node fleet cannot coordinate locally, and
@@ -181,6 +151,62 @@ single node it falls back to an in-process store, while the shared
 buckets — the activation pointer, the ledgers, the counters, the company's
 secrets — are opened on every topology, because a lone node still has to read
 back what it wrote.
+
+**The routes `ingress` terminates.**
+
+| Route | What it is |
+|---|---|
+| `/webhooks/slack/HANDLE` · `/webhooks/github` · `/webhooks/gitlab` · `/webhooks/jira` · `/webhooks/confluence` · `/webhooks/forge` | The webhook routes. A delivery is verified, then claimed once per fleet, then handed to the notification service. |
+| `/config` · `/secrets` · `/agents` · `/org` · `/tools` · `/query` · `/backup` · `/budgets/reset` | The REST and config plane. It reads and writes the coordination KV and the store directly. |
+| `/ws/stream` | The dashboard's only data channel: live pushes plus a query channel. The observability edge's projector is what pushes onto it. |
+| `/otlp/{token}/v1/{signal}` | Signed-token trace ingest. |
+| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. |
+| `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
+
+**`workers` is four company-wide singletons, each held on its own
+`worker:DUTY` lease.**
+
+| Lease | Duty |
+|---|---|
+| `worker:scheduler` | Role- and unit-scoped cron; a fire is published to the stream. |
+| `worker:sandbox-waiter` | Polls detached runs and resumes the turns waiting on them, over the stream. The same tick is the box keepalive. |
+| `worker:maintenance` | The retention sweep, over this node's store. |
+| `worker:skill-curator` | Every learning background pass: skill ageing, episode compaction, clustering. |
+
+**Five more services run on every node, whatever the roles say.**
+
+| Always on | What it does |
+|---|---|
+| Notification service | One fleet-wide group, `notify-inbound`: parse → resolve → valve → wake, publishing the wake to the seat's inbox on the stream. |
+| Config reconciler | Polls the activation pointer, applies an epoch, reports status — all in the KV. |
+| Node presence | The `node:ID` lease in the KV, plus the posture heartbeat. |
+| Reflection worker | Consumes `turn_completed`, one delivery at a time, and writes to the store. |
+| Observability edge | Two routes off one published event: a publish listener writes the store row, a projector pushes it live onto `/ws/stream`. |
+
+`seats` is the exception — the one group whose boxes hand work to each other.
+This is what a wake becomes after the stream delivers it:
+
+```mermaid
+flowchart TB
+    subgraph seats["<b>seats</b> — run agents"]
+        CLAIM["<b>Seat host</b><br/>claims seat leases, attaches the mailbox<br/><i>acquire → equip → THEN attach</i>"]
+        MBOX["<b>Per-seat mailbox</b><br/>durable consumer on<br/>crewlet.agent.HANDLE.inbox<br/>+ .control for sandbox resumes"]
+        BATCH["<b>Inbox batching</b><br/>drain · partition by conversation<br/>· one digest turn per partition"]
+        TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>one per running turn, gated by<br/>node.max_concurrent</i>"]
+        REG["<b>Per-seat tool registry + bridge</b><br/>the shared catalogue, CLONED,<br/>plus this role's own MCP children"]
+        PROV["<b>Provider chain</b><br/>fallback chain over<br/>a credential pool"]
+    end
+    STREAM[("<b>Event stream</b>")]
+    KV[("<b>Coordination KV</b>")]
+
+    STREAM --> MBOX
+    MBOX --> BATCH --> TURN
+    TURN --> REG
+    TURN --> PROV
+    TURN -->|events| STREAM
+    CLAIM --> MBOX
+    CLAIM --> KV
+```
 
 **Two MCP lifetimes, and the difference is a security boundary.** A
 `shared: true` server is one company-wide child bound to the **config epoch**.
@@ -240,6 +266,17 @@ A person mentions an agent in a Slack thread. Here is every hop between that
 message and the agent's reply — across a fleet, where the node that *receives*
 the delivery is rarely the node that *runs* the seat.
 
+It is drawn in three legs, one per process that touches the delivery: on a
+fleet those are usually three different processes, and on one node they are
+three parts of the same one. Each leg ends by publishing to a subject and the next
+begins by consuming from it — the seam between the pictures is the seam in the
+architecture, and no hop is hiding in it. The coordination store and the event
+stream appear in more than one leg; there is one of each, company-wide, not one
+per picture. The step numbers run 1–17 straight through.
+
+**Leg 1 — the node that took the delivery.** Verify it, claim it, publish it,
+and answer the vendor only once it is on the stream.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -247,9 +284,6 @@ sequenceDiagram
     participant I as Any node<br/>(ingress)
     participant KV as Coordination KV
     participant S as Event stream
-    participant R as Any node<br/>(notify-inbound)
-    participant O as The seat's owner<br/>(seats)
-    participant M as LLM + MCP
 
     V->>I: POST /webhooks/slack/HANDLE
     I->>I: verify the signature<br/>(per-seat signing secret)
@@ -257,11 +291,37 @@ sequenceDiagram
     Note over I,KV: A retry that lands on another node<br/>finds the claim taken and is answered<br/>"duplicate" — one wake, however many<br/>copies the vendor sends
     I->>S: publish RawWebhook →<br/>crewlet.notifications.inbound
     I-->>V: 200
+```
+
+**Leg 2 — any node in the inbound group.** It takes the delivery off
+`crewlet.notifications.inbound`, works out whose it is, and publishes a wake
+onto that seat's own subject.
+
+```mermaid
+sequenceDiagram
+    autonumber 6
+    participant S as Event stream
+    participant R as Any node<br/>(notify-inbound)
+    participant KV as Coordination KV
+
     S->>R: one fleet-wide group: notify-inbound
     R->>R: the vendor's parser: who is this for?<br/>mention · assignee · watcher ·<br/>thread follow · project lead
     R->>R: resolve to a seat through the<br/>org-derived party registry
     R->>KV: notification valve — is this seat<br/>over its rate for the window?
     R->>S: publish ExternalNotification →<br/>crewlet.agent.HANDLE.inbox
+```
+
+**Leg 3 — the node holding that seat.** Its mailbox is a durable consumer on
+`crewlet.agent.HANDLE.inbox`. Everything from there is the turn, and the reply
+leaves as the agent rather than back down the path it arrived on.
+
+```mermaid
+sequenceDiagram
+    autonumber 11
+    participant S as Event stream
+    participant O as The seat's owner<br/>(seats)
+    participant M as LLM + MCP
+
     S->>O: the seat's durable consumer,<br/>group agent-HANDLE
     O->>O: drain the backlog, partition by<br/>conversation key, one digest per partition
     O->>O: take a slot at node.max_concurrent
@@ -323,25 +383,24 @@ onward is identical again.
 
 ## 4. The path a turn takes
 
-Every trigger that reaches a seat runs the same two-stage turn. What varies is
-how many rounds it takes, and whether the turn survives its own process.
+Every trigger that reaches a seat runs the same two-stage turn — a batch of
+triggers for one conversation is one turn. What varies is how many rounds it
+takes, and whether the turn survives its own process.
 
 ```mermaid
 flowchart TB
-    IN["<b>A batch of triggers</b><br/>one conversation, one turn"]
-    PRE["<b>Turn-start prefetch</b> — six blocks, rendered<br/>concurrently BEFORE the turn starts<br/>personal memory · relevant knowledge · similar prior<br/>work · known counterparty · synthesized skills ·<br/>first-turn onboarding"]
     WHO["<b>Who is waiting?</b><br/>derived from the trigger's own type,<br/>before any model runs"]
     EXEC["<b>Executor</b><br/>one agentic loop: decide, discover,<br/>act, then account for it"]
-    SUSP["<b>Suspended</b><br/>a detached coding run:<br/>the loop is serialized into<br/>the pending-run record and left"]
-    CHECK{"<b>Engine check</b><br/>does the record support<br/>what it says it did?"}
+    SUSP["<b>Suspended</b><br/>a detached coding run: the loop is serialized<br/>into the pending-run record and left"]
+    CHECK["<b>Engine check</b><br/>does the record support<br/>what it says it did?"]
     SKIP["<b>skipped</b><br/>nobody was asking<br/>this seat to do anything"]
-    REV{"<b>Reviewer</b><br/>is the work any good?"}
-    OVER["<b>Override</b><br/>a `done` that answered in text<br/>on a turn somebody is waiting for"]
+    REV["<b>Reviewer</b><br/>is the work any good?"]
+    OVER["<b>Override</b><br/>a done that answered in text<br/>on a turn somebody is waiting for"]
     DONE["<b>done</b>"]
     FAIL["<b>failed</b>"]
     AFTER["<b>What the turn leaves behind</b><br/>events · episode · diary entries ·<br/>conversation-ledger entry · token spend"]
 
-    IN --> PRE --> WHO --> EXEC
+    WHO --> EXEC
     EXEC -->|run_sandbox| SUSP
     SUSP -->|"minutes or days later,<br/>possibly on another node"| EXEC
     EXEC --> CHECK
@@ -369,10 +428,13 @@ about when sizing a budget — not "one call per turn".
 plan in one conversation and act in another; the actor lost everything the
 planner had read, and the planner had to name its tools in advance against a
 catalogue it was never shown. The executor decides and acts in one place, so it
-carries the whole picture — identity, policies, the team roster, the six
-prefetched blocks above. The reviewer's question is narrower and its prompt is
-smaller: is this round's work right, given the record. A frontier model can do
-the work while a cheap one reviews; see [Turn Engine](turn-engine.md).
+carries the whole picture — identity, policies, the team roster, and the
+**turn-start prefetch**. That prefetch is six blocks rendered concurrently
+*before the turn starts*: personal memory, relevant knowledge, similar prior
+work, known counterparty, synthesized skills, first-turn onboarding. The
+reviewer's question is narrower and its prompt is smaller: is this round's work
+right, given the record. A frontier model can do the work while a cheap one
+reviews; see [Turn Engine](turn-engine.md).
 
 **Tools are discovered, not enumerated.** A role with 50–150 MCP tools would
 push 15–25 KB of catalogue into every prompt, so the executor sees *server
@@ -412,40 +474,51 @@ Three estates, and which one a fact belongs to is decided by a single
 question: **who has to agree on it?**
 
 ```mermaid
-flowchart TB
+flowchart LR
     Q{"Who has to agree<br/>on this fact?"}
+    LOCAL["<b>This node alone</b> — the store<br/><i>one file, one process, exclusively owned</i>"]
+    FLEET["<b>The whole company</b> — coordination KV<br/><i>thirteen buckets on the stream's own connection</i>"]
+    STREAM["<b>In flight, or keyed</b> — the event stream<br/><i>6 streams</i>"]
 
-    subgraph local["<b>This node alone</b> — the store<br/><i>one file, one process, exclusively owned</i>"]
-        L1["<b>crewlet_events</b> · crewlet_event_parties<br/><i>the audit log and its party index</i>"]
-        L2["<b>agent_diary</b> · <b>episodes</b><br/><i>vector-indexed recall</i>"]
-        L3["<b>synthesized_skills</b> · synthesized_skill_versions<br/>counterparty_profiles · agent_onboarding_markers"]
-        L4["<b>conversation_sessions</b><br/><i>what this seat already said in that thread</i>"]
-        L5["company_config · scheduled_runs<br/>chat_thread_follows · secret_values<br/><i>revisions, cron bookkeeping, thread follows,<br/>and the secret store's bootstrap half</i>"]
-    end
-
-    subgraph fleet["<b>The whole company</b> — coordination KV<br/><i>thirteen buckets on the stream's own connection</i>"]
-        F1["<b>crewlet_leases</b><br/><i>node: · seat: · worker: ownership.<br/>The bucket's age IS the lease TTL</i>"]
-        F1B["<b>crewlet_epochs</b><br/><i>the monotonic fencing counter.<br/>No age at all — see below</i>"]
-        F2["<b>crewlet_config</b><br/><i>the activation pointer and its payload —<br/>the pointer's own revision IS the epoch</i>"]
-        F3["<b>crewlet_status</b><br/><i>one key per node: which revision it applied</i>"]
-        F4["<b>crewlet_ledger</b> · <b>crewlet_claims</b> · crewlet_fires<br/><i>turn completions, webhook delivery claims,<br/>scheduled-fire claims</i>"]
-        F5["<b>crewlet_budgets</b> · crewlet_rate · crewlet_cooldowns<br/><i>the token counter, the notification valve,<br/>benched credentials</i>"]
-        F6["<b>crewlet_secrets</b> · crewlet_channels · crewlet_sandbox_runs<br/><i>the company's sealed credentials, open A2A<br/>channels, detached coding runs</i>"]
-    end
-
-    subgraph stream["<b>In flight, or keyed</b> — the event stream<br/><i>6 streams</i>"]
-        S1["<b>CREWLET_AGENT</b> — crewlet.agent.>"]
-        S2["<b>CREWLET_NOTIFICATIONS</b> — crewlet.notifications.>"]
-        S3["<b>CREWLET_EVENTS</b> — crewlet.events.>"]
-        S4["<b>CREWLET_CONFIG</b> — crewlet.config.>"]
-        S5["<b>CREWLET_MEMORY</b> — crewlet.memory.><br/><i>one message per subject: a keyed table,<br/>not a log</i>"]
-        S6["<b>CREWLET_DLQ</b> — dlq.><br/><i>deliberately outside crewlet.*</i>"]
-    end
-
-    Q -->|"nobody — it is this node's<br/>own record of what it did"| local
-    Q -->|"every node, or the answer<br/>is wrong on all of them"| fleet
-    Q -->|"it is a message, or a<br/>row that has to travel"| stream
+    Q -->|"nobody — it is this node's<br/>own record of what it did"| LOCAL
+    Q -->|"every node, or the answer<br/>is wrong on all of them"| FLEET
+    Q -->|"it is a message, or a<br/>row that has to travel"| STREAM
 ```
+
+What each of the three holds, in full:
+
+**This node alone — the store.**
+
+| Tables | What they hold |
+|---|---|
+| **`crewlet_events`** · `crewlet_event_parties` | The audit log and its party index |
+| **`agent_diary`** · **`episodes`** | Vector-indexed recall |
+| **`synthesized_skills`** · `synthesized_skill_versions` · `counterparty_profiles` · `agent_onboarding_markers` | The rest of the learning subsystem — skill induction and its versions, counterparty profiles, first-turn onboarding markers |
+| **`conversation_sessions`** | What this seat already said in that thread |
+| `company_config` · `scheduled_runs` · `chat_thread_follows` · `secret_values` | Revisions, cron bookkeeping, thread follows, and the secret store's bootstrap half |
+
+**The whole company — coordination KV.**
+
+| Bucket | What it holds |
+|---|---|
+| **`crewlet_leases`** | `node:` · `seat:` · `worker:` ownership. The bucket's age **is** the lease TTL |
+| **`crewlet_epochs`** | The monotonic fencing counter. No age at all — see below |
+| **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
+| **`crewlet_status`** | One key per node: which revision it applied |
+| **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |
+| **`crewlet_budgets`** · `crewlet_rate` · `crewlet_cooldowns` | The token counter, the notification valve, benched credentials |
+| **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
+
+**In flight, or keyed — the event stream.**
+
+| Stream | Subjects |
+|---|---|
+| **`CREWLET_AGENT`** | `crewlet.agent.>` |
+| **`CREWLET_NOTIFICATIONS`** | `crewlet.notifications.>` |
+| **`CREWLET_EVENTS`** | `crewlet.events.>` |
+| **`CREWLET_CONFIG`** | `crewlet.config.>` |
+| **`CREWLET_MEMORY`** | `crewlet.memory.>` — *one message per subject: a keyed table, not a log* |
+| **`CREWLET_DLQ`** | `dlq.>` — *deliberately outside* `crewlet.*` |
 
 **Mailboxes and event history are different kinds of stream.** The two
 mailbox streams use *interest* retention — a message lives until its durable

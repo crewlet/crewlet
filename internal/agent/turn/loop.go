@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -162,6 +163,30 @@ type Settings struct {
 	// SkipNames are meta-tools filtered from the ledger — never a delivery,
 	// so pure noise in a record of what already happened that matters.
 	SkipNames []string
+
+	// Now is the clock the wall-clock cap reads, injectable so a test can
+	// drive it without sleeping. Nil takes time.Now.
+	Now func() time.Time
+
+	// MaxWallClock bounds the whole turn. 0 or less is unbounded, which is
+	// every trigger but a scheduled fire.
+	//
+	// Checked BETWEEN ROUNDS, never mid-phase. A phase that is running has
+	// possibly already fired side effects, and abandoning it there would
+	// leave a post half-written with nothing recording that it happened —
+	// the same reason the drain lets a running turn finish. So the cap
+	// refuses to start another round rather than interrupting one, and a
+	// single round that outruns it is bounded by the phase timeouts beneath.
+	MaxWallClock time.Duration
+}
+
+// now is the clock, injectable so a test can drive the wall-clock cap without
+// sleeping through it.
+func (s Settings) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 func (s Settings) iterations() int {
@@ -225,8 +250,24 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 	notes := ""
 	maxRounds := set.iterations()
 
+	started := set.now()
 	resuming := in.Resume
 	for round := 1; round <= maxRounds; round++ {
+		// The wall-clock cap, at a ROUND BOUNDARY. Round one always runs:
+		// a cap that refused before any work started would report a turn
+		// as timed out having done nothing, which is a misconfiguration
+		// rather than a slow turn and reads better as one.
+		if elapsed := set.now().Sub(started); round > 1 &&
+			set.MaxWallClock > 0 && elapsed >= set.MaxWallClock {
+			res.Breach = &Breach{
+				Kind: BreachScheduledTimeout,
+				Detail: fmt.Sprintf(
+					"the turn ran %s across %d round(s), past its %s cap, so no "+
+						"further round was started", elapsed.Round(time.Second),
+					round-1, set.MaxWallClock),
+			}
+			return res, nil
+		}
 		res.Rounds = round
 
 		var (

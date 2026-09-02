@@ -86,11 +86,7 @@ func (t *listMCPTools) Call(_ context.Context, args map[string]any) (tools.Resul
 		if !ok || name != server {
 			continue
 		}
-		if desc := firstLine(e.Tool.Description()); desc != "" {
-			lines = append(lines, "- "+e.Name()+": "+desc)
-			continue
-		}
-		lines = append(lines, "- "+e.Name())
+		lines = append(lines, tools.CatalogueLine(e.Name(), e.Tool.Description()))
 	}
 	if len(lines) == 0 {
 		// A named server with no tools and an unknown server read very
@@ -159,11 +155,4 @@ func (t *activateTool) Call(_ context.Context, args map[string]any) (tools.Resul
 			"%s to see that server's real tool names.", name, ListMCPToolsTool),
 		Failed: true,
 	}, nil
-}
-
-// firstLine trims a description to its first line, so a paragraph does not
-// break the one-tool-per-line shape a model reads a listing as.
-func firstLine(s string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	return strings.TrimSpace(line)
 }

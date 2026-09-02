@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -348,9 +349,18 @@ func collapseSpace(s string) string { return strings.Join(strings.Fields(s), " "
 
 // truncate bounds a rendered field, marking where it was cut so the judge
 // does not read a severed argument as a different one.
+//
+// NEVER THROUGH A RUNE. A plain s[:max] splits whatever multi-byte character
+// straddles the boundary and yields invalid UTF-8, which a JSON encoder
+// replaces with U+FFFD — so a task, a plan or a tool argument that is not
+// ASCII reaches the judge garbled rather than merely short, and the judge's
+// whole job is telling two renderings apart.
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
 	}
 	return s[:max] + "…"
 }

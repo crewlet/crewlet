@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -187,6 +188,20 @@ type TraceContext struct {
 type (
 	// Summarizer provides a summary needing nothing but the payload.
 	Summarizer interface{ Summary() string }
+
+	// Briefer provides the ASK a wake carries — everything the seat woken
+	// by this event has to act on.
+	//
+	// Deliberately NOT Summarizer, and the split is the whole point. A
+	// summary is one line for a dashboard row and is free to drop the body
+	// under it; a brief is the body. Reading a summary where a brief was
+	// meant hands a model "Message from alice: deploy" and silently drops
+	// the message — which is what this engine did for every trigger type
+	// until the wake payloads started stating their ask here.
+	//
+	// Only a type that WAKES A SEAT needs to implement it; see
+	// [github.com/crewlet/crewlet/internal/agent/inbox.LedgeredTypes].
+	Briefer interface{ Brief() string }
 
 	// ActorSummarizer provides a summary that leads with the actor. The
 	// RESOLVED actor is passed in, so a payload never has to know how the
@@ -454,6 +469,23 @@ func RegisteredTypes() []string {
 	return slices.Sorted(maps.Keys(registry))
 }
 
+// PayloadFor returns a zero payload of the named type, reporting whether this
+// build knows it.
+//
+// For asking what a type IS rather than what an event holds: which optional
+// interfaces it implements, what its zero rendering looks like. A guard that
+// every turn-running type can state its ask ([Briefer]) needs exactly this, and
+// building it from a hand-kept list of concrete types instead would prove only
+// that the list agrees with itself — the failure mode a new wake type
+// introduces is being absent from that list, not present and wrong.
+func PayloadFor(t string) (Payload, bool) {
+	make, ok := lookup(t)
+	if !ok {
+		return nil, false
+	}
+	return make(), true
+}
+
 // DataAs decodes an event's typed body into *T, reporting whether the event
 // actually carries that type. It is the one way callers should reach typed
 // fields, so an unknown or mismatched type is a boolean rather than a panic.
@@ -497,4 +529,42 @@ func NewTrace() TraceContext {
 		TraceID: hex.EncodeToString(buf[:16]),
 		SpanID:  hex.EncodeToString(buf[16:]),
 	}
+}
+
+// MaxDiagnosticBytes bounds ONE free-text diagnostic field on an event.
+//
+// Not a content budget — the prompts, responses, artifacts and tool results
+// events carry are verbatim, deliberately. This is a delivery guarantee for
+// the one field whose length is set by something outside the engine: an
+// error string. A provider chain that exhausted can carry every attempt's
+// body, and a decode failure can carry the whole undecodable document.
+//
+// The failure it prevents is worse than a cut. An event over the queue's
+// [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes] (8 MiB) is
+// REFUSED, and every telemetry publisher logs the refusal and moves on — so
+// an unbounded error does not arrive shortened, it does not arrive at all,
+// and the operator diagnosing the incident sees no event rather than a long
+// one. 64 KiB is two orders of magnitude past any message written to be read
+// and two orders below the ceiling, so the field can never be what pushes an
+// event over it.
+const MaxDiagnosticBytes = 64 << 10
+
+// ClipDiagnostic applies [MaxDiagnosticBytes], marking the cut.
+//
+// The HEAD is kept. A wrapped Go error reads outermost-first, so the head
+// names the operation that failed; and in the pathological case this bound
+// exists for — a decode failure quoting a document — the head is the message
+// and the tail is the document.
+//
+// Never through a rune: a byte slice splits whatever multi-byte character
+// straddles the cut, and a JSON encoder replaces the result with U+FFFD.
+func ClipDiagnostic(text string) string {
+	if len(text) <= MaxDiagnosticBytes {
+		return text
+	}
+	cut := MaxDiagnosticBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "\n…[diagnostic truncated at 64 KiB so the event could be published]"
 }

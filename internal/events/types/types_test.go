@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -34,6 +35,7 @@ func catalogue() []events.Payload {
 		MessageSent{}, ExternalNotification{}, TurnTriggerSkipped{},
 		NotificationsCoalesced{}, NotificationSkipped{},
 		// a2a.go
+		A2ARequest{}, A2AMessage{},
 		A2AChannelOpened{}, A2AMessageSent{}, A2AMessageDelivered{},
 		A2AChannelClosed{},
 		// knowledge.go
@@ -69,8 +71,10 @@ func catalogue() []events.Payload {
 var wireTypes = []string{
 	"a2a_channel_closed",
 	"a2a_channel_opened",
+	"a2a_message",
 	"a2a_message_delivered",
 	"a2a_message_sent",
+	"a2a_request",
 	"agent_phase_completed",
 	"agent_phase_started",
 	"agent_reassigned",
@@ -600,4 +604,29 @@ func missing(want, got []string) []string {
 		}
 	}
 	return out
+}
+
+// A summary's leading rune is upper-cased, not its leading BYTE. s[:1] on a
+// multi-byte lead hands ToUpper an invalid UTF-8 fragment, which it
+// substitutes — so an "Éditeur" phrase would reach the event feed and the
+// store's summary column as "\uFFFD\x89diteur". Every phrase is ASCII-led
+// today, which makes this latent rather than live, and one variable-led
+// phrase is all it takes.
+func TestASummaryLeadIsUpperCasedByRuneNotByte(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ in, want string }{
+		{"éditeur plan (done)", "Éditeur plan (done)"},
+		{"über alles", "Über alles"},
+		{"日本語", "日本語"},
+		{"completed a turn", "Completed a turn"},
+		{"", ""},
+	} {
+		got := lead("", tc.in)
+		if got != tc.want {
+			t.Errorf("lead(\"\", %q) = %q, want %q", tc.in, got, tc.want)
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("lead(\"\", %q) produced invalid UTF-8", tc.in)
+		}
+	}
 }

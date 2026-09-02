@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -199,11 +200,29 @@ func stamp(file *os.File) {
 	_ = file.Sync()
 }
 
+// maxHolderStamp bounds the sidecar read.
+//
+// Not a truncation of the stamp — stamp() writes one line of well under a
+// kilobyte — but a bound on a file this process does not fully control: the
+// path is operator-supplied, and reading an arbitrary file whole into an error
+// message is how a mistyped store path becomes a gigabyte in the heap. 8 KiB
+// is an order of magnitude past the longest stamp a 253-byte hostname can
+// produce.
+const maxHolderStamp = 8 << 10
+
 // readHolder describes the process holding the lock, for the error message.
+//
+// THE WHOLE STAMP. It used to read into a fixed 256-byte buffer, and stamp()
+// writes "pid N on HOST since TIMESTAMP" — a hostname may be up to 253 bytes,
+// so the one diagnostic an operator gets for a locked store could lose the
+// host, which is the single field telling them WHICH machine to go and look
+// at. The file is one line this process wrote; reading it whole costs nothing.
 func readHolder(file *os.File) string {
-	buf := make([]byte, 256)
-	n, _ := file.ReadAt(buf, 0)
-	if line := strings.TrimSpace(string(buf[:n])); line != "" {
+	raw, err := io.ReadAll(io.NewSectionReader(file, 0, maxHolderStamp))
+	if err != nil {
+		return "another crewlet process"
+	}
+	if line := strings.TrimSpace(string(raw)); line != "" {
 		return line
 	}
 	// An empty sidecar is the window between a peer's lock and its stamp,

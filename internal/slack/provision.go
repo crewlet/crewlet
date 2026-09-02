@@ -359,7 +359,10 @@ func adoptable(record AppRecord) []string {
 
 // seat brings one agent's app in line.
 func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, res *Result) error {
-	manifest := Manifest(seat.RoleName, seat.Handle, o.BaseURL)
+	manifest, err := Manifest(seat.RoleName, seat.Handle, o.BaseURL)
+	if err != nil {
+		return err
+	}
 	fingerprint := Fingerprint(manifest)
 	record := o.Ledger.Apps[seat.Handle]
 
@@ -587,7 +590,11 @@ func Validate(ctx context.Context, opts Options) (*Result, error) {
 		// validates an update differently from a create: a manifest that
 		// is fine for a new app can still be refused as a change to an
 		// existing one (a scope an installed app may not drop, say).
-		manifest := Manifest(seat.RoleName, seat.Handle, opts.BaseURL)
+		manifest, err := Manifest(seat.RoleName, seat.Handle, opts.BaseURL)
+		if err != nil {
+			res.Failed[seat.Handle] = err.Error()
+			continue
+		}
 		if err := opts.Admin.ValidateManifest(ctx, configToken, manifest,
 			opts.Ledger.Apps[seat.Handle].AppID); err != nil {
 			res.Failed[seat.Handle] = err.Error()

@@ -44,10 +44,18 @@ func CheckDepth(depth, limit int) error {
 	return &DepthError{Depth: depth, Limit: limit}
 }
 
-// ArtifactHash is the stable short hash the stall guard compares.
+// ArtifactHash is the stable hash the stall guard compares.
+//
+// THE WHOLE DIGEST. It was cut to 16 hex characters, and nothing wanted it
+// short: the value is never displayed, never keyed on width, and is only ever
+// compared for equality. Cutting 256 bits to 64 turned an exact comparison
+// into a probabilistic one, so the guard's answer to "did this round produce
+// the same artifact" carried a collision chance it did not need — and the
+// consequence of a false match is a turn aborted for stalling when it was
+// making progress.
 func ArtifactHash(text string) string {
 	sum := sha256.Sum256([]byte(text))
-	return hex.EncodeToString(sum[:])[:16]
+	return hex.EncodeToString(sum[:])
 }
 
 // StallDetector aborts a turn when repeated self_iterate rounds produce an
@@ -107,6 +115,11 @@ const (
 	BreachMaxIterations BreachKind = "max_iter"
 	// BreachDepth — the delegation chain hit its cap.
 	BreachDepth BreachKind = "depth"
+	// BreachScheduledTimeout — the turn ran past the wall-clock cap its
+	// trigger carried. Only a scheduled fire sets one, which is why the
+	// operator-facing string is the one docs/concepts/scheduling.md and
+	// [types.GuardScheduledTimeout] already name.
+	BreachScheduledTimeout BreachKind = "scheduled_timeout"
 )
 
 // Breach is a guard firing. Returned on the result rather than published from

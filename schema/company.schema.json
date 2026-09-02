@@ -126,16 +126,6 @@
             "null"
           ]
         },
-        "injected_max_chars": {
-          "description": "Byte budget for the injected block.",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "injected_max_entries": {
-          "description": "Entries injected into the prompt, newest N.",
-          "minimum": 0,
-          "type": "integer"
-        },
         "max_entries": {
           "description": "Entries kept per conversation.",
           "minimum": 0,

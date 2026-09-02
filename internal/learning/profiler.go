@@ -43,7 +43,6 @@ type Profiler struct {
 	timeout      time.Duration
 	maxTokens    int
 	maxSubjects  int
-	maxBodyChars int
 	now          func() time.Time
 }
 
@@ -76,13 +75,6 @@ const (
 	// turn was woken by a room, not by people, and the tail speakers
 	// contributed a line each.
 	maxProfiledSubjects = 8
-
-	// maxProfiledBody caps how much of one message reaches the prompt.
-	//
-	// A trigger body can be a whole diff or a pasted log. What this pass
-	// reads it for is HOW someone writes and what they ask for, which the
-	// opening is entirely sufficient for.
-	maxProfiledBody = 2000
 )
 
 // ProfilerSystemPrompt is the contract for one traits patch.
@@ -121,8 +113,8 @@ func NewProfiler(models Models, c *Counterparties, opts ProfilerOptions) (*Profi
 	p := &Profiler{
 		models: models, counterparts: c,
 		timeout: opts.CallTimeout, maxTokens: opts.MaxTokens,
-		maxSubjects: maxProfiledSubjects, maxBodyChars: maxProfiledBody,
-		now: opts.Now,
+		maxSubjects: maxProfiledSubjects,
+		now:         opts.Now,
 	}
 	if p.timeout <= 0 {
 		p.timeout = DefaultAuxTimeout
@@ -302,7 +294,13 @@ func (p *Profiler) prompt(s subjectMessages, existing Profile) string {
 		if body == "" {
 			continue
 		}
-		fmt.Fprintf(&b, "- %s\n", collapseLines(truncate(body, p.maxBodyChars)))
+		// WHOLE, and collapsed rather than cut. This is what the person
+		// actually said, and it is the only evidence the profiler has for
+		// the trait it is about to write down and keep — a message cut at
+		// 2000 bytes teaches a preference from half a sentence. The cut
+		// also ran BEFORE the newline collapse, so its byte budget was
+		// being spent on whitespace the next call removed.
+		fmt.Fprintf(&b, "- %s\n", collapseLines(body))
 	}
 	return b.String()
 }
@@ -381,8 +379,23 @@ func scalarTraits(obj map[string]any) map[string]any {
 		case string:
 			// An empty string is a trait the model could not fill in,
 			// not a fact — and it would render as a bare bullet.
-			if trimmed := strings.TrimSpace(value); trimmed != "" {
-				out[key] = truncate(trimmed, maxTraitValue)
+			// SKIPPED, not truncated. A trait is stored and then rendered
+			// in every prompt that mentions this person, so half of one is
+			// a lasting half-fact — "prefers deploys after" is worse than
+			// no trait at all. A model that answers with a paragraph under
+			// a snake_case key has not produced a working preference, and
+			// dropping that key leaves the profile honest.
+			trimmed := strings.TrimSpace(value)
+			switch {
+			case trimmed == "":
+				// A trait the model could not fill in, not a fact — and it
+				// would render as a bare bullet.
+			case len(trimmed) > maxTraitValue:
+				log.Warn("counterparty_trait_oversized", "trait", key,
+					"chars", len(trimmed), "max", maxTraitValue,
+					"detail", "the trait was dropped rather than stored half-written")
+			default:
+				out[key] = trimmed
 			}
 		case bool, float64:
 			// float64 is every JSON number: encoding/json decodes them
@@ -396,12 +409,13 @@ func scalarTraits(obj map[string]any) map[string]any {
 	return out
 }
 
-// maxTraitValue caps one trait's rendered length.
+// maxTraitValue is the length past which a trait is REFUSED.
 //
 // A trait is a working preference — "bullet points", "Europe/Berlin" — and
-// the prefetch renders each as one bullet in a budgeted block. A model that
-// answers with a paragraph under a snake_case key would otherwise spend that
-// whole block on one party.
+// the prefetch renders each as one bullet. A model that answers with a
+// paragraph under a snake_case key has not produced a preference, so the key
+// is dropped and logged rather than stored truncated: this value is written
+// once and read in every later prompt about that person.
 const maxTraitValue = 200
 
 // subjectLine renders who a party is, for the profiler's prompt.

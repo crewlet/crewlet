@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -112,17 +113,51 @@ func (c *Client) RepoWebhooks(ctx context.Context, owner, repo string) ([]Webhoo
 	return c.listWebhooks(ctx, "/repos/"+owner+"/"+repo+"/hooks")
 }
 
+// hookPageSize is GitHub's per_page maximum.
+//
+// GitHub's documented 20-hooks limit is PER EVENT per target, not per target,
+// so a full page is not evidence that the listing is complete — which is why
+// this walks rather than trusting one request.
+const hookPageSize = 100
+
+// hookWalkCeiling stops a walk that is not converging. A target needing more
+// than this many requests' worth of hooks is not one Crewlet provisions into.
+//
+// It is a non-convergence guard, not a hard cap, so it is compared with > and
+// not >=: at >= a target holding EXACTLY this many hooks is refused by an
+// error saying it has "more than" this many, when its next page is empty and
+// the walk would have finished. The cost of the looser test is one extra page.
+const hookWalkCeiling = 1000
+
+// listWebhooks walks a target's hooks TO EXHAUSTION.
+//
+// One page was requested and whatever came back was taken as the whole set.
+// Every caller uses this to decide whether Crewlet's own hook already exists,
+// so a hook past the first page read as absent — and the reconcile then
+// created a duplicate on every run, each delivering the same event again.
 func (c *Client) listWebhooks(ctx context.Context, path string) ([]Webhook, error) {
-	var rows []hookWire
-	params := url.Values{"per_page": {strconv.Itoa(PageSize)}}
-	if err := c.get(ctx, path, params, &rows); err != nil {
-		return nil, err
+	out := []Webhook{}
+	for page := 1; ; page++ {
+		var rows []hookWire
+		params := url.Values{
+			"per_page": {strconv.Itoa(hookPageSize)},
+			"page":     {strconv.Itoa(page)},
+		}
+		if err := c.get(ctx, path, params, &rows); err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			out = append(out, row.webhook())
+		}
+		if len(rows) < hookPageSize {
+			return out, nil
+		}
+		if len(out) > hookWalkCeiling {
+			return nil, fmt.Errorf(
+				"github: %s has more than %d webhooks, which is not a target "+
+					"Crewlet provisions into", path, hookWalkCeiling)
+		}
 	}
-	out := make([]Webhook, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, row.webhook())
-	}
-	return out, nil
 }
 
 // CreateOrgWebhook registers one hook covering every repository in an

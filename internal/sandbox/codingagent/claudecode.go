@@ -12,13 +12,6 @@ import (
 // ClaudeCodeName is this runner's config name.
 const ClaudeCodeName = "claude-code"
 
-// rawTextLimit bounds the unparseable output carried back as the result text.
-//
-// Enough to see a banner, a usage message or a stack's top — which is what
-// unparseable output usually is — without putting a whole log through the
-// event store as if it were a report.
-const rawTextLimit = 2000
-
 // ClaudeCode drives Claude Code headless.
 //
 // It reaches its model through the run ENVIRONMENT rather than a config file,
@@ -103,8 +96,15 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	}
 	obj, ok := decodeObject(text)
 	if !ok {
+		// TAILED, not head-cut. Unparseable output is the case where the
+		// text IS the result — there is no structured field to fall back
+		// to — and the useful part of it (the actual error, after the
+		// banner and the warnings) is at the END, which is exactly what a
+		// 2000-byte head cut discarded. Bounded because this is the CLI's
+		// whole stdout and nothing upstream limits it; marked, so a reader
+		// can tell a cut from a short run.
 		return sandbox.Result{
-			Text:  truncate(text, rawTextLimit),
+			Text:  tail(text),
 			Error: "the coding agent's output could not be parsed",
 		}
 	}
@@ -129,7 +129,7 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	if !success {
 		res.Error = stringField(obj, "error")
 		if res.Error == "" {
-			res.Error = truncate(resultText, errorDetailLimit)
+			res.Error = resultText
 		}
 	}
 	return res

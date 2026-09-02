@@ -293,6 +293,22 @@ func (p *Provider) completion(prompt string, res *rawResult) (*llm.Completion, e
 				"legitimately reasons for longer:\n%s", p.timeout, tail(res.stderr)))
 	}
 
+	// A CLIPPED ANSWER IS NOT AN ANSWER. stdout past maxOutput is dropped by
+	// the capped buffer, and everything below would then parse whatever
+	// survived and hand it back as a completion — a half-written envelope, a
+	// JSON body missing its close, a report cut mid-sentence — with nothing
+	// downstream able to tell it from a model that simply stopped there.
+	// Refused as a SERVER failure so the fallback chain may try another
+	// member and the credential is not benched: nothing about the prompt was
+	// rejected.
+	if res.droppedStdout > 0 {
+		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
+			"the CLI wrote more than %d bytes to stdout and %d were dropped, so "+
+				"the answer is incomplete — raise cli.max_output_bytes for this "+
+				"provider, or point it at a model that streams less",
+			maxOutput, res.droppedStdout))
+	}
+
 	out := extract(p.profile, res.stdout)
 
 	// A spent subscription is checked BEFORE the exit code, because it

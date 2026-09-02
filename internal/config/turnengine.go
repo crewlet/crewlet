@@ -185,24 +185,25 @@ type ConversationSession struct {
 	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Record and replay per-conversation history (default on)."`
 
 	// MaxEntries is what is KEPT per conversation, trimmed at write time.
+	//
+	// It is not the only bound, and the split is deliberate: this one bounds
+	// the RECORD, and [ledger.InjectedMaxChars] bounds what one prompt
+	// SHOWS, by dropping whole entries oldest-first and saying how many.
+	// Neither ever cuts inside an entry — the stored row is the only copy of
+	// that turn, and a half-recorded reply reads as the whole of what the
+	// seat said.
+	//
+	// There is no injected-side CONFIG pair. Two knobs (injected_max_entries,
+	// injected_max_chars) used to sit here; neither was ever threaded to a
+	// caller, so both validated, defaulted and documented a truncation that
+	// did not happen. The render bound that replaced them is a constant with
+	// its reasoning at the definition rather than a knob nobody had cause to
+	// set.
 	// Larger than what any prompt injects, so the dashboard can show a
 	// conversation's history beyond what a single turn carried. The trim
 	// is what bounds a DM, whose conversation key is the whole channel and
 	// so never stops receiving entries.
 	MaxEntries int `yaml:"max_entries,omitempty" json:"max_entries,omitempty" js:"min=0" desc:"Entries kept per conversation."`
-
-	// InjectedMaxEntries is how many reach the prompt: the newest N,
-	// rendered OLDEST first so the block reads forward into the task
-	// beneath it.
-	InjectedMaxEntries int `yaml:"injected_max_entries,omitempty" json:"injected_max_entries,omitempty" js:"min=0" desc:"Entries injected into the prompt, newest N."`
-
-	// InjectedMaxChars is the byte budget for the rendered block; oldest
-	// entries drop first.
-	//
-	// It is re-sent on every round of every phase, so its cost is
-	// multiplied by the round cap — this is the knob that bounds that
-	// product.
-	InjectedMaxChars int `yaml:"injected_max_chars,omitempty" json:"injected_max_chars,omitempty" js:"min=0" desc:"Byte budget for the injected block."`
 
 	// RetentionDays is how long a conversation is remembered. It matches
 	// the event store's own horizon, so the engine's memory of a
@@ -214,43 +215,18 @@ type ConversationSession struct {
 // DefaultConversationSession is the ledger's shipped defaults.
 func DefaultConversationSession() ConversationSession {
 	return ConversationSession{
-		MaxEntries:         20,
-		InjectedMaxEntries: 5,
-		InjectedMaxChars:   6000,
-		RetentionDays:      30,
+		MaxEntries:    20,
+		RetentionDays: 30,
 	}
 }
 
 // Records reports whether the ledger is on, applying the true default.
 func (c *ConversationSession) Records() bool { return c.Enabled.Or(true) }
 
-// minInjectedChars is the floor below which the block cannot carry one
-// useful entry, and so is a disabled ledger written as a number.
-const minInjectedChars = 500
-
 func (c *ConversationSession) validate(path string) error {
 	var p problems
 	if c.MaxEntries < 1 {
 		p.add(at(path, "max_entries"), ErrOutOfRange, "must be at least 1, got %d", c.MaxEntries)
-	}
-	if c.InjectedMaxEntries < 1 {
-		p.add(at(path, "injected_max_entries"), ErrOutOfRange,
-			"must be at least 1, got %d", c.InjectedMaxEntries)
-	}
-	// Injecting more than is kept is not an error the engine notices — the
-	// trim silently bounds it — so an operator who raised one and not the
-	// other believes they changed something they did not.
-	if c.InjectedMaxEntries > c.MaxEntries && c.MaxEntries >= 1 {
-		p.add(at(path, "injected_max_entries"), ErrConflict,
-			"%d is more than max_entries (%d), so the trim bounds it and the "+
-				"extra entries never exist. Raise max_entries too",
-			c.InjectedMaxEntries, c.MaxEntries)
-	}
-	if c.InjectedMaxChars < minInjectedChars {
-		p.add(at(path, "injected_max_chars"), ErrOutOfRange,
-			"must be at least %d, got %d — below that the block cannot carry "+
-				"one useful entry, so turn the ledger off instead",
-			minInjectedChars, c.InjectedMaxChars)
 	}
 	if c.RetentionDays < 1 {
 		p.add(at(path, "retention_days"), ErrOutOfRange,

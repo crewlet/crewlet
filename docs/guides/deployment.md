@@ -442,7 +442,7 @@ all in the [coordination slot](../concepts/coordination.md) instead.
 
 The load-bearing tables:
 
-- **`agent_diary`** — vector-indexed, each agent's private observation log. Written by the reflect path, which embeds content on write. The `## Personal memory` prefetch reads it via hybrid candidate selection (vector top-K ∪ recency top-K, deduped, capped at 100) handed to an aux-LLM relevance filter. Shared knowledge is **not** stored here — the knowledge base is searched live at query time; see [knowledge system](../concepts/knowledge-system.md).
+- **`agent_diary`** — vector-indexed, each agent's private observation log. Written by the reflect path, which embeds content on write. The `## Personal memory` prefetch reads it via hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is **not** stored here — the knowledge base is searched live at query time; see [knowledge system](../concepts/knowledge-system.md).
 - **`episodes`** — vector-indexed, one row per completed turn, raw and LLM-compacted shapes in the same table. Drained by the episode-lifecycle duty.
 - **`synthesized_skills`** + **`synthesized_skill_versions`** — auto-drafted skills the agent can load, plus their refinement history.
 - **`counterparty_profiles`** — per-`(observer, subject, platform)` profiles built from observed interactions.
@@ -521,6 +521,8 @@ test rather than vanishing quietly.
 | `agent_turn_progress` | Fires once per LLM round as a live-only signal; the matching `agent_phase_completed` is its durable record, so persisting this would fill the log with intermediate states of rows it also holds finished. It still drives the live projection. |
 | `budget_reported` | A snapshot of **live**, in-memory meters whose values mean nothing outside the engine run that produced them. Persisting it lets a dashboard hydrate a dead process's counters and render them as the current ones — a number that is not merely stale but describes a different run. It still drives the live projection. |
 | `raw_webhook` | The delivery is **already** a row (the `webhook` category above). This event is the wake the receiver publishes onto a seat's inbox, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
+| `a2a_request` | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
+| `a2a_message` | The answer is **already** a row (`a2a_message_sent`, plus `a2a_message_delivered` for the read). This event is the wake it puts on the requester's inbox. |
 
 #### Querying events
 

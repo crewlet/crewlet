@@ -995,16 +995,26 @@ func missingTools(s *tools.Surface) []string {
 	return out
 }
 
-// reviewArtifact bounds the draft handed to the reviewer.
+// reviewArtifact is what the executor produced, handed to the reviewer.
 //
-// The same budget the cross-round ledger gives an artifact, because it is the
-// same content answering the same question: enough to judge, and enough for
-// the next round to extend rather than rewrite.
+// WHOLE, and that is a bug fix rather than a preference. [turn.Work.Text] is
+// every assistant message of the executor's tool loop concatenated, thinking
+// blocks included — so the draft is at its END. The 2000-rune cut this used to
+// carry kept the HEAD, which on any multi-round execution is the opening of
+// round one's reasoning and not the draft at all. The reviewer's verdict
+// decides whether the turn ships or loops, and it was being asked for that
+// verdict on a prefix that frequently did not contain the work.
+//
+// Bounded by the executor's round cap times the phase's max_tokens, which is a
+// real ceiling and the right place for one.
+//
+// "(empty)" rather than "" for a pass with no text: an absent section reads as
+// a section the engine forgot to fill in.
 func reviewArtifact(w turn.Work) string {
 	if w.Text == "" {
 		return "(empty)"
 	}
-	return ledger.Elide(w.Text, ledger.ArtifactLimit)
+	return w.Text
 }
 
 // Caps returns the runner's round budgets, so an assembler can assert on what

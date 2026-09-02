@@ -32,6 +32,7 @@ package knowledge
 import (
 	"context"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -258,24 +259,48 @@ func Excludes(h Hit, ancestors []string) bool {
 		strings.HasPrefix(h.Title, AutoDraftTitlePrefix)
 }
 
-// Snippet trims a page's text to one sentence's worth of plain summary.
+// Snippet trims a page's text to `limit` bytes of plain summary.
 //
-// Cut at a sentence boundary when there is one inside the budget, because a
-// snippet ending mid-word reads as a rendering fault rather than a summary.
-func Snippet(text string) string {
+// THE ONE PLACE a knowledge excerpt is shortened, and one of the few cuts in
+// this engine that is correct: the block it feeds tells a planner WHICH page
+// to open and says so in as many words, and the page is re-readable in full
+// through the seat's own tools. A pointer that says it is a pointer is not the
+// same thing as content that was quietly halved.
+//
+// Three properties the two hand-rolled copies of this used to get wrong:
+//
+//   - ALWAYS MARKED. Every cut ends in an ellipsis, including the no-space
+//     fallback. An unmarked cut is indistinguishable from a page that really
+//     does end there, which is how a planner concludes a runbook has no step 4.
+//   - NEVER THROUGH A RUNE. A byte slice splits whatever multi-byte character
+//     straddles the boundary and yields invalid UTF-8, which reaches a model as
+//     a replacement character — a bug that appears the first time a page is not
+//     ASCII.
+//   - LENGTH ONLY. A copy of this in the Confluence parser also cut at the
+//     first newline or ". " before applying any limit, so it decapitated a page
+//     to its opening sentence even when asked for an unlimited snippet.
+//
+// A limit of zero or less is unbounded.
+func Snippet(text string, limit int) string {
 	text = strings.Join(strings.Fields(text), " ")
-	if text == "" {
-		return ""
-	}
-	if len(text) <= SnippetLimit {
+	if text == "" || limit <= 0 || len(text) <= limit {
 		return text
 	}
-	head := text[:SnippetLimit]
-	if i := strings.LastIndexAny(head, ".!?"); i > SnippetLimit/2 {
-		return head[:i+1]
+	head := text[:limit]
+	// A sentence boundary inside the second half of the budget reads as a
+	// summary rather than a cut, so it is preferred — and still marked,
+	// because the page continues past it either way.
+	if i := strings.LastIndexAny(head, ".!?"); i > limit/2 {
+		return head[:i+1] + " …"
 	}
 	if i := strings.LastIndex(head, " "); i > 0 {
 		return head[:i] + "…"
 	}
-	return head
+	// No space at all — a URL, a CJK run. Back up to a rune boundary
+	// rather than splitting one.
+	cut := len(head)
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "…"
 }

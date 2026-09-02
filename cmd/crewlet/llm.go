@@ -521,9 +521,22 @@ func importLLM(providers []cliAgentProvider, key string, stdin io.Reader, stdout
 				"(`crewlet llm logout %s`) if you mean to replace it",
 			key, p.Workspace().CredentialsDir(), key)
 	}
-	raw, err := io.ReadAll(io.LimitReader(stdin, maxBundleBytes))
+	// +1 SO THE OVERRUN IS VISIBLE. io.LimitReader stops at the cap and
+	// reports a clean EOF, so reading exactly maxBundleBytes cannot be told
+	// from a bundle that was clipped there — and a clipped bundle is a
+	// truncated tar that RestoreBundle would unpack as far as it goes. The
+	// constant's own doc says this "refuses to buffer" an oversized pipe;
+	// reading one extra byte is what makes that true.
+	raw, err := io.ReadAll(io.LimitReader(stdin, maxBundleBytes+1))
 	if err != nil {
 		return fmt.Errorf("reading the bundle from stdin: %w", err)
+	}
+	if len(raw) > maxBundleBytes {
+		return fmt.Errorf(
+			"the bundle on stdin exceeds %d bytes, which is far larger than any "+
+				"real credential directory — check what is on the other side of "+
+				"the pipe (`crewlet llm export %s` produces one)",
+			maxBundleBytes, key)
 	}
 	blob := strings.TrimSpace(string(raw))
 	if blob == "" {
@@ -542,8 +555,10 @@ func importLLM(providers []cliAgentProvider, key string, stdin io.Reader, stdout
 // maxBundleBytes bounds what import will read.
 //
 // A credential directory is a handful of small JSON files; 8 MiB is orders of
-// magnitude above any real one and still refuses to buffer whatever a
-// mistyped pipe happens to be carrying.
+// magnitude above any real one, and a pipe carrying more than that is REFUSED
+// rather than read to the cap — a clipped bundle is a truncated tar, and
+// unpacking one as far as it goes writes a partial credential directory that
+// looks like a finished login.
 const maxBundleBytes = 8 << 20
 
 // isTerminal reports whether a writer is a character device.

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/coord"
 )
@@ -728,6 +730,32 @@ var planeCases = []fleetCase{{
 		}
 		if len(got[0].Error) >= len(huge) {
 			h.t.Fatalf("the failure text was stored whole (%d bytes)", len(got[0].Error))
+		}
+
+		// NEVER THROUGH A RUNE. The cut was a plain byte slice, so a driver
+		// error naming a non-ASCII path ended in half a character — which
+		// the KV's JSON encoding replaces with U+FFFD, delivering the fleet
+		// view a garbled message rather than a shortened one.
+		if err = h.f.RecordApply(h.ctx, coord.NodeApply{
+			NodeID: "node-b", Epoch: 7, Status: "failed",
+			Error: strings.Repeat("日本語", 1000), UpdatedAt: h.now(),
+		}); err != nil {
+			h.t.Fatalf("RecordApply: %v", err)
+		}
+		got, err = h.f.Fleet(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Fleet: %v", err)
+		}
+		for _, n := range got {
+			if n.NodeID != "node-b" {
+				continue
+			}
+			if !utf8.ValidString(n.Error) {
+				h.t.Error("a non-ASCII failure text was cut through a rune")
+			}
+			if !strings.HasSuffix(n.Error, "…") {
+				h.t.Errorf("the cut is unmarked: %q", n.Error[max(0, len(n.Error)-12):])
+			}
 		}
 	},
 }}

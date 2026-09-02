@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -420,8 +419,13 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 		if err != nil {
 			detail = err.Error()
 		}
+		// THE WHOLE DETAIL. This is the container runtime's own account of
+		// why the image would not start — a missing platform, a pull
+		// failure, a mount that does not exist — and the operator reading
+		// it has no other copy. A 400-byte cut removed the second half of
+		// exactly the messages worth reading.
 		return nil, localErrorf("could not start sandbox container from image %q: %s",
-			l.opts.Image, truncate(detail, 400))
+			l.opts.Image, detail)
 	}
 	box := &containerBox{
 		layout: layout, runtime: l.runtime, container: name,
@@ -703,8 +707,17 @@ func (l *Local) liveContainers(ctx context.Context) (map[string]bool, error) {
 		if err != nil {
 			detail = err.Error()
 		}
-		localLog.Warn("local_sandbox_reap_listing_failed", "error", truncate(detail, 200))
-		return nil, errors.New("container listing failed")
+		localLog.Warn("local_sandbox_reap_listing_failed", "error", detail)
+		// WRAPPED, and carrying the detail. The reaper reads this to decide
+		// which boxes are live, so a listing failure that reported only
+		// "container listing failed" left the caller unable to say whether
+		// the runtime was down, unreachable or refusing — three different
+		// operator actions behind one string.
+		if err != nil {
+			return nil, fmt.Errorf("listing sandbox containers: %w", err)
+		}
+		return nil, localErrorf("listing sandbox containers failed with exit %d: %s",
+			result.ExitCode, detail)
 	}
 	names := map[string]bool{}
 	for _, line := range strings.Split(result.Stdout, "\n") {
@@ -713,13 +726,6 @@ func (l *Local) liveContainers(ctx context.Context) (map[string]bool, error) {
 		}
 	}
 	return names, nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
 }
 
 // logSignal reports a signal that did not reach its process group.

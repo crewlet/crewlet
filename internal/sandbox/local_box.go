@@ -499,7 +499,7 @@ func (b *containerBox) StartBackground(ctx context.Context, cmd string, opts Exe
 			detail = strings.TrimSpace(result.Stdout)
 		}
 		return "", localErrorf("container sandbox %s could not start a background job: %s",
-			b.layout.id, truncate(detail, 400))
+			b.layout.id, detail)
 	}
 	localLog.Info("local_sandbox_job_started",
 		"sandbox_id", b.layout.id, "pid", pid, "container", b.container)
@@ -564,7 +564,7 @@ func (b *containerBox) Pause(ctx context.Context) error {
 		if err != nil {
 			detail = err.Error()
 		}
-		localLog.Warn("local_sandbox_pause_failed", "sandbox_id", b.layout.id, "error", truncate(detail, 200))
+		localLog.Warn("local_sandbox_pause_failed", "sandbox_id", b.layout.id, "error", detail)
 	}
 	return nil
 }

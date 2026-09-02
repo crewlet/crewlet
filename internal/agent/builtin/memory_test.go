@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,69 @@ func TestARefinementOverTheBodyCapIsRefused(t *testing.T) {
 	// is worse than the one the seat already has.
 	if skills.updated {
 		t.Error("the over-cap body was stored anyway")
+	}
+}
+
+// ONE STORE, ONE RULE. Three writers share the diary's content bound and they
+// used to disagree: reflect_and_persist refused an over-long note naming the
+// limit, while mark_onboarded and refine_skill's `reason` silently clipped at
+// the same number and reported success. A clipped note is worse than a refused
+// one — the seat reads back half of what it wrote and cannot tell — and the
+// refusal has to NAME the limit or a model has nothing to aim at.
+func TestEveryDiaryWriterRefusesAnOverLongNoteAndNamesTheCap(t *testing.T) {
+	t.Parallel()
+	over := strings.Repeat("z", learning.MaxContentChars+1)
+	at := strings.Repeat("z", learning.MaxContentChars)
+
+	for _, tc := range []struct {
+		name string
+		args func(content string) map[string]any
+		tool string
+		deps func() (builtin.Deps, func() bool)
+	}{
+		{
+			name: "mark_onboarded",
+			tool: builtin.MarkOnboardedTool,
+			args: func(c string) map[string]any { return map[string]any{"notes": c} },
+			deps: func() (builtin.Deps, func() bool) {
+				m := &onboardingStore{}
+				return builtin.Deps{Onboarding: m}, func() bool { return len(m.marks) > 0 }
+			},
+		},
+		{
+			name: "refine_skill reason",
+			tool: builtin.RefineSkillTool,
+			args: func(c string) map[string]any {
+				return map[string]any{"skill_name": "deploys", "content": "step one", "reason": c}
+			},
+			deps: func() (builtin.Deps, func() bool) {
+				sk := &recordingSkills{skill: learning.Skill{ID: "s-1", Name: "deploys"}}
+				return builtin.Deps{Refinable: sk}, func() bool { return sk.updated }
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			deps, wrote := tc.deps()
+			res := callFor(t, registered(t, deps, tc.tool), turnFor(t, "agent-ceo"), tc.args(over))
+			if !res.Failed {
+				t.Fatalf("an over-long note was accepted: %q", res.Output)
+			}
+			if !strings.Contains(res.Output, strconv.Itoa(learning.MaxContentChars)) {
+				t.Errorf("the refusal does not name the cap: %q", res.Output)
+			}
+			if wrote() {
+				t.Error("the over-long value was written anyway")
+			}
+
+			deps, wrote = tc.deps()
+			if res := callFor(t, registered(t, deps, tc.tool), turnFor(t, "agent-ceo"),
+				tc.args(at)); res.Failed {
+				t.Errorf("a note exactly at the cap was refused: %q", res.Output)
+			} else if !wrote() {
+				t.Error("a note at the cap was accepted but not written")
+			}
+		})
 	}
 }
 

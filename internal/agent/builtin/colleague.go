@@ -27,21 +27,6 @@ import (
 
 var log = logging.Get("agent.builtin")
 
-// displayLimit caps a disambiguation list.
-//
-// Ten candidates is already more than a model will read carefully, and the
-// list exists to be chosen from rather than scanned. The rest are counted, so
-// the answer never claims to be complete when it is not.
-const displayLimit = 10
-
-// displayMax bounds any caller-supplied string echoed back into a tool result.
-//
-// A model's query reaches an LLM-visible output and a structured log line, so
-// a pathological one — or one carrying newlines — would break a
-// line-structured render and bloat an audit payload. Eighty characters is more
-// than any real colleague name.
-const displayMax = 80
-
 // LookupColleagueTool is the tool's wire name.
 const LookupColleagueTool = "lookup_colleague"
 
@@ -111,7 +96,7 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 		log.Debug("lookup_colleague_no_match", "query", safe, "corpus", len(seats))
 		return failed(fmt.Sprintf(
 			"No colleague matches %q. Known handles: %s.",
-			safe, strings.Join(allHandles(seats, displayLimit), ", "))), nil
+			safe, strings.Join(allHandles(seats), ", "))), nil
 
 	case len(found) == 1:
 		return tools.Result{Output: describe(found[0].Seat)}, nil
@@ -122,19 +107,17 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 	var b strings.Builder
 	fmt.Fprintf(&b, "%q is ambiguous — %d colleagues match. Call lookup_colleague "+
 		"again with one of these handles:\n", safe, len(found))
-	shown := found
-	if len(shown) > displayLimit {
-		shown = shown[:displayLimit]
-	}
-	for _, c := range shown {
+	// EVERY candidate. This message's whole job is to let the model retry
+	// with an exact handle, and a handle it cannot see is one it cannot
+	// name — a cap here answers "who might you mean" with a list that may
+	// not contain the answer. A company's seats are its org chart, so the
+	// list is bounded by the config a founder wrote.
+	for _, c := range found {
 		fmt.Fprintf(&b, "  - %s (%s, %s)", c.Seat.Handle, c.Seat.Name, c.Seat.Kind)
 		if label := c.Method.Label(); label != "" {
 			fmt.Fprintf(&b, " — %s", label)
 		}
 		b.WriteString("\n")
-	}
-	if more := len(found) - len(shown); more > 0 {
-		fmt.Fprintf(&b, "  ...and %d more\n", more)
 	}
 	return failed(b.String()), nil
 }
@@ -190,14 +173,16 @@ func describe(s colleague.Seat) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func allHandles(seats []colleague.Seat, limit int) []string {
+// allHandles is every seat's handle, sorted.
+//
+// EVERY one, with no cap. This list is what a model that missed reads to find
+// the handle it should have used; "...and 7 more" tells it the answer exists
+// and withholds it.
+func allHandles(seats []colleague.Seat) []string {
 	out := make([]string, 0, len(seats))
 	for _, s := range seats {
 		out = append(out, s.Handle)
 	}
 	sortStrings(out)
-	if len(out) > limit {
-		out = append(out[:limit:limit], fmt.Sprintf("...and %d more", len(out)-limit))
-	}
 	return out
 }

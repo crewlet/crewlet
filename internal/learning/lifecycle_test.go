@@ -1354,8 +1354,20 @@ func TestRenderClusterFlattensClampsAndCounts(t *testing.T) {
 	if strings.Contains(got, long) || !strings.Contains(got, "xxx...") {
 		t.Errorf("the per-turn clamp did not apply:\n%s", got)
 	}
+	// Capped at 8, and it SAYS SO. The compactor is inferring "how this
+	// agent does this kind of work", and a silently shortened tool sequence
+	// reads as a shorter procedure — which is the pattern it then writes
+	// down as the seat's own.
 	if strings.Contains(got, "t9") || !strings.Contains(got, "t8") {
 		t.Errorf("the tool list is not capped at 8:\n%s", got)
+	}
+	if !strings.Contains(got, "(+1 more)") {
+		t.Errorf("the tool-list cut is silent:\n%s", got)
+	}
+	// And a turn under the cap carries no marker at all.
+	under := rawEp("c", t0, "t1", "t2")
+	if u := RenderCluster(Cluster{Handle: "ceo", Episodes: []Episode{under}}); strings.Contains(u, "more)") {
+		t.Errorf("a short tool list claimed to be cut:\n%s", u)
 	}
 	if !strings.Contains(got, "tools: (none)") {
 		t.Errorf("a tool-free turn is not labelled:\n%s", got)

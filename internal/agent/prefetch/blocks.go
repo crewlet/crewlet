@@ -14,18 +14,7 @@ import (
 // The four blocks with no auxiliary judgement in them — plus one optional
 // summary pass over the episodes.
 
-// RecallCharBudget, ProfileCharBudget and SkillsCharBudget cap each rendered
-// block.
-//
-// Smaller than memory's and knowledge's, and deliberately: these three are
-// BACKGROUND — what happened before, who this is, what procedures exist —
-// while those two are the ones the planner reasons from. A prompt where the
-// background outweighs the task is one where the model plans the background.
 const (
-	RecallCharBudget  = 1200
-	ProfileCharBudget = 1200
-	SkillsCharBudget  = 1200
-
 	// recallHits is how many past turns are recalled.
 	//
 	// Three, and low on purpose: an episode is a whole turn compressed
@@ -47,14 +36,6 @@ const (
 	// dropped, so a reader is not misled into thinking that is all the
 	// seat knows.
 	maxRenderedTraits = 24
-
-	// skillsListed caps the skills catalogue.
-	//
-	// The block is a MENU, not the skills: each line is a name and a
-	// description, and the seat loads the one it wants. Twelve is enough
-	// for a seat that has been running for months to see its whole
-	// repertoire without the menu becoming the prompt.
-	skillsListed = 12
 )
 
 // EmptyRecallHint is what the recall block says when the search was skipped
@@ -112,7 +93,7 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 	for _, hit := range hits {
 		bullets = append(bullets, renderEpisode(hit))
 	}
-	raw := budget(bullets, RecallCharBudget)
+	raw := joinBullets(bullets)
 	if raw == "" || !f.src.SummarizeEpisodes {
 		return raw
 	}
@@ -120,7 +101,7 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 	// already a usable block, so a model that is slow or unreachable costs
 	// verbosity rather than the block.
 	summary, ok := f.auxCall(ctx, r.Seat, recallSummarySystemPrompt,
-		"Current task:\n"+truncate(r.Task, 800)+
+		"Current task:\n"+r.Task+
 			"\n\nPast turns by this agent:\n"+raw+
 			"\n\nBriefing:", recallSummaryTokens)
 	if !ok || strings.TrimSpace(summary) == "" {
@@ -141,7 +122,7 @@ func renderEpisode(hit learning.Hit) string {
 	if summary == "" {
 		return ""
 	}
-	line := "- " + truncate(summary, 300)
+	line := "- " + summary
 	var notes []string
 	if ep.ReviewOutcome != "" {
 		notes = append(notes, "outcome: "+ep.ReviewOutcome)
@@ -191,7 +172,14 @@ func (f *Fetcher) counterpartyProfile(ctx context.Context, r Request) string {
 		}
 		blocks = append(blocks, renderProfile(profile))
 	}
-	return budget(blocks, ProfileCharBudget)
+	// "\n\n", not "\n": each element is a MULTI-LINE block, and a single
+	// newline runs the second sender's opening line straight onto the end of
+	// the first sender's. The char budget used to hide that by rendering only
+	// one profile — it admitted the first block and dropped the rest — which
+	// silently negated this function's whole reason to exist: ONE BLOCK PER
+	// DISTINCT SENDER, so a turn woken by four people is not a turn about
+	// whichever of them spoke last.
+	return strings.Join(blocks, "\n\n")
 }
 
 // renderProfile renders one counterparty.
@@ -270,9 +258,14 @@ func (f *Fetcher) synthesizedSkills(ctx context.Context, r Request) (string, []s
 	if len(skills) == 0 {
 		return "", nil
 	}
-	if len(skills) > skillsListed {
-		skills = skills[:skillsListed]
-	}
+	// EVERY SKILL, no list cap. The block is a MENU — a name and a
+	// description per line, and the seat loads the one it wants — so its
+	// cost is a line each, not a body each. The cap that used to sit here
+	// kept the first twelve in whatever order the store returned, and the
+	// ids this function reports back are what resets a skill's staleness
+	// clock: a skill past the cut was never offered, so it was never used,
+	// so it went stale and archived. That is the starvation the branch
+	// above refuses to do to stale skills, done instead by position.
 	bullets := make([]string, 0, len(skills)+1)
 	ids := make([]string, 0, len(skills))
 	for _, skill := range skills {
@@ -285,15 +278,10 @@ func (f *Fetcher) synthesizedSkills(ctx context.Context, r Request) (string, []s
 		bullets = append(bullets, line)
 		ids = append(ids, skill.ID)
 	}
-	// THE IDS FOLLOW THE BUDGET, which is why this takes the count back:
-	// the budget drops the tail that does not fit, and a skill the model
-	// never saw must not have its staleness clock reset — that is
-	// precisely how a never-read skill would live for ever.
-	rendered, kept := budgetN(bullets, SkillsCharBudget)
+	rendered := joinBullets(bullets)
 	if rendered == "" {
 		return "", nil
 	}
-	ids = ids[:kept]
 	// THE MENU NEEDS ITS VERB. A list of skill names with no instruction
 	// is a list the model reads and does not act on — it has to be told
 	// that loading one is a thing it can do.
@@ -309,7 +297,7 @@ func renderSkill(s learning.Skill) string {
 	}
 	line := "- **" + name + "**"
 	if description := collapse(s.Description); description != "" {
-		line += ": " + truncate(description, 200)
+		line += ": " + description
 	}
 	if s.State == learning.SkillStale {
 		// MARKED, not hidden. The seat can still load it — loading is

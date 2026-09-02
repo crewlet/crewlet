@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -116,12 +117,20 @@ func TestTurnSettingsComeFromTheEpochNotALiveCell(t *testing.T) {
 	// which is what makes the mid-turn config swap unrepresentable rather
 	// than merely guarded against.
 	c := company(t, companyDoc+"\nturn_engine:\n  max_iterations: 7\n  delegation_depth_limit: 2\n")
-	got := c.TurnSettings()
+	got := c.TurnSettings(0)
 	if got.MaxIterations != 7 || got.DelegationDepthLimit != 2 {
 		t.Errorf("settings = %+v", got)
 	}
 	if !slices.Contains(got.SkipNames, "activate_tool") {
 		t.Errorf("skip names = %v, want the meta-tools", got.SkipNames)
+	}
+	// The wall-clock cap comes off the TRIGGER, not the epoch: a scheduled
+	// fire carries one and every other trigger carries none.
+	if got.MaxWallClock != 0 {
+		t.Errorf("an uncapped trigger produced a %s cap", got.MaxWallClock)
+	}
+	if capped := c.TurnSettings(180); capped.MaxWallClock != 3*time.Minute {
+		t.Errorf("MaxWallClock = %s, want the fire's 180s", capped.MaxWallClock)
 	}
 }
 

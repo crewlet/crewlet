@@ -83,6 +83,13 @@ func FormatCalls(calls []Call, opts FormatOptions) string {
 		}
 		outcome := "success"
 		if call.Failed {
+			// ELIDED, like the arguments beside it. Call.Result is the
+			// tool's own output, which is a PAYLOAD by this package's
+			// definition — authored outside the engine and unbounded, so a
+			// failed HTTP call can put a whole error document on one
+			// ledger line, re-sent on every round of every later phase.
+			// The cut is marked, and the full text is on the phase event
+			// this line summarises.
 			outcome = "error: " + elide(call.Result, opts.ValueLimit)
 		}
 		marker := ""
@@ -176,17 +183,21 @@ func RenderIterations(records []Iteration, skip []string) string {
 	for _, rec := range records {
 		lines := []string{"### Iteration " + itoa(rec.Iteration)}
 		if rec.Intent != "" {
-			lines = append(lines, "Set out to: "+elide(rec.Intent, IntentLimit))
+			lines = append(lines, "Set out to: "+rec.Intent)
 		}
 		lines = append(lines, "Called:", FormatCalls(rec.Calls, Format(skip, rec.Reads)))
 		if rec.Text != "" {
-			lines = append(lines, "Produced: "+elide(rec.Text, ArtifactLimit))
+			// TAIL-ELIDED at render, whole in the record. See
+			// RenderedArtifactLimit: this text is a whole tool loop's
+			// assistant output, one per iteration, re-sent on every round
+			// of every later phase — and its deliverable is at the end.
+			lines = append(lines, "Produced: "+elideTail(rec.Text, RenderedArtifactLimit))
 		}
 		if rec.CompletedWork != "" {
-			lines = append(lines, "Reviewer, on what already landed: "+elide(rec.CompletedWork, NoteLimit))
+			lines = append(lines, "Reviewer, on what already landed: "+rec.CompletedWork)
 		}
 		if rec.ReviewNotes != "" {
-			lines = append(lines, "Reviewer's correction: "+elide(rec.ReviewNotes, NoteLimit))
+			lines = append(lines, "Reviewer's correction: "+rec.ReviewNotes)
 		}
 		blocks = append(blocks, strings.Join(lines, "\n"))
 	}

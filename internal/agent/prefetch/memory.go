@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/learning"
 )
@@ -34,19 +33,11 @@ import (
 // nobody is watching for.
 
 const (
-	// MemoryCharBudget caps the rendered block.
-	MemoryCharBudget = 1500
-
-	// memoryCandidatePool caps what the filter is shown.
-	//
-	// The signal saturates well before this: the filter needs to
-	// recognise a relevant memory, not to survey the seat's whole
-	// history, and an agent whose diary has grown to hundreds of rows
-	// would otherwise pay for all of them on every turn.
-	memoryCandidatePool = 100
-
 	// memoryVectorLimit and memoryRecencyLimit are the two halves of the
-	// candidate pool, UNIONED.
+	// candidate pool, UNIONED. Their sum is what bounds the pool — there is
+	// no third cap over the union, and the one that used to sit there was
+	// unreachable arithmetic: a dedup of two 50-row halves cannot exceed
+	// 100, so a `> 100` trim never fired.
 	//
 	// Similarity finds what the task is about; recency finds the
 	// broadly-applicable rules that match no particular task and apply to
@@ -142,7 +133,7 @@ func (f *Fetcher) personalMemory(ctx context.Context, r Request) string {
 	for _, entry := range selected {
 		bullets = append(bullets, renderMemory(entry))
 	}
-	return budget(bullets, MemoryCharBudget)
+	return joinBullets(bullets)
 }
 
 // memoryCandidates gathers the pool the filter judges.
@@ -183,9 +174,6 @@ func (f *Fetcher) memoryCandidates(ctx context.Context, r Request) []learning.Di
 	for _, entry := range recent {
 		add(entry)
 	}
-	if len(out) > memoryCandidatePool {
-		out = out[:memoryCandidatePool]
-	}
 	return out
 }
 
@@ -210,7 +198,7 @@ func (f *Fetcher) filterMemories(ctx context.Context, r Request, candidates []le
 // memoryFilterPrompt renders the task, the sender and the numbered pool.
 func memoryFilterPrompt(r Request, candidates []learning.DiaryEntry) string {
 	var b strings.Builder
-	b.WriteString("Agent's current task:\n" + truncate(r.Task, 1200) + "\n")
+	b.WriteString("Agent's current task:\n" + r.Task + "\n")
 	// THE SENDER, STRUCTURED. Without it the filter has only whatever
 	// platform ids appear in the task body to reason from, and rule 3 —
 	// the one hard subject filter — becomes unenforceable: it cannot tell
@@ -221,8 +209,13 @@ func memoryFilterPrompt(r Request, candidates []learning.DiaryEntry) string {
 	}
 	b.WriteString("\nStored memories:\n")
 	for i, entry := range candidates {
+		// COLLAPSED, NOT CUT. One line per index is what keeps the indices
+		// unambiguous; a length cap on top of that decided which memories
+		// the filter could SEE, so a rule whose scope clause sat past the
+		// cut was judged on its opening and excluded — and the seat then
+		// behaved as if it had never been written.
 		b.WriteString(strconv.Itoa(i) + ". " + memoryKindLabel(entry) +
-			truncate(collapse(entry.Content), 400) + "\n")
+			collapse(entry.Content) + "\n")
 	}
 	b.WriteString("\nRelevant indices (JSON array):")
 	return b.String()
@@ -280,12 +273,12 @@ func renderMemory(entry learning.DiaryEntry) string {
 func parseIndices(text string, pool int) []int {
 	array := jsonArray(text)
 	if array == "" {
-		log.Warn("memory_filter_unparseable", "answer", truncate(text, 200))
+		log.Warn("memory_filter_unparseable", "answer", text)
 		return nil
 	}
 	var raw []int
 	if err := json.Unmarshal([]byte(array), &raw); err != nil {
-		log.Warn("memory_filter_unparseable", "answer", truncate(text, 200),
+		log.Warn("memory_filter_unparseable", "answer", text,
 			"error", err.Error())
 		return nil
 	}
@@ -346,20 +339,4 @@ func subjectLabel(s learning.Subject) string {
 // collapse folds a memory's internal newlines so one entry stays one bullet.
 func collapse(s string) string {
 	return strings.TrimSpace(strings.Join(strings.Fields(s), " "))
-}
-
-// truncate cuts s to at most max bytes and marks the cut.
-//
-// NEVER THROUGH A RUNE: a plain s[:max] splits whatever multi-byte character
-// straddles the boundary and yields invalid UTF-8, which reaches a model as
-// a replacement character and a JSON encoder as an escaped substitution — a
-// bug that appears the first time a memory is not ASCII.
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	for max > 0 && !utf8.RuneStart(s[max]) {
-		max--
-	}
-	return s[:max] + "…"
 }

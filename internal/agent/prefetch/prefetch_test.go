@@ -694,12 +694,25 @@ func TestEverySenderWithAProfileIsRendered(t *testing.T) {
 		{ExternalID: "U1", Platform: "chat", Name: "Ana Ruiz"},
 		{ExternalID: "U3", Platform: "chat", Name: "A Stranger"},
 	}
+	// TWENTY TRAITS EACH, not one. With one trait apiece both blocks fit
+	// inside any plausible character budget, so this guard passed for as
+	// long as the budget was silently rendering only the FIRST sender —
+	// a test that cannot fail on the bug it names.
+	traits := func(prefix string) map[string]any {
+		out := map[string]any{}
+		for i := range 20 {
+			out[prefix+"-trait-"+strconv.Itoa(i)] = strings.Repeat("a wordy observed value ", 4)
+		}
+		return out
+	}
+	u1 := traits("ana")
+	u1["tone"] = "terse"
+	u2 := traits("miles")
+	u2["timezone"] = "CET"
 	got := fetch(t, prefetch.Sources{Counterparties: counterparties{
 		byExternal: map[string]learning.Profile{
-			"U1": {Subject: r.Senders[0], InteractionCount: 12,
-				Traits: map[string]any{"tone": "terse"}},
-			"U2": {Subject: r.Senders[1], InteractionCount: 3,
-				Traits: map[string]any{"timezone": "CET"}},
+			"U1": {Subject: r.Senders[0], InteractionCount: 12, Traits: u1},
+			"U2": {Subject: r.Senders[1], InteractionCount: 3, Traits: u2},
 		}}}, r).CounterpartyProfile
 
 	for _, want := range []string{"Ana Ruiz", "Miles Okafor", "tone: terse", "timezone: CET"} {
@@ -715,6 +728,12 @@ func TestEverySenderWithAProfileIsRendered(t *testing.T) {
 	// And a repeated sender is one block.
 	if strings.Count(got, "Ana Ruiz") != 1 {
 		t.Fatalf("a repeated sender rendered twice:\n%s", got)
+	}
+	// SEPARATED BY A BLANK LINE. Each profile is several lines, so joining
+	// on a single newline runs the second sender's opening straight onto
+	// the end of the first sender's last trait.
+	if !strings.Contains(got, "\n\n") {
+		t.Fatalf("two multi-line profiles were joined without a blank line:\n%s", got)
 	}
 }
 
@@ -810,29 +829,41 @@ func TestAnUnreadableOnboardingMarkerRendersNoHint(t *testing.T) {
 	}
 }
 
-// ── the budget ──
+// ── block assembly ──
 
-// The budget is applied per BULLET, so a block never ends mid-sentence: a
-// model that hits a truncated final line cannot tell whether the thought was
-// finished elsewhere.
-func TestABudgetedBlockNeverEndsMidSentence(t *testing.T) {
+// EVERY SKILL IS LISTED. The block is a menu of names and one-line
+// descriptions, and the ids it reports back are what reset a skill's
+// staleness clock — so a skill dropped from the menu is never offered, never
+// used, and ages out of the catalogue on its own. It used to be cut twice:
+// a 12-entry list cap and a character budget on top of it.
+func TestEverySynthesizedSkillReachesTheMenu(t *testing.T) {
 	t.Parallel()
 	var rows []learning.Skill
 	for i := range 40 {
 		rows = append(rows, learning.Skill{
+			ID:          "id-" + strconv.Itoa(i),
 			Name:        "skill-" + string(rune('a'+i%26)) + strconv.Itoa(i),
-			Description: strings.Repeat("a long description that eats budget ", 4),
+			Description: strings.Repeat("a long description that used to eat budget ", 4),
 		})
 	}
-	got := fetch(t, prefetch.Sources{Skills: skills{rows: rows}}, request(t)).SynthesizedSkills
-	if len(got) > prefetch.SkillsCharBudget+300 {
-		t.Fatalf("the block ran to %d chars", len(got))
+	blocks := fetch(t, prefetch.Sources{Skills: skills{rows: rows}}, request(t))
+	got := blocks.SynthesizedSkills
+	for _, row := range rows {
+		if !strings.Contains(got, row.Name) {
+			t.Fatalf("the menu dropped %q:\n%s", row.Name, got)
+		}
+	}
+	// The ids reported as OFFERED must match what actually rendered, or a
+	// skill the model never saw has its staleness clock reset.
+	if len(blocks.SkillIDs) != len(rows) {
+		t.Fatalf("offered ids = %d, want %d — the reported set and the rendered "+
+			"menu disagree", len(blocks.SkillIDs), len(rows))
 	}
 	if !strings.HasSuffix(strings.TrimSpace(got), "before doing the work it covers.") {
 		t.Fatalf("the block did not end on a whole line:\n%s", got[max(0, len(got)-200):])
 	}
-	// Every rendered line is a WHOLE bullet — the budget dropped entries
-	// rather than cutting one in half.
+	// Every rendered line is a WHOLE bullet: entries are dropped or kept,
+	// never cut in half.
 	for _, line := range strings.Split(got, "\n") {
 		if strings.HasPrefix(line, "- ") && !strings.Contains(line, "**") {
 			t.Fatalf("a bullet was cut mid-render: %q", line)
