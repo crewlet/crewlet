@@ -97,7 +97,7 @@ func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, r
 	// WALKED IN THE CLOSED SET'S ORDER, not the map's: a map iterates
 	// randomly, and an error naming whichever backend happened to come
 	// first would differ between two runs of the same broken config.
-	for _, placement := range config.Placements {
+	for _, placement := range config.BackendPlacements() {
 		if _, want := reached[placement]; !want {
 			continue
 		}
@@ -313,12 +313,19 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 
 	company := e.Company()
 	tel := e.describeResume(ctx, company, in)
+	turnIdentity := tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth,
+		in.Run.DelegationChain, resumeTask(in), turn.Reply(in.Run.Reply))
 	r, err := company.RunnerFor(in.Turn.Handle(), RunnerInput{
 		Task:      resumeTask(in),
 		Publisher: e.backends.Queue,
-		Turn: tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth,
-			in.Run.DelegationChain, resumeTask(in), turn.Reply(in.Run.Reply)),
-		Budget: e.meterFor(company, in.Turn.Handle()),
+		Turn:      turnIdentity,
+		// THE SAME RUNTIME THE TURN SUSPENDED UNDER — supplied here for
+		// the turn's LATER rounds, not for this one: whether the phase
+		// being re-entered was agentic is the state's own answer (see
+		// [execstate.State.AgentRun]), but a turn that loops to another
+		// iteration must run that one the same way it ran the first.
+		AgentRun: e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context),
+		Budget:   e.meterFor(company, in.Turn.Handle()),
 		// A resumed Execute loop can exhaust its rounds like any other,
 		// and it is the phase most likely to: it comes back mid-task with
 		// its budget already partly spent.
@@ -335,7 +342,14 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// this turn already ran its first phase — running it here would
 		// spend the resumed turn's opening on orientation for a seat that
 		// is mid-task.
-		Resume: &runner.Resume{State: in.State, Answer: in.Answer},
+		Resume: &runner.Resume{
+			State: in.State, Answer: in.Answer,
+			// THE RUN'S OWN TOOL CALLS, off its durable row. An
+			// agent-mode executor called them over the bridge, possibly
+			// in another process, so this list is the only record of
+			// what the phase did — its submission included.
+			Bridged: bridgedCalls(in.Run.BridgeCalls),
+		},
 	})
 	if err != nil {
 		return err
@@ -485,6 +499,18 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		// surface, but the surface is built from a snapshot and a seat can
 		// lose its gate across an apply mid-turn.
 		return sandbox.LaunchResult{}, fmt.Errorf("this seat's sandbox is not enabled")
+	}
+	if gate.RunIn == config.PlacementSelf {
+		// `self` means this seat's code work rides its own executor run,
+		// which is a coding CLI in agent mode and already holds a shell,
+		// an editor and a checkout. A second box beside it would give the
+		// seat two filesystems with the work in the one the turn cannot
+		// see — so the tool refuses and says which shell to use, rather
+		// than provisioning a box whose output is invisible.
+		return sandbox.LaunchResult{}, fmt.Errorf(
+			"this seat runs its code work in its own agent session (role.sandbox.run_in: " +
+				"self) — use the shell and editor you already have rather than " +
+				"starting a second box")
 	}
 
 	// THE PRE-FLIGHT BUDGET FLOOR. turn_engine.sandbox_min_budget_tokens
@@ -771,6 +797,11 @@ func (e *Engine) buildSandboxRuntime(company *Company) error {
 		Queue: e.backends.Queue, Pending: e.sandboxPending, Manager: manager,
 		Resume:  &resumer{engine: e},
 		Account: e.sandboxAccountant(),
+		// The per-run tool bridge dies with the run — see
+		// [sandbox.CoordinatorOptions.Ended]. Idempotent, and reached
+		// from every settle path, so a run that failed before it ever
+		// had a box closes its session too.
+		Ended: e.bridge.Close,
 	})
 	if err != nil {
 		return err
@@ -1033,12 +1064,26 @@ func (e *Engine) AwaitingSandbox(handle string) bool {
 // registry already refuses a company with no models at build, and a run whose
 // agent reads its credential from the environment needs none of this.
 func sandboxLLM(c *Company, seat *org.Role) (*sandbox.AgentLLM, map[string]string, map[string]string) {
+	return runLLM(c, seat, phase.Sandbox)
+}
+
+// runLLM is [sandboxLLM] over an explicit phase.
+//
+// TWO CALLERS, TWO PHASES, and the difference is load-bearing. A run_sandbox
+// call is CODE WORK the executor delegated, so it runs on llm_sandbox — a seat
+// legitimately points that at a cheaper or more code-shaped model than the one
+// it thinks with. An AGENT-MODE run is the executor ITSELF, so it runs on the
+// executor's own entry: sending it to llm_sandbox would run a seat's whole turn
+// on the model it chose for a subordinate job, silently, on any seat that set
+// both.
+func runLLM(c *Company, seat *org.Role, ph phase.Phase) (*sandbox.AgentLLM, map[string]string, map[string]string) {
 	if c == nil || c.Models == nil {
 		return nil, nil, nil
 	}
-	member, err := c.Models.Head(seat, phase.Sandbox)
+	member, err := c.Models.Head(seat, ph)
 	if err != nil {
-		log.Warn("sandbox_llm_unresolved", "seat", seat.Handle(), "error", err)
+		log.Warn("sandbox_llm_unresolved", "seat", seat.Handle(),
+			"phase", ph.String(), "error", err)
 		return nil, nil, nil
 	}
 	spec, ok := c.Config.Providers.LLM[member.Key]

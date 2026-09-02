@@ -4,7 +4,7 @@ import "strings"
 
 // Placement is WHERE a seat's code work runs.
 //
-// # One axis, three cells
+// # One axis, four cells
 //
 // This replaces a `type:` on the provider block, and the reason is that the
 // old shape could express only ONE answer for a whole company. A company has
@@ -37,17 +37,35 @@ const (
 	// that is not the engine's, which is what makes it the right choice
 	// for anything shared.
 	PlacementE2B Placement = "e2b"
+
+	// PlacementSelf runs code work INSIDE the seat's own executor run,
+	// which is only possible when that executor is a coding CLI in agent
+	// mode: it already holds a shell, an editor and a checkout, so
+	// provisioning a second box beside it would give the seat two
+	// filesystems and make the one doing the work invisible to the other.
+	//
+	// It is the one value that needs no backend, because it IS the
+	// executor's box. A seat that names it is simply not offered
+	// run_sandbox — there is nothing to launch.
+	PlacementSelf Placement = "self"
 )
 
-// Placements is the closed set — the cells this engine can actually run.
+// Placements is the closed set — every value a `run_in` may take.
 //
-// A value here is a placement the engine builds a provider for, and a test
-// walks this list against the switch that builds them. The list and the switch
-// have disagreed before: `e2b` was once the default with no case behind it, so
-// a company that wrote `providers.sandbox:` and no type validated cleanly,
-// reported a configured sandbox on the dashboard, and failed at its first
-// coding run.
-var Placements = []Placement{PlacementDirect, PlacementContainer, PlacementE2B}
+// The three that need a BACKEND are walked against the switch that builds them
+// by a test, because the list and the switch have disagreed before: `e2b` was
+// once the default with no case behind it, so a company that wrote
+// `providers.sandbox:` and no type validated cleanly, reported a configured
+// sandbox on the dashboard, and failed at its first coding run.
+var Placements = []Placement{PlacementDirect, PlacementContainer, PlacementE2B, PlacementSelf}
+
+// NeedsBackend reports whether a cell has a provider behind it.
+//
+// Only `self` does not, and it is worth a method rather than an equality test
+// at each site: three separate walks decide what to build, what to validate
+// and what to report, and each one silently does the wrong thing for a cell
+// that is the executor's own box rather than a box the engine mints.
+func (p Placement) NeedsBackend() bool { return p != PlacementSelf }
 
 // backend names the catalogue entry a placement needs, for the message a
 // refusal carries: an operator who wrote `run_in: container` with no `local:`
@@ -57,6 +75,24 @@ func (p Placement) backend() string {
 		return "`e2b:`"
 	}
 	return "`local:`"
+}
+
+// BackendPlacements are the cells a provider is built for, in closed-set
+// order — every value of [Placements] but `self`.
+//
+// Exported because three surfaces outside this file need exactly this list and
+// must not each filter it themselves: the engine's build switch, the schema
+// enum for the two fields that name a BACKEND cell (a company default and an
+// agent-mode runtime, neither of which can be the executor's own box), and the
+// test that holds those two together.
+func BackendPlacements() []Placement {
+	out := make([]Placement, 0, len(Placements))
+	for _, p := range Placements {
+		if p.NeedsBackend() {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // CodingAgent is which coding CLI runs inside a box.
@@ -249,6 +285,12 @@ func (s *SandboxProvider) Configured(p Placement) bool {
 	if s == nil {
 		return false
 	}
+	if !p.NeedsBackend() {
+		// `self` is the executor's own box. Nothing in the catalogue
+		// serves it, and nothing has to — which is why the question
+		// "does this company configure it" has no bearing on it.
+		return false
+	}
 	if s.Fake {
 		return oneOf(p, Placements)
 	}
@@ -337,9 +379,13 @@ func (s *SandboxProvider) validate(path string) error {
 					"role.sandbox.run_in",
 				names(s.available()))
 		}
-	case !oneOf(s.DefaultRunIn, Placements):
+	case !oneOf(s.DefaultRunIn, BackendPlacements()):
+		// `self` is deliberately not offerable as a COMPANY default: it
+		// is only meaningful for a seat whose executor is a coding CLI
+		// in agent mode, and a company-wide default would silently turn
+		// code work off for every seat that is not.
 		p.add(at(path, "default_run_in"), ErrUnknownValue, "%q (want %s)",
-			s.DefaultRunIn, names(Placements))
+			s.DefaultRunIn, names(BackendPlacements()))
 	case !s.Configured(s.DefaultRunIn):
 		p.add(at(path, "default_run_in"), ErrConflict,
 			"%q needs the %s backend configured under providers.sandbox (this "+
@@ -389,7 +435,7 @@ func (s *SandboxProvider) available() []Placement {
 		return nil
 	}
 	out := make([]Placement, 0, len(Placements))
-	for _, p := range Placements {
+	for _, p := range BackendPlacements() {
 		if s.Configured(p) {
 			out = append(out, p)
 		}

@@ -124,10 +124,107 @@ sequenceDiagram
 
 ---
 
-## Tool calls
+## Two modes: a text model, or the agent itself
+
+A cli-agent entry runs one of two ways, named on the entry with
+`cli.mode`. There is deliberately **no default beyond `text`** and no
+inference, because both are defensible for the same CLI on the same
+seat.
+
+| | `mode: text` (default) | `mode: agent` |
+|---|---|---|
+| Who drives the loop | Crewlet's own tool loop | the CLI's |
+| The CLI's shell and editor | denied | **enabled** — that is the point |
+| Crewlet's tools | ride the prompt envelope; the engine executes them | reach the run over the [MCP bridge](#the-tool-bridge) |
+| Where it runs | a subprocess of this engine | a sandbox box (`cli.run_in`) |
+| Lifetime | one call, inside the phase | **detached** — outlives the turn, resumes it later |
+| Needs | a login on this host | a login *plus* `providers.sandbox` and a reachable bridge URL |
+
+**Text mode is predictable**: the tool log is the engine's own, every
+call goes through the permission model and redaction, and it works with
+no reachable API. **Agent mode is the vendor's own harness**: a real
+shell, a real editor and a real checkout, which is what makes it worth
+having for code work.
+
+Only the **executor** branches. Every other phase — the reviewer, a
+delegated worker, the summariser, the round-cap judge — is a text call on
+the same entry, and a seat pointing `llm` at an agent-mode entry keeps
+all of them. The reviewer in particular stays native and stays a separate
+model call: the point of a reviewer is that it is not the thing being
+reviewed.
+
+### Agent mode
+
+```yaml
+providers:
+  llm:
+    subscription:
+      type: cli-agent
+      model: sonnet
+      cli:
+        agent: claude-code
+        mode: agent                    # text (default) | agent
+        run_in: direct                 # direct | container | e2b
+```
+
+`run_in` names a cell of [`providers.sandbox`](code-sandbox.md), and it
+sits on the **entry** rather than on the seat because it is a property of
+this runtime: the CLI's subscription login lives on the engine host, so
+`direct` and `container` reach it directly while a remote cell needs the
+headless token instead. Want both? Make two entries and point each seat
+at the one that is right for it — the same way you already choose between
+two models. Empty takes `providers.sandbox.default_run_in`.
+
+An agent-mode run is a **detached coding run** and reuses that machinery
+whole: the executor phase suspends, the run's state goes on a durable row
+in the [coordination store](coordination.md), the completion poll collects
+it, and the *same turn* resumes — possibly in another process on another
+node, days later. Nothing about that is new for agent mode; see
+[Code Sandbox](code-sandbox.md#how-a-coding-task-runs).
+
+#### The tool bridge
+
+The seat's tools cannot be shipped into the box: most are MCP children
+holding the **seat's** credentials, several are engine control, and the
+whole point of a sandbox is that its credentials are not the company's.
+So the box gets exactly one MCP server — on the engine, named `crewlet` —
+and every call comes back out through the *same* `tools.Surface` a native
+loop would call. A tool denied natively is denied there; the skill guard,
+the recording and the failure shape are the ones already tested.
+
+The endpoint is a per-run URL carrying a signed token that expires with
+the run, and the session is closed the moment the run ends, whatever
+ended it. Set **`CREWLET_MCP_BRIDGE_URL`** to a URL a sandbox can reach;
+without it agent mode is **refused** at launch rather than started — a
+coding agent with none of the seat's tools cannot answer anybody, cannot
+touch a ticket and cannot submit its work.
+
+The run ends by calling `submit_work` over that bridge, exactly as a
+native loop ends by calling it locally, so the outcome vocabulary and the
+rescue path are shared. A run that stops without submitting is rescued as
+`incomplete` and judged on its record — the engine never reads the prose
+a CLI happened to end with as a delivery.
+
+Every bridged call is appended to the run's own durable row, bounded at
+200 with the **middle** dropped, because that log is the whole record a
+resume has: the process collecting a run may not be the one that launched
+it, and without it a restart mid-run would leave the reviewer judging a
+turn whose entire tool log is gone.
+
+#### Code work inside the run
+
+A seat whose executor already holds a shell has no use for a second box
+beside it — two filesystems, with the work in the one the turn cannot
+see. That is what [`role.sandbox.run_in: self`](code-sandbox.md#where-code-work-runs)
+names: code work rides the executor's own run, `run_sandbox` refuses with
+a message saying to use the shell it already has, and no second box is
+provisioned. `self` is refused on any other runtime, and is not offerable
+as a company-wide default.
+
+## Tool calls in text mode
 
 Every one of these CLIs has its own tools — file edits, shell, web
-fetch. Crewlet does **not** use them: they run in the CLI's sandbox,
+fetch. In **text mode** Crewlet does **not** use them: they run in the CLI's sandbox,
 invisible to the [tool registry](../guides/tools-and-mcp.md), the
 permission model, secret redaction, and the event stream. Routing agent
 work through them would fork the engine's tool surface in two.
@@ -410,6 +507,8 @@ providers:
       model: sonnet                    # passed to the CLI's --model
       cli:
         agent: claude-code             # or codex | gemini-cli | opencode | …
+        mode: text                     # text (default) | agent — see above
+        run_in: ""                     # agent mode only: direct | container | e2b
 
         state_dir: /var/lib/crewlet/llm-cli/claude
         # Where credentials and per-seat homes live. Empty uses

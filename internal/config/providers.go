@@ -521,6 +521,43 @@ var CLIAgentNames = []string{
 	"opencode", "cursor-agent", "copilot", "grok", "custom",
 }
 
+// CLIAgentMode is HOW the engine uses a coding CLI.
+//
+// # Two genuinely different things wearing one config block
+//
+// A coding CLI is an agent. Driving it as a text model — one prompt in, one
+// answer out, its own tools denied — spends a whole agentic runtime to get a
+// completion, and it is the right trade only because Crewlet's own tool loop
+// is doing the agency: the tools ride the prompt envelope, the engine executes
+// them, and everything an operator reads about a turn comes from that loop.
+//
+// AGENT MODE gives the agency back. The CLI runs the executor itself: its loop
+// drives the model, its own shell and editor are enabled, and the seat's tools
+// reach it over the MCP bridge (internal/api/mcpbridge) so a bridged call is
+// the same frame a native loop would call. The engine's job becomes handing
+// that loop a brief and collecting what it did.
+//
+// The mode is NOT inferred, and the reason is that both are defensible for the
+// same CLI on the same seat. Text mode is predictable, its tool log is the
+// engine's own, and it works with no reachable API. Agent mode is faster on
+// real code work and gets the vendor's own harness — at the cost of a run that
+// outlives its turn and a tool surface reached over the network.
+type CLIAgentMode string
+
+const (
+	// CLIModeText drives the CLI as a text model behind the engine's own
+	// tool loop. The default, and what every cli-agent entry meant before
+	// agent mode existed.
+	CLIModeText CLIAgentMode = "text"
+
+	// CLIModeAgent runs the seat's executor AS the CLI's own agentic run,
+	// detached, with the seat's tools bridged in over MCP.
+	CLIModeAgent CLIAgentMode = "agent"
+)
+
+// CLIAgentModes is the closed set.
+var CLIAgentModes = []CLIAgentMode{CLIModeText, CLIModeAgent}
+
 // CLIAgentAuthMode is how a cli-agent provider authenticates.
 type CLIAgentAuthMode string
 
@@ -567,6 +604,23 @@ type CLIAgentAuth struct {
 type CLIAgent struct {
 	// Agent is which CLI to drive.
 	Agent string `yaml:"agent,omitempty" json:"agent,omitempty" desc:"Which coding CLI to drive."`
+
+	// Mode is text (the default) or agent. See [CLIAgentMode].
+	Mode CLIAgentMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=text|agent" desc:"text (a model behind the engine's tool loop) or agent (the CLI runs the executor)."`
+
+	// RunIn is WHERE an agent-mode run happens, naming a cell of
+	// providers.sandbox. Empty takes the catalogue's default.
+	//
+	// On the entry rather than on the seat, because it is a property of
+	// this RUNTIME: the CLI's subscription login lives on the engine host,
+	// so `direct` and `container` reach it directly and a remote cell
+	// needs the headless token instead. An operator who wants both makes
+	// two entries and points seats at whichever one is right for them —
+	// which is also how they already choose between two models.
+	//
+	// Read only in agent mode; a value here in text mode configures
+	// nothing and is refused.
+	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where an agent-mode run happens. Empty = providers.sandbox.default_run_in."`
 
 	// StateDir is where this provider keeps its credential directory and
 	// its per-seat homes. Empty derives one per key, so unrelated
@@ -709,8 +763,27 @@ func (c *CLIAgent) validate(path string) error {
 		p.add(at(path, "auth.mode"), ErrUnknownValue, "%q (want %s)",
 			c.Auth.Mode, names(CLIAgentAuthModes))
 	}
+	switch {
+	case c.Mode != "" && !oneOf(c.Mode, CLIAgentModes):
+		p.add(at(path, "mode"), ErrUnknownValue, "%q (want %s)",
+			c.Mode, names(CLIAgentModes))
+	case c.RunIn != "" && !c.AgentMode():
+		// A value that means nothing where it is written. In text mode
+		// the CLI is a subprocess of this engine and there is no cell to
+		// choose — an operator who wrote one meant to switch modes.
+		p.add(at(path, "run_in"), ErrConflict,
+			"only agent mode runs somewhere: a text-mode CLI is a subprocess of "+
+				"this engine. Set `mode: agent`, or remove the field")
+	case c.RunIn != "" && !oneOf(c.RunIn, Placements):
+		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
+			c.RunIn, names(Placements))
+	}
 	return p.err()
 }
+
+// AgentMode reports whether this entry runs the executor as the CLI's own
+// agentic run.
+func (c *CLIAgent) AgentMode() bool { return c != nil && c.Mode == CLIModeAgent }
 
 // ---- embeddings ------------------------------------------------------ //
 

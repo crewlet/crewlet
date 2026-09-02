@@ -243,6 +243,12 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 			Ceiling: te.OnboardingMaxToolRoundsCeiling,
 		},
 		Resume: in.Resume,
+		// The executor's RUNTIME: nil for the native tool loop, non-nil
+		// for a coding CLI in agent mode. Supplied by the caller rather
+		// than resolved here, because building it needs the engine and
+		// the turn — and there is one helper behind both call sites, so
+		// a turn cannot change runtime by being resumed.
+		AgentRun: in.AgentRun,
 	})
 }
 
@@ -291,6 +297,13 @@ type RunnerInput struct {
 	// rather than epoch configuration.
 	Publisher queue.Publisher
 	Turn      runner.Turn
+
+	// AgentRun runs this turn's executor as a coding CLI's own agentic
+	// run. Nil is the native tool loop. Built by [Engine.agentRunFor],
+	// which BOTH RunnerFor call sites use — a turn whose executor ran as
+	// an agentic loop and came back to a native one would rebuild a
+	// surface for a conversation that never existed.
+	AgentRun runner.AgentLauncher
 
 	// Markers and Latch drive the first-turn onboarding pass. Nil markers
 	// disable it: without somewhere to mark, the pass would run every turn

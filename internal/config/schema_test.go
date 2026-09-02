@@ -74,7 +74,13 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"LLMProvider", "type", strs(LLMProviderTypes)},
 		{"LLMProvider", "reasoning_effort", strs(ReasoningEfforts)},
 		{"EmbeddingProvider", "type", strs(EmbeddingProviderTypes)},
-		{"SandboxProvider", "default_run_in", strs(Placements)},
+		// TWO DIFFERENT CLOSED SETS, deliberately. A seat may name `self`
+		// — code work inside its own agent-mode executor run — and a
+		// company default may not, because it would silently turn code
+		// work off for every seat that is not in agent mode.
+		{"SandboxProvider", "default_run_in", strs(BackendPlacements())},
+		{"CLIAgent", "run_in", strs(BackendPlacements())},
+		{"CLIAgent", "mode", strs(CLIAgentModes)},
 		{"SandboxProvider", "default_coding_agent", strs(CodingAgents)},
 		{"RoleSandbox", "run_in", strs(Placements)},
 		{"LocalSandbox", "runtime", strs(ContainerRuntimes)},

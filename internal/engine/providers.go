@@ -194,6 +194,7 @@ func buildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver, apiK
 		// "${VAR}", and the CLI would reject a model by that name.
 		Model:            r.Value(spec.Model),
 		Agent:            cli.Name(),
+		AgentMode:        cli.AgentMode(),
 		StateDir:         stateDir,
 		Overrides:        cli.Overrides,
 		Timeout:          time.Duration(cli.Timeout() * float64(time.Second)),

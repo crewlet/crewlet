@@ -387,7 +387,7 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 	}
 	c.eachRole(func(path string, role *Role) {
 		gate := role.Sandbox
-		if gate == nil || !gate.Enabled || gate.RunIn == "" {
+		if gate == nil || !gate.Enabled || gate.RunIn == "" || !gate.RunIn.NeedsBackend() {
 			return
 		}
 		if _, seen := reached[gate.RunIn]; !seen {
@@ -395,6 +395,37 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 		}
 	})
 	return reached
+}
+
+// ExecutorProvider is the providers.llm entry a seat's EXECUTOR actually runs
+// on, resolved exactly as the phase registry resolves it: the seat's own `llm`
+// keys, then the entry called "default", then the first provider in
+// declaration order.
+//
+// A SECOND RESOLUTION OF THE SAME QUESTION, and normally that is the mistake
+// this codebase spends most of its rules on — but the registry's needs a
+// BUILT provider per key, which exists only once a company is constructed, and
+// this has to answer during validation, where the answer's whole value is
+// catching the mistake before anything is built. The two are held together by
+// a test that walks the same fallbacks. What must never happen is this one
+// growing a rule the registry does not have.
+//
+// The second return is false when the company configures no provider at all,
+// which the registry refuses at construction and this must not crash on.
+func (c *Company) ExecutorProvider(role *Role) (string, LLMProvider, bool) {
+	order := c.Providers.ProviderOrder()
+	if len(order) == 0 {
+		return "", LLMProvider{}, false
+	}
+	for _, key := range role.LLM.Default {
+		if entry, ok := c.Providers.LLM[key]; ok {
+			return key, entry, true
+		}
+	}
+	if entry, ok := c.Providers.LLM["default"]; ok {
+		return "default", entry, true
+	}
+	return order[0], c.Providers.LLM[order[0]], true
 }
 
 // validateSandboxPlacement holds the rules that need BOTH the catalogue and
@@ -425,6 +456,25 @@ func (c *Company) validateSandboxPlacement() error {
 			return
 		}
 		run := gate.RunIn
+		if run == PlacementSelf {
+			// CODE WORK INSIDE THE EXECUTOR'S OWN RUN, which only exists
+			// when that executor is a coding CLI in agent mode. On any
+			// other runtime the seat has no shell of its own, so `self`
+			// would read as a working choice and turn code work off — a
+			// seat that plans around a sandbox it is never offered, with
+			// nothing anywhere saying why.
+			key, entry, resolved := c.ExecutorProvider(role)
+			if resolved && !entry.CLI.AgentMode() {
+				p.add(where, ErrConflict,
+					"`self` means code work rides this seat's own executor run, "+
+						"which only a coding CLI in agent mode has. This seat's "+
+						"executor is providers.llm.%s. Set `mode: agent` on a "+
+						"cli-agent entry and point the seat at it, or name a "+
+						"cell the catalogue configures (%s)",
+					key, names(catalogue.available()))
+			}
+			return
+		}
 		if run == "" {
 			run = catalogue.RunIn()
 		}

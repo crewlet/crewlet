@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -166,11 +167,29 @@ func runnerWithModels(t *testing.T, entries []phase.Entry) *runner.Runner {
 	return r
 }
 
+// buildOpts are the knobs a test varies on the shared fixture. Zero is the
+// native tool loop with somebody waiting, which is what most tests want.
+type buildOpts struct {
+	reply    turn.Reply
+	agentRun runner.AgentLauncher
+	resume   *runner.Resume
+	pub      queue.Publisher
+}
+
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
 	t.Helper()
 	waiting := turn.ReplyTool
 	if len(reply) > 0 {
 		waiting = reply[0]
+	}
+	return buildWith(t, entries, buildOpts{reply: waiting})
+}
+
+func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Runner, *tools.Registry) {
+	t.Helper()
+	waiting := opts.reply
+	if waiting == "" {
+		waiting = turn.ReplyTool
 	}
 	reg := tools.NewRegistry()
 	for _, tl := range []stubTool{{name: "lookup_colleague"}, {name: "reflect"}} {
@@ -214,12 +233,16 @@ func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Ru
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 
 	r, err := runner.New(runner.Config{
-		Seat:     prompts.Seat{Org: organization, Role: role},
-		Registry: reg,
-		Models:   models,
-		Caps:     runner.Caps{ExecutorRounds: 6},
-		Task:     "post the weekly summary",
-		Reply:    waiting,
+		Seat:      prompts.Seat{Org: organization, Role: role},
+		Registry:  reg,
+		Models:    models,
+		Caps:      runner.Caps{ExecutorRounds: 6},
+		Task:      "post the weekly summary",
+		Reply:     waiting,
+		AgentRun:  opts.agentRun,
+		Resume:    opts.resume,
+		Publisher: opts.pub,
+		Turn:      runner.Turn{ID: "t-1", AgentID: "a-1"},
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
