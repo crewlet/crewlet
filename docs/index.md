@@ -43,7 +43,7 @@ How the engine works, one subsystem per page:
 - **[Organization Model](concepts/organization-model.md)** — Hierarchy, departments, teams, roles (seats), handles
 - **[Humans in the Org Chart](concepts/humans-in-the-org.md)** — Human seats (`kind: human`): hierarchy membership, contact identities, notify delivery, escalation terminus, prompts and lookup
 - **[Agent Runtime](concepts/agent-runtime.md)** — Agent lifecycle, states, execution model, graceful shutdown
-- **[Turn Engine](concepts/turn-engine.md)** — Per-agent executor / reviewer loop, how the engine decides a turn delivered, sub-agents, colleague-surface tools, per-phase LLM models
+- **[Turn Engine](concepts/turn-engine.md)** — Per-agent executor / reviewer loop, how the engine decides a turn delivered, delegating to workers, colleague-surface tools, per-phase LLM models
 - **[Subscription LLM Backends](concepts/subscription-llm-backends.md)** — Run agents on a coding CLI you already subscribe to (Claude Code, Codex, Gemini CLI, OpenCode, …) instead of a metered API key: per-seat state isolation, the in-prompt tool-call channel, `crewlet llm login`, falling back to a key when the window is spent, and the other shape — an OAuth proxy behind an ordinary HTTP entry, and what that moves onto you
 - **[Code Sandbox](concepts/code-sandbox.md)** — Sandboxed coding-agent execution: the `run_sandbox` tool, E2B cloud/self-hosted, local boxes (direct or containerised, on a subscription login), Claude Code & OpenCode runners, git-auth recipes, mid-run clarifications
 - **[Tool Skills](concepts/tool-skills.md)** — Knowledge-base-sourced prompt fragments (Confluence pages) that teach agents *how to use* each tool / MCP server

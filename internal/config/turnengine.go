@@ -1,9 +1,7 @@
 package config
 
-// TurnEngine configures the Plan/Execute/Review turn engine: three phases
-// per agent turn, where Plan produces an execution plan, Execute runs the
-// tool surface that plan named, and Review decides whether the turn is
-// done, should iterate, or should hand off to a colleague.
+// TurnEngine configures the two-stage turn: an executor that decides and acts
+// in one agentic loop, and a reviewer that judges the record it left.
 //
 // Almost every field here is a CAP, and every cap is a trade between a turn
 // that gives up too early and one that burns a budget thrashing. The
@@ -16,36 +14,17 @@ package config
 // the company on the first guard check, with nothing in the file looking
 // wrong. Hence the bounds below.
 type TurnEngine struct {
-	// MaxIterations caps Plan-Execute-Review rounds per turn. Review
-	// returning self_iterate increments it; on breach the turn is
-	// terminated as failed with a guard-breach event.
-	MaxIterations int `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty" js:"min=0" desc:"Plan/Execute/Review iterations per turn."`
+	// MaxIterations caps execute-review rounds per turn. Review returning
+	// self_iterate increments it; on breach the turn is terminated as
+	// failed with a guard-breach event.
+	MaxIterations int `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty" js:"min=0" desc:"Execute/review iterations per turn."`
 
-	// SubagentMaxTurns caps the tool rounds one ephemeral sub-agent may
-	// run. A parent asking for more is clamped, never refused.
-	SubagentMaxTurns int `yaml:"subagent_max_turns,omitempty" json:"subagent_max_turns,omitempty" js:"min=0" desc:"Tool rounds one sub-agent may run."`
-
-	// SubagentTimeoutSeconds bounds one sub-agent invocation. Fractional
-	// so a test can ask for half a second without integer truncation.
-	SubagentTimeoutSeconds float64 `yaml:"subagent_timeout_seconds,omitempty" json:"subagent_timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one sub-agent."`
-
-	// SubagentBudgetFraction is the share of the parent turn's REMAINING
-	// token budget a sub-agent may consume. For a batched spawn it is the
-	// total slice shared across all children, not per child.
-	SubagentBudgetFraction float64 `yaml:"subagent_budget_fraction,omitempty" json:"subagent_budget_fraction,omitempty" js:"min=0;max=1" desc:"Share of the parent's remaining budget a sub-agent may use."`
-
-	// SubagentMaxParallel caps concurrency within one batched spawn;
-	// children beyond it run as earlier ones finish.
-	SubagentMaxParallel int `yaml:"subagent_max_parallel,omitempty" json:"subagent_max_parallel,omitempty" js:"min=0" desc:"Sub-agents run concurrently in one batch."`
-
-	// SubagentBatchTimeoutSeconds bounds a whole batch; each child also
-	// has its own timeout.
-	SubagentBatchTimeoutSeconds float64 `yaml:"subagent_batch_timeout_seconds,omitempty" json:"subagent_batch_timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on a whole batched spawn."`
-
-	// SubagentMinPerChildTokens floors the per-child slice. If the total
-	// divided across the requested children falls below it, the batch is
-	// refused up front rather than starving every child.
-	SubagentMinPerChildTokens int `yaml:"subagent_min_per_child_tokens,omitempty" json:"subagent_min_per_child_tokens,omitempty" js:"min=0" desc:"Floor on a child's token slice; below it the batch is refused."`
+	// Delegation bounds every `delegate` call: how many workers run at
+	// once, how much of the turn's budget they may spend between them, and
+	// how long any of it may take. Nested here rather than beside the
+	// top-level workers: block because these are the engine's CAPS and
+	// that block is authored content — see [Delegation].
+	Delegation Delegation `yaml:"delegation,omitempty" json:"delegation"`
 
 	// DelegationDepthLimit caps colleague-to-colleague chains. A turn
 	// triggered by another agent inherits its depth plus one; on breach
@@ -103,14 +82,9 @@ type TurnEngine struct {
 // DefaultTurnEngine is the turn engine's shipped defaults.
 func DefaultTurnEngine() TurnEngine {
 	return TurnEngine{
-		MaxIterations:               3,
-		SubagentMaxTurns:            20,
-		SubagentTimeoutSeconds:      120,
-		SubagentBudgetFraction:      0.2,
-		SubagentMaxParallel:         3,
-		SubagentBatchTimeoutSeconds: 120,
-		SubagentMinPerChildTokens:   500,
-		DelegationDepthLimit:        3,
+		MaxIterations:        3,
+		Delegation:           DefaultDelegation(),
+		DelegationDepthLimit: 3,
 		// 24 = the 16 the planner had plus the 20 the actor had, minus
 		// the round each spent on its own submission and the re-reads the
 		// actor made of what the planner had already fetched. One
@@ -143,8 +117,6 @@ func (t *TurnEngine) validate(path string) error {
 		value int
 	}{
 		{"max_iterations", t.MaxIterations},
-		{"subagent_max_turns", t.SubagentMaxTurns},
-		{"subagent_max_parallel", t.SubagentMaxParallel},
 		{"delegation_depth_limit", t.DelegationDepthLimit},
 		{"max_tool_rounds", t.MaxToolRounds},
 		{"extension_round_step", t.ExtensionRoundStep},
@@ -161,7 +133,6 @@ func (t *TurnEngine) validate(path string) error {
 		name  string
 		value int
 	}{
-		{"subagent_min_per_child_tokens", t.SubagentMinPerChildTokens},
 		{"sandbox_min_budget_tokens", t.SandboxMinBudgetTokens},
 		// 0 is meaningful here: it disables the dedicated onboarding pass.
 		{"onboarding_max_tool_rounds", t.OnboardingMaxToolRounds},
@@ -172,34 +143,7 @@ func (t *TurnEngine) validate(path string) error {
 		}
 	}
 
-	timeouts := []struct {
-		name  string
-		value float64
-	}{
-		{"subagent_timeout_seconds", t.SubagentTimeoutSeconds},
-		{"subagent_batch_timeout_seconds", t.SubagentBatchTimeoutSeconds},
-	}
-	for _, f := range timeouts {
-		if f.value <= 0 {
-			p.add(at(path, f.name), ErrOutOfRange,
-				"must be positive, got %v — a non-positive timeout expires "+
-					"before the work starts", f.value)
-		}
-	}
-
-	fractions := []struct {
-		name  string
-		value float64
-	}{
-		{"subagent_budget_fraction", t.SubagentBudgetFraction},
-	}
-	for _, f := range fractions {
-		if f.value <= 0 || f.value > 1 {
-			p.add(at(path, f.name), ErrOutOfRange,
-				"must be a fraction in (0, 1], got %v — it is a SHARE of the "+
-					"parent's remaining budget, not a token count", f.value)
-		}
-	}
+	p.wrap(t.Delegation.validate(at(path, "delegation")))
 
 	// A ceiling below its own base is not a smaller budget, it is a
 	// contradiction: the phase starts above the ceiling the judge may

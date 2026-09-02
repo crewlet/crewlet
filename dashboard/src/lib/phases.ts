@@ -97,8 +97,16 @@ export interface PhaseRecord {
   conversationKey: string;
   toolsAvailable: string[];
   toolCatalogue: string[];
+  /** The named worker behind this call: a learning worker on an
+      `auxiliary` phase, a delegate template on a `subagent` one. */
   worker: string;
+  /** A delegated task's own id, as the executor wrote it. `subagent` only. */
+  taskId: string;
+  /** The phase this one ran UNDER — `execute` for a worker or a judge.
+      Empty on a turn's own phases. */
   hostPhase: string;
+  /** The iteration of that host phase. */
+  hostIteration: number;
   backend: string;
   codingAgent: string;
   trigger: { type?: string; summary?: string; actor?: string; integration?: string } | null;
@@ -234,8 +242,20 @@ function promptRole(messages: PromptMessage[] | null | undefined, role: string):
   return "";
 }
 
-export function phaseKey(turnId: string, phase: string, iteration: number): string {
-  return `${turnId}|${phase}|${iteration}`;
+/**
+ * A phase's identity: `turn|phase|iteration`, plus the task id where there
+ * is one.
+ *
+ * THE TASK ID IS NOT OPTIONAL for a delegated worker. A `delegate` call of
+ * eight runs eight `subagent` phases in one executor round, and without it
+ * they share one key — so the map keeps the last one to arrive and seven
+ * workers, their prompts, their tools and their failures simply are not on
+ * the page. A turn's own phases have no task id and keep the three-part key
+ * they have always had.
+ */
+export function phaseKey(turnId: string, phase: string, iteration: number, taskId = ""): string {
+  const base = `${turnId}|${phase}|${iteration}`;
+  return taskId ? `${base}|${taskId}` : base;
 }
 
 /** A phase still running, from a seat's live overlay. */
@@ -275,7 +295,9 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     toolsAvailable: [],
     toolCatalogue: [],
     worker: "",
+    taskId: "",
     hostPhase: "",
+    hostIteration: 0,
     backend: "",
     codingAgent: "",
     trigger: (call.trigger as PhaseRecord["trigger"]) ?? null,
@@ -292,8 +314,9 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
   const phase = String(p.phase ?? "");
   const turnId = String(p.turn_id ?? "");
   const iteration = num(p.iteration);
+  const taskId = String(p.task_id ?? "");
   return {
-    key: phaseKey(turnId, phase, iteration),
+    key: phaseKey(turnId, phase, iteration, taskId),
     turnId,
     phase,
     iteration,
@@ -325,7 +348,9 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     toolsAvailable: Array.isArray(p.tools_available) ? (p.tools_available as string[]) : [],
     toolCatalogue: Array.isArray(p.tool_catalogue) ? (p.tool_catalogue as string[]) : [],
     worker: String(p.worker ?? ""),
+    taskId,
     hostPhase: String(p.host_phase ?? ""),
+    hostIteration: num(p.host_iteration),
     backend: String(p.backend ?? ""),
     codingAgent: String(p.coding_agent ?? ""),
     trigger: (p.trigger as PhaseRecord["trigger"]) ?? null,
@@ -364,7 +389,16 @@ export function mergePhases(stored: PhaseRecord[], live: PhaseRecord[]): PhaseRe
 export interface TurnGroup {
   turnId: string;
   role: string;
+  /** The turn's OWN phases, in the order they ran. A nested call is not
+      here — it hangs off the phase that made it, see `nested`. */
   phases: PhaseRecord[];
+  /** Nested calls keyed by the key of the phase that made them: the
+      workers a `delegate` call ran, the round-cap judge, a learning
+      worker. `host_phase` and `host_iteration` have always been on the
+      wire and nothing read them, so a fan-out of eight rendered as eight
+      siblings of the turn's own two phases and the reader had to work out
+      which round each belonged to. */
+  nested: Map<string, PhaseRecord[]>;
   /** The newest instant in the group — what the group is ordered by. */
   at: string;
   /** When the turn's OLDEST phase began. Never moves; `at` does. */
@@ -394,6 +428,20 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
         if (ai !== bi) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
         return tsKey(a.at) - tsKey(b.at);
       });
+      // A NESTED call belongs UNDER the phase that made it. It is split
+      // out here rather than filtered at render time so every consumer —
+      // the card, the trace tree, the counts — agrees about what a turn's
+      // phases are.
+      const own: PhaseRecord[] = [];
+      const nested = new Map<string, PhaseRecord[]>();
+      for (const rec of ordered) {
+        if (!rec.hostPhase) {
+          own.push(rec);
+          continue;
+        }
+        const host = phaseKey(rec.turnId, rec.hostPhase, rec.hostIteration);
+        nested.set(host, [...(nested.get(host) ?? []), rec]);
+      }
       const at = ordered.reduce((max, r) => (tsKey(r.at) > tsKey(max) ? r.at : max), "");
       // The EARLIEST start across the turn's phases. A turn is "running for"
       // as long as its first phase has been going, not its newest round.
@@ -404,7 +452,8 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
       return {
         turnId,
         role: ordered[0]?.role ?? "",
-        phases: ordered,
+        phases: own,
+        nested,
         at,
         startedAt,
         live: ordered.some((r) => r.live),

@@ -228,6 +228,73 @@ turn_engine:
   extension_round_step: 8                 # max rounds the judge may grant per call
   # llm_judge per role is not set — the judge falls back to the role's
   # main ``llm`` (here: the org-wide ``default`` provider).
+  # Delegation bounds are left at their defaults here; the two templates
+  # below are what a seat actually reaches for.
+
+# Worker templates — the reusable delegates a seat's executor hands work
+# to with ``delegate``.  A template holds the half of a worker that does
+# not change per task (persona, tools, model, answer shape) so the seat
+# writes only the task itself.  NAMING A TOOL HERE GRANTS NOTHING: every
+# name still passes the worker filter — the caller's own live tools,
+# minus the engine-control denylist, minus anything that writes to a
+# shared surface.  See docs/concepts/turn-engine.md#workers.
+workers:
+  researcher:
+    description: >-
+      reads the team's Confluence pages and reports what they actually
+      say, with the page titles it read
+    system_prompt: |
+      You research a narrow question against the team's knowledge base.
+
+      Report only what you can point at. Where the pages do not answer
+      the question, say so plainly rather than filling the gap — the
+      agent that delegated this cannot tell your inference from what a
+      page said, and will act on both.
+    tools: [confluence_search, confluence_get_page]
+    max_turns: 10
+    output:
+      type: object
+      properties:
+        findings:
+          type: string
+          description: What the pages say about the question, in your own words.
+        sources:
+          type: array
+          items: {type: string}
+          description: The titles of the pages you actually read.
+        gaps:
+          type: string
+          description: What the question asked that the pages do not answer.
+      required: [findings]
+
+  synthesist:
+    description: >-
+      reconciles several workers' findings into one recommendation with
+      its open questions
+    system_prompt: |
+      You are given other workers' answers as your input. Reconcile them
+      into one recommendation.
+
+      Where they disagree, say so and say which you believe and why —
+      the agent reading you has to act on ONE answer, and averaging two
+      contradictory ones produces a third that neither worker supports.
+    # No ``tools:`` at all — a synthesist reasons over what it was given.
+    # A worker with no tools cannot go looking for anything, and that
+    # bound is worth having on purpose.
+    max_turns: 4
+    output:
+      type: object
+      properties:
+        recommendation:
+          type: string
+          description: The single answer the parent should act on.
+        disagreements:
+          type: string
+          description: Where the inputs conflicted, and which you believed.
+        open_questions:
+          type: string
+          description: What nobody answered and somebody has to.
+      required: [recommendation]
 
 # Agent-learning subsystem — episodic memory, reflection, skill
 # synthesis/refinement/promotion, counterparty profiling.  Auto-disables

@@ -596,7 +596,7 @@ here.
 | Seat leases, placement, acquire and release | `internal/seat`, `internal/node` | [Seat ownership](seat-ownership.md) |
 | Leases, buckets, the three-valued answer | `internal/coord` | [Coordination](coordination.md) |
 | The activation pointer and node postures | `internal/configplane` | [Control plane](control-plane.md) |
-| The executor/reviewer loop, sub-agents | `internal/agent/turn`, `runner`, `toolloop` | [Turn engine](turn-engine.md) · [Agent runtime](agent-runtime.md) |
+| The executor/reviewer loop, workers | `internal/agent/turn`, `runner`, `toolloop`, `subagent` | [Turn engine](turn-engine.md) · [Agent runtime](agent-runtime.md) |
 | The tool registry, MCP children, A2A | `internal/tools`, `internal/mcp`, `internal/a2a` | [Tools & MCP](../guides/tools-and-mcp.md) · [Tool capabilities](tool-capabilities.md) |
 | Knowledge-base-sourced prompt fragments | `internal/agent/skills` | [Tool skills](tool-skills.md) |
 | Live knowledge search | `internal/knowledge` | [Knowledge system](knowledge-system.md) |

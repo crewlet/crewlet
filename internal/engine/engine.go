@@ -195,6 +195,7 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 		return nil, fmt.Errorf("engine: %q is not an agent seat in this company", handle)
 	}
 	te := c.Config.TurnEngine
+	del := te.Delegation
 	return runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: c.Org, Role: role},
 		Registry: c.ToolsFor(handle),
@@ -207,19 +208,25 @@ func (c *Company) RunnerFor(handle string, in RunnerInput) (*runner.Runner, erro
 		},
 		Budget: in.Budget,
 		Judge:  in.Judge,
-		// The company's own sub-agent caps, from the SAME pinned epoch as
-		// the round caps above, so a revision landing mid-turn cannot move
-		// a cap a spawn is judged against. Every one of these six was
-		// declared, defaulted, validated, schema'd and read by nobody.
+		// The company's own delegation caps AND the seat's visible worker
+		// templates, from the SAME pinned epoch as the round caps above,
+		// so a revision landing mid-turn cannot move a cap a call is
+		// judged against or add a worker to a graph that is already
+		// planned.
 		Subagent: &runner.SubagentConfig{
 			Limits: subagent.Limits{
-				MaxTurns:          te.SubagentMaxTurns,
-				Timeout:           seconds(te.SubagentTimeoutSeconds),
-				BatchTimeout:      seconds(te.SubagentBatchTimeoutSeconds),
-				MaxParallel:       te.SubagentMaxParallel,
-				BudgetFraction:    te.SubagentBudgetFraction,
-				MinPerChildTokens: te.SubagentMinPerChildTokens,
+				MaxTurns:         del.MaxTurns,
+				MaxTasksPerCall:  del.MaxTasksPerCall,
+				TaskTimeout:      seconds(del.TaskTimeoutSeconds),
+				CallTimeout:      seconds(del.CallTimeoutSeconds),
+				MaxParallel:      del.MaxParallel,
+				BudgetFraction:   del.BudgetFraction,
+				MinTokensPerTask: del.MinTokensPerTask,
 			},
+			// CLONED, because the live config cell is replaced wholesale
+			// by an apply and a turn holding the old map would otherwise
+			// be reading a schema the next apply is free to mutate.
+			Workers:   config.CloneWorkers(c.Config.WorkersFor(handle)),
 			Remaining: in.Remaining,
 		},
 		Task:         in.Task,

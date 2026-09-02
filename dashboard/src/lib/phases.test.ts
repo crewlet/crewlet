@@ -389,3 +389,70 @@ describe("a round being written is not a round that is finished", () => {
     expect(ledger.every((r) => !r.streaming)).toBe(true);
   });
 });
+
+describe("delegated workers", () => {
+  // EIGHT WORKERS IN ONE ROUND SHARE turn|phase|iteration. Without the task
+  // id in the key the map keeps the last one to arrive, and seven workers —
+  // their prompts, their tools, their failures — are simply not on the page.
+  test("every worker of one call keeps its own row", () => {
+    const call = [1, 2, 3].map((n) =>
+      fromPhaseEvent(
+        phaseEvent({
+          phase: "subagent",
+          iteration: 1,
+          task_id: `task-${n}`,
+          worker: "researcher",
+          host_phase: "execute",
+          host_iteration: 1,
+        }),
+      ),
+    );
+    const keys = new Set(call.map((r) => r!.key));
+    expect(keys.size).toBe(3);
+  });
+
+  // A NESTED CALL BELONGS UNDER THE PHASE THAT MADE IT. host_phase and
+  // host_iteration have always been on the wire and nothing read them, so a
+  // fan-out rendered as siblings of the turn's own phases and the reader had
+  // to work out which round each belonged to.
+  test("workers hang off their host phase, not beside it", () => {
+    const exec = fromPhaseEvent(
+      phaseEvent({ phase: "execute", iteration: 1 }, "2026-01-01T00:00:02Z"),
+    )!;
+    const review = fromPhaseEvent(
+      phaseEvent({ phase: "review", iteration: 1 }, "2026-01-01T00:00:09Z"),
+    )!;
+    const workers = ["a", "b"].map((id) =>
+      fromPhaseEvent(
+        phaseEvent(
+          {
+            phase: "subagent",
+            iteration: 1,
+            task_id: id,
+            host_phase: "execute",
+            host_iteration: 1,
+          },
+          "2026-01-01T00:00:05Z",
+        ),
+      )!,
+    );
+
+    const [group] = groupTurns([exec, review, ...workers]);
+    // The turn's OWN phases are the two it ran.
+    expect(group?.phases.map((p) => p.phase)).toEqual(["execute", "review"]);
+    const nested = group?.nested.get(phaseKey("t1", "execute", 1)) ?? [];
+    expect(nested.map((p) => p.taskId)).toEqual(["a", "b"]);
+    // And nothing hangs off the phase that made no calls.
+    expect(group?.nested.get(phaseKey("t1", "review", 1))).toBeUndefined();
+  });
+
+  // A TURN'S OWN PHASES KEEP THE THREE-PART KEY they have always had, so a
+  // live call and its completed event still resolve to one row.
+  test("a phase with no task id keeps its original identity", () => {
+    expect(phaseKey("t1", "execute", 1)).toBe("t1|execute|1");
+    expect(phaseKey("t1", "subagent", 1, "gather")).toBe("t1|subagent|1|gather");
+    const live = fromLiveCall(liveCall({ phase: "execute", iteration: 1 }), "PM");
+    const done = fromPhaseEvent(phaseEvent({ phase: "execute", iteration: 1 }))!;
+    expect(live.key).toBe(done.key);
+  });
+});

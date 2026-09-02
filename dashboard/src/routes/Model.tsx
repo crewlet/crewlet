@@ -44,7 +44,10 @@ const PAGE = 60;
 // Stable identity for the settled list. Named rather than inline so the
 // hook's dependencies do not change identity on every render.
 const phaseRecordKey = (r: PhaseRecord) => r.key;
-const PHASES = ["execute", "review", "onboarding", "subagent", "auxiliary"] as const;
+// Every phase the engine emits, the turn's own two first. A phase left off
+// this row is one nobody can filter to, which on this screen means its cost
+// is only ever visible inside the "all phases" total.
+const PHASES = ["execute", "review", "onboarding", "subagent", "auxiliary", "judge"] as const;
 
 export function ModelActivity() {
   const { socket } = useClient();

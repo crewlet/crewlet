@@ -447,6 +447,11 @@ type Role struct {
 	// somewhere else — and LLM is what that work runs on.
 	LLMSandbox ProviderKeys `yaml:"llm_sandbox,omitempty" json:"llm_sandbox,omitzero"`
 
+	// Workers narrows which of the company's delegate templates this seat
+	// may hand work to. Empty means every one — see config.Role.Workers,
+	// which is where the rule and its reason live.
+	Workers []string `yaml:"workers,omitempty" json:"workers,omitempty"`
+
 	// LearningEnabled overrides the system-wide learning setting for this
 	// seat. Unset inherits it; false skips every reflection worker for this
 	// seat's turns while still writing episodes, which are cheap and useful
@@ -530,6 +535,7 @@ func (r *Role) humanForbidden() []string {
 		{"llm_sandbox", len(r.LLMSandbox) > 0},
 		{"sandbox", r.Sandbox != nil},
 		{"token_budget", r.TokenBudget != 0},
+		{"workers", len(r.Workers) > 0},
 		{"learning_enabled", r.LearningEnabled.IsSet()},
 		{"schedules", len(r.Schedules) > 0},
 		{"slack", !r.Slack.IsZero()},

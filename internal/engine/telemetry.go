@@ -149,17 +149,25 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// one-line row names. The per-phase models are carried beside it
 		// rather than collapsed, because a seat with a fallback chain can
 		// legitimately have run three phases on three models.
-		Model:           lastModel(spend),
-		Trigger:         t.trigger,
-		Prompt:          t.trigger.Summary,
-		Response:        res.Artifact,
-		InputTokens:     spend.InputTokens,
-		OutputTokens:    spend.OutputTokens,
-		TotalTokens:     spend.Total(),
-		ToolExecutions:  spend.ToolExecutions,
-		TurnID:          workKey,
-		ExecuteModel:    spend.ExecuteModel,
-		ReviewModel:     spend.ReviewModel,
+		Model:          lastModel(spend),
+		Trigger:        t.trigger,
+		Prompt:         t.trigger.Summary,
+		Response:       res.Artifact,
+		InputTokens:    spend.InputTokens,
+		OutputTokens:   spend.OutputTokens,
+		TotalTokens:    spend.Total(),
+		ToolExecutions: spend.ToolExecutions,
+		TurnID:         workKey,
+		ExecuteModel:   spend.ExecuteModel,
+		ReviewModel:    spend.ReviewModel,
+		// What this turn DELEGATED, beside what it spent itself. Kept
+		// apart from TotalTokens on purpose: a worker's tokens are
+		// already charged through the shared meter, so folding them in
+		// would double-count them — and the split is the only thing that
+		// answers "how much of this turn was fan-out" when a seat's spend
+		// jumps and its own rounds did not.
+		SubagentCount:   spend.Workers,
+		SubagentTokens:  spend.WorkerTokens,
 		Iterations:      res.Rounds,
 		Decision:        decision,
 		Failed:          failed,

@@ -46,6 +46,8 @@ policies:                               # optional — org-wide policies (full t
   - "All code must be reviewed before merging"
   - "Communicate decisions in writing"
 
+workers: {...}                          # optional — reusable delegate templates (see below)
+
 roles: [...]                            # optional — root-level org-wide agents (see below)
 units: [...]                            # optional — org structure tree (see below)
 
@@ -55,13 +57,15 @@ turn_engine:                            # optional — executor/reviewer turn co
                                         #   (the reviewer has no knob: it holds one
                                         #   submission tool, so its budget is structural)
   onboarding_max_tool_rounds: 10        # dedicated first-turn onboarding pass (0 = disabled)
-  subagent_max_turns: 20                # maximum tool rounds per spawn_subagent call
-  subagent_timeout_seconds: 120         # wall-clock timeout per sub-agent
-  subagent_budget_fraction: 0.2         # fraction of parent's remaining tokens a sub-agent may consume
-                                        #   (for a batched call, the TOTAL slice shared across children)
-  subagent_max_parallel: 3              # max children a batched spawn_subagent runs concurrently
-  subagent_batch_timeout_seconds: 120   # aggregate wall-clock timeout for one batched spawn_subagent call
-  subagent_min_per_child_tokens: 500    # floor on the per-child token slice; batch rejected if undercut
+  delegation:                           # bounds on every `delegate` call — see Turn Engine § Workers
+    max_parallel: 3                     # workers running at once within one call
+    max_tasks_per_call: 8               # tasks one call may contain; over it the call is REFUSED
+    max_turns: 20                       # tool rounds one worker may run (a request above it is clamped)
+    max_turns_ceiling: 40               # highest max_turns a worker template may declare
+    budget_fraction: 0.2                # ONE slice for the whole call, shared by every task in it
+    min_tokens_per_task: 500            # call refused up front if the per-task share falls below this
+    task_timeout_seconds: 300           # wall-clock cap on one worker
+    call_timeout_seconds: 900           # wall-clock cap on the whole call, dependency waves included
   sandbox_min_budget_tokens: 2000       # refuse a coding run below this remaining budget
   delegation_depth_limit: 3             # max colleague-handoff chain depth before depth_cap guard breach
   extension_enabled: true               # round-cap extension judge (executor + onboarding)
@@ -512,7 +516,40 @@ units:
 | `integrations.mattermost` | dict | no | Per-agent Mattermost **transport** identity (`bot_token`, optional `username`, optional `channel`). One credential, three readers: the same token is named as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess, and the inbound websocket for this seat authenticates with it too |
 | `integrations.jira.project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.JiraProject` / `org.Role.JiraProject`). The team's Jira project as integration identity: an issue that names nobody in the org chart routes to the unit lead, and it is the project the team files work under. **Not** an MCP credential, and it does **not** scope knowledge reads |
 | `integrations.confluence.space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.ConfluenceSpace` / `org.Role.ConfluenceSpace`). The team's Confluence space as integration identity: a page change that names nobody routes to the unit lead, and it is where the team writes. It does **not** scope reads — read scope is the org-wide `knowledge.confluence_spaces` only |
+| `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
+
+### Worker templates
+
+`workers:` holds the reusable delegates a seat's executor hands work to with the `delegate` tool, keyed by the name it types into that call. A template carries the half of a worker that does not change per task — the persona, the tool set, the model, and the shape of the answer — so a seat writes only the task.
+
+```yaml
+workers:
+  researcher:
+    description: reads sources and reports findings with citations
+    system_prompt: |
+      You research things carefully and report only what you can point at.
+    tools: [confluence_search, confluence_get_page]   # a REQUEST, not a grant — see below
+    model: fast                                       # a providers.llm key; omit for llm_subagent
+    max_turns: 12                                     # omit for turn_engine.delegation.max_turns
+    output:                                           # omit for the default {result, notes}
+      type: object
+      properties:
+        findings:  {type: string}
+        citations: {type: array, items: {type: string}}
+      required: [findings]
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `description` | string | yes | What this worker is for, written for the **executor choosing one** rather than for the operator. It is the only part of the template that reaches the parent's prompt |
+| `system_prompt` | string | yes | The worker's persona and standing instructions. The runtime preamble (no nesting, no colleague contact, how to answer) is appended, so a template never restates the boundary and cannot weaken it by forgetting to |
+| `tools` | list[string] | no | The tools this worker asks for. Empty means none at all, which is the right shape for a summariser. **Naming a tool grants nothing**: every name still passes the worker filter — the caller's own live tools, minus the engine-control denylist, minus shared-surface writes — so `workers:` is never a privilege-escalation path |
+| `model` | string | no | A `providers.llm` key. An explicit key gets **no fallback chain**: an operator's cheap-model choice that quietly ran somewhere else is worse than a refusal. Omit to take the seat's `llm_subagent` chain |
+| `max_turns` | int | no | Tool rounds this worker may run. Refused at load — not clamped — above `turn_engine.delegation.max_turns_ceiling`: a template is an edit, and an operator overruled by a number nothing in the file mentions writes it again next time |
+| `output` | dict | no | The JSON Schema the worker's `submit_result` publishes, so the answer comes back as fields the parent can index rather than prose it re-parses. Must be an object schema with 1–12 named properties, at most 3 levels deep, whose `required` entries are properties it actually has; keywords the engine does not read are passed through to the provider untouched |
+
+See [Turn Engine — Workers](../concepts/turn-engine.md#workers) for what a `delegate` call looks like and how dependency waves work.
 
 ### Schedules
 

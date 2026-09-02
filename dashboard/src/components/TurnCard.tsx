@@ -96,7 +96,12 @@ export function TurnCard({
       {open && (
         <div className="turn-body">
           {group.phases.map((p, i) => (
-            <PhaseCard key={p.key} record={p} defaultOpen={i === 0 && group.phases.length === 1} />
+            <PhaseCard
+              key={p.key}
+              record={p}
+              nested={group.nested.get(p.key)}
+              defaultOpen={i === 0 && group.phases.length === 1}
+            />
           ))}
           <footer className="phase-foot">
             <a className="t-caption mono" href={href(["turns", group.turnId])}>

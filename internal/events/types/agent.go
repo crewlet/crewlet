@@ -339,9 +339,16 @@ type AgentPhaseCompleted struct {
 	// rendering a standalone sibling.
 	HostPhase     Phase `json:"host_phase"`
 	HostIteration int   `json:"host_iteration"`
-	// Worker names the auxiliary learning worker that made the call, and is set
-	// only when Phase is PhaseAuxiliary.
-	Worker      string  `json:"worker"`
+	// Worker names the worker behind this call: the learning worker on a
+	// PhaseAuxiliary event, the delegate template on a PhaseSubagent one.
+	// Empty on every other phase, and on an ad-hoc delegation that named
+	// no template.
+	Worker string `json:"worker"`
+	// TaskID is a delegated task's own id, as the parent wrote it. Set
+	// only on PhaseSubagent, and it is what pairs this phase record with
+	// a node of the call's graph on the matching SubagentBatched event —
+	// without it a call of eight is eight indistinguishable records.
+	TaskID      string  `json:"task_id,omitempty"`
 	Model       string  `json:"model"`
 	ProviderKey string  `json:"provider_key"`
 	Trigger     Trigger `json:"trigger"`
@@ -531,14 +538,42 @@ func (e AgentTurnProgress) SummaryFor(actor string) string {
 	return lead(actor, "working"+tag)
 }
 
-// SubagentBatched fires once per batched sub-agent spawn, so a dashboard can
-// count fan-out work and spot a pathological batch.
+// SubagentBatched fires once per delegate call, so a dashboard can count
+// fan-out work and spot a pathological one.
 type SubagentBatched struct {
 	ParentHandle string `json:"parent_handle"`
 	TaskCount    int    `json:"task_count"`
 	Successes    int    `json:"successes"`
 	Failures     int    `json:"failures"`
 	TotalTokens  int    `json:"total_tokens"`
+
+	// Graph is the shape the call ran: every task, the worker it used, its
+	// topological wave and what it waited for.
+	//
+	// ON THE EVENT rather than reconstructed from the parent's tool
+	// arguments, because those are not on any event a dashboard can read —
+	// the phase record carries the CALL, not the arguments. Without this a
+	// two-wave call and two independent tasks are indistinguishable
+	// afterwards, which is exactly the distinction an operator wondering
+	// why a turn took four minutes is trying to make.
+	Graph []SubagentNode `json:"graph,omitempty"`
+
+	// Statuses is each task's own outcome, keyed by task id — `ok`,
+	// `no_result`, `skipped_dependency_failed`, `timed_out`, and the rest.
+	// The counts above cannot say WHICH failed, and in a graph that is the
+	// only thing that explains the shape of what came back.
+	Statuses map[string]string `json:"statuses,omitempty"`
+}
+
+// SubagentNode is one task in a delegate call's graph.
+type SubagentNode struct {
+	ID string `json:"id"`
+	// Worker is the template this task ran, empty for an ad-hoc one.
+	Worker string `json:"worker,omitempty"`
+	// Wave is the topological depth: 0 for a task that waited on nothing.
+	Wave int `json:"wave"`
+	// After is what this task waited for, as the parent wrote it.
+	After []string `json:"after,omitempty"`
 }
 
 // EventType is the "subagent_batched" wire type.
@@ -548,8 +583,18 @@ func (SubagentBatched) EventType() string { return "subagent_batched" }
 // tokens — because a pathological batch is only recognisable from the ratio,
 // and this event carries no role for a dashboard to group the parts under.
 func (e SubagentBatched) SummaryFor(actor string) string {
-	return lead(actor, fmt.Sprintf("batched %d sub-agents (%d ok, %d failed, %d tokens)",
-		e.TaskCount, e.Successes, e.Failures, e.TotalTokens))
+	waves := 1
+	for _, n := range e.Graph {
+		waves = max(waves, n.Wave+1)
+	}
+	shape := ""
+	if waves > 1 {
+		// The one fact the counts cannot carry: a two-wave call took as
+		// long as its slowest chain, not its slowest task.
+		shape = fmt.Sprintf(", %d waves", waves)
+	}
+	return lead(actor, fmt.Sprintf("delegated %d tasks (%d ok, %d failed, %d tokens%s)",
+		e.TaskCount, e.Successes, e.Failures, e.TotalTokens, shape))
 }
 
 // FormatReasoningAndContent renders one assistant turn's reasoning and visible

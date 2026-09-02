@@ -1,51 +1,58 @@
-// Package subagent runs the ephemeral workers a turn's executor spawns.
+// Package subagent runs the workers a turn's executor delegates to.
 //
-// A sub-agent is one tool loop with a parent-written prompt, a parent-chosen
-// slice of the parent's own tools, and hard caps on rounds, wall-clock and
-// tokens. It is a LEAF: it cannot spawn further sub-agents and it cannot
-// contact colleagues, which is the only thing bounding the depth of the whole
+// A worker is one tool loop with a persona, a slice of the parent's own
+// tools, a declared answer shape and hard caps on rounds, wall-clock and
+// tokens. It is a LEAF: it cannot delegate further and it cannot contact
+// colleagues, which is the only thing bounding the depth of the whole
 // construct — there is no depth counter anywhere, because a leaf needs none.
 //
-// Four properties are load-bearing. Each is enforced in code here, never in
-// the prompt, because a prompt is a request and this is a boundary:
+// Three files, three concerns: this one is the boundary and the loop,
+// workflow.go is the task graph, result.go is how a worker answers.
 //
-//   - THE GRANT IS A SECURITY BOUNDARY. A child's reachable set is the
+// Five properties are load-bearing. Each is enforced in code, never in the
+// prompt, because a prompt is a request and these are boundaries:
+//
+//   - THE GRANT IS A SECURITY BOUNDARY. A worker's reachable set is the
 //     parent's own tools, minus the engine-control denylist, minus anything
 //     whose annotations say it writes to a shared surface. Both halves of
-//     "reachable" are covered — what the parent NAMED and what the child can
-//     DISCOVER — because the child's discovery runs against the filtered
-//     snapshot, not the parent's. Discovery over the parent's catalogue is
-//     how a child would otherwise promote a tool nobody granted it.
+//     "reachable" are covered — what was NAMED and what the worker can
+//     DISCOVER — because discovery runs against the filtered snapshot, not
+//     the parent's. Discovery over the parent's catalogue is how a worker
+//     would otherwise promote a tool nobody granted it. A CONFIG TEMPLATE
+//     CHANGES NOTHING HERE: `workers:` names tools, and every name still
+//     passes this filter, so Tier B config can never be an escalation path.
 //
-//   - THE BUDGET SLICE IS THE BATCH'S, NOT EACH CHILD'S. One fraction of the
-//     parent's remaining tokens is computed once and shared by every child in
-//     a batch. The alternative — a fresh fraction per child — over-allocates
+//   - THE BUDGET SLICE IS THE CALL'S, NOT EACH WORKER'S. One fraction of the
+//     parent's remaining tokens is computed once and shared by every task in
+//     the call. The alternative — a fresh fraction per task — over-allocates
 //     by N, which is the whole cost of a fan-out being invisible until the
 //     org budget is gone.
 //
-//   - A CHILD'S FAILURE IS A RESULT, NOT AN ERROR. Timeout, budget exhaustion
-//     and a panic all come back as a Result with Failed set and the partial
-//     transcript intact. The trap is a timeout or budget path that returns
-//     early: the phase-failure guard never sees it and the spawn publishes
-//     NOTHING — the parent's Execute event shows a spawn_subagent
-//     call whose sub-agent left no phase record, no partial transcript and no
-//     reason it stopped. Here every path produces exactly one Result carrying
-//     all three, so the caller's phase event cannot be missing.
+//   - A WORKER'S FAILURE IS A RESULT, NOT AN ERROR. Timeout, budget
+//     exhaustion, a skipped dependency and a panic all come back as a Result
+//     with a status and the partial transcript intact. The trap is a path
+//     that returns early: the phase-failure guard never sees it and the call
+//     publishes NOTHING — the parent's execute event shows a delegate call
+//     whose worker left no phase record, no partial transcript and no reason
+//     it stopped. Here every path produces exactly one Result carrying all
+//     three, so the caller's phase event cannot be missing.
 //
-//   - AN ERROR MEANS NOTHING RAN. Spawn and SpawnBatch return an error only
-//     for a request or a wiring that could not start a child at all. That
-//     split is what lets the tool wrapper answer the model with a refusal in
-//     one case and with the worker's own words in the other.
+//   - AN ERROR MEANS NOTHING RAN. Run returns an error only for a request or
+//     a wiring that could not start any task at all. That split is what lets
+//     the tool answer the model with a refusal in one case and with the
+//     workers' own answers in the other.
+//
+//   - AN ABSENT ANSWER IS NEVER SYNTHESISED. A worker that never submitted
+//     reports `no_result` with its prose, and a task waiting on it is
+//     skipped rather than fed a fabricated answer. See result.go.
 package subagent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,8 +60,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
+	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -68,12 +77,12 @@ import (
 
 var log = logging.Get("agent.subagent")
 
-// ToolName is the name the Execute-phase model calls to spawn one.
+// ToolName is the name the executor calls to hand work to a worker.
 //
 // A constant because it is also the first entry of the denylist below: the
-// tool that spawns a sub-agent is the tool a sub-agent must never see, and
-// two spellings of that name is one recursion away from a fork bomb.
-const ToolName = "spawn_subagent"
+// tool that starts a worker is the tool a worker must never see, and two
+// spellings of that name is one recursion away from a fork bomb.
+const ToolName = "delegate"
 
 // skillLoaderTool is the read-only prompt-fragment loader.
 //
@@ -168,36 +177,43 @@ var controlDenylist = map[string]struct{}{
 // package answers, rather than keeping a second list of names.
 func Denied(name string) bool { _, ok := controlDenylist[name]; return ok }
 
-// Limits are the runtime caps one spawn runs under. They come from the
-// company config's turn_engine block, which validates every one of them.
+// Limits are the runtime caps one delegate call runs under. They come from
+// the company config's turn_engine.delegation block, which validates every
+// one of them and carries the reasoning for each number.
 type Limits struct {
-	// MaxTurns caps a child's tool rounds. A parent asking for more is
-	// CLAMPED, never refused: the request is a hint about how much work the
-	// task needs, and refusing a hint costs the whole spawn.
+	// MaxTurns caps a worker's tool rounds. A request above it is
+	// CLAMPED, never refused: the request is a hint about how much work
+	// the task needs, and refusing a hint costs the whole call.
 	MaxTurns int
 
-	// Timeout bounds one child.
-	Timeout time.Duration
+	// MaxTasksPerCall bounds one call's graph. Unlike MaxTurns this IS a
+	// refusal, because a call with too many tasks is a misunderstanding of
+	// the tool rather than an over-estimate: clamping it would silently
+	// drop tasks the parent is about to read answers for.
+	MaxTasksPerCall int
 
-	// BatchTimeout bounds a whole batch. Both apply to a batched child —
-	// the per-child cap stops one straggler, this one stops twenty of them
-	// each finishing just inside their own cap.
-	BatchTimeout time.Duration
+	// TaskTimeout bounds one worker.
+	TaskTimeout time.Duration
 
-	// MaxParallel caps concurrency within one batch. Children beyond it run
-	// as earlier ones finish.
+	// CallTimeout bounds the whole call, waves included. Both apply — the
+	// per-task cap stops one straggler, this one stops eight of them each
+	// finishing just inside their own cap.
+	CallTimeout time.Duration
+
+	// MaxParallel caps concurrency across the call. Tasks beyond it run as
+	// earlier ones finish.
 	MaxParallel int
 
 	// BudgetFraction is the share of the parent's REMAINING tokens one
-	// spawn may consume — for a batch, the total across all children.
+	// call may consume — the total across every task, not each.
 	BudgetFraction float64
 
-	// MinPerChildTokens floors the per-child slice. A batch whose total
-	// divided by its child count falls below this is refused UP FRONT,
-	// rather than started with every child too poor to finish: N children
+	// MinTokensPerTask floors each task's share. A call whose total
+	// divided by its task count falls below this is refused UP FRONT,
+	// rather than started with every worker too poor to finish: N workers
 	// that each die mid-round have spent the whole slice and produced
 	// nothing, which is strictly worse than not starting.
-	MinPerChildTokens int
+	MinTokensPerTask int
 }
 
 // validate refuses a zero rather than defaulting it.
@@ -212,11 +228,15 @@ func (l Limits) validate() error {
 	if l.MaxTurns < 1 {
 		errs = append(errs, fmt.Errorf("limits: MaxTurns must be at least 1, got %d", l.MaxTurns))
 	}
-	if l.Timeout <= 0 {
-		errs = append(errs, fmt.Errorf("limits: Timeout must be positive, got %v", l.Timeout))
+	if l.MaxTasksPerCall < 1 {
+		errs = append(errs, fmt.Errorf("limits: MaxTasksPerCall must be at least 1, got %d",
+			l.MaxTasksPerCall))
 	}
-	if l.BatchTimeout <= 0 {
-		errs = append(errs, fmt.Errorf("limits: BatchTimeout must be positive, got %v", l.BatchTimeout))
+	if l.TaskTimeout <= 0 {
+		errs = append(errs, fmt.Errorf("limits: TaskTimeout must be positive, got %v", l.TaskTimeout))
+	}
+	if l.CallTimeout <= 0 {
+		errs = append(errs, fmt.Errorf("limits: CallTimeout must be positive, got %v", l.CallTimeout))
 	}
 	if l.MaxParallel < 1 {
 		errs = append(errs, fmt.Errorf("limits: MaxParallel must be at least 1, got %d", l.MaxParallel))
@@ -226,9 +246,9 @@ func (l Limits) validate() error {
 			"limits: BudgetFraction must be in (0, 1], got %v — it is a SHARE of the "+
 				"parent's remaining budget, not a token count", l.BudgetFraction))
 	}
-	if l.MinPerChildTokens < 0 {
-		errs = append(errs, fmt.Errorf("limits: MinPerChildTokens must not be negative, got %d",
-			l.MinPerChildTokens))
+	if l.MinTokensPerTask < 0 {
+		errs = append(errs, fmt.Errorf("limits: MinTokensPerTask must not be negative, got %d",
+			l.MinTokensPerTask))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("subagent: %w", err)
@@ -243,10 +263,13 @@ type Config struct {
 	// event's actor.
 	Seat prompts.Seat
 
-	// Models resolves the seat's per-phase provider chain. Sub-agents run
-	// on [phase.Subagent] — the llm_subagent keys — which is what lets an
+	// Models resolves the seat's per-phase provider chain. Workers run on
+	// [phase.Subagent] — the llm_subagent keys — which is what lets an
 	// operator put fan-out work on a cheap model without touching the
-	// model the seat itself thinks on.
+	// model the seat itself thinks on. A template or a task naming its own
+	// `model` overrides that with one configured key and no fallback
+	// chain: an explicit choice that quietly ran somewhere else would be
+	// worse than a refusal.
 	Models *phase.Registry
 
 	// Universe is the PARENT phase's tool snapshot: everything a name could
@@ -277,8 +300,16 @@ type Config struct {
 	// worker widening itself at all.
 	Discovery func(surface func() *tools.Surface) []tools.Callable
 
-	// Skills renders the tool-skill catalogue into the child's prompt. Nil
-	// keeps the prompt free of skill scaffolding.
+	// Workers are the templates this seat may delegate to, already
+	// narrowed to what its role can see. A task naming one that is not
+	// here is refused with the visible names listed — the seat's own
+	// visibility is the boundary, and a refusal that named the whole
+	// company's library would be telling the model about workers it
+	// cannot have.
+	Workers map[string]config.Worker
+
+	// Skills renders the tool-skill catalogue into the worker's prompt.
+	// Nil keeps the prompt free of skill scaffolding.
 	Skills prompts.SkillCatalogue
 
 	// Budget is the parent turn's shared token counter. Nil disables
@@ -362,92 +393,6 @@ func (c Config) validate() error {
 	}
 	return c.Limits.validate()
 }
-
-// Request is one single-child spawn.
-type Request struct {
-	// TaskPrompt is seeded as the child's first user message.
-	TaskPrompt string
-	// SystemPrompt is the parent's task-specific prompt. The runtime
-	// preamble is appended to it.
-	SystemPrompt string
-	// ToolNames is the allowlist the parent is asking to grant.
-	ToolNames []string
-	// MaxTurns is the parent's requested round cap. Zero means "the
-	// runtime's" and anything above it is clamped down.
-	MaxTurns int
-}
-
-func (r Request) validate() error {
-	switch {
-	case strings.TrimSpace(r.TaskPrompt) == "":
-		return errors.New("subagent: task_prompt is required")
-	case strings.TrimSpace(r.SystemPrompt) == "":
-		return errors.New("subagent: system_prompt is required")
-	}
-	return nil
-}
-
-// Task is one child of a batch. It carries its own prompts and round cap; the
-// allowlist is the BATCH's, applied uniformly.
-type Task struct {
-	TaskPrompt   string
-	SystemPrompt string
-	MaxTurns     int
-}
-
-// BatchRequest is a fan-out spawn.
-//
-// One allowlist for every child, deliberately. Heterogeneous capabilities per
-// child in one call means one tool result the parent cannot reason about —
-// it would have to remember which index got which grant. Two calls express
-// that without ambiguity.
-type BatchRequest struct {
-	ToolNames []string
-	Tasks     []Task
-}
-
-// Result is one child's record: everything the caller's phase event needs and
-// everything the parent's model is told.
-//
-// It is produced on EVERY path a child can take, including the ones that
-// never reached a model. A caller can publish from it unconditionally.
-type Result struct {
-	// Text is the child's answer, or its partial transcript when it was
-	// cut off.
-	Text string
-
-	Rounds       int
-	InputTokens  int
-	OutputTokens int
-
-	// Model is what actually served the calls; ProviderKey is the config
-	// key its chain was resolved under.
-	Model       string
-	ProviderKey string
-
-	// ToolsAvailable is what the child could call when it finished,
-	// activations included. Rejected is what the parent asked for and did
-	// not get, in request order.
-	ToolsAvailable []string
-	Rejected       []string
-
-	Executions []toolloop.Execution
-
-	// SystemPrompt and UserPrompt are what the child was actually sent.
-	SystemPrompt string
-	UserPrompt   string
-
-	// Failed marks a child that did not finish. TimedOut narrows that to
-	// the wall-clock cases, which is the one class a planner can usefully
-	// retry with fewer children.
-	Failed    bool
-	TimedOut  bool
-	Error     string
-	ErrorKind string
-}
-
-// Tokens is the child's total spend.
-func (r Result) Tokens() int { return r.InputTokens + r.OutputTokens }
 
 // Grant is the resolved reachable set for one child.
 type Grant struct {
@@ -554,176 +499,69 @@ func childMayReach(e tools.Entry, parent map[string]bool) bool {
 // DeadlineExceeded that a provider's own internal HTTP timeout produces just
 // as readily.
 var (
-	errChildDeadline = errors.New("sub-agent exceeded its wall-clock cap")
-	errBatchDeadline = errors.New("the batch exceeded its wall-clock cap")
+	errTaskDeadline = errors.New("the worker exceeded its wall-clock cap")
+	errCallDeadline = errors.New("the delegate call exceeded its wall-clock cap")
 )
 
-// Spawn runs one sub-agent and returns its record.
+// Run plans one delegate call and executes its graph.
 //
-// The error is reserved for a request or a wiring that could not start a
-// child at all; every way a started child can end is a Result.
-func Spawn(ctx context.Context, cfg Config, req Request) (Result, error) {
-	if err := cfg.validate(); err != nil {
-		return Result{}, err
-	}
-	if err := req.validate(); err != nil {
-		return Result{}, err
-	}
-	provider, key, err := resolveProvider(cfg)
-	if err != nil {
-		return Result{}, err
-	}
-
-	meter := cfg.Budget
-	if cap := slice(cfg.ParentRemaining, cfg.Limits.BudgetFraction); cap > 0 && meter != nil {
-		meter = newSliceMeter(meter, cap)
-	}
-
-	childCtx, cancel := context.WithTimeoutCause(ctx, cfg.Limits.Timeout, errChildDeadline)
-	defer cancel()
-	return run(childCtx, cfg, provider, key, meter, req), nil
-}
-
-// BatchRefusedError is a batch that never started because its budget slice
-// could not give every child a workable share.
-//
-// One error for the batch rather than one synthetic failure per child, because
-// the refusal is a property of the BATCH. N copies of one sentence reads to a planner as N independent
-// failures, and the obvious reaction to that is to retry them individually,
-// which is exactly the thing the floor exists to prevent.
-type BatchRefusedError struct {
-	// Slice is the total the batch would have shared, MinPerChild the floor
-	// each child needed, and Tasks how many were asked for.
-	Slice       int
-	MinPerChild int
-	Tasks       int
-}
-
-func (e *BatchRefusedError) Error() string {
-	return fmt.Sprintf(
-		"subagent: batch refused: the budget slice is %d tokens, which cannot give "+
-			"%d children the %d each they need to finish — spawn fewer children "+
-			"or wait for budget",
-		e.Slice, e.Tasks, e.MinPerChild)
-}
-
-// SpawnBatch fans out children concurrently and returns their records in
-// INPUT ORDER.
-//
-// Order matters more than it looks: the parent's model wrote the tasks as a
-// list and reads the answers as one, so a result slice ordered by completion
-// would silently re-pair every answer with the wrong question.
-func SpawnBatch(ctx context.Context, cfg Config, req BatchRequest) ([]Result, error) {
+// The error is reserved for a request or a wiring that could not start ANY
+// task — a malformed graph, an unknown worker, a budget slice too thin to
+// share. Every way a started task can end is a Result, and the results come
+// back in the order the parent wrote them.
+func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	if len(req.Tasks) == 0 {
-		return nil, errors.New("subagent: a batch needs at least one task")
-	}
-	for i, t := range req.Tasks {
-		if err := (Request{TaskPrompt: t.TaskPrompt, SystemPrompt: t.SystemPrompt}).validate(); err != nil {
-			return nil, fmt.Errorf("subagent: tasks[%d]: %w", i, err)
-		}
-	}
-	provider, key, err := resolveProvider(cfg)
+	tasks, err := plan(req, cfg.Workers, cfg.Limits)
 	if err != nil {
 		return nil, err
 	}
 
-	// ONE slice for the whole batch, computed once. Every child charges the
-	// same meter, so they compete: whoever spends first leaves less for the
-	// rest. That is deliberate — the alternative, a fresh fraction per
-	// child, hands out N times the fraction the operator configured.
+	// ONE slice for the whole call, computed once. Every worker charges
+	// the same meter, so they compete: whoever spends first leaves less
+	// for the rest. That is deliberate — the alternative, a fresh fraction
+	// per task, hands out N times the fraction the operator configured.
 	meter := cfg.Budget
 	total := slice(cfg.ParentRemaining, cfg.Limits.BudgetFraction)
 	if total > 0 && meter != nil {
-		if floor := cfg.Limits.MinPerChildTokens; floor > 0 && total < floor*len(req.Tasks) {
-			return nil, &BatchRefusedError{Slice: total, MinPerChild: floor, Tasks: len(req.Tasks)}
+		if floor := cfg.Limits.MinTokensPerTask; floor > 0 && total < floor*len(tasks) {
+			return nil, &RefusedError{Slice: total, MinPerTask: floor, Tasks: len(tasks)}
 		}
 		meter = newSliceMeter(meter, total)
 	}
 
-	batchCtx, cancelBatch := context.WithTimeoutCause(ctx, cfg.Limits.BatchTimeout, errBatchDeadline)
-	defer cancelBatch()
+	callCtx, cancelCall := context.WithTimeoutCause(ctx, cfg.Limits.CallTimeout, errCallDeadline)
+	defer cancelCall()
 
-	results := make([]Result, len(req.Tasks))
-	sem := make(chan struct{}, cfg.Limits.MaxParallel)
-	var wg sync.WaitGroup
-	for i, task := range req.Tasks {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-batchCtx.Done():
-				// Never got a worker: the deadline landed while this child
-				// was queued behind MaxParallel. Said explicitly, because
-				// "never started" is the one failure a planner can retry
-				// unchanged — unlike a child that burned its budget.
-				results[i] = neverStarted(batchCtx)
-				return
+	results := runGraph(callCtx, tasks, cfg.Limits.MaxParallel,
+		func(taskCtx context.Context, r resolved, deps []Result) Result {
+			provider, key, err := resolveProvider(cfg, r.model)
+			if err != nil {
+				// A model key that does not resolve is this TASK's
+				// failure, not the call's: its siblings are running on
+				// keys that do, and refusing the whole call would throw
+				// away work that is already in flight.
+				return Result{
+					ID: r.ID, Worker: r.Worker, Status: StatusFailed,
+					Error: ledger.Elide(err.Error(), errorLimit),
+				}
 			}
-			if batchCtx.Err() != nil {
-				// The turn came free only BECAUSE the deadline killed the
-				// child ahead, so both select cases were ready and the
-				// choice between them was a coin flip. Re-checking after
-				// the acquire is what makes "never started" a fact rather
-				// than a scheduling accident — without it the same batch
-				// reports the same child two different ways on two runs.
-				results[i] = neverStarted(batchCtx)
-				return
-			}
-			childCtx, cancel := context.WithTimeoutCause(batchCtx, cfg.Limits.Timeout, errChildDeadline)
+			childCtx, cancel := context.WithTimeoutCause(taskCtx, cfg.Limits.TaskTimeout, errTaskDeadline)
 			defer cancel()
-			results[i] = run(childCtx, cfg, provider, key, meter, Request{
-				TaskPrompt:   task.TaskPrompt,
-				SystemPrompt: task.SystemPrompt,
-				ToolNames:    req.ToolNames,
-				MaxTurns:     task.MaxTurns,
-			})
-		}()
-	}
+			return run(childCtx, cfg, provider, key, meter, r, deps)
+		})
 
-	// WAIT for every child, deadline or not.
-	//
-	// Returning at the batch deadline with children still running would be
-	// a data race on the result slots and a goroutine leak the caller has
-	// no handle on. The deadline is enforced by CANCELLING their contexts,
-	// which is what actually stops the work; waiting only costs the time a
-	// provider takes to notice. Abandoning the wait is only safe in a
-	// runtime where a cancelled task stops at its next suspension point. A
-	// goroutine has no such point, and its writes would land in a slice the
-	// caller already returned.
-	wg.Wait()
-
-	publishBatched(ctx, cfg, results)
+	publishCall(ctx, cfg, tasks, results)
 	return results, nil
 }
 
-// neverStarted is the record for a child the batch deadline reached before it
-// got a worker.
-func neverStarted(ctx context.Context) Result {
-	kind, reason := stopReason(ctx)
-	if kind == "" {
-		// The select lost a race it should not be able to lose: Done fired
-		// with no cause. Report it rather than returning a zero Result that
-		// reads as a child which ran and said nothing.
-		kind, reason = KindFailed, "the batch stopped before this child started"
-	}
-	return Result{
-		Failed:    true,
-		TimedOut:  kind == KindTimeout,
-		ErrorKind: kind,
-		Error:     "never started: " + reason,
-	}
-}
-
-// run drives one child to completion and never returns anything but a Result.
+// run drives one worker to completion and never returns anything but a
+// Result.
 func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
-	meter toolloop.BudgetMeter, req Request,
+	meter toolloop.BudgetMeter, task resolved, deps []Result,
 ) (res Result) {
-	res.ProviderKey = key
+	res.ID, res.Worker, res.ProviderKey = task.ID, task.Worker, key
 
 	// TELEMETRY ON EVERY PATH, including the panic the frame below
 	// contains. Deferred FIRST so it runs LAST: the recovery below writes
@@ -731,21 +569,21 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 	// result the panic had not yet been folded into.
 	//
 	// The package produces a Result for every outcome precisely so a
-	// caller's phase event cannot be missing, and without this a spawn is
-	// invisible — its tokens charged, its model call made, and nothing in
-	// the event store saying a sub-agent ran.
+	// caller's phase event cannot be missing, and without this a delegate
+	// call is invisible — its tokens charged, its model call made, and
+	// nothing in the event store saying a worker ran.
 	if cfg.Telemetry != nil {
 		defer func() { cfg.Telemetry(ctx, res) }()
 	}
 
-	// A PANIC IS CONTAINED HERE, on both the single and the batched path.
+	// A PANIC IS CONTAINED HERE.
 	//
-	// Batched, the case is not arguable: a panicking goroutine takes the
-	// whole PROCESS down, so one malformed MCP schema would stop a fleet
-	// node mid-turn. Single, it would unwind through the parent's Execute
-	// tool call and kill a turn that may be forty minutes of work. Neither
-	// is a proportionate answer to one worker falling over, and the parent
-	// is told exactly what happened either way.
+	// Workers run concurrently, so a panicking goroutine takes the whole
+	// PROCESS down: one malformed MCP schema would stop a fleet node
+	// mid-turn. Even alone it would unwind through the parent's own tool
+	// call and kill a turn that may be forty minutes of work. Neither is a
+	// proportionate answer to one worker falling over, and the parent is
+	// told exactly what happened either way.
 	//
 	// The stack is logged, not swallowed: a contained panic nobody can see
 	// is a bug that never gets fixed.
@@ -755,20 +593,36 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 			return
 		}
 		log.ErrorContext(ctx, "subagent_panicked", "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
-		res.Failed = true
-		res.ErrorKind = KindPanic
-		res.Error = ledger.Elide(fmt.Sprintf("sub-agent panicked: %v", r), errorLimit)
+		res.Status = StatusFailed
+		res.Error = ledger.Elide(fmt.Sprintf("worker panicked: %v", r), errorLimit)
 	}()
 
-	grant := Permit(cfg.Universe, cfg.parentNames(), req.ToolNames)
+	grant := Permit(cfg.Universe, cfg.parentNames(), task.tools)
 	res.Rejected = grant.Rejected
 	if len(grant.Rejected) > 0 {
 		log.InfoContext(ctx, "subagent_tools_rejected", "rejected", grant.Rejected,
-			"role", cfg.Seat.Role.Name)
+			"task", task.ID, "worker", task.Worker, "role", cfg.Seat.Role.Name)
 	}
 
-	universe := grant.Universe
+	// THE SUBMISSION TOOL IS ALWAYS ON THE SURFACE and never subject to
+	// the grant: it is how the worker answers, so a filter that could
+	// remove it would leave a worker able to work and unable to report.
+	submit := newSubmitTool(task.output)
+	universe, err := grant.Universe.With(tools.Entry{Tool: submit, Origin: tools.OriginBuiltin})
+	if err != nil {
+		// A granted tool already publishes this name. The worker keeps its
+		// tools and loses the ability to answer structurally, which is a
+		// no_result rather than a failure — but it is a CONFIG problem, so
+		// it is logged loudly with the name that collided.
+		log.ErrorContext(ctx, "subagent_submit_tool_shadowed", "tool", SubmitTool, "error", err)
+		universe = grant.Universe
+		submit = nil
+	}
 	active := slices.Clone(grant.Active)
+	if submit != nil {
+		active = append(active, SubmitTool)
+	}
+
 	var surface *tools.Surface
 	if cfg.Discovery != nil {
 		for _, meta := range cfg.Discovery(func() *tools.Surface { return surface }) {
@@ -777,7 +631,7 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 				// A meta-tool colliding with a granted name would shadow the
 				// real tool: the model's call would reach the meta-tool while
 				// the catalogue described the other. Drop the meta-tool — the
-				// child loses discovery, not correctness.
+				// worker loses discovery, not correctness.
 				log.WarnContext(ctx, "subagent_meta_tool_skipped", "tool", meta.Name(), "error", err)
 				continue
 			}
@@ -793,46 +647,52 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 	}
 	if cfg.Guard != nil {
 		// AFTER the surface exists and from that surface, so what the
-		// guard enforces and what the child's catalogue showed cannot
+		// guard enforces and what the worker's catalogue showed cannot
 		// disagree.
 		if guard := cfg.Guard(surface); guard != nil {
 			surface = surface.WithGuard(guard)
 		}
 	}
 
-	// The catalogue is rendered only for a child that can act on it.
-	// Listing tools to a worker with no activate_tool is an invitation to
-	// call a name it was never offered, which costs a round and produces a
+	// The catalogue is rendered only for a worker that can act on it.
+	// Listing tools to one with no activate_tool is an invitation to call
+	// a name it was never offered, which costs a round and produces a
 	// refusal.
 	var catalogue string
 	if cfg.Discovery != nil {
 		catalogue = renderCatalogue(grant.Universe)
 	}
 	res.SystemPrompt = prompts.BuildSubagent(cfg.Seat, prompts.SubagentInput{
-		ParentSystemPrompt: req.SystemPrompt,
+		ParentSystemPrompt: task.systemPrompt,
 		// Both the offered set AND the discoverable catalogue, so a skill
-		// covering a tool the child may later activate is in the prompt
+		// covering a tool the worker may later activate is in the prompt
 		// before the first call rather than after the guard blocks it.
 		AvailableTools: union(surface.Active(), grant.Universe.Names()),
 		ToolCatalogue:  catalogue,
+		Submits:        submit != nil,
 		Skills:         cfg.Skills,
 	})
-	res.UserPrompt = req.TaskPrompt
+	res.UserPrompt = withDependencies(task.Prompt, deps)
 
 	progress := &toolloop.Progress{}
 	loop, err := toolloop.Run(ctx, toolloop.Config{
 		Provider:  provider,
 		Surface:   surface,
-		MaxRounds: clampTurns(req.MaxTurns, cfg.Limits.MaxTurns),
+		MaxRounds: task.maxTurns,
 		Budget:    meter,
 		Progress:  progress,
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: res.SystemPrompt},
-			{Role: llm.RoleUser, Content: req.TaskPrompt},
+			{Role: llm.RoleUser, Content: res.UserPrompt},
 		},
-		// No AllowSuspend: a sub-agent's conversation is never persisted,
-		// so a suspended one could never be resumed — the tool loop turns
-		// the attempt into an ordinary tool failure the child can react to.
+		// THE SUBMISSION ENDS THE LOOP. Without this a worker that has
+		// answered keeps its remaining rounds and spends them narrating
+		// what it just submitted — on the parent's budget, for output
+		// nobody reads.
+		TerminateAfter: terminators(submit),
+		// No AllowSuspend: a worker's conversation is never persisted, so
+		// a suspended one could never be resumed — the tool loop turns
+		// the attempt into an ordinary tool failure it can react to.
 	})
 	res.ToolsAvailable = surface.Active()
 
@@ -842,10 +702,15 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 		res.InputTokens, res.OutputTokens = loop.InputTokens, loop.OutputTokens
 		res.Model = loop.Model
 		res.Executions = loop.Executions
+		res.Status, res.Output = submitted(submit)
+		if res.Status == StatusNoResult {
+			log.WarnContext(ctx, "subagent_never_submitted", "task", task.ID,
+				"worker", task.Worker, "rounds", res.Rounds)
+		}
 		return res
 	}
 
-	// The failure paths all report the PARTIAL state. A child that spent
+	// The failure paths all report the PARTIAL state. A worker that spent
 	// nine rounds and then hit its cap did nine rounds of work the parent
 	// paid for; reporting zeros throws away both the transcript and the
 	// only evidence of what it cost.
@@ -855,35 +720,49 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 	res.InputTokens, res.OutputTokens = partial.InputTokens, partial.OutputTokens
 	res.Model = partial.Model
 	res.Executions = partial.Executions
-	res.Failed = true
 
-	switch kind, reason := stopReason(ctx); {
-	case kind == KindTimeout:
-		res.TimedOut = true
-		res.ErrorKind = KindTimeout
-		res.Error = reason
+	kind, reason := stopReason(ctx)
+	res.Status, res.Error = classify(kind, reason, err)
+
+	// A SUBMISSION SURVIVES THE FAILURE THAT FOLLOWED IT. A worker that
+	// answered and then spent a round it did not have has still answered,
+	// and discarding that would make the parent re-run finished work.
+	if status, out := submitted(submit); status == StatusOK {
+		res.Status, res.Output, res.Error = StatusOK, out, ""
+	}
+
+	switch res.Status {
+	case StatusTimedOut:
 		log.WarnContext(ctx, "subagent_timed_out", "role", cfg.Seat.Role.Name,
-			"rounds", res.Rounds, "tokens", res.Tokens(), "reason", reason)
-	case kind != "":
-		res.ErrorKind = kind
-		res.Error = reason
-	case errors.Is(err, toolloop.ErrBudgetExhausted):
-		res.ErrorKind = KindFailed
-		res.Error = ledger.Elide(err.Error(), errorLimit)
-		var be *toolloop.BudgetError
-		if errors.As(err, &be) && be.Scope == ScopeSubagent {
-			// The child's own slice, not the seat's cap. Reported as its own
-			// kind so nobody goes looking for a company budget that never
-			// ran out.
-			res.ErrorKind = KindBudget
-			log.WarnContext(ctx, "subagent_budget_exhausted", "role", cfg.Seat.Role.Name,
-				"used", be.Used, "slice", be.Limit)
-		}
-	default:
-		res.ErrorKind = KindFailed
-		res.Error = ledger.Elide(err.Error(), errorLimit)
+			"task", task.ID, "rounds", res.Rounds, "tokens", res.Tokens(), "reason", reason)
+	case StatusBudget:
+		log.WarnContext(ctx, "subagent_budget_exhausted", "role", cfg.Seat.Role.Name,
+			"task", task.ID, "tokens", res.Tokens())
 	}
 	return res
+}
+
+// submitted reads the worker's answer off its submission tool.
+//
+// NOTHING IS SYNTHESISED when none arrived: `no_result` is the honest status,
+// and the worker's prose rides the Result beside it. See result.go.
+func submitted(submit *structured.Tool[resultPayload]) (Status, map[string]any) {
+	if submit == nil {
+		return StatusNoResult, nil
+	}
+	payload, ok := submit.Value()
+	if !ok {
+		return StatusNoResult, nil
+	}
+	return StatusOK, payload.Fields
+}
+
+// terminators is the tool-name list that ends a worker's loop.
+func terminators(submit *structured.Tool[resultPayload]) []string {
+	if submit == nil {
+		return nil
+	}
+	return []string{SubmitTool}
 }
 
 // stopReason classifies a context that ended, and returns ("", "") for one
@@ -897,10 +776,10 @@ func stopReason(ctx context.Context) (kind, reason string) {
 	switch cause := context.Cause(ctx); {
 	case cause == nil:
 		return "", ""
-	case errors.Is(cause, errChildDeadline):
-		return KindTimeout, errChildDeadline.Error()
-	case errors.Is(cause, errBatchDeadline):
-		return KindTimeout, errBatchDeadline.Error()
+	case errors.Is(cause, errTaskDeadline):
+		return KindTimeout, errTaskDeadline.Error()
+	case errors.Is(cause, errCallDeadline):
+		return KindTimeout, errCallDeadline.Error()
 	default:
 		// The parent turn was torn down. NOT a timeout: nothing exceeded a
 		// cap, and a planner told "timed out" would helpfully retry with a
@@ -1001,10 +880,29 @@ func (m *sliceMeter) Used() int {
 // A chain even for one member: the wrapper is a pass-through there, and a
 // one-member seat then fails, logs and reports identically to a three-member
 // one.
-func resolveProvider(cfg Config) (llm.Provider, string, error) {
-	members, err := cfg.Models.Chain(cfg.Seat.Role, phase.Subagent)
-	if err != nil {
-		return nil, "", fmt.Errorf("subagent: %w", err)
+func resolveProvider(cfg Config, key string) (llm.Provider, string, error) {
+	var members []chain.Member
+	if key != "" {
+		// AN EXPLICIT KEY GETS NO FALLBACK CHAIN, and no silent
+		// substitution. The seat's chain exists so a turn survives one
+		// provider being down; a template or a task that named a model
+		// named it for a reason, and quietly running somewhere else is
+		// how an operator's cheap-model decision becomes a frontier bill
+		// nobody can trace. An unknown key is refused, naming what is
+		// configured.
+		p, ok := cfg.Models.Provider(key)
+		if !ok {
+			return nil, "", fmt.Errorf(
+				"subagent: model %q is not configured under providers.llm — configured: %s",
+				key, strings.Join(cfg.Models.Keys(), ", "))
+		}
+		members = []chain.Member{{Key: key, Provider: p}}
+	} else {
+		resolved, err := cfg.Models.Chain(cfg.Seat.Role, phase.Subagent)
+		if err != nil {
+			return nil, "", fmt.Errorf("subagent: %w", err)
+		}
+		members = resolved
 	}
 	c, err := chain.New(members, chain.Options{})
 	if err != nil {
@@ -1013,21 +911,23 @@ func resolveProvider(cfg Config) (llm.Provider, string, error) {
 	return c, members[0].Key, nil
 }
 
-// publishBatched emits the one fan-out summary event, best effort.
+// publishCall emits the one fan-out summary event, best effort.
 //
-// Telemetry must never fail a spawn: the children have already run and their
+// Telemetry must never fail a call: the workers have already run and their
 // results are the parent's answer, so a broker that refuses this event must
-// not turn a finished batch into a failed tool call.
-func publishBatched(ctx context.Context, cfg Config, results []Result) {
+// not turn a finished call into a failed tool call.
+func publishCall(ctx context.Context, cfg Config, tasks []resolved, results []Result) {
 	if cfg.Publisher == nil {
 		return
 	}
 	var successes, tokens int
+	statuses := make(map[string]string, len(results))
 	for _, r := range results {
-		if !r.Failed {
+		if r.Status.Succeeded() {
 			successes++
 		}
 		tokens += r.Tokens()
+		statuses[r.ID] = string(r.Status)
 	}
 	ev := events.New(types.SubagentBatched{
 		ParentHandle: cfg.Seat.Role.Handle(),
@@ -1035,6 +935,8 @@ func publishBatched(ctx context.Context, cfg Config, results []Result) {
 		Successes:    successes,
 		Failures:     len(results) - successes,
 		TotalTokens:  tokens,
+		Graph:        graphOf(tasks),
+		Statuses:     statuses,
 	}, cfg.Trace)
 	// The payload carries no role, so the envelope's source is the only
 	// attribution this event has — without it every fan-out in the company
@@ -1043,6 +945,34 @@ func publishBatched(ctx context.Context, cfg Config, results []Result) {
 	if err := cfg.Publisher.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
 		log.WarnContext(ctx, "subagent_batched_publish_failed", "error", err)
 	}
+}
+
+// graphOf renders the shape the call ran, so a dashboard can draw it without
+// the parent's tool arguments — which are not on any event.
+func graphOf(tasks []resolved) []types.SubagentNode {
+	out := make([]types.SubagentNode, 0, len(tasks))
+	for _, t := range tasks {
+		out = append(out, types.SubagentNode{
+			ID: t.ID, Worker: t.Worker, Wave: t.wave,
+			After: slices.Clone(t.After),
+		})
+	}
+	// INPUT ORDER, matching the results beside it: the two are read
+	// together, and a graph in wave order beside results in input order
+	// makes the reader do the pairing by hand.
+	slices.SortStableFunc(out, func(a, b types.SubagentNode) int {
+		return indexOfID(tasks, a.ID) - indexOfID(tasks, b.ID)
+	})
+	return out
+}
+
+func indexOfID(tasks []resolved, id string) int {
+	for _, t := range tasks {
+		if t.ID == id {
+			return t.order
+		}
+	}
+	return 0
 }
 
 // renderCatalogue is the slim catalogue a discovery-capable child is shown:
@@ -1097,268 +1027,3 @@ func union(a, b []string) []string {
 	slices.Sort(out)
 	return out
 }
-
-// --- the LLM-callable tool -------------------------------------------------
-
-// Tool is `spawn_subagent`, bound to ONE parent turn.
-//
-// Bound rather than registered globally: everything a spawn needs — the
-// parent's surface, its remaining budget, its trace — is per-turn. The
-// alternative is a global registration that reaches those values by hanging a
-// map off the tool-call context and validating its shape at every call. A
-// closure over the turn's Config makes that whole class of "engine config
-// missing or malformed" failure unrepresentable.
-type Tool struct{ cfg Config }
-
-var _ tools.Callable = (*Tool)(nil)
-
-// NewTool binds the tool to a turn's config.
-func NewTool(cfg Config) *Tool { return &Tool{cfg: cfg} }
-
-// Name is the tool's name in the registry.
-func (t *Tool) Name() string { return ToolName }
-
-// Description is what the model is told this tool does.
-func (t *Tool) Description() string {
-	return "Spawn an ephemeral sub-agent to do a narrowly-scoped task on your " +
-		"behalf (for example: web research, code execution, large-doc " +
-		"summarisation). The sub-agent runs with ONLY the tools you name in " +
-		"`tool_names` (subset of your own tools, minus spawn_subagent itself " +
-		"and all colleague-surface tools), returns a concise text answer, and " +
-		"cannot itself spawn further sub-agents or contact colleagues. Use this " +
-		"when the task is a bounded capability call rather than work that " +
-		"belongs with a colleague."
-}
-
-// Parameters is the tool's JSON Schema.
-func (t *Tool) Parameters() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"task_prompt": map[string]any{
-				"type": "string",
-				"description": "The concrete task the sub-agent should complete. " +
-					"Seeded as its first user message. For a single sub-agent. " +
-					"Mutually exclusive with `tasks`.",
-			},
-			"system_prompt": map[string]any{
-				"type": "string",
-				"description": "Task-specific system prompt for the sub-agent. The " +
-					"runtime appends the mandatory preamble (no further sub-agents, " +
-					"no colleague contact, return a concise final answer) " +
-					"automatically.",
-			},
-			"tool_names": map[string]any{
-				"type":  "array",
-				"items": map[string]any{"type": "string"},
-				"description": "Names of tools the sub-agent(s) may call. Must be a " +
-					"subset of your own tool list; `spawn_subagent`, `a2a_ask`, and " +
-					"outbound write tools to shared surfaces (channel post, issue " +
-					"comment, pull request) are rejected regardless. The SAME " +
-					"allowlist applies to all children in a batched call.",
-			},
-			"max_turns": map[string]any{
-				"type": "integer",
-				"description": "Optional cap on tool-call rounds for a single " +
-					"sub-agent. Capped at the runtime's configured maximum; asking " +
-					"for more is silently clamped. Ignored when `tasks` is provided " +
-					"— use the per-task `max_turns` instead.",
-			},
-			"tasks": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"task_prompt":   map[string]any{"type": "string"},
-						"system_prompt": map[string]any{"type": "string"},
-						"max_turns":     map[string]any{"type": "integer"},
-					},
-					"required": []any{"task_prompt", "system_prompt"},
-				},
-				"description": "Fan out N sub-agents in parallel. Use for independent " +
-					"workstreams that can run concurrently (parallel research, batch " +
-					"reads, multi-source summarisation). Each entry needs its own " +
-					"`task_prompt` and `system_prompt`; the batch shares one " +
-					"`tool_names` allowlist. The whole batch shares one budget slice " +
-					"— greedy children can starve siblings. Results are returned in " +
-					"input order. Mutually exclusive with the single-shape fields " +
-					"above (`task_prompt` / `system_prompt` / `max_turns`).",
-			},
-		},
-	}
-}
-
-// spawnArgs is the tool's argument shape. The struct tags ARE the schema
-// above; decoding through JSON rather than field by field keeps one
-// definition of the mapping instead of two that can disagree.
-type spawnArgs struct {
-	TaskPrompt   string     `json:"task_prompt"`
-	SystemPrompt string     `json:"system_prompt"`
-	ToolNames    []string   `json:"tool_names"`
-	MaxTurns     turnCount  `json:"max_turns"`
-	Tasks        []taskArgs `json:"tasks"`
-}
-
-type taskArgs struct {
-	TaskPrompt   string    `json:"task_prompt"`
-	SystemPrompt string    `json:"system_prompt"`
-	MaxTurns     turnCount `json:"max_turns"`
-}
-
-// turnCount is a round cap as a model actually emits one.
-//
-// Tool arguments are model output, and models emit an integer as a bare
-// number, a float and a quoted string more or less at random. Two shapes are
-// REFUSED rather than coerced, because both have a silently wrong reading:
-// `3.9` truncates to 3 and mis-caps the child, and `true` is a Go bool that
-// numeric coercion would turn into 1 — a one-round sub-agent that can do
-// nothing but answer.
-type turnCount int
-
-func (t *turnCount) UnmarshalJSON(b []byte) error {
-	text := strings.TrimSpace(string(b))
-	if text == "null" {
-		return nil
-	}
-	// A quoted number is the common string form; anything else quoted falls
-	// through to the numeric parse below and is refused there.
-	if unquoted, err := strconv.Unquote(text); err == nil {
-		text = strings.TrimSpace(unquoted)
-	}
-	n, err := strconv.Atoi(text)
-	if err != nil {
-		return fmt.Errorf("max_turns must be a whole number, got %s", string(b))
-	}
-	if n < 1 {
-		return fmt.Errorf("max_turns must be at least 1, got %d", n)
-	}
-	*t = turnCount(n)
-	return nil
-}
-
-// Call runs the spawn the model asked for.
-func (t *Tool) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
-	_, batched := args["tasks"]
-
-	var parsed spawnArgs
-	if err := remarshal(args, &parsed); err != nil {
-		return failed(err.Error()), nil
-	}
-
-	// Mutual exclusion is checked here rather than expressed as a oneOf in
-	// the schema: tool-call serialisers routinely flatten a oneOf into a
-	// hybrid payload carrying both branches, and the engine then has to
-	// guess which one the model meant.
-	single := parsed.TaskPrompt != "" || parsed.SystemPrompt != ""
-	if single && batched {
-		return failed("spawn_subagent: pass either `task_prompt` + `system_prompt` " +
-			"(single) or `tasks` (batched), not both"), nil
-	}
-
-	if batched {
-		if len(parsed.Tasks) == 0 {
-			return failed("spawn_subagent: `tasks` must not be empty"), nil
-		}
-		req := BatchRequest{ToolNames: parsed.ToolNames}
-		for _, task := range parsed.Tasks {
-			req.Tasks = append(req.Tasks, Task{
-				TaskPrompt:   task.TaskPrompt,
-				SystemPrompt: task.SystemPrompt,
-				MaxTurns:     int(task.MaxTurns),
-			})
-		}
-		results, err := SpawnBatch(ctx, t.cfg, req)
-		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return tools.Result{}, ctxErr
-			}
-			return failed(err.Error()), nil
-		}
-		// The tool itself SUCCEEDED even when children failed: per-child
-		// errors ride inside the payload so the parent can pick out which
-		// sub-tasks need a retry. Marking the whole call failed would tell
-		// it to throw away the siblings that worked.
-		return tools.Result{Output: renderBatch(results)}, nil
-	}
-
-	result, err := Spawn(ctx, t.cfg, Request{
-		TaskPrompt:   parsed.TaskPrompt,
-		SystemPrompt: parsed.SystemPrompt,
-		ToolNames:    parsed.ToolNames,
-		MaxTurns:     int(parsed.MaxTurns),
-	})
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return tools.Result{}, ctxErr
-		}
-		return failed(err.Error()), nil
-	}
-	if result.ErrorKind == KindCancelled {
-		// The turn is being torn down. Reporting this to the model is noise
-		// on a conversation that is about to stop; the loop's own context
-		// check is what ends it.
-		return tools.Result{}, context.Cause(ctx)
-	}
-	if result.Failed {
-		// The partial text goes back WITH the reason. A child that spent
-		// eight rounds before its cap usually produced most of an answer,
-		// and discarding it makes the parent re-run the whole task.
-		out := "sub-agent " + result.ErrorKind + ": " + result.Error
-		if strings.TrimSpace(result.Text) != "" {
-			out += "\n\nPartial output:\n" + result.Text
-		}
-		return failed(out), nil
-	}
-	return tools.Result{Output: result.Text}, nil
-}
-
-// childReport is one child's line in a batched tool result.
-type childReport struct {
-	Index         int      `json:"index"`
-	Text          string   `json:"text"`
-	TurnsUsed     int      `json:"turns_used"`
-	TokensUsed    int      `json:"tokens_used"`
-	RejectedTools []string `json:"rejected_tools,omitempty"`
-	TimedOut      bool     `json:"timed_out"`
-	Error         string   `json:"error,omitempty"`
-	Model         string   `json:"model,omitempty"`
-}
-
-// renderBatch is the batched tool's output: JSON, so the parent can read the
-// per-child split rather than a prose blob it has to re-parse.
-func renderBatch(results []Result) string {
-	reports := make([]childReport, 0, len(results))
-	for i, r := range results {
-		reports = append(reports, childReport{
-			Index: i, Text: r.Text, TurnsUsed: r.Rounds, TokensUsed: r.Tokens(),
-			RejectedTools: r.Rejected, TimedOut: r.TimedOut, Error: r.Error, Model: r.Model,
-		})
-	}
-	blob, err := json.Marshal(map[string]any{"results": reports})
-	if err != nil {
-		// Nothing in childReport can refuse to marshal, but returning an
-		// empty string here would hand the parent silence for a batch that
-		// ran and cost tokens.
-		log.Error("subagent_batch_render_failed", "error", err)
-		return fmt.Sprintf("%d sub-agents ran; their results could not be rendered: %v",
-			len(results), err)
-	}
-	return string(blob)
-}
-
-// remarshal moves a decoded argument map into a typed struct, via JSON
-// because the arguments already came off the wire as JSON and the struct tags
-// are the schema.
-func remarshal(args map[string]any, into any) error {
-	blob, err := json.Marshal(args)
-	if err != nil {
-		return fmt.Errorf("spawn_subagent: arguments could not be re-encoded: %w", err)
-	}
-	if err := json.Unmarshal(blob, into); err != nil {
-		return fmt.Errorf("spawn_subagent: arguments do not match the schema: %w", err)
-	}
-	return nil
-}
-
-// failed is a tool refusal the model reads and can act on.
-func failed(msg string) tools.Result { return tools.Result{Output: msg, Failed: true} }

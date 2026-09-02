@@ -64,6 +64,18 @@ type Role struct {
 
 	BehavioralGuidelines []string `yaml:"behavioral_guidelines,omitempty" json:"behavioral_guidelines,omitempty" desc:"How this seat should work; reaches its prompt."`
 
+	// Workers narrows which of the company's delegate templates this seat
+	// may use. EMPTY MEANS EVERY ONE, which is the useful default: a
+	// company that publishes three workers wants its seats using them, and
+	// requiring each seat to opt in turns a shared library into per-seat
+	// copy-paste. Naming any narrows to exactly those.
+	//
+	// A name that no template defines is refused at load. The runtime
+	// filter would otherwise drop it silently and offer the executor a
+	// shorter list, with nothing anywhere saying a worker was meant to be
+	// there.
+	Workers []string `yaml:"workers,omitempty" json:"workers,omitempty" desc:"Delegate templates this seat may use; empty = every one."`
+
 	// TokenBudget is this seat's own ceiling; 0 is unlimited.
 	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty" js:"min=0" desc:"Per-seat token ceiling; 0 = unlimited."`
 
@@ -392,6 +404,7 @@ func (r *Role) Seat() *org.Role {
 		LLMJudge:             pick(r.LLMJudge, r.LLM.Judge),
 		LLMSandbox:           pick(r.LLMSandbox, r.LLM.Sandbox),
 		LearningEnabled:      r.LearningEnabled,
+		Workers:              append([]string(nil), r.Workers...),
 		MCPEnv:               r.MCPEnv.Clone(),
 		Placement:            r.Placement.Seat(),
 		Schedules:            append([]org.Schedule(nil), r.Schedules...),

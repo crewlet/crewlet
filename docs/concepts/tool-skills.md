@@ -74,7 +74,7 @@ reproduce a bug, call `run_sandbox` with a concrete brief …
 |---|---|---|
 | `key` | yes | Stable identifier. By convention `mcp:<server>`, `tool:<name>`, or `skill:<descriptive>`. Used for idempotency on re-import, prefix-cache ordering, and as the argument to `load_tool_skill`. |
 | `trigger` | yes | A discriminated expression; see *Triggers* below. |
-| `phases` | yes | List of turn phases this skill is **catalogued** in: any subset of `plan`, `execute`, `review`, `subagent`. |
+| `phases` | yes | List of turn phases this skill is **catalogued** in: any subset of `execute`, `review`, `subagent`. |
 | `title` | yes | Rendered as the header when the body loads. |
 | `summary` | yes | ≤240-byte one-liner. Always inline in the per-phase catalogue, regardless of whether the LLM ends up loading the body. Keep it tight. |
 | `required` | no (default `true`) | Load-before-use safeguard. When `true` (the default), the engine **rejects** calls to the tools the trigger covers until the LLM has loaded this skill via `load_tool_skill` in the current session. Set `false` for advisory orientation / hint content. See *Required skills* below. |
@@ -166,7 +166,7 @@ A skill is **catalogued** in a phase's prompt when its declared `phases` include
 |---|---|---|
 | **Execute** | every first-party tool plus whatever the executor has activated, and the role's MCP server names | The executor's live surface, so a skill for a tool it discovered mid-run is catalogued from the next round. |
 | **Review** | empty (Review has no domain tools) | MCP-server-keyed skills still appear when an operator scopes a skill to the Review phase (lists it in the skill's `phases`), even though Review has no domain-tool surface. |
-| **Sub-agent** | parent-passed allowlist | Same matching as Execute against the sub-agent's narrower surface. |
+| **Sub-agent** | the delegated task's allowlist | Same matching as Execute, against the worker's narrower surface. `subagent` is the wire name of the worker phase |
 
 `execute`, `review` and `subagent` are the only names a skill's `phases:` accepts; an unrecognised one is a parse error rather than a skill offered in no phase.
 
@@ -208,7 +208,7 @@ per session; after that the tool works normally.
 
 The blocked call never executes; the LLM loads the skill on the next round and retries.
 
-**Session scope, not turn scope.** "Loaded" means the body is in *this model's context*, and the executor, the reviewer and each sub-agent are separate message histories — so a skill loaded by one is genuinely not in front of the others, and each session loads it itself. A round-cap extension continues the same session and keeps the load; a `self_iterate` starts a fresh session and therefore a fresh guard, because its context started over too. A **suspended** executor is the exception in the other direction: it is re-entered as the same message history, possibly on another node, so its loaded keys ride the saved conversation and the rebuilt guard starts from them.
+**Session scope, not turn scope.** "Loaded" means the body is in *this model's context*, and the executor, the reviewer and each worker are separate message histories — so a skill loaded by one is genuinely not in front of the others, and each session loads it itself. A round-cap extension continues the same session and keeps the load; a `self_iterate` starts a fresh session and therefore a fresh guard, because its context started over too. A **suspended** executor is the exception in the other direction: it is re-entered as the same message history, possibly on another node, so its loaded keys ride the saved conversation and the rebuilt guard starts from them.
 
 **The exempt set is about deadlock, not policy.** `load_tool_skill` itself, the discovery meta-tools, and the phase submitters are never blocked, whatever a trigger says: gating the unlock would make a session unrecoverable, gating discovery would add rounds without protecting anything, and gating a submitter would brick the phase. A misauthored trigger can cost a phase some tools; it can never cost the phase. Every block also publishes a `phase.tool_skill_blocked` event (agent, phase, tool, skill keys, turn id) so operators can see agents attempting to skip required practices.
 
@@ -237,13 +237,13 @@ Enforcement gates exactly the tools the trigger names:
 
 ### Session scope — why "per phase", not "per turn"
 
-"Loaded" is tracked per **LLM session**: one phase's message history. The executor, the reviewer and each sub-agent run on separate message histories, so a body loaded by a sub-agent is *not in its parent's context* — and the same applies to every `self_iterate` iteration (each starts a fresh phase session). This is deliberate: the entire point of a required skill is that the practices are in the context window of the model actually making the call. Round-cap extension loops continue the same message history, so loads carry across extensions without re-loading.
+"Loaded" is tracked per **LLM session**: one phase's message history. The executor, the reviewer and each worker run on separate message histories, so a body loaded by a worker is *not in its parent's context* — and the same applies to every `self_iterate` iteration (each starts a fresh phase session). This is deliberate: the entire point of a required skill is that the practices are in the context window of the model actually making the call. Round-cap extension loops continue the same message history, so loads carry across extensions without re-loading.
 
 ### Discoverability and guardrails
 
 - Catalogued required skills carry a visible `(required — load before use)` marker plus a one-line enforcement note in the `## Tool skills` section, so the model learns the contract up front; the block message is the recovery path, not the discovery path. Review renders required skills *unmarked* — it has no domain tools and no `load_tool_skill`, so nothing is enforced there.
 - Engine plumbing is exempt (`load_tool_skill` itself, `activate_tool`, `list_mcp_server_tools`, `submit_work`, `submit_review`) — a misauthored trigger cannot brick a phase.
-- The guard only arms when the session can satisfy it: `load_tool_skill` is a Plan meta-tool, an Execute always-on, and is always included in sub-agent surfaces. A surface without it (e.g. a custom always-on override that removed the loader) disables enforcement for that session rather than soft-locking the LLM, with a `skill_guard_disabled_no_loader` warning.
+- The guard only arms when the session can satisfy it: `load_tool_skill` is an Execute always-on and rides along on every worker surface that can reach it. A surface without it (e.g. a custom always-on override that removed the loader) disables enforcement for that session rather than soft-locking the LLM, with a `skill_guard_disabled_no_loader` warning.
 - A failed `load_tool_skill` call (wrong key, registry error) does **not** unlock anything.
 
 An enforced skill costs the session one extra tool round plus the body tokens, only in sessions that actually use a covered tool — cheap when triggers are narrow and bodies are sized to their blast radius (the tokens are the point: the practices end up in context before the call). When several enforced skills cover the same tool, the block message lists every missing key and the LLM can load them all in a single round of parallel `load_tool_skill` calls. **Most bundled examples ship enforced**: narrow practices like `skill:platform_mentions` gate only their exact tools, and the server-wide enforced skills (`mcp:github` / `mcp:gitlab`) keep their bodies to ~100-token orientation one-pagers so the per-session load is near-free. Three bundled skills are advisory (`required: false`): `skill:code_runtime` (a "plan a sandbox Execute for code work" hint, not markup correctness), and `skill:getting_unstuck` / `skill:retrieval_research` — each carries a server-wide `mcp_server: atlassian` leaf in its trigger, and *enforcing* advisory practice prose at that width would gate every Jira and Confluence read, inverting the trigger-width rule above.
