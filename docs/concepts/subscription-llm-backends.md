@@ -100,9 +100,9 @@ anyone else.
 
 ### Concurrency within a seat
 
-Batched [sub-agents](turn-engine.md) run in parallel and belong to the
+Delegated [workers](turn-engine.md#workers) run in parallel and belong to the
 *same* agent, so they share that seat's home — sharing memory between an
-agent and its own sub-agents is harmless by definition. Pruning is keyed
+agent and its own workers is harmless by definition. Pruning is keyed
 to the seat's in-flight count crossing zero: the first concurrent call
 wipes and seeds, the last one to finish wipes again. Parallelism inside a
 seat is preserved; nothing crosses a seat or a turn.

@@ -55,8 +55,9 @@ func spawnRunner(t *testing.T, sub *runner.SubagentConfig) *runner.Runner {
 
 func shipped() subagent.Limits {
 	return subagent.Limits{
-		MaxTurns: 20, Timeout: 2 * time.Minute, BatchTimeout: 2 * time.Minute,
-		MaxParallel: 3, BudgetFraction: 0.2, MinPerChildTokens: 500,
+		MaxTurns: 20, MaxTasksPerCall: 8,
+		TaskTimeout: 2 * time.Minute, CallTimeout: 5 * time.Minute,
+		MaxParallel: 3, BudgetFraction: 0.2, MinTokensPerTask: 500,
 	}
 }
 
@@ -73,7 +74,7 @@ func executeOffers(t *testing.T, r *runner.Runner) []string {
 // THE SPAWNER REACHES THE EXECUTOR'S SURFACE.
 //
 // The regression this exists for: internal/agent/subagent was imported by
-// nothing outside its own test, so spawn_subagent was never registered on any
+// nothing outside its own test, so delegate was never registered on any
 // surface and all six turn_engine.subagent_* knobs were validated, schema'd,
 // documented and read by nobody. The package's whole contract — the grant, the
 // caps, the batch, the panic containment — could not run.

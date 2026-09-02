@@ -2,9 +2,11 @@ package runner
 
 import (
 	"context"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -32,13 +34,38 @@ type Remaining interface {
 // [Config.Subagent] leaves the tool off the surface entirely, which is the
 // honest shape for a build with no budget source and for a test.
 type SubagentConfig struct {
-	// Limits are the company's own caps, mapped from turn_engine.
+	// Limits are the company's own caps, mapped from
+	// turn_engine.delegation.
 	Limits subagent.Limits
+
+	// Workers are the delegate templates this seat may name, already
+	// narrowed by its role's own visibility list. Empty is a company that
+	// publishes none, and every task then has to write its own prompt.
+	Workers map[string]config.Worker
 
 	// Remaining reads the seat's headroom. Nil means the seat is uncapped,
 	// which is the same thing a company with no token budget already is —
 	// distinct from a read that FAILED, which refuses the spawn.
 	Remaining Remaining
+}
+
+// workerCatalogue renders the `## Your workers` block, or "".
+//
+// SORTED, because it reaches a system prompt: a block whose lines reshuffle
+// between two turns of one seat costs the provider's prompt cache the whole
+// prefix, on every turn, for no reason a reader could ever find. The line's
+// shape belongs to config.DescribeWorker, so the prompt and the delegate
+// tool's own refusal message cannot describe one worker two ways.
+func (r *Runner) workerCatalogue() string {
+	if r.cfg.Subagent == nil || len(r.cfg.Subagent.Workers) == 0 {
+		return ""
+	}
+	workers := r.cfg.Subagent.Workers
+	lines := make([]string, 0, len(workers))
+	for _, name := range config.WorkerNames(workers) {
+		lines = append(lines, config.DescribeWorker(name, workers[name]))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // spawnEntry is the sub-agent tool as it goes onto a phase surface, or the
@@ -92,6 +119,7 @@ func (r *Runner) spawnEntry(ctx context.Context, ph phase.Phase, round int,
 		// parent's is built from a finished one: what the guard enforces
 		// and what the catalogue showed must come from the same active
 		// list, and the child's does not exist until subagent builds it.
+		Workers: r.cfg.Subagent.Workers,
 		Guard: func(child *tools.Surface) tools.Guard {
 			return r.guardFor(phase.Subagent, child, nil).tools()
 		},

@@ -87,6 +87,12 @@ type Company struct {
 	// batches rather than one unbounded megaprompt.
 	NotificationCoalesceMaxBatch int `yaml:"notification_coalesce_max_batch,omitempty" json:"notification_coalesce_max_batch,omitempty" js:"min=1" desc:"Events merged into one digest trigger."`
 
+	// Workers are the reusable delegate templates a seat's executor hands
+	// work to, keyed by the name it types into a `delegate` call. See
+	// workers.go for why a template exists at all and why naming a tool in
+	// one grants nothing.
+	Workers map[string]Worker `yaml:"workers,omitempty" json:"workers,omitempty" desc:"Reusable delegate templates, keyed by the name an executor calls them by."`
+
 	// Roles are the seats that belong to no unit — a CEO, a cross-cutting
 	// advisor, the founder's own human seat.
 	Roles []Role `yaml:"roles,omitempty" json:"roles,omitempty" desc:"Seats belonging to no unit."`
@@ -186,6 +192,7 @@ func (c *Company) Validate() error {
 	p.wrap(c.Integrations.validate("integrations"))
 	p.wrap(c.validateKnowledgeBackend())
 	p.wrap(c.validateProviderKeys())
+	p.wrap(c.validateWorkers())
 
 	seen := make(map[string]struct{}, len(c.MCPServers))
 	for i := range c.MCPServers {

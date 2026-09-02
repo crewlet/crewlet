@@ -80,6 +80,17 @@ func (r *Registry) All() iter.Seq2[string, llm.Provider] {
 	}
 }
 
+// Provider resolves ONE configured key, with no chain and no fallback.
+//
+// For a caller that was given an explicit model name — a worker template, a
+// delegate task — where falling back would defeat the point of naming it. A
+// key that misses is (nil, false) rather than a substitution, so the caller
+// can refuse and say which keys exist.
+func (r *Registry) Provider(key string) (llm.Provider, bool) {
+	p, ok := r.byKey[key]
+	return p, ok
+}
+
 // Has reports whether a key is configured. The config validator uses it to
 // reject a role naming a provider that does not exist — which is where that
 // typo should die, rather than here where it can only be survived.

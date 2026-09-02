@@ -225,10 +225,16 @@ export function PhaseCard({
   record,
   defaultOpen,
   showRole,
+  nested,
 }: {
   record: PhaseRecord;
   defaultOpen?: boolean;
   showRole?: boolean;
+  /** The calls this phase made — the workers a `delegate` call ran, the
+      round-cap judge. Rendered INSIDE this card, because that is what
+      `host_phase` has always meant and rendering them as siblings left
+      the reader working out which round each belonged to. */
+  nested?: PhaseRecord[];
 }) {
   // Latched: seeded from `defaultOpen` and then owned by the reader. A phase
   // completing is not a reason to hide it.
@@ -257,6 +263,24 @@ export function PhaseCard({
           <span className="t-caption" title="self-iterate round">
             iter {record.iteration}
           </span>
+        )}
+        {/* WHICH task and WHICH template. A delegate call of eight
+            otherwise produces eight identical-looking rows, and the one
+            the reader wants is the one that failed. */}
+        {record.taskId && (
+          <span className="t-cell mono truncate" title="delegated task id">
+            {record.taskId}
+          </span>
+        )}
+        {record.worker && (
+          <Badge outline mono title="worker template">
+            {record.worker}
+          </Badge>
+        )}
+        {!!nested?.length && (
+          <Badge outline title="calls this phase made">
+            {nested.length} {nested.length === 1 ? "worker" : "workers"}
+          </Badge>
         )}
         {showRole && record.role && <span className="t-cell truncate">{record.role}</span>}
 
@@ -454,6 +478,21 @@ export function PhaseCard({
             </Disclosure>
           )}
 
+          {!!nested?.length && (
+            <Disclosure
+              label="Delegated to"
+              count={`${nested.length} · ${fmtCount(
+                nested.reduce((n, r) => n + r.totalTokens, 0),
+              )} tokens`}
+              defaultOpen
+            >
+              <div className="phase-nest">
+                {nested.map((r) => (
+                  <PhaseCard key={r.key} record={r} />
+                ))}
+              </div>
+            </Disclosure>
+          )}
           <footer className="phase-foot">
             <span className="t-caption">
               {record.inputTokens ? `${fmtCount(record.inputTokens)} in` : ""}

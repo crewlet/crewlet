@@ -140,8 +140,8 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		},
 		{
 			"a budget fraction above one",
-			"name: Acme\nturn_engine:\n  subagent_budget_fraction: 1.5\n",
-			"turn_engine.subagent_budget_fraction", ErrOutOfRange,
+			"name: Acme\nturn_engine:\n  delegation:\n    budget_fraction: 1.5\n",
+			"turn_engine.delegation.budget_fraction", ErrOutOfRange,
 		},
 		{
 			"a ceiling below its own base",

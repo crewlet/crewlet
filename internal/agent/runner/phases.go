@@ -240,6 +240,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
 		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
 		OnboardingHint:      r.onboardingHint(),
+		Workers:             r.workerCatalogue(),
 		// The tool-skill catalogue, offered against the surface this
 		// phase actually has — and nil where a company has published
 		// none, which keeps the prompt free of skill scaffolding rather

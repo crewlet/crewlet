@@ -168,6 +168,53 @@
       },
       "type": "object"
     },
+    "Delegation": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_fraction": {
+          "description": "Share of the parent's remaining budget one delegate call may spend.",
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "call_timeout_seconds": {
+          "description": "Wall-clock cap on a whole delegate call, waves included.",
+          "minimum": 0,
+          "type": "number"
+        },
+        "max_parallel": {
+          "description": "Workers running at once within one delegate call.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_tasks_per_call": {
+          "description": "Tasks one delegate call may contain.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_turns": {
+          "description": "Tool rounds one worker may run.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_turns_ceiling": {
+          "description": "Highest max_turns a worker template may declare.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "min_tokens_per_task": {
+          "description": "Floor on one worker's token share; below it the call is refused.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "task_timeout_seconds": {
+          "description": "Wall-clock cap on one worker.",
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
     "EmbeddingProvider": {
       "additionalProperties": false,
       "properties": {
@@ -1192,6 +1239,13 @@
         "unit": {
           "description": "Home unit for a root-level seat; the seat is moved into it.",
           "type": "string"
+        },
+        "workers": {
+          "description": "Delegate templates this seat may use; empty = every one.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -1744,6 +1798,9 @@
         "conversation_session": {
           "$ref": "#/$defs/ConversationSession"
         },
+        "delegation": {
+          "$ref": "#/$defs/Delegation"
+        },
         "delegation_depth_limit": {
           "description": "Maximum depth of agent-to-agent delegation chains.",
           "minimum": 0,
@@ -1767,7 +1824,7 @@
           "type": "integer"
         },
         "max_iterations": {
-          "description": "Plan/Execute/Review iterations per turn.",
+          "description": "Execute/review iterations per turn.",
           "minimum": 0,
           "type": "integer"
         },
@@ -1790,37 +1847,6 @@
           "description": "Refuse a coding run below this remaining budget.",
           "minimum": 0,
           "type": "integer"
-        },
-        "subagent_batch_timeout_seconds": {
-          "description": "Wall-clock cap on a whole batched spawn.",
-          "minimum": 0,
-          "type": "number"
-        },
-        "subagent_budget_fraction": {
-          "description": "Share of the parent's remaining budget a sub-agent may use.",
-          "maximum": 1,
-          "minimum": 0,
-          "type": "number"
-        },
-        "subagent_max_parallel": {
-          "description": "Sub-agents run concurrently in one batch.",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "subagent_max_turns": {
-          "description": "Tool rounds one sub-agent may run.",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "subagent_min_per_child_tokens": {
-          "description": "Floor on a child's token slice; below it the batch is refused.",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "subagent_timeout_seconds": {
-          "description": "Wall-clock cap on one sub-agent.",
-          "minimum": 0,
-          "type": "number"
         }
       },
       "type": "object"
@@ -1915,6 +1941,45 @@
         }
       },
       "type": "object"
+    },
+    "Worker": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "description": "What this worker is for, written for the executor choosing one.",
+          "type": "string"
+        },
+        "max_turns": {
+          "description": "Tool rounds this worker may run; 0 takes the runtime cap.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "description": "providers.llm key for this worker; empty takes the seat's llm_subagent chain.",
+          "type": "string"
+        },
+        "output": {
+          "additionalProperties": {},
+          "description": "JSON Schema for this worker's structured answer. Absent takes the default shape.",
+          "type": "object"
+        },
+        "system_prompt": {
+          "description": "The worker's persona and standing instructions. The runtime preamble is appended.",
+          "type": "string"
+        },
+        "tools": {
+          "description": "Tools this worker asks for. Still filtered against the caller's own tools at spawn.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "description",
+        "system_prompt"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://docs.crewlet.ai/schema/company.schema.json",
@@ -2006,6 +2071,13 @@
     "vision": {
       "description": "Longer statement of where the company is going.",
       "type": "string"
+    },
+    "workers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Worker"
+      },
+      "description": "Reusable delegate templates, keyed by the name an executor calls them by.",
+      "type": "object"
     }
   },
   "required": [

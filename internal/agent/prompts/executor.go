@@ -128,6 +128,16 @@ type ExecutorInput struct {
 	// OnboardingHint.
 	AvailableTools []string
 
+	// Workers is the rendered `## Your workers` block: one line per
+	// delegate template this seat may name, with what it is for and what
+	// it returns.
+	//
+	// GATED on `delegate` actually being on the surface, below: a seat
+	// told about workers it cannot reach spends a round discovering the
+	// tool does not exist, and reads the refusal as a permission decision
+	// nobody made.
+	Workers string
+
 	// CounterpartyProfile is the observed-traits block for the turn's
 	// triggering counterparty, pre-rendered and trimmed by the profiler.
 	CounterpartyProfile string
@@ -159,6 +169,19 @@ type ExecutorInput struct {
 	// scaffolding entirely.
 	Skills SkillCatalogue
 }
+
+// workersPreamble frames the list that follows it.
+//
+// Two sentences, and both are load-bearing. The first says a worker is a
+// PARALLEL leaf rather than a colleague, which is the confusion that sends an
+// executor to delegate something it should have asked a teammate. The second
+// says the answer comes back in this turn, which is what stops it treating a
+// delegation as fire-and-forget and ending the turn before reading anything.
+const workersPreamble = "Short-lived workers you can hand narrowly-scoped work " +
+	"to with `delegate`. Each one runs its own tool loop with a slice of your " +
+	"tools, cannot write anywhere, and reports back to you inside this turn — " +
+	"so you still finish the job yourself. They are not colleagues: work that " +
+	"belongs to another seat goes to that seat."
 
 // BuildExecutor renders the executor's system prompt.
 //
@@ -213,6 +236,13 @@ func BuildExecutor(seat Seat, in ExecutorInput) string {
 	}
 	if in.CounterpartyProfile != "" {
 		parts = append(parts, "\n## Known counterparty", in.CounterpartyProfile)
+	}
+	// BEFORE the tool sections, because choosing a worker is a decision
+	// about how to do the work rather than about which tool to call, and
+	// the executor reads this prompt top-down: what it is, what it knows,
+	// who it can hand work to, then what it can call itself.
+	if in.Workers != "" && slices.Contains(in.AvailableTools, "delegate") {
+		parts = append(parts, "\n## Your workers", workersPreamble, in.Workers)
 	}
 
 	// The tool-skills catalogue lands adjacent to the tool catalogue so the

@@ -1255,12 +1255,15 @@ auxiliary worker, agent, and turn.
 Notes:
 
 - `by_phase` covers every phase emitted by the
-  [Turn Engine](../concepts/turn-engine.md): `plan`, `execute`,
-  `review`, `subagent`, `auxiliary`, and `judge` (the round-cap
-  extension judge).
-- `by_worker` covers only `phase == "auxiliary"` rows — the worker
-  name identifies the learning-subsystem caller (e.g.
-  `persist_decider`, `counterparty_profiler`, `skill_synthesizer`).
+  [Turn Engine](../concepts/turn-engine.md): `onboarding`, `execute`,
+  `review`, `subagent` (a delegated worker), `auxiliary`, and `judge`
+  (the round-cap extension judge). A store that predates the two-stage
+  redesign also holds `plan` rows, and they still roll up.
+- `by_worker` covers the rows that name one: an `auxiliary` row's worker
+  is the learning-subsystem caller (e.g. `persist_decider`,
+  `counterparty_profiler`, `skill_synthesizer`), and a `subagent` row's
+  is the `workers:` template it ran — empty on a delegation that wrote
+  its prompt inline.
 - `by_model` is useful when roles override `llm_auxiliary` with a
   cheaper model for reflection / summarisation work.
 - All lists are sorted by `total_tokens` descending; `by_turn` is
