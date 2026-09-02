@@ -330,6 +330,22 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 	if seatSandbox(c, "CEO") != nil || seatSandbox(c, "Nobody") != nil {
 		t.Error("a seat with no block, or no such seat, answered a block")
 	}
+
+	// THE FIRST MATCH IS THE ANSWER, even when it wrote no block. Using the
+	// nil block as the "still looking" sentinel cannot tell a seat that
+	// declared none from a name nobody holds, so the walk ran on past its
+	// own answer and handed back a LATER seat's block for this one — a
+	// seat that turned code work off getting somebody else's.
+	shadowed := &Company{Config: &config.Company{
+		Roles: []config.Role{{Name: "Twin"}},
+		Units: []config.Unit{{
+			Name:  "Platform",
+			Roles: []config.Role{{Name: "Twin", Sandbox: &config.RoleSandbox{Enabled: true}}},
+		}},
+	}}
+	if got := seatSandbox(shadowed, "Twin"); got != nil {
+		t.Errorf("the first seat named Twin wrote no block and was handed %+v", got)
+	}
 }
 
 // launchReadyEngine is an engine that can take an agent-mode launch all the

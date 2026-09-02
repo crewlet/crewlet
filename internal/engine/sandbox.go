@@ -717,13 +717,20 @@ func seatSandbox(c *Company, roleName string) *config.RoleSandbox {
 	// it with "this seat's sandbox is not enabled" on a seat whose block
 	// says otherwise: code work was silently unavailable to every unit
 	// member, and the message pointed at the one thing that was correct.
-	var found *config.RoleSandbox
+	//
+	// A SEPARATE found FLAG, not the block itself as a sentinel: a seat
+	// that exists and wrote no `sandbox:` block is a nil block, which is
+	// the same value a name nobody holds returns. Overloading the two
+	// meant the walk kept looking after it had its answer, and would have
+	// returned a LATER seat's block for an earlier one of the same name.
+	var gate *config.RoleSandbox
+	found := false
 	c.Config.EachRole(func(_ string, role *config.Role) {
-		if found == nil && role.Name == roleName {
-			found = role.Sandbox
+		if !found && role.Name == roleName {
+			gate, found = role.Sandbox, true
 		}
 	})
-	return found
+	return gate
 }
 
 // sandboxEnv assembles the run environment.
@@ -1193,11 +1200,12 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 	}
 	member, err := c.Models.Head(seat, ph)
 	if err != nil {
-		//nolint:nilerr // Deliberate: a seat with no resolvable sandbox
-		// model is the phase registry's problem — it refuses a company
-		// with no models at build — and sandboxLLM has already logged
-		// this one. Returning the error here would refuse a run over a
-		// question this guard does not ask.
+		//nolint:nilerr // Deliberate: a seat with no resolvable model for
+		// this phase is the phase registry's problem — it refuses a
+		// company with no models at build — and [runLLM], which resolved
+		// the same seat and phase to pick the run's model moments ago,
+		// has already logged it. Returning the error here would refuse a
+		// run over a question this guard does not ask.
 		return nil
 	}
 	agent, isCLI := member.Provider.(*cliagent.Provider)
