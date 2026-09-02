@@ -30,6 +30,7 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 	}{
 		{"ASecondLaunchKeepsTheBoxItWillReattachTo", testASecondLaunchKeepsTheBoxItWillReattachTo},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
+		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
 		{"ALaunchingRunIsNotClaimable", testALaunchingRunIsNotClaimable},
 		{"SuspendingOpensTheRunToTheTail", testSuspendingOpensTheRunToTheTail},
@@ -161,6 +162,39 @@ func testASecondLaunchDropsTheFirstSuspension(t *testing.T, s sandbox.PendingSto
 	}
 	if len(got.ExecuteState) != 0 {
 		t.Errorf("the first call's suspension survived the relaunch: %+v", got.ExecuteState)
+	}
+}
+
+// A SECOND LAUNCH UNDER ONE TURN ID IS A SECOND ROUND, and its tool log starts
+// empty.
+//
+// The bridged log is the whole record an agent-mode resume rebuilds its phase
+// from. A reviewer's self_iterate launches another executor run under the same
+// turn id, and the first round's log left in place is not merely stale: a
+// round that in fact submitted nothing would report the PREVIOUS round's
+// outcome instead of being rescued as incomplete, and the previous round's
+// deliveries would satisfy this round's delivery check. The same reset the
+// suspension beside it gets, for the same reason.
+func testASecondLaunchDropsTheFirstRunsBridgedCalls(t *testing.T, s sandbox.PendingStore) {
+	first := run("t-relaunch-bridge")
+	mustBeginLaunch(t, s, first)
+	if _, err := s.AppendBridgeCall(context.Background(), first.TurnID, sandbox.BridgeCall{
+		Name: "submit_work", Args: `{"outcome":"delivered"}`, At: base,
+	}); err != nil {
+		t.Fatalf("AppendBridgeCall: %v", err)
+	}
+	if got := mustGet(t, s, first.TurnID); len(got.BridgeCalls) != 1 {
+		t.Fatalf("the first round recorded %d calls, want 1", len(got.BridgeCalls))
+	}
+
+	mustBeginLaunch(t, s, run("t-relaunch-bridge"))
+	got := mustGet(t, s, first.TurnID)
+	if len(got.BridgeCalls) != 0 {
+		t.Errorf("the second round inherited %d calls from the first: %+v",
+			len(got.BridgeCalls), got.BridgeCalls)
+	}
+	if got.BridgeCallsElided != 0 {
+		t.Errorf("the elision count survived the relaunch: %d", got.BridgeCallsElided)
 	}
 }
 

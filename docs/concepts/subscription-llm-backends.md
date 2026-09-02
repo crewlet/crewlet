@@ -199,6 +199,18 @@ without it agent mode is **refused** at launch rather than started — a
 coding agent with none of the seat's tools cannot answer anybody, cannot
 touch a ticket and cannot submit its work.
 
+> **In a fleet, that URL must address the node itself — not a load
+> balancer in front of several, and not a standalone API process.** A
+> session is a live tool surface: the seat's MCP children, its skill
+> guard, its per-turn recording, all objects in the process that claimed
+> the seat. Signing shares *authentication* across a fleet; it does not
+> and could not share the surface. Each node mints its endpoint from its
+> own value, so a per-node-addressable one is correct and a shared one
+> sends calls to peers that never held the session. Those answer 401
+> forever, and the response deliberately cannot say why — but the log
+> can, and does: `mcp_bridge_unresolved` names this setting when the
+> token is one the fleet signed.
+
 The run ends by calling `submit_work` over that bridge, exactly as a
 native loop ends by calling it locally, so the outcome vocabulary and the
 rescue path are shared. A run that stops without submitting is rescued as

@@ -705,12 +705,19 @@ func seatSandbox(c *Company, roleName string) *config.RoleSandbox {
 	if c == nil || c.Config == nil {
 		return nil
 	}
-	for i := range c.Config.Roles {
-		if c.Config.Roles[i].Name == roleName {
-			return c.Config.Roles[i].Sandbox
+	// EVERY SEAT, AT ANY DEPTH. This walked only the top-level `roles:`,
+	// so a seat declared under `units:` — which, in a company with an org
+	// chart, is most of them — always answered nil. The tool then refused
+	// it with "this seat's sandbox is not enabled" on a seat whose block
+	// says otherwise: code work was silently unavailable to every unit
+	// member, and the message pointed at the one thing that was correct.
+	var found *config.RoleSandbox
+	c.Config.EachRole(func(_ string, role *config.Role) {
+		if found == nil && role.Name == roleName {
+			found = role.Sandbox
 		}
-	}
-	return nil
+	})
+	return found
 }
 
 // sandboxEnv assembles the run environment.
@@ -736,8 +743,14 @@ func (e *Engine) sandboxEnv(seat *org.Role, gate *config.RoleSandbox, setup []sa
 	for key, value := range sandbox.SetupEnv(setup) {
 		env[key] = value
 	}
-	for key, value := range gate.Env {
-		env[key] = value
+	// NIL-SAFE, because a seat legitimately has no block: an agent-mode
+	// executor is placed by its own providers.llm entry, so it runs in a
+	// box whether or not role.sandbox was ever written. Ranging over a nil
+	// pointer's field panicked the seat's first launch.
+	if gate != nil {
+		for key, value := range gate.Env {
+			env[key] = value
+		}
 	}
 
 	// RESOLVED EXACTLY ONCE, here, at launch — not at load. These values

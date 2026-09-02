@@ -254,3 +254,66 @@ func TestAnAgentModeRunUsesTheExecutorsModelNotTheSandboxOne(t *testing.T) {
 		t.Fatalf("a delegated coding run resolved to %+v, want llm_sandbox's model", delegated)
 	}
 }
+
+// A SEAT WITH NO role.sandbox BLOCK IS A SUPPORTED AGENT-MODE CONFIGURATION.
+//
+// An agent-mode executor is placed by its own providers.llm entry's `run_in`,
+// so it runs in a box whether or not that block was ever written — and
+// assembling the run environment used to range over the nil block's Env and
+// panic on the seat's very first launch.
+func TestAnAgentModeSeatNeedsNoSandboxBlock(t *testing.T) {
+	t.Parallel()
+	e := &Engine{}
+	seat := &org.Role{Name: "SWE"}
+	env := e.sandboxEnv(seat, nil, nil)
+	if env == nil {
+		t.Fatal("a seat with no sandbox block assembled no environment")
+	}
+	// The engine's own tool-agnostic facts still land.
+	if env["CREWLET_AGENT_HANDLE"] == "" {
+		t.Errorf("the agent identity was dropped: %v", env)
+	}
+}
+
+// A SEAT'S SANDBOX BLOCK IS FOUND WHEREVER IT IS DECLARED.
+//
+// The lookup walked only the top-level `roles:`, so a seat under `units:` —
+// most of a real company's seats — always answered nil. run_sandbox then
+// refused it with "this seat's sandbox is not enabled" on a seat whose block
+// says exactly the opposite, and every other per-seat sandbox setting (its
+// setup steps, its MCP scope, its env, its pause TTL, its round cap) was
+// silently dropped.
+func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
+	t.Parallel()
+	never := 0.0
+	c := &Company{Config: &config.Company{
+		Roles: []config.Role{{Name: "CEO"}},
+		Units: []config.Unit{{
+			Name:  "Platform",
+			Roles: []config.Role{{Name: "Nested", Sandbox: &config.RoleSandbox{Enabled: true}}},
+			Children: []config.Unit{{
+				Name: "Infra",
+				Roles: []config.Role{{Name: "Deep", Sandbox: &config.RoleSandbox{
+					Enabled: true, PauseTTLSeconds: &never,
+				}}},
+			}},
+		}},
+	}}
+	for _, name := range []string{"Nested", "Deep"} {
+		gate := seatSandbox(c, name)
+		if gate == nil {
+			t.Fatalf("seat %q inside a unit found no sandbox block", name)
+		}
+		if !gate.Enabled {
+			t.Errorf("seat %q found a block that is not the one it wrote", name)
+		}
+	}
+	// The seat at depth keeps its own settings, not the shallower one's.
+	if deep := seatSandbox(c, "Deep"); deep.PauseTTLSeconds == nil || *deep.PauseTTLSeconds != 0 {
+		t.Errorf("the nested seat's own settings were lost: %+v", deep)
+	}
+	// A seat with no block still answers nil, and a name nobody holds too.
+	if seatSandbox(c, "CEO") != nil || seatSandbox(c, "Nobody") != nil {
+		t.Error("a seat with no block, or no such seat, answered a block")
+	}
+}

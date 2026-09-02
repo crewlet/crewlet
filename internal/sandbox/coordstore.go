@@ -118,6 +118,15 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// And its question is answered, or was never asked — either way a
 		// reply arriving now belongs to the new job, not the old one.
 		existing.Question, existing.Audience = "", ""
+		// NOR ARE THE PREVIOUS JOB'S TOOL CALLS THIS JOB'S. The bridged
+		// log is the whole record an agent-mode resume rebuilds its phase
+		// from, and a second executor round under the same turn id — what
+		// a reviewer's self_iterate produces — would otherwise replay the
+		// FIRST round's submit_work: a round that in fact submitted
+		// nothing would report the previous round's outcome instead of
+		// being rescued, and its deliveries would satisfy this round's
+		// delivery check.
+		existing.BridgeCalls, existing.BridgeCallsElided = nil, 0
 		return true
 	})
 	return err
