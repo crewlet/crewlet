@@ -193,6 +193,7 @@ func (c *Company) Validate() error {
 	p.wrap(c.validateKnowledgeBackend())
 	p.wrap(c.validateProviderKeys())
 	p.wrap(c.validateWorkers())
+	p.wrap(c.validateSandboxPlacement())
 
 	seen := make(map[string]struct{}, len(c.MCPServers))
 	for i := range c.MCPServers {
@@ -288,9 +289,7 @@ func (c *Company) validateProviderKeys() error {
 	}
 	slices.Sort(known)
 
-	for i := range c.Roles {
-		role := &c.Roles[i]
-		path := idx("roles", i)
+	c.eachRole(func(path string, role *Role) {
 		// Both written surfaces are checked, and each is reported at the
 		// path the operator typed. Validating the RESOLVED chain instead
 		// would hide half of them: the flat field wins over the mapping,
@@ -323,6 +322,148 @@ func (c *Company) validateProviderKeys() error {
 							"is the only place the typo can be seen",
 						key, strings.Join(known, ", "))
 				}
+			}
+		}
+	})
+	return p.err()
+}
+
+// eachRole visits EVERY seat in the company, at the path an operator typed:
+// the top-level `roles:` and every seat inside `units:`, to any depth.
+//
+// It exists because the walk was written inline once and covered only the
+// top-level list, so a cross-field rule silently exempted every seat that
+// belonged to a unit — which, in a company with an org chart, is most of them.
+// A rule that holds for a seat in `roles:` and not for the identical seat one
+// level down is not a rule, and the seats it missed are exactly the ones whose
+// mistakes have no run-time symptom to find them by.
+func (c *Company) eachRole(visit func(path string, role *Role)) {
+	for i := range c.Roles {
+		visit(idx("roles", i), &c.Roles[i])
+	}
+	var walk func(path string, units []Unit)
+	walk = func(path string, units []Unit) {
+		for i := range units {
+			unit := &units[i]
+			here := idx(path, i)
+			for j := range unit.Roles {
+				visit(idx(at(here, "roles"), j), &unit.Roles[j])
+			}
+			walk(at(here, "children"), unit.Children)
+		}
+	}
+	walk("units", c.Units)
+}
+
+// SandboxPlacements is every cell a seat could ACTUALLY land in, each mapped
+// to the path of the first thing that named it.
+//
+// ONE COMPUTATION, TWO CALLERS, and they have to agree or the company is
+// refused for a rule the engine then breaks anyway. Validation requires a
+// container image only where a container is reached; the engine builds a
+// backend only for what is reached. Built eagerly from the catalogue instead,
+// the engine constructed a container backend for a company whose seats all run
+// direct — and failed the apply demanding an image the validator had just
+// refused as a field nothing would read.
+//
+// The DEFAULT IS ALWAYS REACHED when the catalogue is enabled: it is where a
+// seat that names nothing goes, including a seat added later by a founder
+// editing Tier B live, so a company must be able to run it before one exists.
+func (c *Company) SandboxPlacements() map[Placement]string {
+	reached := make(map[Placement]string)
+	catalogue := c.Providers.Sandbox
+	if !catalogue.Enabled() {
+		return reached
+	}
+	if run := catalogue.RunIn(); run != "" {
+		where := "providers.sandbox.default_run_in"
+		if catalogue.DefaultRunIn == "" {
+			// Resolved from the catalogue's own shape rather than
+			// written, so the message points at the block, not at a
+			// field the operator will not find.
+			where = "providers.sandbox"
+		}
+		reached[run] = where
+	}
+	c.eachRole(func(path string, role *Role) {
+		gate := role.Sandbox
+		if gate == nil || !gate.Enabled || gate.RunIn == "" {
+			return
+		}
+		if _, seen := reached[gate.RunIn]; !seen {
+			reached[gate.RunIn] = at(at(path, "sandbox"), "run_in")
+		}
+	})
+	return reached
+}
+
+// validateSandboxPlacement holds the rules that need BOTH the catalogue and
+// the seats: which cells a company actually reaches, and whether the blocks
+// configuring them are there.
+//
+// Neither half can hold it alone. providers.sandbox is validated without the
+// roles, so it cannot know that `run_in: container` is reached and an image is
+// needed; a role is validated without the providers, so it cannot know that
+// the cell it names is not configured. Both failures are silent at run time —
+// the seat is offered the tool and the first coding run dies inside a turn.
+func (c *Company) validateSandboxPlacement() error {
+	var p problems
+	catalogue := c.Providers.Sandbox
+
+	c.eachRole(func(path string, role *Role) {
+		gate := role.Sandbox
+		if gate == nil || !gate.Enabled {
+			return
+		}
+		where := at(at(path, "sandbox"), "run_in")
+		if !catalogue.Enabled() {
+			p.add(at(at(path, "sandbox"), "enabled"), ErrMissing,
+				"this seat runs code, but the company configures no sandbox. "+
+					"Add providers.sandbox, or turn the seat's gate off — an "+
+					"enabled gate with no catalogue offers the seat nothing and "+
+					"says so nowhere")
+			return
+		}
+		run := gate.RunIn
+		if run == "" {
+			run = catalogue.RunIn()
+		}
+		switch {
+		case run == "":
+			p.add(where, ErrMissing,
+				"this seat runs code and the catalogue offers more than one "+
+					"place to do it (%s), so it has to name one — or "+
+					"providers.sandbox.default_run_in has to",
+				names(catalogue.available()))
+		case !oneOf(run, Placements):
+			// Spelling is the role's own rule; it already reported.
+		case !catalogue.Configured(run):
+			p.add(where, ErrConflict,
+				"%q needs the %s backend configured under providers.sandbox "+
+					"(this catalogue has %s)",
+				run, run.backend(), names(catalogue.available()))
+		}
+	})
+
+	reached := c.SandboxPlacements()
+	if local := catalogue.localBlock(); local != nil {
+		// THE IMAGE IS ONLY NEEDED WHERE A CONTAINER IS ACTUALLY RUN, and
+		// only the walk above knows that. Required unconditionally it would
+		// refuse a perfectly good direct-only company; unchecked, a seat's
+		// first coding run fails at container create, minutes into a turn.
+		if named, wanted := reached[PlacementContainer]; wanted && strings.TrimSpace(local.Image) == "" {
+			p.add("providers.sandbox.local.image", ErrMissing,
+				"%s runs in a container, so the local backend needs an image "+
+					"with the coding-agent CLI installed", named)
+		}
+		if _, wanted := reached[PlacementContainer]; !wanted {
+			for _, unread := range local.containerOnly() {
+				if strings.TrimSpace(unread.value) == "" {
+					continue
+				}
+				p.add(at("providers.sandbox.local", unread.field), ErrConflict,
+					"only a container box reads this, and no seat runs in one. "+
+						"Give a seat `run_in: container`, or remove the field")
 			}
 		}
 	}

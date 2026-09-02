@@ -74,8 +74,8 @@ func newWaiterRig(t *testing.T) *waiterRig {
 		now:      time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
 	}
 	manager, err := NewManager(ManagerOptions{
-		Provider: rig.provider,
-		Runners:  map[string]Runner{"claude-code": rig.runner},
+		Providers: map[Placement]Provider{Direct: rig.provider},
+		Runners:   map[string]Runner{"claude-code": rig.runner},
 	})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)

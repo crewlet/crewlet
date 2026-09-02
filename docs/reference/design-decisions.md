@@ -177,7 +177,7 @@ that list, and the two bullets below are why.
   at its first query. Shipping one architecture of an operating system while
   silently breaking the other is worse than shipping neither, and a Windows
   binary was in any case the one that refused
-  [`providers.sandbox: {type: local}`](../concepts/code-sandbox.md).
+  [`providers.sandbox.local`](../concepts/code-sandbox.md).
 - **There is no musl build either, so the linux binaries need glibc.** Loading
   that native library means `dlopen`, which makes the binary dynamically linked
   against `libc.so.6` even though it is pure Go and built with

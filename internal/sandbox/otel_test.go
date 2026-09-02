@@ -398,7 +398,9 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
-		Provider:  sandbox.NewFakeProvider(),
+		Providers: map[sandbox.Placement]sandbox.Provider{
+			sandbox.Direct: sandbox.NewFakeProvider(),
+		},
 		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
 		Telemetry: receiver,
 	})

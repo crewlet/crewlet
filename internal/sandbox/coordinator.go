@@ -305,7 +305,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 // same checkout, and re-provisioning would throw away the working tree.
 func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, error) {
 	manager := c.mgr()
-	box, runner, err := manager.Reconnect(ctx, run.SandboxID, run.CodingAgent)
+	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.CodingAgent)
 	if err != nil {
 		return Result{}, err
 	}
@@ -562,7 +562,15 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 	if run.SandboxID == "" {
 		return
 	}
-	if err := c.mgr().Provider().Kill(ctx, run.SandboxID); err != nil {
+	provider, err := c.mgr().Provider(Placement(run.Placement))
+	if err != nil {
+		// The row names a cell this company no longer configures. The box
+		// is unreachable and cannot be reclaimed here, so the row is still
+		// released below — leaving it open would hold the seat's busy count
+		// forever over a box that will expire on its own TTL anyway.
+		log.WarnContext(ctx, "sandbox_teardown_no_backend",
+			"turn_id", run.TurnID, "placement", run.Placement, "error", err.Error())
+	} else if err := provider.Kill(ctx, run.SandboxID); err != nil {
 		log.WarnContext(ctx, "sandbox_teardown_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
 	}

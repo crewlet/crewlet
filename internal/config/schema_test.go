@@ -74,9 +74,9 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"LLMProvider", "type", strs(LLMProviderTypes)},
 		{"LLMProvider", "reasoning_effort", strs(ReasoningEfforts)},
 		{"EmbeddingProvider", "type", strs(EmbeddingProviderTypes)},
-		{"SandboxProvider", "type", strs(SandboxTypes)},
+		{"SandboxProvider", "default_run_in", strs(Placements)},
 		{"SandboxProvider", "default_coding_agent", strs(CodingAgents)},
-		{"LocalSandbox", "containment", strs(Containments)},
+		{"RoleSandbox", "run_in", strs(Placements)},
 		{"LocalSandbox", "runtime", strs(ContainerRuntimes)},
 		{"MCPServer", "transport", strs(MCPTransports)},
 		{"Slack", "typing_status", strs(WorkingStatuses)},
@@ -262,8 +262,8 @@ providers:
       cli: {agent: claude-code, max_concurrent: 2}
   embeddings: {type: openai, model: text-embedding-3-small, api_key: "${OPENAI_API_KEY}", dimensions: 1536}
   sandbox:
-    type: local
-    local: {containment: container, image: acme/box, runtime: auto}
+    local: {image: acme/box, runtime: auto}
+    default_run_in: container
     default_coding_agent: opencode
     setup:
       - name: git-auth
@@ -350,8 +350,8 @@ units:
 			yaml: "name: Acme\nproviders:\n  llm:\n    default: {type: openai-compatable, model: m, base_url: https://x}\n",
 		},
 		{
-			name: "unknown containment", tier: TierCompany, editorCatches: true,
-			yaml: "name: Acme\nproviders:\n  sandbox: {type: local, local: {containment: chroot, image: x}}\n",
+			name: "unknown placement", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nproviders:\n  sandbox: {local: {image: x}, default_run_in: chroot}\n",
 		},
 		{
 			name: "malformed handle", tier: TierCompany, editorCatches: true,

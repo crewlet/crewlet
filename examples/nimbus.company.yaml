@@ -96,46 +96,56 @@ providers:
   # role.llm_sandbox at it (otherwise the sandbox run fails credential
   # validation — SandboxCredentialError — at launch).
   sandbox:
-    # THE ENGINE HOST IS THE BACKEND HERE. `type: local` runs each coding
-    # job as a process tree on the machine running `crewlet run` — no
-    # remote account, no API key, nothing to provision, which is what
-    # makes it the right choice for a company running on your own machine
-    # against your own checkouts.
+    # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST, and each
+    # seat picks one with `role.sandbox.run_in`. Configure `local:`, `e2b:`,
+    # or both — the seat that should use the login on this machine and the
+    # seat whose generated code must never touch it are different seats, and
+    # a company-wide backend could only ever answer for both.
     #
-    # For anything shared, `type: e2b` gives every run a fresh VM that is
-    # not the engine's — set `api_key` (and `domain` for a self-hosted
-    # cluster). Don't want code work at all? Set ``type: none`` and the
-    # engineers fall back to native Execute. (``type: fake`` is in-process
-    # stubs for tests — it runs no real coding agent and no real MCP.)
-    # There is NO DEFAULT: `local` runs code on this host and `none` turns
-    # code work off, and neither is a choice to make for you.
+    # This company configures the ENGINE HOST only: each coding job runs as a
+    # process tree on the machine running `crewlet run` — no remote account,
+    # no API key, nothing to provision, which is what makes it right for a
+    # company running on your own machine against your own checkouts.
     #
-    # PREREQUISITE for `local`: the coding agent named below must be
-    # installed on that machine, since `direct` runs it as a child
+    # For anything shared, add `e2b:` with its `api_key` (and `domain` for a
+    # self-hosted cluster) and point the seats that need it at `run_in: e2b`.
+    # Don't want code work at all? Remove this block and the engineers fall
+    # back to the native executor. (`fake: true` is in-process stubs for a
+    # demonstration — it runs no real coding agent and no real MCP.)
+    #
+    # PREREQUISITE for the local backend: the coding agent named below must
+    # be installed on that machine, since `direct` runs it as a child
     # process. `opencode` here; `claude-code` is the other supported one.
-    type: local                                  # e2b | local | fake | none (required)
     local:
-      # `direct` isolates STATE, not the host: each box gets its own HOME,
-      # XDG directories and an allowlisted environment (never the engine's
-      # own tokens), and writes outside the box are refused — but the
-      # agent runs as the engine's user with the engine's filesystem
-      # access. That is the right trade for a company running on your own
-      # machine against your own checkouts, and the wrong one for anything
-      # shared.
+      # The local backend serves both local cells, chosen per seat:
       #
-      # For host isolation use `container`, which needs an image carrying
-      # the coding-agent CLI and is where a local box is SIZED (run_args
-      # takes --cpus/--memory, mirroring how a remote box is sized by its
-      # template):
+      #   run_in: direct     state isolation only — each box gets its own
+      #                      HOME, XDG directories and an allowlisted
+      #                      environment (never the engine's own tokens),
+      #                      and writes outside the box are refused — but
+      #                      the agent runs as the engine's user with the
+      #                      engine's filesystem access. The right trade for
+      #                      your own machine, the wrong one for a shared
+      #                      host.
       #
-      #   containment: container
-      #   image: "your-registry/coding-agent:latest"
-      #   runtime: auto                          # auto | docker | podman
-      #   run_args: ["--cpus", "2", "--memory", "4g"]
-      containment: direct
+      #   run_in: container  real host isolation. Needs an image carrying
+      #                      the coding-agent CLI, and is where a local box
+      #                      is SIZED (run_args takes --cpus/--memory,
+      #                      mirroring how a remote box is sized by its
+      #                      template):
+      #
+      #                        image: "your-registry/coding-agent:latest"
+      #                        runtime: auto      # auto | docker | podman
+      #                        run_args: ["--cpus", "2", "--memory", "4g"]
       state_dir: "./nimbus-data/sandboxes"       # box directories; removed at teardown,
                                                  #   and orphans from a crashed engine are
                                                  #   reaped on the next create
+    # WHERE A SEAT THAT NAMES NONE RUNS. Required whenever the catalogue
+    # offers more than one cell — and `local:` alone is two, because it
+    # serves `direct` and `container`. There is deliberately no implicit
+    # answer: `direct` runs the coding agent as the engine's user, which is
+    # a trade to make deliberately and never one to inherit by accident.
+    default_run_in: direct                       # direct | container | e2b
     default_coding_agent: opencode               # provider-agnostic → reuses the openai-compatible LLM above
     default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
     default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); a paused box costs its state for as long as it is held, so the engine reaps it after this long and re-seeds from the pushed branch. 0 = never pause, always re-seed.
@@ -920,6 +930,12 @@ units:
             # default (opencode).
             sandbox:
               enabled: true
+              # `run_in:` picks this seat's cell from providers.sandbox
+              # above — direct | container | e2b. Omitted here, so it
+              # inherits providers.sandbox.default_run_in (direct). A seat
+              # whose work must not touch this host names `container` (or
+              # `e2b`, once that backend is in the catalogue) here and
+              # nothing else changes.
               mcp:                                # MCP surface inside the sandbox
                 servers: [atlassian, mattermost, tavily]   # the coding agent reads work items via Jira in-box; code-host MCP not needed — it pushes + opens the MR via git push options
                 # Scoping is server-level only — the coding agent gets every

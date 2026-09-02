@@ -151,8 +151,20 @@ type PendingRun struct {
 
 	SandboxID   string `json:"sandbox_id"`
 	CodingAgent string `json:"coding_agent"`
-	CommandID   string `json:"command_id"`
-	Status      string `json:"status"`
+
+	// Placement is which configured backend holds this run's box.
+	//
+	// PERSISTED, not re-derived from the config, and that is the whole
+	// reason the field exists: the completion turn may run in a different
+	// process on a different node, minutes or days later, and the company
+	// configuration may have been applied again in between. Reconnecting to
+	// a remote box through the local backend does not error usefully — it
+	// reports a box that has vanished, and a run that is still going is
+	// abandoned as gone. A row written before this field existed decodes
+	// empty, which the manager reads as the provider default.
+	Placement string `json:"placement,omitempty"`
+	CommandID string `json:"command_id"`
+	Status    string `json:"status"`
 
 	// Owner is the process INCARNATION that owns this run's seat, and
 	// OwnerEpoch the seat lease's epoch at the moment of the claim.
