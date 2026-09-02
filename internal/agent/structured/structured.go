@@ -58,10 +58,19 @@ func New[T any](name, description string, schema map[string]any,
 	return &Tool[T]{name: name, desc: description, schema: schema, decode: decode}
 }
 
-func (t *Tool[T]) Name() string               { return t.name }
-func (t *Tool[T]) Description() string        { return t.desc }
+// Name is the tool's wire name, which is also what a terminator matches on.
+func (t *Tool[T]) Name() string { return t.name }
+
+// Description is what the model is told this tool is for.
+func (t *Tool[T]) Description() string { return t.desc }
+
+// Parameters is the JSON Schema the model fills in. It IS the answer's shape:
+// a phase that asked for prose and parsed it would be validating twice, once
+// in the model's head and once in a decoder, and only one of those reports a
+// mistake the model can act on.
 func (t *Tool[T]) Parameters() map[string]any { return t.schema }
 
+// Call decodes one submission and records it.
 func (t *Tool[T]) Call(_ context.Context, args map[string]any) (tools.Result, error) {
 	v, err := t.decode(args)
 	if err != nil {

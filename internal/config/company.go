@@ -289,7 +289,7 @@ func (c *Company) validateProviderKeys() error {
 	}
 	slices.Sort(known)
 
-	c.eachRole(func(path string, role *Role) {
+	c.EachRole(func(path string, role *Role) {
 		// Both written surfaces are checked, and each is reported at the
 		// path the operator typed. Validating the RESOLVED chain instead
 		// would hide half of them: the flat field wins over the mapping,
@@ -328,7 +328,7 @@ func (c *Company) validateProviderKeys() error {
 	return p.err()
 }
 
-// eachRole visits EVERY seat in the company, at the path an operator typed:
+// EachRole visits EVERY seat in the company, at the path an operator typed:
 // the top-level `roles:` and every seat inside `units:`, to any depth.
 //
 // It exists because the walk was written inline once and covered only the
@@ -337,15 +337,13 @@ func (c *Company) validateProviderKeys() error {
 // A rule that holds for a seat in `roles:` and not for the identical seat one
 // level down is not a rule, and the seats it missed are exactly the ones whose
 // mistakes have no run-time symptom to find them by.
-// EachRole is [Company.eachRole] for callers outside this package.
 //
-// Exported because the ENGINE needs the same walk: a seat's sandbox block is
-// looked up by name at launch, and a lookup that stopped at the top-level
-// `roles:` answered nil for every seat in a unit. One walker, so a rule that
-// holds for a seat in `roles:` holds for the identical seat one level down.
-func (c *Company) EachRole(visit func(path string, role *Role)) { c.eachRole(visit) }
-
-func (c *Company) eachRole(visit func(path string, role *Role)) {
+// EXPORTED because the ENGINE needs the same walk: a seat's sandbox block is
+// looked up by name at launch, and a lookup that stopped at the top level
+// answered nil for every seat in a unit — so run_sandbox refused each of them
+// with "this seat's sandbox is not enabled" on a seat whose block said
+// otherwise. One walker, so the two can never disagree about which seats exist.
+func (c *Company) EachRole(visit func(path string, role *Role)) {
 	for i := range c.Roles {
 		visit(idx("roles", i), &c.Roles[i])
 	}
@@ -393,7 +391,7 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 		}
 		reached[run] = where
 	}
-	c.eachRole(func(path string, role *Role) {
+	c.EachRole(func(path string, role *Role) {
 		gate := role.Sandbox
 		if gate == nil || !gate.Enabled || gate.RunIn == "" || !gate.RunIn.NeedsBackend() {
 			return
@@ -449,7 +447,7 @@ func (c *Company) validateSandboxPlacement() error {
 	var p problems
 	catalogue := c.Providers.Sandbox
 
-	c.eachRole(func(path string, role *Role) {
+	c.EachRole(func(path string, role *Role) {
 		gate := role.Sandbox
 		if gate == nil || !gate.Enabled {
 			return
