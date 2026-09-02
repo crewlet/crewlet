@@ -1349,7 +1349,15 @@ func RenderCluster(c Cluster) string {
 	for i, ep := range c.Episodes {
 		tools := "(none)"
 		if len(ep.ToolSequence) > 0 {
-			tools = strings.Join(ep.ToolSequence[:min(8, len(ep.ToolSequence))], ", ")
+			// SAYS WHEN IT CUTS. The compactor is inferring "how this
+			// agent does this kind of work", and a silently shortened
+			// tool sequence reads as a shorter procedure rather than a
+			// clipped one — which is the pattern it then writes down.
+			shown := ep.ToolSequence
+			tools = strings.Join(shown[:min(8, len(shown))], ", ")
+			if dropped := len(shown) - 8; dropped > 0 {
+				tools += fmt.Sprintf(" (+%d more)", dropped)
+			}
 		}
 		fmt.Fprintf(&b, "%d. [%s] task: %s\n", i, ep.ReviewOutcome, oneLine(ep.TaskSummary))
 		fmt.Fprintf(&b, "   plan: %s\n", oneLine(ep.PlanSummary))

@@ -167,6 +167,15 @@ func (c *nodeClient) post(ctx context.Context, path string, into any) error {
 	return c.do(ctx, http.MethodPost, path, into)
 }
 
+// maxNodeResponseBytes bounds one answer read back from a node.
+//
+// An error body is a sentence; a proxy's error page is not. The largest
+// legitimate answer this client reads is /query/budgets, which is one row of
+// roughly two hundred bytes per seat — so a megabyte is three orders of
+// magnitude above a large company's answer and still small enough that a
+// misdirected -url cannot make the CLI buffer a website.
+const maxNodeResponseBytes = 1 << 20
+
 func (c *nodeClient) do(ctx context.Context, method, path string, into any) error {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, nil)
 	if err != nil {
@@ -184,8 +193,25 @@ func (c *nodeClient) do(ctx context.Context, method, path string, into any) erro
 	defer func() { _ = resp.Body.Close() }()
 
 	// Capped, because an error body is a sentence and anything larger is
-	// either a proxy's HTML or something that is not this API at all.
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// either a proxy's HTML or something that is not this API at all — and
+	// REFUSED at the cap rather than read up to it. io.LimitReader reports a
+	// clean EOF when it stops, so a clipped answer would reach json.Unmarshal
+	// as malformed JSON and be reported as "not the expected JSON", which
+	// sends the reader looking for a protocol fault that is not there.
+	//
+	// The read error is no longer discarded either: a connection that died
+	// mid-body is a different fact from a short answer.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxNodeResponseBytes+1))
+	if err != nil {
+		return fmt.Errorf("reading the node's answer to %s: %w", path, err)
+	}
+	if len(body) > maxNodeResponseBytes {
+		return fmt.Errorf(
+			"the node's answer to %s exceeded %d bytes, so it was not read: this "+
+				"build caps one answer to bound a proxy's error page. Check that "+
+				"-url names the engine rather than something in front of it",
+			path, maxNodeResponseBytes)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nodeError(resp.StatusCode, body, c.token != "")
 	}

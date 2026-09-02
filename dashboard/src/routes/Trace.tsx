@@ -66,6 +66,10 @@ export function TraceScreen({ traceId }: { traceId: string }) {
 
   // `.events`, not the answer itself.
   const events = data?.events ?? [];
+  // The store caps one trace's rows and the answer says when it did. A trace
+  // shown short with no note reads as a complete causal chain that simply
+  // ends, which is the one thing a reader must not conclude from it.
+  const truncated = Boolean(data?.truncated);
   const rows = useMemo(() => flatten(arrange(events)), [events]);
 
   const from = events.length ? Math.min(...events.map((e) => tsKey(e.timestamp))) : 0;
@@ -77,7 +81,12 @@ export function TraceScreen({ traceId }: { traceId: string }) {
       <ScreenHead
         title="Trace"
         sub={<code className="inline">{traceId}</code>}
-        badges={<Badge outline>{events.length} events</Badge>}
+        badges={
+          <>
+            <Badge outline>{events.length} events</Badge>
+            {truncated && <Badge tone="caution">oldest {events.length} shown</Badge>}
+          </>
+        }
         actions={
           <Button size="sm" icon="activity" onClick={() => nav.to(["activity"], { q: traceId })}>
             In the log

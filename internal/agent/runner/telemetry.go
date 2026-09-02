@@ -374,16 +374,6 @@ type phaseRecord struct {
 	Err    error
 }
 
-// maxErrorLength caps the error text on a failed phase.
-//
-// The prompts and the response are deliberately verbatim — this telemetry is
-// what shows an operator what the model actually saw — but an error is not
-// that. A provider chain that exhausted can carry every attempt's body, and a
-// wrapped decode failure can carry the whole undecodable document; both are
-// megabytes of one string on an event that fans out to every open dashboard.
-// Two thousand characters holds any message written to be read.
-const maxErrorLength = 2000
-
 // subagentCompleted closes ONE sub-agent, as a phase nested under the Execute
 // round that spawned it.
 //
@@ -449,8 +439,15 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		Decision:        string(res.Status),
 		ConversationKey: e.turn.ConversationKey,
 		Failed:          res.Failed(),
-		Error:           truncate(res.Error, maxErrorLength),
-		ErrorKind:       string(res.Status),
+		// A CHILD'S failure text, which is the one field on this event
+		// whose length is set by something the parent does not control.
+		// Bounded only so the event can be published — one over the
+		// queue's ceiling is refused and this publisher logs and moves
+		// on, so an unbounded child error costs the operator the whole
+		// record rather than its tail. The parent phase's own error is
+		// carried the same way; see events.MaxDiagnosticBytes.
+		Error:     events.ClipDiagnostic(res.Error),
+		ErrorKind: string(res.Status),
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
 }
@@ -501,7 +498,14 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		Failed:          rec.Failed,
 	}
 	if rec.Err != nil {
-		ev.Error = truncate(rec.Err.Error(), maxErrorLength)
+		// The 2000-character cut this used to carry landed on exactly the
+		// errors worth reading: an exhausted provider chain naming what
+		// each attempt refused, a wrapped chain whose cause is at its end.
+		// What is left is a DELIVERY GUARANTEE, not a content budget —
+		// an event over the queue's ceiling is refused and this publisher
+		// logs and moves on, so an unbounded error would reach the
+		// operator not shortened but ABSENT. See events.MaxDiagnosticBytes.
+		ev.Error = events.ClipDiagnostic(rec.Err.Error())
 		ev.ErrorKind = classifyError(rec.Err)
 	}
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
@@ -701,23 +705,6 @@ func userPrompt(msgs []llm.Message) string {
 	}
 	return ""
 }
-
-// truncate caps a string at n bytes, on a rune boundary.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	cut := n
-	for cut > 0 && !utf8StartsRune(s[cut]) {
-		cut--
-	}
-	return s[:cut] + "…"
-}
-
-// utf8StartsRune reports whether b can begin a UTF-8 encoding. Cutting a
-// multi-byte rune in half produces invalid UTF-8, which JSON encoders replace
-// with U+FFFD — turning one over-long error into a garbled one.
-func utf8StartsRune(b byte) bool { return b&0xC0 != 0x80 }
 
 // traceFor is the trace an event this emitter publishes belongs to.
 //

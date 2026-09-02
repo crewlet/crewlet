@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
@@ -499,10 +500,16 @@ func orNone(s string) string {
 	return s
 }
 
+// truncate bounds a probe's echoed output for a doctor line, never through a
+// rune: a byte slice splits whatever multi-byte character straddles the cut and
+// yields invalid UTF-8, which a JSON log encoder replaces with U+FFFD.
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n] + "…"
 }

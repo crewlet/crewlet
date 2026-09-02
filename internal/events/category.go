@@ -138,6 +138,15 @@ var excluded = map[string]string{
 		"a dashboard hydrate a dead process's counters and render them as the " +
 		"current ones — a number that is not merely stale but describes a " +
 		"different run",
+	"a2a_request": "the ASK is already a row: the A2A service publishes " +
+		"a2a_channel_opened and a2a_message_sent for the same exchange, under " +
+		"the ids the audit trail is keyed on. This event is the WAKE it puts " +
+		"on the target seat's inbox, so categorising it would write a second " +
+		"row per ask saying the same thing — the same reason raw_webhook is " +
+		"kept out below",
+	"a2a_message": "the ANSWER is already a row (a2a_message_sent, and " +
+		"a2a_message_delivered for the read). This event is the wake it puts " +
+		"on the requester's inbox; see a2a_request",
 	"raw_webhook": "the delivery is ALREADY a row, written by the webhook " +
 		"receiver under its own id with the raw provider bytes as its payload. " +
 		"This event is the wake it publishes onto a seat's inbox, so " +

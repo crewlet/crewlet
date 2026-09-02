@@ -52,9 +52,11 @@ func TestTypesThatRunNoTurnAreNotLedgered(t *testing.T) {
 // against the system's behaviour finds a type that appears covered and is not.
 //
 // Every ledgered name must therefore be one the system can actually put on an
-// inbox: a registered payload type, or one of the two A2A wakes, which are
-// registered nowhere because they carry no schema. Pinning the exemption to
-// exactly those two is what stops this test being satisfied by adding another.
+// inbox: a REGISTERED PAYLOAD TYPE, with no exemptions. The two A2A wakes used
+// to be the exception — carried as free-form bags on the grounds that they had
+// no schema — and that exemption is exactly what let the ask travel under a key
+// nothing read, so a woken seat was handed "(a2a_request)" instead of the
+// colleague's question. They are registered now and the exemption is gone.
 //
 // It reads LedgeredTypes rather than a list of its own. An earlier version
 // iterated the four names it expected and asked whether each was ledgered,
@@ -70,12 +72,11 @@ func TestNoLedgeredTypeIsANameNothingPublishes(t *testing.T) {
 			unregistered = append(unregistered, kind)
 		}
 	}
-	want := []string{types.A2AMessageType, types.A2ARequestType}
-	slices.Sort(unregistered)
-	slices.Sort(want)
-	if !slices.Equal(unregistered, want) {
-		t.Errorf("ledgered names with no registered payload = %v, want exactly %v",
-			unregistered, want)
+	if len(unregistered) > 0 {
+		slices.Sort(unregistered)
+		t.Errorf("ledgered names with no registered payload: %v — a type that runs a "+
+			"turn must carry a typed payload, or its ask has nowhere to travel",
+			unregistered)
 	}
 }
 

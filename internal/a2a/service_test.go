@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -104,11 +105,23 @@ func TestAnAskOpensAChannelAndWakesTheTarget(t *testing.T) {
 	// THE BRIEF TRAVELS ON THE WAKE. Held anywhere else it exists on
 	// exactly one node while the wake reaches whichever node owns the
 	// target's seat — the same node only by luck.
-	if got := wakes[0].Payload["content"]; got != "can you review this?" {
-		t.Errorf("the wake carries content %q", got)
+	//
+	// Asserted on the TYPED payload, and then on Brief(). The brief used to
+	// travel in the envelope's free-form bag, which no reader ever opened:
+	// every assertion here passed while the woken seat was handed the
+	// literal string "(a2a_request)" instead of the question.
+	ask, ok := events.DataAs[*types.A2ARequest](wakes[0])
+	if !ok {
+		t.Fatalf("the wake does not carry a typed A2ARequest payload")
 	}
-	if got := wakes[0].Payload["channel_id"]; got != id {
-		t.Errorf("the wake names channel %q, want %q", got, id)
+	if ask.Content != "can you review this?" {
+		t.Errorf("the wake carries content %q", ask.Content)
+	}
+	if ask.ChannelID != id {
+		t.Errorf("the wake names channel %q, want %q", ask.ChannelID, id)
+	}
+	if brief := ask.Brief(); !strings.Contains(brief, "can you review this?") {
+		t.Errorf("Brief() = %q, want it to carry the question", brief)
 	}
 }
 
@@ -296,11 +309,22 @@ func TestAReplyEchoesTheQuestionBack(t *testing.T) {
 		t.Fatalf("Reply: %v", err)
 	}
 	reply := rec.onlyTo(topics.AgentInbox("alice"))[0]
-	if got := reply.Payload["question"]; got != "when?" {
-		t.Errorf("the reply echoes %q, want the original ask", got)
+	answer, ok := events.DataAs[*types.A2AMessage](reply)
+	if !ok {
+		t.Fatalf("the reply does not carry a typed A2AMessage payload")
 	}
-	if got := reply.Payload["content"]; got != "friday" {
-		t.Errorf("the reply carries %q", got)
+	if answer.Question != "when?" {
+		t.Errorf("the reply echoes %q, want the original ask", answer.Question)
+	}
+	if answer.Content != "friday" {
+		t.Errorf("the reply carries %q", answer.Content)
+	}
+	// BOTH HALVES IN THE ASK. The channel is closed by the time this lands,
+	// so a brief carrying the answer without the question leaves the
+	// requester's next turn reading a reply with no antecedent.
+	brief := answer.Brief()
+	if !strings.Contains(brief, "when?") || !strings.Contains(brief, "friday") {
+		t.Errorf("Brief() = %q, want both the question and the answer", brief)
 	}
 }
 
@@ -440,8 +464,12 @@ func TestAnAskOpenedOnOneNodeIsAnsweredFromAnother(t *testing.T) {
 	if len(replies) != 1 {
 		t.Fatalf("replies to alice = %d, want 1 (topics: %v)", len(replies), answerRec.topics())
 	}
-	if got := replies[0].Payload["content"]; got != "looks good" {
-		t.Errorf("the reply carries content %q", got)
+	crossNode, ok := events.DataAs[*types.A2AMessage](replies[0])
+	if !ok {
+		t.Fatalf("the reply does not carry a typed A2AMessage payload")
+	}
+	if crossNode.Content != "looks good" {
+		t.Errorf("the reply carries content %q", crossNode.Content)
 	}
 
 	// And a close performed on the answering node is what the ASKING node

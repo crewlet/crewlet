@@ -1,6 +1,7 @@
 package turn_test
 
 import (
+	"crypto/sha256"
 	"errors"
 	"testing"
 
@@ -136,7 +137,11 @@ func TestTheArtifactHashIsStableAndDiscriminating(t *testing.T) {
 	if a == b {
 		t.Error("two different invalid-UTF-8 artifacts hashed identically")
 	}
-	if len(a) != 16 {
-		t.Errorf("hash length = %d, want 16", len(a))
+	// THE WHOLE DIGEST. The comparison is for equality only and the value is
+	// never displayed, so there is nothing to buy by shortening it — and a
+	// 64-bit prefix turns "did this round produce the same artifact" into a
+	// probabilistic answer whose false match aborts a turn that was working.
+	if len(a) != sha256.Size*2 {
+		t.Errorf("hash length = %d, want the full %d-character digest", len(a), sha256.Size*2)
 	}
 }

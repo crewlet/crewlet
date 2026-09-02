@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -17,11 +18,6 @@ import (
 // producer and a consumer that disagree about a type name never raise — the
 // ledger simply records nothing under a name nobody looks up, and every
 // redelivery runs the turn again.
-//
-// They carry no struct because they carry no schema: the wake is a pointer at
-// a channel the recipient reads, and its payload is built by the service that
-// owns that channel. Registering an empty struct for them would put two types
-// in the decoder that nothing ever decodes.
 const (
 	// A2ARequestType wakes the TARGET of an ask.
 	A2ARequestType = "a2a_request"
@@ -34,10 +30,97 @@ const (
 )
 
 func init() {
+	events.Register[A2ARequest]()
+	events.Register[A2AMessage]()
 	events.Register[A2AChannelOpened]()
 	events.Register[A2AMessageSent]()
 	events.Register[A2AMessageDelivered]()
 	events.Register[A2AChannelClosed]()
+}
+
+// A2ARequest is the wake a colleague's ask puts on the TARGET's inbox.
+//
+// TYPED, and that is a correction rather than a preference. Both wakes used to
+// travel as a free-form Payload bag holding the brief under a "content" key,
+// and nothing in the engine read that key: the turn's ask was assembled by
+// [Briefer]-less fallback and the target seat was woken with the literal
+// string "(a2a_request)" instead of the question. A registered payload is what
+// makes the ask reachable — and what makes it survive a round-trip through a
+// build that predates it.
+type A2ARequest struct {
+	ChannelID string `json:"channel_id"`
+	Requester string `json:"requester"`
+	// SenderRole is the asking seat's role name, so the answer's author is
+	// identifiable without a second lookup.
+	SenderRole string `json:"sender_role"`
+	// Content is the brief — the question itself, verbatim.
+	Content string `json:"content"`
+}
+
+// EventType is the "a2a_request" wire type.
+func (A2ARequest) EventType() string { return A2ARequestType }
+
+// Brief is the colleague's question, which IS the woken seat's whole task.
+func (e A2ARequest) Brief() string {
+	who := e.SenderRole
+	if who == "" {
+		who = e.Requester
+	}
+	if who == "" {
+		return e.Content
+	}
+	return "A colleague (" + who + ") asks:\n\n" + e.Content
+}
+
+// Actor is the colleague who asked, not the bus that relayed it.
+func (e A2ARequest) Actor() string { return e.Requester }
+
+// Summary is the dashboard's one-liner for the ask.
+func (e A2ARequest) Summary() string {
+	return lead(e.Requester, "asked a colleague on "+e.ChannelID)
+}
+
+// A2AMessage is the wake an answer puts on the REQUESTER's inbox.
+type A2AMessage struct {
+	ChannelID string `json:"channel_id"`
+	Sender    string `json:"sender"`
+	// SenderRole is the answering seat's role name.
+	SenderRole string `json:"sender_role"`
+	// Question is the ask this answers, carried so the requester's next
+	// turn reads the exchange rather than a reply with no antecedent. The
+	// channel is closed by the time this lands, so there is nowhere else
+	// left to fetch it from.
+	Question string `json:"question,omitempty"`
+	// Content is the answer, verbatim.
+	Content string `json:"content"`
+}
+
+// EventType is the "a2a_message" wire type.
+func (A2AMessage) EventType() string { return A2AMessageType }
+
+// Brief is the answer, under the question it answers.
+func (e A2AMessage) Brief() string {
+	who := e.SenderRole
+	if who == "" {
+		who = e.Sender
+	}
+	var b strings.Builder
+	if e.Question != "" {
+		b.WriteString("You asked a colleague:\n\n" + e.Question + "\n\n")
+	}
+	if who != "" {
+		b.WriteString("Their answer (" + who + "):\n\n")
+	}
+	b.WriteString(e.Content)
+	return b.String()
+}
+
+// Actor is the colleague who answered.
+func (e A2AMessage) Actor() string { return e.Sender }
+
+// Summary is the dashboard's one-liner for the answer.
+func (e A2AMessage) Summary() string {
+	return lead(e.Sender, "answered a colleague on "+e.ChannelID)
 }
 
 // A2AChannelOpened marks a channel being created between two agents.

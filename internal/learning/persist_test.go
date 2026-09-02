@@ -554,14 +554,15 @@ func TestTheDedupBlockRendersWhatTheSeatAlreadyKnows(t *testing.T) {
 	if !strings.Contains(prompt, "1. Sarah is OOO (until "+expiry.Format(time.RFC3339)+")") {
 		t.Errorf("short memory rendered without its deadline:\n%s", prompt)
 	}
-	// One bloated row may not crowd out the others, and the empty row must
-	// take no index: the numbers are what the read-side filter selects by,
-	// so a gap in them is a memory the model cannot point at.
-	if strings.Contains(prompt, strings.Repeat("x", 300)) {
-		t.Errorf("an overlong memory was not truncated:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "2. "+strings.Repeat("x", 240)+"...") {
-		t.Errorf("truncation did not land at the cap, or the empty row took index 2:\n%s", prompt)
+	// EVERY MEMORY WHOLE. This block is what the model compares a candidate
+	// against to answer "does the seat already know this", and a row cut at
+	// 240 characters is a row it compares against the opening of — so a new
+	// memory duplicating the TAIL of an existing one reads as novel and is
+	// written again. The empty row must still take no index: the numbers
+	// are what the read-side filter selects by, so a gap in them is a
+	// memory the model cannot point at.
+	if !strings.Contains(prompt, "2. "+strings.Repeat("x", 400)) {
+		t.Errorf("a long memory was cut, or the empty row took index 2:\n%s", prompt)
 	}
 	if store.askedFor != 50 {
 		t.Errorf("dedup pool = %d, want it bounded at 50", store.askedFor)

@@ -23,6 +23,24 @@ const (
 	DiaryShort DiaryKind = "diary_short"
 )
 
+// MaxContentChars bounds one written diary note, for EVERY writer.
+//
+// A note is meant to be re-read in a later turn's prompt, so its cost is paid
+// on every turn that recalls it, not once — and it is read back into the
+// relevance filter's candidate pool as well, which is what makes an unbounded
+// row a bound on nothing. Two thousand characters is a long paragraph and a
+// short page; past that the model is writing a document, and a document
+// belongs in the knowledge base where colleagues can read it too.
+//
+// HERE rather than beside either writer. There are two — the reflect_and_persist
+// tool and the post-turn PersistDecider — and they disagreed: the tool refused
+// an over-long note naming the limit, while the decider wrote whatever the
+// classifier produced. One store, one rule, stated where the store is. The two
+// writers still differ in what they DO about it, and that difference is
+// deliberate: a model holding the text can tighten it and retry, so the tool
+// refuses; the decider has no one to ask, so it skips and says so.
+const MaxContentChars = 2000
+
 // DiaryEntry is one private observation a seat made about its own work.
 //
 // PRIVATE is the operative word, and the reason the table is called a diary

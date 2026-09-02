@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 )
@@ -119,26 +120,38 @@ func TestTheTitlePrefixCatchesADraftWithNoAncestorChain(t *testing.T) {
 }
 
 func TestSnippetCutsAtASentence(t *testing.T) {
-	if got := knowledge.Snippet("  Deploy   the   thing.  "); got != "Deploy the thing." {
+	if got := knowledge.Snippet("  Deploy   the   thing.  ", knowledge.SnippetLimit); got != "Deploy the thing." {
 		t.Fatalf("Snippet collapsed to %q", got)
 	}
-	if got := knowledge.Snippet(""); got != "" {
+	if got := knowledge.Snippet("", knowledge.SnippetLimit); got != "" {
 		t.Fatalf("Snippet(\"\") = %q", got)
 	}
 
+	// LENGTH ONLY. A copy of this in the Confluence parser also cut at the
+	// first newline or ". ", so it decapitated a page to its opening
+	// sentence whatever the budget — and at limit 0, where the caller asked
+	// for no cut at all.
+	multi := "First line. Second sentence follows.\nAnd a third."
+	if got := knowledge.Snippet(multi, 0); got != "First line. Second sentence follows. And a third." {
+		t.Fatalf("an unbounded snippet was still cut: %q", got)
+	}
+
 	long := strings.Repeat("word ", 30) + "End of it. " + strings.Repeat("more ", 40)
-	got := knowledge.Snippet(long)
-	if len(got) > knowledge.SnippetLimit {
+	got := knowledge.Snippet(long, knowledge.SnippetLimit)
+	if len(got) > knowledge.SnippetLimit+len(" …") {
 		t.Fatalf("Snippet is %d bytes, over the %d budget", len(got), knowledge.SnippetLimit)
 	}
-	if !strings.HasSuffix(got, "End of it.") {
-		t.Fatalf("Snippet did not cut at the sentence: %q", got)
+	// A sentence boundary is preferred, and the cut is STILL MARKED: the
+	// page continues past it either way, and an unmarked cut is
+	// indistinguishable from a page that really does end there.
+	if !strings.HasSuffix(got, "End of it. …") {
+		t.Fatalf("Snippet did not cut at the sentence, marked: %q", got)
 	}
 
 	// With no sentence boundary in budget it cuts at a word and says so,
 	// because a snippet ending mid-word reads as a rendering fault.
 	noStop := strings.Repeat("word ", 100)
-	got = knowledge.Snippet(noStop)
+	got = knowledge.Snippet(noStop, knowledge.SnippetLimit)
 	if len(got) > knowledge.SnippetLimit+3 {
 		t.Fatalf("Snippet is %d bytes", len(got))
 	}
@@ -147,6 +160,17 @@ func TestSnippetCutsAtASentence(t *testing.T) {
 	}
 	if strings.HasSuffix(strings.TrimSuffix(got, "…"), " ") {
 		t.Fatalf("the ellipsis follows a space: %q", got)
+	}
+
+	// NEVER THROUGH A RUNE, including the no-space fallback a URL or a CJK
+	// run reaches. Invalid UTF-8 reaches a model as a replacement
+	// character, which only shows up once a page stops being ASCII.
+	cjk := strings.Repeat("日本語", 200)
+	if got := knowledge.Snippet(cjk, knowledge.SnippetLimit); !utf8.ValidString(got) {
+		t.Fatalf("a snippet cut through a rune: %q", got)
+	}
+	if got := knowledge.Snippet(cjk, knowledge.SnippetLimit); !strings.HasSuffix(got, "…") {
+		t.Fatalf("a no-space cut did not mark itself: %q", got)
 	}
 }
 

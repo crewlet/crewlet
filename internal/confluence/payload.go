@@ -48,29 +48,6 @@ func Flatten(storage string) string {
 	return strings.TrimSpace(blankRun.ReplaceAllString(text, "\n\n"))
 }
 
-// Snippet is the first sentence's worth of a page, capped.
-//
-// The knowledge block exists to tell a planner WHICH page to go and read,
-// not to be the page — and a longer snippet buys nothing while multiplying
-// by the hit count and the Plan phase's round cap.
-func Snippet(text string, limit int) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
-	}
-	for _, boundary := range []string{"\n", ". "} {
-		if i := strings.Index(text, boundary); i > 0 {
-			text = strings.TrimSpace(text[:i])
-			break
-		}
-	}
-	text = strings.ReplaceAll(text, "\n", " ")
-	if limit > 0 && len(text) > limit {
-		return text[:limit] + "..."
-	}
-	return text
-}
-
 // MentionIDs are the accounts named in a page or comment body.
 //
 // Confluence writes a mention as `<ri:user ri:account-id="…"/>` on Cloud and
@@ -105,15 +82,17 @@ func EscapeCQL(value string) string {
 	return strings.ReplaceAll(value, `"`, `\"`)
 }
 
-// MaxQueryChars caps the text fed into a CQL `text ~` clause.
-//
-// A pathologically long fragment is both a slow query and a sign the
-// auxiliary model that generated it misbehaved — and Confluence's own limit
-// is not documented, so a bound here is what turns "the server refused a
-// 4KB query" into "the search used the first 200 characters".
-const MaxQueryChars = 200
-
 // BuildCQL renders one search.
+//
+// THE QUERY IS NOT SHORTENED. A 200-character cap used to sit here, justified
+// as turning "the server refused a 4KB query" into "the search used the first
+// 200 characters" — but those are not comparable outcomes. A refusal is an
+// error the caller sees, and the knowledge block reports it as empty; a
+// silently shortened query is a DIFFERENT SEARCH, returning plausible pages
+// for terms the seat never asked about, with nothing anywhere saying so. The
+// cut was mid-rune too, so a non-ASCII query could end in half a character
+// inside a quoted CQL literal. What bounds this text is the aux model's own
+// output-token cap, upstream, where a bound belongs.
 //
 // Shape: `space IN ("ENG","HANDBOOK") AND type = page AND text ~ "…"`.
 //
@@ -126,9 +105,6 @@ func BuildCQL(text string, spaces []string, allowUnscoped bool) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ""
-	}
-	if len(text) > MaxQueryChars {
-		text = text[:MaxQueryChars]
 	}
 	if len(spaces) > 0 {
 		quoted := make([]string, 0, len(spaces))

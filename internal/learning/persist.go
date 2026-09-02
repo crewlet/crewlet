@@ -99,11 +99,6 @@ const (
 	// pool, and an agent whose diary has grown to hundreds of rows would
 	// otherwise pay for all of them on every completed turn.
 	dedupPoolLimit = 50
-
-	// dedupEntryChars truncates one rendered memory. Enough for the model
-	// to recognise an overlap, short enough that a single bloated row
-	// cannot crowd the other forty-nine out of the block.
-	dedupEntryChars = 240
 )
 
 const (
@@ -401,6 +396,18 @@ func (d *PersistDecider) write(
 		},
 		CreatedAt: now,
 	}
+	if len(content) > MaxContentChars {
+		// SKIPPED, and said out loud. The tool path refuses an over-long
+		// note so the model can tighten it; there is nobody to ask here, so
+		// the honest move is to drop the row rather than store a note whose
+		// tail the seat will never read back — and to log it, because a
+		// classifier that keeps producing documents is a prompt to fix.
+		log.WarnContext(ctx, "persist_decider_note_oversized",
+			"turn_id", t.Event.TurnID, "agent_handle", t.Event.AgentHandle,
+			"chars", len(content), "max", MaxContentChars,
+			"detail", "the note was dropped rather than stored half-written")
+		return DiaryEntry{}, nil
+	}
 	if err := d.diary.Write(ctx, entry); err != nil {
 		return DiaryEntry{}, fmt.Errorf("learning: persist %s for %s: %w",
 			kind, t.Event.AgentHandle, err)
@@ -566,7 +573,7 @@ func renderExistingMemories(memories []DiaryEntry) string {
 		b.WriteString("\n")
 		b.WriteString(strconv.Itoa(n))
 		b.WriteString(". ")
-		b.WriteString(preview(content, dedupEntryChars))
+		b.WriteString(content)
 		// A deadline is rendered so the model can tell "the seat knows
 		// this and the row is still live" from "the seat knew this until
 		// last week" — the second is not a duplicate, it is a fact worth

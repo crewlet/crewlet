@@ -153,6 +153,16 @@ func (e ExternalNotification) IntegrationEventType() string { return e.SourceEve
 // defers to the rest of the chain rather than replacing a value with nothing.
 func (e ExternalNotification) Actor() string { return e.Sender }
 
+// Brief is the ask: the enriched planner prompt the notification builder
+// assembled, which is the message plus the triage guidance wrapped around it.
+//
+// Body rather than SalientBody, because the scaffolding is not noise here —
+// it is the vendor prompt that tells the planner how to read this surface.
+// The salient half is what the LEARNING workers want (see
+// engine.salientBody), and the two readers wanting different halves is
+// exactly why both fields exist.
+func (e ExternalNotification) Brief() string { return e.Body }
+
 // Summary leads with the sender and subject. The integration is surfaced by the
 // dashboard as a badge built from NotificationSource, so repeating the source
 // name here would say it twice.

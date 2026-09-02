@@ -141,17 +141,16 @@ func (s *Service) Open(ctx context.Context, ask Ask) (string, error) {
 		}
 	}
 
-	wake := &events.Event{
-		ID: uuid.New(), Type: types.A2ARequestType, Timestamp: now, Source: ask.Requester,
-		Payload: map[string]any{
-			"channel_id": id, "requester": ask.Requester,
-			"content": ask.Brief, "sender_role": ask.SenderRole,
-		},
-		// The ASK is the delegation, so this is the leg that charges.
-		DelegationDepth: ask.DelegationDepth + 1,
-		DelegationChain: appendChain(ask.DelegationChain, ask.Requester),
-		ParentTurnID:    ask.ParentTurnID,
-	}
+	wake := events.New(types.A2ARequest{
+		ChannelID: id, Requester: ask.Requester,
+		SenderRole: ask.SenderRole, Content: ask.Brief,
+	}, events.TraceContext{})
+	wake.Timestamp = now
+	wake.Source = ask.Requester
+	// The ASK is the delegation, so this is the leg that charges.
+	wake.DelegationDepth = ask.DelegationDepth + 1
+	wake.DelegationChain = appendChain(ask.DelegationChain, ask.Requester)
+	wake.ParentTurnID = ask.ParentTurnID
 	if err := s.queue.Publish(ctx, topics.AgentInbox(ask.Target), wake); err != nil {
 		return "", fmt.Errorf("a2a: wake %s: %w", ask.Target, err)
 	}
@@ -220,17 +219,15 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 		return err
 	}
 
-	wake := &events.Event{
-		ID: uuid.New(), Type: types.A2AMessageType, Timestamp: now, Source: ans.Sender,
-		Payload: map[string]any{
-			"channel_id": ans.ChannelID, "sender": ans.Sender,
-			"content": ans.Content, "sender_role": ans.SenderRole,
-			"question": ans.Question,
-		},
-		DelegationDepth: ans.DelegationDepth,
-		DelegationChain: appendChain(ans.DelegationChain, ans.Sender),
-		ParentTurnID:    ans.ParentTurnID,
-	}
+	wake := events.New(types.A2AMessage{
+		ChannelID: ans.ChannelID, Sender: ans.Sender,
+		SenderRole: ans.SenderRole, Question: ans.Question, Content: ans.Content,
+	}, events.TraceContext{})
+	wake.Timestamp = now
+	wake.Source = ans.Sender
+	wake.DelegationDepth = ans.DelegationDepth
+	wake.DelegationChain = appendChain(ans.DelegationChain, ans.Sender)
+	wake.ParentTurnID = ans.ParentTurnID
 	if ans.CausedBy != nil {
 		wake.TraceID = ans.CausedBy.TraceID
 		wake.SpanID = ans.CausedBy.SpanID

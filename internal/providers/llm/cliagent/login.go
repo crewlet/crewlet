@@ -294,16 +294,39 @@ func (p *Provider) RestoreBundle(blob string) error {
 	for _, rel := range p.profile.CredentialPaths {
 		allowed[filepath.Base(rel)] = true
 	}
-	if err := os.MkdirAll(dest, 0o700); err != nil {
+	if err = os.MkdirAll(dest, 0o700); err != nil {
 		return fmt.Errorf("cliagent: preparing %q: %w", dest, err)
 	}
 
-	tr := tar.NewReader(io.LimitReader(zr, maxBundle))
-	total := 0
+	// REFUSED PAST THE CAP, not clipped to it. io.LimitReader stops at its
+	// limit and hands the tar reader a clean io.EOF, which the loop below
+	// cannot tell from the end of a whole archive — so an over-large bundle
+	// used to restore whatever files fitted and report success. Reading one
+	// byte past the cap is what makes "too large" a distinct answer from
+	// "finished".
+	decompressed, err := io.ReadAll(io.LimitReader(zr, maxBundle+1))
+	if err != nil {
+		return fmt.Errorf("cliagent: reading the credential bundle: %w", err)
+	}
+	if len(decompressed) > maxBundle {
+		return fmt.Errorf(
+			"cliagent: the credential bundle is larger than %d bytes decompressed, "+
+				"so it was not unpacked — a bundle this size is not a login; "+
+				"re-export it with `crewlet llm export %s`", maxBundle, p.agent)
+	}
+
+	// VALIDATED WHOLE, THEN WRITTEN. Every entry is checked and held before
+	// anything reaches the disk, because the checks below reject a bundle
+	// mid-archive: writing as the loop went left the rejected bundle's
+	// earlier files behind, and HasLogin reads a directory with any
+	// credential in it as a login — so a refused restore could leave a
+	// half-populated home that the next boot declines to repair.
+	staged := make(map[string][]byte, len(allowed))
+	tr := tar.NewReader(bytes.NewReader(decompressed))
 	for {
 		header, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			break
 		}
 		if err != nil {
 			return fmt.Errorf("cliagent: reading the credential bundle: %w", err)
@@ -317,19 +340,23 @@ func (p *Provider) RestoreBundle(blob string) error {
 			return fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
 				"%q credential file", header.Name, p.agent)
 		}
-		data, err := io.ReadAll(io.LimitReader(tr, maxBundle))
+		data, err := io.ReadAll(io.LimitReader(tr, maxBundle+1))
 		if err != nil {
 			return fmt.Errorf("cliagent: reading %q from the bundle: %w", name, err)
 		}
-		total += len(data)
-		if total > maxBundle {
-			return fmt.Errorf("cliagent: the credential bundle is larger than %d bytes",
-				maxBundle)
+		if len(data) > maxBundle {
+			return fmt.Errorf("cliagent: %q in the credential bundle is larger than %d bytes",
+				name, maxBundle)
 		}
+		staged[name] = data
+	}
+
+	for name, data := range staged {
 		if err := os.WriteFile(filepath.Join(dest, name), data, 0o600); err != nil {
 			return fmt.Errorf("cliagent: writing %q: %w", name, err)
 		}
 	}
+	return nil
 }
 
 // runInCredentialHome runs one of the CLI's own auth commands with its home

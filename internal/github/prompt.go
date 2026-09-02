@@ -2,6 +2,7 @@ package github
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/notify"
 )
@@ -475,5 +476,8 @@ func capitalize(s string) string {
 	if s == "" {
 		return s
 	}
-	return strings.ToUpper(s[:1]) + s[1:]
+	// The first RUNE: s[:1] on a multi-byte lead byte yields invalid UTF-8,
+	// which ToUpper substitutes rather than passes through.
+	first, size := utf8.DecodeRuneInString(s)
+	return strings.ToUpper(string(first)) + s[size:]
 }

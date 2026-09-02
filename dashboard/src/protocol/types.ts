@@ -83,6 +83,13 @@ export interface EventsPage {
 export interface TraceAnswer {
   trace_id: string;
   events: EventRecord[];
+  /**
+   * True when the store stopped at its per-trace cap rather than at the end of
+   * the trace. A trace shown short with no note reads as a complete causal
+   * chain that simply ends, which is the one thing a reader must not conclude
+   * from it — and the store's own doc asks the caller to say so.
+   */
+  truncated: boolean;
 }
 
 // ---------------------------------------------------------------------------

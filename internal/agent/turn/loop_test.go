@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -798,5 +799,61 @@ func TestTheReportedSurfaceIsWhatTheCheckJudges(t *testing.T) {
 		turn.Input{TurnID: "t1", Reply: turn.ReplyTool})
 	if res.Decision != phase.Done {
 		t.Errorf("decision = %s: a mid-run activation was not seen", res.Decision)
+	}
+}
+
+// The scheduled wall-clock cap. It was documented (docs/concepts/scheduling.md),
+// had a GuardKind reserved for it, and was enforced NOWHERE — the value rode a
+// Payload key nothing read, so a scheduled turn ran until its round cap.
+func TestAScheduledTurnStopsAtItsWallClockCap(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(0, 0)
+	f := &fake{
+		works:   []turn.Work{{Text: "a"}, {Text: "b"}, {Text: "c"}},
+		reviews: []turn.Review{{Decision: phase.SelfIterate}, {Decision: phase.SelfIterate}, {Decision: phase.Done}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{
+		MaxIterations: 5,
+		MaxWallClock:  90 * time.Second,
+		// One minute passes per read; Run reads once per round boundary.
+		Now: func() time.Time { now = now.Add(time.Minute); return now },
+	}, turn.Input{TurnID: "t-1"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Breach == nil || res.Breach.Kind != turn.BreachScheduledTimeout {
+		t.Fatalf("breach = %+v, want a scheduled_timeout", res.Breach)
+	}
+	// ROUND ONE ALWAYS RUNS. A cap that refused before any work started
+	// would report a turn as timed out having done nothing.
+	if res.Rounds < 1 {
+		t.Errorf("rounds = %d, want at least the first", res.Rounds)
+	}
+	// And it stopped BEFORE the round cap, which is the point.
+	if res.Rounds >= 5 {
+		t.Errorf("rounds = %d — the cap did not stop the loop", res.Rounds)
+	}
+	if !strings.Contains(res.Breach.Detail, "cap") {
+		t.Errorf("the breach does not explain itself: %q", res.Breach.Detail)
+	}
+}
+
+// Every other trigger carries no cap, and an unbounded turn must not acquire
+// one by accident.
+func TestAnUncappedTurnRunsItsRounds(t *testing.T) {
+	t.Parallel()
+	f := &fake{
+		works:   []turn.Work{{Text: "a"}},
+		reviews: []turn.Review{{Decision: phase.Done}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{
+		MaxIterations: 3,
+		Now:           func() time.Time { return time.Unix(0, 0).Add(24 * time.Hour) },
+	}, turn.Input{TurnID: "t-2"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Breach != nil {
+		t.Errorf("an uncapped turn breached: %+v", res.Breach)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -14,9 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -380,6 +383,81 @@ func TestTheConversationLedgerIsReadInAndWrittenBack(t *testing.T) {
 	// which appends no iteration record of its own.
 	if after[1].CompletedWork != "the post landed" {
 		t.Errorf("completed work = %q", after[1].CompletedWork)
+	}
+}
+
+// The `enabled` toggle is documented as a live kill switch that "restores the
+// previous prompt exactly". It was read NOWHERE — the dispatcher wired its
+// conversation store whenever a store existed — so the switch did nothing, and
+// nothing noticed.
+func TestTheConversationLedgerKillSwitchActuallyStops(t *testing.T) {
+	t.Parallel()
+	conversations := ledgerstore.NewMemoryConversations()
+	ctx := context.Background()
+	if err := conversations.Append(ctx, "ceo", "slack:C1",
+		ledger.Session{Reply: "said this before"}, "wk-old", clock, 0); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "and now this"}}
+	d := dispatcher(t, r)
+	d.Conversations = conversations
+	d.Conversation = func() config.ConversationSession {
+		return config.ConversationSession{Enabled: org.Off(), MaxEntries: 20, RetentionDays: 30}
+	}
+	d.Dispatch(ctx, "ceo", []*events.Event{inThread("notification", "slack:C1")})
+
+	if len(r.reqs) != 1 {
+		t.Fatalf("the turn ran %d times", len(r.reqs))
+	}
+	// Neither half: no history read in, no entry written back.
+	if len(r.reqs[0].History) != 0 {
+		t.Errorf("history reached a turn with the ledger switched off: %+v", r.reqs[0].History)
+	}
+	after, err := conversations.History(ctx, "ceo", "slack:C1", 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(after) != 1 {
+		t.Errorf("history = %d entries; the turn wrote one with the ledger off", len(after))
+	}
+}
+
+// max_entries is documented as what bounds a DM, whose conversation key is the
+// whole channel and so never stops receiving entries. It was passed to Append
+// as a literal 0 — "keep everything" — so the table grew for the life of the
+// deployment.
+func TestTheConversationLedgerTrimsToTheConfiguredKeep(t *testing.T) {
+	t.Parallel()
+	conversations := ledgerstore.NewMemoryConversations()
+	ctx := context.Background()
+	for i := range 6 {
+		if err := conversations.Append(ctx, "ceo", "slack:C1",
+			ledger.Session{Reply: "older " + strconv.Itoa(i)},
+			"wk-"+strconv.Itoa(i), clock, 0); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+
+	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "newest"}}
+	d := dispatcher(t, r)
+	d.Conversations = conversations
+	d.Conversation = func() config.ConversationSession {
+		return config.ConversationSession{MaxEntries: 3, RetentionDays: 30}
+	}
+	d.Dispatch(ctx, "ceo", []*events.Event{inThread("notification", "slack:C1")})
+
+	after, err := conversations.History(ctx, "ceo", "slack:C1", 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(after) != 3 {
+		t.Fatalf("history = %d entries, want the configured keep of 3", len(after))
+	}
+	// The NEWEST survive: a trim that kept the oldest would hand the next
+	// turn a history that stops before the message it is answering.
+	if after[len(after)-1].Reply != "newest" {
+		t.Errorf("the trim dropped the newest entry: %+v", after)
 	}
 }
 

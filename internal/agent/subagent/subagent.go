@@ -992,11 +992,7 @@ func renderCatalogue(safe tools.Snapshot) string {
 			}
 			continue
 		}
-		if desc := firstLine(e.Tool.Description()); desc != "" {
-			lines = append(lines, "- "+e.Name()+": "+desc)
-			continue
-		}
-		lines = append(lines, "- "+e.Name())
+		lines = append(lines, tools.CatalogueLine(e.Name(), e.Tool.Description()))
 	}
 	for _, server := range servers {
 		lines = append(lines, "- MCP server `"+server+"` (use the discovery tools to list its tools)")
@@ -1005,11 +1001,6 @@ func renderCatalogue(safe tools.Snapshot) string {
 		return ""
 	}
 	return strings.Join(lines, "\n")
-}
-
-func firstLine(s string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	return strings.TrimSpace(line)
 }
 
 // union merges two name lists, deduplicated and sorted.

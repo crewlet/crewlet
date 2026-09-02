@@ -55,13 +55,26 @@ func TestAPhaseCanDiscoverAndActivateAnMCPTool(t *testing.T) {
 	if strings.Contains(listing, "lookup_colleague") {
 		t.Errorf("the listing leaked a first-party tool:\n%s", listing)
 	}
-	// One line per tool. A real server publishes paragraphs, and an entry
-	// that spilled would break the shape a model reads the listing as.
-	if strings.Contains(listing, "Accepts a cursor") {
-		t.Errorf("a description spilled past its first line:\n%s", listing)
+	// ONE BULLET PER TOOL, description whole. A real server publishes
+	// paragraphs, and the entry that used to be cut to its first line was
+	// cut exactly where the usable part starts: "Accepts a cursor for
+	// paging" is what a planner needs to call the tool correctly, and this
+	// listing is the only place it is ever shown. Continuation lines are
+	// indented so the shape survives without paying for it in content.
+	if !strings.Contains(listing, "Accepts a cursor") {
+		t.Errorf("a description was cut at its first line:\n%s", listing)
 	}
-	if n := len(strings.Split(strings.TrimSpace(listing), "\n")); n != 2 {
-		t.Errorf("the listing has %d lines for 2 tools:\n%s", n, listing)
+	if !strings.Contains(listing, "\n  Accepts a cursor") {
+		t.Errorf("a continuation line was not indented under its bullet:\n%s", listing)
+	}
+	bullets := 0
+	for _, line := range strings.Split(strings.TrimSpace(listing), "\n") {
+		if strings.HasPrefix(line, "- ") {
+			bullets++
+		}
+	}
+	if bullets != 2 {
+		t.Errorf("the listing has %d bullets for 2 tools:\n%s", bullets, listing)
 	}
 	// ONE server's tools, not every MCP tool. A listing that ignored the
 	// argument would hand a planner the wall of text discovery exists to

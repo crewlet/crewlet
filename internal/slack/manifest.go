@@ -2,8 +2,10 @@ package slack
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 )
 
 // The canonical app manifest for a Crewlet agent.
@@ -93,11 +95,30 @@ func OAuthRedirectURL(base string) string {
 // app directory ("Engineering Lead"), and the bot display name is what
 // appears beside every message it posts — and it has to be the handle,
 // because that is the identity the rest of the engine addresses.
-func Manifest(roleName, handle, base string) map[string]any {
+//
+// AN OVER-LONG NAME IS REFUSED, not truncated. Slack's limits are real, but
+// silently cutting to them puts an app in the operator's workspace under a
+// name their config does not contain — and two roles sharing a 35-character
+// prefix become two apps a person cannot tell apart. The operator can shorten
+// a role name; only they can decide which words to lose.
+func Manifest(roleName, handle, base string) (map[string]any, error) {
+	description := "Crewlet agent @" + handle
+	switch {
+	case utf8.RuneCountInString(roleName) > appNameMax:
+		return nil, fmt.Errorf(
+			"slack: role name %q is %d characters and Slack caps an app name at %d — "+
+				"shorten the role's `name` in the company config",
+			roleName, utf8.RuneCountInString(roleName), appNameMax)
+	case utf8.RuneCountInString(description) > descriptionMax:
+		return nil, fmt.Errorf(
+			"slack: handle %q makes a %d-character app description and Slack caps it "+
+				"at %d — shorten the seat's handle",
+			handle, utf8.RuneCountInString(description), descriptionMax)
+	}
 	return map[string]any{
 		"display_information": map[string]any{
-			"name":        truncate(roleName, appNameMax),
-			"description": truncate("Crewlet agent @"+handle, descriptionMax),
+			"name":        roleName,
+			"description": description,
 		},
 		"features": map[string]any{
 			"bot_user": map[string]any{
@@ -125,7 +146,7 @@ func Manifest(roleName, handle, base string) map[string]any {
 			"socket_mode_enabled":    false,
 			"token_rotation_enabled": false,
 		},
-	}
+	}, nil
 }
 
 // AuthorizeURL is where the operator clicks to install one app.
@@ -159,11 +180,4 @@ func Fingerprint(manifest map[string]any) string {
 		return ""
 	}
 	return digest(encoded)
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max]
 }

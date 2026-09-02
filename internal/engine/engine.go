@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -319,12 +320,17 @@ type RunnerInput struct {
 }
 
 // TurnSettings is the loop's pinned configuration for this epoch.
-func (c *Company) TurnSettings() turn.Settings {
+//
+// wallClock is the cap THIS turn's trigger carried, in seconds, zero for the
+// triggers that carry none. It is a per-turn argument rather than a config
+// field because it comes off the fire, not the epoch.
+func (c *Company) TurnSettings(wallClock int) turn.Settings {
 	te := c.Config.TurnEngine
 	return turn.Settings{
 		MaxIterations:        te.MaxIterations,
 		DelegationDepthLimit: te.DelegationDepthLimit,
 		SkipNames:            MetaToolNames(),
+		MaxWallClock:         time.Duration(wallClock) * time.Second,
 	}
 }
 

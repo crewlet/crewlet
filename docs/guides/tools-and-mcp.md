@@ -295,6 +295,18 @@ From the LLM's perspective, builtin tools and MCP tools are identical — both a
 1. **Per-role MCP tools** — checked first (role-specific credentials)
 2. **Global tools** — builtin tools + global MCP tools
 
-**Tool output is returned to the LLM in full.** Control characters are stripped, secrets redacted and binary rejected, but results are **never length-truncated** — a truncated result silently hides content the agent reasons over (the tail of a `list_mcp_server_tools` listing, for example, where the tool the agent needs may sort past any cap). The same principle applies across the engine: phase / aux telemetry, the agent diary (stored content), coalesced notification digests, and the Review / extension-judge tool logs all carry their full text. The one deliberate bound is the *embeddings* input (diary writes, similarity-query keys), trimmed only because the embeddings provider has a hard token limit — the stored/displayed text stays complete.
+**Tool output is returned to the LLM in full.** Control characters are stripped, secrets redacted and binary rejected, but results are **never length-truncated** — a truncated result silently hides content the agent reasons over. The same principle applies across the engine: the turn's own trigger text, the Plan-phase prefetch blocks (personal memory, similar prior work, synthesized skills, counterparty profiles), the tool catalogue and every `list_mcp_server_tools` listing, the draft handed to Review, the agent diary and the conversation ledger as **stored**, coalesced notification digests, and the knowledge-base search query all carry their full text.
+
+**Where a bound is genuinely unavoidable, the engine refuses or says so — it never shortens in silence.** Three shapes, and which one applies is a deliberate choice:
+
+| Shape | Where | Why not just cut it |
+|---|---|---|
+| **Refuse** | `reflect_and_persist` and `mark_onboarded` notes, `refine_skill` bodies and reasons, a `secrets` value, a Slack app manifest name, a counterparty trait | The value is *stored* and read back later, so half of it is a lasting half-fact. The caller — a model or an operator — can shorten it and retry, and the error names the field and the limit |
+| **Say it cut** | a coding run's result, error and transcript (tailed — a crash explains itself at the bottom); an MCP server's stderr tail; a `cli-agent` subprocess's output; error text on an event (`events.ClipDiagnostic`, 64 KiB, head kept); a prior round's produced text and a failed call's result as *rendered* into the prior-work ledger; a conversation's older entries, dropped whole; a config diff; a knowledge snippet; an episode's tool sequence | The full text genuinely cannot travel — an unbounded subprocess, a per-tick fleet read, or an event the queue would REFUSE, which costs the operator the whole record rather than its tail — so the excerpt carries a marker and, where a reader can go and get the rest, says how |
+| **Bound the input, not the output** | the embeddings input (diary writes, similarity-query keys) | The provider has a hard token limit; only the vector's *input* is trimmed, and the stored and displayed text stays complete |
+
+Two rules run through the table. **Bound the render, never the record** — the stored row is usually the only copy, so a cut at write time is not a shortened rendering. And **drop whole units where you can**: an entry, a bullet, a call, never the middle of a sentence.
+
+A cut with none of these properties is a bug, not a budget: a "character budget" on a prompt block is not a ceiling, it is a silent decision about which of the agent's own memories it is allowed to see.
 
 See [Agent Runtime](../concepts/agent-runtime.md) for the full execution loop.
