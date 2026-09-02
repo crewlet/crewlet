@@ -137,6 +137,10 @@ func TestTheProbesAndTheShellAreNeverGuarded(t *testing.T) {
 		"/", "/health", "/ready", "/dashboard", "/favicon.ico",
 		"/health/", "/ready/", "/dashboard/",
 		"/static/dashboard/app.js", "/webhooks/slack", "/otlp/tok/v1/traces",
+		// The MCP bridge: a coding agent inside a sandbox holds no API
+		// token, and giving it one would hand a box the credential that
+		// reads the whole company. Its per-run signed token IS the check.
+		"/mcp/tok",
 	} {
 		if g.Requires(path, "GET") {
 			t.Errorf("%s was guarded", path)

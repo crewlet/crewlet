@@ -105,6 +105,37 @@ var Active = []string{
 	StatusLaunching, StatusRunning, StatusAwaiting, StatusReseed, StatusResumed,
 }
 
+// BridgeCall is one tool call a bridged run made.
+//
+// Its own shape rather than [tools.Call], because this crosses the wire into
+// the fleet's coordination store where a node running a different build reads
+// it — so the json tags are a wire format and the type must not carry a
+// dependency the store layer has no business on. Same rule the rest of
+// [PendingRun] follows: add fields, never rename one.
+type BridgeCall struct {
+	Name string `json:"name"`
+	// Args is what the caller passed, as JSON text rather than a decoded
+	// map: the map's values would round-trip through the store's own
+	// encoder a second time, and a large id survives one pass and not two.
+	Args   string    `json:"args,omitempty"`
+	Output string    `json:"output,omitempty"`
+	Failed bool      `json:"failed,omitempty"`
+	At     time.Time `json:"at"`
+}
+
+// MaxBridgeCalls bounds the durable log of a bridged run.
+//
+// The row is ONE VALUE in the coordination store, read and written whole on
+// every mutation, and a coding run can make hundreds of calls — so an
+// unbounded list turns a busy run's every status change into a growing write.
+// Two hundred is well past what a reviewer reads (the ledger elides a long log
+// anyway) and small enough that the row stays a row.
+//
+// The MIDDLE is what gets dropped, never the start: how a run began and how it
+// ended are what explain it, and a log truncated to its last N loses the
+// former entirely.
+const MaxBridgeCalls = 200
+
 // PendingRun is one detached job's durable state, keyed by its kick-off turn.
 //
 // The json tags are a WIRE FORMAT, not decoration: the record lives in the
@@ -183,6 +214,26 @@ type PendingRun struct {
 	// predates the launching state, which the coordinator fails rather
 	// than resuming into nothing.
 	ExecuteState map[string]any `json:"execute_state"`
+
+	// BridgeCalls is what a run made through the MCP bridge, in order.
+	//
+	// DURABLE, because this is the one tool log that has nowhere else to
+	// live. A native tool loop keeps its calls on a surface in memory and
+	// the turn writes them when it ends; a bridged run's calls are made by
+	// a process outside the engine, minutes or hours apart, and possibly
+	// across a restart. Without this the reviewer of a resumed run judges a
+	// turn whose entire tool log is gone — and "it called nothing" is
+	// exactly the shape the delivery check reads as a turn that did not act.
+	//
+	// Bounded: see [MaxBridgeCalls]. Empty on every run that is not
+	// bridged, which is every ordinary coding run.
+	BridgeCalls []BridgeCall `json:"bridge_calls,omitempty"`
+
+	// BridgeCallsElided counts the calls dropped from the middle of that
+	// list, so a reader can tell a short run from a long one whose middle
+	// was cut. Reported rather than hidden, because a log that silently
+	// skips is a log that lies about what the run did.
+	BridgeCallsElided int `json:"bridge_calls_elided,omitempty"`
 
 	PauseTTLSeconds float64 `json:"pause_ttl_seconds"`
 
@@ -294,6 +345,21 @@ type PendingStore interface {
 	// conversation with nowhere to put it, so the run cannot be resumed and
 	// must be failed rather than left holding a box.
 	MarkSuspended(ctx context.Context, turnID string, state map[string]any) (bool, error)
+
+	// AppendBridgeCall records one tool call a bridged run made through the
+	// MCP bridge, so the reviewer of a run that outlived its process still
+	// has the tool log. See [BridgeCall].
+	//
+	// NO FENCE, unlike every other mutation here: this is a log append
+	// rather than an ownership decision, and refusing to record a call that
+	// already ran because the seat's lease moved would lose evidence of
+	// something that is true either way.
+	//
+	// Reports whether the append landed. FALSE IS NOT AN ERROR: it is a run
+	// whose row is gone, which is the ordinary shape of a late call from a
+	// box that is shutting down, and the caller must not fail the box's
+	// call over it.
+	AppendBridgeCall(ctx context.Context, turnID string, call BridgeCall) (bool, error)
 
 	// ListActive returns every run that still owns engine-side state.
 	ListActive(ctx context.Context) ([]PendingRun, error)

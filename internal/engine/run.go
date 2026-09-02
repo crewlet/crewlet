@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
@@ -153,6 +154,11 @@ type Engine struct {
 	// depend on happening to be configured.
 	sandboxOtel *sandbox.OtelReceiver
 
+	// bridge serves a running seat's tool surface to a coding agent over
+	// MCP. Nil where no bridge URL is configured, which is every
+	// deployment that runs no agent mode.
+	bridge *mcpbridge.Bridge
+
 	// reflector is the learning write side: one dispatcher for the life of
 	// the process, whose org and workers an apply swaps. On the ENGINE
 	// rather than on an epoch because its redelivery ring is process
@@ -255,6 +261,10 @@ type Options struct {
 	// [sandbox.BuildOtelReceiver].
 	OtelReceiver *sandbox.OtelReceiver
 
+	// Bridge serves a seat's tools to a coding agent. Nil builds one from
+	// the environment; see [mcpbridge.Build].
+	Bridge *mcpbridge.Bridge
+
 	// Backends may be supplied by a caller that already opened them — the
 	// API process and the engine share one broker when they run merged.
 	// Nil opens them from the bootstrap config, and the engine then owns
@@ -332,12 +342,21 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		}
 		otel = built
 	}
+	// SAME KEY MATERIAL, DIFFERENT DOMAIN, and for the same reason the
+	// receiver above is built here: a split deployment mints in this
+	// process and verifies in another, so both derive their key from the
+	// fleet's keyring rather than from a per-process random.
+	bridge := opts.Bridge
+	if bridge == nil {
+		bridge = mcpbridge.Build(os.Getenv, keyMaterial(opts.Bootstrap))
+	}
 
 	e := &Engine{
 		backends: backends, ownsBackends: ownsBackends,
 		onboarded: runner.NewLatch(), skills: skills.NewRegistry(),
 		mcp:         mcp.NewBridge(nil),
 		sandboxOtel: otel,
+		bridge:      bridge,
 		startedAt:   time.Now().UTC(),
 		// Built before equip, which is what writes the company's own
 		// numbers into it, and before node.New, which hands the same
@@ -977,6 +996,13 @@ func (e *Engine) notifyApplied(ctx context.Context) {
 // against, and so a SPLIT one is visibly missing it rather than answering 401
 // with a key nobody shares.
 func (e *Engine) OtelReceiver() *sandbox.OtelReceiver { return e.sandboxOtel }
+
+// Bridge is this node's MCP tool bridge, or nil.
+//
+// Exposed for the same reason the receiver is: the API process serves the
+// route, and on a merged deployment it is handed this engine's own — one
+// object, so a session opened by a run is the session the route resolves.
+func (e *Engine) Bridge() *mcpbridge.Bridge { return e.bridge }
 
 // keyMaterial is the Tier A keyring, as the OTLP token key is derived from.
 //
