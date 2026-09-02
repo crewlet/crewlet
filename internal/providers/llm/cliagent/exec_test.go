@@ -36,6 +36,19 @@ func TestCLIAgentFakeCLI(t *testing.T) {
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 	switch {
+	case os.Getenv("FAKE_STUBBORN") == "1":
+		// A CLI that ignores the polite signal and leaves a forking
+		// descendant behind — a Node or Bun runtime under a launcher, which
+		// is what every coding CLI in this package actually is. It announces
+		// the grandchild's pid so the parent can watch for its death, then
+		// holds its own process open for ever.
+		//
+		// The whole tree is signalled through the process GROUP, so an
+		// engine that only signals the process it started leaves this
+		// grandchild holding the seat's workspace and sockets.
+		fakeStubborn()
+	case os.Getenv("FAKE_GRANDCHILD") == "1":
+		fakeGrandchild()
 	case os.Getenv("FAKE_DUMP_ENV") == "1":
 		env := os.Environ()
 		slices.Sort(env)
