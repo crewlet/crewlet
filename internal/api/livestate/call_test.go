@@ -264,6 +264,35 @@ func TestAProgressRoundDoesNotOverwriteAFrozenFailedCall(t *testing.T) {
 	}
 }
 
+// A FROZEN CALL HAS NO ROUND IN FLIGHT. The phase is over; nothing is
+// arriving.
+//
+// The last frame before a provider dies carries a partial for a round that
+// will never commit, and the failure payload cannot displace it — a snapshot
+// holds committed rounds only. Left on the frozen call it never goes away, so
+// a phase that died an hour ago keeps rendering that round as streaming, with
+// the running ring and a blinking caret, on a card that also says it failed.
+func TestAFrozenFailedCallKeepsNoRoundInFlight(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_phase_started", planCall()))
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num":     3,
+		"partial_round": map[string]any{"round": 4, "reasoning": "half a thou"},
+	}), streamOnly, at("2026-06-14T12:00:04+00:00")))
+	s.Apply(env("agent_phase_completed",
+		with(planCall(), map[string]any{"failed": true, "error": "boom"}),
+		at("2026-06-14T12:00:05+00:00")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call == nil {
+		t.Fatal("the frozen call disappeared")
+	}
+	if call.PartialRound != nil {
+		t.Errorf("a dead phase still reports a round in flight: %v", call.PartialRound)
+	}
+}
+
 func TestAProgressRoundForAnotherCallLosesToANewerOne(t *testing.T) {
 	t.Parallel()
 	// Not the same call, and the one held is newer: a delivery that

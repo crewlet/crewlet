@@ -267,17 +267,33 @@ rules fix it, and each one names a specific mechanism:
 3. **The model's words are prose; JSON is monospace.** Reasoning and speech
    get a proportional face, real leading and a bounded measure. Monospace
    stays where it carries meaning — tool arguments and tool results.
-4. **Grouping is structural; colour is semantic.** Rounds are separated by a
-   numbered rail and a two-step alternating tint, not by a hue apiece: a
-   colour per round would read as meaning something and mean nothing, which
-   is the same objection as a colour per agent and worse at nine rounds. A
-   round's node takes colour for exactly three states — normal, contains a
-   failed call, in flight — because "which round went wrong" and "where is
-   it now" are the two questions a reader brings to a running turn.
+4. **Grouping is structural; colour is semantic.** A round is BRACKETED by a
+   rail running from its numbered node down its own content, and adjacent
+   rounds are told apart by a two-step alternating tint — not by a hue
+   apiece: a colour per round would read as meaning something and mean
+   nothing, which is the same objection as a colour per agent and worse at
+   nine rounds. A round's node takes colour for exactly three states —
+   normal, contains a failed call, in flight — because "which round went
+   wrong" and "where is it now" are the two questions a reader brings to a
+   running turn.
+
+   Bounding a round and separating it from the next one are two jobs, and
+   only the second was being done. The rail was drawn strictly *between*
+   rounds and the tint only on even ones, so a phase with a single round —
+   the common case — got neither, and rendered as a bare numeral in the
+   gutter beside a flat stack of look-alike disclosure rows: the thinking
+   and the call it asked for read as siblings. The round's content also sat
+   on three different left edges, because a disclosure head carries its own
+   inset and the model's speech carried none. One bracket per round, one
+   left edge, and 24px between rounds against 8px inside one.
 5. **A running phase tails; a finished one flows.** While live the ledger is
    bounded and follows the newest round, but only while the reader is
    already at the bottom — following regardless yanks them off whatever
-   they stopped to read.
+   they stopped to read. What does NOT change is the ledger's frame: it is
+   the same border and padding either way, and only the height bound and the
+   scroll come and go. The frame used to be part of the tailing rule, so the
+   transcript grew a box the moment a phase went live and lost it again the
+   moment it completed — rule 9's defect, one level down.
 
    The engine STREAMS: a round's text arrives while the model is writing
    it, coalesced to five frames a second, and the round in flight rides

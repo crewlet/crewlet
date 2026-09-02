@@ -573,6 +573,16 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// left showing an in-flight call with no response and no reason.
 	emit := r.emitter()
 	progress := &toolloop.Progress{}
+	// The PHASE's record, accumulated across every invocation of the tool
+	// loop. Declared up here because the failure path below reports it too.
+	//
+	// A resumed phase's pre-suspend spend is seeded ONCE, before the loop:
+	// the fold carries it forward with everything else, and adding it per
+	// invocation would count it again for every extension the phase is
+	// granted.
+	var out phaseResult
+	out.Result.InputTokens = in.spent.InputTokens
+	out.Result.OutputTokens = in.spent.OutputTokens
 	// Returns the phase context too, so `return fail(err)` stays a single
 	// line now that runPhase hands its context back.
 	fail := func(err error) (context.Context, phaseResult, error) {
@@ -582,7 +592,17 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		tracing.Fail(span, err)
 		emit.completed(ctx, phaseRecord{
 			Phase: ph, Iteration: iteration, System: system, User: user,
-			Result: progress.Snapshot(), Available: surface.Active(),
+			// FOLDED onto what the phase already had, exactly as the success
+			// path folds it. `progress` is one object reused across every
+			// invocation of the loop and `record` REPLACES rather than
+			// appends, so it holds only the invocation that died: a phase
+			// that ran twenty rounds, was extended and then failed on
+			// extension round 2 published a record claiming two rounds,
+			// numbered 1 and 2, with the tokens of those two — on precisely
+			// the card an operator opens to see what led up to the failure.
+			// `out` is read here, not captured: the closure sees whatever
+			// the loop has accumulated by the time it fails.
+			Result: foldOnto(out, progress.Snapshot()), Available: surface.Active(),
 			Failed: true, Err: err,
 		})
 		return ctx, phaseResult{}, err
@@ -616,17 +636,26 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		Enabled: r.cfg.Caps.ExtensionOn, RoundStep: r.cfg.Caps.ExtensionStep, Ceiling: ceiling,
 	}
 
-	var out phaseResult
 	budget := in.rounds
 	for {
-		// The loop numbers its rounds per INVOCATION, from 1. An extended
-		// phase runs it again, so without this offset the second invocation
-		// restarts at 1 and every consumer that orders on the round number
-		// sees the phase run backwards: the live projection's stale-round
-		// guard drops the whole extension, and the ledger merges extension
-		// round 1 into original round 1. Captured before the call because
-		// out.Rounds only grows after it returns.
-		prior := out.Rounds
+		// What the phase holds BEFORE this invocation, captured by value:
+		// the loop calls OnProgress from inside Run, and `out` is written
+		// only after it returns.
+		//
+		// The loop numbers its rounds per INVOCATION, from 1, and its Result
+		// carries only that invocation's own rounds. An extended phase runs
+		// it again, so every publish has to be folded onto what came before
+		// — and BOTH halves of that fold had their own symptom. Without the
+		// offset the second invocation restarts at 1 and every consumer that
+		// orders on the round number sees the phase run backwards: the live
+		// projection's stale-round guard dropped the whole extension, and
+		// the ledger merged extension round 1 into original round 1. Without
+		// the prefix the live view — which rebuilds a call from each frame
+		// rather than merging — collapsed a twenty-round ledger to a single
+		// round the instant the extension's first frame landed, moving
+		// everything above the insertion point, which is the one property
+		// the round ledger exists to guarantee.
+		prior := out
 		res, err := toolloop.Run(ctx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
 			MaxRounds: budget, Budget: r.cfg.Budget,
@@ -645,7 +674,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			// exactly when something is listening.
 			StreamPartials: true,
 			OnProgress: func(live toolloop.Result) {
-				emit.progress(ctx, ph, iteration, offsetRounds(live, prior))
+				emit.progress(ctx, ph, iteration, foldOnto(prior, live))
 			},
 		})
 		if err != nil {
@@ -654,28 +683,10 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		out.Text = res.Text
 		out.Suspended = res.Suspended
 		out.Exhausted = res.ExhaustedRounds
-		// ACCUMULATED, not replaced. The conversation carries across an
-		// extension (so res.Text is already the whole phase), but the loop's
-		// executions and narration are per-invocation — assigning the last
-		// one wholesale dropped every tool call and every round of narration
-		// from before the extension, on exactly the long, hard phases that
-		// get extended.
-		shifted := offsetRounds(*res, out.Rounds)
-		shifted.Executions = append(out.Result.Executions, shifted.Executions...)
-		shifted.Narration = append(out.Result.Narration, shifted.Narration...)
-		out.Result = shifted
-		out.Rounds += res.RoundsUsed
-		// The loop's own count is per-invocation; an extended phase runs it
-		// more than once and the record must carry the phase's total.
-		out.Result.RoundsUsed = out.Rounds
-		// A resumed phase adds what the pre-suspend rounds spent. The
-		// MESSAGES are not re-emitted (they are already recorded, and
-		// re-publishing them would redraw a turn the dashboard has and
-		// double-count every token) but the COUNTERS are the turn's, and a
-		// record showing only the second half understates every resumed
-		// turn's cost.
-		out.Result.InputTokens += in.spent.InputTokens
-		out.Result.OutputTokens += in.spent.OutputTokens
+		// The same fold the live view got, so the record a phase publishes
+		// and the frames it published while running describe one phase.
+		out.Result = foldOnto(prior, *res)
+		out.Rounds = prior.Rounds + res.RoundsUsed
 		messages = res.Messages
 
 		if res.Suspended || !res.ExhaustedRounds {
@@ -729,6 +740,56 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 		narration[i] = n
 	}
 	res.Narration = narration
+	// The round IN FLIGHT is on the same scale as the rounds behind it, or it
+	// COLLIDES with one of them. A consumer keys the ledger on the round
+	// number — the dashboard's `rounds()` builds one block per number and the
+	// partial overwrites the block it lands on — so an unshifted partial from
+	// extension round 1 is written into the phase's committed round 1: that
+	// round's thinking and prose are replaced by text the model is writing
+	// twenty rounds later, sitting directly above round 1's own tool calls,
+	// while the round actually running gets no block at all. The abandoned
+	// attempts carry the same number and travel with it.
+	if res.Partial != nil {
+		shifted := *res.Partial
+		shifted.Round += prior
+		abandoned := make([]toolloop.Narration, len(res.Partial.Abandoned))
+		for i, a := range res.Partial.Abandoned {
+			a.Round += prior
+			abandoned[i] = a
+		}
+		shifted.Abandoned = abandoned
+		res.Partial = &shifted
+	}
+	return res
+}
+
+// foldOnto merges one loop invocation's record onto the rounds already behind
+// it, producing the record of the PHASE rather than of the invocation.
+//
+// One function for all three publishers — the live frame, the completed
+// record and the failure record — because they were three places that had to
+// agree about what an extended phase is, and they did not: the live frame
+// carried the invocation alone, the completed record carried the invocation's
+// token counters, and the failure record carried the invocation raw. Anything
+// a loop invocation counts from zero has to be folded here; anything that
+// carries across (the conversation, and so `Text`) is taken from the
+// invocation as it stands.
+func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
+	res := offsetRounds(live, done.Rounds)
+	res.Executions = append(
+		append([]toolloop.Execution(nil), done.Result.Executions...), res.Executions...)
+	res.Narration = append(
+		append([]toolloop.Narration(nil), done.Result.Narration...), res.Narration...)
+	res.RoundsUsed = done.Rounds + live.RoundsUsed
+	res.InputTokens += done.Result.InputTokens
+	res.OutputTokens += done.Result.OutputTokens
+	// The model that served the phase, not the model that served the round
+	// that died. An invocation which failed before its first completion
+	// names nobody, and a record with no model on it reads as a phase that
+	// never reached a provider.
+	if res.Model == "" {
+		res.Model = done.Result.Model
+	}
 	return res
 }
 

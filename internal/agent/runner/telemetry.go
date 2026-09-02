@@ -440,6 +440,12 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		UserPrompt:     res.UserPrompt,
 		Response:       res.Text,
 		ToolExecutions: toolExecutions(res.Executions),
+		// Published beside the executions, on the round number they share.
+		// A worker's card is the same round ledger as the turn's own phases
+		// and reads it the same way; without this half of the pair, every
+		// delegated worker rendered as bare tool rows with nothing that
+		// asked for them.
+		RoundNarration: roundNarration(res.Narration),
 		InputTokens:    res.InputTokens,
 		OutputTokens:   res.OutputTokens,
 		TotalTokens:    res.Tokens(),

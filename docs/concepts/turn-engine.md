@@ -533,6 +533,25 @@ hand-written assemblies, and the live one omitted reasoning entirely: a
 thinking model's live row streamed tool calls against an empty response
 and only grew its reasoning once the phase was over.
 
+**Every phase, workers included.** A [delegated worker](#workers) publishes
+the same `subagent` phase event with the same pair, because its card is the
+same round ledger and reads it the same way. Publishing its executions alone
+left every worker's ledger as bare tool rows with nothing that asked for them,
+and pushed its reasoning into the consumer's pre-narration fallback — where
+it renders under a heading saying the record predates rounds being kept
+apart, which for a record this build just wrote is simply false.
+
+**And one scale per phase, not per loop invocation.** The tool loop numbers
+its rounds from 1 each time it is *entered*, and an extended phase enters it
+again — so every publisher folds the invocation onto the rounds behind it.
+All three do it through one function, because they were three places that had
+to agree and did not: the live frame carried the invocation alone (an
+extension's first frame collapsed a twenty-round ledger to one), the round in
+flight was never renumbered (its streaming text overwrote the block of a
+committed round twenty rounds earlier), and the completed record took the
+invocation's token counters (every round before the extension billed, then
+dropped from the report).
+
 **Never load-bearing.** Every progress publish is a live view of the
 phase, not part of it: failures are logged (`turn_progress_publish_failed`)
 and swallowed, so a broker hiccup cannot kill an otherwise healthy turn,
