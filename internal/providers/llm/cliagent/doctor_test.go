@@ -24,7 +24,7 @@ func TestDoctorReportsAMissingBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := p.Diagnose(t.Context(), true)
+	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 	if d.Healthy() {
 		t.Fatal("a missing binary was reported as healthy")
 	}
@@ -63,7 +63,7 @@ func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := p.Diagnose(t.Context(), false)
+	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: false})
 	if d.Credentials != "none on disk" {
 		t.Fatalf("Credentials = %q", d.Credentials)
 	}
@@ -103,7 +103,7 @@ func TestDoctorSaysWhenTokenCountsAreEstimated(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d := p.Diagnose(t.Context(), false)
+	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: false})
 	if !strings.Contains(d.TokenUsage, "estimated") {
 		t.Errorf("TokenUsage = %q", d.TokenUsage)
 	}
@@ -129,7 +129,7 @@ func TestTheSmokeTestCatchesACLIThatCannotProduceAToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := p.Diagnose(t.Context(), true)
+	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 	if !strings.HasPrefix(d.Smoke, "failed") {
 		t.Fatalf("Smoke = %q, want a failure", d.Smoke)
 	}
@@ -159,7 +159,7 @@ func TestTheSmokeTestPassesOnAWorkingEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := p.Diagnose(t.Context(), true)
+	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 	if !strings.HasPrefix(d.Smoke, "ok") {
 		t.Fatalf("Smoke = %q", d.Smoke)
 	}

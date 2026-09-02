@@ -64,12 +64,9 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 		return nil, nil
 	}
 	return sandbox.NewManager(sandbox.ManagerOptions{
-		Providers:        providers,
-		DefaultPlacement: sandbox.Placement(spec.RunIn()),
-		Runners: map[string]sandbox.Runner{
-			codingagent.ClaudeCodeName: codingagent.NewClaudeCode(),
-			codingagent.OpenCodeName:   codingagent.NewOpenCode(),
-		},
+		Providers:          providers,
+		DefaultPlacement:   sandbox.Placement(spec.RunIn()),
+		Runners:            sandboxRunners(),
 		DefaultCodingAgent: string(spec.DefaultCodingAgent),
 		DefaultTimeout:     seconds(spec.Timeout()),
 		DefaultPauseTTL:    seconds(spec.PauseTTL()),
@@ -77,6 +74,20 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 		DefaultSetup:       setupSteps(spec.Setup),
 		Telemetry:          otel,
 	})
+}
+
+// sandboxRunners is every coding agent this build can drive.
+//
+// A FUNCTION rather than a literal at the one call site, because a second
+// reader needs the same list: `crewlet llm doctor` refuses an agent-mode entry
+// whose CLI has no runner, and it checks against codingagent.Names(). A test
+// holds the two together — a drift would have the doctor pass an entry the
+// engine then refuses at the seat's first turn.
+func sandboxRunners() map[string]sandbox.Runner {
+	return map[string]sandbox.Runner{
+		codingagent.ClaudeCodeName: codingagent.NewClaudeCode(),
+		codingagent.OpenCodeName:   codingagent.NewOpenCode(),
+	}
 }
 
 // buildSandboxProviders turns the catalogue into one backend per placement it

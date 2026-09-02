@@ -784,6 +784,7 @@ endpoint that reports its own clock and applies the same test:
 ```
 provider      : subscription
 cli agent     : claude-code
+mode          : text (a model behind the engine's tool loop)
 binary        : /usr/local/bin/claude
 version       : 2.0.31 (Claude Code)
 written for   : Claude Code CLI 2.x (`claude --version`)
@@ -796,6 +797,28 @@ local tools   : denied by profile — probe: refused
 web           : ok — fetched https://www.cloudflare.com/cdn-cgi/trace
 problems      : none
 ```
+
+On an **agent-mode** entry the report carries two more lines, and both
+check something that fails at a seat's *first turn* and nowhere earlier:
+
+```
+mode          : agent (the CLI runs the executor)
+agent runtime : runner: "claude-code" is registered
+              : tool bridge: https://engine.example.com
+```
+
+The **runner** line is whether this build can actually drive that CLI as
+a coding agent. Agent mode reuses the coding-agent runners rather than
+growing a second way to invoke the same binary, and there are two of
+them — `claude-code` and `opencode`. An entry naming any other CLI in
+agent mode validates cleanly, appears in the schema and reports a
+configured provider, then refuses the moment a seat has work. The
+**tool bridge** line is `CREWLET_MCP_BRIDGE_URL`: without it every
+agent-mode launch is refused, because a coding agent with none of the
+seat's tools cannot answer anybody, touch a ticket or submit its work.
+
+A text-mode entry reports neither, rather than reporting that it would
+not work in a mode it is not in.
 
 A profile that says `denied` while the shell ran is a problem naming the
 installed version, because the vendor's switch is not taking effect on
@@ -816,6 +839,10 @@ often — it skips all three and says so on each line.
 - **The CLI runs on the engine host.** It must be installed there, and
   the engine process must be able to execute it. This is not a remote
   service.
+- **Agent mode needs more than a login.** A CLI with a coding-agent
+  runner, a `providers.sandbox` catalogue to place the run in, and a
+  bridge URL a box can dial. `crewlet llm doctor` checks all of it —
+  see [Operating it](#operating-it).
 - **Code work needs one more decision.** A subscription *can* back the
   [code sandbox](code-sandbox.md), two ways. On any backend including
   remote E2B, the headless token travels: `crewlet llm login <key>

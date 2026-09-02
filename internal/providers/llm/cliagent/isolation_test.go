@@ -263,7 +263,7 @@ func TestReportsCurrentClockBelievesOnlyTheClock(t *testing.T) {
 // A profile that says "denied" and a CLI that refused is the healthy case.
 func TestDoctorProbesReportADeniedShellAndAReachableWeb(t *testing.T) {
 	p := probeProvider(t, LocalToolsDenied, noLocalToolsReply, "ts="+nowEpoch()+".123")
-	d := p.Diagnose(t.Context(), true)
+	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 	if !strings.HasPrefix(d.LocalTools, "denied by profile — probe: refused") {
 		t.Errorf("LocalTools = %q", d.LocalTools)
 	}
@@ -294,7 +294,7 @@ func probeProblem(d Diagnosis) string {
 // the probe exists for: the vendor's flag is not taking effect on this build.
 func TestDoctorReportsAShellThatRanDespiteTheProfile(t *testing.T) {
 	p := probeProvider(t, LocalToolsDenied, nowEpoch()+"\n", "ts="+nowEpoch())
-	d := p.Diagnose(t.Context(), true)
+	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 	if !strings.Contains(d.LocalTools, "SHELL RAN") {
 		t.Errorf("LocalTools = %q", d.LocalTools)
 	}
@@ -308,7 +308,7 @@ func TestDoctorReportsAShellThatRanDespiteTheProfile(t *testing.T) {
 // is — a CLI with a shell on the engine host — with the note the profile gave.
 func TestDoctorReportsAVendorDefaultShellHonestly(t *testing.T) {
 	p := probeProvider(t, LocalToolsVendorDefault, nowEpoch(), "ts="+nowEpoch())
-	d := p.Diagnose(t.Context(), true)
+	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 	if !strings.HasPrefix(d.LocalTools, "vendor default (no denial flag on this fake) — probe: SHELL RAN") {
 		t.Errorf("LocalTools = %q", d.LocalTools)
 	}
@@ -322,7 +322,7 @@ func TestDoctorReportsAVendorDefaultShellHonestly(t *testing.T) {
 // the usual causes.
 func TestDoctorReportsAnUnreachableWeb(t *testing.T) {
 	p := probeProvider(t, LocalToolsDenied, noLocalToolsReply, noWebReply)
-	d := p.Diagnose(t.Context(), true)
+	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: true})
 	if !strings.HasPrefix(d.Web, "failed") {
 		t.Errorf("Web = %q", d.Web)
 	}
@@ -336,7 +336,7 @@ func TestDoctorReportsAnUnreachableWeb(t *testing.T) {
 // an unmeasured stance as a measurement.
 func TestDoctorWithoutSmokeSkipsTheProbesVisibly(t *testing.T) {
 	p := probeProvider(t, LocalToolsDenied, nowEpoch(), "ts="+nowEpoch())
-	d := p.Diagnose(t.Context(), false)
+	d := p.Diagnose(t.Context(), DiagnoseOptions{Smoke: false})
 	if !strings.Contains(d.LocalTools, "probe skipped") || !strings.Contains(d.Web, "skipped") {
 		t.Errorf("LocalTools = %q, Web = %q", d.LocalTools, d.Web)
 	}

@@ -12,9 +12,11 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
 
 // `crewlet llm` — the operator's window onto the subscription CLI backends.
@@ -266,7 +268,15 @@ func doctorLLM(ctx context.Context, providers []cliAgentProvider, key string, sm
 		if i > 0 {
 			fmt.Fprintln(stdout)
 		}
-		d := p.provider.Diagnose(ctx, smoke)
+		d := p.provider.Diagnose(ctx, cliagent.DiagnoseOptions{
+			Smoke: smoke,
+			// THE ENGINE'S OWN ANSWERS, not the provider's guess at them:
+			// which runners this build registers and what a sandbox can
+			// dial are facts about the process, and both decide whether
+			// an agent-mode entry works at all.
+			AgentRunners: codingagent.Names(),
+			BridgeURL:    os.Getenv(mcpbridge.BaseURLVar),
+		})
 		d.Render(stdout)
 		if !d.Healthy() {
 			unhealthy++
