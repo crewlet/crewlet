@@ -118,6 +118,13 @@ flowchart TD
     PEERS -->|no| ANY
     ANY -->|yes| ISO
     ANY -->|no| WAIT
+
+    STUCK:::danger
+    ISO:::warning
+    classDef danger stroke:#ef4444
+    classDef warning stroke:#f59e0b
+    linkStyle 5 stroke:#ef4444,color:#ef4444
+    linkStyle 8 stroke:#f59e0b,color:#f59e0b
 ```
 
 The rule that matters, and the one an obvious design gets backwards:

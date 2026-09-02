@@ -411,6 +411,15 @@ flowchart TB
     REV -->|failed| FAIL
     DONE --> AFTER
     FAIL --> AFTER
+
+    DONE:::ok
+    FAIL:::danger
+    SUSP:::happens
+    classDef ok stroke:#46a758
+    classDef danger stroke:#ef4444
+    classDef happens stroke-dasharray:4 3
+    linkStyle 6,8 stroke:#46a758,color:#46a758
+    linkStyle 10 stroke:#ef4444,color:#ef4444
 ```
 
 **Two nested loops, not one.** The outer loop is the turn: Plan → Execute →

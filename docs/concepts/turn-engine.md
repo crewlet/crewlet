@@ -271,6 +271,10 @@ flowchart TD
     B -->|extend| C
     B -->|rescue| D
     C -->|"exhausts again, up to the ceiling"| B
+
+    D:::warning
+    classDef warning stroke:#f59e0b
+    linkStyle 2 stroke:#f59e0b,color:#f59e0b
 ```
 
 The judge is best-effort: any failure (timeout, provider error, parse
