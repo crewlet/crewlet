@@ -537,3 +537,103 @@ func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T
 		t.Error("the reviewer was re-asked without being told which tool to call")
 	}
 }
+
+// A LIVE FRAME IS BOUNDED; THE DURABLE RECORD IS VERBATIM.
+//
+// The whole frame is republished five times a second for the length of the
+// phase, and only the round in flight was bounded. The system prompt rode
+// every one of them unchanged, and so did every tool result — routinely the
+// largest thing on the frame, and already final. Past the queue's ceiling the
+// publish is refused, this publisher logs and moves on, and the live row stops
+// for the rest of the phase with nothing on screen to say why.
+func TestALiveFrameCarriesNeitherThePromptNorWholeToolResults(t *testing.T) {
+	t.Parallel()
+	huge := strings.Repeat("x", 20_000)
+	prov := &scriptedProvider{execute: []llm.Completion{
+		submitCall(t, "read_file", `{"path":"/big"}`),
+		submitCall(t, runner.SubmitWorkTool,
+			`{"outcome":"delivered","summary":"read it"}`),
+		text("done"),
+	}}
+	pub := newCapture()
+	r := bigResultRunner(t, prov, pub, huge)
+
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	for _, frame := range progressFrames(t, pub, "execute") {
+		// The prompt is sent ONCE, on the opening frame, and carried by the
+		// projection from there.
+		if frame.Prompt != "" || len(frame.PromptMessages) != 0 {
+			t.Errorf("round %d re-sent the prompt", frame.RoundNum)
+		}
+		for _, ex := range frame.ToolExecutions {
+			if result, _ := ex["result"].(string); len(result) > 5_000 {
+				t.Errorf("round %d shipped a %d-character tool result",
+					frame.RoundNum, len(result))
+			}
+		}
+	}
+	// The opening frame still carries it — that is its whole job.
+	opening := openingFrame(t, pub, "execute")
+	if opening.Prompt == "" || len(opening.PromptMessages) == 0 {
+		t.Error("the opening frame carries no prompt, so the live row never gets one")
+	}
+	// AND THE DURABLE RECORD KEEPS THE RESULT WHOLE. A reader opens the
+	// finished card to read what a tool actually returned.
+	done := completedPhase(t, pub, "execute")
+	var stored string
+	for _, ex := range done.ToolExecutions {
+		if name, _ := ex["name"].(string); name == "read_file" {
+			stored, _ = ex["result"].(string)
+		}
+	}
+	if len(stored) != len(huge) {
+		t.Errorf("the stored result is %d characters, want the whole %d", len(stored), len(huge))
+	}
+}
+
+// bigResultRunner is a seat whose one tool returns more than a frame should
+// carry.
+func bigResultRunner(
+	t *testing.T, prov *scriptedProvider, pub queue.Publisher, out string,
+) *runner.Runner {
+	t.Helper()
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	reg := tools.NewRegistry()
+	if err := reg.Register(stubTool{name: "read_file", out: out}, tools.OriginBuiltin); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
+	r, err := runner.New(runner.Config{
+		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
+		Registry: reg, Models: models,
+		Caps:      runner.Caps{ExecutorRounds: 4},
+		Task:      "read the big file",
+		Publisher: pub,
+		Turn:      runner.Turn{ID: "t-frames", AgentID: "agent-1"},
+	})
+	if err != nil {
+		t.Fatalf("runner.New: %v", err)
+	}
+	return r
+}
+
+// openingFrame is the update a phase publishes before its first provider call.
+func openingFrame(t *testing.T, c *capture, ph string) *types.AgentTurnProgress {
+	t.Helper()
+	c.mu <- struct{}{}
+	defer func() { <-c.mu }()
+	for _, ev := range c.events {
+		got, ok := events.DataAs[*types.AgentTurnProgress](ev)
+		if ok && string(got.Phase) == ph && got.RoundNum < 0 {
+			return got
+		}
+	}
+	t.Fatalf("no opening frame for %s", ph)
+	return nil
+}

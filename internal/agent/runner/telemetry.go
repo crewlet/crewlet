@@ -205,8 +205,10 @@ type Spend struct {
 	JudgeTokens int
 }
 
-// Total is the turn's own token count. It does NOT include what its workers
-// spent — see the Workers fields.
+// Total is the turn's own token count — what its PHASES spent, and what the
+// phase events sum to. It does not include what its workers or its extension
+// judgements cost; both are metered separately and reported in their own
+// fields, for the reason those fields state.
 func (s Spend) Total() int { return s.InputTokens + s.OutputTokens }
 
 // recordWorker folds one finished delegated task into the tally.
@@ -331,24 +333,35 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		return
 	}
 	e.publish(ctx, events.New(types.AgentTurnProgress{
-		Agent:          e.turn.AgentID,
-		RoleName:       e.role,
-		TurnID:         e.turn.ID,
-		Phase:          types.Phase(ph),
-		Iteration:      iteration,
-		Model:          res.Model,
-		Trigger:        e.turn.Trigger,
-		Prompt:         userPrompt(res.Messages),
-		PromptMessages: promptMessages(res.Messages),
-		Response:       res.Text,
-		InputTokens:    res.InputTokens,
-		OutputTokens:   res.OutputTokens,
-		TotalTokens:    res.InputTokens + res.OutputTokens,
+		Agent:     e.turn.AgentID,
+		RoleName:  e.role,
+		TurnID:    e.turn.ID,
+		Phase:     types.Phase(ph),
+		Iteration: iteration,
+		Model:     res.Model,
+		Trigger:   e.turn.Trigger,
+		// NO PROMPT. It is sent once, on the opening frame, and the live
+		// projection carries it forward from there — exactly as it already
+		// carries the trigger.
+		//
+		// It was the largest thing on this event by a wide margin and the
+		// one thing on it that never changes: a seat with a 30 KB system
+		// prompt republished the whole of it five times a second, for the
+		// length of every phase, to every open dashboard. Past
+		// [queue.MaxPayloadBytes] the publish is refused outright, this
+		// publisher logs and moves on, and the live row simply stops for
+		// the rest of the phase with nothing on screen to say why — which
+		// is likeliest at the tail of exactly the long phases somebody is
+		// watching.
+		Response:     tail(res.Text),
+		InputTokens:  res.InputTokens,
+		OutputTokens: res.OutputTokens,
+		TotalTokens:  res.InputTokens + res.OutputTokens,
 		// RoundsUsed is 1-based and RoundNum is 0-based; see the sentinel
 		// above. Subtracting rather than counting separately keeps the two
 		// from ever disagreeing about which round this is.
 		RoundNum:       res.RoundsUsed - 1,
-		ToolExecutions: toolExecutions(res.Executions),
+		ToolExecutions: liveExecutions(res.Executions),
 		RoundNarration: roundNarration(res.Narration),
 		PartialRound:   partialRound(res.Partial),
 	}, e.traceFor(ctx)))
@@ -743,6 +756,30 @@ func partialRound(p *toolloop.Partial) map[string]any {
 	return out
 }
 
+// liveExecutions is the round's tool calls with their OUTPUT bounded.
+//
+// Only on the live event: the durable record keeps every result verbatim, and
+// this is the copy that is republished five times a second for the length of
+// the phase. A tool result is routinely the largest thing on the frame — a
+// knowledge search, a file read — and it is already final: the reader opens it
+// on the completed record, where it is whole.
+//
+// The arguments are NOT bounded. They are what a reader scans a running phase
+// for ("which file is it reading now?"), they are small, and cutting JSON in
+// the middle produces something no consumer can parse.
+func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
+	out := toolExecutions(execs)
+	for _, row := range out {
+		if result, ok := row["result"].(string); ok {
+			row["result"] = tail(result)
+		}
+		if failure, ok := row["error"].(string); ok {
+			row["error"] = tail(failure)
+		}
+	}
+	return out
+}
+
 // partialTail bounds how much of a round in flight goes on the wire.
 //
 // The whole accumulated text is republished five times a second — deltas
@@ -787,39 +824,6 @@ func encodeArgs(args map[string]any) string {
 		return "{}"
 	}
 	return string(raw)
-}
-
-// promptMessages renders the conversation for a live consumer.
-//
-// The system and user messages ONLY. The assistant turns and the tool results
-// are the response, which the same event carries separately, and repeating
-// them here would double the size of every round's envelope to say what the
-// row already shows.
-func promptMessages(msgs []llm.Message) []types.PromptMessage {
-	out := make([]types.PromptMessage, 0, 2)
-	for _, m := range msgs {
-		if m.Role != llm.RoleSystem && m.Role != llm.RoleUser {
-			continue
-		}
-		out = append(out, types.PromptMessage{Role: m.Role, Content: m.Content})
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// userPrompt is the ask, for the consumers that show one line rather than the
-// whole conversation. The FIRST user message: the loop appends corrective and
-// extension nudges as later user turns, and the last one is a nudge rather
-// than the ask.
-func userPrompt(msgs []llm.Message) string {
-	for _, m := range msgs {
-		if m.Role == llm.RoleUser {
-			return m.Content
-		}
-	}
-	return ""
 }
 
 // traceFor is the trace an event this emitter publishes belongs to.

@@ -526,3 +526,59 @@ func TestAnOpeningRoundThatBeatsItsPhaseStartOpensTheClock(t *testing.T) {
 		t.Fatalf("live call = %+v, want a start time", call)
 	}
 }
+
+// THE PROMPT IS SENT ONCE AND CARRIED. It never changes over a phase and it is
+// the largest thing on a progress event — a 30 KB system prompt republished
+// five times a second, for the length of every phase, to every open dashboard,
+// was most of what a frame weighed, and past the queue's ceiling the publish is
+// refused outright and the live row simply stops with nothing on screen to say
+// why.
+func TestThePromptSurvivesRoundsThatDoNotCarryIt(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_phase_started", planCall()))
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num": -1,
+		"prompt":    "post the weekly summary",
+		"prompt_messages": []any{
+			map[string]any{"role": "system", "content": "you are the Lead"},
+			map[string]any{"role": "user", "content": "post the weekly summary"},
+		},
+	}), streamOnly, at("2026-06-14T12:00:01+00:00")))
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num": 0, "response": "thinking",
+	}), streamOnly, at("2026-06-14T12:00:02+00:00")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call.Prompt != "post the weekly summary" {
+		t.Errorf("prompt = %q — a round that did not carry it blanked it", call.Prompt)
+	}
+	if len(call.PromptMessages) != 2 {
+		t.Errorf("prompt_messages = %v, want the system message the phase was given",
+			call.PromptMessages)
+	}
+}
+
+// AND IT STILL LANDS WHEN IT LOSES THE RACE. The opening frame travels on a
+// different subject from the rounds, so it can arrive after one — and the
+// stale-round guard would drop it, leaving the call with no prompt for its
+// whole life. It fills in what it alone carries and moves nothing else.
+func TestAnOpeningFrameThatArrivesLateStillDeliversThePrompt(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num": 2, "response": "already going", "total_tokens": 90,
+	}), streamOnly, at("2026-06-14T12:00:02+00:00")))
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num": -1, "prompt": "post the weekly summary",
+	}), streamOnly, at("2026-06-14T12:00:01+00:00")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call.Prompt != "post the weekly summary" {
+		t.Errorf("prompt = %q, want the late opening frame's", call.Prompt)
+	}
+	// And it rolled NOTHING back.
+	if call.RoundNum != 2 || call.Response != "already going" || call.TotalTokens != 90 {
+		t.Errorf("the late opening frame overwrote the round it arrived after: %+v", call)
+	}
+}
