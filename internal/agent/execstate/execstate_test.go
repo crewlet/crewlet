@@ -31,8 +31,13 @@ func suspended() execstate.State {
 		InputTokens:     1200,
 		OutputTokens:    340,
 		ToolExecutions:  []types.ToolExecution{{"name": "read_file", "success": true, "round": 1}},
-		Iterations:      []ledger.Iteration{{Iteration: 1, Intent: "fix it"}},
-		Task:            "fix the flake",
+		RoundsUsed:      2,
+		RoundNarration: []types.RoundNarration{
+			{"round": 1, "reasoning": "read it first", "content": ""},
+			{"round": 2, "reasoning": "", "content": "Starting a coding run."},
+		},
+		Iterations: []ledger.Iteration{{Iteration: 1, Intent: "fix it"}},
+		Task:       "fix the flake",
 	}
 }
 
@@ -63,6 +68,16 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	}
 	if len(got.ToolExecutions) != 1 || len(got.Iterations) != 1 {
 		t.Fatalf("prior-work state lost: %+v", got)
+	}
+	// THE ROUNDS THEMSELVES. Nothing else holds them — a suspending phase
+	// publishes no completed event and its progress frames are stream-only —
+	// so a row that loses these loses the pre-suspend half of the phase from
+	// the store for good, and the resumed half renumbers from 1.
+	if got.RoundsUsed != 2 || len(got.RoundNarration) != 2 {
+		t.Fatalf("the pre-suspend rounds were lost: %+v", got)
+	}
+	if got.RoundNarration[0]["reasoning"] != "read it first" {
+		t.Fatalf("round 1's thinking did not survive: %+v", got.RoundNarration)
 	}
 	if got.Task != "fix the flake" {
 		t.Fatalf("task = %q", got.Task)

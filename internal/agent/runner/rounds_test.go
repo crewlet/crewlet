@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
@@ -232,4 +233,106 @@ func progressFrames(t *testing.T, c *capture, ph string) []*types.AgentTurnProgr
 		t.Fatalf("no %s frame was published", ph)
 	}
 	return out
+}
+
+// A RESUMED PHASE IS THE SAME PHASE, AND ITS RECORD COVERS ALL OF IT.
+//
+// A suspending Execute returns before `emit.completed` runs, so it publishes
+// no durable record at all, and its progress frames are stream-only. The
+// resumed half is therefore the only account this phase will ever have — and
+// it used to start at round 1, so the pre-suspend rounds, the `run_sandbox`
+// call that caused the suspension included, were gone from the store for good,
+// under token counters that covered both halves.
+func TestAResumedPhasePublishesTheWholePhase(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{execute: []llm.Completion{
+		thinkAndCall(t, "slack_post", `{"text":"the fix is up"}`, "tell the requester"),
+		thinkAndCall(t, runner.SubmitWorkTool,
+			`{"outcome":"delivered","summary":"shipped it","deliveries":["slack_post"]}`,
+			"the box did the work"),
+		text("done"),
+	}}
+	pub := newCapture()
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+		pub:    pub,
+		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
+	})
+
+	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	done := completedPhase(t, pub, "execute")
+	if done.RoundsUsed != 4 {
+		t.Errorf("RoundsUsed = %d, want the phase's own 4 (two before the suspend, two after)",
+			done.RoundsUsed)
+	}
+	names := map[string]int{}
+	for _, ex := range done.ToolExecutions {
+		name, _ := ex["name"].(string)
+		round, _ := ex["round"].(int)
+		names[name] = round
+	}
+	// The call that CAUSED the suspension. If this is missing, the only
+	// durable evidence that the phase started a coding run is gone.
+	if names["run_sandbox"] != 2 {
+		t.Errorf("run_sandbox is recorded in round %d, want 2: %v", names["run_sandbox"], names)
+	}
+	if names["search_knowledge"] != 1 {
+		t.Errorf("the pre-suspend read is in round %d, want 1: %v",
+			names["search_knowledge"], names)
+	}
+	// And the resumed round CONTINUES rather than restarting.
+	if names["slack_post"] != 3 || names[runner.SubmitWorkTool] != 4 {
+		t.Errorf("the resumed rounds are numbered %d and %d, want 3 and 4: %v",
+			names["slack_post"], names[runner.SubmitWorkTool], names)
+	}
+	rounds := map[int]bool{}
+	for _, n := range done.RoundNarration {
+		round, _ := n["round"].(int)
+		if rounds[round] {
+			t.Errorf("round %d is narrated twice — the resume restarted the count", round)
+		}
+		rounds[round] = true
+	}
+	if len(rounds) != 4 {
+		t.Errorf("narrated rounds = %v, want one per round of 4", rounds)
+	}
+	// The counters were already the phase's total; they must not double now
+	// that the rounds they cover are on the record too.
+	if done.TotalTokens != 500+2*100 {
+		t.Errorf("total_tokens = %d, want 700 (500 before the suspend, 200 after)",
+			done.TotalTokens)
+	}
+}
+
+// suspendedAfterTwoRounds is a phase parked on run_sandbox, two rounds in.
+func suspendedAfterTwoRounds() execstate.State {
+	return execstate.State{
+		Version: execstate.Version,
+		Messages: []llm.Message{
+			{Role: llm.RoleSystem, Content: "you are the CTO"},
+			{Role: llm.RoleUser, Content: "post the weekly summary"},
+			{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
+				{ID: "call-1", Name: "run_sandbox", Arguments: map[string]any{"task": "fix it"}},
+			}},
+		},
+		PendingCallID:   "call-1",
+		PendingCallName: "run_sandbox",
+		// The activations the pre-suspend rounds made, replayed — which is
+		// the reason the field exists.
+		ActiveTools:  []string{"slack_post"},
+		Round:        1,
+		RoundsUsed:   2,
+		InputTokens:  400,
+		OutputTokens: 100,
+		ToolExecutions: []types.ToolExecution{
+			{"name": "search_knowledge", "arguments": "{}", "result": "2 pages", "success": true, "round": 1},
+			{"name": "run_sandbox", "arguments": "{}", "result": "started", "success": true, "round": 2},
+		},
+		RoundNarration: []types.RoundNarration{
+			{"round": 1, "reasoning": "what do we already know", "content": ""},
+			{"round": 2, "reasoning": "this needs code", "content": "Starting a coding run."},
+		},
+	}
 }

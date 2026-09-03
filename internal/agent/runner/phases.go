@@ -514,9 +514,17 @@ type phaseRun struct {
 	// phase.
 	seed []llm.Message
 
-	// spent is what the pre-suspend rounds already cost, so a resumed
-	// phase's record is the turn's total rather than only its second half.
-	spent toolloop.Result
+	// prior is what this phase ALREADY DID before this entry — a resumed
+	// executor's pre-suspend rounds, their narration, their tool calls and
+	// what they cost.
+	//
+	// The whole record rather than only the counters. A suspended phase
+	// publishes no completed event and `agent_turn_progress` is stream-only,
+	// so nothing durable holds those rounds: a record starting at 1 after the
+	// resume was not a second half, it was the ONLY half, with the
+	// `run_sandbox` call that caused the suspension gone from the store for
+	// good and the round numbers claiming to be the phase's first.
+	prior toolloop.Result
 
 	// allowSuspend permits a tool to stop this loop with its call
 	// unanswered. ONLY EXECUTE sets it: a phase that never persists a
@@ -576,13 +584,13 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// The PHASE's record, accumulated across every invocation of the tool
 	// loop. Declared up here because the failure path below reports it too.
 	//
-	// A resumed phase's pre-suspend spend is seeded ONCE, before the loop:
-	// the fold carries it forward with everything else, and adding it per
-	// invocation would count it again for every extension the phase is
-	// granted.
+	// SEEDED from what the phase already did, once, before the loop: a
+	// resumed executor's pre-suspend rounds are part of this phase and the
+	// fold carries them forward with everything else. Seeding per invocation
+	// would count them again for every extension the phase is granted.
 	var out phaseResult
-	out.Result.InputTokens = in.spent.InputTokens
-	out.Result.OutputTokens = in.spent.OutputTokens
+	out.Result = in.prior
+	out.Rounds = in.prior.RoundsUsed
 	// Returns the phase context too, so `return fail(err)` stays a single
 	// line now that runPhase hands its context back.
 	fail := func(err error) (context.Context, phaseResult, error) {
