@@ -3,6 +3,7 @@ package sandbox
 import (
 	"errors"
 	"io"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -64,25 +65,86 @@ func TestTheIdleReaderKeepsTheBudgetItWasGiven(t *testing.T) {
 // AND A DELIVERING STREAM SURVIVES PAST ITS OWN BUDGET, which is the other
 // half of the same claim: the budget bounds the GAP between bytes, not the
 // life of the stream.
+//
+// Driven through a countdown this case owns rather than a real one, because
+// the claim is a NEGATIVE — the stream was not abandoned — and an
+// abandonment that has not happened has no signal to wait on. Against wall
+// time the only way to make it is to sleep between deliveries and hope the
+// budget outlasts the scheduler, which is a claim about the machine: this
+// case slept 10ms against a 40ms budget and went red on a loaded CI box with
+// the reader behaving perfectly. See newIdleReaderOn.
 func TestDeliveringBytesPostponesTheAbandonment(t *testing.T) {
 	t.Parallel()
 	var cancelled atomic.Bool
 	body := &blockingReader{deliveries: 20, block: make(chan struct{})}
 	defer close(body.block)
 
-	r := newIdleReader(body, func() { cancelled.Store(true) }, 40*time.Millisecond)
+	const budget = 40 * time.Millisecond
+	var countdown *fakeTimer
+	r := newIdleReaderOn(body, func() { cancelled.Store(true) }, budget,
+		func(d time.Duration, fire func()) idleTimer {
+			countdown = &fakeTimer{armed: d, fire: fire}
+			return countdown
+		})
 	defer r.timer.Stop()
 
-	// Twenty deliveries at 10ms apart is 200ms of stream against a 40ms
-	// idle budget: it survives only because each one re-arms.
 	buf := make([]byte, 1)
 	for range 20 {
 		if _, err := r.Read(buf); err != nil && !errors.Is(err, io.EOF) {
 			t.Fatalf("Read: %v", err)
 		}
-		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Every delivery re-armed, and re-armed with the CALLER's budget — the
+	// two halves that together mean a stream is bounded by its gaps.
+	if got := countdown.resets(); got != 20 {
+		t.Errorf("20 deliveries re-armed the budget %d times, want 20", got)
+	}
+	if got := countdown.last(); got != budget {
+		t.Errorf("a delivery re-armed the budget with %s, want the caller's %s", got, budget)
 	}
 	if cancelled.Load() {
-		t.Error("a stream delivering every 10ms was abandoned on a 40ms idle budget")
+		t.Error("a stream that never stopped delivering was abandoned")
+	}
+
+	// And the countdown the reader armed is a real one: when it expires,
+	// the request is cancelled rather than merely failing the read.
+	countdown.expire()
+	if !cancelled.Load() {
+		t.Error("the armed countdown expired without cancelling the request")
 	}
 }
+
+// fakeTimer is a countdown the test expires by hand, recording what the
+// reader did to it.
+type fakeTimer struct {
+	mu    sync.Mutex
+	armed time.Duration
+	count int
+	fire  func()
+}
+
+func (f *fakeTimer) Reset(d time.Duration) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.armed = d
+	f.count++
+	return true
+}
+
+func (f *fakeTimer) Stop() bool { return true }
+
+func (f *fakeTimer) resets() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.count
+}
+
+func (f *fakeTimer) last() time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.armed
+}
+
+// expire runs the callback the way a real timer's own goroutine would.
+func (f *fakeTimer) expire() { f.fire() }
