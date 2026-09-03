@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test, vi } from "vitest";
-import { MAX_EVENTS, Store } from "./store.ts";
+import { MAX_EVENTS, MAX_PHASES, Store } from "./store.ts";
 import type { EventEnvelope, FeedRow } from "./types.ts";
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {
@@ -116,15 +116,78 @@ describe("the event feed", () => {
     // Newest first: the last one published is the first one held.
     expect(store.state.events[0]?.id).toBe(`e${MAX_EVENTS + 49}`);
   });
+});
 
-  test("every envelope reaches an event listener, feed or not", () => {
-    // A screen watching for one event type must see the ones the feed
-    // declines to keep.
+describe("completed phases", () => {
+  // THE DURABLE HALF OF A LIVE PHASE. The projection clears `live_call` the
+  // instant a phase completes, and the query that answered a seat's history was
+  // answered once, at mount — so without this slice the turn a reader is
+  // watching vanishes the moment its review lands, and on a seat's first turn
+  // the page is left claiming the seat has never run.
+  const phaseEvent = (id: string, over: Record<string, unknown> = {}): EventEnvelope =>
+    ({
+      ...feedRow(id, { type: "agent_phase_completed", category: "llm" }),
+      payload: { turn_id: "t1", phase: "review", iteration: 0, role: "PM", ...over },
+    }) as EventEnvelope;
+
+  test("a completed phase is kept WITH its payload", () => {
     const store = new Store();
-    const seen: string[] = [];
-    store.onEvent((ev) => seen.push(ev.id));
-    store.applyEvent({ ...feedRow("e1"), category: "" } as EventEnvelope);
-    expect(seen).toEqual(["e1"]);
+    store.applyEvent(phaseEvent("p1"));
+    expect(store.state.phases).toHaveLength(1);
+    expect(store.state.phases[0]?.payload?.phase).toBe("review");
+  });
+
+  test("a payload-free row is not kept", () => {
+    // Snapshots and the `events` query both answer with payload-free rows. One
+    // of those would evict a real record for a phase nothing can render.
+    const store = new Store();
+    store.applyEvent(feedRow("p1", { type: "agent_phase_completed" }) as EventEnvelope);
+    expect(store.state.phases).toHaveLength(0);
+  });
+
+  test("only phase completions are kept", () => {
+    const store = new Store();
+    store.applyEvent({ ...phaseEvent("t1"), type: "agent_turn_completed" });
+    expect(store.state.phases).toHaveLength(0);
+  });
+
+  test("a redelivered phase does not double", () => {
+    const store = new Store();
+    store.applyEvent(phaseEvent("p1"));
+    store.applyEvent(phaseEvent("p1"));
+    expect(store.state.phases).toHaveLength(1);
+  });
+
+  test("the buffer is bounded, newest first", () => {
+    // The payloads carry verbatim prompts, responses and tool results, so an
+    // unbounded buffer grows with the length of a session.
+    const store = new Store();
+    for (let i = 0; i < MAX_PHASES + 10; i++) store.applyEvent(phaseEvent(`p${i}`));
+    expect(store.state.phases).toHaveLength(MAX_PHASES);
+    expect(store.state.phases[0]?.id).toBe(`p${MAX_PHASES + 9}`);
+  });
+
+  test("a snapshot leaves the slice alone", () => {
+    // The snapshot carries payload-free feed rows and no phase payloads, so a
+    // reconnect must add to this rather than blank it — the records are still
+    // true, and each screen re-asks its own query anyway.
+    const store = new Store();
+    store.applyEvent(phaseEvent("p1"));
+    store.applySnapshot({ agents: [], events: [] });
+    expect(store.state.phases).toHaveLength(1);
+  });
+
+  test("a phase completion wakes only phase readers", () => {
+    // `agents` is pushed twice per tool-loop round; a slice that woke every
+    // listener would re-render the whole application several times a second.
+    const store = new Store();
+    const agentsWoke = vi.fn();
+    const phasesWoke = vi.fn();
+    store.subscribe(["agents"], agentsWoke);
+    store.subscribe(["phases"], phasesWoke);
+    store.applyEvent(phaseEvent("p1"));
+    expect(phasesWoke).toHaveBeenCalled();
+    expect(agentsWoke).not.toHaveBeenCalled();
   });
 });
 
@@ -206,18 +269,6 @@ describe("subscriptions", () => {
 });
 
 describe("partial pushes", () => {
-  test("a schedules push without recent_runs leaves what was fetched", () => {
-    const store = new Store();
-    store.applySchedules({
-      schedules: [],
-      recent_runs: [
-        { name: "a", scope: "role", scope_name: "PM", fired_at: "", outcome: "fired", detail: "" },
-      ],
-    });
-    store.applySchedules({ schedules: [] });
-    expect(store.state.recentRuns).toHaveLength(1);
-  });
-
   test("a rollup with no totals is refused", () => {
     // applySnapshot requires `totals`; a bare list of records passes neither
     // path and would leave the Spend screen blank with the numbers in memory.

@@ -25,6 +25,7 @@ function emptyState() {
 	return {
 		agents: [],
 		events: [],
+		phases: [],
 		sandboxes: [],
 		org: {},
 		tools: [],
@@ -32,7 +33,6 @@ function emptyState() {
 		tokens: null,
 		budget: {},
 		schedules: null,
-		recentRuns: null,
 		connected: false,
 		authRejected: false
 	};
@@ -40,7 +40,6 @@ function emptyState() {
 var Store = class {
 	state = emptyState();
 	subs = /* @__PURE__ */ new Map();
-	eventSubs = /* @__PURE__ */ new Set();
 	/**
 	* A monotonic counter per slice.
 	*
@@ -66,13 +65,6 @@ var Store = class {
 		}
 		return () => {
 			for (const slice of slices) this.subs.get(slice)?.delete(fn);
-		};
-	}
-	/** Call `fn` for every event envelope, as it arrives. */
-	onEvent(fn) {
-		this.eventSubs.add(fn);
-		return () => {
-			this.eventSubs.delete(fn);
 		};
 	}
 	emit(...slices) {
@@ -151,7 +143,6 @@ var Store = class {
 	applySchedules(payload) {
 		if (!payload) return;
 		if (payload.schedules) this.state.schedules = payload.schedules;
-		if (payload.recent_runs) this.state.recentRuns = payload.recent_runs;
 		this.emit("schedules");
 	}
 	applyOrg(org) {
@@ -184,7 +175,12 @@ var Store = class {
 			this.state.events = [ev, ...this.state.events].slice(0, 400);
 			this.emit("events");
 		}
-		for (const fn of this.eventSubs) fn(ev);
+		if (ev.type === "agent_phase_completed" && ev.payload) {
+			if (!this.state.phases.some((p) => p.id === ev.id)) {
+				this.state.phases = [ev, ...this.state.phases].slice(0, 200);
+				this.emit("phases");
+			}
+		}
 	}
 	agentById(id) {
 		return this.state.agents.find((a) => a.id === id || a.role === id) ?? null;

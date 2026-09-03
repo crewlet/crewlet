@@ -5,7 +5,7 @@
  * them — and the tab is in the URL so a colleague can be sent the exact view.
  */
 
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
@@ -27,7 +27,7 @@ import {
 import { BarList, phaseColor } from "~/ui/charts.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
-import { useAgents, useOrg, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
+import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, statusLine, afkReason, runState } from "~/lib/seats.ts";
 import {
@@ -44,6 +44,7 @@ import {
   fromPhaseEvent,
   groupTurns,
   mergePhases,
+  streamedPhases,
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
@@ -61,6 +62,8 @@ export function SeatScreen({ handle }: { handle: string }) {
   const now = useNow();
   const [tab, setTab] = useParam("tab", "overview", "section");
 
+  const phaseEvents = usePhaseEvents();
+
   const index = useMemo(() => indexOrg(org), [org]);
   const seat =
     index.byHandle.get(handle) ??
@@ -70,6 +73,11 @@ export function SeatScreen({ handle }: { handle: string }) {
 
   const agent = agents.find((a) => a.handle === handle || a.id === handle || a.role === seat?.name);
   const sandbox = sandboxes.find((s) => s.role === seat?.name) ?? null;
+  // The ROLE NAME, which is what a phase record carries — the URL and every
+  // link into this screen carry the handle. Empty for a handle that resolves to
+  // nothing, and the stream filter below reads it as "match no phase" rather
+  // than as "match every phase that named no role".
+  const role = agent?.role ?? seat?.name ?? "";
 
   // The seat's own phase history. Its `live` half is deliberately NOT read:
   // the projection already pushes it onto the roster, and reading it here too
@@ -90,14 +98,38 @@ export function SeatScreen({ handle }: { handle: string }) {
     const stored = (history.data?.llm_history ?? [])
       .map((ev) => fromPhaseEvent(ev as EventRecord))
       .filter((r): r is PhaseRecord => r !== null);
+    // The query above is answered ONCE, at mount. Every phase that finishes
+    // after it — which is every phase of the turn a reader opened this tab to
+    // watch — reaches the tab only here.
+    const streamed = streamedPhases(phaseEvents, (r) => role !== "" && r.role === role);
     const live = agent?.live_call ? [fromLiveCall(agent.live_call, agent.role)] : [];
-    return mergePhases(stored, live);
-  }, [history.data, agent]);
+    // Streamed FIRST so the query's own copy of the same phase wins the key:
+    // both are the same durable record, and preferring the one that came
+    // through the paged, authoritative answer keeps one source in charge.
+    return mergePhases([...streamed, ...stored], live);
+  }, [history.data, phaseEvents, agent, role]);
 
   const turns = useMemo(() => groupTurns(phases), [phases]);
   const liveTurns = useMemo(() => turns.filter((g) => g.live), [turns]);
   const doneTurns = useMemo(() => turns.filter((g) => !g.live), [turns]);
-  const settled = useSettled(doneTurns, seatTurnKey);
+  const liveTurnKeys = useMemo(() => liveTurns.map(seatTurnKey), [liveTurns]);
+  // The turns this reader has watched RUN.
+  //
+  // A turn card is REMOUNTED when it crosses from the live region into the
+  // settled list — two different lists, so React builds a new component — and
+  // its latched open state goes with the old one. `i === 0 && !liveTurns.length`
+  // then closes it whenever the seat has already started another turn, which
+  // collapsed the transcript the reader had open at the exact moment its last
+  // phase landed. Accumulated in a ref, and written during render for the same
+  // reason `useSettled` does it: adding to a set is idempotent, so a render
+  // React discards and repeats leaves the same set behind.
+  const watched = useRef<Set<string>>(new Set());
+  for (const key of liveTurnKeys) watched.current.add(key);
+  // A turn the reader has been watching run is not a NEW row when it finishes:
+  // it moves out of the live list into this one, and holding it behind "1 new
+  // turn finished while you were reading" is the same disappearance from the
+  // reader's side.
+  const settled = useSettled(doneTurns, seatTurnKey, liveTurnKeys);
 
   if (!seat) {
     return (
@@ -391,48 +423,55 @@ export function SeatScreen({ handle }: { handle: string }) {
       {tab === "model" && (
         <>
           {history.loading && !turns.length && <Skeleton rows={4} height={44} />}
-          <QueryState
-            error={history.error}
-            loading={history.loading}
-            empty={
-              turns.length
-                ? undefined
-                : {
-                    title: "No phases in the record for this seat",
-                    hint: "A phase is recorded when it completes. A seat that has not taken a turn has nothing here.",
-                  }
-            }
-          >
-            {/* The same split the Model screen makes, for the same reason:
-                a running turn changes every couple of hundred milliseconds,
-                and letting that churn sit inside the settled history reflowed
-                whatever the reader was working through. Here it also answers
-                "which of these is happening right now", which used to be
-                readable only off a badge. */}
-            {liveTurns.length > 0 && (
-              <section className="col gap-1 live-region">
-                <div className="t-label">
-                  Running now
-                  <span className="faint"> · updates as each round is written</span>
-                </div>
-                <div className="col gap-2">
-                  {liveTurns.map((g) => (
-                    <TurnCard key={g.turnId} group={g} defaultOpen />
-                  ))}
-                </div>
-              </section>
-            )}
-            {settled.pending > 0 && (
-              <button className="new-rows" onClick={settled.flush}>
-                {plural(settled.pending, "new turn")} finished while you were reading — show
-              </button>
-            )}
-            <div className="col gap-2">
-              {settled.items.map((g, i) => (
-                <TurnCard key={g.turnId} group={g} defaultOpen={i === 0 && !liveTurns.length} />
-              ))}
-            </div>
-          </QueryState>
+          {/* The QUERY'S OWN STATE, BESIDE THE TURNS RATHER THAN IN PLACE OF
+              THEM. It used to wrap them, and `QueryState` renders NOTHING while
+              a query is in flight and a banner INSTEAD of its children when one
+              fails — so the turn happening right now was hidden until the event
+              store answered, and hidden for good on a node that keeps no event
+              log at all. Only the settled half of this screen comes from that
+              query; the running half is pushed. */}
+          {history.error && <QueryState error={history.error} loading={history.loading} />}
+          {!history.loading && !history.error && !turns.length && (
+            <Empty
+              inline
+              icon="brain"
+              title="No phases in the record for this seat"
+              hint="A phase is recorded when it completes. A seat that has not taken a turn has nothing here."
+            />
+          )}
+          {/* The same split the Model screen makes, for the same reason:
+              a running turn changes every couple of hundred milliseconds,
+              and letting that churn sit inside the settled history reflowed
+              whatever the reader was working through. Here it also answers
+              "which of these is happening right now", which used to be
+              readable only off a badge. */}
+          {liveTurns.length > 0 && (
+            <section className="col gap-1 live-region">
+              <div className="t-label">
+                Running now
+                <span className="faint"> · updates as each round is written</span>
+              </div>
+              <div className="col gap-2">
+                {liveTurns.map((g) => (
+                  <TurnCard key={g.turnId} group={g} defaultOpen />
+                ))}
+              </div>
+            </section>
+          )}
+          {settled.pending > 0 && (
+            <button className="new-rows" onClick={settled.flush}>
+              {plural(settled.pending, "new turn")} finished while you were reading — show
+            </button>
+          )}
+          <div className="col gap-2">
+            {settled.items.map((g, i) => (
+              <TurnCard
+                key={g.turnId}
+                group={g}
+                defaultOpen={(i === 0 && !liveTurns.length) || watched.current.has(g.turnId)}
+              />
+            ))}
+          </div>
           {turns.length > 0 && (
             <Panel padding="tight">
               <div className="row">

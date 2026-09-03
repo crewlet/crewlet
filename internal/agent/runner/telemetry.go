@@ -410,6 +410,19 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		RoleName: e.role,
 		TurnID:   e.turn.ID,
 		Phase:    types.PhaseSubagent,
+		// THE ROUND THIS RAN IN, and it was left at zero.
+		//
+		// A phase's identity is (turn, phase, iteration) plus the task id
+		// that distinguishes one worker of a fan-out from the next, and
+		// task ids are only unique WITHIN one delegate call — `plan`
+		// refuses a repeat there and nothing constrains the next round.
+		// So a self-iterating turn that delegated a task named the same
+		// thing twice produced two records under one identity, and the
+		// dashboard's merge kept whichever arrived last: a worker, its
+		// prompt, its tools and its failure were simply not on the page.
+		// Iteration is what tags which round fired the trio, and a nested
+		// phase belongs to the round that spawned it.
+		Iteration: e.hostIteration,
 		// NESTED under the phase that spawned it, so a dashboard groups
 		// it beneath that Execute round rather than rendering it as a
 		// standalone sibling of the turn's own three phases.
