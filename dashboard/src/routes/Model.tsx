@@ -24,7 +24,7 @@ import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Button, Chip, Empty, PhaseTag, Select, Skeleton } from "~/ui/primitives.tsx";
 import { DataTable, type Column } from "~/ui/DataTable.tsx";
-import { useAgents, useClient } from "~/lib/store-hooks.ts";
+import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtElapsed, plural, relTime, tsKey } from "~/lib/format.ts";
@@ -35,6 +35,7 @@ import {
   fromLiveCall,
   fromPhaseEvent,
   mergePhases,
+  streamedPhases,
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
@@ -72,13 +73,18 @@ export function ModelActivity() {
     ...(role ? { role } : {}),
   });
 
-  const stored = useMemo<PhaseRecord[]>(
-    () =>
-      [...(data?.phases ?? []), ...older]
-        .map((row) => fromPhaseEvent(row))
-        .filter((r): r is PhaseRecord => r !== null),
-    [data, older],
-  );
+  const phaseEvents = usePhaseEvents();
+
+  const stored = useMemo<PhaseRecord[]>(() => {
+    const answered = [...(data?.phases ?? []), ...older]
+      .map((row) => fromPhaseEvent(row))
+      .filter((r): r is PhaseRecord => r !== null);
+    // The query above is answered once. Without the phases that finish after
+    // it, a row here leaves "Running now" when its phase completes and never
+    // appears among the recent ones — it just goes.
+    const streamed = streamedPhases(phaseEvents, (r) => !role || r.role === role);
+    return [...streamed, ...answered];
+  }, [data, older, phaseEvents, role]);
 
   const live = useMemo<PhaseRecord[]>(
     () =>
@@ -104,9 +110,11 @@ export function ModelActivity() {
   // anywhere published a round.
   const running = useMemo(() => filtered.filter((r) => r.live), [filtered]);
   const done = useMemo(() => filtered.filter((r) => !r.live), [filtered]);
+  const runningKeys = useMemo(() => running.map(phaseRecordKey), [running]);
   // The settled list does not splice new rows in under a reader — see
-  // lib/settled.ts.
-  const settled = useSettled(done, phaseRecordKey);
+  // lib/settled.ts. A phase that was in the running table above is exempt: the
+  // reader has been watching it, and it lands here the moment it completes.
+  const settled = useSettled(done, phaseRecordKey, runningKeys);
 
   const loadOlder = useCallback(async () => {
     setPaging(true);

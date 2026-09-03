@@ -225,6 +225,28 @@ rules fix it, and each one names a specific mechanism:
    the entrance animation replayed, the row relocated from the end of the list
    into its chronological slot, and its expanded state was lost with the key it
    was filed under. Now a live phase *becomes* a finished phase in place.
+
+   **A phase has to HAVE a finished half for that to mean anything**, and for a
+   while it did not. A screen reads two sources — the seat overlay's `live_call`
+   and a query answered ONCE, at mount — and the projection clears `live_call`
+   the instant a phase completes. Nothing delivered the durable record to a tab
+   already open, so a turn watched to its end did not become finished: it
+   *disappeared*, most completely on a seat's first turn, where the mount-time
+   history is empty and the page was left saying the seat had never run at all.
+   The record was on the wire the whole time — the `event` push carries the
+   whole `agent_phase_completed` envelope, payload included, and is sent BEFORE
+   the overlay that clears the call — so the store keeps the recent ones
+   (`MAX_PHASES`) and every screen merges them over its own query answer through
+   the same `fromPhaseEvent` the stored half uses. Same function, same key, so
+   the streamed record and the one the query would return next time are the same
+   row.
+
+   That buffer is bounded on the retained PAYLOADS, not on a row count: a phase
+   carries its verbatim system prompt, its response and every tool result, which
+   is why the server itself caps one page of these at 60. It is company-wide and
+   drop-oldest, so it is a supplement rather than a guarantee — a fleet busy
+   enough to evict a record a tab still wants renders that turn with a phase
+   missing, and the reload that supersedes it is authoritative.
 2. **One block per round: thought, speech, then calls.** A round groups
    `round_narration[]` and `tool_executions[]` on the `round` they share,
    and rounds only ever append — so nothing above an insertion point can
@@ -332,8 +354,9 @@ while somebody was reading one, and splicing a phase in at the top pushes
 everything below it down by a card — mid-sentence, every few seconds on a busy
 company.
 
-Two rules, and they are the same rule the round ledger already follows —
-**the page moves only when the reader is not reading**:
+Three rules, the first two of which are the same rule the round ledger already
+follows — **the page moves only when the reader is not reading** — and the third
+of which is what makes them worth having at all:
 
 - **Running and settled are different lists.** A live phase changes every
   couple of hundred milliseconds; a finished one never changes again.
@@ -346,6 +369,22 @@ Two rules, and they are the same rule the round ledger already follows —
   they are counted and offered: *"3 new turns finished while you were
   reading — show"*. Keyed on identity, never position, so a row that UPDATES
   in place — a round landing, a phase completing — is never held back.
+
+  **And identity reaches across the two lists.** A running turn lives in the
+  live region; when it finishes it leaves that region and arrives in the
+  settled list with a key that list has never admitted — so the row a reader
+  had been watching for four minutes was replaced by *"1 new turn finished
+  while you were reading"*. It was on their screen a moment earlier: it is not
+  new to them, whatever list it was in. Each screen passes the keys it is
+  rendering live, and they are admitted without the scroll check.
+
+- **The live half of a screen does not wait on the stored half.** The seat's
+  Model activity tab wrapped its turns in the query-state component, which
+  renders nothing while a query is in flight and a banner *instead of* its
+  children when one fails. So a turn happening right now was invisible until
+  the event store answered — and invisible for good on a node that keeps no
+  event log, where the answer is a permanent `no_event_store`. The query's
+  state renders beside the turns now, never in place of them.
 
 The seat screen makes the same split, where it answers a second question:
 which of these turns is happening right now, readable at a glance from the

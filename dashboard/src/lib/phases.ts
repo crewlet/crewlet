@@ -362,6 +362,39 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
 }
 
 /**
+ * The phases that completed on the wire while this tab was watching.
+ *
+ * Every screen that renders a phase reads two sources: a query, answered ONCE
+ * at mount, and the seat's live overlay. Neither covers a phase that finishes
+ * while the reader is looking at it — the overlay's `live_call` is cleared the
+ * moment it lands, and the query is never re-asked — so the phase, and with it
+ * the whole turn, went away. Most visibly on a seat's first turn, where the
+ * mount-time history is empty and the page was left saying the seat had never
+ * run at all.
+ *
+ * The durable record is already on the wire: the engine broadcasts the whole
+ * `agent_phase_completed` envelope, payload included, and the store keeps the
+ * recent ones. This is the same `fromPhaseEvent` the stored half goes through,
+ * so a streamed record and the one the same query would return next time are
+ * the same record with the same key — which is what lets it merge in place.
+ *
+ * `keep` narrows the buffer to the screen's own scope (this seat, this turn,
+ * this role filter); the buffer itself is company-wide because one socket
+ * serves every screen.
+ */
+export function streamedPhases(
+  events: readonly EventRecord[],
+  keep: (record: PhaseRecord) => boolean,
+): PhaseRecord[] {
+  const out: PhaseRecord[] = [];
+  for (const ev of events) {
+    const record = fromPhaseEvent(ev);
+    if (record && keep(record)) out.push(record);
+  }
+  return out;
+}
+
+/**
  * Merge the live view and the durable record into one ordered list.
  *
  * The DURABLE record wins on a key collision, always: it is the complete one,

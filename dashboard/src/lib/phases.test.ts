@@ -19,6 +19,7 @@ import {
   narrations,
   rounds,
   splitThinking,
+  streamedPhases,
   toolCalls,
   type PhaseRecord,
 } from "./phases.ts";
@@ -454,5 +455,83 @@ describe("delegated workers", () => {
     const live = fromLiveCall(liveCall({ phase: "execute", iteration: 1 }), "PM");
     const done = fromPhaseEvent(phaseEvent({ phase: "execute", iteration: 1 }))!;
     expect(live.key).toBe(done.key);
+  });
+});
+
+describe("the phases that finish while a tab is watching", () => {
+  // THE TURN THAT DISAPPEARED. A screen reads two sources: a query answered
+  // once at mount, and the seat's live overlay. Neither covers a phase that
+  // completes while the reader is looking at it — the projection clears
+  // `live_call` the moment it lands — so the phase, and with it the whole
+  // turn, simply went away. The durable record is on the wire; this is what
+  // reads it.
+
+  test("a streamed record replaces the live call it closes, in place", () => {
+    const live = fromLiveCall(liveCall({ phase: "review", iteration: 1 }), "PM");
+    const streamed = streamedPhases(
+      [phaseEvent({ phase: "review", iteration: 1, decision: "done" })],
+      () => true,
+    );
+    const merged = mergePhases(streamed, [live]);
+    // ONE row, not two, and it is the finished one: same key, so the card the
+    // reader was watching becomes the finished card rather than being removed
+    // and replaced.
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.key).toBe(live.key);
+    expect(merged[0]?.live).toBe(false);
+    expect(merged[0]?.decision).toBe("done");
+  });
+
+  test("a turn survives its own last phase completing", () => {
+    // The seat page's exact sequence on a FIRST turn, where the mount-time
+    // history is empty: onboarding and execute have landed on the stream, the
+    // review is live, then the review lands too and the overlay clears.
+    const events = [
+      phaseEvent({ phase: "onboarding", iteration: 0 }, "2026-01-01T00:00:01Z"),
+      phaseEvent({ phase: "execute", iteration: 1 }, "2026-01-01T00:00:05Z"),
+    ];
+    const liveReview = fromLiveCall(liveCall({ phase: "review", iteration: 1 }), "PM");
+
+    const during = groupTurns(
+      mergePhases(
+        streamedPhases(events, () => true),
+        [liveReview],
+      ),
+    );
+    expect(during).toHaveLength(1);
+    expect(during[0]?.live).toBe(true);
+    expect(during[0]?.phases.map((p) => p.phase)).toEqual(["onboarding", "execute", "review"]);
+
+    const after = groupTurns(
+      mergePhases(
+        streamedPhases(
+          [...events, phaseEvent({ phase: "review", iteration: 1 }, "2026-01-01T00:00:09Z")],
+          () => true,
+        ),
+        // The overlay has been cleared: this is the render that used to leave
+        // the page empty.
+        [],
+      ),
+    );
+    // The turn is STILL THERE, with every phase it ran, and is no longer live.
+    expect(after).toHaveLength(1);
+    expect(after[0]?.live).toBe(false);
+    expect(after[0]?.phases.map((p) => p.phase)).toEqual(["onboarding", "execute", "review"]);
+  });
+
+  test("the scope filter reads the record, not the envelope", () => {
+    // A seat page keeps its own seat's phases. The role is on the PAYLOAD; an
+    // envelope's `actor` agrees today and is not the field a phase record is
+    // built from.
+    const events = [
+      phaseEvent({ role: "PM" }),
+      phaseEvent({ role: "Engineer" }, "2026-01-01T00:00:10Z"),
+    ];
+    expect(streamedPhases(events, (r) => r.role === "PM").map((r) => r.role)).toEqual(["PM"]);
+  });
+
+  test("a row with no payload is dropped rather than rendered blank", () => {
+    const bare = { ...phaseEvent(), payload: undefined };
+    expect(streamedPhases([bare], () => true)).toEqual([]);
   });
 });

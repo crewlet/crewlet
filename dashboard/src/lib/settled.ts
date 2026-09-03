@@ -18,6 +18,14 @@
  * UPDATES in place (a live round landing, a phase completing) is not a new row
  * and must never be held back, or the row a reader is watching would freeze
  * while the rest of the page moved on.
+ *
+ * The same rule reaches ACROSS the two lists a live screen renders, which is
+ * what `shownElsewhere` is for. A running turn lives in its own region above
+ * the settled list; when it finishes it leaves that region and arrives here
+ * with a key this hook has never admitted, so a reader scrolled into the
+ * transcript they were following had it replaced by "1 new turn finished while
+ * you were reading — show". The row was on their screen a moment earlier: it is
+ * not new to them, whatever list it was in.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -34,7 +42,17 @@ export interface Settled<T> {
   flush: () => void;
 }
 
-export function useSettled<T>(items: T[], keyOf: (item: T) => string): Settled<T> {
+export function useSettled<T>(
+  items: T[],
+  keyOf: (item: T) => string,
+  /**
+   * Keys the screen is rendering somewhere ELSE right now — its live region.
+   * Accumulated, because by the time a row arrives here it has already left
+   * that list: the key is passed on the renders BEFORE the move, and this hook
+   * has to still know it on the render after.
+   */
+  shownElsewhere: readonly string[] = [],
+): Settled<T> {
   // The keys the reader has been shown. A ref, not state: it is a record of
   // what has been rendered, and writing it must not itself cause a render.
   const shown = useRef<Set<string> | null>(null);
@@ -45,6 +63,14 @@ export function useSettled<T>(items: T[], keyOf: (item: T) => string): Settled<T
   }
 
   const admitted = shown.current;
+  // Written during render, which is safe here for the one reason it usually is
+  // not: adding to a set is idempotent and order-independent, so a render React
+  // discards and repeats — StrictMode's double invoke, a re-render for another
+  // slice — leaves exactly the same set behind. Doing it in an effect instead
+  // would show the "new rows" button for the one frame between the move and the
+  // effect, which is the flicker this is here to remove.
+  for (const key of shownElsewhere) admitted.add(key);
+
   const visible = items.filter((item) => admitted.has(keyOf(item)));
   const held = items.filter((item) => !admitted.has(keyOf(item)));
 

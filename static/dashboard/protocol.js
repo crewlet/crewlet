@@ -25,6 +25,7 @@ function emptyState() {
 	return {
 		agents: [],
 		events: [],
+		phases: [],
 		sandboxes: [],
 		org: {},
 		tools: [],
@@ -183,6 +184,12 @@ var Store = class {
 		if (ev.category && !this.state.events.some((e) => e.id === ev.id)) {
 			this.state.events = [ev, ...this.state.events].slice(0, 400);
 			this.emit("events");
+		}
+		if (ev.type === "agent_phase_completed" && ev.payload) {
+			if (!this.state.phases.some((p) => p.id === ev.id)) {
+				this.state.phases = [ev, ...this.state.phases].slice(0, 200);
+				this.emit("phases");
+			}
 		}
 		for (const fn of this.eventSubs) fn(ev);
 	}
