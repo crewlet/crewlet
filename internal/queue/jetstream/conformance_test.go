@@ -121,20 +121,32 @@ func capabilities() queuetest.Capabilities {
 			return peer
 		},
 
-		WithRedeliveryBudget: func(t *testing.T, budget int) queue.EventQueue {
+		// MaxDeliver already counts total deliveries, which is the
+		// observable the suite asks for, so the translation is the identity.
+		WithDeliveryAttempts: func(t *testing.T, attempts int) queue.EventQueue {
 			t.Helper()
-			// The budget counts redeliveries AFTER the first delivery,
-			// while MaxDeliver counts total deliveries.
-			return openForTest(t, Config{MaxDeliver: budget + 1})
+			return openForTest(t, Config{MaxDeliver: attempts})
 		},
 
-		Backlog: func(q queue.EventQueue, topic, group string) []*events.Event {
-			evs, _ := inspector(q).Backlog(context.Background(), topic, group)
+		// Both reads report a failure AS a failure. Returning the error as
+		// an empty result would tell the suite the seat is holding no mail
+		// whenever the broker did not answer, inside the group that asserts
+		// absences.
+		Backlog: func(t *testing.T, q queue.EventQueue, topic, group string) []*events.Event {
+			t.Helper()
+			evs, err := inspector(q).Backlog(context.Background(), topic, group)
+			if err != nil {
+				t.Fatalf("Backlog(%s, %s): %v", topic, group, err)
+			}
 			return evs
 		},
 
-		DeadLetters: func(q queue.EventQueue, topic, group string) []*events.Event {
-			evs, _ := inspector(q).DeadLetters(context.Background(), topic, group)
+		DeadLetters: func(t *testing.T, q queue.EventQueue, topic, group string) []*events.Event {
+			t.Helper()
+			evs, err := inspector(q).DeadLetters(context.Background(), topic, group)
+			if err != nil {
+				t.Fatalf("DeadLetters(%s, %s): %v", topic, group, err)
+			}
 			return evs
 		},
 
@@ -144,6 +156,10 @@ func capabilities() queuetest.Capabilities {
 
 		PauseHolds: func(q queue.EventQueue, topic, group string) []string {
 			return q.(*Queue).PauseHolds(topic, group)
+		},
+
+		Quiescing: func(q queue.EventQueue, topic, group string) bool {
+			return q.(*Queue).Quiescing(topic, group)
 		},
 
 		// Deliberately NOT declared, each for a measured reason:

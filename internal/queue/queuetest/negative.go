@@ -98,7 +98,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		}
 		// And it must not have half-landed: nothing is retained for a
 		// delivery the transport refused.
-		if backlog := s.caps.Backlog; backlog != nil {
+		if backlog := s.optionalBacklog(t); backlog != nil {
 			if got := backlog(q, topic, group); len(got) != 0 {
 				t.Errorf("a refused publish left %d events in the mailbox", len(got))
 			}
@@ -119,7 +119,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		awaitState(t, "the mail to be retained", func() bool {
 			return len(backlog(q, topic, group)) == 2
 		})
-		before := s.snapshot(q, topic, group)
+		before := s.snapshot(t, q, topic, group)
 
 		// Declaring a seat's inbox at boot must be a no-op when it is
 		// already there. "Ensure" that re-creates is indistinguishable
@@ -148,7 +148,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 		awaitState(t, "both groups to retain a copy", func() bool {
 			return len(backlog(q, topic, doomed)) == 1 && len(backlog(q, topic, neighbour)) == 1
 		})
-		before := s.snapshot(q, topic, neighbour)
+		before := s.snapshot(t, q, topic, neighbour)
 
 		deleted, err := q.DeleteSubscription(ctx, topic, doomed)
 		if err != nil || !deleted {
@@ -278,7 +278,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 			t.Fatalf("EnsureSubscription: %v", err)
 		}
 		publish(ctx, t, q, topic, newEvent("e0"))
-		before := s.snapshot(q, topic, group)
+		before := s.snapshot(t, q, topic, group)
 
 		quiesced, err := q.Quiesce(ctx, topic, group)
 		if err != nil || quiesced {
@@ -319,14 +319,15 @@ type subscriptionState struct {
 	known       bool
 }
 
-func (s *suite) snapshot(q queue.EventQueue, topic, group string) subscriptionState {
+func (s *suite) snapshot(t *testing.T, q queue.EventQueue, topic, group string) subscriptionState {
+	t.Helper()
 	var out subscriptionState
 	if s.caps.Backlog != nil {
-		out.backlog = labelsOf(s.caps.Backlog(q, topic, group))
+		out.backlog = labelsOf(s.caps.Backlog(t, q, topic, group))
 		out.known = true
 	}
 	if s.caps.DeadLetters != nil {
-		out.deadLetters = labelsOf(s.caps.DeadLetters(q, topic, group))
+		out.deadLetters = labelsOf(s.caps.DeadLetters(t, q, topic, group))
 		out.known = true
 	}
 	if s.caps.PauseHolds != nil {
@@ -360,7 +361,7 @@ func (s *suite) assertUntouched(t *testing.T, q queue.EventQueue, topic, group s
 	if !before.known {
 		t.Skip("backend reports nothing about a subscription's state")
 	}
-	after := s.snapshot(q, topic, group)
+	after := s.snapshot(t, q, topic, group)
 	if !equalStrings(after.backlog, before.backlog) {
 		t.Errorf("%s changed the retained mail of (%s, %s): %v -> %v",
 			what, topic, group, before.backlog, after.backlog)
