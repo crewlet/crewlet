@@ -46,6 +46,13 @@ type Caps struct {
 // reviewRounds is the reviewer's whole budget: one submission, the tool loop's
 // two corrective re-prompts when a model answers without calling it, and one
 // spare.
+//
+// That arithmetic is real now. The correctives are gated on the caller asking
+// for a forced tool call and no caller did, so three of these four rounds were
+// headroom for a mechanism that never armed — and a reviewer that thought and
+// stopped went straight to the rescue, sending the whole turn back for another
+// executor round over the one failure a model fixes when it is simply asked
+// again.
 const reviewRounds = 4
 
 // Config is everything a runner needs that does not change between rounds.
@@ -457,6 +464,11 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		phase: phase.Review, surface: surface, system: system, user: r.cfg.Task,
 		rounds: reviewRounds, iteration: round,
 		terminateAfter: []string{SubmitReviewTool}, intent: w.Summary,
+		// THE REVIEWER'S ONLY TOOL IS ITS SUBMISSION. Its surface carries
+		// no catalogue at all, so "call a tool" and "submit the review" are
+		// the same instruction here — which is what makes forcing it safe
+		// as well as right.
+		toolChoice: llm.ToolChoiceRequired,
 	})
 	if err != nil {
 		return turn.Review{}, err
@@ -547,6 +559,19 @@ type phaseRun struct {
 
 	// terminateAfter names tools that end the loop once they have run.
 	terminateAfter []string
+
+	// toolChoice forces the round to end in a tool call, for a phase whose
+	// whole contract is one submission. Empty is the tool loop's `auto`,
+	// which is right for a phase that legitimately spends rounds on calls
+	// that are not its submission — the executor.
+	//
+	// It arms the loop's corrective re-prompt, which is gated on exactly
+	// this and which nothing set: `maxForcedToolRetries` and
+	// `forcedToolCorrective` were unreachable code, and the one failure a
+	// model reliably fixes when asked — thinking and then stopping without
+	// calling — fell straight through to the rescue path instead, at the
+	// cost of a whole extra turn rather than one cheap round.
+	toolChoice llm.ToolChoice
 
 	// seed is the conversation a RESUMED loop starts from: the suspended
 	// messages plus the answer to their dangling call. Nil for an ordinary
@@ -706,6 +731,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		res, err := toolloop.Run(ctx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
 			MaxRounds: budget, Budget: r.cfg.Budget,
+			ToolChoice:   in.toolChoice,
 			AllowSuspend: in.allowSuspend,
 			// A phase that has SUBMITTED is finished. Without this the
 			// loop asks again, the model submits again, and the phase

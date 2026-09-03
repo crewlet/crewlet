@@ -377,21 +377,28 @@ from the turn's own totals for the same reason a worker's is: it is
 already counted once by the meter, and folding it in would stop the
 phase events summing to the turn's number.
 
-**Forced tool calls are enforced, not just requested.** The rescue
-paths and the extension judge call the tool loop with
-`tool_choice="required"` to force a structured-output call (the executor's
-`submit_work`, the reviewer's `submit_review`, the judge's
-`submit_extension_decision`). Some endpoints
-don't honor `tool_choice`, and some models "think then stop" — emitting
-reasoning with no tool call. The loop treats a no-tool-call completion
-on a `required` round as a non-terminal miss: it re-prompts with an
-explicit corrective ("you must call `<tool>` now — no prose") and
-retries within the round budget (bounded by `_MAX_FORCED_TOOL_RETRIES`
-and `max_rounds`), instead of silently accepting the prose as a finish.
-Without this, a single think-without-act response would defeat the
-executor, the judge, *and* the rescue at once, and the turn would fall
-through to a silent skip. Normal (`tool_choice="auto"`) rounds are
-unaffected — a text answer there is a legitimate finish.
+**Forced tool calls are enforced, not just requested.** A phase whose
+whole contract is one submission calls the tool loop with
+`tool_choice="required"`: the **reviewer**, whose surface carries no
+catalogue at all so "call a tool" and "submit the review" are the same
+instruction, and **onboarding**, whose every round discovers, activates,
+reads or reflects and whose last one marks. Some endpoints don't honor
+`tool_choice`, and some models "think then stop" — emitting reasoning
+with no tool call. The loop treats a no-tool-call completion on a
+`required` round as a non-terminal miss: it re-prompts with an explicit
+corrective naming the tool ("you must call `<tool>` now — no prose") and
+retries within the round budget (bounded by `max_forced_tool_retries` = 2
+and `max_rounds`), instead of accepting the prose as a finish. Without
+it a reviewer that thought and stopped fell through to the rescue, which
+sends the whole turn back for another executor round — a whole extra
+turn spent on the one failure a model reliably fixes when it is asked
+again. `review_max_tool_rounds` = 4 is that arithmetic: one submission,
+two correctives, one spare.
+
+The **executor** stays on `auto`, and the **judge** takes no tools at
+all — it answers in two lines of text, and a tool on its surface would
+invite a model to call it and answer nothing. A text answer on an `auto`
+round is a legitimate finish.
 
 **No submission never goes silent.** An executor that ran out of rounds, or
 simply stopped, has produced text and no account of itself. Discarding the

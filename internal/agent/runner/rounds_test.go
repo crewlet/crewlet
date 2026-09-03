@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -482,4 +484,56 @@ func phasesOfKind(t *testing.T, c *capture, ph string) []*types.AgentPhaseComple
 		}
 	}
 	return out
+}
+
+// A REVIEWER THAT THINKS AND STOPS IS ASKED AGAIN, not rescued.
+//
+// The tool loop's corrective re-prompt is gated on the caller requiring a tool
+// call, and no caller did — so `maxForcedToolRetries` and
+// `forcedToolCorrective` were unreachable and the package doc's claim that a
+// forced tool call is ENFORCED held for no phase the engine runs. A reviewer
+// that answered with prose fell straight through to the rescue, which sends
+// the whole turn back for another executor round: a whole extra turn spent on
+// the one failure a model reliably fixes when it is simply asked again.
+func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{review: []llm.Completion{
+		// Round 1: thinks, calls nothing. Some endpoints ignore tool_choice
+		// and some models think-then-stop; this is that round.
+		text("The work looks fine to me."),
+		submitCall(t, runner.SubmitReviewTool,
+			`{"decision":"done","notes":"the delivery matches the ask"}`),
+	}}
+	pub := newCapture()
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
+		buildOpts{reply: turn.ReplyNone, pub: pub})
+
+	got, err := r.Review(context.Background(), 1, turn.Work{
+		Outcome: turn.OutcomeDelivered, Summary: "posted it",
+	}, nil)
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if got.Decision != phase.Done {
+		t.Fatalf("decision = %q, want the one the second round submitted", got.Decision)
+	}
+	done := completedPhase(t, pub, "review")
+	if done.RescueFired {
+		t.Error("the reviewer was rescued, so the turn goes back for another executor round")
+	}
+	// The corrective is a round of the REVIEW phase, not a new turn.
+	if done.RoundsUsed != 2 {
+		t.Errorf("rounds_used = %d, want the prose round plus the corrected one", done.RoundsUsed)
+	}
+	// And the model was told what to do, by name. A bare "no" sends it round
+	// the same loop.
+	var corrective string
+	for _, msg := range prov.requestsFor("review")[1].Messages {
+		if strings.Contains(msg.Content, runner.SubmitReviewTool) && msg.Role == llm.RoleUser {
+			corrective = msg.Content
+		}
+	}
+	if corrective == "" {
+		t.Error("the reviewer was re-asked without being told which tool to call")
+	}
 }
