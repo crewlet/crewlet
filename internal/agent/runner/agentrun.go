@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -197,9 +198,10 @@ func (r *Runner) resumeAgentRun(ctx context.Context, state execstate.State,
 
 	work, described, err := r.finishWork(ctx, state.Round, work{
 		submit:   submit,
-		res:      phaseResult{Text: answer, Result: toolloop.Result{}},
+		res:      agentRunResult(answer, bridged),
 		surface:  surface,
 		snapshot: snapshot,
+		run:      r.cfg.Resume.Run,
 	})
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
@@ -207,6 +209,41 @@ func (r *Runner) resumeAgentRun(ctx context.Context, state execstate.State,
 	// The RUN's calls, not this process's surface's — see the doc above.
 	work.Calls = bridged
 	return work, described, nil
+}
+
+// agentRunResult turns what the run actually did into the phase's record.
+//
+// This used to hand `finishWork` a zero [toolloop.Result] while holding the
+// whole record in `bridged`, so the published event carried no response, no
+// tool calls, no tokens, no rounds and no model. The card rendered EMPTY: with
+// nothing in the ledger and nothing in the joined response there is no
+// transcript to fall back on, and the "composing its first round" placeholder
+// is gated on a phase being live, which a completed one is not. An operator
+// saw a decision word and a blank card for a run that made real tool calls.
+//
+// ONE ROUND, and that is not a stand-in for a number the engine failed to
+// count — it is the honest one. A round is an iteration of the ENGINE's tool
+// loop: one request, one answer. In agent mode the engine made a single
+// request — the launch — and got a single answer back, however many turns the
+// CLI took inside its own loop to produce it. The bridge's call log carries no
+// round of its own and inventing one per call would claim a structure nobody
+// observed, splitting one run into thirty rounds of one call each.
+func agentRunResult(answer string, bridged []ledger.Call) phaseResult {
+	res := toolloop.Result{Text: answer, RoundsUsed: 1}
+	for _, call := range bridged {
+		res.Executions = append(res.Executions, toolloop.Execution{
+			Round: 1, Name: call.Name, Args: call.Args,
+			Output: call.Result, Failed: call.Failed,
+		})
+	}
+	if strings.TrimSpace(answer) != "" {
+		// The run's own last word, on the round its calls are on, so the
+		// ledger reads as one block rather than as prose beside orphaned
+		// tool rows. There is no separate reasoning to report: a CLI's
+		// thinking stays inside its own loop.
+		res.Narration = []toolloop.Narration{{Round: 1, Content: answer}}
+	}
+	return phaseResult{Text: answer, Rounds: 1, Result: res}
 }
 
 // replaySubmission feeds the run's own submit_work call back through a fresh

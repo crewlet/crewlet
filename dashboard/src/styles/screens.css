@@ -81,11 +81,20 @@
 
    GROUPING IS STRUCTURAL, NOT CHROMATIC. A hue per round would read as
    meaning something and mean nothing — the same objection as a colour per
-   agent, and worse at nine rounds. So a round is separated by a continuous
-   rail with a numbered node, plus an alternating surface tint that is two
-   steps rather than N. Colour inside a round is reserved for what it can
-   actually distinguish: thinking from speech, and a failed call from a
-   successful one. */
+   agent, and worse at nine rounds. So a round is BRACKETED by a rail that
+   runs from its numbered node down its own content, and adjacent rounds are
+   told apart by an alternating surface tint that is two steps rather than N.
+   Colour inside a round is reserved for what it can actually distinguish:
+   thinking from speech, and a failed call from a successful one.
+
+   Those are two different jobs and it took a reader to notice only one of
+   them was being done. The rail used to be drawn strictly BETWEEN rounds and
+   the tint only on even ones, so both devices described the SEQUENCE and
+   neither bounded a round: a phase with a single round — the common case, and
+   the one a reader complained about — got neither, and rendered as a bare
+   numeral in the gutter beside a flat stack of look-alike disclosure rows,
+   where `Thinking` and `submit_work` read as two siblings rather than as a
+   thought and the call it asked for. */
 .round-ledger {
   list-style: none;
   margin: 0;
@@ -93,11 +102,18 @@
   display: flex;
   flex-direction: column;
 }
+/* The block-padding is what separates one round from the next, and it has to
+   beat `.round-body`'s own gap by enough to be read as a different KIND of
+   boundary: 24px between rounds against 8px inside one. At the previous
+   `--space-2` the two were 16 and 8, and the ledger's boundary to the phase
+   sections below it (`.phase-body`'s 12px gap) sat between them — so the
+   three levels of the hierarchy were 8 / 12 / 16 and read as one flat list.
+   The ledger's own frame, below, supplies the outer boundary. */
 .round {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-2) var(--space-2) 0;
+  padding: var(--space-3) var(--space-2) var(--space-3) 0;
   border-radius: var(--r-sm);
 }
 /* Two steps, alternating — enough to separate adjacent blocks, not enough to
@@ -128,23 +144,49 @@
   font-weight: var(--fw-medium);
   position: relative;
 }
-/* Drawn from the node down, and absent on the last round so the ledger has a
-   visible end rather than trailing into nothing. */
-.round:not(:last-child) .round-rail::after {
+/* Drawn from under the node to the bottom of THIS round's own content, on
+   every round including the last — the bracket that says the thinking, the
+   speech and the calls beside it are one round.
+
+   It used to stop short of the last round (`:not(:last-child)`) and to bleed
+   past its own content into the gap below, which is the shape you draw when
+   the line is a connector between siblings rather than a bracket around one.
+   Bounded to the round it belongs to it does both jobs at once: every round
+   is delimited, and the ledger still ends where its last round's content ends
+   rather than trailing into nothing. */
+.round-rail::after {
   content: "";
   position: absolute;
   left: calc(50% - 1px);
-  top: 24px;
-  bottom: calc(-1 * var(--space-2) - 2px);
+  /* Just under the node (2px margin + 18px), so the bracket reads as the
+     node continuing. At the old 24px it started 4px clear of it, which on a
+     round only one row tall — a round that called a tool and said nothing —
+     left a detached 6px dash rather than a short bracket. */
+  top: 22px;
+  bottom: 0;
   width: 2px;
   border-radius: 1px;
-  background: var(--border-subtle);
+  /* `--border`, not `--border-subtle`. This line is now the thing that says
+     which blocks are one round, and the subtle step is 0.06 alpha in dark
+     mode — a rule a reader has to look for is not doing that job. */
+  background: var(--border);
 }
 .round-body {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
+}
+/* ONE LEFT EDGE for everything a round holds. A disclosure head carries its
+   own `--space-2` so its hover band has room to sit under the chevron, and a
+   tool row's head the same inside its box — so the model's SPEECH, the one
+   block with no inset, started 8px to the left of every other piece of ink in
+   the round. Three kinds of round content on three different edges is the
+   other half of "these do not belong together". */
+.round-body > .prose,
+.round-body > .abandoned,
+.round-body > .round-thinking {
+  margin-inline: var(--space-2);
 }
 .round-tools {
   display: flex;
@@ -216,15 +258,28 @@
   }
 }
 
+/* The ledger's own frame. It says where the transcript stops and the phase's
+   metadata — the prompt, the tool surface, the workers — begins, which
+   nothing else did: `.phase-body`'s 12px gap put the last round's tool row
+   closer to the `Prompt` disclosure below it than to the round it belonged
+   to.
+
+   The frame is the SAME live and finished. It used to be part of the tailing
+   rule, so a ledger grew a border and 8px of padding the moment a phase went
+   live and lost them again the moment it completed — the transcript visibly
+   reshaping at exactly the instant it became complete, which is the defect
+   rule 5 of this card forbids for its header and is no better here. */
+.tail-scroll {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  padding: var(--space-1) var(--space-2);
+}
 /* Tailing. A running phase's ledger is bounded and scrolls itself; a finished
    one is a document and simply flows, because there is nothing to follow. */
 .tail-scroll.tailing {
   max-height: 620px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
-  padding: var(--space-1) var(--space-2);
 }
 
 /* PROSE. The model's reasoning and its speech are natural language, and were

@@ -264,6 +264,35 @@ func TestAProgressRoundDoesNotOverwriteAFrozenFailedCall(t *testing.T) {
 	}
 }
 
+// A FROZEN CALL HAS NO ROUND IN FLIGHT. The phase is over; nothing is
+// arriving.
+//
+// The last frame before a provider dies carries a partial for a round that
+// will never commit, and the failure payload cannot displace it — a snapshot
+// holds committed rounds only. Left on the frozen call it never goes away, so
+// a phase that died an hour ago keeps rendering that round as streaming, with
+// the running ring and a blinking caret, on a card that also says it failed.
+func TestAFrozenFailedCallKeepsNoRoundInFlight(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_phase_started", planCall()))
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num":     3,
+		"partial_round": map[string]any{"round": 4, "reasoning": "half a thou"},
+	}), streamOnly, at("2026-06-14T12:00:04+00:00")))
+	s.Apply(env("agent_phase_completed",
+		with(planCall(), map[string]any{"failed": true, "error": "boom"}),
+		at("2026-06-14T12:00:05+00:00")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call == nil {
+		t.Fatal("the frozen call disappeared")
+	}
+	if call.PartialRound != nil {
+		t.Errorf("a dead phase still reports a round in flight: %v", call.PartialRound)
+	}
+}
+
 func TestAProgressRoundForAnotherCallLosesToANewerOne(t *testing.T) {
 	t.Parallel()
 	// Not the same call, and the one held is newer: a delivery that
@@ -495,5 +524,61 @@ func TestAnOpeningRoundThatBeatsItsPhaseStartOpensTheClock(t *testing.T) {
 	call := liveCallOf(t, s, "Lead")
 	if call == nil || call.StartedAt == "" {
 		t.Fatalf("live call = %+v, want a start time", call)
+	}
+}
+
+// THE PROMPT IS SENT ONCE AND CARRIED. It never changes over a phase and it is
+// the largest thing on a progress event — a 30 KB system prompt republished
+// five times a second, for the length of every phase, to every open dashboard,
+// was most of what a frame weighed, and past the queue's ceiling the publish is
+// refused outright and the live row simply stops with nothing on screen to say
+// why.
+func TestThePromptSurvivesRoundsThatDoNotCarryIt(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_phase_started", planCall()))
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num": -1,
+		"prompt":    "post the weekly summary",
+		"prompt_messages": []any{
+			map[string]any{"role": "system", "content": "you are the Lead"},
+			map[string]any{"role": "user", "content": "post the weekly summary"},
+		},
+	}), streamOnly, at("2026-06-14T12:00:01+00:00")))
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num": 0, "response": "thinking",
+	}), streamOnly, at("2026-06-14T12:00:02+00:00")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call.Prompt != "post the weekly summary" {
+		t.Errorf("prompt = %q — a round that did not carry it blanked it", call.Prompt)
+	}
+	if len(call.PromptMessages) != 2 {
+		t.Errorf("prompt_messages = %v, want the system message the phase was given",
+			call.PromptMessages)
+	}
+}
+
+// AND IT STILL LANDS WHEN IT LOSES THE RACE. The opening frame travels on a
+// different subject from the rounds, so it can arrive after one — and the
+// stale-round guard would drop it, leaving the call with no prompt for its
+// whole life. It fills in what it alone carries and moves nothing else.
+func TestAnOpeningFrameThatArrivesLateStillDeliversThePrompt(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num": 2, "response": "already going", "total_tokens": 90,
+	}), streamOnly, at("2026-06-14T12:00:02+00:00")))
+	s.Apply(env("agent_turn_progress", with(planCall(), map[string]any{
+		"round_num": -1, "prompt": "post the weekly summary",
+	}), streamOnly, at("2026-06-14T12:00:01+00:00")))
+
+	call := liveCallOf(t, s, "Lead")
+	if call.Prompt != "post the weekly summary" {
+		t.Errorf("prompt = %q, want the late opening frame's", call.Prompt)
+	}
+	// And it rolled NOTHING back.
+	if call.RoundNum != 2 || call.Response != "already going" || call.TotalTokens != 90 {
+		t.Errorf("the late opening frame overwrote the round it arrived after: %+v", call)
 	}
 }

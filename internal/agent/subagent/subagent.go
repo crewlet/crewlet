@@ -703,6 +703,7 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 		res.InputTokens, res.OutputTokens = loop.InputTokens, loop.OutputTokens
 		res.Model = loop.Model
 		res.Executions = loop.Executions
+		res.Narration = loop.Narration
 		res.Status, res.Output = submitted(submit)
 		if res.Status == StatusNoResult {
 			log.WarnContext(ctx, "subagent_never_submitted", "task", task.ID,
@@ -721,6 +722,7 @@ func run(ctx context.Context, cfg Config, provider llm.Provider, key string,
 	res.InputTokens, res.OutputTokens = partial.InputTokens, partial.OutputTokens
 	res.Model = partial.Model
 	res.Executions = partial.Executions
+	res.Narration = partial.Narration
 
 	kind, reason := stopReason(ctx)
 	res.Status, res.Error = classify(kind, reason, err)

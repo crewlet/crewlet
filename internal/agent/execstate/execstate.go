@@ -92,6 +92,22 @@ type State struct {
 	// is what stops a resumed turn re-firing a delivery that already went.
 	ToolExecutions []types.ToolExecution `json:"tool_executions"`
 
+	// RoundsUsed is how many tool-loop rounds ran before the suspend, and
+	// RoundNarration what they thought and said — keyed on the same round
+	// numbers ToolExecutions carries.
+	//
+	// Both are here because NOTHING ELSE HOLDS THEM. A suspended phase
+	// publishes no `agent_phase_completed` — it returns before the record is
+	// written — and `agent_turn_progress` is stream-only, refused by the
+	// event store. So the resumed phase's record is the only durable account
+	// this phase will ever have, and without these it began at round 1 with
+	// the pre-suspend half, the `run_sandbox` call included, gone for good.
+	//
+	// Additive within v2: a row written before these existed decodes to zero
+	// and resumes exactly as that build intended.
+	RoundsUsed     int                    `json:"rounds_used,omitempty"`
+	RoundNarration []types.RoundNarration `json:"round_narration,omitempty"`
+
 	// Iterations is the closed-round ledger of the suspended TURN. The
 	// resume is the same turn, so without this it would forget every round
 	// that closed before the suspend.

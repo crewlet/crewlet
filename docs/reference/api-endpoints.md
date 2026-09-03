@@ -641,11 +641,23 @@ It is deliberately never persisted: replaying a live meter from history
 would show a dead process's counters as the current ones.
 
 Each agent's `live_call` is `null` between turns, or
-`{ turn_id, phase, iteration, model, response, tool_executions, round_narration, rounds,
-in_progress }` while an LLM call is under way.  A call whose phase
-failed keeps `in_progress: false` plus `failed: true` and an `error`
-object, so the dashboard renders the failure instead of an answer that
-never arrives.
+`{ turn_id, phase, iteration, model, prompt, prompt_messages, response,
+tool_executions, round_narration, partial_round, rounds, in_progress }` while an
+LLM call is under way.  A call whose phase failed keeps `in_progress: false`
+plus `failed: true` and an `error` object, so the dashboard renders the failure
+instead of an answer that never arrives — and no `partial_round`, because the
+phase is over and nothing is still arriving.
+
+**What the projection carries, and what the wire sends.** The whole call is
+republished to every open dashboard five times a second for the length of a
+phase, so the frames behind it are trimmed and the projection reassembles them:
+the `prompt` and `prompt_messages` are sent **once**, on the phase's opening
+frame, and carried forward from there (a 30 KB system prompt does not change
+mid-phase, and past `queue.MaxPayloadBytes` the publish is refused outright and
+the live row simply stops); a tool result and the joined `response` are sent
+**tail-bounded** on a live frame, because they are what a reader is watching
+the end of. The durable `agent_phase_completed` record keeps every one of them
+verbatim, which is what a reader opens the finished card for.
 
 ### `WS /ws/stream`
 

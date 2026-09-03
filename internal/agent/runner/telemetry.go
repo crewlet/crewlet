@@ -8,6 +8,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -189,10 +190,25 @@ type Spend struct {
 	// a seat's spend jumps and its own rounds did not.
 	Workers      int
 	WorkerTokens int
+
+	// Judged and JudgeTokens count the round-cap extension judge: how many
+	// times a phase ran out of rounds and asked for more, and what those
+	// calls cost between them.
+	//
+	// Kept out of the turn's own totals for the same reason a worker's are —
+	// the judge's spend goes through the shared meter, so folding it in
+	// would report it twice and stop the phase events summing to the turn's
+	// number. What it answers instead is a question the phase numbers
+	// cannot: whether a seat's cost is its work or its arguing about
+	// whether to keep working.
+	Judged      int
+	JudgeTokens int
 }
 
-// Total is the turn's own token count. It does NOT include what its workers
-// spent — see the Workers fields.
+// Total is the turn's own token count — what its PHASES spent, and what the
+// phase events sum to. It does not include what its workers or its extension
+// judgements cost; both are metered separately and reported in their own
+// fields, for the reason those fields state.
 func (s Spend) Total() int { return s.InputTokens + s.OutputTokens }
 
 // recordWorker folds one finished delegated task into the tally.
@@ -203,6 +219,15 @@ func (s *Spend) recordWorker(mu *sync.Mutex, tokens int) {
 	defer mu.Unlock()
 	s.Workers++
 	s.WorkerTokens += tokens
+}
+
+// recordJudge folds one extension judgement into the turn's tally.
+//
+// No lock, like record and unlike recordWorker: the judge is called from the
+// phase's own goroutine, between tool-loop invocations.
+func (s *Spend) recordJudge(tokens int) {
+	s.Judged++
+	s.JudgeTokens += tokens
 }
 
 // Spend reports what this turn has cost so far.
@@ -308,24 +333,35 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		return
 	}
 	e.publish(ctx, events.New(types.AgentTurnProgress{
-		Agent:          e.turn.AgentID,
-		RoleName:       e.role,
-		TurnID:         e.turn.ID,
-		Phase:          types.Phase(ph),
-		Iteration:      iteration,
-		Model:          res.Model,
-		Trigger:        e.turn.Trigger,
-		Prompt:         userPrompt(res.Messages),
-		PromptMessages: promptMessages(res.Messages),
-		Response:       res.Text,
-		InputTokens:    res.InputTokens,
-		OutputTokens:   res.OutputTokens,
-		TotalTokens:    res.InputTokens + res.OutputTokens,
+		Agent:     e.turn.AgentID,
+		RoleName:  e.role,
+		TurnID:    e.turn.ID,
+		Phase:     types.Phase(ph),
+		Iteration: iteration,
+		Model:     res.Model,
+		Trigger:   e.turn.Trigger,
+		// NO PROMPT. It is sent once, on the opening frame, and the live
+		// projection carries it forward from there — exactly as it already
+		// carries the trigger.
+		//
+		// It was the largest thing on this event by a wide margin and the
+		// one thing on it that never changes: a seat with a 30 KB system
+		// prompt republished the whole of it five times a second, for the
+		// length of every phase, to every open dashboard. Past
+		// [queue.MaxPayloadBytes] the publish is refused outright, this
+		// publisher logs and moves on, and the live row simply stops for
+		// the rest of the phase with nothing on screen to say why — which
+		// is likeliest at the tail of exactly the long phases somebody is
+		// watching.
+		Response:     tail(res.Text),
+		InputTokens:  res.InputTokens,
+		OutputTokens: res.OutputTokens,
+		TotalTokens:  res.InputTokens + res.OutputTokens,
 		// RoundsUsed is 1-based and RoundNum is 0-based; see the sentinel
 		// above. Subtracting rather than counting separately keeps the two
 		// from ever disagreeing about which round this is.
 		RoundNum:       res.RoundsUsed - 1,
-		ToolExecutions: toolExecutions(res.Executions),
+		ToolExecutions: liveExecutions(res.Executions),
 		RoundNarration: roundNarration(res.Narration),
 		PartialRound:   partialRound(res.Partial),
 	}, e.traceFor(ctx)))
@@ -371,12 +407,68 @@ type phaseRecord struct {
 	Available []string
 	Catalogue []string
 
+	// Run says which box this phase ran in, where that is not this process.
+	// The zero value is the native tool loop, which is what all but the
+	// resumed Execute phases are.
+	Run RunRecord
+
 	// Failed and Err describe a phase that died instead of finishing. The
 	// rest of the record is then PARTIAL rather than absent: a phase that
 	// raises used to publish nothing at all, leaving a dashboard showing an
 	// in-flight call with no response and no reason.
 	Failed bool
 	Err    error
+}
+
+// judged reports one round-cap extension judgement, as a phase nested under
+// the phase that ran out of rounds.
+//
+// THE JUDGE IS A MODEL CALL, and it was the only one in the engine that
+// nothing recorded: no phase event, so no card under the Execute round that
+// fired it and no row in the token breakdown; no span, though the turn-engine
+// doc promised `agent.turn.judge`; and no charge, because it runs outside the
+// tool loop where every other call is metered. `types.PhaseJudge` was declared,
+// read by the dashboard's nested-call grouping, and produced by nobody.
+//
+// What that cost is the question an operator actually asks: a company whose
+// judge model is misconfigured and rescues every phase looked exactly like one
+// whose phases genuinely deserved no extension. The only trace was a log line.
+func (e emitter) judged(ctx context.Context, host phase.Phase, iteration int,
+	granted int, d extension.Decision,
+) {
+	// Tallied first, as everywhere here: the tally is the turn's own
+	// accounting and must not depend on whether anyone is listening.
+	e.tally.recordJudge(d.Tokens())
+	if !e.on() {
+		return
+	}
+	verdict := "rescue"
+	if granted > 0 {
+		verdict = "extend"
+	}
+	e.publish(ctx, events.New(types.AgentPhaseCompleted{
+		Agent:    e.turn.AgentID,
+		RoleName: e.role,
+		TurnID:   e.turn.ID,
+		Phase:    types.PhaseJudge,
+		// NESTED under the phase that asked, which is what the dashboard's
+		// grouping already expects of every non-turn phase.
+		HostPhase:     types.Phase(host),
+		HostIteration: iteration,
+		Iteration:     iteration,
+		Model:         d.Model,
+		Trigger:       e.turn.Trigger,
+		InputTokens:   d.InputTokens,
+		OutputTokens:  d.OutputTokens,
+		TotalTokens:   d.Tokens(),
+		// The verdict and the judge's own wording for it. `Notes` is the
+		// reason: it is what makes a rescue readable, and on the failure
+		// paths it is the only thing that names what went wrong.
+		Decision:        verdict,
+		Notes:           d.Reason,
+		Backend:         types.BackendNative,
+		ConversationKey: e.turn.ConversationKey,
+	}, e.traceFor(ctx)))
 }
 
 // subagentCompleted closes ONE sub-agent, as a phase nested under the Execute
@@ -440,6 +532,12 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		UserPrompt:     res.UserPrompt,
 		Response:       res.Text,
 		ToolExecutions: toolExecutions(res.Executions),
+		// Published beside the executions, on the round number they share.
+		// A worker's card is the same round ledger as the turn's own phases
+		// and reads it the same way; without this half of the pair, every
+		// delegated worker rendered as bare tool rows with nothing that
+		// asked for them.
+		RoundNarration: roundNarration(res.Narration),
 		InputTokens:    res.InputTokens,
 		OutputTokens:   res.OutputTokens,
 		TotalTokens:    res.Tokens(),
@@ -511,9 +609,22 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		// Set explicitly. BackendNative is the value every consumer reads
 		// as "ran here", and it is NOT the zero value — an empty string
 		// renders as an unknown backend rather than as the normal one.
+		//
+		// It was a CONSTANT here, on every phase, which is why nothing in
+		// the tree ever produced BackendSandbox: a detached coding run and
+		// three rounds in this process reported the same backend, and the
+		// two most expensive things a seat does were indistinguishable in
+		// the event log.
 		Backend:         types.BackendNative,
 		ConversationKey: e.turn.ConversationKey,
 		Failed:          rec.Failed,
+	}
+	if rec.Run.Sandboxed() {
+		ev.Backend = types.BackendSandbox
+		ev.CodingAgent = rec.Run.CodingAgent
+		ev.SandboxID = rec.Run.SandboxID
+		ev.CostUSD = rec.Run.CostUSD
+		ev.DeliveredRefs = rec.Run.DeliveredRefs
 	}
 	if rec.Err != nil {
 		// The 2000-character cut this used to carry landed on exactly the
@@ -645,6 +756,30 @@ func partialRound(p *toolloop.Partial) map[string]any {
 	return out
 }
 
+// liveExecutions is the round's tool calls with their OUTPUT bounded.
+//
+// Only on the live event: the durable record keeps every result verbatim, and
+// this is the copy that is republished five times a second for the length of
+// the phase. A tool result is routinely the largest thing on the frame — a
+// knowledge search, a file read — and it is already final: the reader opens it
+// on the completed record, where it is whole.
+//
+// The arguments are NOT bounded. They are what a reader scans a running phase
+// for ("which file is it reading now?"), they are small, and cutting JSON in
+// the middle produces something no consumer can parse.
+func liveExecutions(execs []toolloop.Execution) []types.ToolExecution {
+	out := toolExecutions(execs)
+	for _, row := range out {
+		if result, ok := row["result"].(string); ok {
+			row["result"] = tail(result)
+		}
+		if failure, ok := row["error"].(string); ok {
+			row["error"] = tail(failure)
+		}
+	}
+	return out
+}
+
 // partialTail bounds how much of a round in flight goes on the wire.
 //
 // The whole accumulated text is republished five times a second — deltas
@@ -689,39 +824,6 @@ func encodeArgs(args map[string]any) string {
 		return "{}"
 	}
 	return string(raw)
-}
-
-// promptMessages renders the conversation for a live consumer.
-//
-// The system and user messages ONLY. The assistant turns and the tool results
-// are the response, which the same event carries separately, and repeating
-// them here would double the size of every round's envelope to say what the
-// row already shows.
-func promptMessages(msgs []llm.Message) []types.PromptMessage {
-	out := make([]types.PromptMessage, 0, 2)
-	for _, m := range msgs {
-		if m.Role != llm.RoleSystem && m.Role != llm.RoleUser {
-			continue
-		}
-		out = append(out, types.PromptMessage{Role: m.Role, Content: m.Content})
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// userPrompt is the ask, for the consumers that show one line rather than the
-// whole conversation. The FIRST user message: the loop appends corrective and
-// extension nudges as later user turns, and the last one is a nudge rather
-// than the ask.
-func userPrompt(msgs []llm.Message) string {
-	for _, m := range msgs {
-		if m.Role == llm.RoleUser {
-			return m.Content
-		}
-	}
-	return ""
 }
 
 // traceFor is the trace an event this emitter publishes belongs to.

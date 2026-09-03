@@ -72,12 +72,18 @@ func beginCall(env Envelope, payload map[string]any) *LiveCall {
 		PromptMessages: []any{},
 		ToolExecutions: []any{},
 		RoundNarration: []any{},
-		RoundNum:       -1,
+		RoundNum:       openingRound,
 		InProgress:     true,
 		StartedAt:      env.Timestamp,
 		UpdatedAt:      env.Timestamp,
 	}
 }
+
+// openingRound is the RoundNum a phase's opening frame carries — the update
+// published before its first provider call, and the only one carrying its
+// prompt. -1 rather than 0 so the first real round is strictly newer; see
+// [beginCall].
+const openingRound = -1
 
 // applyProgress folds one progress round into the in-flight call, returning the
 // role whose call moved or "" when the round was stale.
@@ -114,6 +120,22 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	cur := agent.liveCall
 	switch {
 	case cur.sameCall(turnID, phase, iteration):
+		// THE OPENING FRAME IS THE ONLY CARRIER OF THE PROMPT, and it
+		// travels on a different subject from the rounds, so it can land
+		// after one of them. Dropping it as stale would leave the call with
+		// no prompt for its whole life — the one moment an operator most
+		// wants to know what the model was actually told. It fills in what
+		// it alone carries and moves nothing else: not the round, not the
+		// tokens, not the clock.
+		if roundNum == openingRound && cur.RoundNum > openingRound {
+			if cur.Prompt == "" {
+				cur.Prompt = str(payload, "prompt")
+			}
+			if len(cur.PromptMessages) == 0 {
+				cur.PromptMessages = list(payload, "prompt_messages")
+			}
+			return role
+		}
 		// A stale earlier round of the SAME call is ignored.
 		if roundNum < cur.RoundNum {
 			return ""
@@ -150,6 +172,22 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		trigger = map[string]any{}
 	}
 
+	// CARRIED, like the trigger and for the same reason — and because the
+	// prompt is now sent ONCE, on the opening frame. It never changes over
+	// a phase and it is the largest thing on the event: republishing a
+	// 30 KB system prompt five times a second, for the length of the phase,
+	// to every open dashboard, was most of what a progress frame weighed.
+	prompt := str(payload, "prompt")
+	promptMessages := list(payload, "prompt_messages")
+	if cur != nil && cur.sameCall(turnID, phase, iteration) {
+		if prompt == "" {
+			prompt = cur.Prompt
+		}
+		if len(promptMessages) == 0 {
+			promptMessages = cur.PromptMessages
+		}
+	}
+
 	// CARRIED, never restamped: the call started when it started, and a
 	// round landing is not a new beginning. A progress round that arrives
 	// before its own phase_started (different subjects, no ordering) opens
@@ -165,8 +203,8 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		Iteration:      iteration,
 		Trigger:        trigger,
 		Model:          str(payload, "model"),
-		Prompt:         str(payload, "prompt"),
-		PromptMessages: list(payload, "prompt_messages"),
+		Prompt:         prompt,
+		PromptMessages: promptMessages,
 		Response:       str(payload, "response"),
 		InputTokens:    num(payload, "input_tokens"),
 		OutputTokens:   num(payload, "output_tokens"),
@@ -227,6 +265,14 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	if narration := list(payload, "round_narration"); len(narration) > 0 {
 		call.RoundNarration = narration
 	}
+	// The round in flight is NOT frozen — it is over. A partial says "this
+	// text is still arriving", and the last progress frame before a provider
+	// died carries one for a round that will never commit. Left on the frozen
+	// call it never goes away: the failure payload cannot displace it (a
+	// snapshot holds committed rounds only), so a phase that died an hour ago
+	// keeps rendering that round as streaming, with the running ring and a
+	// blinking caret, on a card that also says it failed.
+	call.PartialRound = nil
 }
 
 // finishLiveCall closes out the in-flight call when its phase completes.

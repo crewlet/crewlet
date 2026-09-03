@@ -255,6 +255,15 @@ type Result struct {
 
 	Executions []toolloop.Execution
 
+	// Narration is what the worker thought and said in each round, keyed on
+	// the same round number its Executions carry. Without it a worker's phase
+	// event ships tool calls with nothing that asked for them: a consumer
+	// interleaves the two lists on that shared number, and one list alone
+	// leaves it to fall back on the joined Text — where every round's
+	// reasoning after the first renders as the worker's answer, `<think>`
+	// tags and all. It is the same contract the turn's own phases publish.
+	Narration []toolloop.Narration
+
 	// SystemPrompt and UserPrompt are what the worker was actually sent.
 	SystemPrompt string
 	UserPrompt   string

@@ -2357,3 +2357,60 @@ func TestEveryChildIsReportedOnce(t *testing.T) {
 		t.Error("the reported result carries no prompts, so a dashboard shows an empty phase")
 	}
 }
+
+// A WORKER'S THINKING TRAVELS WITH THE ROUND IT THOUGHT IN.
+//
+// The Result carries Executions and Narration keyed on the SAME round number,
+// which is the whole contract a consumer interleaves them on. Publishing the
+// executions alone left every delegated worker's card as bare tool rows with
+// nothing that asked for them, and pushed the worker's reasoning into the
+// dashboard's pre-narration fallback — where it renders under a heading
+// claiming the record predates rounds being kept apart, which is false: it is
+// what this build publishes for every worker.
+func TestAWorkersNarrationSharesItsRoundsWithItsToolCalls(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub", reply: func(_ context.Context, n int, _ llm.Request) (*llm.Completion, error) {
+		if n == 1 {
+			call := callTool("read_file", map[string]any{"path": "/x"}, 60, 40)
+			call.ReasoningContent = "the answer is probably in that file"
+			return call, nil
+		}
+		return answer("read it", 10, 5), nil
+	}}
+
+	res := one(t, baseConfig(t, w, p), request("read_file"))
+
+	if res.Status != subagent.StatusOK {
+		t.Fatalf("the worker did not finish: %+v", res)
+	}
+	if len(res.Narration) == 0 {
+		t.Fatal("the worker's rounds carry no narration, so its thinking reaches no consumer")
+	}
+	byRound := make(map[int]string, len(res.Narration))
+	for _, n := range res.Narration {
+		byRound[n.Round] = n.Reasoning
+	}
+	// The thinking and the call it asked for carry the SAME number, which is
+	// the only thing that puts them in one block. A round that called a tool
+	// and said nothing narrates nothing — that is not a gap, it is the round
+	// having nothing to say.
+	var read toolloop.Execution
+	for _, ex := range res.Executions {
+		if ex.Name == "read_file" {
+			read = ex
+		}
+	}
+	if read.Name == "" {
+		t.Fatalf("the worker's tool call is missing: %+v", res.Executions)
+	}
+	if byRound[read.Round] != "the answer is probably in that file" {
+		t.Errorf("round %d called read_file but its narration reads %q",
+			read.Round, byRound[read.Round])
+	}
+	for _, n := range res.Narration {
+		if n.Round < 1 || n.Round > res.Rounds {
+			t.Errorf("narration numbered round %d on a worker that ran %d", n.Round, res.Rounds)
+		}
+	}
+}

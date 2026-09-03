@@ -46,10 +46,17 @@ func (r *Runner) Suspended() (Suspension, bool) {
 // rather than rebuilt, because a phase that rebuilt its surface would lose
 // every activation the pre-suspend rounds made.
 //
-// The phase record it publishes covers only the POST-resume slice of the
-// conversation: the earlier rounds are already recorded, and re-emitting them
-// would redraw a turn the dashboard already has. Their token counters do carry
-// forward, because those are the turn's total.
+// THE RECORD IT PUBLISHES COVERS THE WHOLE PHASE, pre-suspend rounds
+// included. This used to carry only the post-resume slice, on the argument
+// that the earlier rounds were already recorded and re-emitting them would
+// redraw a turn the dashboard already had. That premise was false: a
+// suspending phase returns before `emit.completed` runs, so it publishes no
+// completed event at all, and its `agent_turn_progress` frames are stream-only
+// and refused by the event store. Nothing durable held those rounds. What the
+// argument protected against — a double record — could not happen, and what it
+// cost was every round before the suspend, the `run_sandbox` call that caused
+// it included, with the resumed half renumbered from 1 beside token counters
+// covering both halves.
 func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.Work, turn.Surface, error) {
 	if r.cfg.Resume == nil {
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: resume with no suspended state")
@@ -94,9 +101,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		// A resumed executor can suspend AGAIN: it may call run_sandbox a
 		// second time to continue in the same box.
 		allowSuspend: true,
-		spent: toolloop.Result{
-			InputTokens: state.InputTokens, OutputTokens: state.OutputTokens,
-		},
+		prior:        priorRounds(state),
 	})
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
@@ -118,6 +123,10 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	// again would show a reader a prompt that was not sent this time.
 	work, described, err := r.finishWork(phaseCtx, state.Round, work{
 		submit: submit, res: res, surface: surface, snapshot: snapshot,
+		// WHICH BOX. This phase suspended on a coding run and is being
+		// re-entered with its result, which is the one thing that makes it
+		// a sandbox phase rather than a native one.
+		run: r.cfg.Resume.Run,
 	})
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
@@ -159,6 +168,69 @@ func resumedCalls(s *tools.Surface, state execstate.State) []ledger.Call {
 	return append(prior, calls(s)...)
 }
 
+// priorRounds is what the phase did before it suspended, back in the loop's
+// own shape so the resumed phase can continue it.
+//
+// The wire rows are loose maps ([types.ToolExecution] and
+// [types.RoundNarration] are both `map[string]any`), because the event
+// envelope evolves additive-only and a producer this build predates may have
+// written fields it does not know. A row missing the one field that matters —
+// a call with no name, a round with no number — is dropped rather than
+// defaulted: a call numbered 0 would land in a round no other row shares and
+// render as a round of its own.
+func priorRounds(state execstate.State) toolloop.Result {
+	out := toolloop.Result{
+		RoundsUsed:   state.RoundsUsed,
+		InputTokens:  state.InputTokens,
+		OutputTokens: state.OutputTokens,
+	}
+	for _, exec := range state.ToolExecutions {
+		name, _ := exec["name"].(string)
+		round, ok := intField(exec["round"])
+		if name == "" || !ok {
+			continue
+		}
+		ex := toolloop.Execution{Round: round, Name: name}
+		if args, ok := exec["arguments"].(string); ok {
+			ex.Args = decodeArgs(args)
+		}
+		if result, ok := exec["result"].(string); ok {
+			ex.Output = result
+		}
+		if ok, present := exec["success"].(bool); present {
+			ex.Failed = !ok
+		}
+		out.Executions = append(out.Executions, ex)
+	}
+	for _, narr := range state.RoundNarration {
+		round, ok := intField(narr["round"])
+		if !ok {
+			continue
+		}
+		reasoning, _ := narr["reasoning"].(string)
+		content, _ := narr["content"].(string)
+		out.Narration = append(out.Narration,
+			toolloop.Narration{Round: round, Reasoning: reasoning, Content: content})
+	}
+	return out
+}
+
+// intField reads a number that has been through JSON, where every one of them
+// is a float64 — and out of a Go map that never was, where it is still an int.
+// Both shapes reach here: a state serialized to the pending-run row and back,
+// and one handed straight over in the process that wrote it.
+func intField(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	}
+	return 0, false
+}
+
 // recordSuspension captures the conversation an Execute phase parked on, for
 // the engine to persist the moment the turn returns.
 //
@@ -183,8 +255,15 @@ func (r *Runner) recordSuspension(round int, surface *tools.Surface,
 		InputTokens:     res.InputTokens,
 		OutputTokens:    res.OutputTokens,
 		ToolExecutions:  toolExecutions(res.Executions),
-		Iterations:      history,
-		Task:            r.cfg.Task,
+		// The rounds themselves, so the resumed phase continues the count
+		// instead of restarting it — and so they reach the store at all.
+		// Nothing else records them: this phase publishes no completed event
+		// (it returns suspended, before the record is written) and its
+		// progress frames are stream-only.
+		RoundsUsed:     res.RoundsUsed,
+		RoundNarration: roundNarration(res.Narration),
+		Iterations:     history,
+		Task:           r.cfg.Task,
 		// THE SKILL-GUARD STATE, which the field declared and nothing ever
 		// wrote. With it empty, a resumed executor was told to load the
 		// skills it had already loaded — the bodies were in the very

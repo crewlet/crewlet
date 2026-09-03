@@ -359,24 +359,46 @@ flowchart TD
 The judge is best-effort: any failure (timeout, provider error, parse
 error) maps to a conservative `rescue` decision so a flaky judge can
 never block the host phase. The judge's own LLM call is published as
-an `AgentPhaseCompleted` event with `phase="judge"` so dashboards can
-see how often it fires and which decisions it makes.
+an `AgentPhaseCompleted` event with `phase="judge"`, `host_phase` and
+`host_iteration` naming the round that asked, the verdict in `decision`
+and the judge's own wording in `notes` — so a dashboard groups it under
+that round and an operator can see how often it fires and what it
+decides. **A judge that was never asked publishes nothing**: the policy
+declining to ask and the judge saying no are different facts, and an
+event for the first would claim a model call that did not happen.
 
-**Forced tool calls are enforced, not just requested.** The rescue
-paths and the extension judge call the tool loop with
-`tool_choice="required"` to force a structured-output call (the executor's
-`submit_work`, the reviewer's `submit_review`, the judge's
-`submit_extension_decision`). Some endpoints
-don't honor `tool_choice`, and some models "think then stop" — emitting
-reasoning with no tool call. The loop treats a no-tool-call completion
-on a `required` round as a non-terminal miss: it re-prompts with an
-explicit corrective ("you must call `<tool>` now — no prose") and
-retries within the round budget (bounded by `_MAX_FORCED_TOOL_RETRIES`
-and `max_rounds`), instead of silently accepting the prose as a finish.
-Without this, a single think-without-act response would defeat the
-executor, the judge, *and* the rescue at once, and the turn would fall
-through to a silent skip. Normal (`tool_choice="auto"`) rounds are
-unaffected — a text answer there is a legitimate finish.
+**And it is charged.** The judge runs outside the tool loop, which is
+where every other model call is metered, so its tokens go through the
+turn's shared budget explicitly. A refusal there does not fail the
+turn — the extension is a generosity on a phase that has already run
+out of rounds, so a seat at its cap simply stops extending, which is
+the same outcome as the judge saying no. Its spend is reported apart
+from the turn's own totals for the same reason a worker's is: it is
+already counted once by the meter, and folding it in would stop the
+phase events summing to the turn's number.
+
+**Forced tool calls are enforced, not just requested.** A phase whose
+whole contract is one submission calls the tool loop with
+`tool_choice="required"`: the **reviewer**, whose surface carries no
+catalogue at all so "call a tool" and "submit the review" are the same
+instruction, and **onboarding**, whose every round discovers, activates,
+reads or reflects and whose last one marks. Some endpoints don't honor
+`tool_choice`, and some models "think then stop" — emitting reasoning
+with no tool call. The loop treats a no-tool-call completion on a
+`required` round as a non-terminal miss: it re-prompts with an explicit
+corrective naming the tool ("you must call `<tool>` now — no prose") and
+retries within the round budget (bounded by `max_forced_tool_retries` = 2
+and `max_rounds`), instead of accepting the prose as a finish. Without
+it a reviewer that thought and stopped fell through to the rescue, which
+sends the whole turn back for another executor round — a whole extra
+turn spent on the one failure a model reliably fixes when it is asked
+again. `review_max_tool_rounds` = 4 is that arithmetic: one submission,
+two correctives, one spare.
+
+The **executor** stays on `auto`, and the **judge** takes no tools at
+all — it answers in two lines of text, and a tool on its surface would
+invite a model to call it and answer nothing. A text answer on an `auto`
+round is a legitimate finish.
 
 **No submission never goes silent.** An executor that ran out of rounds, or
 simply stopped, has produced text and no account of itself. Discarding the
@@ -532,6 +554,25 @@ scroll past what it considered. The three builders of that field used to be thre
 hand-written assemblies, and the live one omitted reasoning entirely: a
 thinking model's live row streamed tool calls against an empty response
 and only grew its reasoning once the phase was over.
+
+**Every phase, workers included.** A [delegated worker](#workers) publishes
+the same `subagent` phase event with the same pair, because its card is the
+same round ledger and reads it the same way. Publishing its executions alone
+left every worker's ledger as bare tool rows with nothing that asked for them,
+and pushed its reasoning into the consumer's pre-narration fallback — where
+it renders under a heading saying the record predates rounds being kept
+apart, which for a record this build just wrote is simply false.
+
+**And one scale per phase, not per loop invocation.** The tool loop numbers
+its rounds from 1 each time it is *entered*, and an extended phase enters it
+again — so every publisher folds the invocation onto the rounds behind it.
+All three do it through one function, because they were three places that had
+to agree and did not: the live frame carried the invocation alone (an
+extension's first frame collapsed a twenty-round ledger to one), the round in
+flight was never renumbered (its streaming text overwrote the block of a
+committed round twenty rounds earlier), and the completed record took the
+invocation's token counters (every round before the extension billed, then
+dropped from the report).
 
 **Never load-bearing.** Every progress publish is a live view of the
 phase, not part of it: failures are logged (`turn_progress_publish_failed`)

@@ -32,7 +32,31 @@ type Decision struct {
 	// clamps it, and a judge that says extend while asking for zero gets
 	// the step rather than nothing — see [Policy.Grant].
 	AdditionalRounds int
+
+	// Asked reports that a judge was actually CALLED, whatever came back —
+	// including a call that errored or answered something unparseable.
+	//
+	// It is what tells the caller there is a model call to report and to
+	// charge, and it is deliberately not derivable from the rest: a rescue
+	// with no reason to look at is what "the policy declined to ask" and
+	// "the judge said no" both look like from outside, and those are the two
+	// cases an operator most needs to tell apart. A company whose judge
+	// model is misconfigured and rescues every phase used to be
+	// indistinguishable from one whose phases genuinely deserved no
+	// extension.
+	Asked bool
+
+	// Model is who answered, and InputTokens/OutputTokens what the call
+	// cost. Carried on the decision because the judge is the only frame
+	// that knows and the caller is the only one that can charge it: this
+	// call is outside the tool loop, so nothing else meters it.
+	Model        string
+	InputTokens  int
+	OutputTokens int
 }
+
+// Tokens is what the judge call cost.
+func (d Decision) Tokens() int { return d.InputTokens + d.OutputTokens }
 
 // Rescue builds a refusal carrying why the engine did not even ask.
 func Rescue(reason string) Decision { return Decision{Reason: reason} }
@@ -216,7 +240,14 @@ func Consider(ctx context.Context, j Judge, p Policy, req Request) (granted int,
 	}
 	decision, err := j.Decide(ctx, req)
 	if err != nil {
-		return 0, Rescue("judge_failed: " + err.Error())
+		// THE SPEND SURVIVES THE FAILURE. A judge that answered something
+		// unparseable still made the call and still cost the tokens, and a
+		// rescue that reported neither is how a misconfigured judge stayed
+		// invisible while billing every exhausted phase.
+		refusal := Rescue("judge_failed: " + err.Error())
+		refusal.Asked, refusal.Model = decision.Asked, decision.Model
+		refusal.InputTokens, refusal.OutputTokens = decision.InputTokens, decision.OutputTokens
+		return 0, refusal
 	}
 	return p.Grant(decision, req.RoundsUsed), decision
 }

@@ -24,6 +24,14 @@
  *     model deliberating about which tool to try, labelled as its answer, in a
  *     block detached from the tool calls that deliberation was about.
  *
+ *     Grouping the data was only half of it: the block has to LOOK like one
+ *     block. It did not, and a reader said so — a thought and the call it
+ *     asked for read as two unrelated collapsed rows. The devices meant to
+ *     bound a round both described the sequence instead (a rail drawn only
+ *     between rounds, a tint only on even ones), so a phase with a single
+ *     round had neither. The rail is a bracket around each round now and the
+ *     round's content shares one left edge; see `.round` in screens.css.
+ *
  *  4. **The model's words are set as prose, not as code.** Its reasoning and
  *     its speech are natural language and get a proportional face, a real
  *     line height and a bounded measure. Monospace stays where it means
@@ -177,8 +185,16 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
   const errored = round.tools.some((t) => t.failed);
   return (
     <li className={cx("round", errored && "errored", live && "live")}>
-      <div className="round-rail" aria-hidden="true">
-        <span className="round-node t-num">{round.round}</span>
+      <div className="round-rail">
+        {/* The numeral is decorative — the rail draws it as a node — but WHICH
+            round this is is the only thing tying the blocks below together,
+            and a reader who cannot see the rail was getting "1", then two
+            unrelated-sounding disclosures. Announced here, hidden from the
+            node so it is not read twice. */}
+        <span className="sr-only">Round {round.round}</span>
+        <span className="round-node t-num" aria-hidden="true">
+          {round.round}
+        </span>
       </div>
       <div className="round-body">
         {/* An attempt a provider gave up on partway through. KEPT, not
@@ -198,8 +214,11 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
         {thinking &&
           (round.streaming ? (
             // Open while it streams: a collapsed disclosure whose only sign
-            // of life is a character count is not "watching it think".
-            <div className="col gap-1">
+            // of life is a character count is not "watching it think". It
+            // carries `round-thinking` so it sits on the round's own left
+            // edge — the same edge the disclosure that replaces it sits on,
+            // so the block does not shift sideways when the round commits.
+            <div className="col gap-1 round-thinking">
               <div className="t-label">Thinking</div>
               <p className="prose muted stream">{thinking}</p>
             </div>

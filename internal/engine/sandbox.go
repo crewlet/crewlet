@@ -288,9 +288,11 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 			ID: req.Run.TurnID, Seat: seat, Org: r.engine.Company().Org,
 			Depth: req.Run.DelegationDepth, Chain: req.Run.DelegationChain,
 		},
-		Answer:  req.Answer,
-		Success: req.Success,
-		Trigger: req.Trigger,
+		Answer:        req.Answer,
+		Success:       req.Success,
+		Trigger:       req.Trigger,
+		CostUSD:       req.CostUSD,
+		DeliveredRefs: req.DeliveredRefs,
 	})
 }
 
@@ -302,6 +304,12 @@ type resumeInput struct {
 	Answer  string
 	Success bool
 	Trigger *events.Event
+
+	// CostUSD and DeliveredRefs are what the collected run reported, for the
+	// resumed phase's own event. Zero when a person's answer resumed a
+	// parked clarification: nothing was collected.
+	CostUSD       float64
+	DeliveredRefs []string
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -371,6 +379,16 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// is mid-task.
 			Resume: &runner.Resume{
 				State: in.State, Answer: in.Answer,
+				// WHICH BOX DID THE WORK. Off the run's own row, because
+				// this process may not be the one that launched it — and
+				// it is the only thing that can say a phase ran in a
+				// sandbox rather than in this process's own tool loop.
+				Run: runner.RunRecord{
+					CodingAgent:   in.Run.CodingAgent,
+					SandboxID:     in.Run.SandboxID,
+					CostUSD:       in.CostUSD,
+					DeliveredRefs: in.DeliveredRefs,
+				},
 				// THE RUN'S OWN TOOL CALLS, off its durable row. An
 				// agent-mode executor called them over the bridge, possibly
 				// in another process, so this list is the only record of
