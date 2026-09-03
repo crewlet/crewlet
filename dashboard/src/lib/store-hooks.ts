@@ -109,13 +109,6 @@ export function useOrgBudget() {
   return useSlice(["budget"], (s) => s.budget);
 }
 
-export function useSchedules() {
-  return useSlice(["schedules"], (s) => ({
-    schedules: s.schedules,
-    recentRuns: s.recentRuns,
-  }));
-}
-
 /**
  * Connection posture.
  *

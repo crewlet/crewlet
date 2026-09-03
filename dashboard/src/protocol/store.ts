@@ -27,7 +27,6 @@ import type {
   Rollup,
   SandboxEntry,
   ScheduleRow,
-  ScheduleRunRow,
   Snapshot,
   ToolRow,
 } from "./types.ts";
@@ -92,7 +91,6 @@ export interface StoreState {
   tokens: Rollup | null;
   budget: OrgBudget;
   schedules: ScheduleRow[] | null;
-  recentRuns: ScheduleRunRow[] | null;
   connected: boolean;
   /**
    * Whether the engine REFUSED this browser, as opposed to being unreachable.
@@ -132,7 +130,6 @@ function emptyState(): StoreState {
     tokens: null,
     budget: {},
     schedules: null,
-    recentRuns: null,
     connected: false,
     authRejected: false,
   };
@@ -142,7 +139,6 @@ export class Store {
   state: StoreState = emptyState();
 
   private subs = new Map<Slice, Set<() => void>>();
-  private eventSubs = new Set<(ev: EventEnvelope) => void>();
 
   /**
    * A monotonic counter per slice.
@@ -171,14 +167,6 @@ export class Store {
     }
     return () => {
       for (const slice of slices) this.subs.get(slice)?.delete(fn);
-    };
-  }
-
-  /** Call `fn` for every event envelope, as it arrives. */
-  onEvent(fn: (ev: EventEnvelope) => void): () => void {
-    this.eventSubs.add(fn);
-    return () => {
-      this.eventSubs.delete(fn);
     };
   }
 
@@ -276,14 +264,11 @@ export class Store {
     this.emit("budget");
   }
 
-  applySchedules(
-    payload: { schedules?: ScheduleRow[]; recent_runs?: ScheduleRunRow[] } | null,
-  ): void {
+  applySchedules(payload: { schedules?: ScheduleRow[] } | null): void {
     if (!payload) return;
-    // Each key is applied only when present: the push omits `recent_runs`, and
-    // overwriting with undefined would blank what the screen already fetched.
+    // Applied only when present: the push carries the CONFIGURED rows and
+    // nothing else, so an absent key means "unchanged" rather than "empty".
     if (payload.schedules) this.state.schedules = payload.schedules;
-    if (payload.recent_runs) this.state.recentRuns = payload.recent_runs;
     this.emit("schedules");
   }
 
@@ -346,7 +331,6 @@ export class Store {
         this.emit("phases");
       }
     }
-    for (const fn of this.eventSubs) fn(ev);
   }
 
   // ---- reads -------------------------------------------------------------

@@ -22,7 +22,6 @@ import {
   plural,
   relTime,
   splitConversationKey,
-  truncate,
   tsKey,
   fmtElapsed,
 } from "./format.ts";
@@ -146,11 +145,6 @@ describe("text", () => {
     expect(humanize("agent_phase_completed")).toBe("Agent phase completed");
     expect(humanize("phase.tool_skill_blocked")).toBe("Phase tool skill blocked");
     expect(humanize("")).toBe("");
-  });
-
-  test("truncation is marked", () => {
-    expect(truncate("abcdefgh", 5)).toBe("abcd…");
-    expect(truncate("abc", 5)).toBe("abc");
   });
 });
 

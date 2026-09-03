@@ -227,11 +227,6 @@ export function humanize(key: string | null | undefined): string {
     .replace(/^\w/, (c) => c.toUpperCase());
 }
 
-export function truncate(text: string, max: number): string {
-  if (!text) return "";
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
-}
-
 /**
  * A conversation key's two halves.
  *

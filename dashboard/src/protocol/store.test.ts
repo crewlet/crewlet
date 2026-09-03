@@ -116,16 +116,6 @@ describe("the event feed", () => {
     // Newest first: the last one published is the first one held.
     expect(store.state.events[0]?.id).toBe(`e${MAX_EVENTS + 49}`);
   });
-
-  test("every envelope reaches an event listener, feed or not", () => {
-    // A screen watching for one event type must see the ones the feed
-    // declines to keep.
-    const store = new Store();
-    const seen: string[] = [];
-    store.onEvent((ev) => seen.push(ev.id));
-    store.applyEvent({ ...feedRow("e1"), category: "" } as EventEnvelope);
-    expect(seen).toEqual(["e1"]);
-  });
 });
 
 describe("completed phases", () => {
@@ -279,18 +269,6 @@ describe("subscriptions", () => {
 });
 
 describe("partial pushes", () => {
-  test("a schedules push without recent_runs leaves what was fetched", () => {
-    const store = new Store();
-    store.applySchedules({
-      schedules: [],
-      recent_runs: [
-        { name: "a", scope: "role", scope_name: "PM", fired_at: "", outcome: "fired", detail: "" },
-      ],
-    });
-    store.applySchedules({ schedules: [] });
-    expect(store.state.recentRuns).toHaveLength(1);
-  });
-
   test("a rollup with no totals is refused", () => {
     // applySnapshot requires `totals`; a bare list of records passes neither
     // path and would leave the Spend screen blank with the numbers in memory.

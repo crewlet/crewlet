@@ -248,9 +248,11 @@ func (s *Service) Tools() []map[string]any { return s.currentTools() }
 // Schedules is the configured rows as the `schedules` push carries them.
 //
 // Wrapped in the push's own object shape rather than sent bare: the client
-// reads `schedules` and `recent_runs` off it and assigns each only when
-// present, so omitting the ledger here LEAVES what the screen already
-// fetched rather than blanking it.
+// assigns each key only when present, so omitting one LEAVES what it already
+// holds rather than blanking it. The RUN LEDGER is deliberately not one of
+// them — "how it last went" is answered by the `schedules` query, which the
+// screen polls, and sending a second, staler copy of it here would give one
+// screen two sources for one fact.
 func (s *Service) Schedules() map[string]any {
 	return map[string]any{"schedules": s.currentSchedules()}
 }
