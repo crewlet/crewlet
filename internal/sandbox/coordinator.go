@@ -62,6 +62,18 @@ type ResumeRequest struct {
 	// Trigger is the event that caused the resume, carried so the resumed
 	// turn's telemetry names what woke it.
 	Trigger *events.Event
+
+	// CostUSD and DeliveredRefs are what the run reported, for the resumed
+	// phase's own event. The coding agents produce both and nothing carried
+	// them: the phase record's `cost_usd` and `delivered_refs` had no
+	// producer at all, so a subscription CLI's spend — which never passes
+	// through the engine's token meter — was reported nowhere.
+	//
+	// Both are zero when a PERSON's answer resumes a parked clarification:
+	// no new run finished, and claiming a cost for one would double-count
+	// the run that is still going.
+	CostUSD       float64
+	DeliveredRefs []string
 }
 
 // Accountant post-charges a collected run's tokens.
@@ -313,7 +325,17 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		return c.park(ctx, run, result)
 	}
 
-	return c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger)
+	return c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
+		CostUSD: result.CostUSD, DeliveredRefs: result.DeliveredRefs,
+	})
+}
+
+// runOutcome is what a finished run reported about itself, for the resumed
+// phase's own record. Zero where no run finished — a person answering a parked
+// clarification resumes the turn without collecting anything.
+type runOutcome struct {
+	CostUSD       float64
+	DeliveredRefs []string
 }
 
 // collect reconnects, reads the result, and PAUSES the box rather than tearing
@@ -430,7 +452,10 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversat
 	// The seat goes busy again for the duration of the resume: the parked
 	// run freed it, and re-entering the Execute loop is work like any other.
 	c.markBusy(claimed.AgentHandle)
-	return true, c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger)
+	// NO OUTCOME: this resume collects no run. The box is still parked and
+	// its cost is charged where it is collected, so reporting one here would
+	// bill the same run twice.
+	return true, c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger, runOutcome{})
 }
 
 // resumeAndSettle re-enters the suspended loop, then settles the box.
@@ -440,7 +465,7 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversat
 // the next completion. Otherwise the phase is done with the box, so tear it
 // down and mark the run done.
 func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
-	answer string, success bool, trigger *events.Event,
+	answer string, success bool, trigger *events.Event, outcome runOutcome,
 ) error {
 	if len(run.ExecuteState) == 0 {
 		// No suspended conversation to resume, and the turn cannot
@@ -471,6 +496,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 
 	if err := c.resume.Resume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
+		CostUSD: outcome.CostUSD, DeliveredRefs: outcome.DeliveredRefs,
 	}); err != nil {
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
 		// completion redelivers, the claim refuses, and the suspended

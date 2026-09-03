@@ -123,6 +123,10 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	// again would show a reader a prompt that was not sent this time.
 	work, described, err := r.finishWork(phaseCtx, state.Round, work{
 		submit: submit, res: res, surface: surface, snapshot: snapshot,
+		// WHICH BOX. This phase suspended on a coding run and is being
+		// re-entered with its result, which is the one thing that makes it
+		// a sandbox phase rather than a native one.
+		run: r.cfg.Resume.Run,
 	})
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err

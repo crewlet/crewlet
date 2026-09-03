@@ -371,6 +371,11 @@ type phaseRecord struct {
 	Available []string
 	Catalogue []string
 
+	// Run says which box this phase ran in, where that is not this process.
+	// The zero value is the native tool loop, which is what all but the
+	// resumed Execute phases are.
+	Run RunRecord
+
 	// Failed and Err describe a phase that died instead of finishing. The
 	// rest of the record is then PARTIAL rather than absent: a phase that
 	// raises used to publish nothing at all, leaving a dashboard showing an
@@ -517,9 +522,22 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		// Set explicitly. BackendNative is the value every consumer reads
 		// as "ran here", and it is NOT the zero value — an empty string
 		// renders as an unknown backend rather than as the normal one.
+		//
+		// It was a CONSTANT here, on every phase, which is why nothing in
+		// the tree ever produced BackendSandbox: a detached coding run and
+		// three rounds in this process reported the same backend, and the
+		// two most expensive things a seat does were indistinguishable in
+		// the event log.
 		Backend:         types.BackendNative,
 		ConversationKey: e.turn.ConversationKey,
 		Failed:          rec.Failed,
+	}
+	if rec.Run.Sandboxed() {
+		ev.Backend = types.BackendSandbox
+		ev.CodingAgent = rec.Run.CodingAgent
+		ev.SandboxID = rec.Run.SandboxID
+		ev.CostUSD = rec.Run.CostUSD
+		ev.DeliveredRefs = rec.Run.DeliveredRefs
 	}
 	if rec.Err != nil {
 		// The 2000-character cut this used to carry landed on exactly the

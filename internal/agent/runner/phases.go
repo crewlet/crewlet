@@ -149,7 +149,42 @@ type Resume struct {
 	// that launched, so its surface is fresh and has executed nothing.
 	// Ignored by a native resume, which replays the conversation instead.
 	Bridged []ledger.Call
+
+	// Run describes the detached run this resume is collecting.
+	Run RunRecord
 }
+
+// RunRecord is what a phase event says about the box a phase ran in.
+//
+// It exists because nothing could say it. Every publisher stamped
+// [types.BackendNative] unconditionally, so a phase that spent twenty minutes
+// in a remote box and one that ran three rounds in this process were reported
+// identically: the sandbox badge could never render, and `coding_agent`,
+// `sandbox_id`, `cost_usd` and `delivered_refs` had no producer at all —
+// despite the coding agents reporting every one of them.
+//
+// Carried rather than re-derived, for the same reason the run's placement is:
+// the resume may be another process on another node, days later, under a
+// company configuration that has been applied again since.
+type RunRecord struct {
+	// CodingAgent is the CLI that did the work; SandboxID the box it ran in.
+	// Both are empty on a resume that is not collecting a run — a person
+	// answering a clarification — and their absence is what says so.
+	CodingAgent string
+	SandboxID   string
+
+	// CostUSD is what the run's own provider billed, where the agent reports
+	// it. A subscription CLI's spend never passes through the engine's token
+	// meter, so this is the only number that sees it.
+	CostUSD float64
+
+	// DeliveredRefs are the branches and pull requests the run produced.
+	DeliveredRefs []string
+}
+
+// Sandboxed reports whether this resume is collecting a detached coding run,
+// which is what makes its phase's backend a sandbox rather than this process.
+func (r RunRecord) Sandboxed() bool { return r.CodingAgent != "" || r.SandboxID != "" }
 
 // Runner implements [turn.Phases] against real models and real tools.
 //
@@ -326,6 +361,9 @@ type work struct {
 	snapshot tools.Snapshot
 	system   string
 	user     string
+
+	// run names the box this pass ran in, where it was not this process.
+	run RunRecord
 }
 
 // finishWork turns a finished executor pass into the turn's Work, publishing
@@ -365,6 +403,7 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		Result: w.res.Result, Exhausted: w.res.Exhausted,
 		Decision: payload.Outcome, Rescued: !submitted,
 		Notes:     missingNote(missing),
+		Run:       w.run,
 		Available: w.surface.Active(),
 		// The names the executor was shown as prose, with no schemas.
 		// Sending every MCP server's tool definitions is what made a turn

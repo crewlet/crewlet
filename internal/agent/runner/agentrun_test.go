@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -342,5 +343,107 @@ func TestAnAgentRunPublishesThePromptItWasLaunchedWith(t *testing.T) {
 	}
 	if !strings.Contains(prompts[0], "post the weekly summary") {
 		t.Errorf("the published prompt does not carry the ask: %q", prompts[0])
+	}
+}
+
+// AN AGENT-MODE RUN'S EVENT SAYS WHAT IT DID, and which box it did it in.
+//
+// The resume used to hand the record builder a zero result while holding the
+// whole account in the bridged log, so the published event carried no
+// response, no tool calls, no rounds and no model — and stamped `native` on a
+// run that had not run here. The card rendered EMPTY: an empty ledger and an
+// empty response leave no transcript to fall back on, and the "composing its
+// first round" placeholder only shows on a LIVE phase. An operator saw a
+// decision word and a blank card for a run that made real tool calls.
+func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	prov := &scriptedProvider{}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+		agentRun: &recordingLauncher{},
+		pub:      pub,
+		resume: &runner.Resume{
+			State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
+			Answer: "cloned the repo, fixed the failing test, opened the merge request",
+			Bridged: []ledger.Call{
+				{Name: "slack_post", Result: "posted"},
+				{Name: runner.SubmitWorkTool, Args: map[string]any{
+					"outcome":    "delivered",
+					"summary":    "fixed the failing test and opened the MR",
+					"deliveries": []any{"slack_post"},
+				}},
+			},
+			Run: runner.RunRecord{
+				CodingAgent: "claude-code", SandboxID: "box-7",
+				CostUSD: 0.42, DeliveredRefs: []string{"https://example.com/pr/9"},
+			},
+		},
+	})
+
+	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	done := completedPhase(t, pub, "execute")
+	if done.Response == "" {
+		t.Error("the run's own account is missing, so the card has nothing to render")
+	}
+	if len(done.ToolExecutions) != 2 {
+		t.Errorf("tool_executions = %+v, want the run's own two calls", done.ToolExecutions)
+	}
+	// ONE ROUND, and every call on it — the engine made one request, the
+	// launch, and got one answer. Splitting the log into a round per call
+	// would claim a structure nobody observed.
+	if done.RoundsUsed != 1 {
+		t.Errorf("rounds_used = %d, want the one round the engine actually drove", done.RoundsUsed)
+	}
+	for _, ex := range done.ToolExecutions {
+		if round, _ := ex["round"].(int); round != 1 {
+			t.Errorf("%v is on round %d, want 1", ex["name"], round)
+		}
+	}
+	if len(done.RoundNarration) != 1 {
+		t.Fatalf("round_narration = %+v, want the run's answer on its own round", done.RoundNarration)
+	}
+	if done.RoundNarration[0]["content"] == "" {
+		t.Error("the round carries no content, so its tool rows have nothing above them")
+	}
+	// AND WHICH BOX. `native` on a detached coding run is what made a
+	// twenty-minute remote job and three local rounds indistinguishable.
+	if done.Backend != types.BackendSandbox {
+		t.Errorf("backend = %q, want sandbox", done.Backend)
+	}
+	if done.CodingAgent != "claude-code" || done.SandboxID != "box-7" {
+		t.Errorf("the box is unnamed: agent=%q id=%q", done.CodingAgent, done.SandboxID)
+	}
+	if done.CostUSD != 0.42 {
+		t.Errorf("cost_usd = %v — a subscription CLI's spend is reported nowhere else", done.CostUSD)
+	}
+	if len(done.DeliveredRefs) != 1 {
+		t.Errorf("delivered_refs = %v, want what the run produced", done.DeliveredRefs)
+	}
+}
+
+// A NATIVE PHASE IS STILL NATIVE. The backend is a fact about where a phase
+// ran, not a flag the resume path sets for everything it touches.
+func TestAPhaseThatRanHereReportsTheNativeBackend(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	prov := &scriptedProvider{execute: []llm.Completion{
+		submitCall(t, runner.SubmitWorkTool, `{"outcome":"no_action","summary":"nothing to do"}`),
+		text("done"),
+	}}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
+		buildOpts{reply: turn.ReplyNone, pub: pub})
+
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	done := completedPhase(t, pub, "execute")
+	if done.Backend != types.BackendNative {
+		t.Errorf("backend = %q, want native", done.Backend)
+	}
+	if done.CodingAgent != "" || done.SandboxID != "" {
+		t.Errorf("a native phase named a box: agent=%q id=%q", done.CodingAgent, done.SandboxID)
 	}
 }
