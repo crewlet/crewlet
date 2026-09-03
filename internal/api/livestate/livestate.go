@@ -109,10 +109,21 @@ var eventState = map[string]string{
 	"agent_terminated":      "terminated",
 	"agent_phase_started":   "working",
 	"agent_phase_completed": "working",
-	"reflection_completed":  "idle",
-	"llm_unavailable":       "afk",
-	"turn.guard_breach":     "afk",
-	"budget_exhausted":      "afk",
+	// THE END OF THE WORK, and reflection_completed is only the end of what
+	// FOLLOWS it. Reflection is the trailing sentinel for the auxiliary phases
+	// a learning pass emits, and it was the only entry here that anything
+	// publishes AND that returns a seat to idle — but the reflector returns
+	// without publishing it on five paths (no workers configured, an unknown
+	// role, a per-role `learning_enabled: false`, a spent token budget, a
+	// redelivery it has already marked). A company running with learning off
+	// takes the first of those on every turn, so every one of its seats went
+	// to `working` on its first turn and stayed there for the life of the
+	// process — mid-phase, in a phase that had ended.
+	"agent_turn_completed": "idle",
+	"reflection_completed": "idle",
+	"llm_unavailable":      "afk",
+	"turn.guard_breach":    "afk",
+	"budget_exhausted":     "afk",
 }
 
 // afkEvents are the engine-detected failures that flip a seat to afk and carry
@@ -596,11 +607,8 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		}
 		s.finishLiveCall(agent, env, payload)
 
-	case env.Type == "reflection_completed":
-		agent.state = "idle"
-		agent.currentPhase = ""
-		agent.currentIteration = 0
-		agent.liveCall = nil
+	case env.Type == "agent_turn_completed" || env.Type == "reflection_completed":
+		endTurn(agent, str(payload, "turn_id"))
 
 	case env.Type == "agent_terminated":
 		agent.state = "terminated"
@@ -637,6 +645,34 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		}
 	}
 	return true
+}
+
+// endTurn returns a seat to idle at the end of the turn `turnID`.
+//
+// SCOPED TO THAT TURN, and it has to be: both events that end one arrive
+// asynchronously and neither is ordered against the next turn's work.
+// reflection_completed is published by a separate consumer seconds after the
+// turn returned, and the projection reads every type through one wildcard
+// subscription where cross-topic order is not guaranteed — so by the time
+// either lands the seat may already be several rounds into the NEXT turn. The
+// clear used to be unconditional, which wiped the live row a reader was
+// watching and reported a working seat as idle, until the following round
+// happened to rebuild both.
+//
+// The timestamp reorder guard does not cover this on its own: applyProgress
+// deliberately never advances stateTS, so a seat whose only events since the
+// last phase boundary are progress rounds still carries the older stamp and
+// lets a late completion through.
+func endTurn(agent *agentLive, turnID string) {
+	// A live call for ANOTHER turn is the seat having moved on. Neither the
+	// row nor the state belongs to the turn ending here.
+	if agent.liveCall != nil && turnID != "" && agent.liveCall.TurnID != turnID {
+		return
+	}
+	agent.state = "idle"
+	agent.currentPhase = ""
+	agent.currentIteration = 0
+	agent.liveCall = nil
 }
 
 func (s *LiveState) ensureAgent(role string) *agentLive {
