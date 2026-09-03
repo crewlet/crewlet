@@ -745,7 +745,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 				attribute.Bool("crewlet.suspended", out.Suspended))
 			return ctx, out, nil
 		}
-		granted, decision := extension.Consider(ctx, r.cfg.Judge, policy, extension.Request{
+		granted, decision := r.consider(ctx, ph, iteration, policy, extension.Request{
 			Phase: ph, Task: r.cfg.Task, PlanSummary: in.intent,
 			Calls: calls(surface), LastText: res.Text, RoundsUsed: out.Rounds,
 		})
@@ -808,6 +808,81 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 		res.Partial = &shifted
 	}
 	return res
+}
+
+// consider asks the round-cap judge, and makes the call visible.
+//
+// The judge is a model call like any other and was the only one nothing
+// recorded: no phase event, no span, and no charge — it runs outside the tool
+// loop, which is where every other call is metered. So it is wrapped here
+// rather than inside [extension.Consider], which is policy plus a model and
+// has no business knowing about spans, meters or the event vocabulary.
+//
+// A CHARGE THAT REFUSES DOES NOT FAIL THE TURN. The extension is a generosity
+// on a phase that has already run out of rounds, and a seat at its cap should
+// stop extending, not die: an over-budget judgement is recorded and treated as
+// "no extension", which is the same outcome as the judge saying no.
+func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration int,
+	policy extension.Policy, req extension.Request,
+) (int, extension.Decision) {
+	// The span the turn-engine doc has always promised: one per judge call,
+	// nested under the phase that fired it. It is the only place a reader
+	// can see what the judgement COST IN TIME, which no event records — and
+	// a judge on a slow cheap model is a stall in the middle of a phase that
+	// has already been running for minutes.
+	ctx, span := tracing.Start(ctx, "agent.runner", "agent.turn.judge",
+		attribute.String("crewlet.phase", string(ph)),
+		attribute.Int("crewlet.iteration", iteration),
+		attribute.Int("crewlet.rounds", req.RoundsUsed))
+	defer span.End()
+
+	granted, decision := extension.Consider(ctx, r.cfg.Judge, policy, req)
+	if !decision.Asked {
+		// The policy declined to ask, or there is no judge. Nothing was
+		// called, so there is nothing to report or to charge — and an event
+		// here would claim a model call that never happened.
+		span.SetAttributes(attribute.Bool("crewlet.judge_called", false))
+		return granted, decision
+	}
+	span.SetAttributes(
+		attribute.Bool("crewlet.judge_called", true),
+		attribute.String("crewlet.model", decision.Model),
+		attribute.Bool("crewlet.extended", granted > 0),
+		attribute.Int("crewlet.granted", granted),
+		attribute.Int("crewlet.total_tokens", decision.Tokens()))
+
+	if err := charge(ctx, r.cfg.Budget, decision.Tokens()); err != nil {
+		log.WarnContext(ctx, "extension_judge_over_budget", "phase", ph,
+			"iteration", iteration, "tokens", decision.Tokens(), "error", err.Error())
+		granted = 0
+	}
+	r.emitter().judged(ctx, ph, iteration, granted, decision)
+	return granted, decision
+}
+
+// charge meters a model call the tool loop did not make.
+//
+// An unreachable counter is NOT a refusal — the same three-valued rule the
+// loop's own charge follows — but here both answers end the same way, because
+// neither is worth failing a turn over: the caller declines to extend and
+// says why.
+func charge(ctx context.Context, meter toolloop.BudgetMeter, tokens int) error {
+	if meter == nil || tokens <= 0 {
+		return nil
+	}
+	outcome, err := meter.Spend(ctx, tokens)
+	if err != nil {
+		return fmt.Errorf("charging the extension judge: %w", err)
+	}
+	if outcome.OK {
+		return nil
+	}
+	scope := outcome.Scope
+	if scope == "" {
+		scope = "org"
+	}
+	return fmt.Errorf("the %s budget refused %d tokens (%d of %d used)",
+		scope, tokens, outcome.Used, outcome.Limit)
 }
 
 // foldOnto merges one loop invocation's record onto the rounds already behind

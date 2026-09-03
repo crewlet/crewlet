@@ -8,6 +8,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/agent/extension"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -189,6 +190,19 @@ type Spend struct {
 	// a seat's spend jumps and its own rounds did not.
 	Workers      int
 	WorkerTokens int
+
+	// Judged and JudgeTokens count the round-cap extension judge: how many
+	// times a phase ran out of rounds and asked for more, and what those
+	// calls cost between them.
+	//
+	// Kept out of the turn's own totals for the same reason a worker's are —
+	// the judge's spend goes through the shared meter, so folding it in
+	// would report it twice and stop the phase events summing to the turn's
+	// number. What it answers instead is a question the phase numbers
+	// cannot: whether a seat's cost is its work or its arguing about
+	// whether to keep working.
+	Judged      int
+	JudgeTokens int
 }
 
 // Total is the turn's own token count. It does NOT include what its workers
@@ -203,6 +217,15 @@ func (s *Spend) recordWorker(mu *sync.Mutex, tokens int) {
 	defer mu.Unlock()
 	s.Workers++
 	s.WorkerTokens += tokens
+}
+
+// recordJudge folds one extension judgement into the turn's tally.
+//
+// No lock, like record and unlike recordWorker: the judge is called from the
+// phase's own goroutine, between tool-loop invocations.
+func (s *Spend) recordJudge(tokens int) {
+	s.Judged++
+	s.JudgeTokens += tokens
 }
 
 // Spend reports what this turn has cost so far.
@@ -382,6 +405,57 @@ type phaseRecord struct {
 	// in-flight call with no response and no reason.
 	Failed bool
 	Err    error
+}
+
+// judged reports one round-cap extension judgement, as a phase nested under
+// the phase that ran out of rounds.
+//
+// THE JUDGE IS A MODEL CALL, and it was the only one in the engine that
+// nothing recorded: no phase event, so no card under the Execute round that
+// fired it and no row in the token breakdown; no span, though the turn-engine
+// doc promised `agent.turn.judge`; and no charge, because it runs outside the
+// tool loop where every other call is metered. `types.PhaseJudge` was declared,
+// read by the dashboard's nested-call grouping, and produced by nobody.
+//
+// What that cost is the question an operator actually asks: a company whose
+// judge model is misconfigured and rescues every phase looked exactly like one
+// whose phases genuinely deserved no extension. The only trace was a log line.
+func (e emitter) judged(ctx context.Context, host phase.Phase, iteration int,
+	granted int, d extension.Decision,
+) {
+	// Tallied first, as everywhere here: the tally is the turn's own
+	// accounting and must not depend on whether anyone is listening.
+	e.tally.recordJudge(d.Tokens())
+	if !e.on() {
+		return
+	}
+	verdict := "rescue"
+	if granted > 0 {
+		verdict = "extend"
+	}
+	e.publish(ctx, events.New(types.AgentPhaseCompleted{
+		Agent:    e.turn.AgentID,
+		RoleName: e.role,
+		TurnID:   e.turn.ID,
+		Phase:    types.PhaseJudge,
+		// NESTED under the phase that asked, which is what the dashboard's
+		// grouping already expects of every non-turn phase.
+		HostPhase:     types.Phase(host),
+		HostIteration: iteration,
+		Iteration:     iteration,
+		Model:         d.Model,
+		Trigger:       e.turn.Trigger,
+		InputTokens:   d.InputTokens,
+		OutputTokens:  d.OutputTokens,
+		TotalTokens:   d.Tokens(),
+		// The verdict and the judge's own wording for it. `Notes` is the
+		// reason: it is what makes a rescue readable, and on the failure
+		// paths it is the only thing that names what went wrong.
+		Decision:        verdict,
+		Notes:           d.Reason,
+		Backend:         types.BackendNative,
+		ConversationKey: e.turn.ConversationKey,
+	}, e.traceFor(ctx)))
 }
 
 // subagentCompleted closes ONE sub-agent, as a phase nested under the Execute

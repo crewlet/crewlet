@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -9,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -172,6 +174,7 @@ func thinkAndCall(t *testing.T, name, argsJSON, reasoning string) llm.Completion
 // be granted more.
 func extendableRunner(
 	t *testing.T, prov *scriptedProvider, pub queue.Publisher, judge extension.Judge,
+	meter ...toolloop.BudgetMeter,
 ) *runner.Runner {
 	t.Helper()
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
@@ -194,12 +197,21 @@ func extendableRunner(
 		Task:      "read the files",
 		Publisher: pub,
 		Judge:     judge,
+		Budget:    budgetOf(meter),
 		Turn:      runner.Turn{ID: "t-rounds", AgentID: "agent-1"},
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
 	}
 	return r
+}
+
+// budgetOf is the shared meter a fixture was given, or none.
+func budgetOf(meter []toolloop.BudgetMeter) toolloop.BudgetMeter {
+	if len(meter) == 0 {
+		return nil
+	}
+	return meter[0]
 }
 
 // completedPhase is the durable record one phase published.
@@ -335,4 +347,139 @@ func suspendedAfterTwoRounds() execstate.State {
 			{"round": 2, "reasoning": "this needs code", "content": "Starting a coding run."},
 		},
 	}
+}
+
+// THE JUDGE IS A MODEL CALL, AND A MODEL CALL LEAVES A RECORD.
+//
+// It was the only one in the engine that left none: no phase event, so no card
+// under the round that fired it and no row in the token breakdown; and no
+// charge, because it runs outside the tool loop where every other call is
+// metered. `types.PhaseJudge` was declared, read by the dashboard's grouping,
+// and produced by nobody — so a company whose judge rescues every phase looked
+// exactly like one whose phases deserved no extension.
+func TestTheExtensionJudgeIsPublishedAsAPhaseAndCharged(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{execute: []llm.Completion{
+		thinkAndCall(t, "read_file", `{"path":"/a"}`, "one"),
+		thinkAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+		thinkAndCall(t, runner.SubmitWorkTool,
+			`{"outcome":"delivered","summary":"read both"}`, "enough"),
+		text("done"),
+	}}
+	pub := newCapture()
+	meter := &countingMeter{}
+	r := extendableRunner(t, prov, pub, spendingJudge{}, meter)
+
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	judged := phasesOfKind(t, pub, "judge")
+	if len(judged) != 1 {
+		t.Fatalf("%d judge phases published, want the one call that ran", len(judged))
+	}
+	got := judged[0]
+	// NESTED under the phase that asked, which is what puts the card under
+	// the Execute round rather than beside the turn's own phases.
+	if got.HostPhase != "execute" || got.HostIteration != 1 {
+		t.Errorf("host = %q/%d, want execute/1", got.HostPhase, got.HostIteration)
+	}
+	if got.Decision != "extend" {
+		t.Errorf("decision = %q, want the verdict", got.Decision)
+	}
+	if got.Notes == "" {
+		t.Error("the judge's reason is missing, which is what makes a rescue readable")
+	}
+	if got.TotalTokens != 30 || got.Model != "judge-model" {
+		t.Errorf("the judge's own spend is unreported: %d tokens on %q",
+			got.TotalTokens, got.Model)
+	}
+	// AND CHARGED. The judge runs outside the tool loop, so nothing else
+	// meters it: a seat's reported cost was below what it actually cost by
+	// one model call per exhausted phase.
+	if !meter.sawAtLeast(30) {
+		t.Errorf("the judge's tokens never reached the shared meter: charges = %v",
+			meter.charges())
+	}
+	// The turn's own totals must NOT double-count it: its spend went through
+	// the meter, so folding it in would stop the phase events summing to the
+	// turn's number.
+	spend := r.Spend()
+	if spend.Judged != 1 || spend.JudgeTokens != 30 {
+		t.Errorf("judge tally = %d calls / %d tokens, want 1/30", spend.Judged, spend.JudgeTokens)
+	}
+}
+
+// A POLICY THAT DECLINES TO ASK IS NOT A JUDGEMENT. Nothing was called, so
+// there is nothing to report or to charge — and an event would claim a model
+// call that never happened, which is the fact the judge phase exists to carry.
+func TestNoJudgePhaseIsPublishedWhenNoJudgeWasAsked(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{execute: []llm.Completion{
+		thinkAndCall(t, runner.SubmitWorkTool,
+			`{"outcome":"delivered","summary":"done in one"}`, "straight in"),
+		text("done"),
+	}}
+	pub := newCapture()
+	r := extendableRunner(t, prov, pub, spendingJudge{}, &countingMeter{})
+
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := phasesOfKind(t, pub, "judge"); len(got) != 0 {
+		t.Errorf("%d judge phases on a phase that never ran out of rounds", len(got))
+	}
+}
+
+// spendingJudge grants every request and reports what the call cost, which is
+// the half nothing carried.
+type spendingJudge struct{}
+
+func (spendingJudge) Decide(context.Context, extension.Request) (extension.Decision, error) {
+	return extension.Decision{
+		Extend: true, Reason: "each call advances on the last",
+		Asked: true, Model: "judge-model", InputTokens: 20, OutputTokens: 10,
+	}, nil
+}
+
+// countingMeter records every charge the shared budget saw.
+type countingMeter struct {
+	mu   sync.Mutex
+	seen []int
+}
+
+func (m *countingMeter) Spend(_ context.Context, tokens int) (toolloop.SpendOutcome, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.seen = append(m.seen, tokens)
+	return toolloop.SpendOutcome{OK: true}, nil
+}
+
+func (m *countingMeter) charges() []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]int(nil), m.seen...)
+}
+
+func (m *countingMeter) sawAtLeast(tokens int) bool {
+	for _, got := range m.charges() {
+		if got == tokens {
+			return true
+		}
+	}
+	return false
+}
+
+// phasesOfKind is every phase of one kind the turn published.
+func phasesOfKind(t *testing.T, c *capture, ph string) []*types.AgentPhaseCompleted {
+	t.Helper()
+	c.mu <- struct{}{}
+	defer func() { <-c.mu }()
+	var out []*types.AgentPhaseCompleted
+	for _, ev := range c.events {
+		if got, ok := events.DataAs[*types.AgentPhaseCompleted](ev); ok && string(got.Phase) == ph {
+			out = append(out, got)
+		}
+	}
+	return out
 }

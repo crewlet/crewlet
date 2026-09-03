@@ -359,8 +359,23 @@ flowchart TD
 The judge is best-effort: any failure (timeout, provider error, parse
 error) maps to a conservative `rescue` decision so a flaky judge can
 never block the host phase. The judge's own LLM call is published as
-an `AgentPhaseCompleted` event with `phase="judge"` so dashboards can
-see how often it fires and which decisions it makes.
+an `AgentPhaseCompleted` event with `phase="judge"`, `host_phase` and
+`host_iteration` naming the round that asked, the verdict in `decision`
+and the judge's own wording in `notes` — so a dashboard groups it under
+that round and an operator can see how often it fires and what it
+decides. **A judge that was never asked publishes nothing**: the policy
+declining to ask and the judge saying no are different facts, and an
+event for the first would claim a model call that did not happen.
+
+**And it is charged.** The judge runs outside the tool loop, which is
+where every other model call is metered, so its tokens go through the
+turn's shared budget explicitly. A refusal there does not fail the
+turn — the extension is a generosity on a phase that has already run
+out of rounds, so a seat at its cap simply stops extending, which is
+the same outcome as the judge saying no. Its spend is reported apart
+from the turn's own totals for the same reason a worker's is: it is
+already counted once by the meter, and folding it in would stop the
+phase events summing to the turn's number.
 
 **Forced tool calls are enforced, not just requested.** The rescue
 paths and the extension judge call the tool loop with

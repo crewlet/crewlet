@@ -131,22 +131,35 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 		MaxTokens:   JudgeMaxTokens,
 	})
 	if err != nil {
-		return Decision{}, fmt.Errorf("extension: judge %s: %w", j.key, err)
+		// Asked, with no model and no tokens: the call was made and the
+		// provider never answered, which is a different fact from the
+		// policy declining to ask at all.
+		return Decision{Asked: true}, fmt.Errorf("extension: judge %s: %w", j.key, err)
 	}
 	if completion == nil {
 		// A provider answering (nil, nil) is a contract violation, and
 		// checked rather than dereferenced: the panic would surface as a
 		// failed turn on the phase this was trying to be generous to.
-		return Decision{}, fmt.Errorf("extension: judge %s returned nothing: %w",
+		return Decision{Asked: true}, fmt.Errorf("extension: judge %s returned nothing: %w",
 			j.key, ErrNoVerdict)
+	}
+	// The spend, on every path out of here: the call happened whatever the
+	// answer was, and the caller is the only frame that can charge it.
+	spent := Decision{
+		Asked:        true,
+		Model:        completion.Model,
+		InputTokens:  completion.InputTokens,
+		OutputTokens: completion.OutputTokens,
 	}
 	decision, err := ParseVerdict(completion.Content)
 	if err != nil {
 		log.DebugContext(ctx, "extension_judge_unparsed", "model", j.key,
 			"answer", textcut.Ellipsis(completion.Content, 200),
 			"output_tokens", completion.OutputTokens)
-		return Decision{}, err
+		return spent, err
 	}
+	decision.Asked, decision.Model = spent.Asked, spent.Model
+	decision.InputTokens, decision.OutputTokens = spent.InputTokens, spent.OutputTokens
 	return decision, nil
 }
 
