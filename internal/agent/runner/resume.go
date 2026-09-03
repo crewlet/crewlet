@@ -194,8 +194,8 @@ func priorRounds(state execstate.State) toolloop.Result {
 		if args, ok := exec["arguments"].(string); ok {
 			ex.Args = decodeArgs(args)
 		}
-		if out, ok := exec["result"].(string); ok {
-			ex.Output = out
+		if result, ok := exec["result"].(string); ok {
+			ex.Output = result
 		}
 		if ok, present := exec["success"].(bool); present {
 			ex.Failed = !ok
