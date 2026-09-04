@@ -199,12 +199,6 @@ type Capabilities struct {
 	// it can actually see.
 	WithDeliveryAttempts func(t *testing.T, attempts int) queue.EventQueue
 
-	// WithRedeliveryBudget is the superseded form of WithDeliveryAttempts,
-	// counting redeliveries after the first delivery. Kept so a backend
-	// that already supplies it keeps being certified; set
-	// WithDeliveryAttempts instead and this can go.
-	WithRedeliveryBudget func(t *testing.T, budget int) queue.EventQueue
-
 	// READ-YOUR-OWN-WRITE, required of every inspection function below.
 	//
 	// A backend supplying these must have them reflect an operation that has
@@ -230,13 +224,39 @@ type Capabilities struct {
 	// cases stay green while proving nothing — which is exactly the pair of
 	// symptoms that gets the wrong one investigated.
 	//
-	// Stated here because no case can discover it: both backends this suite
-	// was built against make it true for free — the twin is a mutex over a
-	// map, and the broker-backed one reads statistics synchronously — so
-	// nothing here can tell a backend that GUARANTEES it from one that merely
-	// happens to. That is the same blindness as fixtures shaped like the
-	// backend, reached the same way, and the only remedy is to write the
-	// requirement down where the capability is supplied.
+	// Stated here because no case can discover it — and THE REASON GIVEN FOR
+	// THAT WAS ITSELF WRONG, which is worth more than the conclusion it
+	// supported. This paragraph used to say both backends made the property
+	// true for free: the twin because it is a mutex over a map, and the
+	// broker-backed one because it "reads statistics synchronously". The
+	// twin's half is right. The broker-backed one's was not. It sized a
+	// backlog read from its durable CONSUMER's pending count, and a consumer's
+	// accounting is not caught up when the publish that produced it has
+	// already been acked — the server stores the message and acks the
+	// publisher, and the consumer's own count follows after. Measured on the
+	// embedded broker: immediately after an acked Publish the consumer
+	// reported nothing pending on roughly two reads in three from another
+	// connection, and about one in nine from the publisher's own.
+	//
+	// So the one backend that ships violated the requirement stated here for
+	// as long as this comment claimed it could not. It cost a red CI on a
+	// merge that touched nothing in this package:
+	// quiesce_with_no_attachment_changes_nothing read an empty baseline, the
+	// publish became visible a fraction of a millisecond later, and Quiesce —
+	// which with nothing attached writes nothing at all — was reported as
+	// having changed the mail. Note which case: the two OTHER users of
+	// assertUntouched wait for their baseline to settle before snapshotting,
+	// so a lagging view reached the suite through the only one that did not.
+	//
+	// The lesson is the one above, sharpened. A requirement nothing asserts is
+	// held up by a comment, so the comment has to be re-derived from the code
+	// rather than inherited: "reads statistics synchronously" was plausible,
+	// unchecked, and the exact opposite of what the code did. Nothing here can
+	// tell a backend that GUARANTEES this from one that merely happens to,
+	// which is the same blindness as fixtures shaped like the backend, reached
+	// the same way — and the only remedy is still to write the requirement
+	// down where the capability is supplied, now with what it costs when it is
+	// written down wrongly.
 	//
 	// It is deliberately a requirement on the CAPABILITY and not on
 	// EventQueue: nothing in the contract promises when a completed operation
@@ -244,12 +264,24 @@ type Capabilities struct {
 	// promise. A backend that cannot honour it should leave these nil and
 	// skip the group rather than supply a lagging view of itself.
 
+	// AND NOTHING HIDDEN BEHIND AN UNREPORTED FAILURE, which is the same
+	// class of promise as the paragraphs above and was broken the same way.
+	// The two reads below can fail — they are broker round trips on the
+	// backend that ships — and their adapters discarded the error, so "the
+	// broker did not answer" arrived here as "the seat is holding no mail".
+	// That is the engine's most incident-hardened rule broken inside the
+	// suite that exists to enforce it: held, definitively not held, and
+	// could-not-tell are three facts, and NegativePaths asserts absences
+	// almost exclusively. Hence the *testing.T — an adapter reports the
+	// failure as a failure instead of returning it as an emptiness, and no
+	// case has to thread an error through a polling predicate to get it.
+
 	// Backlog reports the events a subscription retains and has not
 	// delivered — the mail an unowned seat is holding.
-	Backlog func(q queue.EventQueue, topic, group string) []*events.Event
+	Backlog func(t *testing.T, q queue.EventQueue, topic, group string) []*events.Event
 
 	// DeadLetters reports the events a subscription gave up on.
-	DeadLetters func(q queue.EventQueue, topic, group string) []*events.Event
+	DeadLetters func(t *testing.T, q queue.EventQueue, topic, group string) []*events.Event
 
 	// Attachments reports every (topic, group) pair THIS client is
 	// attached to. Scoped to the client, never the broker: "attached to
@@ -1104,7 +1136,25 @@ func (s *suite) needBacklog(t *testing.T) func(q queue.EventQueue, topic, group 
 	if s.caps.Backlog == nil {
 		t.Skip("backend cannot report a subscription's retained mail")
 	}
-	return s.caps.Backlog
+	// Bound to this test's own T so a case keeps calling it with three
+	// arguments — including from inside a polling predicate, which is where
+	// most of these reads happen and where returning an error would have to
+	// be swallowed all over again.
+	return func(q queue.EventQueue, topic, group string) []*events.Event {
+		return s.caps.Backlog(t, q, topic, group)
+	}
+}
+
+// optionalBacklog is needBacklog for a case that runs either way: it returns
+// nil when the backend reports no backlog, rather than skipping the case.
+func (s *suite) optionalBacklog(t *testing.T) func(q queue.EventQueue, topic, group string) []*events.Event {
+	t.Helper()
+	if s.caps.Backlog == nil {
+		return nil
+	}
+	return func(q queue.EventQueue, topic, group string) []*events.Event {
+		return s.caps.Backlog(t, q, topic, group)
+	}
 }
 
 func (s *suite) needDeadLetters(t *testing.T) func(q queue.EventQueue, topic, group string) []*events.Event {
@@ -1112,7 +1162,9 @@ func (s *suite) needDeadLetters(t *testing.T) func(q queue.EventQueue, topic, gr
 	if s.caps.DeadLetters == nil {
 		t.Skip("backend cannot report dead letters")
 	}
-	return s.caps.DeadLetters
+	return func(q queue.EventQueue, topic, group string) []*events.Event {
+		return s.caps.DeadLetters(t, q, topic, group)
+	}
 }
 
 // needAttempts returns a constructor for a queue that gives a persistently
@@ -1121,14 +1173,6 @@ func (s *suite) needAttempts(t *testing.T) func(t *testing.T, attempts int) queu
 	t.Helper()
 	if s.caps.WithDeliveryAttempts != nil {
 		return s.caps.WithDeliveryAttempts
-	}
-	if legacy := s.caps.WithRedeliveryBudget; legacy != nil {
-		// The superseded field counts redeliveries after the first, so one
-		// fewer than the attempts the suite observes.
-		return func(t *testing.T, attempts int) queue.EventQueue {
-			t.Helper()
-			return legacy(t, attempts-1)
-		}
 	}
 	t.Skip("backend cannot be built with a specific delivery-attempt limit")
 	return nil

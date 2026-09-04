@@ -188,6 +188,30 @@ func (q *Queue) PauseHolds(topic, group string) []string {
 	return out
 }
 
+// Quiescing reports whether this client has stopped taking work on a
+// subscription.
+//
+// Separate from a pause hold although both stop deliveries, because the two
+// are cleared by different things — a hold by the subsystem that took it, a
+// quiesce by detaching or attaching again — and because a stale quiesce is
+// invisible from outside until someone attaches, which is what let one sit
+// unnoticed long enough to strand a seat.
+//
+// Reported so the conformance suite can see it. A negative path asserts that
+// an operation which declined to act touched NOTHING, and it compares every
+// observable a backend exports; one this backend keeps to itself is one that
+// case silently stops checking. Quiescing was exactly that here — the state
+// existed and was writable, and the case written to catch a stale quiesce was
+// checking it on the twin alone.
+func (q *Queue) Quiescing(topic, group string) bool {
+	for _, a := range q.lookup(topic, group) {
+		if a.quiesced.Load() {
+			return true
+		}
+	}
+	return false
+}
+
 // --- attaching ------------------------------------------------------------
 
 // attach creates or reuses the durable consumer and starts a loop.
