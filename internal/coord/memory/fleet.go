@@ -42,6 +42,10 @@ type Fleet struct {
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
 
+	// documents is the fleet's document families. Lazily built, so a
+	// caller that never touches one carries no watcher bookkeeping.
+	documents *documents
+
 	epoch   int64
 	target  coord.Activation
 	set     bool
