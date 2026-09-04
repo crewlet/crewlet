@@ -257,11 +257,6 @@ func (b *Broker) restoreLocked(sub *subscription, remaining []queue.Partition[*e
 	sub.mail = spliced
 }
 
-func (q *Queue) isQuiescedLocked(key subKey) bool {
-	_, held := q.quiescing[key]
-	return held
-}
-
 // invoke runs one delivery and applies the handler's outcome.
 //
 // Ack drops the events — they were removed from the mailbox before the call.

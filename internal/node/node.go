@@ -549,7 +549,8 @@ func (n *Node) Attached() []string {
 // a change to one constant rather than a silent partition-key mismatch with a
 // regression test that stays green because it uses the constant too.
 //
-// An event that cannot name a conversation keys UNIQUELY, on its own id, so it
-// is never coalesced with anything. That is the honest default: merging two
-// unrelated triggers into one digest turn loses one of them.
+// An event that cannot name a conversation gets a key of its OWN — derived
+// from its id, so nothing else can ever share it — and is therefore never
+// coalesced with anything. That is the honest default: merging two unrelated
+// triggers into one digest turn loses one of them.
 func conversationKey(ev *events.Event) string { return notify.KeyOf(ev) }

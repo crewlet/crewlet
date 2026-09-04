@@ -321,7 +321,7 @@ The relevance prefetches, the counterparty profiler, the PersistDecider, and `re
 
 `build_notification_prompt` produces the **enriched body** — for a Slack message, ~1.5k chars of `## Triage` instructions front-loaded *before* the actual message. That enriched body becomes the turn's `task_description` (the executor needs the triage contract). But a relevance filter keyed on a `task[:N]` prefix of it never reaches the message: it filters against boilerplate that is byte-identical on every Slack turn.
 
-So the raw message rides separately. the notification's `SalientBody` carries the inbound body verbatim — the message, no scaffolding — alongside the enriched `body`. `InboundInteraction.body` is sourced from it (falling back to the enriched `body` for events that carry no `salient_body`); a [coalesced trigger](event-system.md#inbox-batching--coalescing) sources one interaction body per constituent message, and the merged notification's own `salient_body` is the same messages joined chronologically with sender attribution (`Alice: …`).
+So the raw message rides separately. The notification's `SalientBody` carries the inbound body verbatim — the message, no scaffolding — alongside the enriched `body`. `InboundInteraction.body` is sourced from it (falling back to the enriched `body` for events that carry no `salient_body`); a [coalesced trigger](event-system.md#inbox-batching--coalescing) sources one interaction body per constituent message, and the merged notification's own `salient_body` is the same messages joined chronologically with sender attribution (`Alice: …`).
 
 Which surfaces actually read the salient half, today:
 
