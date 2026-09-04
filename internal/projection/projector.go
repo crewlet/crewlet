@@ -49,6 +49,29 @@ type Applier interface {
 
 	// Reset drops every row this applier owns, for a rebuild.
 	Reset(ctx context.Context, tx *sql.Tx) error
+
+	// Order ranks a key for a batch, lower first.
+	//
+	// # Why the projector cannot decide this itself
+	//
+	// A boot reconcile enumerates the bucket's keys in MAP ORDER, and a
+	// family's records have parents: a comment's row references its item's,
+	// a revision's references its page's. An applier that skipped a child
+	// whose parent was not there yet would drop it PERMANENTLY — the key
+	// set records the child as applied at that revision, so no later
+	// reconcile re-fetches it and nothing anywhere says a thread is short.
+	// That is measured, not hypothetical: a twenty-comment item projected
+	// twelve of them on a fresh node before this existed.
+	//
+	// The projector cannot fix that on its own, because which key is whose
+	// parent is the applier's own grammar. So the applier ranks, and the
+	// projector sorts each batch by (rank, revision) before applying —
+	// which makes an apply's precondition "my parent is either already
+	// here or earlier in this same transaction".
+	//
+	// A rank is a small integer and ties keep revision order, so an applier
+	// with no hierarchy returns a constant and loses nothing.
+	Order(key string) int
 }
 
 // Documents is the coordination surface a projector reads.

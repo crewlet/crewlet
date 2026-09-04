@@ -79,6 +79,11 @@ func (a *rowApplier) Apply(ctx context.Context, tx *sql.Tx, c coord.Change) erro
 	return err
 }
 
+// Order is constant: this probe's records have no parents, which is the case
+// the contract explicitly allows — an applier with no hierarchy returns one
+// rank and loses nothing.
+func (a *rowApplier) Order(string) int { return 0 }
+
 func (a *rowApplier) Reset(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `DELETE FROM projection_probe`)
 	return err

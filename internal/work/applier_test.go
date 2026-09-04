@@ -356,3 +356,77 @@ func queryPlan(t *testing.T, db *store.DB, query string) []string {
 	}
 	return out
 }
+
+// A BOOT RECONCILE ENUMERATES KEYS IN MAP ORDER, so a comment can be reached
+// before its item. Skipping it there is PERMANENT: the projection key set
+// records the child as applied at that revision, so no later reconcile
+// re-fetches it and nothing anywhere says a thread is short.
+//
+// Measured before [work.Applier.Order] existed: a fresh node projected twelve
+// of a twenty-comment thread, differently on every run.
+func TestABootReconcileNeverDropsAThread(t *testing.T) {
+	t.Parallel()
+	docs := memory.NewFleet()
+	s, err := work.NewStore(work.Options{Documents: docs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Create(t.Context(), human("jane"),
+		work.NewItem{Project: "ENG", Type: work.TypeTask, Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const comments = 20
+	for i := range comments {
+		if _, _, err := s.Comment(t.Context(), human("jane"), got.Item.ID,
+			work.NewComment{Body: "remark"}); err != nil {
+			t.Fatalf("comment %d: %v", i, err)
+		}
+	}
+
+	// A FRESH node, so its whole projection is built by the reconcile
+	// rather than by the live watch — which is the path that has an order.
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "fresh.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	p, err := projection.New(projection.Options{
+		Documents: docs, DB: db, Applier: work.NewApplier(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() { _ = p.Run(ctx) }()
+	settle(t, func() bool { return p.Hydrated() }, "the fresh node never hydrated")
+
+	if n := rowCount(t, db, `SELECT COUNT(*) FROM work_comments`); n != comments {
+		t.Errorf("the reconcile projected %d of %d comments", n, comments)
+	}
+	if n := rowCount(t, db, `SELECT COUNT(*) FROM work_history`); n != comments+1 {
+		t.Errorf("the reconcile projected %d of %d history rows", n, comments+1)
+	}
+}
+
+// The ranks put a parent before its children, and an unknown class LAST —
+// ranking it early would make the skip depend on the order of a map.
+func TestTheApplierRanksParentsBeforeChildren(t *testing.T) {
+	t.Parallel()
+	a := work.NewApplier()
+	item := a.Order(work.ItemKey("i1"))
+	for _, child := range []string{work.CommentKey("i1", "m1"), work.ChangeKey("i1", "c1")} {
+		if a.Order(child) <= item {
+			t.Errorf("%q ranks at or before its item", child)
+		}
+	}
+	if a.Order(work.CounterKey("ENG")) >= item {
+		t.Error("the counter ranks after the item it numbers")
+	}
+	for _, foreign := range []string{"z.unknown.class", "not a key"} {
+		if a.Order(foreign) <= a.Order(work.ChangeKey("i1", "c1")) {
+			t.Errorf("a class this build has no rule for (%q) ranks before a known child", foreign)
+		}
+	}
+}

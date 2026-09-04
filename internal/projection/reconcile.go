@@ -1,10 +1,13 @@
 package projection
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -93,29 +96,49 @@ func (p *Projector) reconcile(ctx context.Context) error {
 		removed++
 	}
 
-	noisy := time.NewTicker(reconcileNoise)
-	defer noisy.Stop()
-	done := 0
+	// SORTED BY THE APPLIER'S RANK. A map range is the order this pass
+	// would otherwise take, and it puts a comment before its item often
+	// enough that a fresh node projected twelve of a twenty-comment thread
+	// — permanently, because the key set then records the skipped child as
+	// applied. See [Applier.Order].
+	pending := make([]string, 0, len(held))
 	for key, state := range held {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-noisy.C:
-			log.InfoContext(ctx, "projection_reconcile_running",
-				"family", string(p.family), "keys", len(held), "done", done,
-				"fetched", fetched, "elapsed", time.Since(started).Round(time.Second),
-				"detail", "a boot reconcile is O(keys) metadata reads; this node "+
-					"claims no seats until it finishes")
-		default:
-		}
-		done++
 		if state.purged {
 			continue
 		}
 		if prior, ok := known[key]; ok && !prior.purged && prior.revision == state.revision {
 			continue
 		}
-		if err := p.fetchAndApply(ctx, key, state.revision); err != nil {
+		pending = append(pending, key)
+	}
+	slices.SortFunc(pending, func(a, b string) int {
+		if c := cmp.Compare(p.applier.Order(a), p.applier.Order(b)); c != 0 {
+			return c
+		}
+		// Then by revision, so a re-run of the same reconcile applies in
+		// the same order — a projection that depended on map iteration
+		// would differ between two rebuilds of the same bucket.
+		if c := cmp.Compare(held[a].revision, held[b].revision); c != 0 {
+			return c
+		}
+		return strings.Compare(a, b)
+	})
+
+	noisy := time.NewTicker(reconcileNoise)
+	defer noisy.Stop()
+	for done, key := range pending {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-noisy.C:
+			log.InfoContext(ctx, "projection_reconcile_running",
+				"family", string(p.family), "keys", len(pending), "done", done,
+				"fetched", fetched, "elapsed", time.Since(started).Round(time.Second),
+				"detail", "a boot reconcile is O(keys) metadata reads; this node "+
+					"claims no seats until it finishes")
+		default:
+		}
+		if err := p.fetchAndApply(ctx, key, held[key].revision); err != nil {
 			return err
 		}
 		fetched++
@@ -262,6 +285,12 @@ func (p *Projector) applyOne(ctx context.Context, change *coord.Change) error {
 
 // applyBatch applies changes in ONE transaction and records their keys.
 //
+// SORTED BY THE APPLIER'S OWN RANK FIRST, which is what makes an apply's
+// precondition "my parent is either already here or earlier in this same
+// transaction" — see [Applier.Order] for the thread this silently truncated
+// before it existed. Ties keep revision order, so a family with no hierarchy
+// is applied exactly as it arrived.
+//
 // The cursor is NOT advanced here. It is written by the caller after the
 // commit, so a crash between the two replays the batch — which is free,
 // because an apply is idempotent by revision, where skipping it is not.
@@ -269,6 +298,13 @@ func (p *Projector) applyBatch(ctx context.Context, changes []*coord.Change) err
 	if len(changes) == 0 {
 		return nil
 	}
+	changes = slices.Clone(changes)
+	slices.SortStableFunc(changes, func(a, b *coord.Change) int {
+		if c := cmp.Compare(p.applier.Order(a.Key), p.applier.Order(b.Key)); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Revision, b.Revision)
+	})
 	return p.db.Tx(ctx, func(tx *sql.Tx) error {
 		for _, change := range changes {
 			if err := p.applier.Apply(ctx, tx, *change); err != nil {
