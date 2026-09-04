@@ -87,18 +87,22 @@ const (
 // Deliverable reports whether calling this tool could deliver something to a
 // surface outside the engine.
 //
-// SERVER-BACKED AND NOT A KNOWN READ, which is the rule the phantom-era gate
-// fell back on and the one that survived both incidents. A delivery to a
-// shared surface only ever comes from an MCP server, so a first-party builtin
-// never counts however much it writes: reflect_and_persist records a thought,
-// use_skill loads a page, and neither is an answer anybody is waiting for.
+// ONE MEMBERSHIP TEST, against a set the registry computed — see
+// [tools.Registry.Deliverables]. Two kinds of tool are in it: an MCP-served
+// tool that its own annotations do not POSITIVELY call a read (the
+// fail-closed direction, since treating unannotated as read would exempt
+// every tool a server forgot to annotate), and a first-party tool the engine
+// registered as one that reaches somebody.
 //
-// "Not a known read" is POSITIVE: a tool is exempt only when its own
-// annotations say it is read-only. An unannotated tool counts as a possible
-// delivery, which is the fail-closed direction — the alternative exempts every
-// tool a server forgot to annotate.
+// The rule this replaces was an ORIGIN test — server-backed and not a known
+// read — and it was right for as long as every shared surface belonged to
+// somebody else. It stopped being right when the tracker moved in-process:
+// commenting on a native work item reaches the person who asked, and a gate
+// keyed on origin judged that turn to have answered nobody and looped it to
+// failure. What has NOT changed is that a diary write still does not deliver:
+// the engine declares which of its own tools reach anybody, one at a time.
 func Deliverable(name string, s Surface) bool {
-	return slices.Contains(s.MCPTools, name) && !slices.Contains(s.KnownReads, name)
+	return slices.Contains(s.Deliverables, name)
 }
 
 // Delivered reports whether anything in this turn's record could have reached

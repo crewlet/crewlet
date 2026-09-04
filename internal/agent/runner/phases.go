@@ -1249,8 +1249,10 @@ func calls(s *tools.Surface) []ledger.Call {
 func describe(s *tools.Surface) turn.Surface {
 	u := s.Universe()
 	return turn.Surface{
-		Catalogue: u.Names(), MCPTools: u.MCPNames(),
-		KnownReads: u.KnownReads(), KnownOpenWorld: u.KnownOpenWorld(),
+		Catalogue:      u.Names(),
+		Deliverables:   u.Deliverables(),
+		KnownReads:     u.KnownReads(),
+		KnownOpenWorld: u.KnownOpenWorld(),
 	}
 }
 

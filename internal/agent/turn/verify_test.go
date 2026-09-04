@@ -15,9 +15,12 @@ import (
 func TestDeliverableIsServerBackedAndNotAKnownRead(t *testing.T) {
 	t.Parallel()
 	s := turn.Surface{
-		Catalogue:  []string{"slack_post", "slack_history", "reflect_and_persist", "tracker_do"},
-		MCPTools:   []string{"slack_post", "slack_history", "tracker_do"},
-		KnownReads: []string{"slack_history"},
+		Catalogue: []string{"slack_post", "slack_history", "reflect_and_persist", "tracker_do"},
+		// The registry computed this: slack_history is annotated read-only
+		// so it is absent, and reflect_and_persist is a first-party tool
+		// registered without tools.Delivers().
+		Deliverables: []string{"slack_post", "tracker_do"},
+		KnownReads:   []string{"slack_history"},
 	}
 	for name, want := range map[string]bool{
 		"slack_post":          true,  // server-backed write
@@ -36,7 +39,7 @@ func TestDeliverableIsServerBackedAndNotAKnownRead(t *testing.T) {
 // close the check on exactly the turn that needs to iterate.
 func TestDeliveredIgnoresFailedCalls(t *testing.T) {
 	t.Parallel()
-	s := turn.Surface{MCPTools: []string{"slack_post"}}
+	s := turn.Surface{Deliverables: []string{"slack_post"}}
 	if turn.Delivered([]ledger.Call{{Name: "slack_post", Failed: true}}, s) {
 		t.Error("a failed call counted as a delivery")
 	}
@@ -61,13 +64,13 @@ func TestActedCountsOnlyWhatIsPROVENToHaveLeftTheEngine(t *testing.T) {
 			"slack_post", "slack_history", "tracker_do", "submit_work",
 			"activate_tool", "reflect_and_persist", "a2a_ask", "run_sandbox",
 		},
-		MCPTools:       []string{"slack_post", "slack_history", "tracker_do"},
+		Deliverables:   []string{"slack_post", "tracker_do"},
 		KnownReads:     []string{"slack_history"},
 		KnownOpenWorld: []string{"a2a_ask", "run_sandbox"},
 	}
 	for name, want := range map[string]bool{
-		"slack_post":    true,  // a server-backed write reached a person
-		"tracker_do":    true,  // server-backed and unannotated — Deliverable's own rule
+		"slack_post":    true,  // a declared deliverable reached a person
+		"tracker_do":    true,  // declared a deliverable at registration
 		"a2a_ask":       true,  // a builtin, but it woke a colleague
 		"run_sandbox":   true,  // a builtin, but it started a billed box
 		"slack_history": false, // positively read-only
@@ -92,7 +95,7 @@ func TestActedCountsOnlyWhatIsPROVENToHaveLeftTheEngine(t *testing.T) {
 func TestActedIgnoresFailedCalls(t *testing.T) {
 	t.Parallel()
 	s := turn.Surface{
-		MCPTools:       []string{"slack_post"},
+		Deliverables:   []string{"slack_post"},
 		KnownOpenWorld: []string{"a2a_ask"},
 	}
 	if turn.Acted([]ledger.Call{{Name: "slack_post", Failed: true}}, s) {
@@ -113,7 +116,7 @@ func TestActedAndDeliveredDisagreeOnPurpose(t *testing.T) {
 	t.Parallel()
 	s := turn.Surface{
 		Catalogue:      []string{"a2a_ask", "tracker_do"},
-		MCPTools:       []string{"tracker_do"},
+		Deliverables:   []string{"tracker_do"},
 		KnownOpenWorld: []string{"a2a_ask"},
 	}
 	ask := []ledger.Call{{Name: "a2a_ask"}}
