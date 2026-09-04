@@ -54,13 +54,20 @@ type Unit struct {
 	// do not set their own.
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
 
-	// JiraProject and ConfluenceSpace are the unit's integration IDENTITY:
+	// Project and Space are the unit's tracker and knowledge IDENTITY:
 	// inbound activity with no better recipient routes to the unit lead,
 	// and this is where the team files work and writes pages. Neither is an
 	// MCP credential, and neither scopes what anyone can READ — read scope
 	// is org-wide.
-	JiraProject     string `yaml:"jira_project,omitempty" json:"jira_project,omitempty"`
-	ConfluenceSpace string `yaml:"confluence_space,omitempty" json:"confluence_space,omitempty"`
+	//
+	// VENDOR-NEUTRAL, because the identity is the company's rather than a
+	// product's: the same key names a native project and a Jira one, and a
+	// company that switches backends keeps the org chart it wrote. The
+	// fields were `jira_project` and `confluence_space`, which was the
+	// `slack_channel` mistake — a chat channel is a channel whoever hosts
+	// it — made twice.
+	Project string `yaml:"project,omitempty" json:"project,omitempty"`
+	Space   string `yaml:"space,omitempty" json:"space,omitempty"`
 
 	KnowledgeRefs []string `yaml:"knowledge_refs,omitempty" json:"knowledge_refs,omitempty"`
 

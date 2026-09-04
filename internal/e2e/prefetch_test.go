@@ -199,7 +199,7 @@ func wikiCompany(url string) func(string) string {
     token: confluence-org-token
     webhook_secret: ${CREWLET_TEST_CONFLUENCE_SECRET}
 knowledge:
-  confluence_spaces: [ENG]
+  scope: [ENG]
 roles:
 `, 1)
 	}

@@ -252,7 +252,7 @@ func TestKnowledgeSaysWhenThereIsNoBackend(t *testing.T) {
 	if gated["note"] == none["note"] {
 		t.Errorf("a wired-but-unscoped backend reports itself as no backend at all: %q", gated["note"])
 	}
-	if !strings.Contains(gated["note"].(string), "confluence_spaces") {
+	if !strings.Contains(gated["note"].(string), "knowledge.scope") {
 		t.Errorf("the gated note does not name the field to fix: %q", gated["note"])
 	}
 

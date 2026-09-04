@@ -121,9 +121,9 @@ roles:
     placement:
       node: node-2
       labels: {zone: eu}
+    project: ENGP
     integrations:
       mattermost: {bot_token: "${MM_SWE}", username: swe-bot, channel: eng}
-      jira: {project: ENGP}
     sandbox:
       enabled: true
       run_in: container
@@ -141,15 +141,15 @@ roles:
 		seat.Mattermost.Channel != "eng" {
 		t.Fatalf("mattermost = %+v", seat.Mattermost)
 	}
-	if seat.JiraProject != "ENGP" {
-		t.Fatalf("jira project = %q", seat.JiraProject)
+	if seat.Project != "ENGP" {
+		t.Fatalf("jira project = %q", seat.Project)
 	}
 	// The identity this seat did NOT author must stay empty: the two are
 	// read from separate blocks, and a seat that names one must not come
 	// out carrying the other from somewhere else.
-	if seat.ConfluenceSpace != "" {
+	if seat.Space != "" {
 		t.Fatalf("a seat that named no Confluence identity got %q",
-			seat.ConfluenceSpace)
+			seat.Space)
 	}
 	if seat.Placement.Node != "node-2" || seat.Placement.Labels["zone"] != "eu" {
 		t.Fatalf("placement = %+v", seat.Placement)
@@ -183,18 +183,18 @@ name: Acme
 roles:
   - name: Agent SWE
     handle: swe
+    project: ENG
+    space: ENGSPACE
     integrations:
       slack:
         bot_token: "${SLACK_SWE}"
         signing_secret: "${SIGN_SWE}"
         channel: C123
-      jira: {project: ENG}
-      confluence: {space: ENGSPACE}
 `)
 	seat := cfg.Roles[0].Seat()
 
-	if seat.JiraProject != "ENG" || seat.ConfluenceSpace != "ENGSPACE" {
-		t.Errorf("identities = %q %q", seat.JiraProject, seat.ConfluenceSpace)
+	if seat.Project != "ENG" || seat.Space != "ENGSPACE" {
+		t.Errorf("identities = %q %q", seat.Project, seat.Space)
 	}
 
 	if seat.Slack.BotToken != "${SLACK_SWE}" || seat.Slack.SigningSecret != "${SIGN_SWE}" ||

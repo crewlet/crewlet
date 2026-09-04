@@ -69,7 +69,8 @@ integrations:
     email: bot@example.com
     token: "${CONFLUENCE_TOKEN}"
     webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"
-    skills_space: ` + skillsSpace + `
+knowledge:
+  skills_container: ` + skillsSpace + `
 roles:
   - name: SWE
     handle: swe

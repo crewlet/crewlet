@@ -209,7 +209,7 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	// is configured" here would go and check the integration they already
 	// configured correctly, instead of the empty field that is the cause.
 	if !searcher.CanSearch(nil, organization) {
-		return unavailable(KnowledgeNoScope, "the "+searcher.Backend()+" backend is configured but knowledge.confluence_spaces lists no space, so an org-wide search has nothing to read")
+		return unavailable(KnowledgeNoScope, "the "+searcher.Backend()+" backend is configured but knowledge.scope lists no container, so an org-wide search has nothing to read")
 	}
 	if text == "" {
 		return out, nil

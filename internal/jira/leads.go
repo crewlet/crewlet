@@ -12,8 +12,8 @@ import (
 // vocabulary.
 func LeadsFrom(o *org.Organization) map[string]string {
 	leads, report := o.LeadsBy(org.Scope{
-		OfUnit: func(u *org.Unit) string { return u.JiraProject },
-		OfRole: func(r *org.Role) string { return r.JiraProject },
+		OfUnit: func(u *org.Unit) string { return u.Project },
+		OfRole: func(r *org.Role) string { return r.Project },
 	})
 	for _, unled := range report.Unled {
 		// A unit that owns a project and has nobody leading it. LOUD,

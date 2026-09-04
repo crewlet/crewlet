@@ -38,6 +38,7 @@ units:
           atlassian_account_id: 5b10ac8d-...   # one ID covers Jira + Confluence
           github_login: sarahchen
           gitlab_username: sarahchen
+          crewlet_operator_id: sarah            # her api.auth.tokens[] id (Tier A)
         availability: "CET business hours; replies within ~4h"
       - name: Engineer            # AI agent, unchanged
         goal: "Implement features and ship quality code"
@@ -53,6 +54,7 @@ units:
 | `contact.atlassian_account_id` | one identity | Atlassian Cloud account ID — Jira assignments, Confluence `<ri:user>` mentions, webhook sender attribution |
 | `contact.github_login` | one identity | GitHub username — review requests, sender attribution |
 | `contact.gitlab_username` | one identity | GitLab username — assignment / review / mention routing + sender attribution |
+| `contact.crewlet_operator_id` | one identity | One of Tier A's `api.auth.tokens[].id`. Binds that credential to this seat, so a person writing through the dashboard, the REST API or the operator tool server acts as **themselves** — the item they file carries their name and wakes their colleagues. An **attribution, never an address**: the engine never sends as itself, so this id is left out of rosters and `lookup_colleague`, and a seat carrying only this one is reached through their dashboard queue rather than by an @-mention. Leaving a token unbound is ordinary — an operator outside the org chart, a pipeline — and it acts as `operator:<id>` under its own label rather than being refused |
 | `email` | no | Informational only — rendered in `lookup_colleague`; **not** a delivery channel (no agent has an email tool by default) |
 | `availability` | no | Free text rendered into rosters and `lookup_colleague` results (timezone, hours, response expectations) |
 
@@ -60,6 +62,19 @@ A human seat needs **at least one `contact` identity** — that is how
 agents mention and reach them, and how inbound webhooks attribute their
 activity by name. A seat with no contact would be inert (visible in the
 chart but unreachable), so it's rejected at validation.
+
+`crewlet_operator_id` satisfies that requirement on its own, and the seat is
+still reachable: their queue is the dashboard, not a chat mention. The roster
+an agent reads says so explicitly rather than telling it to @-mention somebody
+it cannot — a message addressed to a handle that resolves to nobody reads to
+everyone else as work handed over.
+
+**The binding is written on the seat, not on the token.** Tier A is the root of
+trust and may never read Tier B — it holds the keys to the secret store — so a
+`seat:` field on an `api.auth.tokens[]` entry would have the trusted tier
+depending on the untrusted one. Naming the token id from the company document
+inverts that: Tier A keeps a bare list of credentials, and the org chart says
+which of them is a person.
 
 Every `contact` field accepts either a literal ID or exactly one
 whole-value `${VAR}` environment reference — e.g.
