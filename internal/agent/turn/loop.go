@@ -91,18 +91,19 @@ type Review struct {
 type Surface struct {
 	// Catalogue is every tool name the phase could reach.
 	Catalogue []string
-	// MCPTools is every tool backed by an MCP server.
-	MCPTools []string
+	// Deliverables is every tool whose successful call could reach
+	// somebody outside this turn — see [Deliverable].
+	Deliverables []string
 	// KnownReads is every tool POSITIVELY annotated read-only.
 	KnownReads []string
 	// KnownOpenWorld is every tool POSITIVELY annotated open-world — one
 	// whose own annotations say it reaches outside this process.
 	//
-	// Separate from MCPTools because the two answer different halves of the
-	// same question and neither contains the other: a company's MCP servers
-	// are where nearly every outward write goes, and `a2a_ask` and
-	// `run_sandbox` are FIRST-PARTY tools that leave the process just as
-	// surely — one wakes a colleague, the other starts a billed box.
+	// Separate from Deliverables because the two answer different halves of
+	// the same question and neither contains the other: a deliverable is a
+	// tool whose call reaches somebody WAITING on this turn, and `a2a_ask`
+	// and `run_sandbox` leave the process without answering anybody — one
+	// wakes a colleague, the other starts a billed box.
 	KnownOpenWorld []string
 }
 

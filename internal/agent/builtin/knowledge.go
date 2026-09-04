@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -107,9 +108,12 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed("search_knowledge needs a `query`: a few keywords describing " +
 			"what you are looking for."), nil
 	}
-	if len(query) > searchQueryMax {
-		query = query[:searchQueryMax]
-	}
+	// textcut, not a byte slice: a plain query[:n] splits whatever
+	// multi-byte rune straddles the cut, and the invalid UTF-8 that
+	// produces is substituted by the JSON encoder, read by a backend as a
+	// replacement character, and rejected outright by some. The cap is
+	// bytes because that is what a backend's own limit is measured in.
+	query = textcut.Bytes(query, searchQueryMax)
 	if turn == nil || turn.Org == nil {
 		return failed("No organization is in scope, so there is no knowledge base to search."), nil
 	}
