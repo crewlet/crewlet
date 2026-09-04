@@ -91,7 +91,7 @@ const (
 // FleetConfig is what a [FleetStore] needs at construction. Every duration is
 // a BUCKET's retention; see the file doc for why each is its own bucket.
 type FleetConfig struct {
-	// BucketPrefix names the eleven buckets. Empty means "crewlet", matching
+	// BucketPrefix names every bucket. Empty means "crewlet", matching
 	// the lease store — two companies on one NATS account are separated by
 	// giving them different prefixes.
 	BucketPrefix string

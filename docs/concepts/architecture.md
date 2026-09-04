@@ -486,7 +486,7 @@ question: **who has to agree on it?**
 flowchart LR
     Q{"Who has to agree<br/>on this fact?"}
     LOCAL["<b>This node alone</b> — the store<br/><i>one file, one process, exclusively owned</i>"]
-    FLEET["<b>The whole company</b> — coordination KV<br/><i>thirteen buckets on the stream's own connection</i>"]
+    FLEET["<b>The whole company</b> — coordination KV<br/><i>sixteen buckets on the stream's own connection</i>"]
     STREAM["<b>In flight, or keyed</b> — the event stream<br/><i>6 streams</i>"]
 
     Q -->|"nobody — it is this node's<br/>own record of what it did"| LOCAL
@@ -505,6 +505,9 @@ What each of the three holds, in full:
 | **`synthesized_skills`** · `synthesized_skill_versions` · `counterparty_profiles` · `agent_onboarding_markers` | The rest of the learning subsystem — skill induction and its versions, counterparty profiles, first-turn onboarding markers |
 | **`conversation_sessions`** | What this seat already said in that thread |
 | `company_config` · `scheduled_runs` · `chat_thread_follows` · `secret_values` | Revisions, cron bookkeeping, thread follows, and the secret store's bootstrap half |
+| `work_items` · `work_comments` · `work_history` · `pages` · `page_revisions` · … | **The projection — a REBUILDABLE COPY, never authoritative.** The record of truth is the coordination buckets below; these tables exist because a board asks for every open item in a project, filtered and sorted, and a listing over a KV bucket is O(keys) message deliveries. Truncating them and re-running the boot reconcile is a supported repair, and a write that coordination did not see is one the next reconcile silently erases |
+| `kb_docs` · `kb_postings` · `kb_vectors` | The knowledge search index over those rows, built asynchronously behind them and droppable wholesale when the analyzer or the embedding width changes |
+| `projection_keys` · `projection_cursor` | How far each family has been applied here, and which keys — the two halves of the boot reconcile |
 
 **The whole company — coordination KV.**
 
@@ -517,6 +520,8 @@ What each of the three holds, in full:
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |
 | **`crewlet_budgets`** · `crewlet_rate` · `crewlet_cooldowns` | The token counter, the notification valve, benched credentials |
 | **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
+| **`crewlet_work`** · **`crewlet_pages`** | **The native tracker and knowledge base — authoritative, with no other copy.** Ageless: an item is a fact for the life of the deployment, and removing one is a decision a sweep takes rather than a horizon that reaps it while a person is still reading it |
+| `crewlet_kb_vectors` | Page and item embeddings, keyed on the source's version. **Derived** — dropped and rebuilt wholesale when the embedding provider or its width changes, which is a thing you must never do to the pages themselves |
 
 **In flight, or keyed — the event stream.**
 
