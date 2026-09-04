@@ -193,10 +193,11 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	// A nil searcher is the ANSWER, not a reason to be unregistered: exactly
 	// one backend serves a company, chosen by which integration is
 	// configured, so "none is" is a fact the company establishes on its own.
-	if s.Knowledge == nil {
+	searcher := s.searcher()
+	if searcher == nil {
 		return unavailable(KnowledgeNoBackend, "no knowledge backend is configured for this company")
 	}
-	out["backend"] = s.Knowledge.Backend()
+	out["backend"] = searcher.Backend()
 	// The seam's own pre-gate, and it is free: it answers "could this search
 	// possibly hit anything" with no I/O, which is exactly what a screen with
 	// no results needs in order to say WHY.
@@ -207,13 +208,13 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	// to whether a read scope was declared — and an operator told "no backend
 	// is configured" here would go and check the integration they already
 	// configured correctly, instead of the empty field that is the cause.
-	if !s.Knowledge.CanSearch(nil, organization) {
-		return unavailable(KnowledgeNoScope, "the "+s.Knowledge.Backend()+" backend is configured but knowledge.confluence_spaces lists no space, so an org-wide search has nothing to read")
+	if !searcher.CanSearch(nil, organization) {
+		return unavailable(KnowledgeNoScope, "the "+searcher.Backend()+" backend is configured but knowledge.confluence_spaces lists no space, so an org-wide search has nothing to read")
 	}
 	if text == "" {
 		return out, nil
 	}
-	hits := s.Knowledge.Search(ctx, knowledge.Query{
+	hits := searcher.Search(ctx, knowledge.Query{
 		Text:  text,
 		Org:   organization,
 		Limit: KnowledgeHitLimit,
@@ -352,4 +353,14 @@ func skillRow(sk learning.Skill) map[string]any {
 		"updated_at": isoOrEmpty(sk.UpdatedAt),
 		"uses":       sk.UseCount,
 	}
+}
+
+// searcher resolves the knowledge backend for this call.
+//
+// Per call rather than per process: see [Sources.Knowledge].
+func (s Sources) searcher() knowledge.Searcher {
+	if s.Knowledge == nil {
+		return nil
+	}
+	return s.Knowledge()
 }
