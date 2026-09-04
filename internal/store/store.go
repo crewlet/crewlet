@@ -55,6 +55,8 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"math/rand/v2"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -406,6 +408,94 @@ func (c *connector) Driver() driver.Driver { return c.drv }
 // is what the caller needs, and replacing it with "rollback failed" would hide
 // the reason the rollback was necessary.
 func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
+	// A CONFLICTED TRANSACTION IS RETRIED, and fn may therefore run more
+	// than once. That is safe by construction: the driver reports the
+	// conflict on a statement inside the transaction, everything the
+	// attempt wrote is rolled back before the next one begins, and fn sees
+	// a fresh snapshot each time. A caller whose fn has side effects
+	// OUTSIDE the transaction — a publish, a counter in memory — must make
+	// them idempotent or move them out, which is what a transaction body
+	// should be anyway.
+	//
+	// The driver's BeginTx ignores its options and always issues a plain
+	// BEGIN, so a read-then-write that loses a race does not wait out a
+	// busy timeout: it fails IMMEDIATELY with "database snapshot is
+	// stale". Without a retry that error reaches the caller as a lost
+	// write on a database with no other writer than this process, which is
+	// how a conversation entry, a memory row or a config revision went
+	// missing under nothing more than two goroutines. internal/learning
+	// carried a private copy of this loop for one of its twelve callers;
+	// the other eleven had none.
+	for attempt := 0; ; attempt++ {
+		err = d.tx(ctx, fn)
+		if err == nil || attempt+1 >= txAttempts || !staleSnapshot(err) {
+			return err
+		}
+		log.WarnContext(ctx, "store_tx_retry", "attempt", attempt+1, "error", err.Error(),
+			"detail", "the transaction read a snapshot another writer had already "+
+				"advanced past; retrying on a fresh one")
+		sleepFor(ctx, txRetryBeat(attempt))
+	}
+}
+
+// txAttempts is how many times a conflicted transaction is retried.
+//
+// Eight, and the number is measured rather than chosen: four goroutines each
+// incrementing one row twelve times — the sharpest contention this store
+// sees, since every one of them reads and writes the SAME row — still lost an
+// update at three attempts even with a jittered pause. What fails at a budget
+// this size is contention no retry loop should absorb silently anyway, and
+// the caller gets the error rather than a lost write.
+const txAttempts = 8
+
+// txRetryBeat is the jittered, WIDENING pause between attempts.
+//
+// Two properties, and both were paid for. Jittered because the conflict
+// returns with no wait of its own, so retries fired back to back re-collide
+// inside the same contention window and spend the whole budget in a few
+// microseconds. Widening because with a fixed window every loser of one round
+// is a contender in the next at the same density: the window has to grow with
+// the number of writers still fighting over the row, and the attempt count is
+// the only estimate of that available here.
+//
+// The base is sized to what is being waited out — one local write transaction
+// committing, which is microseconds — so even the last attempt's ceiling is a
+// pause a caller never notices.
+func txRetryBeat(attempt int) time.Duration {
+	const base = 1_000 // microseconds
+	spread := base << min(attempt, 5)
+	return time.Duration(base+rand.N(spread)) * time.Microsecond
+}
+
+// staleSnapshot reports whether an error is the driver's read-then-write
+// conflict.
+//
+// MATCHED ON TEXT, deliberately and with a comment saying so: the driver
+// returns a bare error for this with no sentinel and no code to compare
+// against, so the alternative to a string match is no retry at all. Kept
+// narrow — two spellings, both of which are the driver's own — so an
+// unrelated failure is never retried into a second side effect.
+func staleSnapshot(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "snapshot is stale") ||
+		strings.Contains(msg, "database is locked")
+}
+
+// sleepFor waits, or returns early if the context is done.
+func sleepFor(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
+}
+
+// tx runs one attempt.
+func (d *DB) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
