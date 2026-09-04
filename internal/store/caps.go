@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 )
 
 // Capabilities records what the live driver can actually do, measured at Open
@@ -87,33 +88,83 @@ func probeVectorFunctions(ctx context.Context, db *sql.DB) bool {
 	return err == nil
 }
 
-// probeVectorIndex tries to build an ANN index. The index expression is the
-// part Turso's parser rejects today, so creating one is the only honest test —
-// the column type and the distance functions are already present and prove
+// probeVectorIndex tries to build an ANN index. The index METHOD is the part
+// Turso's parser rejects today, so creating one is the only honest test — the
+// column type and the distance functions are already present and prove
 // nothing about it.
+//
+// TURSO'S GRAMMAR, not libSQL's. The probe this replaces asked for
+// `libsql_vector_idx(e)`, which is a function of the C fork and a parse error
+// here whatever the driver ever ships — so it could only ever answer false,
+// and a tripwire that cannot fire is a claim rather than a measurement. Both
+// spellings Turso could plausibly land are tried.
 func probeVectorIndex(ctx context.Context, db *sql.DB) bool {
-	return probeInRollback(ctx, db, []string{
-		`CREATE TABLE crewlet_probe_vec (id TEXT PRIMARY KEY, e F32_BLOB(4))`,
-		`CREATE INDEX crewlet_probe_vec_idx ON crewlet_probe_vec (libsql_vector_idx(e))`,
-	})
+	for _, method := range []string{"vector", "diskann"} {
+		if probeInRollback(ctx, db, []string{
+			`CREATE TABLE crewlet_probe_vec (id TEXT PRIMARY KEY, e F32_BLOB(4))`,
+			`CREATE INDEX crewlet_probe_vec_idx ON crewlet_probe_vec USING ` +
+				method + ` (e)`,
+		}) {
+			return true
+		}
+	}
+	return false
 }
 
 // probeFullText accepts either mechanism, because the capability the engine
 // would eventually use is "a full-text index exists", not "this exact syntax
 // parses". The fts5 arm is not dead code for a single driver: it is the shape
-// Turso would most plausibly land, and a probe that only asked for the
-// syntax this driver rejects today could report a capability it has as
-// missing.
+// a SQLite-compatible engine would most plausibly land, and a probe that only
+// asked for the syntax this driver rejects today could report a capability it
+// has as missing.
+//
+// THE SECOND ARM IS TURSO'S OWN GRAMMAR — `CREATE INDEX … USING fts (col)`,
+// gated behind the experimental `index_method` feature. The probe it replaces
+// wrote `(fts(body))` as an index EXPRESSION, which Turso has never accepted
+// in any build, so the arm meant to catch the feature landing could not have
+// caught it.
+//
+// A failure naming the experimental GATE rather than the module is a
+// misconfigured probe, not an absent capability: the driver accepts a
+// misspelled experimental name silently, so a probe that ran without the flag
+// would report false forever and nobody would know the difference. It is
+// therefore logged loudly and still answers false — the tripwire's job is to
+// notice the day the answer changes, and an answer nobody can trust is worse
+// than a false one.
 func probeFullText(ctx context.Context, db *sql.DB) bool {
 	if probeInRollback(ctx, db, []string{
 		`CREATE VIRTUAL TABLE crewlet_probe_fts USING fts5(body)`,
 	}) {
 		return true
 	}
-	return probeInRollback(ctx, db, []string{
+	ok, err := probeReporting(ctx, db, []string{
 		`CREATE TABLE crewlet_probe_txt (body TEXT NOT NULL)`,
-		`CREATE INDEX crewlet_probe_txt_idx ON crewlet_probe_txt (fts(body))`,
+		`CREATE INDEX crewlet_probe_txt_idx ON crewlet_probe_txt USING fts (body)`,
 	})
+	if err != nil && strings.Contains(err.Error(), "experimental feature") {
+		log.Warn("store_fts_probe_gated", "error", err.Error(),
+			"detail", "the driver recognises the fts index method but refuses it "+
+				"without its experimental flag; full-text search is reported "+
+				"absent and this probe is measuring the gate rather than the "+
+				"feature")
+	}
+	return ok
+}
+
+// probeReporting is probeInRollback with the failure kept, for a probe whose
+// ERROR distinguishes "the feature is absent" from "this probe asked wrong".
+func probeReporting(ctx context.Context, db *sql.DB, stmts []string) (bool, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, stmt := range stmts {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 // probeInRollback runs statements in a transaction that is always rolled back,
