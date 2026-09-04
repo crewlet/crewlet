@@ -740,6 +740,7 @@ type Fleet interface {
 	Fires
 	SandboxRuns
 	Secrets
+	Documents
 }
 
 // SortUsage puts the org counter first, then the seats by scope.

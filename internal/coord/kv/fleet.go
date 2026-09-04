@@ -182,13 +182,19 @@ type FleetStore struct {
 	fires     jetstream.KeyValue
 	runs      jetstream.KeyValue
 
+	// The document families. Ageless, and each its own bucket — see
+	// documents.go for why the split is by family rather than by class.
+	work      jetstream.KeyValue
+	pages     jetstream.KeyValue
+	kbVectors jetstream.KeyValue
+
 	rateWindow time.Duration
 	freshness  time.Duration
 }
 
 var _ coord.Fleet = (*FleetStore)(nil)
 
-// OpenFleet creates or adopts the eleven buckets and returns the backend.
+// OpenFleet creates or adopts the fourteen buckets and returns the backend.
 //
 // Idempotent and safe to call from every node at once, like [Open]: creating
 // a bucket that already exists with the same shape is a no-op, and a changed
@@ -251,6 +257,12 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0},
 		{&store.secrets, secretsSuffix,
 			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0},
+		{&store.work, workSuffix,
+			"Crewlet work items, comments and changes; NO TTL — an item is the company's own record", 0},
+		{&store.pages, pagesSuffix,
+			"Crewlet knowledge-base pages and revisions; NO TTL — a page is the company's own record", 0},
+		{&store.kbVectors, kbVectorsSuffix,
+			"Crewlet knowledge embeddings; NO TTL — derived, and dropped wholesale when the width changes", 0},
 	} {
 		got, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {
