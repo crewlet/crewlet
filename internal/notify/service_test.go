@@ -666,33 +666,6 @@ func TestTheServiceNeedsItsHalves(t *testing.T) {
 	}
 }
 
-func TestDelegationMetadataIsSafeParsed(t *testing.T) {
-	depth, parent, chain := notify.DelegationOf(map[string]string{
-		"delegation_depth": "2", "parent_turn_id": "t-1",
-		"delegation_chain": `["a","b"]`,
-	})
-	if depth != 2 || parent != "t-1" || strings.Join(chain, ",") != "a,b" {
-		t.Fatalf("DelegationOf = %d, %q, %v", depth, parent, chain)
-	}
-
-	// Webhook metadata is a string of arbitrary shape. A malformed field
-	// falls back rather than aborting a notification that is otherwise
-	// perfectly routable.
-	depth, _, chain = notify.DelegationOf(map[string]string{
-		"delegation_depth": "not a number", "delegation_chain": "{not json}",
-	})
-	if depth != 0 || chain != nil {
-		t.Fatalf("malformed metadata produced %d, %v", depth, chain)
-	}
-
-	// Falsy-but-valid entries SURVIVE: a producer encoding numeric ids
-	// must not lose a 0 to a truthiness filter.
-	_, _, chain = notify.DelegationOf(map[string]string{"delegation_chain": `[0,"",null,"z"]`})
-	if strings.Join(chain, ",") != "0,z" {
-		t.Fatalf("chain = %v, want the 0 kept and the empties dropped", chain)
-	}
-}
-
 // The resolved handle is the one fact about a notification a parser cannot
 // know — which seat an account id or an email belongs to is answered by the
 // org, not by the payload — so the service stamps it after the cascade.

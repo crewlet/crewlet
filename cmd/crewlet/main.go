@@ -945,7 +945,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// seat's Plan phase searches through — nil when none is
 			// configured, which leaves the question unregistered rather
 			// than answering an empty search as though it had run.
-			Knowledge: e.Knowledge(),
+			//
+			// RESOLVED PER CALL. An apply rebuilds the searcher, so a
+			// value read once here would search with a rotated
+			// credential's predecessor, against a retired wiki, or
+			// answer "no backend" forever for a company whose backend
+			// came up after this line ran.
+			Knowledge: e.Knowledge,
 			Config:    configSurface,
 			Budget:    e.Backends().Fleet,
 			// The DURABLE record of detached coding runs. Read rather

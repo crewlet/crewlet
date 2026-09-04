@@ -89,11 +89,20 @@ type Sources struct {
 		OpenChannels(ctx context.Context) ([]coord.Channel, error)
 	}
 
-	// Knowledge is the company's ONE knowledge backend, behind the same
-	// seam a seat's Plan phase searches through — so an operator asking
-	// "what would an agent find" gets the answer an agent would get,
-	// rather than one from an index somebody has to keep fresh.
-	Knowledge knowledge.Searcher
+	// Knowledge resolves the company's ONE knowledge backend, behind the
+	// same seam a seat's Plan phase searches through — so an operator
+	// asking "what would an agent find" gets the answer an agent would
+	// get, rather than one from an index somebody has to keep fresh.
+	//
+	// A FUNCTION, not a value, for the reason [Sources.Company] is one: an
+	// apply REPLACES the searcher. A credential rotation, a retired
+	// integration block, a knowledge backend repaired after a failed boot
+	// — each rebuilds it, and a value captured when the API was assembled
+	// keeps searching with the credential that was revoked, against the
+	// wiki that was removed, or answers "no backend" forever for a company
+	// that has had one since its second minute. Nil, and a nil answer from
+	// it, both mean the same thing and leave the question unregistered.
+	Knowledge func() knowledge.Searcher
 
 	// Budget is the DURABLE token counter — what the engine actually
 	// enforces against, across every node and every restart. Nil answers

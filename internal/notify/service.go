@@ -2,12 +2,10 @@ package notify
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
@@ -563,44 +561,4 @@ func (s *Service) skip(ctx context.Context, source, handle, reason string) {
 		log.WarnContext(ctx, "notification_skip_unrecorded", "source", source,
 			"handle", handle, "reason", reason, "error", err.Error())
 	}
-}
-
-// DelegationOf reads the delegation bookkeeping a producer put on a
-// notification's metadata, so the woken seat's turn engine can enforce the
-// depth cap.
-//
-// Most webhooks set none of it. What is present comes from an in-process
-// event or a producer carrying it across a webhook boundary, where metadata
-// values are strings of arbitrary shape — so every field is safe-parsed and
-// falls back to a default rather than aborting a notification that is
-// otherwise perfectly routable.
-func DelegationOf(m map[string]string) (depth int, parent string, chain []string) {
-	if raw := m["delegation_depth"]; raw != "" {
-		n, err := strconv.Atoi(raw)
-		if err != nil {
-			log.Warn("delegation_depth_unparsed", "raw", raw)
-		} else if n > 0 {
-			depth = n
-		}
-	}
-	parent = m["parent_turn_id"]
-	if raw := m["delegation_chain"]; raw != "" {
-		var parsed []any
-		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-			log.Warn("delegation_chain_unparsed", "raw", raw)
-		} else {
-			for _, v := range parsed {
-				// Drop nil and empty, but KEEP falsy-but-valid
-				// values: a producer encoding numeric ids must
-				// not lose a 0 to a truthiness filter.
-				if v == nil {
-					continue
-				}
-				if s := fmt.Sprint(v); s != "" {
-					chain = append(chain, s)
-				}
-			}
-		}
-	}
-	return depth, parent, chain
 }
