@@ -244,8 +244,11 @@ func decodeKnown(node *yaml.Node, out any) error {
 // there, sending its author to edit a file they are not in. An unknown key
 // somewhere that never had one is an ordinary typo and has to read like one.
 func retiredFor(out any) map[string]string {
-	if _, isBootstrap := out.(*Bootstrap); isBootstrap {
+	switch out.(type) {
+	case *Bootstrap:
 		return retiredBootstrapFields
+	case *Company:
+		return retiredCompanyFields
 	}
 	return nil
 }
@@ -301,6 +304,40 @@ var retiredBootstrapFields = map[string]string{
 		"that selected it are both gone. Delete the line; the file it names " +
 		"opens unchanged either way, because both drivers wrote the same " +
 		"SQLite file format",
+}
+
+// retiredCompanyFields are TIER B keys this build no longer accepts, on the
+// same terms as [retiredBootstrapFields]: every entry is a name that shipped
+// in the example company or the quickstart, and every entry is permanent.
+//
+// These are the keys the tracker and knowledge backends took over. The
+// company document gained a choice it never had — the engine now HOLDS work
+// items and pages rather than only reading somebody else's — and the identity
+// keys that named a Jira project and a Confluence space became vendor-neutral
+// in the same move, because a unit's project is the company's fact and not a
+// product's.
+var retiredCompanyFields = map[string]string{
+	"Knowledge.confluence_spaces": "`knowledge.confluence_spaces` is now " +
+		"`knowledge.scope`, and it scopes whichever knowledge base the " +
+		"company runs rather than Confluence specifically. The values are " +
+		"unchanged — rename the key",
+	"Unit.integrations": "a unit's `integrations:` block is retired. Its two " +
+		"identities are now direct keys on the unit: write `project: ENG` " +
+		"where you wrote `integrations.jira.project`, and `space: ENG` where " +
+		"you wrote `integrations.confluence.space`. They name whichever " +
+		"tracker and knowledge base the company runs, so the org chart no " +
+		"longer changes when the backend does",
+	"RoleIntegrations.jira": "`integrations.jira.project` on a seat is now the " +
+		"seat's own `project:` key, one level up beside `handle:`. It names " +
+		"whichever tracker the company runs",
+	"RoleIntegrations.confluence": "`integrations.confluence.space` on a seat " +
+		"is now the seat's own `space:` key, one level up beside `handle:`. " +
+		"It names whichever knowledge base the company runs",
+	"Confluence.skills_space": "`integrations.confluence.skills_space` is now " +
+		"`knowledge.skills_container`, because tool skills live in whichever " +
+		"knowledge base the company runs. It is still three-valued: absent " +
+		"takes the reserved default, a name takes that container, and an " +
+		"explicit \"\" turns tool skills off",
 }
 
 // decodeError translates yaml's decode failures into this package's

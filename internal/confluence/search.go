@@ -206,5 +206,5 @@ func scopeOf(o *org.Organization) []string {
 	if o == nil {
 		return nil
 	}
-	return knowledge.Scope(o.ConfluenceSpaces)
+	return knowledge.Scope(o.KnowledgeScope)
 }

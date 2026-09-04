@@ -124,8 +124,15 @@ api:
   # the others set port 0 so only one process binds it (see
   # docs/guides/deployment.md).
   port: 80
+
   auth:
     tokens:
+      # The id is what a write's audit row records, and what a human seat
+      # binds to with ``contact.crewlet_operator_id`` — so a person acting
+      # through the dashboard acts as themselves rather than as a token.
+      # An UNBOUND token is ordinary: an operator outside the org chart, a
+      # pipeline, an automation.  It acts as ``operator:<id>`` under this
+      # label and is never refused for it.
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
 

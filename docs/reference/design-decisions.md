@@ -207,7 +207,7 @@ rather than a backend client, and the promotion writer an interface — both
 subsystems stay ignorant of which product answered.
 
 What validation still refuses is a read scope naming a backend the config does
-not configure: `knowledge.confluence_spaces` with no `integrations.confluence`
+not configure: `knowledge.scope` with no `integrations.confluence`
 reads as a working narrowing and narrows nothing. See
 [Knowledge System](../concepts/knowledge-system.md).
 
