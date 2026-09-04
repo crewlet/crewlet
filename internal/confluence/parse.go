@@ -421,7 +421,19 @@ func (p *Parser) leadCopy(base notify.Inbound, space, actor string, reg *notify.
 // base assembles the notification every recipient's copy is made from.
 func (p *Parser) base(body, page, comment map[string]any, event, space string) (notify.Inbound, bool) {
 	title := firstOf(str(page, "title"), str(comment, "title"))
-	pageID := str(page, "id")
+	// THE COMMENT'S OWN CONTAINER IS THE SECOND PLACE THE PAGE IS NAMED.
+	//
+	// Both inbound shapes tolerate a comment payload that carries no
+	// top-level `page` — the Forge relay only lifts a container it was given,
+	// and Parse itself accepts comment-without-page — and the page id is the
+	// whole conversation key here. Reading only the top-level object left
+	// such a comment with no key at all, so it fell back to its own event id
+	// and coalesced with nothing: three comments on one page while the seat
+	// was busy ran three turns, which is precisely the case this key exists
+	// to collapse. The container is the same object the relay would have
+	// lifted, so this reads the page from where it actually is rather than
+	// depending on whether an upstream copied it.
+	pageID := firstOf(str(page, "id"), str(container(comment), "id"))
 	if title == "" && pageID == "" {
 		return notify.Inbound{}, false
 	}
@@ -559,6 +571,20 @@ func LeadsFrom(o *org.Organization) map[string]string {
 			"candidates", conflict.Candidates)
 	}
 	return leads
+}
+
+// container is a comment's parent object, where a payload states one.
+func container(comment map[string]any) map[string]any {
+	if c, ok := comment["container"].(map[string]any); ok {
+		return c
+	}
+	// Some shapes name it `parent` instead; both are the page the comment
+	// hangs off, and which one arrives is the relay's choice, not a fact
+	// about the comment.
+	if c, ok := comment["parent"].(map[string]any); ok {
+		return c
+	}
+	return nil
 }
 
 func str(m map[string]any, key string) string {

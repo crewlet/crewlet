@@ -654,6 +654,42 @@ func TestThePageIsTheConversation(t *testing.T) {
 	}
 }
 
+// AND A COMMENT NAMES ITS PAGE THROUGH ITS CONTAINER.
+//
+// Both inbound shapes tolerate a comment payload with no top-level `page` —
+// the Forge relay only lifts a container it was given, and Parse itself
+// accepts comment-without-page. The page id is the whole conversation key
+// here, so reading it from the top-level object alone left such a comment
+// with no key: it fell back to its own event id and coalesced with nothing,
+// and three comments on one page while the seat was busy ran three turns.
+func TestACommentWithNoTopLevelPageStillNamesItsPage(t *testing.T) {
+	t.Parallel()
+	body := map[string]any{
+		"event": "comment_created",
+		"user":  map[string]any{"accountId": acctWriter, "displayName": "Ana"},
+		"comment": map[string]any{
+			"id":    "5001",
+			"title": "Re: Deploy runbook",
+			"space": map[string]any{"key": "ENG"},
+			"body":  map[string]any{"storage": map[string]any{"value": "<p>looks right</p>"}},
+			"container": map[string]any{
+				"id": "1001", "title": "Deploy runbook",
+			},
+		},
+	}
+	got := route(t, parser(t, nil), types.RawWebhook{Body: body})
+	if len(got) == 0 {
+		t.Fatal("a comment with no top-level page routed nowhere")
+	}
+	if id := got[0].Metadata["page_id"]; id != "1001" {
+		t.Fatalf("page_id = %q, want the container's — an empty one keys the "+
+			"comment on its own event id and coalesces with nothing", id)
+	}
+	if key := (confluence.Prompt{}).ConversationKey(got[0].Metadata, ""); key != "1001" {
+		t.Fatalf("conversation key = %q", key)
+	}
+}
+
 // A PAGE SNAPSHOT COLLAPSES IN A DIGEST and a comment does not: five saves
 // is the same page five times, where five comments are five things somebody
 // said.
