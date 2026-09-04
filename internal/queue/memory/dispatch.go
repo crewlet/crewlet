@@ -179,17 +179,26 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 
 	for i, part := range parts {
 		b.mu.Lock()
-		if m.client != nil && m.client.isQuiescedLocked(m.key) {
-			// Quiesced — by an earlier partition in this very batch, or
-			// between batches. Stop dispatching and put the rest back for
-			// whoever attaches next. A real broker checks exactly here,
-			// and the twin not doing so was worse than a missing guard:
-			// after one partition deferred, the loop went on invoking the
-			// handler for partitions 2..N on a seat this node had just
-			// been told it does not own, and each deferral pushed its
-			// partition to the front — so the mailbox came back in
-			// REVERSE partition order, which is precisely the reordering
-			// a deferral exists to prevent.
+		if !deliverableLocked(m) {
+			// BLOCKED — by an earlier partition in this very batch, or by
+			// something that landed between them. Stop dispatching and put
+			// the rest back for whoever attaches next. A real broker checks
+			// exactly here, and the twin not doing so was worse than a
+			// missing guard: after one partition deferred, the loop went on
+			// invoking the handler for partitions 2..N on a seat this node
+			// had just been told it does not own, and each deferral pushed
+			// its partition to the front — so the mailbox came back in
+			// REVERSE partition order, which is precisely the reordering a
+			// deferral exists to prevent.
+			//
+			// THE SAME PREDICATE THE PRE-DRAIN GATE USES, because they ask
+			// the same question a moment apart. This asked only about the
+			// quiesce flag, which is the one condition a deferral happens to
+			// set — so a PauseTopic hold, a PauseDelivery or a Detach taken
+			// mid-drain stopped the JetStream backend (which guards on
+			// attachment.blocked(), all four conditions) and did not stop
+			// the twin, and a test written against the twin certified a
+			// behaviour production does not have.
 			b.restoreLocked(sub, parts[i:], inChunk)
 			b.mu.Unlock()
 			return

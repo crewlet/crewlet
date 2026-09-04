@@ -435,3 +435,78 @@ func selfSignedPEM(t *testing.T) (certPEM, keyPEM []byte) {
 	})
 	return certPEM, keyPEM
 }
+
+// THE LINGER WINDOW IS FIXED, NOT SLIDING.
+//
+// The drain used to end only on a fetch that produced NOTHING and a passed
+// deadline, so any arrival kept collection going: under a steady trickle the
+// real bound was maxBatch × drainWait rather than the window an operator set.
+// That matters twice over — the config doc promises `0` adds no latency, and
+// the 60 s ceiling on the window is justified by "collection plus one handler
+// run must fit inside the 30-minute ack budget", which is only an argument if
+// collection is actually bounded by the window.
+//
+// Measured rather than reasoned: a trickle published for five times the window
+// must not all land in the first batch.
+func TestTheLingerWindowDoesNotSlideWithArrivals(t *testing.T) {
+	q := newQueue(t)
+	ctx := t.Context()
+	topic, group := topics.AgentInbox("dora"), topics.AgentInboxGroup("dora")
+	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
+		t.Fatalf("EnsureSubscription: %v", err)
+	}
+
+	const (
+		window  = 200 * time.Millisecond
+		spacing = 25 * time.Millisecond // below drainWait, so every fetch finds one
+		total   = 40
+	)
+
+	batches := make(chan int, 64)
+	if err := q.SubscribeBatch(ctx, topic, group,
+		func(_ context.Context, evs []*events.Event) queue.Result {
+			batches <- len(evs)
+			return queue.Ack()
+		},
+		func(*events.Event) string { return "one-conversation" },
+		queue.NewBatchOptions(window.Seconds(), total),
+	); err != nil {
+		t.Fatalf("SubscribeBatch: %v", err)
+	}
+
+	go func() {
+		for i := range total {
+			if err := q.Publish(ctx, topic, ev(i)); err != nil {
+				return
+			}
+			time.Sleep(spacing)
+		}
+	}()
+
+	var first int
+	select {
+	case first = <-batches:
+	case <-time.After(20 * time.Second):
+		t.Fatal("no batch was ever dispatched")
+	}
+	// The window admits about window/spacing events. The bound is deliberately
+	// loose — this is a wall clock on a shared machine — but a sliding window
+	// runs collection to the cap, so the two outcomes are nowhere near each
+	// other and a slow machine only makes the batch SMALLER.
+	if limit := total / 2; first >= limit {
+		t.Errorf("the first batch collected %d of %d events under a %v window: "+
+			"collection ran to the cap, so the window slid with arrivals rather "+
+			"than closing", first, total, window)
+	}
+	// And nothing is lost: the rest arrive in later batches.
+	seen := first
+	deadline := time.After(30 * time.Second)
+	for seen < total {
+		select {
+		case n := <-batches:
+			seen += n
+		case <-deadline:
+			t.Fatalf("only %d of %d events were delivered", seen, total)
+		}
+	}
+}
