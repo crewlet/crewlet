@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // Company is Tier B — founder-owned, live-editable, versioned in the store.
@@ -72,8 +73,15 @@ type Company struct {
 	// completion that would cross it stops that turn.
 	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty" js:"min=0" desc:"Org-wide token ceiling across all seats; 0 = unlimited."`
 
-	// NotificationRateLimit caps outbound notifications; 0 is unlimited.
-	NotificationRateLimit int `yaml:"notification_rate_limit,omitempty" json:"notification_rate_limit,omitempty" js:"min=0" desc:"Outbound notification cap; 0 = unlimited."`
+	// NotificationRateLimit caps how many INBOUND notifications may wake one
+	// seat per second; 0, the default, is unlimited.
+	//
+	// A safety valve against a webhook storm or a notification loop, never a
+	// burst policy — a dropped notification is context lost, where a
+	// coalesced one is context preserved, so bursts are coalescing's job.
+	// It fails OPEN: a valve that cannot reach its counter must not stop
+	// real notifications.
+	NotificationRateLimit int `yaml:"notification_rate_limit,omitempty" json:"notification_rate_limit,omitempty" js:"min=0" desc:"Inbound notifications one seat may be woken by per second; 0 (default) = unlimited."`
 
 	// NotificationCoalesceWindowSeconds is how long after the first
 	// pending event an idle seat's inbox waits to absorb a burst before
@@ -86,10 +94,26 @@ type Company struct {
 	// unbounded linger reintroduces mid-drain redelivery.
 	NotificationCoalesceWindowSeconds float64 `yaml:"notification_coalesce_window_seconds,omitempty" json:"notification_coalesce_window_seconds,omitempty" js:"min=0;max=60" desc:"Inbox linger before dispatch, 0..60s. 0 adds no latency."`
 
-	// NotificationCoalesceMaxBatch caps the events merged into one
-	// coalesced digest, so a larger backlog arrives as successive capped
-	// batches rather than one unbounded megaprompt.
-	NotificationCoalesceMaxBatch int `yaml:"notification_coalesce_max_batch,omitempty" json:"notification_coalesce_max_batch,omitempty" js:"min=1" desc:"Events merged into one digest trigger."`
+	// NotificationCoalesceMaxBatch caps the events collected into one
+	// DRAIN, before it is partitioned by conversation — so it bounds a
+	// digest as a consequence (a digest can never exceed it) and it bounds
+	// the drain itself, which has to fit the broker's ack budget alongside
+	// a whole turn. A larger backlog arrives as successive capped drains
+	// rather than one unbounded megaprompt.
+	//
+	// Per drain rather than per digest, and the difference is visible: a
+	// drain spanning several conversations shares the cap between them, so
+	// 24 events over 4 conversations at 20 is two drains and 8 turns rather
+	// than 4. Raise it for a company whose seats routinely serve several
+	// busy threads at once.
+	// Capped at 100: the digest IS the trigger, and a trigger is re-sent to
+	// the model on every round of the tool loop — so a constituent count is
+	// really a multiplier on the dominant repeated content of a turn. Five
+	// times the default leaves room for a genuinely busy thread; past it,
+	// one turn is reasoning over a hundred messages at once and successive
+	// capped batches are strictly better than one megaprompt, which is the
+	// cap's whole purpose.
+	NotificationCoalesceMaxBatch int `yaml:"notification_coalesce_max_batch,omitempty" json:"notification_coalesce_max_batch,omitempty" js:"min=1;max=100" desc:"Events drained into one batch before partitioning by conversation, 1..100. Bounds a digest too, since a digest cannot exceed a drain."`
 
 	// Workers are the reusable delegate templates a seat's executor hands
 	// work to, keyed by the name it types into a `delegate` call. See
@@ -107,7 +131,18 @@ type Company struct {
 
 // coalesceWindowMax bounds the inbox linger. See the field's own comment:
 // the window is spent out of the broker's ack-timeout budget.
-const coalesceWindowMax = 60.0
+//
+// THE CONTRACT'S OWN NUMBER, not a copy of it. [queue.BatchOptions] clamps to
+// this regardless of who set the field — programmatic construction bypasses
+// validation — and queue.go states that "config validation mirrors this cap".
+// A second literal here made that a claim nothing checked, and two literals
+// that must agree are two literals that eventually do not.
+const coalesceWindowMax = queue.MaxLingerSeconds
+
+// coalesceMaxBatchMax bounds one DRAIN — and a digest with it, since a digest
+// cannot exceed the drain it came from. See the field's own comment for why
+// 100.
+const coalesceMaxBatchMax = 100
 
 // DefaultCompany is a Tier B config with every default applied. The loader
 // decodes into it, so an absent key keeps its default and a valueless key
@@ -184,9 +219,10 @@ func (c *Company) Validate() error {
 				"broker's ack-timeout budget, which also has to fit a whole turn",
 			coalesceWindowMax, w)
 	}
-	if c.NotificationCoalesceMaxBatch < 1 {
+	if b := c.NotificationCoalesceMaxBatch; b < 1 || b > coalesceMaxBatchMax {
 		p.add("notification_coalesce_max_batch", ErrOutOfRange,
-			"must be at least 1, got %d", c.NotificationCoalesceMaxBatch)
+			"must be between 1 and %d, got %d", coalesceMaxBatchMax,
+			c.NotificationCoalesceMaxBatch)
 	}
 
 	p.wrap(c.Providers.validate("providers"))

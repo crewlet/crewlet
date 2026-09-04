@@ -1098,7 +1098,12 @@ Three refusals, each pointing somewhere different:
 ### `GET /integrations`
 
 Backs the dashboard's **Integrations** screen: how each external surface is
-wired, and what has come through it over the last 24 hours.
+wired, and what has come through it.
+
+The counts are **page-capped, not time-bounded** — the most recent page of the
+delivery log, however long that spans — which is why each response carries the
+timestamp of the oldest delivery it counted. "42 inbound" alone could be an
+hour or a year; "42 since Tuesday" is a measurement.
 
 Integrations had close to no surface at all before this. The dashboard
 branded an event once it had already been accepted and routed, so every

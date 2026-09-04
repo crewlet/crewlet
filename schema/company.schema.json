@@ -2044,7 +2044,8 @@
       "type": "string"
     },
     "notification_coalesce_max_batch": {
-      "description": "Events merged into one digest trigger.",
+      "description": "Events drained into one batch before partitioning by conversation, 1..100. Bounds a digest too, since a digest cannot exceed a drain.",
+      "maximum": 100,
       "minimum": 1,
       "type": "integer"
     },
@@ -2055,7 +2056,7 @@
       "type": "number"
     },
     "notification_rate_limit": {
-      "description": "Outbound notification cap; 0 = unlimited.",
+      "description": "Inbound notifications one seat may be woken by per second; 0 (default) = unlimited.",
       "minimum": 0,
       "type": "integer"
     },

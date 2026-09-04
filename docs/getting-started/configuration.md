@@ -29,10 +29,13 @@ name: "Acme AI Corp"                    # required — company name
 mission: "Build intelligent products"   # optional — company mission
 vision: "Lead the AI industry"          # optional — company vision
 token_budget: 1000000                   # optional — org-wide token limit (0 = unlimited)
-notification_rate_limit: 10             # optional — max notifications/sec per agent (0 = unlimited;
-                                        #   drop-based safety valve against webhook storms — burst
-                                        #   handling is inbox coalescing below, which batches instead
-                                        #   of dropping)
+notification_rate_limit: 10             # optional — inbound notifications one seat may be woken by
+                                        #   per second. 0 (the DEFAULT) is unlimited, so the valve is
+                                        #   off unless you set it. Drop-based safety valve against
+                                        #   webhook storms and notification loops — burst handling is
+                                        #   inbox coalescing below, which batches instead of dropping.
+                                        #   Fails OPEN: a valve that cannot reach its counter passes
+                                        #   the notification rather than swallowing it.
 notification_coalesce_window_seconds: 0 # optional — inbox linger window (seconds) absorbing bursts
                                         #   before an idle agent's turn starts. 0 (default) adds no
                                         #   latency: backlog that piled up while the agent was BUSY
@@ -40,7 +43,14 @@ notification_coalesce_window_seconds: 0 # optional — inbox linger window (seco
                                         #   Max 60 — the window counts against the broker ack-timeout
                                         #   budget bounding a message's unacked lifetime.
                                         #   See concepts/event-system.md § Inbox batching.
-notification_coalesce_max_batch: 20     # optional — max events merged into one digest trigger
+notification_coalesce_max_batch: 20     # optional — events collected into one DRAIN before it is
+                                        #   partitioned by conversation, 1..100 (default 20). It
+                                        #   bounds a digest as a consequence — a digest cannot exceed
+                                        #   a drain — and it bounds the drain, which has to fit the
+                                        #   ack budget alongside a whole turn. A drain spanning
+                                        #   several conversations shares the cap between them, so
+                                        #   raise it for seats that routinely serve several busy
+                                        #   threads at once.
 
 policies:                               # optional — org-wide policies (full text renders into the executor's prompt)
   - "All code must be reviewed before merging"
