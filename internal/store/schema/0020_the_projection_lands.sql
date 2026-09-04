@@ -81,17 +81,28 @@ CREATE INDEX work_items_project_status_idx
     ON work_items (project, status, updated_at DESC);
 
 -- "What am I on?", the query every seat's own view runs.
+--
+-- NOT PARTIAL, though the unassigned rows are dead weight in it. A
+-- `WHERE assignee <> ''` predicate makes the index UNUSABLE for
+-- `WHERE assignee = ?`: SQLite's partial-index prover is syntactic and does
+-- not derive "<> ''" from "= 'eng'", so the planner falls back to a full
+-- scan — measured, and the reason this predicate is not here. The unassigned
+-- rows earn their place anyway: the triage board asks for exactly them.
 CREATE INDEX work_items_assignee_idx
-    ON work_items (assignee, status, updated_at DESC)
-    WHERE assignee <> '';
+    ON work_items (assignee, status, updated_at DESC);
 
--- A parent's children, for the epic/story/subtask walk.
-CREATE INDEX work_items_parent_idx
-    ON work_items (parent_id)
-    WHERE parent_id <> '';
+-- A parent's children, for the epic/story/subtask walk. Not partial, for the
+-- reason the assignee index gives.
+CREATE INDEX work_items_parent_idx ON work_items (parent_id);
 
--- The trashed sweep's range scan. A partial index, because closed items are
--- kept for ever by decision and only the removed ones age out.
+-- The trashed sweep's range scan.
+--
+-- PARTIAL, and here that is right: only a fraction of items are closed, and
+-- the sweep is the only reader. THE PRICE IS THAT ITS QUERY MUST RESTATE THE
+-- PREDICATE — `WHERE closed_at IS NOT NULL AND closed_at < ?` seeks, while
+-- `WHERE closed_at < ?` alone scans the whole table, because SQLite's prover
+-- is syntactic. A sweep written without it works and gets slower every month,
+-- with nothing saying why.
 CREATE INDEX work_items_closed_idx
     ON work_items (closed_at)
     WHERE closed_at IS NOT NULL;
@@ -235,15 +246,17 @@ CREATE TABLE pages (
 -- A container's tree, and the title lookup a link resolves through.
 CREATE INDEX pages_container_idx ON pages (container, status, title);
 
-CREATE INDEX pages_parent_idx
-    ON pages (parent_id)
-    WHERE parent_id <> '';
+-- A container's page tree. Not partial, for the reason work_items_assignee_idx
+-- gives: the predicate would make it unusable for the query it exists for.
+CREATE INDEX pages_parent_idx ON pages (parent_id);
 
 -- The onboarding chain's lookup: the page a seat reads first.
 CREATE INDEX pages_onboarding_idx
     ON pages (container)
     WHERE onboarding = 1;
 
+-- The trashed-page sweep. Partial, and its query must restate the predicate —
+-- see work_items_closed_idx.
 CREATE INDEX pages_trashed_idx
     ON pages (trashed_at)
     WHERE trashed_at IS NOT NULL;
