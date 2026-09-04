@@ -568,6 +568,14 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Turn == nil {
 		d.Turn = e.runTurn
 	}
+	if d.Prompts == nil {
+		// Read off the LIVE epoch on each dispatch, like the conversation
+		// policy below: buildDispatcher runs BEFORE startNotifications, so
+		// a captured registry would be the empty one this node booted with
+		// and every merge would supersede nothing for the life of the
+		// process.
+		d.Prompts = e.notifyPrompts
+	}
 	if d.Conversation == nil {
 		// Read off the LIVE company on each dispatch, not captured here:
 		// buildDispatcher runs once and a config apply replaces the company.
@@ -824,7 +832,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// event carries the turn's identity, and a runner built without it
 	// publishes phases attributed to nobody.
 	tel := e.describeTurn(ctx, company, req)
-	task := DescribeTrigger(req.Events)
+	// THE ASK, not the partition: a coalesced conversation reaches the model
+	// as ONE merged digest rather than as its constituents concatenated —
+	// see [Request.Trigger] and internal/engine/coalesce.go.
+	task := DescribeTrigger(req.Ask())
 	// RENDERED BEFORE THE RUNNER, which is what freezes it: the runner
 	// receives strings and has nowhere to re-fetch from, so a self_iterate
 	// loop cannot move the system prompt underneath the executor. Nothing

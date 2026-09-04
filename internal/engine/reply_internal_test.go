@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
@@ -10,13 +11,46 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// wake builds one inbox trigger of the given type.
-func wake(t *testing.T, kind string, payload map[string]any) *events.Event {
+// wake builds one inbox trigger of the given type, THE WAY ITS PRODUCER
+// BUILDS IT: events.New over the registered payload.
+//
+// Never a hand-written Payload bag. The envelope's bag and the typed body are
+// different places — the body marshals flat beside the envelope and Payload
+// carries only what a producer explicitly stamps there (today, the
+// conversation key) — so an event literal carrying "addressed" in the bag is a
+// shape nothing publishes. Asserting against it is how ReplyFor's read of
+// Payload["addressed"] stayed green for a whole release while answering false
+// for every real notification the company ever received.
+func wake(t *testing.T, kind string) *events.Event {
 	t.Helper()
-	if payload == nil {
-		payload = map[string]any{}
+	switch kind {
+	case types.A2ARequestType:
+		return events.New(types.A2ARequest{
+			ChannelID: "a2a-1", Requester: "ceo", Content: "?",
+		}, events.TraceContext{})
+	case types.A2AMessageType:
+		return events.New(types.A2AMessage{
+			ChannelID: "a2a-1", Sender: "cto", Content: "answered",
+		}, events.TraceContext{})
+	case types.TaskAssigned{}.EventType():
+		return events.New(types.TaskAssigned{Description: "ship it"}, events.TraceContext{})
+	case types.ExternalNotification{}.EventType():
+		return inbound(false)
 	}
-	return &events.Event{Type: kind, Payload: payload}
+	// A ledgered type this file has no producer shape for. Left as a bare
+	// envelope on purpose: the coverage assertion below is what reports it,
+	// and failing here instead would hide which type is missing.
+	return &events.Event{Type: kind}
+}
+
+// inbound builds an inbound notification as internal/notify publishes it.
+func inbound(addressed bool) *events.Event {
+	salient := "the message"
+	return events.New(types.ExternalNotification{
+		NotificationSource: "slack", SourceEventType: "message",
+		Sender: "ana", Body: "enriched prompt", SalientBody: &salient,
+		Addressed: addressed,
+	}, events.TraceContext{})
 }
 
 // EVERY LEDGERED TYPE IS COVERED, and the assertion is over inbox's own set
@@ -38,7 +72,7 @@ func TestReplyIsDerivedForEveryLedgeredTriggerType(t *testing.T) {
 		}
 	}
 	for kind, expect := range want {
-		if got := ReplyFor([]*events.Event{wake(t, kind, nil)}); got != expect {
+		if got := ReplyFor([]*events.Event{wake(t, kind)}); got != expect {
 			t.Errorf("ReplyFor(%s) = %s, want %s", kind, got, expect)
 		}
 	}
@@ -50,15 +84,29 @@ func TestReplyIsDerivedForEveryLedgeredTriggerType(t *testing.T) {
 // event vocabulary.
 func TestAnAddressedNotificationOwesAnAnswer(t *testing.T) {
 	t.Parallel()
-	addressed := wake(t, types.ExternalNotification{}.EventType(),
-		map[string]any{"addressed": true})
+	addressed := inbound(true)
 	if got := ReplyFor([]*events.Event{addressed}); got != turn.ReplyTool {
 		t.Errorf("an addressed notification = %s, want tool", got)
+	}
+	// AND ACROSS THE WIRE. The dispatch that reads this flag routinely runs
+	// on a node that did not publish the event, so the obligation has to
+	// survive a marshal/unmarshal round trip — which is precisely what the
+	// envelope-bag read did not.
+	raw, err := json.Marshal(addressed)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back events.Event
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := ReplyFor([]*events.Event{&back}); got != turn.ReplyTool {
+		t.Errorf("an addressed notification off the wire = %s, want tool", got)
 	}
 	// ABSENT DECODES AS UNADDRESSED, which is the safe half: an event
 	// written by a build that predates the field is a freedom to stay
 	// silent rather than an obligation nobody recorded.
-	older := wake(t, types.ExternalNotification{}.EventType(), map[string]any{})
+	older := &events.Event{Type: types.ExternalNotification{}.EventType()}
 	if got := ReplyFor([]*events.Event{older}); got != turn.ReplyNone {
 		t.Errorf("an event with no flag = %s, want none", got)
 	}
@@ -69,10 +117,9 @@ func TestAnAddressedNotificationOwesAnAnswer(t *testing.T) {
 // an answer — WHICHEVER ORDER the broker delivered the events in.
 func TestTheStrongestObligationInAPartitionWins(t *testing.T) {
 	t.Parallel()
-	passing := wake(t, types.ExternalNotification{}.EventType(), map[string]any{})
-	asked := wake(t, types.ExternalNotification{}.EventType(),
-		map[string]any{"addressed": true})
-	ask := wake(t, types.A2ARequestType, nil)
+	passing := inbound(false)
+	asked := inbound(true)
+	ask := wake(t, types.A2ARequestType)
 
 	if got := ReplyFor([]*events.Event{passing, asked}); got != turn.ReplyTool {
 		t.Errorf("a burst carrying one ask = %s, want tool", got)
@@ -108,7 +155,7 @@ func TestTheStrongestObligationInAPartitionWins(t *testing.T) {
 // comes off a broker and the loop reads it before anything has vetted it.
 func TestReplyForSkipsNilEvents(t *testing.T) {
 	t.Parallel()
-	if got := ReplyFor([]*events.Event{nil, wake(t, types.A2ARequestType, nil)}); got != turn.ReplyEngine {
+	if got := ReplyFor([]*events.Event{nil, wake(t, types.A2ARequestType)}); got != turn.ReplyEngine {
 		t.Errorf("ReplyFor with a nil entry = %s", got)
 	}
 }

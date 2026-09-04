@@ -67,13 +67,20 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 	r := prefetch.Request{
 		Seat: seat, AgentID: agentID.String(), Org: company.Org,
 		Task: task, TurnID: req.WorkKey,
-		Senders: sendersOf(e.Registry(), req.Events),
+		// OFF THE ASK, which for a coalesced conversation is the merged
+		// digest and for everything else is the partition itself. One
+		// shape rather than two: the merge is where a conversation's
+		// senders and its recon flag are combined, and re-deriving them
+		// from the constituents here would be a second answer to a
+		// question already answered — free to disagree, and with the
+		// merged event's own constituent list then read by nothing.
+		Senders: sendersOf(e.Registry(), req.Ask()),
 		// A POINTER TRIGGER gates the three searches that judge relevance
 		// against the trigger text. Read off the events rather than
 		// recomputed, because the parser that produced them is the only
 		// thing that knows whether its vendor's body is the context or a
 		// reference to it.
-		RequiresRecon: requiresRecon(req.Events),
+		RequiresRecon: requiresRecon(req.Ask()),
 	}
 	blocks := e.prefetcher(company).Fetch(ctx, r)
 	e.publishPrefetchSummary(ctx, seat, agentID.String(), req.WorkKey, r, blocks)
@@ -192,15 +199,24 @@ func sendersOf(registry *notify.Registry, evs []*events.Event) []learning.Subjec
 // A COALESCED event carries every constituent, and the flat Sender field
 // mirrors only the latest — so reading the flat field alone would profile
 // the last speaker and forget the other three.
+//
+// EITHER the constituents OR the flat fields, never both, which is the rule
+// [Engine.interactionsOf] already states: the flat fields ARE the latest
+// constituent, so taking them as well put the last speaker at the head of a
+// list whose whole contract is "in the order they spoke". Latent while nothing
+// populated Messages, and wrong the moment something did.
 func subjectsOf(registry *notify.Registry, ev *types.ExternalNotification) []learning.Subject {
-	out := make([]learning.Subject, 0, len(ev.Messages)+1)
-	out = append(out, subjectOf(registry, ev.NotificationSource,
-		ev.Sender, ev.Metadata))
-	for _, m := range ev.Messages {
-		out = append(out, subjectOf(registry, ev.NotificationSource,
-			m.Sender, m.Metadata))
+	if len(ev.Messages) > 0 {
+		out := make([]learning.Subject, 0, len(ev.Messages))
+		for _, m := range ev.Messages {
+			out = append(out, subjectOf(registry, ev.NotificationSource,
+				m.Sender, m.Metadata))
+		}
+		return out
 	}
-	return out
+	return []learning.Subject{
+		subjectOf(registry, ev.NotificationSource, ev.Sender, ev.Metadata),
+	}
 }
 
 // subjectOf resolves one sender to the identity their profile is keyed on.

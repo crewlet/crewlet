@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,13 +27,65 @@ import (
 
 var clock = time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
 
+// ev builds one inbox trigger, THE WAY ITS PRODUCER BUILDS IT.
+//
+// "notification" is this file's shorthand for a real inbound message, and it
+// resolves to events.New over the registered payload rather than to an event
+// literal. The distinction is load-bearing rather than tidy: a literal carries
+// no typed body, so a partition of them does not DECODE, so the dispatcher
+// declines to merge it and degrades to per-event dispatch — and every
+// coalescing assertion in this file would pass on the degrade branch while the
+// merge itself ran for nobody.
+//
+// Any other kind is a bare envelope on purpose: that is what an event of a
+// type this build does not know decodes to.
 func ev(kind string) *events.Event {
+	if kind == "notification" {
+		e := events.New(types.ExternalNotification{
+			NotificationSource: "slack", SourceEventType: "message",
+			Sender: "ana", Subject: "a message", Body: "hello",
+		}, events.TraceContext{})
+		// AS internal/notify STAMPS IT: the envelope names the PRODUCER
+		// of the wake, not the vendor — "notify.slack", never "slack".
+		// A test that wrote the bare vendor name here asserted against a
+		// shape nothing publishes, and passed for a coalescing record that
+		// filed every merge under a source no dashboard filter matches.
+		e.Source = "notify.slack"
+		e.Timestamp = clock
+		return e
+	}
 	return &events.Event{ID: uuid.New(), Type: kind}
+}
+
+// notificationType is the wire type ev("notification") produces.
+var notificationType = types.ExternalNotification{}.EventType()
+
+// said builds a notification with a body of its own, for the cases that read
+// the merged digest rather than only counting constituents.
+func said(sender, body string, at time.Time) *events.Event {
+	salient := body
+	e := events.New(types.ExternalNotification{
+		NotificationSource: "slack", SourceEventType: "message",
+		Sender: sender, Subject: "a message", Body: "TRIAGE SCAFFOLDING\n\n" + body,
+		SalientBody: &salient,
+	}, events.TraceContext{})
+	e.Source = "notify.slack"
+	e.Timestamp = at
+	notifyStamp(e, "slack:C1")
+	return e
+}
+
+// notifyStamp writes a conversation key the way internal/notify does.
+func notifyStamp(e *events.Event, key string) {
+	if e.Payload == nil {
+		e.Payload = map[string]any{}
+	}
+	e.Payload["conversation_key"] = key
 }
 
 func inThread(kind, conversation string) *events.Event {
 	e := ev(kind)
-	e.Payload = map[string]any{"conversation_key": conversation}
+	notifyStamp(e, conversation)
 	return e
 }
 
@@ -58,7 +111,7 @@ func (r *recorder) run(ctx context.Context, req engine.Request) (turn.Result, er
 func dispatcher(t *testing.T, r *recorder) *engine.Dispatcher {
 	t.Helper()
 	return &engine.Dispatcher{
-		Ledgered: func(kind string) bool { return kind == "notification" },
+		Ledgered: func(kind string) bool { return kind == notificationType },
 		Turn:     r.run,
 		Park: func(_ context.Context, _ string, evs []*events.Event) error {
 			r.parked = append(r.parked, evs)
@@ -611,10 +664,8 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	d.Observe = func(_ context.Context, e *events.Event) { seen = append(seen, e) }
 
 	first := inThread("notification", "slack:C1/T1")
-	first.Source = "slack"
 	first.Timestamp = clock
 	second := inThread("notification", "slack:C1/T1")
-	second.Source = "slack"
 	second.Timestamp = clock.Add(2 * time.Minute)
 
 	if got := d.Dispatch(context.Background(), "ceo",
@@ -633,6 +684,14 @@ func TestAMergedPartitionIsRecordedWithItsConstituents(t *testing.T) {
 	}
 	if rec.ConversationKey != "slack:C1/T1" {
 		t.Errorf("conversation = %q", rec.ConversationKey)
+	}
+	// THE VENDOR, not the producer of the wake. internal/notify stamps the
+	// envelope "notify.slack"; every other notification event carries the
+	// bare vendor name, and a record that disagrees is filed under a source
+	// no dashboard filter matches — so the Integrations room reported zero
+	// coalesced merges for every integration.
+	if rec.NotificationSource != "slack" {
+		t.Errorf("source = %q, want the bare vendor name", rec.NotificationSource)
 	}
 	// The SPAN they arrived in, which is what an operator reads to see how
 	// hard batching kicked in — the count alone cannot say whether it was
@@ -825,5 +884,299 @@ func TestOnlyTheSandboxParkOffersItsDeliveryAsAnAnswer(t *testing.T) {
 	}
 	if len(r.parked) != 1 {
 		t.Errorf("it was not parked (%d parks)", len(r.parked))
+	}
+}
+
+// ONE CONVERSATION, ONE NOTIFICATION — the whole point of coalescing, and the
+// half that shipped without a caller.
+//
+// Batching landed on its own: a partition of five already became one turn.
+// What that turn was HANDED was the five enriched bodies concatenated, because
+// notify.Coalesce was called by nothing — so the seat read the vendor's triage
+// scaffolding five times, each copy pointing at staler state, and five separate
+// asks, which a model answers separately. The assertion that catches it is the
+// scaffolding count: a merged digest renders it ONCE.
+func TestACoalescedConversationReachesTheTurnAsOneDigest(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+
+	first := said("ana", "Can you take the deploy today?", clock)
+	second := said("bo", "Blocked on the migration — see PROJ-4.", clock.Add(time.Minute))
+	third := said("ana", "Never mind, I have it.", clock.Add(2*time.Minute))
+
+	if got := d.Dispatch(context.Background(), "ceo",
+		[]*events.Event{first, second, third}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if len(r.reqs) != 1 {
+		t.Fatalf("the turn ran %d times", len(r.reqs))
+	}
+
+	// ONE trigger event, not three.
+	if n := len(r.reqs[0].Trigger); n != 1 {
+		t.Fatalf("the turn was handed %d asks, want one merged digest", n)
+	}
+	ask := engine.DescribeTrigger(r.reqs[0].Ask())
+
+	// EVERY constituent survives the merge: a digest that kept only the
+	// latest hands the seat a follow-up with no idea what it follows.
+	for _, want := range []string{
+		"Can you take the deploy today?",
+		"Blocked on the migration — see PROJ-4.",
+		"Never mind, I have it.",
+	} {
+		if !strings.Contains(ask, want) {
+			t.Errorf("the digest lost %q\ngot:\n%s", want, ask)
+		}
+	}
+	// AND THE SCAFFOLDING RENDERS ONCE. This is the assertion that fails
+	// without the merge: three concatenated bodies carry three copies.
+	if n := strings.Count(ask, "TRIAGE SCAFFOLDING"); n != 1 {
+		t.Errorf("the vendor scaffolding rendered %d times, want once\ngot:\n%s", n, ask)
+	}
+	// The digest says it IS one, so the seat answers once rather than
+	// three times.
+	if !strings.Contains(ask, "Coalesced updates") {
+		t.Errorf("the merged ask does not tell the seat it is one piece of work:\n%s", ask)
+	}
+
+	// THE BOOKKEEPING STILL READS THE CONSTITUENTS. The merged digest is
+	// minted fresh, so a ledger keyed on it would match nothing and re-run
+	// the turn on every redelivery.
+	if n := len(r.reqs[0].Events); n != 3 {
+		t.Errorf("the dispatch carries %d constituents, want all three", n)
+	}
+	if r.reqs[0].ConversationKey != "slack:C1" {
+		t.Errorf("conversation = %q", r.reqs[0].ConversationKey)
+	}
+}
+
+// A MERGE MUST NOT LAUNDER WHAT BOUNDS THE TURN.
+//
+// The merged event replaces three envelopes with one, so every fact that
+// bounded the partition has to be carried onto it deliberately: the deepest
+// delegation (or an ask arriving beside a shallow mention resets the cap the
+// ping-pong guard is measured against), the delivery obligation (or one direct
+// ask inside a burst of broadcasts becomes traffic the seat may ignore), and
+// the recon flag (or a bare pointer merged with a substantive message stops
+// telling the prefetch to go and look).
+func TestAMergeCarriesWhatBoundsTheTurn(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+
+	passing := said("ana", "fyi", clock)
+	asked := said("bo", "can you review this?", clock.Add(time.Minute))
+	if n, ok := events.DataAs[*types.ExternalNotification](asked); ok {
+		n.Addressed = true
+		n.ContextRequiresRecon = true
+	}
+	passing.DelegationDepth, passing.DelegationChain = 3, []string{"a", "b", "c"}
+
+	if got := d.Dispatch(context.Background(), "ceo",
+		[]*events.Event{passing, asked}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if len(r.reqs) != 1 || len(r.reqs[0].Trigger) != 1 {
+		t.Fatalf("the partition did not merge into one ask: %+v", r.reqs)
+	}
+	merged := r.reqs[0].Trigger[0]
+
+	if merged.DelegationDepth != 3 {
+		t.Errorf("the merged ask charges depth %d, want the deepest constituent's 3",
+			merged.DelegationDepth)
+	}
+	if len(merged.DelegationChain) != 3 {
+		t.Errorf("the merged ask carries chain %v, want the deepest constituent's",
+			merged.DelegationChain)
+	}
+	note, ok := events.DataAs[*types.ExternalNotification](merged)
+	if !ok {
+		t.Fatalf("the merged ask carries %T, not a notification", merged.Data)
+	}
+	if !note.Addressed {
+		t.Error("the ask was laundered by the merge — the seat may now end in silence")
+	}
+	if !note.ContextRequiresRecon {
+		t.Error("the pointer was laundered by the merge — the prefetch will search on it")
+	}
+	if len(note.Messages) != 2 {
+		t.Errorf("the merged ask carries %d constituents, want both — the learning "+
+			"workers observe each distinct sender", len(note.Messages))
+	}
+	// The conversation key rides the merged envelope, which is what a
+	// parked coding run matches a person's answer back on.
+	if got, _ := merged.Payload["conversation_key"].(string); got != "slack:C1" {
+		t.Errorf("the merged ask carries conversation %q", got)
+	}
+	// And the obligation the turn engine enforces is derived from the
+	// constituents either way.
+	if got := engine.ReplyFor(r.reqs[0].Events); got != turn.ReplyTool {
+		t.Errorf("the turn owes %s, want a tool delivery", got)
+	}
+}
+
+// A PARTITION THAT WILL NOT MERGE DEGRADES RATHER THAN LOSING AN EVENT.
+//
+// The tail is requeued FIRST and the head runs in the ack scope already open,
+// so a requeue failure aborts before any work has run and a completed turn is
+// never replayed by a later event's failure.
+func TestAnUnmergeablePartitionDegradesToPerEventDispatch(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+
+	// A constituent with no typed body — what an event whose payload this
+	// build cannot decode looks like.
+	head := said("ana", "first", clock)
+	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
+	notifyStamp(opaque, "slack:C1")
+
+	if got := d.Dispatch(context.Background(), "ceo",
+		[]*events.Event{head, opaque}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if len(r.reqs) != 1 {
+		t.Fatalf("the turn ran %d times", len(r.reqs))
+	}
+	if ids := eventIDs(r.reqs[0].Events); !slices.Equal(ids, []string{head.ID.String()}) {
+		t.Errorf("the turn received %v, want only the head", ids)
+	}
+	if r.reqs[0].Coalesce {
+		t.Error("a partition that did not merge still reported itself coalesced")
+	}
+	// The tail went back on the queue rather than being dropped.
+	if len(r.parked) != 1 || len(r.parked[0]) != 1 ||
+		r.parked[0][0].ID != opaque.ID {
+		t.Errorf("the tail was not requeued: %v", r.parked)
+	}
+	// And the head is recorded under its OWN key, not the partition's: only
+	// the head ran, and the tail's copies are still on the queue.
+	if r.keys[0] != workkey.Derive([]string{head.ID.String()}) {
+		t.Errorf("the head was recorded under %q, want its own key", r.keys[0])
+	}
+}
+
+// A REQUEUE THAT FAILS ABORTS BEFORE ANY WORK HAS RUN.
+func TestADegradeWhoseRequeueFailsRunsNothing(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Park = func(context.Context, string, []*events.Event) error {
+		return errors.New("broker down")
+	}
+
+	head := said("ana", "first", clock)
+	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
+	notifyStamp(opaque, "slack:C1")
+
+	if got := d.Dispatch(context.Background(), "ceo",
+		[]*events.Event{head, opaque}); got.Outcome != queue.OutcomeNak {
+		t.Errorf("outcome = %v, want a nak so the whole partition comes back", got.Outcome)
+	}
+	if len(r.reqs) != 0 {
+		t.Error("a turn ran on a partition whose tail could not be requeued")
+	}
+}
+
+// A SKIPPED TRIGGER IS ON THE RECORD.
+//
+// The narrow window this covers: a turn finished, its outbound effects
+// shipped, and the delivery came back — from a node that died before acking,
+// or from a drain whose partitions together outlasted the ack window. Without
+// a record the feed shows the arrivals and one turn, and nothing distinguishes
+// "the agent never answered" from "the agent already answered, on a node that
+// has since died" — the same observation and opposite problems.
+//
+// types.TurnTriggerSkipped was registered, categorised and documented as
+// shipped with no producer anywhere, so the case stayed exactly as invisible
+// as it was before the type existed.
+func TestATriggerTheLedgerAlreadyWorkedIsRecordedAsSkipped(t *testing.T) {
+	t.Parallel()
+	completions := ledgerstore.NewMemoryCompletions()
+	worked, fresh := ev("notification"), ev("notification")
+	ctx := context.Background()
+	if err := completions.Record(ctx, "ceo",
+		workkey.Derive([]string{worked.ID.String()}), "", clock); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+	d.Completions = completions
+	var seen []*events.Event
+	d.Observe = func(_ context.Context, e *events.Event) { seen = append(seen, e) }
+
+	if got := d.Dispatch(ctx, "ceo", []*events.Event{worked, fresh}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+
+	var skips []*types.TurnTriggerSkipped
+	for _, e := range seen {
+		if s, ok := events.DataAs[*types.TurnTriggerSkipped](e); ok {
+			skips = append(skips, s)
+		}
+	}
+	if len(skips) != 1 {
+		t.Fatalf("%d skip records, want one for the trigger the ledger had worked", len(skips))
+	}
+	if skips[0].TriggerID != worked.ID.String() || skips[0].AgentHandle != "ceo" {
+		t.Errorf("skip record = %+v", skips[0])
+	}
+	if skips[0].Reason == "" {
+		t.Error("a skip with no reason is the case an operator most needs to read")
+	}
+	// The counterfactual: a partition with nothing worked records no skip,
+	// or every dispatch in the company would file one.
+	seen = nil
+	if got := d.Dispatch(ctx, "cto", []*events.Event{ev("notification")}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	for _, e := range seen {
+		if _, ok := events.DataAs[*types.TurnTriggerSkipped](e); ok {
+			t.Error("a dispatch that skipped nothing filed a skip record")
+		}
+	}
+}
+
+// THE MERGED DIGEST IS WHAT THE TURN'S CONTEXT IS BUILT FROM.
+//
+// Its constituent list is the one place a conversation's senders, their
+// per-message bodies and their recon flags are combined, so the prefetch and
+// the learning workers read it rather than re-deriving the same facts from the
+// partition. Two answers to one question are free to disagree; one of them was
+// also unreachable, which is how a populated field ends up read by nothing.
+func TestTheMergedAskCarriesEverySpeakerInTheOrderTheySpoke(t *testing.T) {
+	t.Parallel()
+	r := &recorder{result: turn.Result{Decision: phase.Done}}
+	d := dispatcher(t, r)
+
+	if got := d.Dispatch(context.Background(), "ceo", []*events.Event{
+		said("ana", "first", clock),
+		said("bo", "second", clock.Add(time.Minute)),
+		said("cy", "third", clock.Add(2*time.Minute)),
+	}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	if len(r.reqs) != 1 || len(r.reqs[0].Trigger) != 1 {
+		t.Fatalf("the partition did not merge into one ask")
+	}
+	note, ok := events.DataAs[*types.ExternalNotification](r.reqs[0].Trigger[0])
+	if !ok {
+		t.Fatalf("the merged ask carries %T", r.reqs[0].Trigger[0].Data)
+	}
+	var spoke []string
+	for _, m := range note.Messages {
+		spoke = append(spoke, m.Sender)
+	}
+	// IN THE ORDER THEY SPOKE. The flat Sender field mirrors the LATEST
+	// constituent, so a reader that took it as well as the list put the
+	// last speaker at the head of a list whose whole contract is the order.
+	if !slices.Equal(spoke, []string{"ana", "bo", "cy"}) {
+		t.Errorf("the merged ask's speakers are %v", spoke)
+	}
+	if note.Sender != "cy" {
+		t.Errorf("the merged ask's flat sender = %q, want the latest constituent's", note.Sender)
 	}
 }

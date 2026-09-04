@@ -73,7 +73,10 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 			t.agentID = id.String()
 		}
 	}
-	t.interactions = e.interactionsOf(req.Events)
+	// OFF THE ASK: a coalesced conversation's interactions come from the
+	// merged digest's own constituent list, which is the same set the
+	// partition held and the one place a merge combined them.
+	t.interactions = e.interactionsOf(req.Ask())
 	// The turn's own span, not the trigger's ids copied forward.
 	//
 	// This used to read `TraceID: ev.TraceID, SpanID: ev.SpanID` straight off
