@@ -712,7 +712,7 @@ func TestOrganizationDecodesFromYAML(t *testing.T) {
 	const doc = `
 name: Acme AI
 mission: Build the best widgets
-confluence_spaces: [ENG, PRODUCT]
+scope: [ENG, PRODUCT]
 roles:
   - name: Jane Founder
     kind: human
@@ -808,8 +808,8 @@ units:
 	if got := o.Unit("Backend").Schedules[0]; got.IsEnabled() || got.Timeout() != DefaultScheduleTimeout {
 		t.Errorf("schedule = %+v", got)
 	}
-	if !slices.Equal(o.ConfluenceSpaces, []string{"ENG", "PRODUCT"}) {
-		t.Errorf("confluence_spaces = %v", o.ConfluenceSpaces)
+	if !slices.Equal(o.KnowledgeScope, []string{"ENG", "PRODUCT"}) {
+		t.Errorf("knowledge scope = %v", o.KnowledgeScope)
 	}
 }
 

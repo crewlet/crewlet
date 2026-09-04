@@ -33,9 +33,10 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("slack provision", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	sinks := addSinkFlags(fs)
-	publicURL := fs.String("public-url", "",
+	publicURLFlag := fs.String("public-url", "",
 		"this deployment's public HTTPS base URL; every app's request URL "+
-			"and redirect URL are built from it")
+			"and redirect URL are built from it. Empty takes api.public_url "+
+			"from the Tier A config")
 	refreshToken := fs.String("config-token", "",
 		"a Slack app-configuration REFRESH token; empty reads SLACK_CONFIG_REFRESH_TOKEN")
 	ledgerPath := fs.String("ledger", "",
@@ -72,6 +73,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	plans := slack.PlanFor(organization)
+	publicURL := publicBase(*publicURLFlag, *sinks.bootstrap)
 	if *ledgerPath == "" {
 		*ledgerPath = slack.LedgerPathFor(companyPath)
 	}
@@ -80,7 +82,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	printSlackPlan(stdout, plans, ledger, *ledgerPath, *publicURL)
+	printSlackPlan(stdout, plans, ledger, *ledgerPath, publicURL)
 
 	refresh := strings.TrimSpace(*refreshToken)
 	if refresh == "" {
@@ -96,7 +98,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 		res, checked := slack.Validate(context.Background(), slack.Options{
 			Admin: slack.NewAdmin(nil), Seats: plans,
 			Ledger: ledger, LedgerPath: *ledgerPath,
-			BaseURL: *publicURL, ConfigRefreshToken: refresh,
+			BaseURL: publicURL, ConfigRefreshToken: refresh,
 			Only: splitHandles(*only),
 		})
 		if res != nil {
@@ -108,11 +110,12 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	if len(plans) == 0 {
 		return nil
 	}
-	if strings.TrimSpace(*publicURL) == "" {
+	if publicURL == "" {
 		return errors.New(
-			"no -public-url: every app's Events API request URL and OAuth " +
-				"redirect URL are built from it, so an app created without one " +
-				"delivers nowhere and cannot be installed")
+			"no -public-url and no api.public_url in the Tier A config: every " +
+				"app's Events API request URL and OAuth redirect URL are built " +
+				"from it, so an app created without one delivers nowhere and " +
+				"cannot be installed")
 	}
 
 	ctx := context.Background()
@@ -125,7 +128,7 @@ func runSlackProvision(args []string, stdout, stderr io.Writer) error {
 	opts := slack.Options{
 		Admin: slack.NewAdmin(nil), Seats: plans,
 		Ledger: ledger, LedgerPath: *ledgerPath, Sink: sink,
-		BaseURL: *publicURL, ConfigRefreshToken: refresh, Reinstall: *reinstall,
+		BaseURL: publicURL, ConfigRefreshToken: refresh, Reinstall: *reinstall,
 		Only: splitHandles(*only),
 	}
 	if !*noInstall {

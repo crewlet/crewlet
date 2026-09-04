@@ -118,12 +118,12 @@ func promotionContainer(unit *org.Unit, wired bool) (container, hint string) {
 		return "", "no knowledge base is configured for this company, so " +
 			"there is nowhere to file a draft at all"
 	}
-	if unit.ConfluenceSpace != "" {
-		return unit.ConfluenceSpace, ""
+	if unit.Space != "" {
+		return unit.Space, ""
 	}
 	return "", fmt.Sprintf(
-		"unit %q has no integrations.confluence.space, so there is nowhere "+
-			"to file a draft its seats could review — set one on the unit",
+		"unit %q has no `space`, so there is nowhere to file a draft its "+
+			"seats could review — set one on the unit",
 		unit.Name)
 }
 

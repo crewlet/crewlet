@@ -35,7 +35,8 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	sinks := addSinkFlags(fs)
 	publicURL := fs.String("public-url", "",
-		"this deployment's public base URL, for registering the webhook")
+		"this deployment's public base URL, for registering the webhook; "+
+			"empty takes api.public_url from the Tier A config")
 	recreate := fs.Bool("recreate-webhook", false,
 		"delete and remake the webhook to mint a fresh secret; this "+
 			"invalidates the secret every other deployment of this company holds")
@@ -111,7 +112,7 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout,
 			"-dry-run: reading the instance; no webhook will be registered.")
 	} else {
-		opts.WebhookBase = *publicURL
+		opts.WebhookBase = publicBase(*publicURL, *sinks.bootstrap)
 		sink, closeSink, openErr := sinks.open(ctx, stdout)
 		if openErr != nil {
 			return openErr

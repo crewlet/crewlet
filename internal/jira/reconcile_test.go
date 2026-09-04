@@ -151,7 +151,7 @@ func company() *org.Organization {
 			// server name; the SWE's is under a Jira-only one. Both are
 			// real configs, and a scan that knew one name would report
 			// the other seat as holding nothing.
-			{Name: "Eng Lead", DeclaredHandle: "lead", JiraProject: "ENG",
+			{Name: "Eng Lead", DeclaredHandle: "lead", Project: "ENG",
 				MCPEnv: map[string]map[string]string{
 					"atlassian": {"JIRA_API_TOKEN": "lead-token"},
 				}},
@@ -255,7 +255,7 @@ func TestTheReconcileChecksEveryDeclaredProject(t *testing.T) {
 	inst.projects["ENG"] = "Engineering"
 
 	o := company()
-	o.Units = []*org.Unit{{Name: "Ops", JiraProject: "OPZ"}}
+	o.Units = []*org.Unit{{Name: "Ops", Project: "OPZ"}}
 	o.Normalize()
 
 	res, err := run(t, inst, func(opts *jira.Options) { opts.Org = o })

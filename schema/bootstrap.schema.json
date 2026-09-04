@@ -15,6 +15,10 @@
           "maximum": 65535,
           "minimum": 0,
           "type": "integer"
+        },
+        "public_url": {
+          "description": "Public base URL this deployment is reachable at, e.g. https://crewlet.example.com. Used for human-clickable links and as every provisioner's -public-url default.",
+          "type": "string"
         }
       },
       "type": "object"

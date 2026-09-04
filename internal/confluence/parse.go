@@ -559,8 +559,8 @@ func storageOf(content map[string]any) string {
 // naming the field and reporting what the walk found in its own vocabulary.
 func LeadsFrom(o *org.Organization) map[string]string {
 	leads, report := o.LeadsBy(org.Scope{
-		OfUnit: func(u *org.Unit) string { return u.ConfluenceSpace },
-		OfRole: func(r *org.Role) string { return r.ConfluenceSpace },
+		OfUnit: func(u *org.Unit) string { return u.Space },
+		OfRole: func(r *org.Role) string { return r.Space },
 	})
 	for _, unled := range report.Unled {
 		log.Warn("confluence_space_has_no_lead", "unit", unled.Unit, "space", unled.Scope)

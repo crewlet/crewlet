@@ -189,6 +189,16 @@ type Engine struct {
 	// duty.go for why the lease alone is not the whole answer.
 	profile placement.NodeProfile
 
+	// publicBase is where this DEPLOYMENT answers from outside, taken from
+	// Tier A's api.public_url. Empty when none is configured, which every
+	// consumer reads as "compose no link".
+	//
+	// Held on the engine rather than looked up per use because it is the
+	// only Tier A value a Tier B consumer needs, and the alternative —
+	// keeping the whole bootstrap alive to read one string — would put the
+	// root of trust, secret keys included, within reach of every epoch.
+	publicBase string
+
 	// learning is the two background passes no turn drives: episode
 	// compaction and skill ageing. On the ENGINE for the same reason the
 	// sandbox waiter is — they are loops this PROCESS runs, and rebuilding
@@ -444,6 +454,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// refused an unknown one at load, and it is what the fleet view reads
 	// a peer's presence row back through.
 	e.profile = opts.Bootstrap.Node.Profile(nodeID)
+	e.publicBase = opts.Bootstrap.API.PublicBase()
 	e.leaseTTL = leaseTTL(opts.Bootstrap)
 	n, err := node.New(node.Config{
 		Queue: backends.Queue,

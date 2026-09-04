@@ -378,10 +378,10 @@ integrations:
   # promotion run on; the query-time ``## Relevant knowledge`` search runs
   # as the ASKING SEAT wherever that seat carries its own token.
   #
-  # ``skills_space`` is left unset, so tool-skill pages live in the
-  # reserved ``TS`` space — excluded from routing and from knowledge
-  # search alike, because those pages are machinery rather than knowledge.
-  # See docs/integrations/confluence.md.
+  # ``knowledge.skills_container`` (below) is left unset, so tool-skill
+  # pages live in the reserved ``TS`` space — excluded from routing and
+  # from knowledge search alike, because those pages are machinery rather
+  # than knowledge.  See docs/integrations/confluence.md.
   confluence:
     url: "${CONFLUENCE_URL}"
     token: "${CONFLUENCE_ADMIN_TOKEN}"
@@ -474,20 +474,36 @@ integrations:
       group_webhook: auto                            # one group hook if the plan allows, else per-project
       token_scopes: [api]
 
-# Knowledge read scope.  Deliberately omitted (``knowledge.confluence_spaces``
-# unset): every Nimbus agent carries its own Atlassian credential
-# (``CONFLUENCE_API_TOKEN`` in role ``mcp_env`` below), so the ``## Relevant
-# knowledge`` search runs *as that agent* and Confluence's own space and
-# page permissions bound what it sees — each agent searches every space its
-# account can read (CTO browsing ENG ADRs, PM reading runbooks, etc. all
-# just work).  A PER-SEAT CREDENTIAL IS THE PRECONDITION: a seat without
-# one falls back to the org account, which sees the whole instance, and an
-# unscoped search on a shared credential is refused rather than run.  Set
-# ``knowledge.confluence_spaces: [...]`` to narrow reads to a curated set
-# — and it is required if the seats share one account.  This is independent
-# of each unit's ``integrations.confluence.space`` identity below, which is
-# for routing + writes, not reads.
-# See docs/concepts/knowledge-system.md.
+# Which tracker and which knowledge base this company runs.  Nimbus is an
+# Atlassian shop, so both name the vendor; a company that declares neither
+# block runs the engine's own tracker and wiki, which is what an unset
+# ``backend`` derives.  ONE OF EACH: naming ``native`` beside an
+# ``integrations.jira`` or ``integrations.confluence`` block is refused,
+# because work would be filed in two places with nothing keeping them in
+# step.  The two axes are independent — a company may run a native tracker
+# against a Confluence wiki, or the reverse.
+tracker:
+  backend: jira
+knowledge:
+  backend: confluence
+
+  # Read scope deliberately omitted (``scope`` unset): every Nimbus agent
+  # carries its own Atlassian credential (``CONFLUENCE_API_TOKEN`` in role
+  # ``mcp_env`` below), so the ``## Relevant knowledge`` search runs *as
+  # that agent* and Confluence's own space and page permissions bound what
+  # it sees — each agent searches every space its account can read (CTO
+  # browsing ENG ADRs, PM reading runbooks, etc. all just work).  A
+  # PER-SEAT CREDENTIAL IS THE PRECONDITION: a seat without one falls back
+  # to the org account, which sees the whole instance, and an unscoped
+  # search on a shared credential is refused rather than run.  Set
+  # ``scope: [...]`` to narrow reads to a curated set — and it is required
+  # if the seats share one account.  This is independent of each unit's
+  # ``space`` identity below, which is for routing + writes, not reads.
+  #
+  # ``skills_container`` (default ``TS``) and ``root_space`` (default
+  # ``HOME``) are both left unset.  Both are reserved: excluded from search
+  # and routing, and refused as a unit's own ``space``.
+  # See docs/concepts/knowledge-system.md.
 
 # All tool MCP servers live here.  Atlassian, Mattermost, and GitLab are
 # ``shared: false`` templates — each agent gets its own stdio instance
@@ -573,6 +589,12 @@ roles:
       # still boots, and an issue assigned to her still routes by email.
       atlassian_account_id: "${ATLASSIAN_FOUNDER_ACCOUNT_ID}"
       gitlab_username: jane-founder
+      # Binds the ``founder`` API token in nimbus.config.yaml to THIS
+      # seat, so what she files from the dashboard is filed by her and
+      # wakes her colleagues by the identities above.  An attribution, not
+      # an address — the engine never sends as itself, so this id is left
+      # out of rosters and lookup_colleague.
+      crewlet_operator_id: founder
 
 # Flexible org — units can nest to any depth.
 # Each unit has a type (department, team, squad, pod, etc.) and can
@@ -585,16 +607,18 @@ units:
       - name: Executives
         type: team
         lead: Agent CEO
-        # Integration identity — the Jira project and Confluence space
-        # this unit owns.  Inbound webhooks with no better recipient
-        # (unassigned issues, page changes nobody was mentioned in) route
-        # to the unit lead (Agent CEO), and the space is the team's write
-        # / skill-promotion home.  NEITHER is a tool credential (those are
-        # per-agent under role ``mcp_env`` below) and neither scopes
-        # knowledge reads — reads are permission-bound (see top).
-        integrations:
-          jira: { project: "LEAD" }
-          confluence: { space: "LEAD" }
+        # Tracker + knowledge identity — the project this unit files work
+        # in and the container it writes pages to.  Inbound activity with
+        # no better recipient (unassigned items, page changes nobody was
+        # mentioned in) routes to the unit lead (Agent CEO), and the
+        # container is the team's write / skill-promotion home.  The keys
+        # are VENDOR-NEUTRAL: they name a native project and space, or a
+        # Jira project and Confluence space, depending on which backend the
+        # company runs — the org chart does not change when it switches.
+        # NEITHER is a tool credential (those are per-agent under role
+        # ``mcp_env`` below) and neither scopes knowledge reads.
+        project: "LEAD"
+        space: "LEAD"
         roles:
           - name: Agent CEO
             goal: "Define Nimbus's product vision and strategic direction, prioritize high-impact initiatives across product and engineering, make final calls on roadmap trade-offs, and ensure the team stays aligned on building an open, composable infrastructure control plane that wins in the AI/ML and enterprise market"
@@ -708,9 +732,8 @@ units:
       - name: Product Management
         type: team
         lead: Agent PM
-        integrations:                          # unit's tracker + wiki identity (routing + write home)
-          jira: { project: "PROD" }
-          confluence: { space: "PROD" }
+        project: "PROD"                        # unit's tracker + wiki identity (routing + write home)
+        space: "PROD"
         roles:
           - name: Agent PM
             manages: ["Agent DevRel"]
@@ -764,10 +787,9 @@ units:
         # Shares the ``PROD`` tracker + wiki identity with Product Management:
         # PM and DevRel collaborate tightly (drafts ↔ review), so isolating
         # them into separate projects would force unnecessary cross-project linking.
-        # Both units mapping PROD → their lead means PROD webhooks reach Agent PM.
-        integrations:
-          jira: { project: "PROD" }
-          confluence: { space: "PROD" }
+        # Both units mapping PROD → their lead means PROD activity reaches Agent PM.
+        project: "PROD"
+        space: "PROD"
         roles:
           - name: Agent DevRel
             goal: "Make the Nimbus platform — both the control plane and the Phase-2 AI framework — discoverable, learnable, and adoptable.  Own developer-facing documentation, tutorials, runnable examples, and the public narrative on the website blog so an external developer can go from ``never heard of Nimbus`` to ``running a distributed job in 10 minutes``"
@@ -826,9 +848,8 @@ units:
       - name: Core
         type: team
         lead: Agent CTO
-        integrations:                          # unit's tracker + wiki identity (routing + write home)
-          jira: { project: "ENG" }
-          confluence: { space: "ENG" }
+        project: "ENG"                         # unit's tracker + wiki identity (routing + write home)
+        space: "ENG"
         # Unit-scoped recurring work — one schedule per delivery mode.
         # Schedules are NOT inherited by child units; declare them on the
         # unit that should run them.  See docs/concepts/scheduling.md.

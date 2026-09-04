@@ -417,9 +417,13 @@ func seatsFor(company *config.Company, kind string) []string {
 		case "mattermost":
 			carries = r.Integrations.Mattermost != nil
 		case "jira":
-			carries = r.Integrations.Jira != nil
+			// A seat's own PROJECT, which is vendor-neutral now: the same
+			// key names a native project and a Jira one, and this answer
+			// is about which seats carry an identity of their own rather
+			// than about which product serves it.
+			carries = r.Project != ""
 		case "confluence":
-			carries = r.Integrations.Confluence != nil
+			carries = r.Space != ""
 		}
 		if carries {
 			out = append(out, r.Name)

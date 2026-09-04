@@ -111,8 +111,8 @@ func TestHumanSeatRejectsEveryRuntimeField(t *testing.T) {
 		}},
 		{"slack", func(r *Role) { r.Slack = SlackIdentity{BotToken: "xoxb-1"} }},
 		{"mattermost", func(r *Role) { r.Mattermost = MattermostIdentity{BotToken: "mm-1"} }},
-		{"integrations.jira", func(r *Role) { r.JiraProject = "ENG" }},
-		{"integrations.confluence", func(r *Role) { r.ConfluenceSpace = "ENG" }},
+		{"integrations.jira", func(r *Role) { r.Project = "ENG" }},
+		{"integrations.confluence", func(r *Role) { r.Space = "ENG" }},
 		{"mcp_env", func(r *Role) { r.MCPEnv = MCPEnv{"atlassian": {"JIRA_USERNAME": "s"}} }},
 		{"behavioral_guidelines", func(r *Role) { r.BehavioralGuidelines = []string{"Reply fast"} }},
 	} {
@@ -384,7 +384,7 @@ func TestContactFieldTableIsConsistent(t *testing.T) {
 	t.Parallel()
 	want := []string{
 		"slack_user_id", "mattermost_user_id", "atlassian_account_id",
-		"github_login", "gitlab_username",
+		"github_login", "gitlab_username", "crewlet_operator_id",
 	}
 	for i, key := range want {
 		if contactFields[i].key != key {
@@ -403,5 +403,45 @@ func TestContactFieldTableIsConsistent(t *testing.T) {
 	}
 	if contactFields[fieldAtlassianAccountID].key != "atlassian_account_id" {
 		t.Error("jira and confluence no longer share the atlassian account id")
+	}
+}
+
+// AN OPERATOR ID IS AN ATTRIBUTION, NEVER AN ADDRESS. The engine never sends
+// as itself, so a roster listing it under "how to reach them" would tell an
+// agent to mention a name no platform resolves — while the id still has to
+// register, so a write arriving with that token is attributed to this seat.
+func TestTheOperatorIDIsAnAttributionAndNotAnAddress(t *testing.T) {
+	t.Parallel()
+	c := &HumanContact{SlackUserID: "U1", CrewletOperatorID: "Founder"}
+	c.Normalize()
+	if c.CrewletOperatorID != "founder" {
+		t.Errorf("operator id = %q: it is compared against a Tier A token id "+
+			"typed in another file, so case must not be two chances to disagree",
+			c.CrewletOperatorID)
+	}
+
+	got := c.ResolvedIdentities(func(string) (string, bool) { return "", false })
+	want := []Identity{{TransportSlack, "U1"}, {TransportCrewlet, "founder"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("identities = %v, want %v — the id must register, or a write "+
+			"carrying that token is attributed to nobody", got, want)
+	}
+
+	var reachable []Identity
+	for _, id := range got {
+		if id.Transport.Reachable() {
+			reachable = append(reachable, id)
+		}
+	}
+	if !slices.Equal(reachable, []Identity{{TransportSlack, "U1"}}) {
+		t.Errorf("reachable = %v: the engine never sends as itself", reachable)
+	}
+
+	// A seat reachable ONLY through the engine is still not empty: they hold
+	// a credential and act, and IsEmpty gates whether a human seat is
+	// considered configured at all.
+	only := &HumanContact{CrewletOperatorID: "ops"}
+	if only.IsEmpty() {
+		t.Error("a seat bound to an API token reads as having no identity")
 	}
 }

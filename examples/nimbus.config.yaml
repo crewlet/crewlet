@@ -124,8 +124,25 @@ api:
   # the others set port 0 so only one process binds it (see
   # docs/guides/deployment.md).
   port: 80
+
+  # Where this deployment answers FROM OUTSIDE, which is rarely what host
+  # and port say — behind a load balancer or a tunnel they are not even
+  # the same machine.  A bare origin: consumers append their own rooted
+  # paths, so a path, query or fragment here would land in the middle of
+  # every link.  Two readers: a notification card composed for a person
+  # links to the item or page it is about, and every provisioner's
+  # -public-url defaults to it rather than being retyped into six
+  # commands.  It reaches tool-skill prose as ${crewlet_base_url}.
+  public_url: "http://localhost"
+
   auth:
     tokens:
+      # The id is what a write's audit row records, and what a human seat
+      # binds to with ``contact.crewlet_operator_id`` — so a person acting
+      # through the dashboard acts as themselves rather than as a token.
+      # An UNBOUND token is ordinary: an operator outside the org chart, a
+      # pipeline, an automation.  It acts as ``operator:<id>`` under this
+      # label and is never refused for it.
       - id: founder
         token: "${CREWLET_API_TOKEN_FOUNDER}"
 

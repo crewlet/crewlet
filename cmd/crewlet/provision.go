@@ -161,6 +161,34 @@ func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer)
 	return config.WithStore(config.MapSource(values)), closeStore, nil
 }
 
+// publicBase is the deployment's public base URL for a provisioner run: the
+// -public-url flag when given, else Tier A's api.public_url.
+//
+// THE FLAG WINS, because a run may deliberately register a webhook at an
+// address this node does not answer at — a tunnel for a local debug session,
+// a staging hostname being cut over. The fallback exists because the value is
+// otherwise typed identically into six commands, and a typo in the fifth
+// registers a webhook whose deliveries land nowhere while the command reports
+// success.
+//
+// A bootstrap that cannot be read answers empty rather than failing: every
+// caller already treats an absent base as "register nothing and say so", and
+// a provisioner refusing to run because a Tier A file it does not otherwise
+// need is malformed would be a worse answer than the one it gives today.
+func publicBase(flagValue, bootstrapPath string) string {
+	if v := strings.TrimSpace(flagValue); v != "" {
+		return v
+	}
+	if _, err := os.Stat(bootstrapPath); err != nil {
+		return ""
+	}
+	boot, err := loadBootstrapForStore(bootstrapPath)
+	if err != nil {
+		return ""
+	}
+	return boot.API.PublicBase()
+}
+
 // operatorCredential reads the human operator's own credential, from the
 // ENVIRONMENT ALONE.
 //
@@ -315,7 +343,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 
 	res, err := gitlab.Reconcile(ctx, gitlab.Options{
 		Client: client, Config: cfg, Plan: plan, Sink: sink,
-		WebhookBase:      *publicURL,
+		WebhookBase:      publicBase(*publicURL, *sinks.bootstrap),
 		SigningSecret:    env.Value(cfg.SigningSecret),
 		SigningSecretVar: signingVar,
 		Rotate:           *rotate, Decommission: *decommission, ExpiryDays: expiry,

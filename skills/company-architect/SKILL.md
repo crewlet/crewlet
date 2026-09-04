@@ -173,19 +173,31 @@ distinct variable per seat. Atlassian and GitHub mint nothing: create
 those accounts and tokens by hand, and their commands report which
 account each credential turned out to be.
 
-**The knowledge backend is single-homed.** The engine wires exactly one
-`knowledge.Searcher`, and Confluence is the backend behind it. Put the
-org-wide read scope in `knowledge.confluence_spaces` — and note a scope
-naming a backend the config does not configure is refused, because it
-reads as a working narrowing and narrows nothing.
+**The knowledge base and the tracker are each single-homed, and each is
+named.** `knowledge.backend` is `native` (the default), `confluence` or
+`none`; `tracker.backend` is `native`, `jira` or `none`. Two knowledge
+bases would make an agent's answer to "what do we already know about
+this" depend on which was asked, so naming `native` beside an
+`integrations.confluence` block is refused — and the same for the
+tracker. Leaving a backend unset **derives** it from whether the vendor
+block is there, so an existing config keeps what it had. The two axes are
+independent: a native tracker against a Confluence wiki is ordinary. Put
+the org-wide read scope in `knowledge.scope`, and note a scope on a
+backend switched off is refused, because it reads as a working narrowing
+and narrows nothing.
 
-**`integrations.*.project` / `.space` is identity, not read scope, and
-not a credential.** On a unit or root role it means "this team's home":
-where inbound activity with no better recipient routes, and where the
-team files work. It does **not** widen what agents can read (only the
-org-wide `knowledge.*` list does) and it is **not** an MCP credential
-(those live in `role.mcp_env`). This is the single most-confused part of
-the config — get it right and say which one you mean.
+**`project` / `space` on a unit or root role is identity, not read scope,
+and not a credential.** It means "this team's home": where inbound
+activity with no better recipient routes, and where the team files work
+and writes pages. It does **not** widen what agents can read (only
+`knowledge.scope` does) and it is **not** an MCP credential (those live
+in `role.mcp_env`). This is the single most-confused part of the config —
+get it right and say which one you mean. The keys are **vendor-neutral**
+by design: the same `project: ENG` names a native project and a Jira one,
+so switching backends never rewrites the org chart. Shape them as an
+upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`),
+which is what every backend accepts, and never use the reserved `TS` or
+`HOME`.
 
 **`mcp_env` is per-agent tool credentials, keyed by MCP server name** —
 env vars for `stdio` servers, HTTP headers for `http` ones. A unit's

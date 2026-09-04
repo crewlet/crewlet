@@ -42,15 +42,15 @@ type Organization struct {
 	// layer could not be shown beside the meter that enforces it.
 	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty"`
 
-	// ConfluenceSpaces is the org-wide knowledge READ scope — the only
+	// KnowledgeScope is the org-wide knowledge READ scope — the only
 	// thing that narrows a knowledge search. Empty means unscoped, bounded
 	// by whatever the backend's own ACLs allow.
 	//
-	// Deliberately org-wide rather than per-seat: a unit's Confluence space
-	// is an identity (where it writes, where its webhooks route), and
+	// Deliberately org-wide rather than per-seat: a unit's own space is an
+	// identity (where it writes, where its page activity routes), and
 	// letting an identity double as a read scope is how an agent ends up
 	// unable to read the page it was told to follow.
-	ConfluenceSpaces []string `yaml:"confluence_spaces,omitempty" json:"confluence_spaces,omitempty"`
+	KnowledgeScope []string `yaml:"scope,omitempty" json:"scope,omitempty"`
 }
 
 // AllRoles iterates every seat in the company: root seats first, then each

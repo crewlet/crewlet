@@ -410,8 +410,8 @@ func (c *Client) PagesIn(ctx context.Context, space string) ([]Page, error) {
 			// which space to split.
 			return nil, fmt.Errorf(
 				"confluence: space %s holds more than %d pages, which is not a "+
-					"tool-skills container — point integrations.confluence."+
-					"skills_space at a space that holds only skills", space, pageWalkCeiling)
+					"tool-skills container — point knowledge.skills_container "+
+					"at a space that holds only skills", space, pageWalkCeiling)
 		}
 	}
 }

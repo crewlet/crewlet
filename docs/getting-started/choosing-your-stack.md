@@ -131,9 +131,8 @@ What **you** do, by hand:
      extra).
    - **Data Center** — register webhooks directly against
      `POST /webhooks/jira` / `POST /webhooks/confluence` with an HMAC secret.
-4. **Create the spaces/projects** your units use (`integrations.jira.project`
-   / `integrations.confluence.space` per unit) and an `Onboarding` page per
-   space.
+4. **Create the spaces/projects** your units use (`project` / `space` per
+   unit) and an `Onboarding` page per space.
 
 Details: [Jira](../integrations/jira.md) ·
 [Confluence](../integrations/confluence.md).

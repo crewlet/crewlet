@@ -137,12 +137,12 @@ func ProjectsOf(o *org.Organization) []string {
 	}
 	seen := map[string]bool{}
 	for u := range o.AllUnits() {
-		if key := org.NormalizeScope(u.JiraProject); key != "" {
+		if key := org.NormalizeScope(u.Project); key != "" {
 			seen[key] = true
 		}
 	}
 	for seat := range o.AllRoles() {
-		if key := org.NormalizeScope(seat.JiraProject); key != "" {
+		if key := org.NormalizeScope(seat.Project); key != "" {
 			seen[key] = true
 		}
 	}

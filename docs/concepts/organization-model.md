@@ -16,13 +16,15 @@ Organization
     ├── name, type, purpose, lead, goals, knowledge_refs
     ├── channel: str                       (team channel on the company's chat
     │                                       surface, inherited by children)
-    ├── jira_project: str                  (integrations.jira.project — the unit's Jira
-    │                                       project identity: lead-fallback webhook
-    │                                       routing + the project the team files under)
-    ├── confluence_space: str              (integrations.confluence.space — the unit's
-    │                                       Confluence space: where its pages live and
-    │                                       where page activity routes. Does NOT scope
-    │                                       knowledge reads)
+    ├── project: str                        (tracker identity: lead-fallback routing
+    │                                        + the project the team files under.
+    │                                        VENDOR-NEUTRAL — it names a native
+    │                                        project or a Jira one, whichever
+    │                                        tracker.backend the company runs)
+    ├── space: str                          (knowledge identity: where its pages live
+    │                                        and where page activity routes. Vendor-
+    │                                        neutral likewise. Does NOT scope
+    │                                        knowledge reads)
     ├── mcp_env: dict[server → env vars]  (per-agent tool creds, inherited by roles)
     ├── roles: Role[]                      (agents directly in this unit)
     ├── children: OrgUnit[]                (nested sub-units, recursive)
@@ -46,14 +48,13 @@ Role (a SEAT — can live at root level OR inside an OrgUnit)
 │                                      for http servers like the remote
 │                                      GitHub MCP. Tool creds only; the
 │                                      project/space identity is the
-│                                      integrations block below)
-├── jira_project: str  (root-level roles — integrations.jira.project;
-│                       the role's Jira project identity: lead-fallback
-│                       webhook routing + write home, NOT an MCP credential)
-├── confluence_space: str (root-level roles — integrations.confluence.space;
-│                          the role's Confluence space. Does NOT scope
-│                          knowledge reads — that is the org-wide
-│                          knowledge.confluence_spaces only)
+│                                      `project` / `space` keys above)
+├── project: str       (root-level roles — a seat inside a unit takes the
+│                       unit's; the seat's own tracker identity:
+│                       lead-fallback routing + write home, NOT a credential)
+├── space: str         (root-level roles — likewise; the seat's own knowledge
+│                       container. Does NOT scope knowledge reads — that is
+│                       the org-wide knowledge.scope only)
 ├── token_budget: int  (0 = unlimited)
 ├── llm: str           (provider key, default = "default")
 ├── llm_auxiliary: str (optional cheap-model key for reflection /
@@ -70,10 +71,10 @@ Role (a SEAT — can live at root level OR inside an OrgUnit)
 
 Roles can live in two places:
 
-- **Inside an OrgUnit** (`units[].roles`) — scoped to that unit for MCP env inheritance and lead auto-management. The unit's [`integrations.jira.project`](../integrations/jira.md) gives the team its tracker "home" (webhook routing + write target), but does not scope what the role can *read*.
-- **At the root level** (`roles`) — org-wide agents that don't belong to any specific team. They participate in the `manages[]` hierarchy like any other role and are fully visible to task routing; a root-level role can carry its own `integrations.jira.project` identity. Knowledge **read** scope for every agent is the org-wide `org.Organization.ConfluenceSpaces` only.
+- **Inside an OrgUnit** (`units[].roles`) — scoped to that unit for MCP env inheritance and lead auto-management. The unit's `project` gives the team its tracker "home" (routing + write target), but does not scope what the role can *read*.
+- **At the root level** (`roles`) — org-wide agents that don't belong to any specific team. They participate in the `manages[]` hierarchy like any other role and are fully visible to task routing; a root-level role can carry its own `project` identity. Knowledge **read** scope for every agent is the org-wide `org.Organization.KnowledgeScope` only.
 
-> Every one of these identities is consulted. Each tracker routes an item that names nobody to the lead of the unit that owns the project, and Confluence does the same for a page change nobody was mentioned in. Neither narrows what an agent can READ: knowledge scope is the org-wide `knowledge.confluence_spaces` only, because letting a unit's identity double as a read scope is how an agent ends up unable to read the page it was told to follow. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
+> Every one of these identities is consulted. The tracker routes an item that names nobody to the lead of the unit that owns the project, and the knowledge base does the same for a page change nobody was mentioned in — whichever backend serves each, which is why the keys name neither. Neither narrows what an agent can READ: knowledge scope is the org-wide `knowledge.scope` only, because letting a unit's identity double as a read scope is how an agent ends up unable to read the page it was told to follow. See [Jira](../integrations/jira.md) and [Confluence](../integrations/confluence.md).
 
 ---
 

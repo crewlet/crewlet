@@ -128,3 +128,42 @@ func TestCapitalizeMatchesPythonSemantics(t *testing.T) {
 		}
 	}
 }
+
+// A PERSON WHO HOLDS ONLY AN OPERATOR CREDENTIAL HAS NOBODY TO @-MENTION.
+// Their id identifies them on the engine's own surface, where nothing is ever
+// sent — so a roster that listed it and then told an agent to mention them
+// would produce a message addressed to a handle resolving to nobody, which
+// reads to everyone else as work handed over.
+func TestRosterDoesNotOfferAnOperatorIDAsAnAddress(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{
+		Name: "Acme",
+		Units: []*org.Unit{{
+			Name: "Eng Team",
+			Type: org.UnitTypeTeam,
+			Lead: "Lead",
+			Roles: []*org.Role{
+				{Name: "Lead", DeclaredHandle: "lead"},
+				{
+					Name:    "Jane Founder",
+					Kind:    org.KindHuman,
+					Contact: &org.HumanContact{CrewletOperatorID: "founder"},
+				},
+			},
+		}},
+	}
+	o.Normalize()
+	p := BuildExecutor(seatIn(o, "Lead"), ExecutorInput{})
+
+	contains(t, p, "**Jane Founder** (jane-founder) — **human teammate**")
+	excludes(t, p, "Crewlet ID:", "crewlet")
+	contains(t, p, "nobody to @-mention")
+	excludes(t, p, "@-mention them on their team's chat")
+
+	// A colleague WITH a reachable account keeps the mention instruction.
+	o.Units[0].Roles[1].Contact.SlackUserID = "U0FOUNDER"
+	o.Normalize()
+	with := BuildExecutor(seatIn(o, "Lead"), ExecutorInput{})
+	contains(t, with, "Slack ID: U0FOUNDER", "@-mention them on their team's chat")
+	excludes(t, with, "nobody to @-mention")
+}

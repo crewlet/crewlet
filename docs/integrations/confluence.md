@@ -19,7 +19,8 @@ integrations:
     webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"  # Data Center: required, HMAC-SHA256
 
 knowledge:
-  confluence_spaces: ["HANDBOOK"]                   # org-wide spaces every agent can search
+  backend: confluence                               # this company's knowledge base
+  scope: ["HANDBOOK"]                               # org-wide containers every agent can search
 
 mcp_servers:
   - name: atlassian                               # shared by Jira + Confluence
@@ -60,15 +61,14 @@ Agents see these tools in their tool list (discovered dynamically via MCP):
 
 ### Per-Unit Confluence Space (identity)
 
-A unit declares the Confluence space it **owns** under `integrations.confluence.space`. This is *integration identity* — it routes inbound page webhooks to the unit lead and is the team's write / skill-promotion home. It is **not** a tool credential (those stay per-role in `mcp_env.atlassian`) and it **does not** scope knowledge reads (read scope is the org-wide `knowledge.confluence_spaces` — see [Scoped spaces](#scoped-spaces) below).
+A unit declares the Confluence space it **owns** under `space`. This is *integration identity* — it routes inbound page webhooks to the unit lead and is the team's write / skill-promotion home. It is **not** a tool credential (those stay per-role in `mcp_env.atlassian`) and it **does not** scope knowledge reads (read scope is the org-wide `knowledge.scope` — see [Scoped spaces](#scoped-spaces) below).
 
 ```yaml
 units:
   - name: Engineering
     type: department
     lead: CTO
-    integrations:
-      confluence: { space: "ENG" }   # unit identity: routing + write home (NOT read scope)
+    space: "ENG"   # unit identity: routing + write home (NOT read scope)
     roles:
       - name: CTO
         mcp_env:
@@ -80,15 +80,14 @@ units:
   - name: Product
     type: department
     lead: VP Product
-    integrations:
-      confluence: { space: "PROD" }
+    space: "PROD"
     roles:
       - name: VP Product
         mcp_env:
           atlassian: { CONFLUENCE_API_TOKEN: "${VP_PRODUCT_CONFLUENCE_TOKEN}" }
 ```
 
-Each role keeps its own `CONFLUENCE_API_TOKEN` (and `CONFLUENCE_USERNAME`) in `mcp_env.atlassian` — the credential the mcp-atlassian server and the query-time searcher authenticate with. The unit's `integrations.confluence.space` is read by the engine (routing + skill-promotion), not passed to the MCP server.
+Each role keeps its own `CONFLUENCE_API_TOKEN` (and `CONFLUENCE_USERNAME`) in `mcp_env.atlassian` — the credential the mcp-atlassian server and the query-time searcher authenticate with. The unit's `space` is read by the engine (routing + skill-promotion), not passed to the MCP server.
 
 ---
 
@@ -172,25 +171,25 @@ To control what an agent can read, set Confluence page/space permissions on that
 
 ### Scoped spaces
 
-The CQL query is narrowed by a `space IN (...)` clause built from **one** source: the org-wide `knowledge.confluence_spaces` list. It is the same for every agent — a unit's own `integrations.confluence.space` is *identity* (routing + writes, above) and **does not** narrow reads.
+The CQL query is narrowed by a `space IN (...)` clause built from **one** source: the org-wide `knowledge.scope` list. It is the same for every agent — a unit's own `space` is *identity* (routing + writes, above) and **does not** narrow reads.
 
-**Scoping is optional, and empty is the useful default.** If `knowledge.confluence_spaces` is empty, the search falls back on the auth model: a role with its **own** Confluence credentials searches **unscoped** (the `space IN (...)` clause is dropped and Confluence ACLs bound the results — it sees every space its account can read), while a **credential-less** role — which would otherwise search the org admin's entire view — searches **nothing**. So with per-agent tokens everywhere you can omit `knowledge.confluence_spaces` entirely and let Confluence ACLs scope reads; set it only to *narrow* the search to a curated floor.
+**Scoping is optional, and empty is the useful default.** If `knowledge.scope` is empty, the search falls back on the auth model: a role with its **own** Confluence credentials searches **unscoped** (the `space IN (...)` clause is dropped and Confluence ACLs bound the results — it sees every space its account can read), while a **credential-less** role — which would otherwise search the org admin's entire view — searches **nothing**. So with per-agent tokens everywhere you can omit `knowledge.scope` entirely and let Confluence ACLs scope reads; set it only to *narrow* the search to a curated floor.
 
 ```yaml
 knowledge:
-  confluence_spaces: ["HANDBOOK", "GENERAL"]   # optional read-scope floor — omit to rely on per-agent ACLs
+  backend: confluence
+  scope: ["HANDBOOK", "GENERAL"]   # optional read-scope floor — omit to rely on per-agent ACLs
 
 units:
   - name: Engineering
-    integrations:
-      confluence: { space: "ENG" }    # ENG is Engineering's WRITE / routing home — it does NOT scope reads
+    space: "ENG"    # ENG is Engineering's WRITE / routing home — it does NOT scope reads
 ```
 
-Read scope is computed at query time from the normalised `knowledge.confluence_spaces`, so a live config edit to the scope takes effect with no restart and no refresh hook. With the config above, *every* agent's search is scoped to `{HANDBOOK, GENERAL}` regardless of unit; an Engineering agent is **not** restricted to `ENG` (and with `confluence_spaces` omitted it searches across everything its Atlassian account can read).
+Read scope is computed at query time from the normalised `knowledge.scope`, so a live config edit to the scope takes effect with no restart and no refresh hook. With the config above, *every* agent's search is scoped to `{HANDBOOK, GENERAL}` regardless of unit; an Engineering agent is **not** restricted to `ENG` (and with `knowledge.scope` omitted it searches across everything its Atlassian account can read).
 
 **Unreviewed auto-drafted skills never reach an agent.** A hit whose ancestor chain includes `Auto-Drafted Skills` is dropped, and so is one whose title still carries the `[Auto-draft] ` prefix — two tests, because the first can silently stop matching (an instance that answered without the ancestor expand) and an exclusion that quietly matches nothing looks exactly like a knowledge base with no drafts in it. A lead publishes a draft by **moving it out** of that parent, which is the review gesture; the prefix is cleared with it.
 
-**The tool-skills space is not knowledge.** Pages in `integrations.confluence.skills_space` (default `TS`) are machinery — a seat told to read one would follow an instruction written for a different phase of a different turn — so they are excluded from search and from routing alike, while still being indexed into the skill registry.
+**The tool-skills space is not knowledge.** Pages in `knowledge.skills_container` (default `TS`) are machinery — a seat told to read one would follow an instruction written for a different phase of a different turn — so they are excluded from search and from routing alike, while still being indexed into the skill registry.
 
 ### When Confluence search is unavailable
 
@@ -354,7 +353,7 @@ crewlet confluence import <company.yaml> ./docs-to-publish
 - **Frontmatter may declare `parent:` and `labels:`.** Frontmatter may also declare a `parent:` — the **title** of a page in the same space to nest this one under, which is the one thing a flat directory of files cannot say about a wiki that has trees in it — and `labels:`, the author's own page labels. The plan is ordered parents-first so a `parent:` naming a page **published by the same run** resolves; a cycle stops the walk naming the files, and a parent nobody publishes is a note and a page at the space root, because a doc nobody can read is worse than a doc in the wrong place. **An existing page is never re-parented** — where a page sits is something people move deliberately, and a run that dragged it back every time would be fighting them with no way to say so. Labels are lower-cased and de-duplicated at parse time, because that is what Confluence stores and answers with; a label that will not attach is a note, not a page failure.
 - **Every skill page this command writes gets the `crewlet-skill` label.** That is provenance, not identity: it says only that the importer wrote the page, which is a fact no field on the page carries. `-prune` is the one thing that needs it.
 - **Page failures are isolated.** A restricted page or one 403 does not cost the other forty; the run reports what failed and exits non-zero.
-- `-space KEY` publishes tool skills into a space other than `integrations.confluence.skills_space`; empty reads `$CREWLET_TOOL_SKILLS_SPACE`, then the config field. A company that has [turned tool skills off](../concepts/tool-skills.md#configuration) with `skills_space: ""` has nowhere for a skill file to go, so a tree containing one stops the walk naming both the setting and this flag.
+- `-space KEY` publishes tool skills into a space other than `knowledge.skills_container`; empty reads `$CREWLET_TOOL_SKILLS_SPACE`, then the config field. A company that has [turned tool skills off](../concepts/tool-skills.md#configuration) with `skills_container: ""` has nowhere for a skill file to go, so a tree containing one stops the walk naming both the setting and this flag.
 - `-prune` deletes the skill pages this tool published that no local file publishes any more — labelled, parsing as a skill, and with a key this run's tree does not carry. All three conditions are required: the label protects a lead's hand-authored page, the parse protects an ordinary page filed in the same space, and the key comparison makes a renamed skill a delete-and-create rather than a silent duplicate. **A prune that cannot enumerate the space deletes nothing** and fails the run, because the orphan set is derived by subtraction and a partial read deletes live pages. Deleted pages go to the space's trash, so an operator who pruned something they wanted restores it in the UI.
 - Add `-dry-run` to print the plan and write or delete nothing.
 
@@ -390,7 +389,7 @@ Each unit's Confluence space can host an `Onboarding` page that fresh agents are
 
 ### 3. Query-time Confluence search (engine side)
 
-The `## Relevant knowledge` block runs a live Confluence search for the seat: the Confluence searcher has the auxiliary LLM generate a CQL query from the trigger and runs it against the Confluence REST API, optionally narrowed to the org-wide `knowledge.confluence_spaces` (empty ⇒ unscoped, with the agent's own Confluence ACLs bounding the results). The `search_knowledge` builtin runs the same search on a query the executor writes itself. See [Knowledge System § Relevant-knowledge prefetch](../concepts/knowledge-system.md#relevant-knowledge-prefetch). Agents that want to search or read pages themselves use the `confluence_search` and `confluence_get_page` MCP tools.
+The `## Relevant knowledge` block runs a live Confluence search for the seat: the Confluence searcher has the auxiliary LLM generate a CQL query from the trigger and runs it against the Confluence REST API, optionally narrowed to the org-wide `knowledge.scope` (empty ⇒ unscoped, with the agent's own Confluence ACLs bounding the results). The `search_knowledge` builtin runs the same search on a query the executor writes itself. See [Knowledge System § Relevant-knowledge prefetch](../concepts/knowledge-system.md#relevant-knowledge-prefetch). Agents that want to search or read pages themselves use the `confluence_search` and `confluence_get_page` MCP tools.
 
 This approach keeps tool guidance **configurable per-org** and **per-role** rather than hardcoded in the engine. The same Confluence MCP tools are available to all agents, but each agent's prompt scaffolding and accessible spaces determine how they use them.
 

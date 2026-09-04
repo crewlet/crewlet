@@ -81,7 +81,7 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 				"to anything", cfg.URL, cfg.CloudID)
 	}
 	site := resolved.ShareableBaseURL()
-	skillsSpace := cfg.SkillsSpaceKey()
+	skillsSpace := c.Config.SkillsContainerKey()
 
 	// THE ORG CREDENTIAL IS WHAT SEARCH RESTS ON. Without it a seat with
 	// its own credential still searches — as itself, which is the better

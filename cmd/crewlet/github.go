@@ -111,7 +111,7 @@ func runGitHubProvision(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout,
 			"-dry-run: reading GitHub; no webhook will be registered.")
 	} else {
-		opts.WebhookBase = *publicURL
+		opts.WebhookBase = publicBase(*publicURL, *sinks.bootstrap)
 		sink, closeSink, openErr := sinks.open(ctx, stdout)
 		if openErr != nil {
 			return openErr

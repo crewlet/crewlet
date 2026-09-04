@@ -138,6 +138,7 @@ func BuildRosterSection(s Seat) []string {
 		if !report.IsHuman() {
 			continue
 		}
+		addressable := false
 		if report.Contact != nil {
 			seen := make(map[string]bool)
 			for _, id := range report.Contact.ResolvedIdentities(s.Env) {
@@ -145,21 +146,42 @@ func BuildRosterSection(s Seat) []string {
 				// Atlassian id covers both Jira and Confluence). Show
 				// each id once, labelled by its first transport —
 				// repeating it reads as two different accounts.
-				if seen[id.ExternalID] {
+				//
+				// An UNREACHABLE transport is left out entirely: an
+				// operator id identifies this person on the engine's own
+				// surface, where nothing is ever sent, so listing it under
+				// how to reach them would have an agent @-mentioning a
+				// name no platform resolves.
+				if seen[id.ExternalID] || !id.Transport.Reachable() {
 					continue
 				}
 				seen[id.ExternalID] = true
+				addressable = true
 				parts = append(parts, "  - "+capitalize(string(id.Transport))+" ID: "+id.ExternalID)
 			}
 		}
 		if report.Availability != "" {
 			parts = append(parts, "  - Availability: "+report.Availability)
 		}
+		if addressable {
+			parts = append(parts,
+				"  - Working with them: hand work over in the PM tool "+
+					"and @-mention them on their team's chat or issue "+
+					"tracker; they reply asynchronously — don't expect an "+
+					"engine turn from them.")
+			continue
+		}
+		// NOBODY TO @-MENTION. A person may hold an operator credential and
+		// no chat account at all — they read their dashboard inbox — and
+		// telling an agent to mention them anyway produces a message
+		// addressed to a handle that resolves to nobody, which reads to
+		// everyone else as work handed over.
 		parts = append(parts,
-			"  - Working with them: hand work over in the PM tool "+
-				"and @-mention them on their team's chat or issue "+
-				"tracker; they reply asynchronously — don't expect an "+
-				"engine turn from them.")
+			"  - Working with them: hand work over in the PM tool and "+
+				"assign it to them; they have no chat or code-host account "+
+				"here, so there is nobody to @-mention. They read their "+
+				"queue and reply asynchronously — don't expect an engine "+
+				"turn from them.")
 	}
 	return parts
 }

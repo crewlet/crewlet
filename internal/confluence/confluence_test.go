@@ -172,8 +172,8 @@ func TestAConfiguredScopeNarrowsTheQuery(t *testing.T) {
 	searcher := confluence.NewSearcher(confluence.SearcherOptions{Org: client(t, inst)})
 
 	o := &org.Organization{Name: "nimbus"}
-	o.ConfluenceSpaces = []string{"handbook", "ENG"}
-	o.Units = []*org.Unit{{Name: "Ops", ConfluenceSpace: "OPS"}}
+	o.KnowledgeScope = []string{"handbook", "ENG"}
+	o.Units = []*org.Unit{{Name: "Ops", Space: "OPS"}}
 	o.Normalize()
 
 	searcher.Search(context.Background(), knowledge.Query{

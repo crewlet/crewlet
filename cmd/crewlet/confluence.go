@@ -28,7 +28,7 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 	bootstrapPath := bootstrapFlag(fs)
 	space := fs.String("space", "",
 		"the space tool-skill pages are published into; empty reads "+
-			"CREWLET_TOOL_SKILLS_SPACE, then integrations.confluence.skills_space")
+			"CREWLET_TOOL_SKILLS_SPACE, then knowledge.skills_container")
 	prune := fs.Bool("prune", false,
 		"delete published tool-skill pages whose key no local file publishes")
 	dryRun := fs.Bool("dry-run", false, "print the plan and write nothing")
@@ -53,7 +53,7 @@ func runConfluenceImport(args []string, stdout, stderr io.Writer) error {
 			"confluence: the company config has no integrations.confluence " +
 				"block, so there is no instance to publish into")
 	}
-	skillsSpace := skillsContainer(*space, "CREWLET_TOOL_SKILLS_SPACE", cfg.SkillsSpaceKey())
+	skillsSpace := skillsContainer(*space, "CREWLET_TOOL_SKILLS_SPACE", company.SkillsContainerKey())
 	plan, err := confluence.Walk(directory, skillsSpace)
 	if err != nil {
 		return err
@@ -160,7 +160,7 @@ func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("confluence resync", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	space := fs.String("space", "",
-		"the skills space key; empty takes integrations.confluence.skills_space")
+		"the skills space key; empty takes knowledge.skills_container")
 	bootstrapPath := bootstrapFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -202,13 +202,13 @@ func runConfluenceResync(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	key := skillsContainer(*space, "CREWLET_TOOL_SKILLS_SPACE", cfg.SkillsSpaceKey())
+	key := skillsContainer(*space, "CREWLET_TOOL_SKILLS_SPACE", company.SkillsContainerKey())
 	if key == "" {
 		return errors.New(
-			"confluence: this company has no tool-skills space — " +
-				"integrations.confluence.skills_space is set to the empty " +
-				"string, which turns tool skills off. Pass -space KEY to " +
-				"read one anyway, or remove that setting")
+			"confluence: this company has no tool-skills container — " +
+				"knowledge.skills_container is set to the empty string, which " +
+				"turns tool skills off. Pass -space KEY to read one anyway, " +
+				"or remove that setting")
 	}
 	pages, err := confluence.SkillPages(ctx, client, key)
 	if err != nil {

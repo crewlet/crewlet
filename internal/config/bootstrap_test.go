@@ -276,3 +276,52 @@ func TestAZeroDurationAccessorStaysZero(t *testing.T) {
 		t.Errorf("EventRetention = %v, want 0", got)
 	}
 }
+
+// api.public_url IS AN ORIGIN, not a page. Every consumer appends a rooted
+// path to it, so a value carrying a path, a query or a bare host composes
+// links with the operator's leftovers in the middle — links that look right
+// in a config review and open nothing.
+func TestThePublicURLIsABareOrigin(t *testing.T) {
+	t.Parallel()
+	for _, ok := range []string{
+		"https://crewlet.example.com",
+		"http://localhost:8080",
+		"https://crewlet.example.com/", // one trailing slash, trimmed
+		"https://crewlet.example.com:8443",
+	} {
+		doc := "node:\n  id: n1\nstore:\n  path: /tmp/x.db\napi:\n  public_url: " + ok + "\n"
+		boot, err := ParseBootstrap([]byte(doc), EnvOnly())
+		if err != nil {
+			t.Errorf("%q was refused: %v", ok, err)
+			continue
+		}
+		if strings.HasSuffix(boot.API.PublicBase(), "/") {
+			t.Errorf("PublicBase(%q) = %q, want no trailing slash", ok, boot.API.PublicBase())
+		}
+	}
+	for _, bad := range []string{
+		"crewlet.example.com",                  // no scheme: every link is relative
+		"ftp://crewlet.example.com",            // not a browser scheme
+		"https://",                             // no host
+		"https://crewlet.example.com/crewlet",  // a path lands mid-link
+		"https://crewlet.example.com?tenant=x", // so does a query
+		"https://crewlet.example.com#top",
+	} {
+		doc := "node:\n  id: n1\nstore:\n  path: /tmp/x.db\napi:\n  public_url: \"" + bad + "\"\n"
+		if _, err := ParseBootstrap([]byte(doc), EnvOnly()); err == nil {
+			t.Errorf("%q was accepted", bad)
+		} else if !strings.Contains(err.Error(), "api.public_url") {
+			t.Errorf("the refusal of %q must name the field; got %v", bad, err)
+		}
+	}
+
+	// Unset is a real posture, and PublicBase says so with an empty string
+	// every consumer reads as "compose no link".
+	boot, err := ParseBootstrap([]byte("node:\n  id: n1\nstore:\n  path: /tmp/x.db\n"), EnvOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := boot.API.PublicBase(); got != "" {
+		t.Errorf("an unset public_url answered %q", got)
+	}
+}

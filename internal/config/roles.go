@@ -123,6 +123,13 @@ type Role struct {
 	// Integrations is this seat's non-tool identity on external surfaces.
 	Integrations RoleIntegrations `yaml:"integrations,omitempty" json:"integrations,omitzero"`
 
+	// Project and Space are this seat's own tracker and knowledge
+	// identity, meaningful for a ROOT-LEVEL seat: a seat inside a unit
+	// takes the unit's. Vendor-neutral for the reason the unit's are —
+	// see [Unit.Project].
+	Project string `yaml:"project,omitempty" json:"project,omitempty" desc:"Tracker project this seat owns. Root-level seats; a unit member takes its unit's."`
+	Space   string `yaml:"space,omitempty" json:"space,omitempty" desc:"Knowledge container this seat owns. Root-level seats; a unit member takes its unit's."`
+
 	// Schedules are this seat's own recurring work.
 	Schedules []org.Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty" desc:"Recurring work fired into this seat's inbox."`
 }
@@ -271,27 +278,11 @@ func (s *RoleSandbox) validate(path string) error {
 type RoleIntegrations struct {
 	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: bot token and signing secret."`
 	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: one token covers everything."`
-	Jira       *ProjectRef     `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this seat owns."`
-	Confluence *SpaceRef       `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"The Confluence space this seat owns."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
-	return r.Slack == nil && r.Mattermost == nil && r.Jira == nil &&
-		r.Confluence == nil
-}
-
-// ProjectRef is the tracker project a seat or unit owns. Integration
-// identity — where activity with no better recipient routes, and where work
-// is filed. Not a credential, and not a read scope.
-type ProjectRef struct {
-	Project string `yaml:"project,omitempty" json:"project,omitempty" desc:"Project key or identifier."`
-}
-
-// SpaceRef is the wiki space a seat or unit owns, on the same terms as
-// [ProjectRef].
-type SpaceRef struct {
-	Space string `yaml:"space,omitempty" json:"space,omitempty" desc:"Space key."`
+	return r.Slack == nil && r.Mattermost == nil
 }
 
 // RoleSlack is a seat's own Slack app.
@@ -442,8 +433,8 @@ func (r *Role) Seat() *org.Role {
 			Channel:  m.Channel,
 		}
 	}
-	seat.JiraProject, seat.ConfluenceSpace = identities(
-		r.Integrations.Jira, r.Integrations.Confluence)
+	seat.Project = strings.TrimSpace(r.Project)
+	seat.Space = strings.TrimSpace(r.Space)
 
 	if s := r.Sandbox; s != nil {
 		env := make(map[string]string, len(s.Env))
@@ -472,20 +463,6 @@ func (r *Role) Seat() *org.Role {
 // A VALUE receiver, because the redaction walker holds the prior document by
 // value and cannot take an address inside it.
 func (r Role) IdentityKey() string { return r.Seat().Handle() }
-
-// identities extracts the tracker project and wiki space a seat or unit
-// owns. References are left VERBATIM and resolved at use time, like every
-// other Tier B value.
-func identities(jira *ProjectRef, confluence *SpaceRef) (string, string) {
-	var project, space string
-	if jira != nil {
-		project = strings.TrimSpace(jira.Project)
-	}
-	if confluence != nil {
-		space = strings.TrimSpace(confluence.Space)
-	}
-	return project, space
-}
 
 // Unit is the AUTHORED shape of one `units:` entry, nesting to any depth.
 type Unit struct {
@@ -524,7 +501,21 @@ type Unit struct {
 	// overrides one header must not silently drop the token beside it.
 	MCPEnv org.MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Credentials inherited by this unit's direct members."`
 
-	Integrations UnitIntegrations `yaml:"integrations,omitempty" json:"integrations,omitzero"`
+	// Project and Space are the unit's tracker and knowledge IDENTITY: the
+	// project it files work in, and the container it writes pages in.
+	//
+	// VENDOR-NEUTRAL, and required of any unit that owns either. They were
+	// `integrations.jira.project` and `integrations.confluence.space`,
+	// which made the org chart name a product: a company switching
+	// backends had to rewrite its units, and a company running a native
+	// tracker against a Confluence wiki could not say so at all. The tree
+	// made this rename once already, when `slack_channel` became `channel`.
+	//
+	// NOT a credential, and NOT a read scope. Read scope is the org-wide
+	// knowledge block, and letting an identity double as one is how an
+	// agent ends up unable to read the page it was told to follow.
+	Project string `yaml:"project,omitempty" json:"project,omitempty" desc:"Tracker project this unit owns. Not a credential, not a read scope."`
+	Space   string `yaml:"space,omitempty" json:"space,omitempty" desc:"Knowledge container this unit owns. Not a credential, not a read scope."`
 
 	Roles    []Role `yaml:"roles,omitempty" json:"roles,omitempty" desc:"Seats belonging to this unit."`
 	Children []Unit `yaml:"children,omitempty" json:"children,omitempty" desc:"Child units."`
@@ -538,18 +529,6 @@ type Unit struct {
 // IdentityKey is the unit's name, which is what every `manages:`, `lead:` and
 // `unit:` reference addresses it by.
 func (u Unit) IdentityKey() string { return u.Name }
-
-// UnitIntegrations is a unit's integration identity. Chat at the unit level
-// is the vendor-neutral channel field, so it is deliberately not here.
-type UnitIntegrations struct {
-	Jira       *ProjectRef `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this unit owns."`
-	Confluence *SpaceRef   `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"The Confluence space this unit owns."`
-}
-
-// IsZero lets an unset block drop out of a round trip.
-func (u UnitIntegrations) IsZero() bool {
-	return u.Jira == nil && u.Confluence == nil
-}
 
 func (u *Unit) validate(path string) error {
 	var p problems
@@ -584,8 +563,8 @@ func (u *Unit) Unit() *org.Unit {
 		MCPEnv:        u.MCPEnv.Clone(),
 		Schedules:     append([]org.Schedule(nil), u.Schedules...),
 	}
-	unit.JiraProject, unit.ConfluenceSpace = identities(
-		u.Integrations.Jira, u.Integrations.Confluence)
+	unit.Project = strings.TrimSpace(u.Project)
+	unit.Space = strings.TrimSpace(u.Space)
 
 	for i := range u.Roles {
 		unit.Roles = append(unit.Roles, u.Roles[i].Seat())

@@ -78,23 +78,23 @@ Contract semantics every backend honors:
 The search scope is set by **one** thing: the org-wide `knowledge.*` scope list for the active backend, normalised once by `internal/knowledge` —
 
 ```text
-knowledge.confluence_spaces: ["HANDBOOK"]   # scoped to these containers
-knowledge.confluence_spaces: []             # empty ⇒ unscoped / ACL-bound for
+knowledge.scope: ["HANDBOOK"]   # scoped to these containers
+knowledge.scope: []             # empty ⇒ unscoped / ACL-bound for
                                             # self-authenticating agents
 ```
 
 It is **role- and unit-independent** — every agent has the same read scope.
 
-> **Read scope ≠ team identity.** A unit's own container — `integrations.confluence.space` (runtime `org.Unit.ConfluenceSpace`) — is *integration identity*: it decides webhook routing (page activity → the unit lead) and is the team's write / skill-promotion home. It deliberately does **not** narrow reads. An Engineering agent isn't limited to the `ENG` space when searching; it searches across everything its own account can read. (See [Confluence § integration identity](../integrations/confluence.md).)
+> **Read scope ≠ team identity.** A unit's own container — `space` (runtime `org.Unit.Space`) — is *integration identity*: it decides webhook routing (page activity → the unit lead) and is the team's write / skill-promotion home. It deliberately does **not** narrow reads. An Engineering agent isn't limited to the `ENG` space when searching; it searches across everything its own account can read. (See [Confluence § integration identity](../integrations/confluence.md).)
 
 **The list is optional — and empty is the useful default.** When the scope list is empty, behaviour depends on how the search authenticates (per-agent token vs. engine/admin fallback):
 
 - A role with **its own backend credentials** searches **unscoped**: the container clause is dropped and the backend's own ACLs bound the results — the agent finds anything its account can read that matches the query.
 - A **credential-less** role (engine/admin-token fallback) searches **nothing**: an unscoped query would read the shared account's entire view, so the empty list means "no search" rather than "everything".
 
-So set `knowledge.confluence_spaces` only to *narrow* reads to a curated floor (e.g. a company handbook); a fully per-agent-credentialled org leaves it unset and lets the backend's ACLs do the scoping. The backend's own permissions remain the hard boundary regardless.
+So set `knowledge.scope` only to *narrow* reads to a curated floor (e.g. a company handbook); a fully per-agent-credentialled org leaves it unset and lets the backend's ACLs do the scoping. The backend's own permissions remain the hard boundary regardless.
 
-> **Single-homed.** One backend per company. With one implementation behind the seam that is now structural rather than enforced; what validation still refuses is a read scope naming a backend the company does not configure — `confluence_spaces` without `integrations.confluence` reads as a working narrowing and narrows nothing.
+> **Single-homed.** One backend per company. With one implementation behind the seam that is now structural rather than enforced; what validation still refuses is a read scope naming a backend the company does not configure — `knowledge.scope` without `integrations.confluence` reads as a working narrowing and narrows nothing.
 
 ---
 

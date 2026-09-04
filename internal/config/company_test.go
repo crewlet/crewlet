@@ -342,38 +342,132 @@ func TestCompanyValidatorRejections(t *testing.T) {
 	}
 }
 
-// The knowledge backend is single-homed, and with one backend that is now
-// structural: what is still enforced is that a read scope names a backend
-// the company actually configures. Selection keys on block PRESENCE, because
-// the scope list defaults to empty (unscoped) and cannot be the signal.
-func TestAKnowledgeScopeNeedsItsBackend(t *testing.T) {
+// The two backend axes: which tracker and which knowledge base a company
+// runs, what an empty value derives to, and the pairs that cannot both be
+// true.
+//
+// A BACKEND BESIDE ITS VENDOR IS THE MIRROR THE DOCTRINE FORBIDS — both would
+// route, both would answer a search, and the company would have two places
+// its work lives with nothing keeping them in step. That is exactly the cache
+// with no invalidation story the no-task-engine decision was written against,
+// so it is refused rather than resolved.
+func TestTheBackendAxesAreExclusiveAndDerived(t *testing.T) {
 	t.Parallel()
 
-	// A SCOPE FOR A BACKEND THAT IS NOT THERE reads as a working narrowing
-	// and narrows nothing — the silence this rule exists to end, one level
-	// down from the block itself.
-	t.Run("a confluence scope with no confluence", func(t *testing.T) {
+	t.Run("a bare company gets a native tracker and a native wiki", func(t *testing.T) {
 		t.Parallel()
-		err := rejects(t, "name: Acme\nknowledge:\n  confluence_spaces: [HANDBOOK]\n",
-			"knowledge.confluence_spaces")
-		if !errors.Is(err, ErrConflict) {
-			t.Fatalf("want ErrConflict, got %v", err)
+		cfg := mustCompany(t, "name: Acme\n")
+		if got := cfg.TrackerBackendFor(); got != TrackerNative {
+			t.Errorf("tracker = %q, want native", got)
+		}
+		if got := cfg.KnowledgeBackendFor(); got != KnowledgeNative {
+			t.Errorf("knowledge = %q, want native", got)
 		}
 	})
 
-	// AND THE WORKING SHAPE STILL WORKS: the backend with its own scope,
-	// and the reserved skills space defaulted rather than invented.
-	t.Run("confluence with a confluence scope is accepted", func(t *testing.T) {
+	// An Atlassian company that has not read the release note keeps the
+	// backends it had: the derivation is the compatible half of the rename.
+	t.Run("declaring the vendor derives the vendor", func(t *testing.T) {
 		t.Parallel()
 		cfg := mustCompany(t, `
 name: Acme
 integrations:
   confluence: {url: "https://wiki.example.com", token: "${T}", webhook_secret: "${S}"}
-knowledge:
-  confluence_spaces: [HANDBOOK, ENG]
+  jira: {url: "https://jira.example.com", token: "${T}", webhook_secret: "${S}"}
 `)
-		if got := cfg.Integrations.Confluence.SkillsSpaceKey(); got != "TS" {
-			t.Errorf("skills space = %q, want the default", got)
+		if got := cfg.TrackerBackendFor(); got != TrackerJira {
+			t.Errorf("tracker = %q, want jira", got)
+		}
+		if got := cfg.KnowledgeBackendFor(); got != KnowledgeConfluence {
+			t.Errorf("knowledge = %q, want confluence", got)
+		}
+	})
+
+	t.Run("native beside its vendor is refused", func(t *testing.T) {
+		t.Parallel()
+		err := rejects(t, `
+name: Acme
+knowledge: {backend: native}
+integrations:
+  confluence: {url: "https://wiki.example.com", token: "${T}", webhook_secret: "${S}"}
+`, "knowledge.backend")
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("want ErrConflict, got %v", err)
+		}
+		err = rejects(t, `
+name: Acme
+tracker: {backend: native}
+integrations:
+  jira: {url: "https://jira.example.com", token: "${T}", webhook_secret: "${S}"}
+`, "tracker.backend")
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("want ErrConflict, got %v", err)
+		}
+	})
+
+	t.Run("a vendor backend without its block is refused", func(t *testing.T) {
+		t.Parallel()
+		if err := rejects(t, "name: Acme\nknowledge: {backend: confluence}\n",
+			"knowledge.backend"); !errors.Is(err, ErrConflict) {
+			t.Fatalf("want ErrConflict, got %v", err)
+		}
+		if err := rejects(t, "name: Acme\ntracker: {backend: jira}\n",
+			"tracker.backend"); !errors.Is(err, ErrConflict) {
+			t.Fatalf("want ErrConflict, got %v", err)
+		}
+	})
+
+	// A setting for a backend that is switched off reads as configuration
+	// and configures nothing.
+	t.Run("a scope with no knowledge base is refused", func(t *testing.T) {
+		t.Parallel()
+		err := rejects(t, "name: Acme\nknowledge:\n  backend: none\n  scope: [HANDBOOK]\n",
+			"knowledge.scope")
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("want ErrConflict, got %v", err)
+		}
+	})
+
+	// A NARROWING ON THE NATIVE BACKEND IS ORDINARY, and this is the case
+	// the rule it replaces got wrong: a scope used to require
+	// integrations.confluence, because presence was the only signal there
+	// was. With a backend named explicitly, a curated floor over the
+	// company's own pages needs no vendor at all.
+	t.Run("a scope narrows the native backend", func(t *testing.T) {
+		t.Parallel()
+		cfg := mustCompany(t, "name: Acme\nknowledge:\n  scope: [HANDBOOK, ENG]\n")
+		if got := cfg.KnowledgeBackendFor(); got != KnowledgeNative {
+			t.Errorf("backend = %q, want native", got)
+		}
+		if got := cfg.SkillsContainerKey(); got != DefaultSkillsContainer {
+			t.Errorf("skills container = %q, want the default", got)
+		}
+		if got := cfg.RootSpaceKey(); got != DefaultRootSpace {
+			t.Errorf("root space = %q, want the default", got)
+		}
+	})
+
+	// The three-valued container: absent takes the default, "" turns the
+	// mechanism off, and the off switch exists because the default reserves
+	// a real key a company might use for ordinary work.
+	t.Run("an empty skills container turns tool skills off", func(t *testing.T) {
+		t.Parallel()
+		cfg := mustCompany(t, "name: Acme\nknowledge:\n  skills_container: \"\"\n")
+		if got := cfg.SkillsContainerKey(); got != "" {
+			t.Errorf("skills container = %q, want it off", got)
+		}
+	})
+
+	// Vectors derive from whether there is anything to compute them with.
+	t.Run("vectors follow the embeddings provider", func(t *testing.T) {
+		t.Parallel()
+		bare := mustCompany(t, "name: Acme\n")
+		if bare.VectorsEnabled() {
+			t.Error("a company with no embeddings provider enabled vectors")
+		}
+		if err := rejects(t, "name: Acme\nknowledge:\n  vectors: true\n",
+			"knowledge.vectors"); !errors.Is(err, ErrConflict) {
+			t.Fatalf("want ErrConflict for vectors with no provider, got %v", err)
 		}
 	})
 }
@@ -533,4 +627,25 @@ func TestTheCoalescingCeilingsAreTheOnesTheContractEnforces(t *testing.T) {
 			t.Errorf("%q was refused: %v", ok, err)
 		}
 	}
+}
+
+// THE RESERVATION IS WHAT KEEPS ONE ADDRESS IN ONE PLACE. An operator who
+// declares the variable and later moves behind a new domain updates Tier A,
+// the stale declaration keeps winning, and every link a person clicks lands
+// nowhere with nothing saying why.
+func TestTheBaseURLVariableIsReserved(t *testing.T) {
+	t.Parallel()
+	err := rejects(t,
+		"name: Acme\nskill_variables:\n  "+ReservedBaseURLVariable+": https://old.example.com\n",
+		"skill_variables."+ReservedBaseURLVariable)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "api.public_url") {
+		t.Errorf("the refusal must name where the value belongs; got:\n%v", err)
+	}
+
+	// A DIFFERENT name is ordinary. The reservation takes one identifier,
+	// not the idea of an operator-declared URL.
+	mustCompany(t, "name: Acme\nskill_variables:\n  wiki_base_url: https://wiki.example.com\n")
 }

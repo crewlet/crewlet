@@ -389,7 +389,8 @@ integrations:
     token: t
     webhook_secret: cf
 knowledge:
-  confluence_spaces: [HANDBOOK]
+  backend: confluence
+  scope: [HANDBOOK]
 `
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
 	if err := e.Start(t.Context()); err != nil {

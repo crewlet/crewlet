@@ -137,10 +137,9 @@ models that forbid unknown keys, so a plausible-but-invented field name
 no-op. An assistant working from prose will occasionally invent one.
 
 **The expensive mistakes aren't type errors.** Choosing a handle you
-later rename, putting a secret in the config file, or confusing
-`integrations.confluence.space` (routing identity) with
-`knowledge.confluence_spaces` (read scope) all produce a *valid* config
-that behaves wrong. Those are judgement calls, and they're what the
+later rename, putting a secret in the config file, or confusing a unit's
+`space` (routing identity) with `knowledge.scope` (read scope) all
+produce a *valid* config that behaves wrong. Those are judgement calls, and they're what the
 skill front-loads.
 
 The schema fixes the first problem. The skill fixes the second.

@@ -171,8 +171,8 @@ func (j *Jira) validate(path string) error {
 // Confluence is the org-level Confluence admin account.
 //
 // Like Jira, this is the org-wide read account behind webhook routing, not
-// a per-agent identity. The org-wide READ SCOPE is knowledge.confluence_spaces
-// and lives nowhere near here.
+// a per-agent identity. The org-wide READ SCOPE is knowledge.scope and lives
+// nowhere near here.
 type Confluence struct {
 	URL     string `yaml:"url,omitempty" json:"url,omitempty" desc:"Instance URL. Give this or cloud_id, not both."`
 	CloudID string `yaml:"cloud_id,omitempty" json:"cloud_id,omitempty" desc:"Atlassian Cloud id. Give this or url, not both."`
@@ -185,18 +185,6 @@ type Confluence struct {
 	Token         string `secret:"true" yaml:"token" json:"token" js:"required" desc:"Admin API token or PAT; ${VAR} supported."`
 	Email         string `yaml:"email,omitempty" json:"email,omitempty" desc:"Set for Cloud Basic auth; omit for bearer-token auth."`
 	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"HMAC secret for Data Center webhooks."`
-
-	// SkillsSpace holds the tool-skill pages. Excluded from routing and
-	// from knowledge search alike: those pages are machinery, and a seat
-	// told to read one would follow an instruction written for a
-	// different phase of a different turn.
-	//
-	// A POINTER because all three states are real settings and the zero
-	// value cannot say which: absent takes [DefaultSkillsSpace], a named
-	// key takes that key, and an explicit `skills_space: ""` turns the
-	// whole tool-skill mechanism OFF — no sync, no routing exclusion, no
-	// search exclusion. See [Confluence.SkillsSpaceKey].
-	SkillsSpace *string `yaml:"skills_space,omitempty" json:"skills_space,omitempty" desc:"Space holding tool-skill pages; excluded from routing and knowledge search. Default TS; empty string disables tool skills entirely."`
 }
 
 // BaseURL is the REST base.
@@ -215,45 +203,6 @@ func (c *Confluence) ShareableBaseURL() string {
 		return c.SiteURL
 	}
 	return c.URL
-}
-
-// DefaultSkillsSpace is where tool-skill pages live when the config names no
-// space.
-//
-// "TS" is the convention the publishing CLI writes into and the docs name, so
-// a company that follows the guide works with nothing configured.
-const DefaultSkillsSpace = "TS"
-
-// SkillsSpaceKey is the tool-skills space, normalised — or "" for a company
-// that has turned tool skills off.
-//
-// UPPER, because every space comparison in the integration is
-// case-insensitive and a config written in lower case must not silently mean
-// a different space from the same word written in upper.
-//
-// # The empty string is an ANSWER, not an absence
-//
-// A company whose ordinary work space happens to be `TS` would otherwise have
-// it silently dropped from every knowledge search and every routing decision,
-// with no way to say so — the default reserving a real space name is the cost
-// of having a default at all. `skills_space: ""` is how an operator says "no
-// space is reserved": every consumer already reads "" as "no exclusion and no
-// sync", so the switch is this accessor and nothing else.
-func (c *Confluence) SkillsSpaceKey() string {
-	if c == nil || c.SkillsSpace == nil {
-		return DefaultSkillsSpaceFor(c)
-	}
-	return strings.ToUpper(strings.TrimSpace(*c.SkillsSpace))
-}
-
-// DefaultSkillsSpaceFor is the key an unset field takes: none at all when
-// there is no Confluence config to hold skills, the reserved default when
-// there is.
-func DefaultSkillsSpaceFor(c *Confluence) string {
-	if c == nil {
-		return ""
-	}
-	return DefaultSkillsSpace
 }
 
 // validate checks the knowledge account.

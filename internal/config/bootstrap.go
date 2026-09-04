@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/base64"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -698,7 +699,37 @@ type API struct {
 	// REST API, and no webhook endpoint, so every integration goes deaf.
 	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port; 0 disables the HTTP surface entirely."`
 
+	// PublicURL is where this deployment is reachable FROM OUTSIDE — the
+	// base a person's browser and somebody else's webhook sender use, which
+	// is rarely what Host and Port say: a fleet behind a load balancer binds
+	// 0.0.0.0:8080 and answers on https://crewlet.example.com.
+	//
+	// It has two consumers, and both fail silently without it. A
+	// notification card composed for a person carries a link to the item or
+	// page it is about, and with no base there is nothing to link TO — the
+	// card still renders, just without the one thing a person would click.
+	// And every provisioner's -public-url defaults to it, so the flag stops
+	// being something an operator has to remember to pass identically on
+	// each of six commands.
+	//
+	// TIER A rather than the company document, because it is a fact about
+	// the DEPLOYMENT: staging and production run the same company revision
+	// and are not reachable at the same address. It reaches prompts as the
+	// reserved skill variable crewlet_base_url.
+	PublicURL string `yaml:"public_url,omitempty" json:"public_url,omitempty" desc:"Public base URL this deployment is reachable at, e.g. https://crewlet.example.com. Used for human-clickable links and as every provisioner's -public-url default."`
+
 	Auth APIAuth `yaml:"auth,omitempty" json:"auth"`
+}
+
+// PublicBase is the public URL with any trailing slash removed, so a caller
+// composes a link by appending a rooted path and never has to think about it.
+// Empty when none is configured, which every consumer reads as "compose no
+// link" rather than as a relative one.
+func (a *API) PublicBase() string {
+	if a == nil {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimSpace(a.PublicURL), "/")
 }
 
 func (a *API) validate(path string) error {
@@ -708,6 +739,31 @@ func (a *API) validate(path string) error {
 	if a.Port < 0 || a.Port > 65535 {
 		p.add(at(path, "port"), ErrOutOfRange,
 			"must be 0 (no HTTP surface) or a port 1..65535, got %d", a.Port)
+	}
+	if raw := strings.TrimSpace(a.PublicURL); raw != "" {
+		// An ORIGIN, not a page. Every consumer appends a rooted path to
+		// it, so a value carrying a path, a query or a fragment composes
+		// links with the operator's own leftovers in the middle of them —
+		// and a bare host with no scheme composes a link a browser reads as
+		// a relative path. Both produce a link that looks right in a config
+		// review and opens nothing.
+		u, err := url.Parse(raw)
+		switch {
+		case err != nil:
+			p.add(at(path, "public_url"), ErrShape, "%q is not a URL: %v", raw, err)
+		case u.Scheme != "http" && u.Scheme != "https":
+			p.add(at(path, "public_url"), ErrShape,
+				"%q needs an http:// or https:// scheme — without one every "+
+					"link composed from it is a relative path", raw)
+		case u.Host == "":
+			p.add(at(path, "public_url"), ErrShape,
+				"%q names no host", raw)
+		case strings.Trim(u.Path, "/") != "" || u.RawQuery != "" || u.Fragment != "":
+			p.add(at(path, "public_url"), ErrShape,
+				"%q must be a bare origin (scheme://host[:port]) — consumers "+
+					"append their own rooted paths to it, and a path, query or "+
+					"fragment here lands in the middle of every link", raw)
+		}
 	}
 	p.wrap(a.Auth.validate(at(path, "auth")))
 	return p.err()

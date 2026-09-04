@@ -792,7 +792,7 @@ crewlet confluence import <company.yaml> <directory> [-space KEY] [-prune]
     [-config PATH] [-dry-run]
 ```
 
-Publishes a tree of authored markdown into Confluence. **One walk, two destinations, decided by the file**: a file whose frontmatter declares a `trigger:` is a [tool skill](../concepts/tool-skills.md) and goes to `integrations.confluence.skills_space` with the leading code block the engine parses back out; everything else is a knowledge doc, published as prose into the space its parent directory names, titled by its first `# H1`.
+Publishes a tree of authored markdown into Confluence. **One walk, two destinations, decided by the file**: a file whose frontmatter declares a `trigger:` is a [tool skill](../concepts/tool-skills.md) and goes to `knowledge.skills_container` with the leading code block the engine parses back out; everything else is a knowledge doc, published as prose into the space its parent directory names, titled by its first `# H1`.
 
 The routing is the FILE'S, not the directory's, because a skill is identified by what it declares — an operator who files one under `ENG/` still means a skill, and publishing it there as prose would put an instruction meant for one phase of one turn into every seat's context.
 
@@ -808,13 +808,13 @@ The routing is the FILE'S, not the directory's, because a skill is identified by
 
 | Flag | Description |
 |------|-------------|
-| `-space KEY` | Publish tool skills into this space instead of `integrations.confluence.skills_space`. Empty reads `$CREWLET_TOOL_SKILLS_SPACE`, then the config field. Skill files only — a knowledge doc takes its space from its parent directory. |
+| `-space KEY` | Publish tool skills into this space instead of `knowledge.skills_container`. Empty reads `$CREWLET_TOOL_SKILLS_SPACE`, then the config field. Skill files only — a knowledge doc takes its space from its parent directory. |
 | — | Frontmatter on a knowledge doc may declare `parent:` (the title of a page in the same space to nest under) and `labels:` (the author's own, lower-cased and de-duplicated because that is what Confluence stores). See below. |
 | `-prune` | After publishing, delete skill pages in the skills space that carry the `crewlet-skill` label and whose key no local file publishes any more. **Three conditions, all required**: in the skills space, labelled, and parsing as a skill whose key this run's tree does not publish — the label protects a hand-authored page, the parse protects an ordinary page filed in the same space, and the key comparison is what makes a renamed skill a delete-and-create rather than a silent duplicate. The orphan set is derived by subtraction, so **a prune that cannot enumerate the space deletes nothing** and fails the run: a partial read would make the orphan set larger and delete live pages. The set is taken from the *plan*, not from the writes that landed, so a page whose update happened to 403 is never deleted as an orphan of itself. A page that declares a trigger and does not parse has an unknown key and is reported rather than deleted. |
 | `-config` | Tier A config naming this node's store and keyring, for resolving the `${VAR}`s in the company's `confluence:` block. |
 | `-dry-run` | Print the plan and write or delete nothing. |
 
-A company that has turned tool skills off (`integrations.confluence.skills_space: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every seat searches.
+A company that has turned tool skills off (`knowledge.skills_container: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every seat searches.
 
 See [Confluence Integration](../integrations/confluence.md#publishing-local-pages-from-your-machine-cli).
 
@@ -845,7 +845,7 @@ and exits non-zero. That is the case worth failing on: somebody wrote a trigger
 and got the rest wrong, and counting it as an ordinary page is exactly how a
 skill goes missing unnoticed.
 
-`-space` overrides `integrations.confluence.skills_space`, for checking a space
+`-space` overrides `knowledge.skills_container`, for checking a space
 the company document does not name yet.
 
 **Skills only.** Knowledge docs are searched live at query time and never

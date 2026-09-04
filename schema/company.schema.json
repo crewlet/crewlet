@@ -105,10 +105,6 @@
           "description": "Human-readable base for shareable links; needed with cloud_id.",
           "type": "string"
         },
-        "skills_space": {
-          "description": "Space holding tool-skill pages; excluded from routing and knowledge search. Default TS; empty string disables tool skills entirely.",
-          "type": "string"
-        },
         "token": {
           "description": "Admin API token or PAT; ${VAR} supported.",
           "type": "string"
@@ -497,6 +493,9 @@
         "atlassian_account_id": {
           "type": "string"
         },
+        "crewlet_operator_id": {
+          "type": "string"
+        },
         "github_login": {
           "type": "string"
         },
@@ -582,12 +581,33 @@
     "Knowledge": {
       "additionalProperties": false,
       "properties": {
-        "confluence_spaces": {
-          "description": "Org-wide Confluence read scope. Empty = unscoped, bounded by each seat's own ACLs. Requires integrations.confluence.",
+        "backend": {
+          "description": "Which knowledge base: native, confluence, or none. Empty derives from integrations.confluence.",
+          "enum": [
+            "native",
+            "confluence",
+            "none"
+          ],
+          "type": "string"
+        },
+        "root_space": {
+          "description": "Container for org-level pages such as the root Onboarding. Absent takes the default.",
+          "type": "string"
+        },
+        "scope": {
+          "description": "Org-wide read scope. Empty = unscoped. Was knowledge.confluence_spaces.",
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "skills_container": {
+          "description": "Container holding tool-skill pages. Absent takes the default; \"\" turns tool skills off.",
+          "type": "string"
+        },
+        "vectors": {
+          "description": "Fuse semantic recall into knowledge search. Unset derives from providers.embeddings.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -920,16 +940,6 @@
       },
       "type": "object"
     },
-    "ProjectRef": {
-      "additionalProperties": false,
-      "properties": {
-        "project": {
-          "description": "Project key or identifier.",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "Providers": {
       "additionalProperties": false,
       "properties": {
@@ -1241,6 +1251,10 @@
           "$ref": "#/$defs/RolePlacement",
           "description": "Which nodes may run this seat. Absent = any node that runs seats."
         },
+        "project": {
+          "description": "Tracker project this seat owns. Root-level seats; a unit member takes its unit's.",
+          "type": "string"
+        },
         "responsibilities": {
           "description": "What this seat owns.",
           "items": {
@@ -1258,6 +1272,10 @@
             "$ref": "#/$defs/Schedule"
           },
           "type": "array"
+        },
+        "space": {
+          "description": "Knowledge container this seat owns. Root-level seats; a unit member takes its unit's.",
+          "type": "string"
         },
         "token_budget": {
           "description": "Per-seat token ceiling; 0 = unlimited.",
@@ -1284,14 +1302,6 @@
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
-        "confluence": {
-          "$ref": "#/$defs/SpaceRef",
-          "description": "The Confluence space this seat owns."
-        },
-        "jira": {
-          "$ref": "#/$defs/ProjectRef",
-          "description": "The Jira project this seat owns."
-        },
         "mattermost": {
           "$ref": "#/$defs/RoleMattermost",
           "description": "This seat's Mattermost bot: one token covers everything."
@@ -1781,16 +1791,6 @@
       },
       "type": "object"
     },
-    "SpaceRef": {
-      "additionalProperties": false,
-      "properties": {
-        "space": {
-          "description": "Space key.",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "StatusPhrases": {
       "additionalProperties": false,
       "properties": {
@@ -1821,6 +1821,21 @@
             "type": "string"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Tracker": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "description": "Which work tracker: native, jira, or none. Empty derives from integrations.jira.",
+          "enum": [
+            "native",
+            "jira",
+            "none"
+          ],
+          "type": "string"
         }
       },
       "type": "object"
@@ -1905,9 +1920,6 @@
           },
           "type": "array"
         },
-        "integrations": {
-          "$ref": "#/$defs/UnitIntegrations"
-        },
         "knowledge": {
           "description": "Free-text knowledge references. Not a read scope.",
           "items": {
@@ -1933,6 +1945,10 @@
           "description": "Unit name; also what a manages entry can reference.",
           "type": "string"
         },
+        "project": {
+          "description": "Tracker project this unit owns. Not a credential, not a read scope.",
+          "type": "string"
+        },
         "purpose": {
           "description": "What this unit is for.",
           "type": "string"
@@ -1951,6 +1967,10 @@
           },
           "type": "array"
         },
+        "space": {
+          "description": "Knowledge container this unit owns. Not a credential, not a read scope.",
+          "type": "string"
+        },
         "type": {
           "description": "Informational label: team (default), department, squad, ...",
           "type": "string"
@@ -1959,20 +1979,6 @@
       "required": [
         "name"
       ],
-      "type": "object"
-    },
-    "UnitIntegrations": {
-      "additionalProperties": false,
-      "properties": {
-        "confluence": {
-          "$ref": "#/$defs/SpaceRef",
-          "description": "The Confluence space this unit owns."
-        },
-        "jira": {
-          "$ref": "#/$defs/ProjectRef",
-          "description": "The Jira project this unit owns."
-        }
-      },
       "type": "object"
     },
     "Worker": {
@@ -2091,6 +2097,9 @@
       "description": "Org-wide token ceiling across all seats; 0 = unlimited.",
       "minimum": 0,
       "type": "integer"
+    },
+    "tracker": {
+      "$ref": "#/$defs/Tracker"
     },
     "turn_engine": {
       "$ref": "#/$defs/TurnEngine"

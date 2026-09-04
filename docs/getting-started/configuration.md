@@ -409,6 +409,7 @@ coordination:
 api:
   host: "0.0.0.0"
   port: 8000
+  public_url: "https://crewlet.example.com"  # where this deployment answers from OUTSIDE
   auth:
     tokens:
       - id: founder
@@ -419,6 +420,25 @@ logging:
   format: console   # console (default: columns and colour for a person),
                     #   text (slog key=value), json (for a log shipper)
 ```
+
+`api.public_url` is where this deployment is reachable from outside, which is
+rarely what `host` and `port` say — a fleet behind a load balancer binds
+`0.0.0.0:8080` and answers on `https://crewlet.example.com`. It must be a bare
+origin (`scheme://host[:port]`, no path, query or fragment) because every
+consumer appends its own rooted path to it. Two things read it, and both fail
+quietly without it: a notification card composed for a person carries a link to
+the item or page it is about, and every provisioner's `-public-url` defaults to
+it, so the value stops being something an operator has to type identically into
+six commands. It reaches [tool-skill](../concepts/tool-skills.md) prose as the
+reserved skill variable `${crewlet_base_url}`, which is why a company may not
+declare a `skill_variables` entry of that name — where this deployment answers
+is a fact about the deployment, and staging and production run the same company
+revision.
+
+It belongs in **Tier A** for that reason. Binding a person to a credential goes
+the other way: an `api.auth.tokens[].id` is named from the company document's
+`roles[].contact.crewlet_operator_id`, never from a `seat:` field on the token,
+because Tier A holds the keys to the secret store and may never read Tier B.
 
 The event store (LLM observability) is a table in that same file, created by
 the engine's own migrations on first start — there is nothing to configure
@@ -467,11 +487,10 @@ units:
         goals:                          # optional
           - "Ship features on 2-week cadence"
         channel: backend                # optional — the team's chat channel, inherited
-        integrations:                   # optional — the unit's tracker + wiki "home"
-          jira:                          #   identity (webhook routing + write home; NOT
-            project: "BACK"              #   read scope, NOT an MCP credential)
-          confluence:
-            space: "BACK"
+        project: "BACK"                 # optional — the unit's tracker "home": routing +
+        space: "BACK"                   #   write target. NOT read scope, NOT a credential,
+                                        #   and NOT vendor-specific — the same keys name a
+                                        #   native project/space or a Jira/Confluence one
         mcp_env:                        # optional — per-agent MCP creds, inherited by roles
           atlassian:                     #   (real tool credentials only; the chat transport
             JIRA_API_TOKEN: "${BACK_JIRA_TOKEN}"  #   identity is per-agent)
@@ -509,7 +528,7 @@ units:
 |-------|------|----------|-------------|
 | `name` | string | yes | Unique seat identity |
 | `kind` | `agent` \| `human` | no | Who holds the seat (default `agent`). `human` marks a [human seat](../concepts/humans-in-the-org.md) — addressable, never spawned; rejects every runtime-only field below and requires at least one `contact` identity |
-| `contact` | dict | human seats | External identities: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`. Each accepts a literal ID or exactly one whole-value `${VAR}` env reference, resolved at use time; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)) |
+| `contact` | dict | human seats | External identities: `slack_user_id`, `mattermost_user_id` (a username, not an ID), `atlassian_account_id` (Jira+Confluence), `github_login`, `gitlab_username`, `crewlet_operator_id`. Each accepts a literal ID or exactly one whole-value `${VAR}` env reference, resolved at use time; values are whitespace-stripped, and a `${VAR}` embedded inside a longer string is rejected at validation (see [Humans in the Org Chart](../concepts/humans-in-the-org.md)). `crewlet_operator_id` is the odd one: it names one of Tier A's `api.auth.tokens[].id`, binding that credential to this seat so a person writing through the dashboard or the API acts as **themselves** rather than as a token. It is an attribution and never an address — the engine never sends as itself — so it is left out of rosters and colleague cards, and a seat carrying only this one is reachable through their dashboard queue rather than by an @-mention |
 | `availability` | string | no | Human seats only — free-text availability rendered into rosters and `lookup_colleague` results |
 | `goal` | string | no | Individual mission statement |
 | `backstory` | string | no | Personality, background, expertise |
@@ -523,11 +542,11 @@ units:
 | `manages` | list[string] | no | Names of roles this agent manages |
 | `responsibilities` | list[string] | no | Role responsibilities |
 | `behavioral_guidelines` | list[string] | no | Behavioral rules |
-| `mcp_env` | dict | no | Per-agent MCP server credentials, keyed by server name — env vars for `stdio` servers, HTTP headers for `http` servers (e.g. `atlassian.JIRA_USERNAME` / `atlassian.JIRA_API_TOKEN`, `confluence.CONFLUENCE_USERNAME` / `confluence.CONFLUENCE_API_TOKEN`, `slack.SLACK_MCP_XOXB_TOKEN`, `mattermost.MATTERMOST_TOKEN`, `github.Authorization: "Bearer …"`). The per-agent tool-credential surface only — scope a server via its own filter (`JIRA_PROJECTS_FILTER` / `CONFLUENCE_SPACES_FILTER`) if needed. The unit's Jira project / Confluence space identity lives under `integrations` (below), not here |
+| `mcp_env` | dict | no | Per-agent MCP server credentials, keyed by server name — env vars for `stdio` servers, HTTP headers for `http` servers (e.g. `atlassian.JIRA_USERNAME` / `atlassian.JIRA_API_TOKEN`, `confluence.CONFLUENCE_USERNAME` / `confluence.CONFLUENCE_API_TOKEN`, `slack.SLACK_MCP_XOXB_TOKEN`, `mattermost.MATTERMOST_TOKEN`, `github.Authorization: "Bearer …"`). The per-agent tool-credential surface only — scope a server via its own filter (`JIRA_PROJECTS_FILTER` / `CONFLUENCE_SPACES_FILTER`) if needed. The unit's project / space identity is `project` and `space` (below), not here |
 | `integrations.slack` | dict | no | This seat's own Slack app: `bot_token`, `signing_secret`, optional `channel`. **Both credentials are required together** — without the token the seat receives messages it cannot answer, without the secret its route answers 503 while the app's settings page reports a healthy request URL. `crewlet slack provision` mints both into the `${VAR}`s these fields point at |
 | `integrations.mattermost` | dict | no | Per-agent Mattermost **transport** identity (`bot_token`, optional `username`, optional `channel`). One credential, three readers: the same token is named as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess, and the inbound websocket for this seat authenticates with it too |
-| `integrations.jira.project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.JiraProject` / `org.Role.JiraProject`). The team's Jira project as integration identity: an issue that names nobody in the org chart routes to the unit lead, and it is the project the team files work under. **Not** an MCP credential, and it does **not** scope knowledge reads |
-| `integrations.confluence.space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.ConfluenceSpace` / `org.Role.ConfluenceSpace`). The team's Confluence space as integration identity: a page change that names nobody routes to the unit lead, and it is where the team writes. It does **not** scope reads — read scope is the org-wide `knowledge.confluence_spaces` only |
+| `project` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Project` / `org.Role.Project`). The team's tracker project as identity: an item that names nobody in the org chart routes to the unit lead, and it is the project the team files work under. **Vendor-neutral** — it names a native project or a Jira one, whichever [`tracker.backend`](#tracker) the company runs, so switching backends does not rewrite the org chart. **Not** an MCP credential, and it does **not** scope knowledge reads. Keys are an upper-case letter plus 1–9 upper-case letters or digits (`ENG`, `PROD`), which is the shape every backend accepts |
+| `space` | string | no | **Authored on a unit or root-level role** (→ `org.Unit.Space` / `org.Role.Space`). The team's knowledge container as identity: a page change that names nobody routes to the unit lead, and it is where the team writes. Vendor-neutral and shaped like `project`, above. It does **not** scope reads — read scope is the org-wide `knowledge.scope` only. The reserved containers (`knowledge.skills_container`, default `TS`, and `knowledge.root_space`, default `HOME`) are refused here |
 | `workers` | list[string] | no | Which [worker templates](#worker-templates) this seat may delegate to. **Empty means every one** — a company that publishes three workers wants its seats using them, and requiring each seat to opt in turns a shared library into per-seat copy-paste. A name no template defines is refused at load |
 | `schedules` | list | no | Role-scoped recurring tasks — see [Schedules](#schedules) |
 
@@ -631,7 +650,6 @@ integrations:
     token: "${CONFLUENCE_API_TOKEN}"      # API token (org read account)
     email: "${CONFLUENCE_EMAIL}"          # Cloud only — the account's email, for Basic auth
     webhook_secret: "${CONFLUENCE_WEBHOOK_SECRET}"  # Data Center only — HMAC-SHA256 secret
-    skills_space: TS                      # tool-skill pages; excluded from routing and search
 
   slack:                                 # per-seat apps live on each role
     typing_status: addressed             # working indicator: addressed (default) | always | off
@@ -669,7 +687,7 @@ integrations:
 
 - **`forge_app_id`** — verifies the Forge Invocation Token (FIT) on Cloud webhooks against Atlassian's JWKS; the `aud` claim must match. Required when Jira Cloud delivers through the Forge app.
 - **`jira`** — the Atlassian tracker, served end to end. Give `url` **or** `cloud_id`, never both — they are two ways to name one instance and `crewlet validate` refuses the ambiguity. `token` is the org read account (an issue's watchers are the one routing input a webhook never carries); `email` switches authentication to Cloud's Basic scheme; `site_url` is the human base for links when the instance is named by a cloud id. `webhook_secret` is **required for Data Center** and unused on Cloud, whose events arrive through the Forge app instead. Each seat's own credential lives in `mcp_env.atlassian` (or `mcp_env.jira`) and is what the engine resolves its account id from — see [Jira](../integrations/jira.md).
-- **`confluence`** — the knowledge base, and the **query-time search** behind every turn's "Relevant knowledge" block and the `search_knowledge` tool. Same address rule as `jira`: `url` **or** `cloud_id`, never both. `token` is the org read account a seat with no Confluence credential of its own searches under; a seat WITH one searches as itself and Confluence enforces its page permissions natively. `webhook_secret` is required for Data Center and unused on Cloud. The knowledge backend is **single-homed** — the engine wires exactly one `knowledge.Searcher`, because two would make an agent's answer to "what do we already know about this" depend on which one was asked. Scope reads with `knowledge.confluence_spaces`; publish with [`crewlet confluence import`](../reference/cli.md#crewlet-confluence-import). See [Confluence](../integrations/confluence.md).
+- **`confluence`** — the knowledge base, and the **query-time search** behind every turn's "Relevant knowledge" block and the `search_knowledge` tool. Same address rule as `jira`: `url` **or** `cloud_id`, never both. `token` is the org read account a seat with no Confluence credential of its own searches under; a seat WITH one searches as itself and Confluence enforces its page permissions natively. `webhook_secret` is required for Data Center and unused on Cloud. The knowledge backend is **single-homed** — the engine wires exactly one `knowledge.Searcher`, because two would make an agent's answer to "what do we already know about this" depend on which one was asked. Scope reads with `knowledge.scope`; publish with [`crewlet confluence import`](../reference/cli.md#crewlet-confluence-import). See [Confluence](../integrations/confluence.md).
 - **`slack`** — the hosted chat backend. The org-level block carries **no credentials at all**: Slack gives each agent its OWN app, so the token and signing secret live on each role's `integrations.slack`, and this block holds only the working-indicator settings. **`typing_status`** takes `off` / `addressed` / `always` and defaults to `addressed` — the opposite of Mattermost's default, because Slack's indicator renders TEXT and a phase change is something the person waiting can actually read, which is also what makes `status_phrases` worth having here. Inbound events arrive per seat at `/webhooks/slack/{handle}`, verified against that seat's own signing secret. Provision with [`crewlet slack provision`](../reference/cli.md#crewlet-slack-provision). See [Slack Integration](../integrations/slack.md).
 - **`mattermost`** — the self-hosted chat backend, and the one integration that is **both** inbound and outbound: enabling it starts the outbound transport *and* the websocket fleet that holds one connection per agent seat (Mattermost has no usable inbound webhook, so nothing has to reach the engine — no public URL, no tunnel). `url` and `team` are both **required** when enabled. Per-agent identity lives on each role's `integrations.mattermost.bot_token`, named again as `mcp_env.mattermost.MATTERMOST_TOKEN` for the MCP subprocess. **`typing_status`** takes `off` / `addressed` / `always` and defaults to `off`, and there is deliberately no `status_phrases`: Mattermost renders a fixed client-side indicator with no API for the text. The `provisioning:` sub-block is read only by [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision), not the engine. A company may run Mattermost and Slack together — they are different workspaces with different people in them, and an org migrating from one to the other runs both for a while. See [Mattermost Integration](../integrations/mattermost.md).
 - **`github`** — the hosted code host, served end to end. `url` is **optional**: leave it unset for github.com, whose API lives on a different host rather than a path on the web UI, and name an Enterprise Server there — the REST base is derived either way. `webhook_secret` is **required** when enabled, and takes any string (GitHub signs with it verbatim, so unlike GitLab's there is no shape to get wrong). The optional `token` is a read credential for **participant fan-out** — a payload carries the author, assignees and requested reviewers but not who has commented or reviewed — and it is what `crewlet github provision` registers webhooks with. Each seat's own credential lives in `mcp_env.github` and is what the engine resolves its login from; a human seat is reached by `contact.github_login` instead. The `provisioning:` sub-block is read only by [`crewlet github provision`](../reference/cli.md#crewlet-github-provision): `org_webhook: auto` takes one organization-level hook where the credential may (covering repositories created later) and falls back to one per repository where it may not. A company may run GitHub and GitLab together — they are two hosts with different repositories on them. See [GitHub Integration](../integrations/github.md).
@@ -680,10 +698,33 @@ integrations:
 
 ```yaml
 knowledge:
-  confluence_spaces: ["ENG", "HANDBOOK"] # org-wide spaces every agent can search (optional)
+  backend: confluence                    # native (default) | confluence | none
+  scope: ["ENG", "HANDBOOK"]             # org-wide containers every agent can search (optional)
+  skills_container: TS                   # tool-skill pages; excluded from routing and search
+  root_space: HOME                       # the organisation's own pages, e.g. the root Onboarding page
+  vectors: true                          # fuse semantic recall; unset derives from providers.embeddings
 ```
 
-`knowledge.confluence_spaces` is the org-wide read scope: [Confluence](../integrations/confluence.md) space keys, materialised onto `org.Organization.ConfluenceSpaces` and read by the Confluence searcher. It requires an `integrations.confluence` block — a read scope for a backend that is not there narrows nothing while reading as though it does. **Optional:** leave it unset and a seat holding its own Confluence credential searches *unscoped*, bounded by that account's own page permissions; a seat with no credential of its own falls back to the org token and is **only** searched under a scope, because an unscoped search on the shared credential is how one seat reads a page its own account never could.
+`knowledge.backend` is **which knowledge base this company runs**, and there is exactly one: two would make an agent's answer to "what do we already know about this" depend on which was asked. Leaving it unset **derives** — `confluence` when an `integrations.confluence` block is declared, `native` otherwise — so a company that has configured nothing gets a wiki, and an Atlassian company that has not read this note keeps the backend it had. Naming `native` **beside** an `integrations.confluence` block is refused: pages would live in two places with nothing keeping them in step. `none` is a real posture — the `## Relevant knowledge` block stays empty and `search_knowledge` is not registered.
+
+`knowledge.scope` is the org-wide read scope, materialised onto `org.Organization.KnowledgeScope` and read by whichever searcher is wired. **Empty means unscoped, and what unscoped MEANS differs by backend:** natively it is the whole company, because the engine is the boundary — every reader is a seat of one company and there is no second account to launder a read through. On Confluence it is whatever the asking seat's own account can read, which is why a credential-less seat searching unscoped there gets nothing: an unscoped query on the shared org token is how one seat reads a page its own account never could. Set it only to **narrow** to a curated floor.
+
+`knowledge.skills_container` (default `TS`) holds [tool-skill](../concepts/tool-skills.md) pages and `knowledge.root_space` (default `HOME`) holds the organisation's own pages, starting with the root Onboarding page every seat reads first. Both are **reserved**: excluded from knowledge search and from routing, and refused as a unit's own `space`. `skills_container` is three-valued — absent takes the default, a name takes that container, and an explicit `""` turns tool skills **off** entirely.
+
+`knowledge.vectors` fuses semantic recall into the search. **Unset derives** from whether `providers.embeddings` is configured — a company already paying for embeddings for its diary gets the better search — and an explicit `true` with no provider is refused, because there would be nothing to compute an embedding with.
+
+---
+
+## Tracker
+
+```yaml
+tracker:
+  backend: native                        # native (default) | jira | none
+```
+
+Which **work tracker** this company runs, on exactly the terms `knowledge.backend` runs on. Unset derives `jira` when an `integrations.jira` block is declared and `native` otherwise; `native` beside `integrations.jira` is refused, because work would be filed in two places and a unit's `project` key would name two trackers. `none` is a company where schedules and chat are the only things that wake a seat.
+
+The two axes are **separate** on purpose. A company running a native tracker against a Confluence wiki, or Jira against native pages, is an ordinary arrangement rather than a mixture to refuse — they are two products with separate routing and separate lead maps.
 
 ---
 
