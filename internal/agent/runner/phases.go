@@ -1184,7 +1184,11 @@ func calls(s *tools.Surface) []ledger.Call {
 // describe renders the surface the delivery gate judges against.
 func describe(s *tools.Surface) turn.Surface {
 	u := s.Universe()
-	return turn.Surface{Catalogue: u.Names(), MCPTools: u.MCPNames(), KnownReads: u.KnownReads()}
+	return turn.Surface{
+		Catalogue:    u.Names(),
+		Deliverables: u.Deliverables(),
+		KnownReads:   u.KnownReads(),
+	}
 }
 
 // missingTools are names the phase called that the surface did not have.

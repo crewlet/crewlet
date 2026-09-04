@@ -77,9 +77,9 @@ func settings() turn.Settings { return turn.Settings{MaxIterations: 5} }
 // need as a backdrop for the delivery check.
 func slackSurface() turn.Surface {
 	return turn.Surface{
-		Catalogue:  []string{"slack_post", "slack_history", "lookup_colleague"},
-		MCPTools:   []string{"slack_post", "slack_history"},
-		KnownReads: []string{"slack_history"},
+		Catalogue:    []string{"slack_post", "slack_history", "lookup_colleague"},
+		Deliverables: []string{"slack_post"},
+		KnownReads:   []string{"slack_history"},
 	}
 }
 
@@ -383,8 +383,8 @@ func TestAnUnannotatedMCPToolCountsAsADelivery(t *testing.T) {
 			Calls:      []ledger.Call{{Name: "tracker_do_thing"}},
 		}},
 		surfaces: []turn.Surface{{
-			Catalogue: []string{"tracker_do_thing"},
-			MCPTools:  []string{"tracker_do_thing"},
+			Catalogue:    []string{"tracker_do_thing"},
+			Deliverables: []string{"tracker_do_thing"},
 		}},
 		reviews: []turn.Review{{Decision: phase.Done}},
 	}
@@ -405,8 +405,8 @@ func TestABuiltinIsNeverADelivery(t *testing.T) {
 			Calls: []ledger.Call{{Name: "reflect_and_persist"}},
 		}},
 		surfaces: []turn.Surface{{
-			Catalogue: []string{"reflect_and_persist", "slack_post"},
-			MCPTools:  []string{"slack_post"},
+			Catalogue:    []string{"reflect_and_persist", "slack_post"},
+			Deliverables: []string{"slack_post"},
 		}},
 		reviews: []turn.Review{{Decision: phase.Done}},
 	}
@@ -571,9 +571,9 @@ func TestOnlyTheReadsActuallyUsedAreRecorded(t *testing.T) {
 			delivered("second"),
 		},
 		surfaces: []turn.Surface{{
-			Catalogue:  []string{"slack_post", "slack_history", "jira_get", "gh_get"},
-			MCPTools:   []string{"slack_post", "slack_history", "jira_get", "gh_get"},
-			KnownReads: []string{"slack_history", "jira_get", "gh_get"},
+			Catalogue:    []string{"slack_post", "slack_history", "jira_get", "gh_get"},
+			Deliverables: []string{"slack_post"},
+			KnownReads:   []string{"slack_history", "jira_get", "gh_get"},
 		}},
 		reviews: []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}, {Decision: phase.Done}},
 	}
@@ -790,8 +790,8 @@ func TestTheReportedSurfaceIsWhatTheCheckJudges(t *testing.T) {
 		// The tool was activated mid-run, so it is on the surface the phase
 		// reports and on no list built before it.
 		surfaces: []turn.Surface{{
-			Catalogue: []string{"discovered_post"},
-			MCPTools:  []string{"discovered_post"},
+			Catalogue:    []string{"discovered_post"},
+			Deliverables: []string{"discovered_post"},
 		}},
 		reviews: []turn.Review{{Decision: phase.Done}},
 	}

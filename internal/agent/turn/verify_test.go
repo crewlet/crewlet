@@ -15,9 +15,12 @@ import (
 func TestDeliverableIsServerBackedAndNotAKnownRead(t *testing.T) {
 	t.Parallel()
 	s := turn.Surface{
-		Catalogue:  []string{"slack_post", "slack_history", "reflect_and_persist", "tracker_do"},
-		MCPTools:   []string{"slack_post", "slack_history", "tracker_do"},
-		KnownReads: []string{"slack_history"},
+		Catalogue: []string{"slack_post", "slack_history", "reflect_and_persist", "tracker_do"},
+		// The registry computed this: slack_history is annotated read-only
+		// so it is absent, and reflect_and_persist is a first-party tool
+		// registered without tools.Delivers().
+		Deliverables: []string{"slack_post", "tracker_do"},
+		KnownReads:   []string{"slack_history"},
 	}
 	for name, want := range map[string]bool{
 		"slack_post":          true,  // server-backed write
@@ -36,7 +39,7 @@ func TestDeliverableIsServerBackedAndNotAKnownRead(t *testing.T) {
 // close the check on exactly the turn that needs to iterate.
 func TestDeliveredIgnoresFailedCalls(t *testing.T) {
 	t.Parallel()
-	s := turn.Surface{MCPTools: []string{"slack_post"}}
+	s := turn.Surface{Deliverables: []string{"slack_post"}}
 	if turn.Delivered([]ledger.Call{{Name: "slack_post", Failed: true}}, s) {
 		t.Error("a failed call counted as a delivery")
 	}

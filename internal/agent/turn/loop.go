@@ -91,8 +91,9 @@ type Review struct {
 type Surface struct {
 	// Catalogue is every tool name the phase could reach.
 	Catalogue []string
-	// MCPTools is every tool backed by an MCP server.
-	MCPTools []string
+	// Deliverables is every tool whose successful call could reach
+	// somebody outside this turn — see [Deliverable].
+	Deliverables []string
 	// KnownReads is every tool POSITIVELY annotated read-only.
 	KnownReads []string
 }

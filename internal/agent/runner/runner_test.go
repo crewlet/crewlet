@@ -15,9 +15,9 @@ import (
 // judges against.
 func deliverySurface() turn.Surface {
 	return turn.Surface{
-		Catalogue:  []string{"slack_post", "slack_history", "lookup_colleague"},
-		MCPTools:   []string{"slack_post", "slack_history"},
-		KnownReads: []string{"slack_history"},
+		Catalogue:    []string{"slack_post", "slack_history", "lookup_colleague"},
+		Deliverables: []string{"slack_post"},
+		KnownReads:   []string{"slack_history"},
 	}
 }
 

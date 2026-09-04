@@ -2414,3 +2414,25 @@ func TestAWorkersNarrationSharesItsRoundsWithItsToolCalls(t *testing.T) {
 		}
 	}
 }
+
+// A worker runs under its parent's name and inside its parent's turn, so the
+// parent's OWN memory is not its to write: a note it persists is filed as the
+// parent's observation, a skill it refines rewrites the parent's practice, and
+// a marker it stamps says the parent finished reading pages it never saw.
+//
+// They are denied BY NAME rather than by annotation, which is the criterion
+// this list exists for. All three are closed-world writes — they touch this
+// node's own store and nothing else — so [mcp.WritesToSharedSurface]
+// correctly does not catch them, and for a while the only thing keeping them
+// from a worker was an OpenWorld hint nobody had set. That is an accident, not
+// a boundary: annotate them honestly and the accident disappears, which is
+// exactly what happened and why this test exists.
+func TestAWorkerNeverWritesItsParentsMemory(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"reflect_and_persist", "refine_skill", "mark_onboarded"} {
+		if !subagent.Denied(name) {
+			t.Errorf("%s is not on the engine-control denylist: a worker acting "+
+				"under its parent's name could write the parent's own memory", name)
+		}
+	}
+}

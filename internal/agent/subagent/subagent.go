@@ -168,6 +168,19 @@ var controlDenylist = map[string]struct{}{
 	"request_a2a_channel": {},
 	"send_a2a_message":    {},
 	"close_a2a_channel":   {},
+
+	// The parent's OWN memory. A worker runs under the parent's name and
+	// inside the parent's turn, so a note it persists is filed as the
+	// parent's observation, a skill it refines rewrites the parent's
+	// practice, and a marker it stamps says the parent finished reading
+	// pages it never saw. These are closed-world writes — annotated
+	// OpenWorld=No, which is what they are — so the shared-surface filter
+	// correctly does not catch them, and they are denied here instead, on
+	// the criterion this list exists for: they are Crewlet's own tools and
+	// the invariant is about WHOSE state they write, not which surface.
+	"reflect_and_persist": {},
+	"refine_skill":        {},
+	"mark_onboarded":      {},
 }
 
 // Denied reports whether a tool name is on the engine-control denylist.

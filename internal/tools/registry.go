@@ -72,6 +72,24 @@ type Entry struct {
 	// unknown as read exempts most of a fresh MCP server from the delivery
 	// fence.
 	Annotations Annotations
+
+	// Delivers is a FIRST-PARTY declaration that calling this tool can put
+	// something in front of somebody outside this turn.
+	//
+	// It exists because the delivery gate used to key on ORIGIN — a tool
+	// delivered if an MCP server served it — and that was a proxy for the
+	// real question, correct only while every shared surface was somebody
+	// else's product. A native tracker breaks the proxy: commenting on a
+	// work item reaches the person who asked, and it is a builtin.
+	//
+	// Deriving it from Annotations instead was considered and refused. The
+	// classifier reads a write as ReadOnly==No && OpenWorld!=No, which is
+	// exactly the shape of reflect_and_persist — so a derived rule would
+	// let a turn satisfy "did this reach anybody" by writing its own
+	// diary, and a2a_ask (OpenWorld:Yes) would count although the engine
+	// itself carries that answer back. A positive flag set at registration
+	// is the only form that says what it means.
+	Delivers bool
 }
 
 // Name is the tool's catalogue name.
@@ -146,8 +164,16 @@ func (r *Registry) Register(tool Callable, origin string) error {
 	return r.RegisterWith(tool, origin, Annotations{})
 }
 
+// Option is a registration detail that is neither the tool, its origin nor
+// its annotations — today only [Delivers].
+type Option func(*Entry)
+
+// Delivers marks a first-party tool as one whose successful call reaches
+// somebody outside the engine. See [Entry.Delivers].
+func Delivers() Option { return func(e *Entry) { e.Delivers = true } }
+
 // RegisterWith adds a tool together with its annotations.
-func (r *Registry) RegisterWith(tool Callable, origin string, ann Annotations) error {
+func (r *Registry) RegisterWith(tool Callable, origin string, ann Annotations, opts ...Option) error {
 	if tool == nil {
 		return fmt.Errorf("tools: cannot register a nil tool")
 	}
@@ -164,7 +190,11 @@ func (r *Registry) RegisterWith(tool Callable, origin string, ann Annotations) e
 	if existing, dup := r.byName[name]; dup {
 		return &ErrDuplicate{Name: name, Existing: existing.Origin, Incoming: origin}
 	}
-	r.byName[name] = Entry{Tool: tool, Origin: origin, Annotations: ann}
+	entry := Entry{Tool: tool, Origin: origin, Annotations: ann}
+	for _, opt := range opts {
+		opt(&entry)
+	}
+	r.byName[name] = entry
 	r.order = append(r.order, name)
 	return nil
 }
@@ -240,9 +270,9 @@ func (r *Registry) Names() []string {
 
 // MCPNames returns the names of every MCP-served tool.
 //
-// The delivery gate reads this: a delivery to a shared surface only ever comes
-// from an MCP server, so a first-party builtin called during recon can never
-// stand in for one.
+// The tool ROOM groups on this. The delivery gate does not — see
+// [Registry.Deliverables], which asks whether a tool reaches anybody rather
+// than who serves it.
 func (r *Registry) MCPNames() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -253,6 +283,41 @@ func (r *Registry) MCPNames() []string {
 		}
 	}
 	return out
+}
+
+// Deliverables returns the names of every tool whose successful call can put
+// something in front of somebody outside this turn.
+//
+// TWO KINDS, one question. An MCP-served tool delivers unless its own
+// annotations POSITIVELY say it is a read — the fail-closed direction, because
+// treating unannotated as read would exempt most of a fresh server. A
+// first-party tool delivers only when it was registered with [Delivers],
+// because the engine ships its own tools and knows which of them reach
+// anybody: a native work-item comment does, a diary write does not.
+//
+// This replaced an origin test. The rule "a delivery only ever comes from an
+// MCP server" was true of a company whose every shared surface was a vendor's,
+// and false the moment the tracker moved in-process — a seat that answered its
+// assignment natively was judged to have reached nobody and looped to failure.
+func (r *Registry) Deliverables() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0, len(r.order))
+	for _, name := range r.order {
+		if delivers(r.byName[name]) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// delivers is the one predicate both the registry and a snapshot answer with,
+// so a tool cannot deliver through one view and not the other.
+func delivers(e Entry) bool {
+	if _, fromMCP := e.FromMCP(); fromMCP {
+		return !mcp.ReadOnlyProven(e.Annotations)
+	}
+	return e.Delivers
 }
 
 // KnownReads returns the names POSITIVELY annotated read-only.
@@ -290,8 +355,8 @@ type OriginView struct {
 func (v *OriginView) Register(tool Callable) error { return v.reg.Register(tool, v.origin) }
 
 // RegisterWith adds a tool with annotations under this view's origin.
-func (v *OriginView) RegisterWith(tool Callable, ann Annotations) error {
-	return v.reg.RegisterWith(tool, v.origin, ann)
+func (v *OriginView) RegisterWith(tool Callable, ann Annotations, opts ...Option) error {
+	return v.reg.RegisterWith(tool, v.origin, ann, opts...)
 }
 
 // Unregister removes every tool this view registered.
@@ -376,6 +441,18 @@ func (s Snapshot) Names() []string {
 	out := make([]string, 0, len(s.entries))
 	for _, e := range s.entries {
 		out = append(out, e.Name())
+	}
+	return out
+}
+
+// Deliverables returns the snapshot's names that reach somebody outside the
+// turn — the same predicate [Registry.Deliverables] answers.
+func (s Snapshot) Deliverables() []string {
+	out := make([]string, 0, len(s.entries))
+	for _, e := range s.entries {
+		if delivers(e) {
+			out = append(out, e.Name())
+		}
 	}
 	return out
 }

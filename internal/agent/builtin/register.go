@@ -158,11 +158,22 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 // default for an MCP server nobody has classified — so a read-only builtin
 // left unannotated would make every recall look like a delivery.
 //
-// None of these writes to a SHARED surface: an agent's own diary, its own
-// skills and its own onboarding marker are private state, and an A2A ask is a
-// message to one colleague rather than something the company can see. The
-// distinction is the one `writes_to_shared_surface` exists to draw — see
-// docs/concepts/tool-capabilities.md.
+// THE PRIVATE WRITES SAY SO, and the reason is that saying nothing meant the
+// opposite. An agent's own diary, its own skills and its own onboarding marker
+// are closed-world local state — nothing outside this engine sees them — but
+// they were annotated ReadOnly=No with OpenWorld left UNKNOWN, and
+// [mcp.WritesToSharedSurface] reads `ReadOnly == No && OpenWorld != No` as a
+// shared write. So the comment that used to stand here ("none of these writes
+// to a shared surface") described an intent the arithmetic contradicted: the
+// classifier called all three shared, and the worker guard denied them for a
+// reason nobody had chosen.
+//
+// They are now annotated OpenWorld=No, which is what they are, and denied to
+// workers BY NAME on the engine-control denylist — the criterion this tree
+// gives for its own tools, where naming is not a tool-stack coupling. A worker
+// running under its parent's name must not write the parent's diary, refine
+// the parent's skills or stamp the parent's onboarding marker, and that is a
+// runtime invariant rather than a property of the surface it writes to.
 func annotationsFor(name string) tools.Annotations {
 	switch name {
 	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,
@@ -178,7 +189,10 @@ func annotationsFor(name string) tools.Annotations {
 	case MarkOnboardedTool:
 		// A write whose repeat is genuinely free: the marker is a fact
 		// about this seat, and setting it again sets the same fact.
-		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, Idempotent: mcp.Yes}
+		// CLOSED WORLD: the marker is a row in this node's own store.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No, Idempotent: mcp.Yes, OpenWorld: mcp.No,
+		}
 	case RunSandboxTool:
 		// The one builtin that writes to a SHARED SURFACE, which
 		// ReadOnly=No plus OpenWorld=Yes is how that is stated: a coding
@@ -191,11 +205,13 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case RefineSkillTool:
 		// It replaces a body. The prior version is archived, so this is
-		// reversible — which is exactly what Destructive asks about.
-		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No}
+		// reversible — which is exactly what Destructive asks about — and
+		// the skill is this seat's own, so the world it writes to is closed.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.No}
 	default:
-		// reflect_and_persist: a write, and each call is another note.
-		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No}
+		// reflect_and_persist: a write, and each call is another note, into
+		// this agent's private diary and nowhere else.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.No}
 	}
 }
 

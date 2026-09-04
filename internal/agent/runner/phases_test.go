@@ -281,8 +281,8 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 	}
 	// The surface handed back is what the delivery check judges against, so
 	// it must describe the whole catalogue and not just what was offered.
-	if !slices.Contains(surface.MCPTools, "slack_post") {
-		t.Errorf("surface MCP tools = %v", surface.MCPTools)
+	if !slices.Contains(surface.Deliverables, "slack_post") {
+		t.Errorf("surface deliverables = %v", surface.Deliverables)
 	}
 	if !slices.Equal(surface.KnownReads, []string{"slack_history"}) {
 		t.Errorf("surface known reads = %v", surface.KnownReads)
