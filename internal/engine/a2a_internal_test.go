@@ -17,16 +17,25 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
+// askEvent builds an ask THE WAY internal/a2a BUILDS IT: events.New over the
+// registered payload, never a hand-written Payload bag.
+//
+// The bag is a shape no producer emits — a2a.Service publishes the typed
+// struct, whose fields marshal flat beside the envelope while Payload stays
+// empty — so a literal one is a fiction, and asserting against it is how the
+// engine's reads of Payload["channel_id"] and Payload["content"] stayed green
+// while answering "" for every real ask: answerColleague logged
+// a2a_answer_unaddressable and returned, so no colleague question was ever
+// answered.
 func askEvent(channelID, brief string) *events.Event {
-	return &events.Event{
-		ID: uuid.New(), Type: types.A2ARequestType, Source: "ceo",
-		Payload: map[string]any{
-			"channel_id": channelID, "requester": "ceo",
-			"content": brief, "sender_role": "Chief Executive",
-		},
-		DelegationDepth: 1,
-		DelegationChain: []string{"ceo"},
-	}
+	ev := events.New(types.A2ARequest{
+		ChannelID: channelID, Requester: "ceo",
+		SenderRole: "Chief Executive", Content: brief,
+	}, events.TraceContext{})
+	ev.Source = "ceo"
+	ev.DelegationDepth = 1
+	ev.DelegationChain = []string{"ceo"}
+	return ev
 }
 
 // A COLLEAGUE'S QUESTION REACHES THE SEAT THAT HAS TO ANSWER IT.
@@ -39,23 +48,33 @@ func askEvent(channelID, brief string) *events.Event {
 func TestAColleaguesQuestionReachesTheAnsweringTurn(t *testing.T) {
 	t.Parallel()
 	got := DescribeTrigger([]*events.Event{askEvent("a2a-1", "What broke last night?")})
-	if got != "What broke last night?" {
+	if !strings.Contains(got, "What broke last night?") {
 		t.Errorf("the answering turn's task = %q", got)
+	}
+	// And it names WHO asked, which is the other half of an ask a seat can
+	// act on: an anonymous question has no reply target a model can reason
+	// about.
+	if !strings.Contains(got, "Chief Executive") {
+		t.Errorf("the answering turn's task does not name the asker: %q", got)
 	}
 }
 
 // AND SO DOES AN ANSWER, on the way back.
 func TestAnAnswerReachesTheSeatThatAsked(t *testing.T) {
 	t.Parallel()
-	reply := &events.Event{
-		ID: uuid.New(), Type: types.A2AMessageType, Source: "cto",
-		Payload: map[string]any{
-			"channel_id": "a2a-1", "sender": "cto",
-			"content": "the deploy at 02:14 rolled back", "question": "What broke?",
-		},
-	}
-	if got := DescribeTrigger([]*events.Event{reply}); got != "the deploy at 02:14 rolled back" {
+	reply := events.New(types.A2AMessage{
+		ChannelID: "a2a-1", Sender: "cto", SenderRole: "CTO",
+		Content: "the deploy at 02:14 rolled back", Question: "What broke?",
+	}, events.TraceContext{})
+	reply.Source = "cto"
+	got := DescribeTrigger([]*events.Event{reply})
+	if !strings.Contains(got, "the deploy at 02:14 rolled back") {
 		t.Errorf("the woken turn's task = %q", got)
+	}
+	// The echo travels with it: the asking turn ENDED when it asked, so
+	// without the question the answer has no antecedent.
+	if !strings.Contains(got, "What broke?") {
+		t.Errorf("the woken turn's task carries no question: %q", got)
 	}
 }
 
@@ -63,8 +82,9 @@ func TestAnAnswerReachesTheSeatThatAsked(t *testing.T) {
 // a turn being handed a blank ask.
 func TestATriggerWithNoBodyStillNamesItself(t *testing.T) {
 	t.Parallel()
-	bare := &events.Event{ID: uuid.New(), Type: types.A2ARequestType,
-		Payload: map[string]any{"channel_id": "a2a-1"}}
+	// A BODY-LESS ENVELOPE — which is exactly what an event of a type this
+	// build does not know decodes to: no typed payload, nothing in the bag.
+	bare := &events.Event{ID: uuid.New(), Type: types.A2ARequestType}
 	if got := DescribeTrigger([]*events.Event{bare}); got != "(a2a_request)" {
 		t.Errorf("trigger = %q", got)
 	}
@@ -101,8 +121,16 @@ func TestTheQuestionIsEchoedBack(t *testing.T) {
 	if got := askedQuestion(askEvent("a2a-1", "What broke?")); got != "What broke?" {
 		t.Errorf("echo = %q", got)
 	}
-	if got := askedQuestion(&events.Event{Payload: map[string]any{}}); got != "" {
+	if got := askedQuestion(&events.Event{Type: types.A2ARequestType}); got != "" {
 		t.Errorf("echo = %q, want none", got)
+	}
+	// AND THE ADDRESS, which is what decides whether the answer goes
+	// anywhere at all.
+	if got := askChannel(askEvent("a2a-9", "?")); got != "a2a-9" {
+		t.Errorf("the answer would be sent to %q — an ask with no address is dropped", got)
+	}
+	if got := askChannel(&events.Event{Type: types.A2ARequestType}); got != "" {
+		t.Errorf("a body-less ask reported channel %q", got)
 	}
 }
 

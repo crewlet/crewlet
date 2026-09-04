@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -541,16 +542,15 @@ func (n *Node) Attached() []string {
 
 // conversationKey partitions a seat's inbox by conversation.
 //
-// Events that cannot name a conversation key on their own conversation key
-// UNIQUELY, on their own id — which means they are never coalesced with
-// anything. That is the honest default: merging two unrelated triggers into
-// one digest turn loses one of them.
-func conversationKey(ev *events.Event) string {
-	if ev == nil {
-		return ""
-	}
-	if k, ok := ev.Payload["conversation_key"].(string); ok && k != "" {
-		return k
-	}
-	return "event:" + ev.ID.String()
-}
+// [notify.KeyOf], not a copy of it. The grammar states that it is stamped by
+// the producer and read by everyone else — "three readers, so one definition"
+// — and this was a fourth definition spelling the field name and the fallback
+// prefix out again. Both live in exactly one place now, so renaming either is
+// a change to one constant rather than a silent partition-key mismatch with a
+// regression test that stays green because it uses the constant too.
+//
+// An event that cannot name a conversation gets a key of its OWN — derived
+// from its id, so nothing else can ever share it — and is therefore never
+// coalesced with anything. That is the honest default: merging two unrelated
+// triggers into one digest turn loses one of them.
+func conversationKey(ev *events.Event) string { return notify.KeyOf(ev) }

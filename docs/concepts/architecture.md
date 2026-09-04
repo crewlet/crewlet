@@ -675,7 +675,7 @@ here.
 | Webhook routes, verification, parsers | `internal/api/webhooks`, `internal/whsec` | [Jira](../integrations/jira.md) · [Confluence](../integrations/confluence.md) · [GitHub](../integrations/github.md) · [GitLab](../integrations/gitlab.md) · [Slack](../integrations/slack.md) · [Mattermost](../integrations/mattermost.md) |
 | Routing a delivery to a seat | `internal/notify` | [Event system](event-system.md) |
 | Subjects, streams, delivery semantics | `internal/queue`, `internal/events` | [Event system](event-system.md) |
-| Inbox batching and coalescing | `internal/agent/inbox` | [Event system](event-system.md#inbox-batching--coalescing) |
+| Inbox batching and coalescing | `internal/queue` (the drain and the partition), `internal/agent/inbox` (the guard order), `internal/notify` (the merge), `internal/engine` (which of the three runs when) | [Event system](event-system.md#inbox-batching--coalescing) |
 | Seat leases, placement, acquire and release | `internal/seat`, `internal/node` | [Seat ownership](seat-ownership.md) |
 | Leases, buckets, the three-valued answer | `internal/coord` | [Coordination](coordination.md) |
 | The activation pointer and node postures | `internal/configplane` | [Control plane](control-plane.md) |

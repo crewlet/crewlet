@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
@@ -13,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -83,6 +86,15 @@ type Dispatcher struct {
 	// failing the dispatch over it would trade real work for a row.
 	Observe func(ctx context.Context, ev *events.Event)
 
+	// Prompts resolves the vendor registry a coalesced partition is merged
+	// with — see [Dispatcher.promptRegistry].
+	//
+	// nil is an empty registry, which merges with the generic fallback's
+	// pass-through supersede rule. That is the honest answer for a node with
+	// no integrations, and it is what keeps a bare &Dispatcher{} in a test
+	// coalescing rather than degrading.
+	Prompts func() notify.Prompts
+
 	// Conversation resolves the conversation-ledger policy for the turn
 	// about to run.
 	//
@@ -122,6 +134,19 @@ type Request struct {
 	// trigger, so the seat runs one turn instead of N.
 	Coalesce bool
 
+	// Trigger is the ask this turn is GIVEN, as opposed to the bookkeeping
+	// the partition is.
+	//
+	// The same events as [Request.Events] for an ordinary single-event
+	// partition, and ONE merged digest event when the partition coalesced
+	// (see mergeNotifications). The two are separate fields because they
+	// answer to different readers and one value cannot serve both: the
+	// completion ledger records the CONSTITUENT ids, so a redelivery of a
+	// subset is droppable, while the model is handed one ask — and a digest
+	// is minted fresh on every merge, so a ledger keyed on it would match
+	// nothing and re-run the turn on every redelivery.
+	Trigger []*events.Event
+
 	// History is what this seat already said in this conversation.
 	History []ledger.Session
 
@@ -145,6 +170,18 @@ type Request struct {
 	// it travels so an ask this turn makes names the whole path instead of
 	// only its immediate asker.
 	DelegationChain []string
+}
+
+// Ask is the events a turn's task text is rendered from.
+//
+// [Request.Trigger] when the dispatcher set one, and the partition otherwise
+// — a Request assembled anywhere but Dispatch (a resumed detached run, a
+// test) carries no separate trigger and its partition IS its ask.
+func (r Request) Ask() []*events.Event {
+	if len(r.Trigger) > 0 {
+		return r.Trigger
+	}
+	return r.Events
 }
 
 // Dispatch runs one partition.
@@ -195,11 +232,63 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	}
 
 	surviving := d.dropWorked(ctx, handle, screening.Events)
+	// WHAT THE LEDGER DROPPED, on the record.
+	//
+	// [types.TurnTriggerSkipped] was registered, categorised, documented as
+	// shipped and produced by nothing, so the one case it exists for was
+	// exactly as invisible as it was before the type was written: a turn
+	// that finished, shipped its outbound effects, and whose delivery came
+	// back — from a node that died before acking, or from a drain whose
+	// partitions together outlasted the ack window. The feed then shows the
+	// arrivals and one turn, and nothing at all distinguishes "the agent
+	// never answered" from "the agent already answered". Emitted here
+	// because here is the only frame that holds both lists.
+	d.noteSkipped(ctx, handle, screening.Events, surviving)
 	if len(surviving) == 0 {
 		return queue.Ack()
 	}
 
 	routing := inbox.Route(surviving, d.ledgered)
+
+	// THE MERGE, here and only here, because this is the last frame that
+	// holds the partition: below it a turn is one ask.
+	//
+	// The result is a SECOND list rather than a replacement — see
+	// [Request.Trigger]. Everything the dispatcher derives from a partition
+	// (the work key, the trace, the deepest delegation, the smallest wall
+	// clock, the reply obligation, the senders and the interactions, and the
+	// completion ledger's per-constituent record) keeps reading the
+	// constituents, and only the ask a model is handed is merged.
+	trigger := routing.Events
+	if routing.Coalesce {
+		merged, ok := mergeNotifications(d.promptRegistry(), routing.Events)
+		if !ok {
+			// A PARTITION THAT CANNOT BE MERGED degrades to per-event
+			// dispatch: requeue the tail FIRST, then run the head in the
+			// ack scope already open. The order is the point — a requeue
+			// failure has to abort before any work has run, or a completed
+			// turn is replayed by a later event's failure. Partially
+			// requeued copies collapse on the next drain through the
+			// same-id dedupe in [inbox.Screen].
+			log.WarnContext(ctx, "partition_not_mergeable", "seat", handle,
+				"conversation", conversationKeyOf(routing.Events),
+				"events", len(routing.Events),
+				"detail", "a partition whose constituents are not all decodable "+
+					"external notifications; dispatching per event")
+			head, tail, headKey := inbox.Degraded(routing.Events, d.ledgered)
+			if d.Park == nil {
+				return queue.Nak(fmt.Errorf(
+					"engine: %s: no requeue path for a partition that would not merge", handle))
+			}
+			if err := d.Park(ctx, handle, tail); err != nil {
+				return queue.Nak(fmt.Errorf("engine: requeue %s: %w", handle, err))
+			}
+			routing = inbox.Routing{WorkKey: headKey, Events: head}
+			trigger = head
+		} else {
+			trigger = []*events.Event{merged}
+		}
+	}
 
 	// THE TRIGGER'S TRACE, restored before anything below publishes or logs,
 	// so this turn's spans hang under whatever caused it — a webhook, a
@@ -222,7 +311,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	ctx = tracing.WithRemote(ctx, triggerTrace(routing.Events))
 	depth, chain := delegationOf(routing.Events)
 	req := Request{
-		Handle: handle, Events: routing.Events,
+		Handle: handle, Events: routing.Events, Trigger: trigger,
 		WorkKey: routing.WorkKey, Coalesce: routing.Coalesce,
 		TimeoutSeconds:  wallClockOf(routing.Events),
 		ConversationKey: conversationKeyOf(routing.Events),
@@ -378,7 +467,7 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 		}
 	}
 	d.RecordSession(ctx, handle, req.ConversationKey, req.WorkKey,
-		DescribeTrigger(req.Events), res, now)
+		DescribeTrigger(req.Ask()), res, now)
 }
 
 // RecordSession appends what this turn said to the conversation it served.
@@ -499,17 +588,10 @@ func (d *Dispatcher) now() time.Time {
 // later event naming a different one is a routing bug, and taking the first
 // keeps the answer stable rather than depending on which event happened to
 // sort last.
-func conversationKeyOf(evs []*events.Event) string {
-	for _, ev := range evs {
-		if ev == nil {
-			continue
-		}
-		if key, _ := ev.Payload["conversation_key"].(string); key != "" {
-			return key
-		}
-	}
-	return ""
-}
+//
+// [notify.KeyOfAll], not a copy of it: the field name lived here as a literal
+// as well, so the grammar that calls itself the one definition had three.
+func conversationKeyOf(evs []*events.Event) string { return notify.KeyOfAll(evs) }
 
 // DescribeTrigger renders a partition as the ask a turn is given.
 //
@@ -662,17 +744,69 @@ func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, conversation str
 	}
 	ev := events.New(types.NotificationsCoalesced{
 		AgentHandle: handle, ConversationKey: conversation,
-		// THE SOURCE OF THE FIRST EVENT names the integration. A merge is
-		// always one conversation's worth of external notifications, and a
-		// conversation belongs to one vendor — so the constituents cannot
-		// disagree, and taking the first is a lookup rather than a choice.
-		NotificationSource: routing.Events[0].Source,
+		// THE VENDOR NAMES THE INTEGRATION. A merge is always one
+		// conversation's worth of external notifications and a conversation
+		// belongs to one vendor, so the constituents cannot disagree and
+		// taking the first is a lookup rather than a choice.
+		NotificationSource: notificationSourceOf(routing.Events),
 		Count:              len(routing.Events),
 		FirstAt:            first.UTC().Format(time.RFC3339),
 		LastAt:             last.UTC().Format(time.RFC3339),
 	}, tracing.TraceOf(ctx))
 	ev.Source = "engine." + routing.Events[0].Source
 	d.Observe(ctx, ev)
+}
+
+// noteSkipped records every constituent the completion ledger already worked.
+//
+// Best effort and nil-safe, like the coalescing record beside it: a node whose
+// queue refused the row has still skipped correctly, and failing the dispatch
+// over an observability event would trade real work for a feed entry.
+func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviving []*events.Event) {
+	if d.Observe == nil || len(all) == len(surviving) {
+		return
+	}
+	kept := make(map[uuid.UUID]bool, len(surviving))
+	for _, ev := range surviving {
+		if ev != nil {
+			kept[ev.ID] = true
+		}
+	}
+	for _, ev := range all {
+		if ev == nil || kept[ev.ID] {
+			continue
+		}
+		// THE SKIPPED TRIGGER'S OWN TRACE, not the dispatch's: the
+		// question this record answers is "what happened to my webhook",
+		// and the answer belongs under the webhook rather than under a
+		// dispatch that went on to do something else.
+		rec := events.New(types.TurnTriggerSkipped{
+			AgentHandle: handle,
+			TriggerID:   ev.ID.String(),
+			TriggerType: ev.Type,
+			Reason:      "a previous turn already worked this trigger",
+		}, triggerTrace([]*events.Event{ev}))
+		rec.Source = "engine.dispatch"
+		d.Observe(ctx, rec)
+	}
+}
+
+// notificationSourceOf is the vendor a partition came from.
+//
+// OFF THE TYPED PAYLOAD, not the envelope's Source. internal/notify stamps the
+// envelope "notify.slack" — it names the PRODUCER of the wake, which is the
+// notification service — so reading it here filed every coalescing record
+// under a source string no other notification event uses and no dashboard
+// filter matches, leaving every integration's coalesced count permanently
+// zero. The payload's own NotificationSource is the bare vendor name every
+// other consumer reads.
+func notificationSourceOf(evs []*events.Event) string {
+	for _, ev := range evs {
+		if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n.NotificationSource != "" {
+			return n.NotificationSource
+		}
+	}
+	return ""
 }
 
 // triggerTrace is the trace a partition of trigger events belongs to.
@@ -753,7 +887,17 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// [notify.Prompt.Addressed]. Absent decodes as false, so an
 			// event written by a build that predates the field is
 			// unaddressed rather than an obligation nobody recorded.
-			if addressed, _ := ev.Payload["addressed"].(bool); addressed {
+			//
+			// OFF THE TYPED PAYLOAD, never the envelope's free-form bag.
+			// Addressed is a field of [types.ExternalNotification], and
+			// nothing has ever written it into Payload — so the bag read
+			// this replaces answered false for EVERY notification, in
+			// process and across the wire alike. The delivery obligation
+			// the reviewer enforces was therefore never raised by an
+			// inbound message: a seat could end a turn woken by a direct
+			// ask having posted nothing, and the guard that exists to
+			// catch exactly that saw ReplyNone.
+			if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n.Addressed {
 				owed = turn.ReplyTool
 			}
 

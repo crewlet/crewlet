@@ -91,9 +91,13 @@ type Recipient struct {
 
 // Valve is the shared per-seat notification rate limiter.
 //
-// Reports whether the seat is under its cap, counting this call. The error
-// is for logging: the valve FAILS OPEN, so an unreachable counter reports
-// true — a valve that cannot be reached must not stop real notifications.
+// THREE-VALUED, and the error is which of the three: nil means the bool is an
+// answer — under the cap, or definitively over it — and a non-nil error means
+// the valve could not say, WHATEVER the bool beside it. The caller fails open
+// on that third answer, because a valve that cannot be reached must not stop
+// real notifications; an implementation is therefore free to return the false
+// that comes naturally when it cannot read a count, and does not have to
+// remember to invent a true.
 type Valve interface {
 	Allow(ctx context.Context, bucket string, limit int, now time.Time) (bool, error)
 }
@@ -216,6 +220,23 @@ func (s *Service) Register(p Parser, prompt Prompt) error {
 		s.prompts = s.prompts.With(prompt)
 	}
 	return nil
+}
+
+// Prompts is the vendor registry as it stands right now.
+//
+// A READ OF THE LIVE VALUE, because the registry is not fixed at boot: an
+// apply calls [Service.Replace] for every integration the new revision
+// enables, and a caller holding a copy taken at construction would keep
+// rendering — and merging — with the vendors the process started with. The
+// second reader is the inbox coalescer, whose per-vendor supersede rules are
+// exactly what a stale copy would drop.
+//
+// A VALUE, and [Prompts.With] copies on write, so what the caller gets cannot
+// change underneath it mid-delivery.
+func (s *Service) Prompts() Prompts {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.prompts
 }
 
 // Replace swaps the parser and prompt for a source already registered.
@@ -387,15 +408,29 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		s.skip(ctx, r.Source, party.Handle, why)
 		return nil
 	}
-	if allowed, err := s.allow(ctx, party); !allowed {
-		log.WarnContext(ctx, "notification_rate_limited", "source", r.Source, "handle", party.Handle)
-		s.skip(ctx, r.Source, party.Handle, "rate limit exceeded")
-		return nil
-	} else if err != nil {
+	// THREE ANSWERS, NOT TWO. "Under the cap", "over the cap" and "the
+	// valve could not say" are three different facts, and the error is
+	// what tells the last two apart.
+	//
+	// The error was checked SECOND, behind `!allowed` — and every error the
+	// only production valve returns comes back paired with false, because a
+	// counter that cannot read its bucket cannot report a count. So a
+	// coordination-store blip did not make the valve blind, it made it
+	// SHUT: every inbound notification for every seat was dropped and
+	// acked, and the fail-open below — the documented behaviour of
+	// [Valve], and the reason a safety valve is allowed to exist on this
+	// path at all — was unreachable code the whole time.
+	allowed, err := s.allow(ctx, party)
+	switch {
+	case err != nil:
 		// FAILED OPEN: the notification is going through. Logged so an
 		// operator can see the valve is blind rather than idle.
 		log.WarnContext(ctx, "notification_valve_unavailable", "handle", party.Handle,
 			"error", err.Error())
+	case !allowed:
+		log.WarnContext(ctx, "notification_rate_limited", "source", r.Source, "handle", party.Handle)
+		s.skip(ctx, r.Source, party.Handle, "rate limit exceeded")
+		return nil
 	}
 
 	prompt := prompts.For(r.Source)
@@ -430,9 +465,14 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	// The conversation key rides on the event so the inbox coalescer can
 	// partition by it without re-deriving a vendor's rule. Derived here,
 	// where the vendor's prompt is already in hand.
-	conversation := ""
-	if key := prompt.ConversationKey(meta, r.Subject); key != "" {
-		conversation = Namespaced(r.Source, key)
+	//
+	// THROUGH [Prompts.Key], which exists so the namespacing rule has one
+	// caller — a vendor's local key is namespaced by source precisely so a
+	// Jira issue "42" and a GitLab issue "42" cannot merge into one trigger.
+	// This is that one caller; hand-rolling the same two steps beside it
+	// made the rule's home a function nothing called.
+	conversation := prompts.Key(r.Inbound)
+	if conversation != "" {
 		meta[KeyField] = conversation
 	}
 

@@ -69,11 +69,11 @@ func (q *Queue) SubscribeBatch(
 			// top of this loop already answers with `continue`, ten lines
 			// up, which is what it should have said here too.
 			if ctx.Err() != nil {
-				a.nakAll(batch)
+				a.nakAll(ctx, batch)
 				return
 			}
 			if a.blocked() {
-				a.nakAll(batch)
+				a.nakAll(ctx, batch)
 				continue
 			}
 			a.dispatchBatch(ctx, batch, h, key)
@@ -114,7 +114,7 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 		if ctx.Err() != nil || a.blocked() {
 			break
 		}
-		wait := drainWait
+		wait := a.q.drainFetchWait()
 		if remaining := time.Until(deadline); remaining > wait {
 			wait = min(remaining, a.q.fetchWait())
 		}
@@ -122,13 +122,28 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 		if err != nil {
 			break
 		}
-		before := len(batch)
 		for msg := range more.Messages() {
 			if d, ok := a.toDelivery(msg); ok {
 				batch = append(batch, d)
 			}
 		}
-		if len(batch) == before && !time.Now().Before(deadline) {
+		// THE WINDOW IS THE BOUND, and only the window.
+		//
+		// This used to end the drain on a fetch that produced nothing AND a
+		// passed deadline, which made the window SLIDE: any arrival kept
+		// collection going, so the real bound was maxBatch × drainWait
+		// rather than the linger — a second of collection at the default
+		// cap, fifty at a large one, spent out of the same ack budget that
+		// has to hold a whole turn as well. The comment above the deadline
+		// already said fixed; this is what makes it true.
+		//
+		// An empty fetch is deliberately NOT an ending on its own: a
+		// positive window exists precisely to wait for arrivals that have
+		// not happened yet. With linger 0 the deadline has already passed
+		// on the first check, so exactly one tail fetch runs — which asks
+		// for the whole remaining cap and is what drains a backlog that
+		// accumulated while the previous handler ran.
+		if !time.Now().Before(deadline) {
 			break
 		}
 	}
@@ -154,7 +169,7 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		// successor gets them, rather than being run by a consumer that
 		// has just admitted it should not.
 		if a.blocked() {
-			a.nakAll(part.Items)
+			a.nakAll(ctx, part.Items)
 			continue
 		}
 
@@ -187,7 +202,7 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 			}
 		}
 	case queue.OutcomeDefer:
-		a.nakAll(items)
+		a.nakAll(ctx, items)
 		a.setQuiesced(true)
 	case queue.OutcomeNak:
 		for _, d := range items {
@@ -196,10 +211,19 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 	}
 }
 
-func (a *attachment) nakAll(items []delivery) {
+// nakAll hands a whole batch back — a deferral, a hold or a pause that landed
+// mid-drain, or teardown. Nothing is wrong with any of these messages.
+//
+// THROUGH THE BUDGET CHECK, because a Nak spends a delivery whatever it means.
+// Handing a batch back is not a failure, but JetStream counts it as one
+// redelivery all the same, and this used to call msg.Nak() bare: a message
+// whose 25 deliveries were spent by lease movements and sandbox parks was then
+// discarded by the broker's own MaxDeliver backstop — no dead-letter copy, no
+// `dead_lettered` line, no advisory consumer anywhere in this package to
+// notice. A healthy inbox event, silently gone. The boundary is the same one
+// the failure path already honours; what differs is only how it got there.
+func (a *attachment) nakAll(ctx context.Context, items []delivery) {
 	for _, d := range items {
-		if err := d.msg.Nak(); err != nil {
-			a.log.Warn("defer_nak_failed", "error", err.Error())
-		}
+		a.handBack(ctx, d.msg)
 	}
 }

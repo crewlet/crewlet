@@ -109,9 +109,18 @@ const (
 	// OutcomeDefer leaves the delivery unacked AND quiesces the
 	// attachment. It is the outcome for work this process has lost the
 	// right to do — a seat whose lease moved, a node serving a stale
-	// config. Acking would claim work it will not perform; NAKing would
-	// spend dead-letter budget on a message nothing is wrong with, and a
-	// healthy event eventually dies after enough handoffs.
+	// config. Acking would claim work it will not perform.
+	//
+	// WHAT IT COSTS DIFFERS BY BACKEND, and the contract says so rather
+	// than pretending otherwise. The in-memory twin returns the events
+	// without touching their counters. A real broker has no "give this
+	// back without counting it": returning a message promptly means a Nak,
+	// and a Nak spends one of its deliveries — so the delivery budget is
+	// sized to cover handoffs as well as failures, and the backend
+	// dead-letters at the boundary rather than letting the broker's own
+	// MaxDeliver backstop discard a healthy event with nothing recorded.
+	// The alternative, letting the ack timer expire instead, parks a
+	// seat's whole mailbox for the ack window on every lease movement.
 	//
 	// When the consumer closes, the broker returns the message to
 	// whoever attaches next, in order and at zero accrued redeliveries.
@@ -536,11 +545,24 @@ func OrderForDispatch[T any](parts []Partition[T], eventOf func(T) *events.Event
 	slices.SortStableFunc(out, func(a, b Partition[T]) int {
 		ta, tb := oldest[a.Key], oldest[b.Key]
 		switch {
-		// A partition with no comparable timestamp keeps arrival order
-		// rather than sorting to an arbitrary end: ordering is a
-		// fairness policy and must never block delivery.
-		case ta.IsZero() || tb.IsZero():
+		// A partition with no comparable timestamp sorts LAST, and
+		// stably among its own kind — so it keeps arrival order relative
+		// to the others like it, and the stamped partitions still age
+		// against each other.
+		//
+		// Answering 0 whenever EITHER side was unstamped read as "these
+		// two are equal" and was not an ordering at all: it is not
+		// transitive, so one unstamped partition anywhere in a drain made
+		// the sort leave unrelated stamped partitions in arrival order,
+		// silently switching aging off for the whole drain. An event with
+		// no timestamp is a bug upstream; the fairness policy has to keep
+		// working for everything around it either way.
+		case ta.IsZero() && tb.IsZero():
 			return 0
+		case ta.IsZero():
+			return 1
+		case tb.IsZero():
+			return -1
 		case ta.Before(tb):
 			return -1
 		case tb.Before(ta):

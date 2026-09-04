@@ -280,3 +280,117 @@ func TestAnAbsentCeilingLeavesTheNumberInOnePlace(t *testing.T) {
 		t.Fatalf("DefaultMaxConcurrent = %d", node.DefaultMaxConcurrent)
 	}
 }
+
+// sendTo publishes one event on a NAMED conversation, so a test can put
+// several messages on one thread and one on another.
+func (g *gatedNode) sendTo(handle, conversation, work string) *events.Event {
+	g.t.Helper()
+	ev := events.New(trigger{Work: work}, events.TraceContext{})
+	if conversation != "" {
+		ev.Payload = map[string]any{"conversation_key": conversation}
+	}
+	ctx := context.WithoutCancel(g.t.Context())
+	go func() {
+		if err := g.q.Publish(ctx, topics.AgentInbox(handle), ev); err != nil {
+			g.t.Errorf("Publish(%s): %v", handle, err)
+		}
+	}()
+	return ev
+}
+
+// THE WHOLE POINT, END TO END: messages that pile up on ONE conversation while
+// a seat is busy reach it as ONE follow-up turn.
+//
+// Nothing asserted this at any layer. The queue's own conformance suite
+// partitions by a key function the SUITE supplies, and the JetStream smoke
+// test hands it a constant — so both certify the machinery while nothing
+// certified that the node feeds it a conversation key at all. Measured:
+// replacing node.conversationKey with the per-event fallback, which deletes
+// conversation coalescing outright, left `go test ./...` completely green.
+//
+// The shape is the user-visible one: a seat is mid-turn on a thread, three
+// more messages land on that same thread, and one lands somewhere else.
+func TestMessagesPilingUpOnOneThreadBecomeOneFollowUpTurn(t *testing.T) {
+	t.Parallel()
+	var (
+		mu      sync.Mutex
+		calls   [][]string
+		entered = make(chan struct{}, 1)
+	)
+	release := make(chan struct{})
+	first := true
+
+	g := gatedFleet(t, 4, func(_ context.Context, _ string, evs []*events.Event) queue.Result {
+		works := make([]string, 0, len(evs))
+		for _, ev := range evs {
+			if p, ok := events.DataAs[*trigger](ev); ok {
+				works = append(works, p.Work)
+			}
+		}
+		mu.Lock()
+		calls = append(calls, works)
+		hold := first
+		first = false
+		mu.Unlock()
+		if hold {
+			entered <- struct{}{}
+			<-release
+		}
+		return queue.Ack()
+	}, "ceo")
+
+	// The seat is woken by the first message and stays inside the turn.
+	g.sendTo("ceo", "slack:C1:1718.001", "m1")
+	select {
+	case <-entered:
+	case <-time.After(3 * fleetTTL):
+		t.Fatal("the first message never woke the seat")
+	}
+
+	// Three more on the SAME thread, and one on a different one, all while
+	// the seat is busy.
+	for _, w := range []string{"m2", "m3", "m4"} {
+		g.sendTo("ceo", "slack:C1:1718.001", w)
+	}
+	g.sendTo("ceo", "slack:C9:1718.777", "other")
+	// Give every publish time to land in the backlog before the turn ends,
+	// or the test measures publish scheduling rather than coalescing.
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+
+	within(t, "the backlog to drain", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		var seen int
+		for _, c := range calls {
+			seen += len(c)
+		}
+		return seen == 5
+	})
+
+	mu.Lock()
+	got := append([][]string(nil), calls...)
+	mu.Unlock()
+
+	// THREE TURNS, NOT FIVE: the opening message, the three that piled up on
+	// its thread as ONE, and the unrelated thread as its own.
+	if len(got) != 3 {
+		t.Fatalf("the seat ran %d turns for 5 messages on 2 threads: %v\n"+
+			"three replies on one thread must cost ONE follow-up turn", len(got), got)
+	}
+	var followUp []string
+	for _, c := range got[1:] {
+		if len(c) > 1 {
+			followUp = c
+		}
+	}
+	if len(followUp) != 3 {
+		t.Fatalf("the follow-up turn carried %v, want the three thread replies together", got)
+	}
+	// And in the order they were said, which is what makes a thread read.
+	for i, want := range []string{"m2", "m3", "m4"} {
+		if followUp[i] != want {
+			t.Fatalf("the follow-up turn read %v, want the thread in order", followUp)
+		}
+	}
+}

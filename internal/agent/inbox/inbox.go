@@ -36,9 +36,9 @@ const (
 	//
 	// Not a requeue: a requeue sends these to the topic tail while the
 	// successor replays its prefetched siblings from the head, which
-	// reorders the conversation. Not a NAK either: three redeliveries
-	// dead-letter a perfectly healthy event, and the condition can hold
-	// for minutes.
+	// reorders the conversation. Not a NAK either: the delivery budget is
+	// finite (25), it is shared with real failures, and a condition that
+	// holds for minutes would spend it on a perfectly healthy event.
 	ActionDefer
 
 	// ActionPark — requeue the events, then ack. For a wait that outlasts

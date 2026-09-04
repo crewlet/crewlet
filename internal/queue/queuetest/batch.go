@@ -460,6 +460,46 @@ func (s *suite) runBatch(t *testing.T) {
 		})
 	})
 
+	t.Run("a_hold_taken_mid_batch_stops_the_rest", func(t *testing.T) {
+		t.Parallel()
+		// A DEFERRAL IS NOT THE ONLY WAY A BATCH HAS TO STOP.
+		//
+		// The contract names four conditions a partition loop must answer —
+		// detached, quiesced, drain-paused, and a per-topic HOLD — and the
+		// case above stops the loop through the quiesce flag a Defer sets
+		// itself. That is the one condition the in-memory twin happened to
+		// check, so a hold stopped the real broker and did not stop the
+		// twin: the loop went on running turns for partitions 2..N on a seat
+		// whose inbox had just been held for a detached coding run, which is
+		// exactly the "no turn starts" the hold exists to buy. A suite that
+		// covers only the deferral certifies a behaviour production does not
+		// have.
+		backlog := s.needBacklog(t)
+		q := s.start(ctx, t)
+
+		seen := newJournal()
+		if err := q.SubscribeBatch(ctx, "topic.hold", "grp",
+			func(hctx context.Context, evs []*events.Event) queue.Result {
+				seen.record(firstConv(t, evs))
+				// The seat parks mid-conversation, so the hold lands while
+				// the rest of this very batch is still waiting to run.
+				if err := q.PauseTopic(hctx, "topic.hold", "grp", "queuetest-park"); err != nil {
+					t.Errorf("PauseTopic: %v", err)
+				}
+				return queue.Ack()
+			}, convKey, queue.DefaultBatchOptions()); err != nil {
+			t.Fatalf("SubscribeBatch: %v", err)
+		}
+
+		fillOneBatch(ctx, t, q, "topic.hold", "grp", "a", "b", "c")
+
+		seen.awaitLabels(t, "only the first partition to be handled", "a")
+		seen.staysAt(t, 1, "the hold did not stop the batch")
+		awaitState(t, "the undispatched partitions to return", func() bool {
+			return equalStrings(convsOf(backlog(q, "topic.hold", "grp")), []string{"b", "c"})
+		})
+	})
+
 	t.Run("a_publish_during_the_batch_does_not_move_the_splice", func(t *testing.T) {
 		t.Parallel()
 		// The restore point for the undispatched partitions is found by
@@ -600,6 +640,31 @@ func (s *suite) runContractPolicy(t *testing.T) {
 		got := orderedKeys([]*events.Event{hotNew, quietOld})
 		if !equalStrings(got, []string{"quiet", "hot"}) {
 			t.Fatalf("dispatch order = %v, want [quiet hot]", got)
+		}
+	})
+
+	t.Run("one_unstamped_partition_does_not_disable_aging", func(t *testing.T) {
+		t.Parallel()
+		// A COMPARATOR THAT IS NOT AN ORDERING breaks the partitions it
+		// was never asked about. Answering "equal" whenever EITHER side
+		// carried no timestamp is not transitive, so one unstamped
+		// partition anywhere in a drain left every stamped one in arrival
+		// order — aging silently off for the whole drain, on the exact
+		// input a fairness policy has to survive.
+		t0 := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+		hotNew := newConvEvent("a", "hot")
+		hotNew.Timestamp = t0.Add(60 * time.Second)
+		unstamped := newConvEvent("b", "nostamp")
+		unstamped.Timestamp = time.Time{}
+		quietOld := newConvEvent("c", "quiet")
+		quietOld.Timestamp = t0
+
+		// Receive order is hot, unstamped, quiet. The two stamped
+		// conversations must still age against each other, and the one
+		// that cannot be compared goes last rather than anywhere.
+		got := orderedKeys([]*events.Event{hotNew, unstamped, quietOld})
+		if !equalStrings(got, []string{"quiet", "hot", "nostamp"}) {
+			t.Fatalf("dispatch order = %v, want [quiet hot nostamp]", got)
 		}
 	})
 

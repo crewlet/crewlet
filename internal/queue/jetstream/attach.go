@@ -25,9 +25,33 @@ import (
 // holds no mail.
 const defaultFetchWait = time.Second
 
-// drainWait is the fetch window used when collecting the tail of a batch
-// that is already locally available.
+// drainWait is the fetch window used when collecting the tail of a batch that
+// is already locally available.
+//
+// LOAD-BEARING at the shipped default. With `notification_coalesce_window_seconds`
+// at 0 the linger deadline has already passed by the first tail fetch, so this
+// single window IS the whole busy-case coalescing mechanism: everything that
+// piled up while the previous handler ran has to come back inside it, or it
+// waits for the next drain and the seat runs a second turn.
+//
+// 50 ms because that is what the fetch is for — collecting what the server has
+// ALREADY got, not waiting for arrivals — and it is two orders of magnitude
+// above a round trip to a broker in the same process or the same datacentre,
+// which is where this one is (embedded by default, an in-cluster NATS
+// otherwise). It is not a latency budget for a distant broker: a deployment
+// whose broker is far enough away for 50 ms to truncate a backlog should raise
+// the linger window, which is the knob for exactly that and is measured
+// against the ack budget rather than guessed at here.
+//
+// Never longer than the idle poll: an operator who shortened FetchWait wanted
+// a more responsive consumer, and a tail fetch that outlasted the poll would
+// take that back on every drain.
 const drainWait = 50 * time.Millisecond
+
+// drainFetchWait is the tail window this queue actually uses.
+func (q *Queue) drainFetchWait() time.Duration {
+	return min(drainWait, q.fetchWait())
+}
 
 // defaultNakDelay spaces out the redelivery of a FAILING message. Not zero:
 // an immediately-redelivered failure spins the loop at full speed against
@@ -306,9 +330,7 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 	// one. Returning it costs nothing: this consumer picks it up again
 	// when the hold lifts, or a successor does.
 	if a.blocked() {
-		if err := msg.Nak(); err != nil {
-			a.log.Warn("hold_nak_failed", "error", err.Error())
-		}
+		a.handBack(ctx, msg)
 		return
 	}
 	a.q.beginHandler()
@@ -375,13 +397,15 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 		// for the whole AckWait window on every lease movement.
 		//
 		// It costs one delivery count, which is why the budget covers
-		// handoffs. Never republish instead: a
-		// republished event is a NEW message, and the completion
-		// ledger's idempotency plus the batch layer's aging both key on
-		// the identity a Nak preserves.
-		if err := msg.Nak(); err != nil {
-			a.log.Warn("defer_nak_failed", "error", err.Error())
-		}
+		// handoffs — and why it goes through the same budget check the
+		// failure path uses rather than a bare Nak. A bare one spent the
+		// budget without owning its boundary, so a healthy event whose 25
+		// deliveries went on lease movements was discarded by the broker's
+		// MaxDeliver backstop with no dead-letter copy and no log line.
+		// Never republish instead: a republished event is a NEW message,
+		// and the completion ledger's idempotency plus the batch layer's
+		// aging both key on the identity a Nak preserves.
+		a.handBack(ctx, msg)
 		// Quiescing is the other half of a deferral: continuing to fetch
 		// would hand this process more work it has equally lost the
 		// right to do.
@@ -392,14 +416,33 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 	}
 }
 
-// nakOrDeadLetter redelivers a failed message until its budget is spent,
-// then dead-letters it.
+// nakOrDeadLetter redelivers a FAILED message until its budget is spent, then
+// dead-letters it. Spaced by nakDelay, because an immediately-redelivered
+// failure spins the loop at full speed against whatever is broken.
 //
 // The decision lives here rather than relying on MaxDeliver alone because
 // this is where the dead-letter subject is known and the message body is in
 // hand. MaxDeliver stays configured as a backstop so a bug here cannot
 // produce an infinite loop.
 func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg) {
+	a.returnMsg(ctx, msg, a.q.nakDelay())
+}
+
+// handBack returns a HEALTHY message — a deferral, a hold, a pause, teardown.
+//
+// IMMEDIATE, and that is the whole reason a deferral NAKs rather than letting
+// the ack timer expire: measured at about a millisecond, where the timer would
+// park a seat's mail for the full ack window on every lease movement. It still
+// goes through the budget boundary, because a Nak spends a delivery whatever
+// it means — so a message whose deliveries went on handoffs is dead-lettered
+// with a line rather than discarded by the broker's backstop in silence.
+func (a *attachment) handBack(ctx context.Context, msg jetstream.Msg) {
+	a.returnMsg(ctx, msg, 0)
+}
+
+// returnMsg is the one place a message goes back, and the one place the
+// delivery budget is spent. delay 0 returns it immediately.
+func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, delay time.Duration) {
 	md, err := msg.Metadata()
 	if err == nil && md.NumDelivered >= uint64(budgetFor(a.q.cfg)) {
 		a.log.Error("dead_lettered", "deliveries", md.NumDelivered)
@@ -412,7 +455,13 @@ func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg) {
 		}
 		return
 	}
-	if err := msg.NakWithDelay(a.q.nakDelay()); err != nil {
+	if delay <= 0 {
+		if err := msg.Nak(); err != nil {
+			a.log.Warn("nak_failed", "error", err.Error())
+		}
+		return
+	}
+	if err := msg.NakWithDelay(delay); err != nil {
 		a.log.Warn("nak_failed", "error", err.Error())
 	}
 }

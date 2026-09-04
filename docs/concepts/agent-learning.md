@@ -321,17 +321,29 @@ The relevance prefetches, the counterparty profiler, the PersistDecider, and `re
 
 `build_notification_prompt` produces the **enriched body** — for a Slack message, ~1.5k chars of `## Triage` instructions front-loaded *before* the actual message. That enriched body becomes the turn's `task_description` (the executor needs the triage contract). But a relevance filter keyed on a `task[:N]` prefix of it never reaches the message: it filters against boilerplate that is byte-identical on every Slack turn.
 
-So the raw message rides separately. the notification's `SalientBody` carries the inbound body verbatim — the message, no scaffolding — alongside the enriched `body`. `InboundInteraction.body` is sourced from it (falling back to the enriched `body` for events that carry no `salient_body`); a [coalesced trigger](event-system.md#inbox-batching--coalescing) sources one interaction body per constituent message. `salient_task_text(interactions, fallback)` (`internal/events/types/interaction.go`) is the single chooser: a single interaction body renders verbatim, multiple bodies join chronologically with sender attribution (`Alice: …`) and the joined text is clipped to the same 4,000-char bound a single body always had (embedding queries and filter prompts never receive `max_batch × 4000` chars), and the turn's `task_description` is the fallback — internal `TaskAssigned` triggers have no notification scaffolding, so the fallback is already clean.
+So the raw message rides separately. The notification's `SalientBody` carries the inbound body verbatim — the message, no scaffolding — alongside the enriched `body`. `InboundInteraction.body` is sourced from it (falling back to the enriched `body` for events that carry no `salient_body`); a [coalesced trigger](event-system.md#inbox-batching--coalescing) sources one interaction body per constituent message, and the merged notification's own `salient_body` is the same messages joined chronologically with sender attribution (`Alice: …`).
 
-Every relevance surface routes through it:
+Which surfaces actually read the salient half, today:
 
 | Surface | Reads |
 |---|---|
-| `## Personal memory` prefetch | the salient text → aux filter prompt |
-| `## Relevant knowledge` prefetch | the salient text → aux-LLM query generation + knowledge-base search |
-| `## Similar prior work` (episode recall) | the salient text → vector query |
-| `refresh_memory` | the salient text as the base task the `context_hint` is appended to |
-| Counterparty profiler / PersistDecider | `InboundInteraction.body` directly |
+| Counterparty profiler / PersistDecider | `InboundInteraction.body` — the salient text, one entry per constituent |
+| `## Personal memory` prefetch | the turn's task text → aux filter prompt |
+| `## Relevant knowledge` prefetch | the turn's task text → aux-LLM query generation + knowledge-base search |
+| `## Similar prior work` (episode recall) | the turn's task text → vector query |
+| `refresh_memory` | the turn's task text as the base the `context_hint` is appended to |
+
+**Known gap — the four relevance surfaces read the ENRICHED task, not the
+salient text.** `prefetch.Request.Task` is the trigger as the turn describes
+it, which for a chat surface carries the vendor's triage scaffolding in front
+of the message, and for a coalesced conversation is the whole digest. It is
+neither stripped nor bounded, so a filter prompt and an embedding query both
+receive the scaffolding, and a busy thread's digest can be arbitrarily long.
+Coalescing bounds the *count* of constituents (`notification_coalesce_max_batch`,
+at most 100) but nothing bounds their length. Routing these four through the
+salient text, with a length bound chosen against the embedding backend's own
+input limit, is the fix; it is a behaviour change to what every relevance
+judgement is made against, so it is called out here rather than done quietly.
 
 Without this, a stored memory that perfectly answered a question went unused: the filter only ever saw the triage boilerplate, so it could not see the question.
 

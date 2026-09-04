@@ -62,7 +62,11 @@ Built at turn end from data already in hand — there is no summarisation call,
 because a summariser that drops the line naming the reply the seat already
 sent re-creates the duplicate-answer bug in a place nothing else can catch.
 
-- **Triggered by** — who said what (the last constituent of a coalesced digest)
+- **Triggered by** — the ask the turn was given, verbatim. For a coalesced
+  conversation that is the whole merged digest — its header, each earlier
+  message with its sender, and the latest message in full — because the entry
+  is the store's only record of what the turn was answering, and keeping only
+  the last constituent would make a five-message thread read back as one
 - **You set out to** — the executor's own summary of what it did
 - **You called** — the tool-call lines, writes always recorded, reads marked `(read)`
 - **You replied** — the turn's final text
@@ -77,8 +81,14 @@ history and becomes a standing order the reviewer never issued, aimed at a
 round that already came and went. Nothing is lost by dropping it: the calls
 that failed are in the tool lines and the verdict is in **Turn ended**.
 
-Every field is elided at write time against the [ledger budgets](turn-engine.md#prior-work-ledger-across-self_iterate-rounds):
-*elide payloads, never structure*.
+Every field is written **verbatim**, apart from the tool *arguments*, which are
+elided against the [ledger budgets](turn-engine.md#prior-work-ledger-across-self_iterate-rounds)
+on the *elide payloads, never structure* rule. Nothing else is cut at write
+time, and that is deliberate: this row is the store's only record of the turn,
+so a trigger trimmed on the way in is not a shortened entry, it is the only
+copy. How much of it a later turn is *shown* is a read-side decision — see
+`ledger.HistoryOptions`, which drops whole entries oldest-first and says how
+many — and answering that display question at write time destroyed the data.
 
 ### Reads stay marked, never merged
 

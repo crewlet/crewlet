@@ -81,15 +81,32 @@ export function Integrations() {
             }
             sub={data?.traffic_since ? `since ${fmtDateTime(data.traffic_since)}` : ""}
           />
+          {/*
+            WHAT BECAME OF IT, which is the half "Inbound" cannot answer on its
+            own: 128 arrived tells a working integration and one whose every
+            delivery reaches nobody apart not at all. This tile summed
+            `outbound`, a field GET /integrations does not return — so it read
+            "0 messages the engine sent" on a company sending thousands.
+          */}
           <Stat
-            icon="send"
-            label="Outbound"
+            icon="filter"
+            label="Dropped"
             value={
               data?.traffic_known
-                ? rows.reduce((n, r) => n + (r.outbound ?? 0), 0).toLocaleString()
+                ? rows.reduce((n, r) => n + (r.skipped ?? 0), 0).toLocaleString()
                 : "unknown"
             }
-            sub="messages the engine sent on a seat's behalf"
+            sub="deliveries the routing gate woke nobody for"
+          />
+          <Stat
+            icon="layers"
+            label="Merged"
+            value={
+              data?.traffic_known
+                ? rows.reduce((n, r) => n + (r.coalesced ?? 0), 0).toLocaleString()
+                : "unknown"
+            }
+            sub="bursts on one conversation that became one turn"
           />
         </StatRow>
       </Panel>
@@ -132,9 +149,17 @@ export function Integrations() {
                   </span>
                 )}
                 <div className="row wrap gap-3">
+                  {/*
+                    THE THREE THE API ACTUALLY ANSWERS WITH. This rendered
+                    `outbound` and `routed`, which GET /integrations has never
+                    emitted — so both read "unknown" on every row forever —
+                    while the two counts that DO arrive, and that the endpoint
+                    documents as the ones that make `inbound` mean anything,
+                    were dropped on the floor.
+                  */}
                   <Count value={row.inbound} label="in" />
-                  <Count value={row.outbound} label="out" />
-                  <Count value={row.routed} label="routed to a seat" />
+                  <Count value={row.skipped} label="dropped" />
+                  <Count value={row.coalesced} label="merged" />
                 </div>
               </div>
             </Panel>
