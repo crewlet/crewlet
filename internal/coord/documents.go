@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // A DOCUMENT FAMILY is a set of compare-and-set records the whole company has
@@ -346,6 +347,70 @@ func unhexSegment(c byte) (byte, bool) {
 	}
 	// Upper case only, so two keys can never decode to one segment set.
 	return 0, false
+}
+
+// Delivery is one change handed to a feed consumer, with its outcome.
+//
+// EXPLICITLY ACKED, unlike a [Watcher]'s change, and that is the whole
+// difference between the two: a watch is how a node keeps its own projection
+// in step and may safely miss nothing but its own restart, while a feed is
+// how a FLEET turns a committed record into work exactly once. A watcher that
+// dropped a change costs a rebuild; a feed that dropped one costs a wake
+// nobody will ever be told about.
+type Delivery struct {
+	Change
+
+	// Ack marks the change handled. Called after whatever the handler
+	// produced is itself durable, never before.
+	Ack func() error
+
+	// Nak returns the change for redelivery, after a delay. A handler that
+	// could not reach something it needs naks; one that decided the change
+	// means nothing to it ACKS, because a decision is handling.
+	Nak func(delay time.Duration) error
+}
+
+// Feed is a durable, fleet-wide consumer over one class of a family's keys.
+//
+// # Why the class, and why create-only keys
+//
+// A feed exists to turn a committed record into a wake, and it must consume a
+// key that is NEVER REWRITTEN. A bucket keeps one revision per key, so
+// rewriting a key TERMINATES any un-acked message already delivered for it —
+// no redelivery, no error, nothing anywhere saying a wake was lost. The
+// change class is create-only for exactly this reason, and a feed over the
+// head class would look identical and lose wakes under load.
+//
+// # Why a group rather than a duty
+//
+// Every node pulls from one durable consumer, so a change is handled once by
+// whichever node gets there first. Making it a singleton DUTY instead would
+// put every wake behind a lease: a flap on the duty holder would stall the
+// company's notifications for a lease TTL, and the work is stateless anyway.
+type Feed interface {
+	// Next blocks for the next delivery until the context ends.
+	//
+	// A nil Delivery with a nil error means the feed has closed, which is
+	// how a caller tells a shutdown from a failure.
+	Next(ctx context.Context) (*Delivery, error)
+
+	// Stop ends the feed. The durable consumer SURVIVES, which is what
+	// makes a restart resume rather than replay: its position is the
+	// fleet's, not this process's.
+	Stop() error
+}
+
+// Feeder opens feeds. Separate from [Documents] because a backend can serve
+// documents without serving feeds — the memory twin did, until its own
+// suite needed one — and because the two are used by different layers.
+type Feeder interface {
+	// FeedDocuments opens a durable feed over one key class.
+	//
+	// A NEW consumer starts at the family's CURRENT HEAD, never at the
+	// beginning: an upgrade that introduced a feed must not wake every
+	// seat for every change the company ever made. An existing one resumes
+	// where the fleet left it.
+	FeedDocuments(ctx context.Context, family Family, class, group string) (Feed, error)
 }
 
 // ErrUnknownFamily names a family this build does not serve.

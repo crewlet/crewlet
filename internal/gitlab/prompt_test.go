@@ -18,6 +18,11 @@ func (p stubParties) ByExternalID(transport, id string) (notify.Party, bool) {
 	return party, ok
 }
 
+// ByHandle answers nothing: a GitLab prompt must resolve its actor through
+// the transport-scoped id its payload carries, and a stub that answered here
+// would let a lookup by the wrong identity pass.
+func (stubParties) ByHandle(string) (notify.Party, bool) { return notify.Party{}, false }
+
 func note(reason string, meta map[string]string) notify.Inbound {
 	m := map[string]string{
 		"event_type": reason, "project": "nimbus/api", "mr_iid": "42",

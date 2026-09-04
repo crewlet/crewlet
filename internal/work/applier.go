@@ -54,6 +54,48 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, change coord.Change) er
 	return nil
 }
 
+// Order ranks a key so a batch applies parents before children.
+//
+// THE ITEM HEAD COMES FIRST, and everything that references it after. A
+// comment or a change whose item is not projected yet is skipped by the
+// guards below, and the projection key set then records it as applied — so
+// nothing ever re-fetches it and a thread is permanently short, with nothing
+// anywhere reporting it. Measured before this existed: a twenty-comment item
+// projected twelve of them on a fresh node.
+//
+// The counter is ranked first of all because it references nothing and a
+// board reads it; the relative order of comments and changes does not matter,
+// and they share a rank rather than being given an arbitrary one.
+func (a *Applier) Order(key string) int {
+	class, ok := ClassOf(key)
+	if !ok {
+		return orderUnknown
+	}
+	switch class {
+	case ClassCounter:
+		return orderCounter
+	case ClassItem:
+		return orderItem
+	case ClassComment, ClassChange:
+		return orderChild
+	}
+	return orderUnknown
+}
+
+// The ranks. Spaced so a class can be inserted between two without renumbering
+// the rest — a renumbering that missed one would reorder a batch silently.
+const (
+	orderCounter = 10
+	orderItem    = 20
+	orderChild   = 30
+
+	// orderUnknown is LAST, so a class this build has no rule for cannot
+	// come before a parent it might reference. It is skipped by Apply
+	// anyway; ranking it early would only make that skip depend on the
+	// order of a map.
+	orderUnknown = 90
+)
+
 // Reset drops every row this applier owns.
 //
 // THE ORDER IS CHILDREN FIRST even though the foreign keys cascade, because a
@@ -239,12 +281,15 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, change coord.Cha
 			"error", err.Error())
 		return nil
 	}
-	// A COMMENT ON AN ITEM THIS NODE HAS NOT PROJECTED YET IS SKIPPED, not
-	// an error: the two keys arrive in separate changes, and a boot
-	// reconcile enumerates them in map order. The next pass over the item
-	// brings the thread with it, because the reconcile re-fetches by key
-	// and the comment's key is in the set either way.
+	// A COMMENT WHOSE ITEM IS NOT HERE IS SKIPPED, not an error — and
+	// [Applier.Order] is what makes that safe: a batch applies the item
+	// first, so the only way to reach here is an item that genuinely does
+	// not exist (a removal that raced this comment's own write). Without
+	// the ordering this skip was PERMANENT, because the key set records
+	// the comment as applied and nothing re-fetches it.
 	if !itemExists(ctx, tx, itemID) {
+		log.DebugContext(ctx, "work_comment_without_item", "key", change.Key,
+			"item", itemID)
 		return nil
 	}
 	_, err = tx.ExecContext(ctx, `
@@ -301,6 +346,10 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, change coord.Chan
 		return nil
 	}
 	if !itemExists(ctx, tx, itemID) {
+		// As for a comment: ordered after the item, so reaching here means
+		// the item is genuinely gone.
+		log.DebugContext(ctx, "work_change_without_item", "key", change.Key,
+			"item", itemID)
 		return nil
 	}
 	quiet := 0
