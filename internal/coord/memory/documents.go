@@ -45,6 +45,11 @@ type documents struct {
 	// complete answer about WHAT IS and an incomplete one about what
 	// happened. A projector reconciles per key on top of it either way.
 	log map[coord.Family][]coord.Change
+
+	// feeds are the durable consumer groups, keyed by family/class/name.
+	// Held here rather than per-handle so a second opener of one group
+	// joins the fleet's position instead of starting a new one.
+	feeds map[string]*memFeed
 }
 
 // logRetained is how many changes per family the twin keeps for resumes.
@@ -94,6 +99,9 @@ func (d *documents) publish(f coord.Family, change coord.Change) {
 	d.log[f] = entries
 	for _, w := range d.watchers[f] {
 		w.send(&change)
+	}
+	for _, feed := range d.feeds {
+		feed.offer(f, change)
 	}
 }
 

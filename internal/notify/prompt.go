@@ -135,6 +135,20 @@ type Parties interface {
 	// result is false when nobody matches, which is ordinary: most senders
 	// on a shared channel are not colleagues.
 	ByExternalID(transport, externalID string) (Party, bool)
+
+	// ByHandle resolves a seat's own identity.
+	//
+	// FOR THE FIRST-PARTY SOURCES, whose actor IS a handle: nothing on the
+	// engine's own tracker or knowledge base authenticates as an account
+	// somewhere else, so there is no external id to scope and asking for
+	// one would mean registering every seat's handle as its own external
+	// id in a namespace that exists only to satisfy this call.
+	//
+	// A vendor parser must NOT reach for this to shortcut a lookup its
+	// payload cannot support — a Slack id is not a handle, and treating
+	// one as the other resolves to nobody in the ordinary case and to the
+	// WRONG seat in the case where a handle happens to collide.
+	ByHandle(handle string) (Party, bool)
 }
 
 // Party is one addressable member of the company, human or agent.

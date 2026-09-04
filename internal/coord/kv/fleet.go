@@ -188,13 +188,23 @@ type FleetStore struct {
 	pages     jetstream.KeyValue
 	kbVectors jetstream.KeyValue
 
+	// js is the JetStream context, held so a feed can create the durable
+	// consumer a bucket's own KeyValue handle cannot: a watch is
+	// ephemeral by construction, and a feed's position has to be the
+	// FLEET's rather than this process's.
+	js jetstream.JetStream
+
+	// bucketPrefix names the buckets, so a feed can address the stream
+	// behind one by its conventional name.
+	bucketPrefix string
+
 	rateWindow time.Duration
 	freshness  time.Duration
 }
 
 var _ coord.Fleet = (*FleetStore)(nil)
 
-// OpenFleet creates or adopts the fourteen buckets and returns the backend.
+// OpenFleet creates or adopts every bucket and returns the backend.
 //
 // Idempotent and safe to call from every node at once, like [Open]: creating
 // a bucket that already exists with the same shape is a no-op, and a changed
@@ -222,7 +232,10 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		return bucket, nil
 	}
 
-	store := &FleetStore{rateWindow: cfg.RateWindow, freshness: cfg.StatusFreshness}
+	store := &FleetStore{
+		js: js, bucketPrefix: cfg.BucketPrefix,
+		rateWindow: cfg.RateWindow, freshness: cfg.StatusFreshness,
+	}
 	for _, bucket := range []struct {
 		into     *jetstream.KeyValue
 		suffix   string
