@@ -146,5 +146,10 @@ func (f *fakeTimer) last() time.Duration {
 	return f.armed
 }
 
-// expire runs the callback the way a real timer's own goroutine would.
+// expire fires the countdown, in the CALLER's goroutine.
+//
+// Synchronous on purpose. A real timer fires on its own goroutine, and
+// reproducing that here would hand the case back the scheduling race it was
+// written to remove — the reader does not care which goroutine calls the
+// callback, so the test does not either.
 func (f *fakeTimer) expire() { f.fire() }

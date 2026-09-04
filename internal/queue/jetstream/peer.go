@@ -234,8 +234,23 @@ func (q *Queue) peek(
 			return nil, fmt.Errorf("peek fetch %s: %w", subject, err)
 		}
 		if got == 0 {
-			// The stream said there was more and delivered none.
-			// Stopping is the only thing that guarantees this ends.
+			// A SHORT READ IS THE ORDINARY END OF THE WINDOW, not an
+			// anomaly, and must not be reported as one. limit is an upper
+			// bound rather than a count: the stream's per-subject total
+			// includes messages below this group's ack floor — mail it has
+			// finished with that a sibling group still holds — and the
+			// sequence bound is the STREAM's last, which spans every
+			// subject on it. Asking for more than the window holds is
+			// normal, so coming up empty means it is exhausted.
+			//
+			// Written out because the obvious hardening is wrong. Turning
+			// this into an error would fail every inspection of a subject
+			// two groups share. The lagging read the rest of this file
+			// exists to prevent is a different thing: it answered without
+			// asking the broker at all, where this has asked and waited
+			// peekWait for the store to answer.
+			//
+			// It is also the only thing that guarantees this loop ends.
 			break
 		}
 	}
