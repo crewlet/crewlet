@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"math/rand/v2"
 	"slices"
 	"strings"
 	"time"
@@ -103,27 +102,6 @@ const (
 	// skill the auto-refiner annotates after every turn would otherwise grow
 	// one full copy of its body per turn, forever.
 	defaultVersionsKept = 10
-
-	// updateAttempts bounds the retry around one refine transaction.
-	//
-	// The transaction reads the live row and writes it in one shot, so a
-	// competing writer does not corrupt anything — it makes our write
-	// conflict with its snapshot, and SQLite answers that with an error
-	// rather than an interleave. Retrying re-reads and re-applies.
-	// Concurrent refines of the SAME skill need the refine_skill builtin
-	// to overlap the post-turn auto-refiner, which is rare, so a handful
-	// of attempts is headroom.
-	updateAttempts = 5
-
-	// useAttempts bounds the retry around a use-telemetry write.
-	//
-	// One retry, because the failure it exists for is a write conflict that
-	// clears as soon as the other writer commits — a local single-file
-	// commit, not a network round trip. A second failure means something
-	// durable is wrong and hammering it does not help; the caller is told
-	// instead, so it can publish SkillTelemetryWriteFailed before the curator
-	// archives a skill whose last-used stamp never refreshed.
-	useAttempts = 2
 
 	// The disuse schedule: stale at 30 days, archived at 90.
 	defaultStaleAfter   = 30 * 24 * time.Hour
@@ -502,71 +480,60 @@ func (s *Skills) Update(ctx context.Context, skillID string, rev Revision, r Ref
 		return Skill{}, fmt.Errorf("learning: a refinement needs a timestamp")
 	}
 
-	var (
-		out Skill
-		err error
-	)
-	for attempt := range updateAttempts {
-		var updated Skill
-		err = s.db.Tx(ctx, func(tx *sql.Tx) error {
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			current, ok, err := s.one(ctx, tx, `WHERE id = ?`, skillID)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return fmt.Errorf("%w: %s", ErrUnknownSkill, skillID)
-			}
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if err := archiveVersion(ctx, tx, current, r); err != nil {
-				return fmt.Errorf("learning: archive skill %s v%d: %w",
-					skillID, current.Version, err)
-			}
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if _, err := tx.ExecContext(ctx, `
-				UPDATE synthesized_skills
-				SET description = ?, content = ?, frontmatter = ?,
-					tool_sequence = ?, source_episode_ids = ?,
-					version = ?, updated_at = ?
-				WHERE id = ?`,
-				rev.Description, rev.Content, jsonObject(rev.Frontmatter),
-				jsonList(rev.ToolSequence), jsonList(rev.SourceEpisodeIDs),
-				current.Version+1, store.EncodeTime(r.At), skillID,
-			); err != nil {
-				return fmt.Errorf("learning: update skill %s: %w", skillID, err)
-			}
-			// Read back inside the transaction rather than assembling the
-			// answer from the arguments: the returned value is then what is
-			// stored, including the columns this edit did not write.
-			updated, ok, err = s.one(ctx, tx, `WHERE id = ?`, skillID)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return fmt.Errorf("%w: %s vanished mid-update", ErrUnknownSkill, skillID)
-			}
-			return nil
-		})
-		if err == nil {
-			out = updated
-			break
+	// NO RETRY LOOP HERE. This transaction reads the live row and rewrites
+	// it, so a competing refine makes one of the two conflict with its
+	// snapshot — and [store.DB.Tx] retries exactly that, re-running the body
+	// against a fresh read. The loop that used to sit here retried EVERY
+	// error, because telling a write conflict from a dead store once meant
+	// reading driver error strings that two drivers worded differently.
+	// There is one driver, the discrimination is written once in the store,
+	// and a second budget on top of it only multiplied the attempts a
+	// genuinely-down store gets hammered with.
+	var updated Skill
+	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		current, ok, err := s.one(ctx, tx, `WHERE id = ?`, skillID)
+		if err != nil {
+			return err
 		}
+		if !ok {
+			return fmt.Errorf("%w: %s", ErrUnknownSkill, skillID)
+		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := archiveVersion(ctx, tx, current, r); err != nil {
+			return fmt.Errorf("learning: archive skill %s v%d: %w",
+				skillID, current.Version, err)
+		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE synthesized_skills
+			SET description = ?, content = ?, frontmatter = ?,
+				tool_sequence = ?, source_episode_ids = ?,
+				version = ?, updated_at = ?
+			WHERE id = ?`,
+			rev.Description, rev.Content, jsonObject(rev.Frontmatter),
+			jsonList(rev.ToolSequence), jsonList(rev.SourceEpisodeIDs),
+			current.Version+1, store.EncodeTime(r.At), skillID,
+		); err != nil {
+			return fmt.Errorf("learning: update skill %s: %w", skillID, err)
+		}
+		// Read back inside the transaction rather than assembling the
+		// answer from the arguments: the returned value is then what is
+		// stored, including the columns this edit did not write.
+		updated, ok, err = s.one(ctx, tx, `WHERE id = ?`, skillID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("%w: %s vanished mid-update", ErrUnknownSkill, skillID)
+		}
+		return nil
+	})
+	if err != nil {
 		if errors.Is(err, ErrUnknownSkill) {
-			// A definitive answer. Retrying re-reads the same absence.
 			return Skill{}, err
 		}
-		// Anything else is retried, because telling a write conflict from a
-		// dead store means reading driver error strings and the two certified
-		// drivers do not word them the same. A bounded retry costs one extra
-		// transaction on a store that is genuinely down, and recovers the
-		// case that is actually common.
-		log.WarnContext(ctx, "synthesized_skill_update_retry",
-			"skill", skillID, "attempt", attempt, "error", err)
-		sleep(ctx, retryBeat())
-	}
-	if err != nil {
-		return Skill{}, fmt.Errorf("learning: refine skill %s after %d attempts: %w",
-			skillID, updateAttempts, err)
+		return Skill{}, fmt.Errorf("learning: refine skill %s: %w", skillID, err)
 	}
 
 	// Pruning is deliberately OUTSIDE the transaction. It is bookkeeping over
@@ -577,8 +544,8 @@ func (s *Skills) Update(ctx context.Context, skillID string, rev Revision, r Ref
 	s.pruneVersions(ctx, skillID, r.KeepVersions)
 
 	log.InfoContext(ctx, "synthesized_skill_updated",
-		"skill", skillID, "kind", string(r.Kind), "version", out.Version)
-	return out, nil
+		"skill", skillID, "kind", string(r.Kind), "version", updated.Version)
+	return updated, nil
 }
 
 // archiveVersion copies a skill's current body into the history table.
@@ -711,78 +678,52 @@ func (s *Skills) MarkUsed(ctx context.Context, skillID string, at time.Time) Use
 	if skillID == "" || at.IsZero() {
 		return Use{}
 	}
-	var lastErr error
-	for attempt := range useAttempts {
-		var use Use
-		err := s.db.Tx(ctx, func(tx *sql.Tx) error {
-			// The prior state is read in the same transaction as the bump so
-			// that Revived answers about the row this write actually moved.
-			var state string
-			if err := tx.QueryRowContext(ctx,
-				`SELECT state FROM synthesized_skills WHERE id = ?`, skillID,
-			).Scan(&state); err != nil {
-				return err
-			}
-			res, err := tx.ExecContext(ctx, `
-				UPDATE synthesized_skills
-				SET use_count = use_count + 1,
-					last_used_at = ?,
-					state = CASE WHEN state = 'stale' THEN 'active' ELSE state END,
-					stale_at = CASE WHEN state = 'stale' THEN NULL ELSE stale_at END
-				WHERE id = ?`, store.EncodeTime(at), skillID)
-			if err != nil {
-				return err
-			}
-			n, err := res.RowsAffected()
-			if err != nil {
-				return err
-			}
-			use = Use{Recorded: n == 1, Revived: n == 1 && SkillState(state) == SkillStale}
-			return nil
-		})
-		if err == nil {
-			return use
+	// NO RETRY LOOP HERE, for the reason [Skills.Update] carries: the
+	// failure this path was built to survive is a write conflict, and
+	// [store.DB.Tx] retries exactly that against a fresh read. What the loop
+	// added on top was a second budget over every OTHER error too — an
+	// outage included — which is the case that cannot be helped by trying
+	// again.
+	var use Use
+	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
+		// The prior state is read in the same transaction as the bump so
+		// that Revived answers about the row this write actually moved.
+		var state string
+		if err := tx.QueryRowContext(ctx,
+			`SELECT state FROM synthesized_skills WHERE id = ?`, skillID,
+		).Scan(&state); err != nil {
+			return err
 		}
-		lastErr = err
-		if errors.Is(err, sql.ErrNoRows) {
-			// No such skill. Definitive — retrying reads the same absence.
-			log.WarnContext(ctx, "synthesized_skill_use_unknown_skill", "skill", skillID)
-			return Use{}
+		res, err := tx.ExecContext(ctx, `
+			UPDATE synthesized_skills
+			SET use_count = use_count + 1,
+				last_used_at = ?,
+				state = CASE WHEN state = 'stale' THEN 'active' ELSE state END,
+				stale_at = CASE WHEN state = 'stale' THEN NULL ELSE stale_at END
+			WHERE id = ?`, store.EncodeTime(at), skillID)
+		if err != nil {
+			return err
 		}
-		if attempt+1 < useAttempts {
-			log.WarnContext(ctx, "synthesized_skill_mark_used_retry",
-				"skill", skillID, "error", err)
-			// A backoff sized for a round trip to a remote database
-			// would be far too long here. See retryBeat.
-			sleep(ctx, retryBeat())
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
 		}
+		use = Use{Recorded: n == 1, Revived: n == 1 && SkillState(state) == SkillStale}
+		return nil
+	})
+	if err == nil {
+		return use
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		// No such skill. Definitive, and a different fact from a write that
+		// failed: the caller must not publish telemetry-write-failed over a
+		// skill that is simply gone.
+		log.WarnContext(ctx, "synthesized_skill_use_unknown_skill", "skill", skillID)
+		return Use{}
 	}
 	log.ErrorContext(ctx, "synthesized_skill_mark_used_failed",
-		"skill", skillID, "attempts", useAttempts, "error", lastErr)
+		"skill", skillID, "error", err)
 	return Use{}
-}
-
-// retryBeat is the jittered pause between attempts at a conflicted write.
-//
-// Sized to what is being waited out: one local write transaction committing,
-// which is microseconds here. Jittered because the conflict SQLite reports —
-// "database snapshot is stale" — returns immediately with no wait of its own,
-// so retries fired back to back re-collide inside the same contention window
-// and a whole retry budget is spent in a few microseconds. Measured on four
-// goroutines refining one skill twelve times: without the pause a run lost a
-// refinement about one time in five, with it about one in fifteen.
-func retryBeat() time.Duration {
-	return time.Duration(rand.N(4_000)+1_000) * time.Microsecond
-}
-
-// sleep waits, or returns early if the context is done.
-func sleep(ctx context.Context, d time.Duration) {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-	case <-t.C:
-	}
 }
 
 // Guard is an optimistic precondition on a transition: apply it only while the
