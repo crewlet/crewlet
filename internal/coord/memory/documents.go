@@ -267,12 +267,7 @@ func (f *Fleet) WatchDocuments(ctx context.Context, family coord.Family, from ui
 		return nil, err
 	}
 
-	w := &memWatcher{
-		out:    make(chan *coord.Change, 256),
-		done:   make(chan struct{}),
-		family: family,
-		fleet:  f,
-	}
+	w := newMemWatcher(family, f)
 
 	// The opening pass is taken UNDER THE LOCK together with the
 	// registration, so a write that lands between them is delivered live
@@ -335,15 +330,78 @@ func (f *Fleet) WatchDocuments(ctx context.Context, family coord.Family, from ui
 }
 
 // memWatcher is one live view.
+//
+// # Why a queue and a relay rather than a plain channel
+//
+// The contract says a watcher's channel CLOSES when the watch ends, and a
+// consumer ranging over it depends on that. But a publisher blocked in a send
+// while Stop closes the same channel is a data race — and a close-while-
+// sending panic in the twin would surface as a flaky projector test rather
+// than as the twin bug it is.
+//
+// So exactly one goroutine ever touches the channel: the relay. Publishers
+// hand changes to a bounded queue, and the relay is the only writer and the
+// only closer. The queue is CAP-BOUNDED at the same 256 the real watcher's
+// channel carries, so a slow consumer blocks its own watch here exactly as it
+// does against the broker — dropping instead would put a hole in a projection
+// that nothing detects, which is the failure the twin most needs to be honest
+// about.
 type memWatcher struct {
 	out    chan *coord.Change
 	done   chan struct{}
 	once   sync.Once
 	family coord.Family
 	fleet  *Fleet
+
+	mu     sync.Mutex
+	room   *sync.Cond
+	queued []*coord.Change
+	closed bool
+}
+
+// memWatchQueue is how many changes a stopped consumer may fall behind by
+// before its publisher blocks. The real watcher's channel is 256 deep.
+const memWatchQueue = 256
+
+func newMemWatcher(family coord.Family, f *Fleet) *memWatcher {
+	w := &memWatcher{
+		out:    make(chan *coord.Change),
+		done:   make(chan struct{}),
+		family: family,
+		fleet:  f,
+	}
+	w.room = sync.NewCond(&w.mu)
+	go w.relay()
+	return w
 }
 
 func (w *memWatcher) Changes() <-chan *coord.Change { return w.out }
+
+// relay is the ONLY writer and the only closer of out.
+func (w *memWatcher) relay() {
+	defer close(w.out)
+	for {
+		w.mu.Lock()
+		for len(w.queued) == 0 && !w.closed {
+			w.room.Wait()
+		}
+		if len(w.queued) == 0 {
+			w.mu.Unlock()
+			return
+		}
+		change := w.queued[0]
+		w.queued = w.queued[1:]
+		// A publisher may be blocked on a full queue.
+		w.room.Broadcast()
+		w.mu.Unlock()
+
+		select {
+		case w.out <- change:
+		case <-w.done:
+			return
+		}
+	}
+}
 
 // send delivers a change, reporting whether the watcher is still live.
 //
@@ -351,12 +409,17 @@ func (w *memWatcher) Changes() <-chan *coord.Change { return w.out }
 // broker's behaviour too. Dropping instead would put a hole in a projection
 // that nothing detects.
 func (w *memWatcher) send(change *coord.Change) bool {
-	select {
-	case <-w.done:
-		return false
-	case w.out <- change:
-		return true
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for len(w.queued) >= memWatchQueue && !w.closed {
+		w.room.Wait()
 	}
+	if w.closed {
+		return false
+	}
+	w.queued = append(w.queued, change)
+	w.room.Broadcast()
+	return true
 }
 
 func (w *memWatcher) Stop() error {
@@ -372,7 +435,14 @@ func (w *memWatcher) Stop() error {
 			}
 		}
 		w.fleet.mu.Unlock()
-		close(w.out)
+
+		// The relay closes out; it is woken by the flag, and a publisher
+		// blocked on a full queue is woken by the same broadcast.
+		w.mu.Lock()
+		w.closed = true
+		w.queued = nil
+		w.room.Broadcast()
+		w.mu.Unlock()
 	})
 	return nil
 }
