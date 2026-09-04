@@ -239,7 +239,7 @@ func TestKnowledgeSaysWhenThereIsNoBackend(t *testing.T) {
 	// the integration and no spaces — is a DIFFERENT state, and says so
 	// rather than answering an empty search as though it had run.
 	gated := asMap(t, answer(t, queries.Sources{
-		Knowledge: stubSearcher{},
+		Knowledge: func() knowledge.Searcher { return stubSearcher{} },
 		Company:   func() *config.Company { return &config.Company{Name: "Acme"} },
 	}, "knowledge", map[string]any{"q": "anything"}))
 	if gated["available"] != false || gated["note"] == "" {
