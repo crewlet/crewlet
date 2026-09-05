@@ -76,8 +76,45 @@ func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm
 	// "${LLM_BASE_URL}" and sends every request to a URL that is not one —
 	// and examples/nimbus.company.yaml ships exactly that reference, against
 	// the variable docs/reference/environment-variables.md documents.
-	model := r.Value(spec.Model)
-	baseURL := r.Value(spec.BaseURL)
+	model, modelMissing := r.Expand(spec.Model)
+	baseURL, baseURLMissing := r.Expand(spec.BaseURL)
+	// A REFERENCE THAT RESOLVED TO NOTHING is not the same as a field
+	// somebody left out, and the two need different sentences. A provider
+	// entry that plainly reads `model: "${LLM_MODEL}"` and is refused with
+	// "Model is required" sends an operator to look at a field they can see
+	// is filled in; naming the variable sends them to the one thing they
+	// have to change.
+	//
+	// This is a REFUSAL where a missing api_key is not, and the asymmetry is
+	// deliberate: a missing credential still builds, because every call then
+	// comes back a clean 401 that names the provider — far easier to
+	// diagnose than a boot that died over one key. A missing MODEL has no
+	// such tell; the request is malformed rather than unauthorised.
+	if len(modelMissing) > 0 && strings.TrimSpace(model) == "" {
+		return nil, fmt.Errorf(
+			"engine: provider %q: model is %q and %s resolved to nothing. Set "+
+				"it in the environment, or with `crewlet secrets set`",
+			key, spec.Model, strings.Join(modelMissing, ", "))
+	}
+	// AN OPENAI-COMPATIBLE ENTRY WITH NO ENDPOINT IS REFUSED, and this one
+	// is not a message fix. `openai-compatible` means "not OpenAI" by
+	// definition — the type exists to point somewhere else — and an empty
+	// base URL takes the openai backend's own default, so a company whose
+	// ${LLM_BASE_URL} was unset sends every request, under a key that is not
+	// an OpenAI key, to api.openai.com. That is a silent misroute of the
+	// company's whole model traffic to a third party, and the only symptom
+	// is a 401 naming a vendor the operator never configured.
+	if spec.Type == config.LLMOpenAICompatible && strings.TrimSpace(baseURL) == "" {
+		where := "base_url is empty"
+		if len(baseURLMissing) > 0 {
+			where = fmt.Sprintf("base_url is %q and %s resolved to nothing",
+				spec.BaseURL, strings.Join(baseURLMissing, ", "))
+		}
+		return nil, fmt.Errorf(
+			"engine: provider %q: %s. An openai-compatible entry needs an endpoint "+
+				"— without one every request would go to api.openai.com under "+
+				"this entry's own key", key, where)
+	}
 	// Through the accessors, not the raw fields: those apply the bounds and
 	// the defaults, and reading the fields directly would send a zero
 	// cooldown for every provider that did not configure one.

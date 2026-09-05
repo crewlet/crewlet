@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"strings"
+
 	"context"
 	"fmt"
 	"io"
@@ -227,5 +229,85 @@ func TestOpenAICompatibleNamesItsEndpoint(t *testing.T) {
 				t.Errorf("String() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// AN UNRESOLVED ${VAR} IS NOT A MISSING FIELD, and the two need different
+// sentences.
+//
+// A provider entry that plainly reads `model: "${LLM_MODEL}"` and is refused
+// with "Model is required" sends an operator to look at a field they can see
+// is filled in. Naming the variable sends them to the one thing they have to
+// change — which is the rule every error in this tree is held to.
+func TestAnUnresolvedModelNamesTheVariable(t *testing.T) {
+	t.Parallel()
+	r := tierB(nil)
+	_, err := buildProvider("default", config.LLMProvider{
+		Type: config.LLMOpenAICompatible, Model: "${LLM_MODEL}",
+		BaseURL: "https://gateway.example.com/v1",
+	}, r)
+	if err == nil {
+		t.Fatal("a provider with no model built")
+	}
+	for _, want := range []string{"default", "${LLM_MODEL}", "LLM_MODEL"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+}
+
+// AN OPENAI-COMPATIBLE ENTRY WITH NO ENDPOINT IS REFUSED, not defaulted.
+//
+// This one is not a message fix. `openai-compatible` means "not OpenAI" by
+// definition — the type exists to point somewhere else — and an empty base
+// URL takes the openai backend's own default. So a company whose
+// ${LLM_BASE_URL} was unset would send every request, under a key that is not
+// an OpenAI key, to api.openai.com: the company's whole model traffic
+// silently misrouted to a third party, with a 401 naming a vendor the
+// operator never configured as the only symptom.
+func TestACompatibleEntryWithNoEndpointIsRefusedRatherThanSentToOpenAI(t *testing.T) {
+	t.Parallel()
+	r := tierB(nil)
+	_, err := buildProvider("gateway", config.LLMProvider{
+		Type: config.LLMOpenAICompatible, Model: "llama-3",
+		BaseURL: "${LLM_BASE_URL}",
+	}, r)
+	if err == nil {
+		t.Fatal("an openai-compatible entry with no endpoint built, so its " +
+			"traffic would go to api.openai.com")
+	}
+	for _, want := range []string{"gateway", "LLM_BASE_URL", "api.openai.com"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+}
+
+// A PLAIN OPENAI ENTRY STILL DEFAULTS, which is the whole difference between
+// the two types: `openai` means OpenAI, so an absent base_url is the ordinary
+// case rather than a misroute.
+func TestAPlainOpenAIEntryNeedsNoEndpoint(t *testing.T) {
+	t.Parallel()
+	r := tierB(map[string]string{"OPENAI_API_KEY": "sk-test"})
+	if _, err := buildProvider("gpt", config.LLMProvider{
+		Type: config.LLMOpenAI, Model: "gpt-4o",
+	}, r); err != nil {
+		t.Fatalf("a plain openai entry with no base_url was refused: %v", err)
+	}
+}
+
+// AND A MISSING CREDENTIAL STILL BUILDS. The asymmetry is deliberate: every
+// call then comes back a clean 401 that names the provider, which is far
+// easier to diagnose than a boot that died over one key — where a missing
+// model or endpoint has no such tell.
+func TestAMissingCredentialStillBuilds(t *testing.T) {
+	t.Parallel()
+	r := tierB(nil)
+	if _, err := buildProvider("default", config.LLMProvider{
+		Type: config.LLMOpenAICompatible, Model: "llama-3",
+		BaseURL: "https://gateway.example.com/v1",
+		APIKeys: []string{"${NOBODY_SET_THIS}"},
+	}, r); err != nil {
+		t.Fatalf("a provider with no credential was refused: %v", err)
 	}
 }
