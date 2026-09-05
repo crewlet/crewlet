@@ -516,6 +516,8 @@ func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 	}
 	if len(company.Seats()) == 0 {
 		t.Error("the applied company contributed no seats")
+	}
+}
 
 // AN IN-MEMORY STREAM CARRIES THE COMPANY'S OWN RECORD NOW, and that is a
 // different fact from the one `store_dir` has always documented.

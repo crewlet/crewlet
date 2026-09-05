@@ -50,9 +50,8 @@ import (
 // registry's own signal for a variable nobody defined — and is what an
 // operator needs to hear. Defining it as "" would compose every link as a
 // rooted path a person cannot click and say nothing at all.
-func skillVariables(env *config.Resolver, c *Company) map[string]string {
+func skillVariables(env *config.Resolver, c *Company, publicBase string) map[string]string {
 	declared := c.Config.SkillVariables
-	publicBase := c.Config.Integrations.WebhookBase(env.LookupOK)
 	if len(declared) == 0 && publicBase == "" {
 		return nil
 	}
@@ -66,6 +65,27 @@ func skillVariables(env *config.Resolver, c *Company) map[string]string {
 	return out
 }
 
+// publicBase is where this DEPLOYMENT answers from outside: the base a link a
+// person clicks is composed on, and the one every webhook registration points
+// at.
+//
+// PER EPOCH rather than held on the engine, and READ THROUGH THE RESOLVER,
+// because `integrations.public_base_url` is a Tier B pointer stored verbatim.
+// A whole `${VAR}` there is how staging and production answer at their own
+// addresses off one company revision, and a raw read would put the seven
+// characters of the reference into every link — and into every webhook URL a
+// provisioner registers, which the third-party app then reports as healthy
+// and delivers nowhere.
+//
+// EMPTY when nothing resolves, which every consumer here reads as "compose no
+// link" rather than as a relative one.
+func (e *Engine) publicBase(c *Company) string {
+	if c == nil {
+		return ""
+	}
+	return c.Config.Integrations.WebhookBase(e.resolver().LookupOK)
+}
+
 // refreshSkillVariables installs an epoch's substitution map.
 //
 // Called on every apply, boot included. A variable REMOVED by a revision
@@ -73,7 +93,7 @@ func skillVariables(env *config.Resolver, c *Company) map[string]string {
 // against the new map — rather than on that skill's next edit, which might
 // be never.
 func (e *Engine) refreshSkillVariables(c *Company) {
-	e.skills.SetVariables(skillVariables(e.resolver(), c))
+	e.skills.SetVariables(skillVariables(e.resolver(), c, e.publicBase(c)))
 }
 
 // auditSkills reports every skill whose trigger names a tool this company
