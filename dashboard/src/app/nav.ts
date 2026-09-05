@@ -77,6 +77,13 @@ export const NAV: NavGroup[] = [
     label: "Work",
     items: [
       {
+        key: "work",
+        label: "Work board",
+        icon: "check",
+        path: ["work"],
+        hint: "Every item on the company's own tracker, and what moved it",
+      },
+      {
         key: "runs",
         label: "Coding runs",
         icon: "terminal",
@@ -123,6 +130,13 @@ export const NAV: NavGroup[] = [
         icon: "book",
         path: ["knowledge"],
         hint: "Search the company knowledge base and what seats have learned",
+      },
+      {
+        key: "pages",
+        label: "Pages",
+        icon: "file",
+        path: ["pages"],
+        hint: "Browse the company's own knowledge base by container and tree",
       },
     ],
   },
@@ -204,6 +218,10 @@ export function activeNavKey(path: string[]): string {
   if (head === "seats") return "people";
   if (head === "traces" || head === "turns") return "model";
   if (head === "events") return "activity";
+  // An item and a page each belong to their own listing, so opening one does
+  // not move the reader's place in the sidebar. They are their own nav
+  // entries rather than details of another screen, which is why neither
+  // needs a DETAIL_TITLES row.
   return ALL_NAV.find((i) => i.path[0] === head)?.key ?? "";
 }
 

@@ -15,8 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/work"
 )
 
 // memorySandbox is a pending-run store with nothing in it: this sweep is
@@ -112,8 +114,24 @@ func everySeam(t *testing.T) queries.Sources {
 		Budget:   coordmemory.NewFleet(),
 		Sandbox:  memorySandbox{},
 		Config:   surface,
+		Work:     emptyWork{},
+		Pages:    emptyPages{},
 	}
 }
+
+// emptyWork and emptyPages are the native readers with nothing in them, on
+// fakeChannels' terms: this sweep is about which NAMES exist.
+type emptyWork struct{}
+
+func (emptyWork) List(context.Context, work.Filter) ([]work.Summary, error) { return nil, nil }
+func (emptyWork) Get(context.Context, string) (work.Detail, error)          { return work.Detail{}, nil }
+func (emptyWork) Counters(context.Context) (map[string]int, error)          { return nil, nil }
+
+type emptyPages struct{}
+
+func (emptyPages) List(context.Context, pages.Filter) ([]pages.Summary, error) { return nil, nil }
+func (emptyPages) Get(context.Context, string) (pages.Detail, error)           { return pages.Detail{}, nil }
+func (emptyPages) Containers(context.Context) ([]pages.Container, error)       { return nil, nil }
 
 // fakeChannels is an A2A channel reader with nothing in it: this sweep is
 // about which names exist, not what they answer.

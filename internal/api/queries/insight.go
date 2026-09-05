@@ -211,6 +211,18 @@ func (s Sources) knowledgeSearch(ctx context.Context, p Params) (any, error) {
 	if !searcher.CanSearch(nil, organization) {
 		return unavailable(KnowledgeNoScope, "the "+searcher.Backend()+" backend is configured but knowledge.scope lists no container, so an org-wide search has nothing to read")
 	}
+	// A BACKEND THAT KEEPS AN INDEX can be behind its own projection, and
+	// during that window every search answers empty. The optional
+	// interface rather than a method on the seam: a live vendor search has
+	// no index and nothing to report, so requiring it of every backend
+	// would be four implementations of "false".
+	if builder, ok := searcher.(interface {
+		Building(ctx context.Context) bool
+	}); ok && builder.Building(ctx) {
+		return unavailable(KnowledgeBuilding,
+			"this node is still indexing what it has projected, so a search "+
+				"here would answer empty for pages that exist")
+	}
 	if text == "" {
 		return out, nil
 	}
@@ -259,13 +271,29 @@ const (
 	KnowledgeNoBackend KnowledgeReason = "no_backend"
 	// KnowledgeNoScope — a backend is wired, with no org-wide read scope.
 	KnowledgeNoScope KnowledgeReason = "no_scope"
+
+	// KnowledgeBuilding — the backend is wired and its index is still
+	// catching up with what this node has projected.
+	//
+	// SEPARATE FROM AN EMPTY RESULT, and that is the entire reason it
+	// exists: "the company has written nothing down" and "this node has
+	// not finished reading what it wrote" are opposite facts, and the
+	// second is true for the whole first index build on a freshly joined
+	// node. A screen that showed the first for the second would send
+	// somebody looking for a wiki that is right there.
+	//
+	// Only a backend that keeps a local index can report it — a live
+	// vendor search has nothing to build — so it is read through an
+	// optional interface rather than added to [knowledge.Searcher].
+	KnowledgeBuilding KnowledgeReason = "building"
 )
 
 // Valid reports whether r is a reason this package emits, so an unknown value
 // off the wire is a value rather than a panic.
 func (r KnowledgeReason) Valid() bool {
 	switch r {
-	case KnowledgeRan, KnowledgeNoCompany, KnowledgeNoBackend, KnowledgeNoScope:
+	case KnowledgeRan, KnowledgeNoCompany, KnowledgeNoBackend, KnowledgeNoScope,
+		KnowledgeBuilding:
 		return true
 	}
 	return false

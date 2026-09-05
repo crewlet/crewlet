@@ -2,10 +2,53 @@
 
 The knowledge system (`internal/knowledge`) is the read path agents use to find context they don't already have in their system prompt. It is two purpose-specific reads composed into the agent runtime:
 
-- **Shared knowledge** — the team knowledge base, searched live at query time. There is no synced local copy. The knowledge base is a single backend — [Confluence](../integrations/confluence.md) pages — behind a seam that keeps it swappable: a `knowledge.Searcher` translates the turn's trigger into a plain-text search query (once per turn, via the auxiliary LLM) and runs it against the backend's own search API, authenticating as the agent's own user so the backend enforces its page permissions natively.
+- **Shared knowledge** — the team knowledge base. **Exactly one backend per company**, chosen by `knowledge.backend`, behind a `knowledge.Searcher` seam that every consumer reads through. A `Searcher` takes plain text — never a backend fragment, never a space key — and answers ranked hits; the turn-start prefetch translates the trigger into that plain text once per turn with the auxiliary LLM, and the executor can re-run the same search itself with `search_knowledge`.
 - **`agent_diary`** (vector-indexed) — the agent's private observation log. One row per declarative fact the agent captured for itself via `reflect_and_persist` (or that the post-turn `PersistDecider` saved on its behalf), scoped to the agent's id. Rows are embedded on write; the `## Personal memory` prefetch picks candidates via a **hybrid selection** — the union of a vector top-K (semantic matches to the trigger) and a recency top-K (broadly-applicable operational rules that may not be a topical match), deduped by row id (the two halves are 50 each, so the union is the bound), then handed to an aux-LLM relevance filter.
 
-There is no shared vector index and no scope ladder for shared docs — no synced local copy of the knowledge base exists anywhere in the engine. Shared knowledge is read straight from the backend on demand, so there is no sync worker to run, no index to keep fresh, and no staleness window.
+**One backend, and that is a rule rather than a limitation.** "What do we already know about this" must not depend on which searcher was asked, so the config refuses a company that wires two.
+
+## The two backends
+
+```yaml
+knowledge:
+  backend: native      # the default — the engine's own pages
+# backend: confluence  # a live search against Confluence at query time
+# backend: none        # no knowledge base; every turn gets an empty block
+```
+
+| | `native` | `confluence` |
+|---|---|---|
+| Where pages live | the fleet's own [coordination store](coordination.md), projected onto each node | a Confluence site |
+| How search works | BM25 over the node's own lexical index, plus optional vector recall | CQL against the site's search API, live at query time |
+| Who it searches as | the engine — every seat reads every page, so there is no per-seat credential to be missing | **the agent's own user**, so Confluence enforces its page permissions natively |
+| Staleness | the index is built behind the projection; a node still indexing SAYS SO rather than answering empty | none — there is no local copy at all |
+| What it costs to set up | nothing | a site, a space, and a per-seat account |
+
+### Native: an index, and what that means
+
+There is a local copy, and being honest about it is the whole design. Pages
+are projected onto each node and a lexical index is built behind that
+projection asynchronously — tokenising a large wiki takes minutes, and doing
+it inline would stop the node applying changes while it worked.
+
+So a search on a freshly joined node can be against an index that is still
+building, and that is **a different fact from an empty company**. Both the
+dashboard and a seat's own prompt say which: a seat is told "the knowledge
+base is not searchable from this node yet — ask a colleague rather than
+concluding nothing has been written down", because a seat that read an empty
+result would act on it by writing a page that already exists.
+
+Ranking is BM25 with term-frequency saturation and length normalisation — the
+part that stops a 20 KB runbook outranking the one-paragraph page that is
+actually the answer. There is no phrase query, no proximity and no query
+language, because the seam deliberately does not have one: a planner writes a
+keyword line and a person types into a box.
+
+### Confluence: no local copy at all
+
+Shared knowledge is read straight from the backend on demand, so there is no sync worker to run, no index to keep fresh, and no staleness window. It authenticates as the agent's own user, which is what makes the backend's own permissions the ones that apply.
+
+There is no shared vector index and no scope ladder for shared docs on this backend.
 
 ---
 
@@ -57,15 +100,28 @@ type Searcher interface {
 
 Contract semantics every backend honors:
 
-- **Scope lives behind the seam.** `Search` derives its container scope from the organization ([`accessible_spaces` / `accessible_projects`](#accessible-containers)); callers pass a role, a plain-text query, and ancestor-title exclusions — never CQL fragments, space keys, or project lists. Because the organization is a per-call parameter, live config edits to the `knowledge.*` scope flow through with no engine refresh hook.
+- **Scope lives behind the seam.** `Search` derives its container scope from the organization ([`knowledge.scope`](#accessible-containers)); callers pass a role, a plain-text query, and ancestor-title exclusions — never CQL fragments, space keys, or project lists. Because the organization is a per-call parameter, live config edits to `knowledge.scope` flow through with no engine refresh hook.
 - **Unscoped-vs-nothing is enforced inside `Search`**: empty scope + a self-authenticating role ⇒ unscoped search (the backend's own ACLs bound the hits); empty scope + a credential-less role ⇒ no results.
 - **`CanSearch` is a cheap, no-I/O pre-gate** — "could a search possibly hit anything?" Its only job is letting the [relevant-knowledge prefetch](#relevant-knowledge-prefetch) skip the aux-LLM query-generation call when the search is a guaranteed no-op.
 - **Best-effort**: `Search` never reports an error; every failure path returns no hits and the prompt block renders empty.
 - **`Query.ExcludeAncestors`** drops hits whose ancestor/parent chain matches any listed title. The prefetch defaults it to `["Auto-Drafted Skills"]` (`AUTO_DRAFTED_PARENT` in `internal/knowledge/knowledge.go`) so unreviewed [promotion drafts](agent-learning.md) never surface before a lead publishes them.
 
-**Selection is by integration presence, and single-homed.** Engine start constructs exactly one searcher: the Confluence searcher when `confluence` is configured. One knowledge home is what makes the turn-start prefetch, the `search_knowledge` builtin, onboarding hints and skill promotion agree about what the company knows — two searchers would make an agent's answer depend on which was asked, and neither would be wrong. With no backend configured, the searcher stays unwired and the `## Relevant knowledge` block renders empty. A live config change that rebuilds or removes a transport re-points the running turn engine at the new searcher (or at none) via `set_knowledge_searcher`.
+**Selection is by `knowledge.backend`, and single-homed.** Engine start constructs exactly one searcher: the native one over this node's own page index, or the Confluence one, or none. One knowledge home is what makes the turn-start prefetch, the `search_knowledge` builtin, onboarding hints and skill promotion agree about what the company knows — two searchers would make an agent's answer depend on which was asked, and neither would be wrong. With `backend: none`, the searcher stays unwired and the `## Relevant knowledge` block renders empty. A live config change re-points the running turn engine at the new searcher (or at none).
 
-**The seam stays an interface with one implementation, deliberately.** `knowledge.Searcher` is declared by its consumers — the prefetch, the onboarding hint, the promotion pass — so a second backend is a new implementation rather than a rewrite of everything that searches. A seam collapsed into its last backend is what makes the next one a rewrite.
+An empty `backend` **derives** rather than defaulting blindly: a company that declares `integrations.confluence` gets `confluence`, and one that declares nothing gets `native`. That is the compatible half of the rename — an Atlassian company that has not read this page keeps the backend it had, and a quickstart company gets a wiki without asking for one.
+
+**The seam has two implementations, and it was written for the second.** `knowledge.Searcher` is declared by its consumers — the prefetch, the onboarding hint, the promotion pass — so the native backend arrived as a new implementation rather than a rewrite of everything that searches. A seam collapsed into its last backend is what makes the next one a rewrite.
+
+### Native backend — the engine's own pages
+
+`internal/pages` + `internal/projection`. Pages live as documents in the fleet's coordination store; each node projects them into its own database and builds a lexical index behind that projection. A search is BM25 over the index — term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
+
+Two properties differ from the vendor path and both are visible:
+
+- **Every seat reads every page.** There is no per-seat credential, so `CanSearch` reduces to "is there an index at all" — the credential-less case below does not arise.
+- **An index that is still building says so.** It is a different fact from an empty company, and a seat is told which: "the knowledge base is not searchable from this node yet — ask a colleague rather than concluding nothing has been written down". A seat that read an empty result would act on it, by writing a page that already exists.
+
+The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction.
 
 ### Confluence backend — the Confluence searcher
 
@@ -75,7 +131,7 @@ Contract semantics every backend honors:
 
 ## Accessible containers
 
-The search scope is set by **one** thing: the org-wide `knowledge.*` scope list for the active backend, normalised once by `internal/knowledge` —
+The search scope is set by **one** thing: the org-wide `knowledge.scope` list, normalised once by `internal/knowledge` —
 
 ```text
 knowledge.scope: ["HANDBOOK"]   # scoped to these containers
@@ -94,7 +150,7 @@ It is **role- and unit-independent** — every agent has the same read scope.
 
 So set `knowledge.scope` only to *narrow* reads to a curated floor (e.g. a company handbook); a fully per-agent-credentialled org leaves it unset and lets the backend's ACLs do the scoping. The backend's own permissions remain the hard boundary regardless.
 
-> **Single-homed.** One backend per company. With one implementation behind the seam that is now structural rather than enforced; what validation still refuses is a read scope naming a backend the company does not configure — `knowledge.scope` without `integrations.confluence` reads as a working narrowing and narrows nothing.
+> **Single-homed, and validation enforces it.** A company that sets `knowledge.backend: native` *and* declares `integrations.confluence` is refused, because "what do we already know about this" would depend on which searcher was asked. Also refused: a read scope with no backend behind it — `knowledge.scope` under `backend: none` reads as a working narrowing and narrows nothing.
 
 ---
 

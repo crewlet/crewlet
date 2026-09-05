@@ -66,6 +66,11 @@ type PageDeps struct {
 	// every search.
 	Reserved []string
 
+	// Actor decides who a write is attributed to. Nil takes the turn's
+	// seat; the operator surface sets it. See [WorkDeps.Actor] for why
+	// this is a seam rather than a second copy of these five tools.
+	Actor func(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error)
+
 	// Await blocks until this node's projection has applied a revision.
 	// See [WorkDeps.Await]: same seam, same reason, and it matters more
 	// here — a page's SavePage takes the version it read, so a turn that
@@ -98,6 +103,14 @@ func pageActor(turn *turnctx.Turn) (pages.Actor, error) {
 		Handle: seat.Handle(), Kind: pages.AuthorAgent,
 		TurnID: turn.ID, Chain: turn.Chain,
 	}, nil
+}
+
+// actor resolves who this call writes as — see [PageDeps.Actor].
+func (d PageDeps) actor(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error) {
+	if d.Actor != nil {
+		return d.Actor(ctx, turn)
+	}
+	return pageActor(turn)
 }
 
 func (d PageDeps) reserved(container string) bool {
@@ -294,7 +307,7 @@ func (t *writePage) Call(ctx context.Context, args map[string]any) (tools.Result
 }
 
 func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	actor, err := pageActor(turn)
+	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
 		return notInATurn(WritePageTool), nil
@@ -393,7 +406,7 @@ func (t *savePage) Call(ctx context.Context, args map[string]any) (tools.Result,
 }
 
 func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	actor, err := pageActor(turn)
+	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
 		return notInATurn(SavePageTool), nil
@@ -493,7 +506,7 @@ func (t *commentOnPage) Call(ctx context.Context, args map[string]any) (tools.Re
 }
 
 func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	actor, err := pageActor(turn)
+	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
 		return notInATurn(CommentOnPageTool), nil
@@ -520,7 +533,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	in := pages.NewComment{
 		Body:    body,
 		ReplyTo: strings.TrimSpace(argString(args, "reply_to")),
-		TurnKey: turn.ID,
+		TurnKey: turnKey(turn),
 	}
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)

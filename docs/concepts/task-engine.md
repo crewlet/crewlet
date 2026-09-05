@@ -1,10 +1,56 @@
-# Task Engine
+# The Tracker
 
-**There is no task engine.** Task lifecycle lives entirely in an external PM
-tool — Jira, GitHub or GitLab issues — and the engine mirrors none of
-it: no task table, no status field, no assignee map, no dependency graph, no
-reconciliation poller. A ticket's state is whatever the PM tool says it is,
-read live through an agent's own MCP tools.
+A company's work has to live somewhere. Crewlet gives you two shapes, chosen
+with one field:
+
+```yaml
+tracker:
+  backend: native    # the default — the engine is the tracker
+# backend: jira      # the tracker is Jira, and the engine mirrors none of it
+```
+
+The two are not variations on one design. They are opposite answers to the
+same question, and each is coherent on its own terms.
+
+## `native` — the engine is the tracker
+
+The company's items live in the fleet's own
+[coordination store](coordination.md) as versioned documents, and every node
+keeps a rebuildable [projection](#the-projection) of them to read from. There
+is a board on the dashboard, tools a seat calls, and an
+[MCP surface](../reference/api-endpoints.md#operatormcp--your-own-assistant)
+your own AI assistant can reach.
+
+**This is not a mirror.** The record here *is* the source of truth, so the
+staleness argument below does not apply to it: there is no other copy to
+disagree with, no webhook to miss, and no reconciliation poller because
+nothing is being reconciled. A node's projection can be behind, and that is
+handled by saying so — a read refuses with "still catching up" rather than
+answering "there is no such item", because the second is an answer somebody
+acts on.
+
+What it is deliberately **not** is a Jira. There is no workflow engine, no
+custom field, no sprint, no board configuration and no permission scheme. An
+item has a key, a type, a status from a closed set, an assignee, a thread and
+a history. That is what an agent company actually uses, and every one of the
+missing features is a screen somebody would have to configure before their
+company could file its first ticket.
+
+### Why the engine grew one
+
+Because the alternative — the paragraph below — costs a founder an Atlassian
+site, a project, six service accounts and a webhook before their company can
+record that it did anything. That is a real barrier for the case Crewlet is
+for, and the vendor path stays fully supported for the companies that are
+already on it.
+
+## `jira` — the tracker is somebody else's
+
+Task lifecycle lives entirely in an external PM tool — Jira, GitHub or GitLab
+issues — and **the engine mirrors none of it**: no task table, no status
+field, no assignee map, no dependency graph, no reconciliation poller. A
+ticket's state is whatever the PM tool says it is, read live through an
+agent's own MCP tools.
 
 That is the design, not a gap. A mirror of somebody else's task state is a
 cache with no invalidation story: every webhook you miss, every edit made in
@@ -12,10 +58,45 @@ the PM tool's own UI, and every retry that arrives out of order leaves the
 engine confidently wrong about work a person can see is finished. Keeping
 nothing means there is nothing to be stale.
 
+## What is identical either way
+
+Everything below this line. Routing, assignment, hand-offs, the lead fallback,
+the way a webhook becomes a turn — none of it knows which backend answered. A
+unit's `project` key names its project on whichever tracker the company runs,
+which is why the field is not called `jira_project`.
+
+## The projection
+
+On the native backend each node keeps its own copy of the fleet's record, in
+its local store, rebuilt from the coordination bucket at boot. It exists so
+that "what is on the board" is a SQL query rather than a listing over the
+whole coordination family — which is `O(keys)` message deliveries, on a
+request path, for a screen somebody refreshes.
+
+Three properties follow from it, and each is visible:
+
+- **A node claims no new seats until its projection has caught up.** A seat
+  whose tools read an incomplete projection would answer "there is no such
+  item" and act on it, by filing the duplicate or telling a person their link
+  is dead. The node keeps every seat it already holds — a projection catching
+  up is not a reason to drop work in hand — and the fleet view reports how
+  many of its projections are ready.
+- **A read that cannot be answered says so.** `503`, not an empty list.
+- **A write waits for its own projection before it answers**, so a turn that
+  files an item and then lists the project sees what it just filed.
+
+Retention is the one asymmetry worth knowing: items, comments and pages are
+kept **for ever** — a tracker that forgot would stop answering the question it
+exists for — while the change records behind them age out after a year, and a
+page's history is capped at a hundred revisions.
 
 ---
 
-## How It Works with Webhooks
+## How it works with webhooks
+
+A change is a change, whoever recorded it: a Jira webhook and a native item's
+own change record both arrive at the notification service as a delivery and
+both become an `ExternalNotification`. Nothing above that seam knows which.
 
 PM-tool webhooks do **not** become dedicated task events. Every webhook is parsed by the notification service into an `ExternalNotification` delivered to the routed agents' inboxes — the assignee, watchers, @-mentioned agents, or the project lead as a fallback (see [Jira Integration](../integrations/jira.md)). The woken agent then acts on the PM tool through its own MCP tools.
 

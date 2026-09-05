@@ -2,10 +2,15 @@
 
 Crewlet is the engine; the surfaces your agents work on — the LLM, the
 work-item tracker, the knowledge base, the code host, chat, the code sandbox —
-are external services you pick and connect. Every one of them has a hosted and
-a self-hosted path. This page is the decision guide: what each choice implies,
+are services you pick and connect. Every one of them has a hosted and a
+self-hosted path. This page is the decision guide: what each choice implies,
 what you must create **yourself** in the external service, and where the
 detailed setup steps live.
+
+**Only the LLM is required.** The tracker and the knowledge base ship with the
+engine and are on by default; everything else is a surface you add when you
+want your company working where your people already are. A company with an API
+key and nothing else runs.
 
 A useful mental model: for each integration there is usually
 
@@ -99,14 +104,50 @@ everything genuinely shared lives in coordination instead. See
 
 ## Work-item tracker + knowledge base
 
-Agents file and pick up work in a tracker, and search a shared knowledge base
-at query time.
+Agents file and pick up work in a tracker, and search a shared knowledge base.
 
-The **tracker** has options — Jira, or the issue tracker of whichever code
-host you run ([GitLab](../integrations/gitlab.md) /
-[GitHub](../integrations/github.md) issues route the same way). The
-**knowledge base** is Confluence: the engine wires exactly one
-`knowledge.Searcher`, and Confluence is the backend behind it.
+**You do not have to bring either one.** The engine ships its own, and they
+are the default:
+
+```yaml
+tracker:
+  backend: native      # the default
+knowledge:
+  backend: native      # the default
+```
+
+That is the whole setup. Items and pages live in the fleet's own store, there
+is a board and a page browser on the dashboard, seats get ten tools for them,
+and your own AI assistant can reach them over
+[`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant).
+Nothing to create, nothing to provision, no per-seat accounts, no webhook.
+
+### Which to choose
+
+| | Native | Atlassian |
+|---|---|---|
+| Setup | none | a site, a project, a space, a per-seat account each, webhooks |
+| Where the record lives | your own deployment | Atlassian's |
+| People can use it | through the Crewlet dashboard | through Jira and Confluence, which they may already live in |
+| Workflows, custom fields, sprints, permission schemes | no | yes |
+| Existing tickets | none — it starts empty | whatever you already have |
+
+**Take the native one unless you have a reason not to.** The reasons are real
+and they are all about the people rather than the agents: a team that already
+works in Jira should not be asked to watch a second board, and an existing
+backlog does not migrate (there is deliberately no migration path — see
+below). If neither applies, the vendor path costs you a provisioning afternoon
+and buys nothing the agents use.
+
+Either way, the org chart is the same. A unit's `project` and `space` name its
+project and its container on whichever backend the company runs — which is why
+the fields are not called `jira_project` and `confluence_space`.
+
+> **No migration between them.** Switching `tracker.backend` does not move
+> anything, in either direction, and the engine does not offer to: a
+> half-migrated tracker where some items answer to one system and some to the
+> other is worse than either, and it is a state nothing can detect from the
+> outside. Choose once, per company.
 
 ### Atlassian (Jira + Confluence Cloud or Data Center)
 
@@ -137,10 +178,15 @@ What **you** do, by hand:
 Details: [Jira](../integrations/jira.md) ·
 [Confluence](../integrations/confluence.md).
 
-> **One knowledge backend per company**: the engine wires exactly one
-> `knowledge.Searcher`. It stays an interface with one implementation, so a
-> second backend is a new implementation rather than a rewrite of everything
-> that searches. See [Knowledge System](../concepts/knowledge-system.md).
+> **One knowledge backend per company**, and validation enforces it: a company
+> that sets `knowledge.backend: native` *and* declares
+> `integrations.confluence` is refused. "What do we already know about this"
+> must not depend on which searcher was asked. See
+> [Knowledge System](../concepts/knowledge-system.md).
+>
+> An empty `backend` **derives**: declare `integrations.confluence` and you get
+> `confluence`; declare nothing and you get `native`. So an Atlassian company
+> that has not read this page keeps the backend it had.
 
 ---
 
