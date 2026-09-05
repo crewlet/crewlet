@@ -88,6 +88,10 @@ type Deps struct {
 	// two can never disagree about scope, exclusions or credentials.
 	Knowledge KnowledgeSearcher
 
+	// Pages is the native knowledge base. Both halves nil omits all five
+	// tools, which is what a company running Confluence has.
+	Pages PageDeps
+
 	// Work is the native tracker. Both halves nil omits all five tools,
 	// which is what a company running Jira has — and omitting them is the
 	// point: a seat offered a tracker tool against a tracker this company
@@ -146,6 +150,11 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&createWorkItem{deps: deps.Work}, deps.Work.Writer != nil},
 		{&updateWorkItem{deps: deps.Work}, deps.Work.Writer != nil && deps.Work.Reader != nil},
 		{&commentOnWorkItem{deps: deps.Work}, deps.Work.Writer != nil && deps.Work.Reader != nil},
+		{&listPages{deps: deps.Pages}, deps.Pages.Reader != nil},
+		{&getPage{deps: deps.Pages}, deps.Pages.Reader != nil},
+		{&writePage{deps: deps.Pages}, deps.Pages.Writer != nil},
+		{&savePage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
+		{&commentOnPage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 	}
 
 	var names []string
@@ -154,7 +163,8 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			continue
 		}
 		opts := []tools.Option{}
-		if slices.Contains(WorkWrites(), c.tool.Name()) {
+		if slices.Contains(WorkWrites(), c.tool.Name()) ||
+			slices.Contains(PageWrites(), c.tool.Name()) {
 			// A DELIVERY. A turn woken by an assignment answers by moving
 			// the item, commenting on it, or filing the follow-up — and
 			// without this the gate sees only builtins, concludes the
@@ -224,7 +234,7 @@ func annotationsFor(name string) tools.Annotations {
 		// nowhere near idempotent: a second call is a second run, a second
 		// box, and a second set of commits.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
-	case ListWorkItemsTool, GetWorkItemTool:
+	case ListWorkItemsTool, GetWorkItemTool, ListPagesTool, GetPageTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
@@ -250,6 +260,18 @@ func annotationsFor(name string) tools.Annotations {
 		// record. That is what the flag asks — whether a call can undo
 		// somebody's work — and a status flip riding the same tool does
 		// not make the whole tool safe.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes}
+	case WritePageTool, CommentOnPageTool:
+		// Shared and additive: a page and a comment on one are both new
+		// records everyone in the company can read, so OpenWorld is Yes
+		// and the sub-agent guard keeps them from a worker acting under
+		// its parent's name.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
+	case SavePageTool:
+		// Shared, and DESTRUCTIVE: it replaces a body somebody wrote.
+		// The revision history is what makes it recoverable, which is
+		// exactly the distinction Destructive draws — reversible, not
+		// harmless.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes}
 	case RefineSkillTool:
 		// It replaces a body. The prior version is archived, so this is
