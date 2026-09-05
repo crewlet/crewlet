@@ -655,7 +655,17 @@ export interface KnowledgeHit {
  * learn a reason this build does not know, and an unknown one must render as
  * its prose `note` rather than crash the screen.
  */
-export type KnowledgeReason = "" | "no_company" | "no_backend" | "no_scope" | (string & {});
+export type KnowledgeReason =
+  | ""
+  | "no_company"
+  | "no_backend"
+  | "no_scope"
+  /** The backend keeps a local index and it is still catching up. NOT the
+   *  same fact as an empty result: on a freshly joined node this is true for
+   *  the whole first index build, and rendering it as "nothing found" tells a
+   *  reader the company has written nothing down. */
+  | "building"
+  | (string & {});
 
 export interface KnowledgeAnswer {
   backend: string;
@@ -671,6 +681,168 @@ export interface KnowledgeAnswer {
   reason: KnowledgeReason;
   /** Search is best effort: a failure is an empty result plus this note. */
   note: string;
+}
+
+// ---------------------------------------------------------------------------
+// The native tracker and knowledge base
+// ---------------------------------------------------------------------------
+//
+// These are the engine's OWN backends — a company on Jira or Confluence has
+// none of these questions registered at all, and the screens say so rather
+// than drawing an empty board. Every field here is the Go type's own JSON
+// tag; the wire shape is [work.Summary], [work.Detail], [pages.Summary] and
+// [pages.Detail], serialised as they stand.
+
+export type WorkStatus = "todo" | "in_progress" | "blocked" | "in_review" | "done" | (string & {});
+export type WorkType = "task" | "bug" | "story" | "epic" | "spike" | (string & {});
+export type WorkPriority = "low" | "normal" | "high" | "urgent" | (string & {});
+
+/** One item as a board row draws it. The BODY IS ABSENT — fifty items at
+ *  64 KiB each is three megabytes to draw a list of titles. */
+export interface WorkSummary {
+  id: string;
+  key: string;
+  project: string;
+  type: WorkType;
+  title: string;
+  status: WorkStatus;
+  priority: WorkPriority;
+  assignee?: string;
+  reporter?: string;
+  parent_id?: string;
+  labels?: string[];
+  due?: string;
+  updated_at: string;
+  revision: number;
+}
+
+export interface WorkItemsAnswer {
+  items: WorkSummary[];
+  limit: number;
+  offset: number;
+  /** The last key number minted per project — the board header's "ENG-42 was
+   *  the last one". A different fact from how many are open, and the one
+   *  nothing else can supply. */
+  minted: Record<string, number>;
+}
+
+export interface WorkComment {
+  id: string;
+  item_id: string;
+  author: string;
+  author_kind?: string;
+  body: string;
+  reply_to?: string;
+  mentions?: string[];
+  created_at: string;
+  edited_at?: string;
+}
+
+export interface WorkChange {
+  id: string;
+  item_id: string;
+  kind: string;
+  actor?: string;
+  actor_kind?: string;
+  fields?: Record<string, { from: string; to: string }>;
+  comment_id?: string;
+  excerpt?: string;
+  created_at: string;
+}
+
+export interface WorkLink {
+  kind: string;
+  other_id: string;
+  key?: string;
+  title?: string;
+  status?: WorkStatus;
+  /** The half nobody authored. A UI renders it differently, and an editor
+   *  knows which end to change. */
+  derived?: boolean;
+}
+
+export interface WorkItem extends WorkSummary {
+  body?: string;
+  watchers?: string[];
+  reassignments?: number;
+  close_reason?: string;
+  created_at?: string;
+}
+
+export interface WorkItemDetail {
+  item: WorkItem;
+  revision: number;
+  comments?: WorkComment[];
+  history?: WorkChange[];
+  links?: WorkLink[];
+}
+
+export type PageStatus = "published" | "draft" | "trashed" | (string & {});
+
+export interface PageSummary {
+  id: string;
+  container: string;
+  parent_id?: string;
+  title: string;
+  status: PageStatus;
+  author?: string;
+  version: number;
+  /** A tool-skill page: machinery the sync publishes, not prose somebody
+   *  wrote to be read. */
+  skill?: boolean;
+  onboarding?: boolean;
+  labels?: string[];
+  updated_at: string;
+  revision: number;
+}
+
+export interface PagesAnswer {
+  pages: PageSummary[];
+  limit: number;
+  offset: number;
+}
+
+export interface PageContainer {
+  key: string;
+  name?: string;
+  purpose?: string;
+  created_at?: string;
+}
+
+export interface PageComment {
+  id: string;
+  page_id: string;
+  author: string;
+  author_kind?: string;
+  body: string;
+  mentions?: string[];
+  created_at: string;
+  edited_at?: string;
+}
+
+/** One past version, METADATA ONLY: the projection keeps no bodies, and
+ *  reading one is a coordination read on demand. */
+export interface PageRevision {
+  version: number;
+  author?: string;
+  message?: string;
+  created_at: string;
+}
+
+export interface Page extends PageSummary {
+  body?: string;
+  watchers?: string[];
+  created_at?: string;
+}
+
+export interface PageDetail {
+  page: Page;
+  revision: number;
+  comments?: PageComment[];
+  history?: PageRevision[];
+  children?: PageSummary[];
+  /** The parent chain, outermost first — the breadcrumb. */
+  ancestors?: PageSummary[];
 }
 
 // ---------------------------------------------------------------------------
@@ -785,6 +957,11 @@ export interface QueryMap {
   schedules: SchedulesAnswer;
   integrations: IntegrationsAnswer;
   sandbox_runs: { runs: SandboxRun[] };
+  work_items: WorkItemsAnswer;
+  work_item: WorkItemDetail;
+  pages: PagesAnswer;
+  page: PageDetail;
+  containers: { containers: PageContainer[] };
   conversations: ConversationsAnswer;
   a2a_channels: A2AAnswer;
   knowledge: KnowledgeAnswer;
@@ -802,6 +979,11 @@ export type QueryErrorCode =
   | "unauthorized"
   | "query_failed"
   | "not_found"
+  /** This node understood the question and cannot answer it YET — a
+   *  projection still catching up after a restart or a fresh join. A screen
+   *  says "ask again in a moment", never "there is nothing": the second is an
+   *  answer a person acts on. */
+  | "unavailable"
   | "no_event_store"
   | "timeout"
   | "closed";

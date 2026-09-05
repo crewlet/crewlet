@@ -207,7 +207,19 @@ func TestDiscoveryAnswersToTheStartupDeadline(t *testing.T) {
 	// end this call is a deadline, and the two budgets are far enough apart
 	// that the ceiling below says which one did.
 	spec := helperSpec(t, "mute-list", "serve", map[string]string{helperPagesEnv: "hang"})
-	spec.StartupTimeout = 200 * time.Millisecond
+	// TWO SECONDS, not the two hundred milliseconds this had. One field
+	// bounds BOTH halves — connect-plus-handshake and the first tools/list
+	// — and the client copies it at connect, so a value chosen to make the
+	// discovery deadline fire quickly is also the budget for forking a
+	// helper binary and completing an MCP handshake. Those have completely
+	// different floors: a fork is single-digit milliseconds idle and
+	// hundreds under a full `-race` suite, which is where this failed.
+	//
+	// The claim survives the raise, which is the point: the ceiling below
+	// is 5x this, and RequestTimeout is 30s, so an elapsed time inside the
+	// ceiling still proves the STARTUP budget ended the listing rather
+	// than the per-call one.
+	spec.StartupTimeout = 2 * time.Second
 	spec.RequestTimeout = 30 * time.Second
 	c := mustConnect(t, spec)
 

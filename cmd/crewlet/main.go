@@ -26,18 +26,23 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -913,7 +918,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// the object that opened it, so an API holding a different
 		// bridge would resolve every token to no session and answer 401
 		// to a box whose run is perfectly healthy.
-		Bridge:       e.Bridge(),
+		Bridge: e.Bridge(),
+		// The OPERATOR MCP surface. Built here rather than in the engine
+		// because it is an API concern — on a split deployment this is
+		// the externally reachable process — and because its writer
+		// identity comes off an HTTP request's own credential.
+		Operator:     operatorMCP(e),
 		QueueBackend: e.Backends().Queue.Backend(),
 		// The read surface answers from this node's OWN store. A
 		// question it has no source for comes back unknown rather than
@@ -966,7 +976,25 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// per-node read drew a dashboard that disagreed with
 			// itself depending on which node answered.
 			Sandbox: sandbox.NewCoordStore(e.Backends().Fleet),
-			NodeID:  nodeID,
+			// THIS NODE'S PROJECTION of the company's own tracker and
+			// knowledge base — the same copy a seat's tools read, so an
+			// operator and an agent looking at one item see one item.
+			//
+			// Nil on a company running Jira or Confluence, which leaves
+			// their questions unregistered: there is no native record
+			// for this node to have a copy of, and an empty board would
+			// claim otherwise.
+			//
+			// A METHOD VALUE is safe here where [Sources.Knowledge]
+			// needs a function: the readers belong to the NODE and are
+			// not rebuilt by an apply — see engine/native.go for why a
+			// projector's lifetime is the process rather than the
+			// epoch. Nil-typed-nil is not a risk either, because these
+			// accessors return an untyped nil for a node with no
+			// backend.
+			Work:   nativeWork(e),
+			Pages:  nativePages(e),
+			NodeID: nodeID,
 		},
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through the FLEET'S coordination store, which is what
@@ -1443,4 +1471,103 @@ func operatorLogLevel() slog.Level {
 // to a level.
 func operatorLogFormat() logging.Format {
 	return logging.ParseFormat(os.Getenv("CREWLET_LOG_FORMAT"))
+}
+
+// nativeWork and nativePages are this node's projections, as the read surface
+// wants them: an interface that is genuinely nil when the company runs the
+// vendor backends.
+//
+// THE CONVERSION IS THE POINT. Handing the read surface a typed nil pointer
+// would satisfy its `!= nil` registration check and then panic on the first
+// question — the exact shape [Engine.Knowledge]'s own doc warns about, in a
+// place where the check is a registration rather than a call.
+func nativeWork(e *engine.Engine) queries.WorkReader {
+	if r := e.Work(); r != nil {
+		return r
+	}
+	return nil
+}
+
+func nativePages(e *engine.Engine) queries.PageReader {
+	if r := e.Pages(); r != nil {
+		return r
+	}
+	return nil
+}
+
+// operatorMCP builds the operator's own MCP surface, or nil.
+//
+// THE SAME DEPS A SEAT'S TOOLS GET, with one field different: the actor. That
+// is what makes this one implementation of ten tools rather than two — see
+// [builtin.WorkDeps.Actor].
+//
+// The DEFAULTS are deliberately absent. A seat files into its unit's project
+// when it names none, because a seat HAS a unit; an operator does not, so the
+// argument is required and the tool refuses naming it rather than guessing a
+// project on a person's behalf.
+func operatorMCP(e *engine.Engine) *opsmcp.Server {
+	var opts opsmcp.Options
+	if c := e.Company(); c != nil && c.Config != nil {
+		opts.Company = c.Config.Name
+	}
+	if reader, writer := e.Work(), e.WorkStore(); reader != nil && writer != nil {
+		opts.Work = builtin.WorkDeps{
+			Reader: reader, Writer: writer,
+			Actor: opsmcp.WorkActor,
+			Await: func(ctx context.Context, revision uint64) error {
+				return e.WaitApplied(ctx, coord.FamilyWork, revision)
+			},
+		}
+	}
+	if reader, writer := e.Pages(), e.PagesStore(); reader != nil && writer != nil {
+		opts.Pages = builtin.PageDeps{
+			Reader: reader, Writer: writer,
+			Actor:    opsmcp.PageActor,
+			Reserved: reservedFor(e),
+			Await: func(ctx context.Context, revision uint64) error {
+				return e.WaitApplied(ctx, coord.FamilyPages, revision)
+			},
+		}
+	}
+	// SEARCH IS OFFERED WHENEVER THE COMPANY HAS A BACKEND, native or not:
+	// unlike the ten write tools, ranked search over the company's own
+	// wiki is exactly as useful to an operator's assistant on Confluence.
+	if e.Knowledge() != nil {
+		opts.Knowledge = operatorKnowledge{engine: e}
+	}
+	return opsmcp.New(opts)
+}
+
+// reservedFor is the containers an operator's assistant may not write to
+// directly, on the same terms a seat has them.
+func reservedFor(e *engine.Engine) []string {
+	c := e.Company()
+	if c == nil || c.Config == nil {
+		return nil
+	}
+	var out []string
+	for _, key := range []string{c.Config.SkillsContainerKey(), c.Config.RootSpaceKey()} {
+		if key = strings.TrimSpace(key); key != "" {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+// operatorKnowledge resolves the node's searcher per call, for the reason the
+// engine's own liveKnowledge does: an apply REPLACES it, and a value captured
+// when the API was assembled searches with a rotated credential's predecessor.
+type operatorKnowledge struct{ engine *engine.Engine }
+
+func (k operatorKnowledge) CanSearch(seat *org.Role, o *org.Organization) bool {
+	s := k.engine.Knowledge()
+	return s != nil && s.CanSearch(seat, o)
+}
+
+func (k operatorKnowledge) Search(ctx context.Context, q knowledge.Query) []knowledge.Hit {
+	s := k.engine.Knowledge()
+	if s == nil {
+		return nil
+	}
+	return s.Search(ctx, q)
 }

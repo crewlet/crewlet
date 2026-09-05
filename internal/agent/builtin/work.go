@@ -73,6 +73,28 @@ type WorkDeps struct {
 	// honest state for a seat whose unit owns none.
 	DefaultProject func(handle string) string
 
+	// Actor decides who a write is attributed to.
+	//
+	// NIL TAKES THE TURN'S SEAT, which is every in-engine caller and the
+	// only correct answer there: a model that could name its own actor
+	// could file work as anybody, so the seat comes from the immutable
+	// turn context the tool surface bound.
+	//
+	// The OPERATOR surface sets it, because there is no turn there and the
+	// writer is a person's credential rather than a seat. That is the
+	// whole reason it is a seam and not a second copy of these five tools:
+	// two implementations of "file an item" would drift on the parts that
+	// matter least visibly — which fields are trimmed, which default
+	// applies, what a refusal says — and only one of them would be tested.
+	//
+	// It takes the CONTEXT as well as the turn because the two callers
+	// carry identity in different places: a turn's seat is on the turn,
+	// and an operator's credential is on the request's context. A seam
+	// that took only the turn would have forced the operator surface to
+	// stash the caller in a package variable, which is one identity for
+	// every concurrent request.
+	Actor func(ctx context.Context, turn *turnctx.Turn) (work.Actor, error)
+
 	// Await blocks until this node's projection has applied a revision.
 	//
 	// THE READ-YOUR-WRITES SEAM, and it is what makes a tool loop
@@ -137,6 +159,29 @@ func actorFor(turn *turnctx.Turn) (work.Actor, error) {
 		TurnID: turn.ID,
 		Chain:  turn.Chain,
 	}, nil
+}
+
+// actor resolves who this call writes as — see [WorkDeps.Actor].
+func (d WorkDeps) actor(ctx context.Context, turn *turnctx.Turn) (work.Actor, error) {
+	if d.Actor != nil {
+		return d.Actor(ctx, turn)
+	}
+	return actorFor(turn)
+}
+
+// turnKey is the idempotency key a comment carries, or "" outside a turn.
+//
+// NIL-SAFE, because these tools serve two callers now. A TURN's key makes a
+// comment idempotent: the engine's redelivery guarantees make a re-run turn
+// ordinary, and without it a seat says the same thing twice. An OPERATOR has
+// no turn and no redelivery — their MCP client made one call — so there is
+// nothing to deduplicate against and an invented key would be a lie about
+// what produced the comment.
+func turnKey(turn *turnctx.Turn) string {
+	if turn == nil {
+		return ""
+	}
+	return turn.ID
 }
 
 // notInATurn is the refusal every one of these tools gives outside a turn.
@@ -363,7 +408,7 @@ func (t *createWorkItem) Call(ctx context.Context, args map[string]any) (tools.R
 }
 
 func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	actor, err := actorFor(turn)
+	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
 		return notInATurn(CreateWorkItemTool), nil
@@ -471,7 +516,7 @@ func (t *updateWorkItem) Call(ctx context.Context, args map[string]any) (tools.R
 }
 
 func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	actor, err := actorFor(turn)
+	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
 		return notInATurn(UpdateWorkItemTool), nil
@@ -602,7 +647,7 @@ func (t *commentOnWorkItem) Call(ctx context.Context, args map[string]any) (tool
 }
 
 func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
-	actor, err := actorFor(turn)
+	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the model reads.
 		return notInATurn(CommentOnWorkTool), nil
@@ -633,7 +678,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// THE TURN'S OWN WORK KEY makes this comment idempotent: a re-run
 		// turn — which the engine's redelivery guarantees make ordinary —
 		// posts once rather than saying the same thing twice.
-		TurnKey: turn.ID,
+		TurnKey: turnKey(turn),
 	}
 	if t.deps.Mentions != nil {
 		in.Mentions = t.deps.Mentions.Mentions(body)

@@ -49,9 +49,9 @@ How the engine works, one subsystem per page:
 - **[Tool Skills](concepts/tool-skills.md)** — Knowledge-base-sourced prompt fragments (Confluence pages) that teach agents *how to use* each tool / MCP server
 - **[Tool Capabilities](concepts/tool-capabilities.md)** — How the engine stays tool-stack agnostic: capability prose + MCP annotations, no hardcoded tool names
 - **[Event System](concepts/event-system.md)** — EventQueue, topics, routing, inbox batching, distributed tracing
-- **[Task Engine](concepts/task-engine.md)** — why the engine keeps no task state: the PM tool is the source of truth
+- **[The Tracker](concepts/task-engine.md)** — the two shapes a company's work can take: the engine's own tracker (`tracker.backend: native`, the default — items as fleet documents, projected onto every node, with a board, seat tools and an MCP surface), or an external PM tool the engine deliberately mirrors none of
 - **[Scheduling](concepts/scheduling.md)** — Role/unit-scoped cron-style recurring work (standups, audits, nightly jobs)
-- **[Knowledge System](concepts/knowledge-system.md)** — Query-time knowledge-base search behind the `knowledge.Searcher` seam (Confluence CQL — one backend per org) + private `agent_diary`
+- **[Knowledge System](concepts/knowledge-system.md)** — Shared knowledge behind the `knowledge.Searcher` seam — exactly one backend per company, either the engine's own pages (BM25 over a per-node index) or a live Confluence search — plus the private `agent_diary`
 - **[Agent Learning](concepts/agent-learning.md)** — Reflection loop, skill induction, episodic memory, counterparty profiles
 - **[Conversation Sessions](concepts/conversation-sessions.md)** — What a seat already said in one Slack thread / issue / pull request, carried into that conversation's next turn: the entry shape and its elision budgets, which turns are recorded, why the key is the conversation and the dedupe is the work key, and why this is a structured ledger rather than a transcript replay
 - **[One-on-Ones](concepts/one-on-ones.md)** — Manager↔report coaching as a usage pattern over the scheduler + A2A channels + learning loop

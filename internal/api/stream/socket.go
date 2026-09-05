@@ -31,13 +31,32 @@ const (
 	CodeUnknownQuery = "unknown_query"
 	CodeUnauthorized = "unauthorized"
 	CodeQueryFailed  = "query_failed"
+
+	// CodeNotFound is a question this node understood, about a record it
+	// does not hold. DISTINCT FROM query_failed, because a client acts on
+	// them differently: "no such item" is a dead link to show the person,
+	// and "the query failed" is a retry.
+	CodeNotFound = "not_found"
+
+	// CodeUnavailable is a question this node cannot answer YET or at all
+	// — a projection still catching up, a surface not wired in this
+	// process.
+	//
+	// It is the code that must never be flattened into an empty result.
+	// "This company has no work" is an answer a person acts on: they file
+	// the duplicate, they conclude the migration failed. A node whose
+	// boot reconcile is still running has to be able to say "ask me in a
+	// moment" rather than "there is nothing".
+	CodeUnavailable = "unavailable"
 )
 
-// ErrUnknownQuery and ErrUnauthorized are the two failures a query surface
-// reports precisely; everything else is a query_failed.
+// The failures a query surface reports precisely; everything else is a
+// query_failed.
 var (
 	ErrUnknownQuery = errors.New("stream: unknown query")
 	ErrUnauthorized = errors.New("stream: query requires an operator")
+	ErrNotFound     = errors.New("stream: no such record")
+	ErrUnavailable  = errors.New("stream: not available on this node yet")
 )
 
 // Query answers one client question.
@@ -283,6 +302,10 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 		client.send(queryError(req, CodeUnknownQuery))
 	case errors.Is(err, ErrUnauthorized):
 		client.send(queryError(req, CodeUnauthorized))
+	case errors.Is(err, ErrNotFound):
+		client.send(queryError(req, CodeNotFound))
+	case errors.Is(err, ErrUnavailable):
+		client.send(queryError(req, CodeUnavailable))
 	default:
 		// The reason reaches the LOG, not the client. A query failure can
 		// carry a database path or a driver's own message, and the socket

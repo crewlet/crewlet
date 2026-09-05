@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/stream"
@@ -120,6 +121,16 @@ type Options struct {
 	// session and a different process verifies its token. That is why the
 	// token is signed rather than stored — see internal/runtoken.
 	Bridge *mcpbridge.Bridge
+
+	// Operator is the company's own tracker and knowledge base, served to
+	// an operator's AI assistant over MCP. Nil serves none and the route
+	// is ABSENT, which is the honest shape for a company on Jira and
+	// Confluence: there is nothing here it could manage.
+	//
+	// ALWAYS GUARDED — see [auth.GuardedPrefixes]. It writes to the
+	// company, and the credential's own name is what lands on each record
+	// as the author.
+	Operator *opsmcp.Server
 
 	// Budgets is the fleet's token counter. Supplied separately from
 	// Sources.Budget, which is the READ half: a reset is an operator
@@ -235,6 +246,11 @@ func New(opts Options) *App {
 	// whatever the anonymous-read posture allows.
 	mux.Handle("POST /backup", http.HandlerFunc(a.serveBackup))
 	mux.Handle("/ws/stream", stream.Handler(a.guard, a.stream, a.answer))
+	// The OPERATOR MCP surface: the same tracker and knowledge tools a
+	// seat holds, offered to a person's own assistant. Under its own
+	// always-guarded prefix rather than under /mcp/, which is exempt
+	// wholesale for the sandbox bridge — see opsmcp.Path.
+	a.mountOperator(mux, opts.Operator)
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
 	// one, and it ships no data — every byte it renders comes from an
@@ -388,6 +404,10 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnknownQuery, what)
 	case errors.Is(err, queries.ErrUnauthorized):
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
+	case errors.Is(err, queries.ErrNotFound):
+		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
+	case errors.Is(err, queries.ErrUnavailable):
+		return nil, fmt.Errorf("%w: %s", stream.ErrUnavailable, what)
 	default:
 		return nil, err
 	}
@@ -427,6 +447,17 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": stream.CodeUnauthorized})
 	case errors.Is(err, queries.ErrBadParams):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": stream.CodeQueryFailed})
+	case errors.Is(err, queries.ErrNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeNotFound})
+	case errors.Is(err, queries.ErrUnavailable):
+		// 503 AND RETRY-AFTER, because this is the one failure here that
+		// is expected to pass: a node's boot reconcile is O(keys) and
+		// finishes. A 500 would tell a client to give up on a screen
+		// that will work in a few seconds, and an empty 200 would tell a
+		// person the company has no work.
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, http.StatusServiceUnavailable,
+			map[string]string{"error": stream.CodeUnavailable})
 	default:
 		// The reason reaches the LOG, not the caller: it can carry a
 		// database path or a driver's own message, and these routes are

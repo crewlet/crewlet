@@ -130,6 +130,14 @@ units:
     type: team
     lead: PM
     purpose: "Define what gets built and why"
+    # A unit's identity on the tracker and the knowledge base. Both default
+    # to the engine's own backends, so these two keys are all it takes to
+    # give the team somewhere to file work and write things down — no site,
+    # no project to create, no per-seat account. They name a Jira project and
+    # a Confluence space just as well if you switch the backend later, which
+    # is why they are not called `jira_project` / `confluence_space`.
+    project: PROD
+    space: PROD
     roles:
       - name: PM
         handle: pm
@@ -141,6 +149,8 @@ units:
     type: team
     lead: CTO
     purpose: "Build and ship the product"
+    project: ENG
+    space: ENG
     goals:
       - "Ship MVP in 4 weeks"
       - "Maintain test coverage above 80%"
@@ -319,6 +329,32 @@ person. Within five minutes the `hello-crewlet` schedule fires a
 each phase listing the rounds it took, the tools each round called, and the
 prompts the model actually saw. A phase that finishes updates in place rather
 than moving, so you can read one while the next is running.
+
+Follow the turn to the **Work board** and **Pages**. Both are the engine's own
+— `tracker.backend` and `knowledge.backend` default to `native`, so your
+company has a tracker and a wiki from its first minute with nothing to set up.
+A seat files with `create_work_item` and writes with `write_page`; a board row
+links to the item's thread and history.
+
+Your own AI assistant can read and write the same records over MCP. Point any
+client at `/operator/mcp` with your API token:
+
+```json
+{
+  "mcpServers": {
+    "crewlet": {
+      "type": "http",
+      "url": "http://localhost:8000/operator/mcp",
+      "headers": { "Authorization": "Bearer ${CREWLET_API_TOKEN_FOUNDER}" }
+    }
+  }
+}
+```
+
+It gets the same eleven tools a seat holds, and its writes are attributed to
+the token's own name rather than to a seat — so an audit can tell your edit
+from an agent's. See
+[the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
 The same picture is available over the API:
 

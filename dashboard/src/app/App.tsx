@@ -15,6 +15,8 @@ import { People } from "~/routes/People.tsx";
 import { SeatScreen } from "~/routes/Seat.tsx";
 import { OrgScreen } from "~/routes/Org.tsx";
 import { Runs } from "~/routes/Runs.tsx";
+import { Work, WorkItem } from "~/routes/Work.tsx";
+import { Pages, PageView } from "~/routes/Pages.tsx";
 import { Conversations } from "~/routes/Conversations.tsx";
 import { Schedules } from "~/routes/Schedules.tsx";
 import { ModelActivity } from "~/routes/Model.tsx";
@@ -45,6 +47,14 @@ function Screen() {
       return <OrgScreen />;
     case "runs":
       return <Runs />;
+    // A key or an id BOTH resolve, because the reader has whichever they were
+    // shown: a person pastes ENG-42 out of chat, and every internal link
+    // carries the id. The engine's own Get takes either, so the route does
+    // not have to know which it was handed.
+    case "work":
+      return id ? <WorkItem id={id} /> : <Work />;
+    case "pages":
+      return id ? <PageView id={id} /> : <Pages />;
     case "conversations":
       return <Conversations />;
     case "schedules":

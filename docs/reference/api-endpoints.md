@@ -85,6 +85,11 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `POST` | `/budgets/reset` | Zero the fleet's token counter. `?scope=` clears one (`org`, `agent:<id>`); its absence clears every one. **Always needs a token** — a write is a write whatever `allow_anonymous_read` opens (see [below](#post-budgetsreset)) |
 | `POST` | `/backup` | Copy this node's store and stream estate into `?dir=` **on the engine's host**. **Always needs a token** — it writes every credential the company holds to a path the caller names (see [below](#post-backup)) |
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
+| `GET` | `/work` | The company's own tracker: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `native` — a company on Jira gets `404 unknown_query`, not an empty board (see [below](#the-native-tracker-and-knowledge-base)) |
+| `GET` | `/work/{id}` | One item with its description, thread, history and links. `{id}` is either the key (`ENG-42`) or the id — a person holds the first and every internal link the second |
+| `GET` | `/pages` | The company's own knowledge base: a filtered listing. Served only where `knowledge.backend` is `native` |
+| `GET` | `/pages/{id}` | One page with its body, comments, revision metadata, children and ancestor breadcrumb. `{id}` is the id, or `CONTAINER/Title` |
+| `GET` | `/containers` | Every knowledge container this node knows about |
 | `GET` | `/stream/snapshot` | Dashboard initial-state bundle, served from the in-memory projection (REST fallback for the WebSocket) |
 | `WS`  | `/ws/stream` | Live dashboard stream — agents, events, LLM invocations, health |
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
@@ -97,8 +102,9 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
+| `GET` `POST` `DELETE` | `/operator/mcp` | The company's own tracker and knowledge base, served over MCP to **your** AI assistant. **Always needs a token** — it files and moves work (see [below](#operatormcp--your-own-assistant)). Absent where the company runs neither native backend |
 
-Plus the two always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated) and [`/secrets/*`](#secrets--the-companys-credentials-auth-gated).
+Plus the three always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated) and [`/operator/mcp`](#operatormcp--your-own-assistant).
 
 Read-side handlers live in the `internal/api` package (one module
 per domain — `agents`, `events`, `tokens`, `org`, `fleet`,
@@ -689,7 +695,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `unauthorized`, `unknown_query`, `no_event_store`, `no_pending_store`, `fleet_unavailable`, `query_failed`. |
+| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `unavailable`, `unauthorized`, `unknown_query`, `no_event_store`, `no_pending_store`, `fleet_unavailable`, `query_failed`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join — so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
 **Client → server kinds**
@@ -719,6 +725,11 @@ REST route calls, so the two surfaces cannot diverge:
 | `a2a_channels` | — | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
 | `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
 | `integrations` | — | `GET /integrations` |
+| `work_items` | `{project, status, assignee, reporter, label, parent, watcher, q, open, limit, offset}` | `GET /work`. `status` is comma-separated, because a socket frame's JSON object cannot carry a repeated key and a filter only one transport can express is exactly the divergence this channel exists to prevent. `open` is THREE-STATED: absent asks for everything, `true` for open work, `false` for closed. An unknown status is refused naming the closed set rather than matching nothing |
+| `work_item` | `{id}` | `GET /work/{id}` — key or id |
+| `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated on the same terms as `open`: only the tool-skill pages, everything but them, or everything |
+| `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title` |
+| `containers` | — | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
 | `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
 | `config` | — | `GET /config` *(operator token required)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |
@@ -759,6 +770,124 @@ a change has to keep — is documented in
 [Dashboard Design System](dashboard-design.md).
 
 ---
+
+## `/operator/mcp` — your own assistant
+
+The premise of running Crewlet is that an AI manages your company. The person
+doing that management is very often working through an AI of their own — a
+coding agent, an assistant, whatever they already have open — and this is the
+endpoint that lets it read the board, file the thing you just decided, and
+read what the company has written down. Without it they are reduced to
+describing the dashboard to it.
+
+Point any MCP client at it:
+
+```json
+{
+  "mcpServers": {
+    "crewlet": {
+      "type": "http",
+      "url": "https://crewlet.example.com/operator/mcp",
+      "headers": { "Authorization": "Bearer ${CREWLET_API_TOKEN}" }
+    }
+  }
+}
+```
+
+### What it serves
+
+The **same tools a seat holds**, not a parallel implementation: `list_work_items`,
+`get_work_item`, `create_work_item`, `update_work_item`, `comment_on_work_item`,
+`list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`, and
+`search_knowledge`. A schema, a default, a trimmed field and the wording of a
+refusal are each written once — two copies of "file an item" drift on exactly
+the parts nobody looks at, and only one of the two is ever tested.
+
+Each tool appears only where its half of the company is native: a company on
+`tracker.backend: jira` gets the page tools and not the work tools, and one on
+neither gets no endpoint at all. `search_knowledge` is the exception and is
+offered against **any** knowledge backend, Confluence included — a ranked
+search over the company's own wiki is exactly as useful to an assistant there.
+
+The turn-only tools are deliberately absent: the memory tools (a diary belongs
+to a seat), the skill tools (a skill is loaded into a phase), `a2a_ask` (a
+colleague's answer comes back by waking a seat, and there is nobody here for
+it to reach) and `run_sandbox` (a detached run resumes a suspended phase that
+does not exist).
+
+### Who a write is attributed to
+
+The **token's own name** — the key in `api.auth.tokens` — with author kind
+`operator`. Not a seat: a token is not a colleague, and a name in the handle
+field would render as one in every thread it appeared in. So an audit can tell
+an operator's edit from an agent's, and a person and the credential they used
+stay two separate facts on the record.
+
+There is deliberately **no way for the caller to name a seat to act as**. That
+would let anybody holding the token write as anybody, and a tracker whose
+author field is chosen by the writer is not an audit trail.
+
+### Why it is not under `/mcp/`
+
+`/mcp/` is exempt from authentication wholesale, because the sandbox
+[tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)
+lives there and a box running generated code holds no API token — a signed
+per-run token in its own path is what authenticates it instead. Mounting a
+writable company surface under the same prefix would have put it behind no
+credential at all. `/operator` is its own always-guarded prefix, alongside
+`/config` and `/secrets`.
+
+## The native tracker and knowledge base
+
+`GET /work`, `GET /pages` and their neighbours read **this node's own
+projection** of the company's tracker and knowledge base — the same copy a
+seat's tools read, so an operator and an agent looking at one item see one
+item.
+
+Three properties are worth stating because each is a decision rather than an
+implementation detail.
+
+**They are registered only where the company runs that backend.** A company on
+`tracker.backend: jira` has no `work_items` question at all, and asking gets
+`unknown_query` / `404`. That is deliberate: an operator who wired Jira and
+then found a blank Crewlet board would reasonably conclude their integration
+was broken. There is no native record for this node to have a copy of, and an
+empty board would claim otherwise.
+
+**A projection that has not caught up refuses.** Every one of these answers
+`unavailable` (`503` with `Retry-After: 5`) while this node's boot reconcile is
+still running, rather than returning an empty list. "This company has no work"
+is an answer a person acts on — they file the duplicate, they conclude the
+migration failed — so a node that has not finished reading what the fleet holds
+must not be able to say it. The reconcile is `O(keys)` and finishes; the screen
+fills in on its own.
+
+**They are read-only.** There is no `POST /work`. An item is filed and moved by
+a seat's own tools, or by an operator through the
+[MCP surface](../guides/tools-and-mcp.md), and both are attributed to somebody
+— where a dashboard button would write as "the dashboard", which is not a
+person and not a seat and cannot be asked why.
+
+### Paging and filters
+
+Both listings take `limit` (default 50, max 500) and `offset`. Multi-valued
+filters are **comma-separated** — `?status=todo,in_progress` — because the
+socket's query channel carries a JSON object, which cannot express a repeated
+key. A filter only one transport could send is exactly the divergence the
+shared answer function exists to prevent.
+
+Two filters are **three-stated**, and the third state is the one a boolean
+would lose:
+
+| Filter | Absent | `true` | `false` |
+|---|---|---|---|
+| `open` (work) | every item | open work | closed work |
+| `skills` (pages) | every page | only tool-skill pages | everything but them |
+
+An unknown enum value is refused naming the closed set — `?status=finished`
+answers `400` saying which statuses exist — rather than matching nothing. A
+listing that answered empty for a typo would send somebody looking for items
+that were never missing.
 
 ## Agent Memory
 

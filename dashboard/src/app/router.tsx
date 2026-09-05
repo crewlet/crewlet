@@ -125,13 +125,28 @@ const MOVED: Record<string, (path: string[], query: URLSearchParams) => string[]
   // The seat list left the org screen and became a screen of its own.
   agents: (p) => (p.length > 1 ? ["seats", p[1] as string] : ["people"]),
   people: () => null, // already current — listed so the intent is explicit
-  work: () => ["runs"],
+  // NOT `work`. It redirected to `#/runs` back when "work" meant a coding
+  // run, and the work board took the name — so the entry would have sent
+  // every reader of a live route to a different screen, for ever, with the
+  // address bar agreeing with them. A redirect whose old path is now a real
+  // route is strictly worse than a dead link: the dead link is visible.
+  // The "no redirect claims a path a live screen now owns" test beside
+  // this holds the rule.
   tokens: () => ["spend"],
   company: () => ["org"],
   audit: () => ["config"],
   // `#/events` was the feed; `#/events/{id}` is still one event.
   events: (p) => (p.length > 1 ? null : ["activity"]),
 };
+
+/**
+ * The first segments a redirect claims, so a test can hold them apart from
+ * the ones a live screen owns. Exported for that test alone — see
+ * `router.test.ts`, and the `work` entry that is deliberately absent above.
+ */
+export const MOVED_PATHS: string[] = Object.keys(MOVED).filter(
+  (key) => MOVED[key]?.([key], new URLSearchParams()) !== null,
+);
 
 /**
  * A LENS can move too, and it does not look like a moved route: the path is

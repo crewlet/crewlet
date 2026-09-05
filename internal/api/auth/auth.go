@@ -42,12 +42,19 @@ var log = logging.Get("api.auth")
 //   - /secrets: the fleet's credential store. Even the listing, which carries
 //     no values, says which credentials a company holds and when each last
 //     changed, and one route returns a value outright.
+//   - /operator: the operator MCP surface, which FILES AND MOVES WORK and
+//     writes to the knowledge base. A write is a write whatever
+//     allow_anonymous_read opens, and it is the credential's own name that
+//     lands on each record as the author — so a request with no token has
+//     nobody to attribute the write to. It is deliberately NOT under /mcp/,
+//     which is exempt wholesale for the sandbox bridge: mounting a writable
+//     company surface there would have put it behind no credential at all.
 //
 // A LIST rather than one constant, because the alternative was a second
 // const somewhere else and a second `HasPrefix` beside it — and the two would
 // have drifted the day a third surface was added, each staying
 // self-consistent while one of them stopped being consulted.
-var GuardedPrefixes = []string{"/config", "/secrets"}
+var GuardedPrefixes = []string{"/config", "/secrets", "/operator"}
 
 // AlwaysGuarded reports whether a path is on one of those surfaces.
 func AlwaysGuarded(path string) bool {

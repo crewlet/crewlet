@@ -85,30 +85,43 @@ export function Knowledge() {
 
       {loading && <Skeleton rows={4} />}
 
-      {/* The search DID NOT RUN. `available: false` covers three states — no
-          company, no backend, a backend with no org-wide read scope — so the
-          engine's `note` is rendered rather than restated, and the REMEDY is
-          chosen off `reason`. Neither is guessed from `backend`: it is empty
-          for "no backend" and "no company" alike, and telling somebody with
-          no company configured to go and wire Confluence is the wrong fix. */}
+      {/* The search DID NOT RUN. `available: false` covers four states — no
+          company, no backend, a backend with no org-wide read scope, and an
+          index still building — so the engine's `note` is rendered rather
+          than restated, and the REMEDY is chosen off `reason`. Neither is
+          guessed from `backend`: it is empty for "no backend" and "no
+          company" alike, and telling somebody with no company configured to
+          go and wire a wiki is the wrong fix. */}
       {q && data?.available === false && (
-        <div className="banner neutral">
-          <Icon name="book" size="sm" />
+        <div className={data.reason === "building" ? "banner caution" : "banner neutral"}>
+          <Icon name={data.reason === "building" ? "clock" : "book"} size="sm" />
           <span>
             This search could not run: {data.note || "the engine gave no reason"}.
             {data.reason === "no_backend" && (
               <>
                 {" "}
-                Wire <code className="inline">integrations.confluence</code> and list the spaces to
-                read in <code className="inline">knowledge.confluence_spaces</code> to give agents a
-                shared place to read from.
+                Set <code className="inline">knowledge.backend</code> to{" "}
+                <code className="inline">native</code> to use the engine's own knowledge base, or to{" "}
+                <code className="inline">confluence</code> alongside an{" "}
+                <code className="inline">integrations.confluence</code> block.
               </>
             )}
             {data.reason === "no_scope" && (
               <>
                 {" "}
-                The integration itself is fine — add the spaces to search to{" "}
-                <code className="inline">knowledge.confluence_spaces</code>.
+                The backend itself is fine — add the containers to search to{" "}
+                <code className="inline">knowledge.scope</code>.
+              </>
+            )}
+            {/* NOT A MISCONFIGURATION, and the banner must not read as one:
+                this node is still indexing what it has projected, which is
+                where a freshly joined node spends its first minutes. There is
+                nothing to fix and nothing is lost. */}
+            {data.reason === "building" && (
+              <>
+                {" "}
+                Nothing is wrong — this node joined recently and is still indexing. Pages that exist
+                are simply not findable from here yet. Try again in a moment.
               </>
             )}
           </span>

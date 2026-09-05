@@ -142,12 +142,16 @@ meets their company first and the engine last.
 | **Company** | People | `#/people?group=&q=` | every seat and what it is doing — grouped by state, by unit, or flat |
 | | Org chart | `#/org?lens=chart\|directory\|charter` | the hierarchy, the directory, and the company's own mission, vision and policies |
 | | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access |
-| **Work** | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
+| **Work** | Work board | `#/work?project=&status=&scope=&q=` | `work_items` — the company's own tracker, this node's copy of the fleet's record. Read-only: work is filed and moved by the seats themselves |
+| | *an item* | `#/work/{key\|id}` | `work_item` — description, thread, history and links |
+| | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
 | | Agent-to-agent | `#/conversations` | `a2a_channels` — who asked whom, how many messages, and when |
 | | Schedules | `#/schedules` | `schedules` — what fires, when it next fires, how it last went |
 | **Intelligence** | Model activity | `#/model?role=&phase=&failed=` | `phases` — one row per phase across the fleet; the transcript is on the seat |
 | | Event log | `#/activity?category=&actor=&q=&failed=` | the live feed, then `events` for older pages |
-| | Knowledge | `#/knowledge?q=` | `knowledge` — the company's own live search |
+| | Knowledge | `#/knowledge?q=` | `knowledge` — search, ranked, through the same seam a seat's own `search_knowledge` uses |
+| | Pages | `#/pages?container=&title=&kind=` | `pages` + `containers` — the same knowledge base BROWSED rather than searched. Two screens because they answer different questions: "show me what the platform team wrote down" should not be a search for a word somebody has to guess |
+| | *a page* | `#/pages/{id}` | `page` — body, breadcrumb, children, comments and revision metadata |
 | **Cost** | Spend & budgets | `#/spend?window=` | the pushed spend rollup, the `tokens` query for other windows, and `budgets` |
 | **Operations** | Fleet | `#/fleet` | `fleet` — the lease table |
 | | Integrations | `#/integrations` | `integrations` |
@@ -160,10 +164,17 @@ meets their company first and the engine last.
 | — | Engine | the pill in the sidebar footer | the `health` push plus the `stream` query |
 
 **Old routes redirect, with their query strings intact.** `#/agents`,
-`#/agents/{id}`, `#/work`, `#/tokens`, `#/events`, `#/company`, `#/audit` and
+`#/agents/{id}`, `#/tokens`, `#/events`, `#/company`, `#/audit` and
 `#/org?lens=seats` all resolve to their new homes. Those links are in bookmarks
 and in chat threads; a redirect costs one navigation, a dead link costs the
 reader the thing they were looking for.
+
+**A redirect is removed the moment a live screen takes its path.** `#/work`
+redirected to the coding runs back when "work" meant a coding run; the work
+board then took the name, and the entry would have sent every reader of a live
+route somewhere else, permanently, with the address bar agreeing with them.
+That is strictly worse than the dead link a redirect exists to avoid, because
+a dead link is visible. `router.test.ts` holds the rule against the nav.
 
 ### Moving, and going back
 
