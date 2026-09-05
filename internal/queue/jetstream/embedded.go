@@ -19,10 +19,51 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
-// readyTimeout bounds waiting for an embedded server to accept connections.
-// Generous because a cold file store on a slow disk legitimately takes a
-// moment, and failing here fails the whole boot.
-const readyTimeout = 30 * time.Second
+// The budgets for an embedded server ACCEPTING CONNECTIONS.
+//
+// Not to be confused with [clusterReadyTimeout] below, which bounds a
+// different and later wait: this one is "the listener is up", that one is
+// "this member's JetStream has caught up with the metadata group". A boot
+// waits for both in that order, and they fail for different reasons.
+//
+// # Why two, and why the clustered one is larger
+//
+// A SOLO server has one thing to do before it accepts: recover its own file
+// store. A CLUSTERED member does that while also standing up its route
+// listener and starting to gossip with peers that are themselves booting —
+// so on a host bringing several members up at once it is competing for the
+// same disk and the same scheduler. One number for both is wrong for one of
+// them.
+//
+// # And why both are generous
+//
+// The asymmetry decides it. Failing here fails the WHOLE BOOT, so a budget
+// that is too short turns a busy host into a node that refuses to start and
+// then works on the retry — which during a rolling restart is how one slow
+// member takes out the restart. Too long only means a genuinely broken
+// server is reported as broken later, and the wait is CANCELLABLE, so a
+// person who has seen enough gets their prompt back immediately.
+//
+// The clustered case shared the solo 30 seconds and flaked under the full
+// race suite with several clusters forming at once — which is a smaller
+// version of exactly the production case it has to survive.
+const (
+	// acceptTimeout bounds a solo server: its own file store, and nothing
+	// else.
+	acceptTimeout = 30 * time.Second
+
+	// clusterAcceptTimeout bounds a member that is also standing up a
+	// route listener and gossiping with peers mid-boot.
+	clusterAcceptTimeout = 2 * time.Minute
+)
+
+// acceptBudget is how long this server gets to accept connections.
+func acceptBudget(clustered bool) time.Duration {
+	if clustered {
+		return clusterAcceptTimeout
+	}
+	return acceptTimeout
+}
 
 const (
 	// clusterReadyTimeout bounds waiting for a clustered member's JetStream
@@ -245,18 +286,26 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	go ns.Start()
 
 	// THE WAIT IS CANCELLABLE, which is the whole reason this function takes
-	// a context. ReadyForConnections blocks for up to readyTimeout with no way
+	// a context. ReadyForConnections blocks for up to its budget with no way
 	// to interrupt it, so a Ctrl-C during a slow cold start — a large file
 	// store recovering its streams — used to sit out the full 30 seconds
 	// before the process could begin its drain.
+	budget := acceptBudget(clustered)
 	ready := make(chan bool, 1)
-	go func() { ready <- ns.ReadyForConnections(readyTimeout) }()
+	go func() { ready <- ns.ReadyForConnections(budget) }()
 	select {
 	case ok := <-ready:
 		if !ok {
 			ns.Shutdown()
 			removeScratch(scratch)
-			return nil, errors.New("embedded nats server did not become ready")
+			// THE BUDGET IS IN THE MESSAGE, and whether this member was
+			// waiting on peers: "did not become ready" alone sends an
+			// operator to the disk when a route was the problem.
+			return nil, fmt.Errorf(
+				"embedded nats server did not become ready within %v (clustered: %v). "+
+					"A clustered member also waits for its routes to dial and for "+
+					"the metadata group to elect a leader, so check that its peers "+
+					"in stream.cluster.routes are reachable", budget, clustered)
 		}
 	case <-ctx.Done():
 		// Shutdown makes the in-flight ReadyForConnections return, so the

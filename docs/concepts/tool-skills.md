@@ -39,11 +39,27 @@ flowchart TD
     REG --> LOAD --> BODY
 ```
 
-**No database row.** The registry is in-memory. Engine restart re-fetches every page in the container. Skill changes propagate via the same Atlassian page webhook the engine already uses for the backend's notification routing.
+**No database row.** The registry is in-memory. Engine restart re-reads every page in the container.
 
-**No code defaults.** The engine ships zero skill prose. An empty container → empty registry → just the tool catalogue. Operators seed it with `crewlet confluence import` (see below).
+**No code defaults.** The engine ships zero skill prose. An empty container →
+empty registry → just the tool catalogue. Operators seed it by publishing
+markdown: with their own assistant over
+[`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant)
+on the native backend, or `crewlet confluence import` on Confluence (see below).
 
-**One sync worker, matching the single-homed knowledge backend** (see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). It applies the same **admission predicate** to every page, at boot and on each webhook alike: the page lives in the configured container *and* identifies as a skill (the `crewlet-skill` marker label + a decodable YAML macro). A previously admitted page that stops satisfying the predicate — deleted, moved out, or edited into a non-skill — is **evicted**, never left serving its last-good body.
+**One sync worker, matching the single-homed knowledge backend** (see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). It applies the same **admission predicate** to every page, at boot and on every re-read alike: the page lives in the configured container *and* identifies as a skill. A previously admitted page that stops satisfying the predicate — deleted, moved out, or edited into a non-skill — is **evicted**, never left serving its last-good body.
+
+**What triggers a re-read differs by backend, and only one of them is a
+webhook.** On Confluence it is the same page webhook the engine already uses
+for notification routing. Natively there is no webhook, and there is
+deliberately no delivery either: the change feed **drops** a skill-page change
+rather than waking a team about a procedure written for one phase of one turn.
+So the *projection's apply* is what notices — it already derives the skill flag
+on every page it writes, so it is the one thing that sees both a page becoming
+a skill and a page ceasing to be one. It reports that after the batch commits,
+coalesced to one re-read however many skill pages moved in it, and a failed
+batch reports nothing: the registry replaces wholesale, so a re-read triggered
+by rows that rolled back is how a company loses every skill it has.
 
 ---
 

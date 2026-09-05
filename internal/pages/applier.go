@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -26,13 +27,89 @@ type SkillDetector interface {
 // Applier projects the pages family into a node's own tables.
 type Applier struct {
 	skills SkillDetector
+
+	// touched is called after a batch that changed a TOOL-SKILL page.
+	//
+	// # Why the applier is what notices
+	//
+	// A tool skill reaches the registry by being READ OUT of its
+	// container, and something has to say when to read again. On the
+	// vendor backend that is a page webhook; natively the change feed
+	// deliberately drops these changes — a skill is machinery, and
+	// waking a team about an edit to a procedure written for one phase
+	// of one turn is exactly what the quiet rule exists to prevent — so
+	// there is no delivery to hang the resync off.
+	//
+	// The apply is the other thing that sees every page change, and it
+	// already computes the skill flag. Nil is legal and means nobody is
+	// listening, which is every caller that is not the engine.
+	touched func()
+
+	// mu guards skillMoved, which Apply sets under the projection's own
+	// write transaction and Committed drains after it. A mutex rather
+	// than an atomic because the drain is a read-and-clear pair that has
+	// to be one step: between an atomic load and an atomic store, a
+	// change landing would be lost.
+	mu         sync.Mutex
+	skillMoved bool
 }
 
 // NewApplier builds the knowledge base's applier.
-func NewApplier(skills SkillDetector) *Applier { return &Applier{skills: skills} }
+//
+// onSkillChange is called after a committed batch that touched a tool-skill
+// page, so a registry can re-read the container. AFTER THE COMMIT, never
+// inside the transaction: a callback that ran mid-apply would see rows the
+// batch had not committed, and a slow one would hold the projection's own
+// write lock while every other change queued behind it.
+func NewApplier(skills SkillDetector, onSkillChange func()) *Applier {
+	return &Applier{skills: skills, touched: onSkillChange}
+}
 
 // Family is the family this applier serves.
 func (a *Applier) Family() projection.Family { return coord.FamilyPages }
+
+// Committed implements [projection.Applier]: tell the registry if a
+// tool-skill page moved in this batch.
+//
+// COALESCED TO ONE CALL PER BATCH by the flag, which is what makes a bulk
+// import — twenty skill pages in one reconcile — one re-read rather than
+// twenty. The flag is cleared before the callback runs, so a change that
+// lands during the re-read sets it again and is picked up by the next batch
+// rather than being swallowed.
+func (a *Applier) Committed(context.Context) {
+	a.mu.Lock()
+	moved := a.skillMoved
+	a.skillMoved = false
+	a.mu.Unlock()
+	if moved && a.touched != nil {
+		a.touched()
+	}
+}
+
+// wasSkill reports whether the row being replaced was already a skill.
+//
+// Read INSIDE the apply's own transaction, which is the only place the
+// previous row is still visible: by the time [Applier.Committed] runs it has
+// been overwritten. A read failure answers false and is not an error — the
+// worst it costs is a registry that keeps an evicted skill until the next
+// change, where failing the batch would stop the projection over a page.
+func (a *Applier) wasSkill(ctx context.Context, tx *sql.Tx, id string) bool {
+	var skill int
+	err := tx.QueryRowContext(ctx, `SELECT skill FROM pages WHERE id = ?`, id).Scan(&skill)
+	return err == nil && skill == 1
+}
+
+// noteSkill records that this batch touched a tool-skill page.
+//
+// It is called for a page that IS one and for one that STOPPED being one:
+// a skill edited into ordinary prose has to leave the registry, and a
+// registry that only heard about arrivals would serve its last-good body
+// for ever. See the eviction rule in [internal/agent/skills].
+func (a *Applier) noteSkill() {
+	a.mu.Lock()
+	a.skillMoved = true
+	a.mu.Unlock()
+}
 
 // Order ranks a key so a batch applies parents before children.
 //
@@ -149,6 +226,12 @@ func (a *Applier) applyPage(ctx context.Context, tx *sql.Tx, change coord.Change
 		return nil
 	}
 	if change.Op == coord.OpPurge {
+		// ASKED BEFORE THE DELETE, because after it there is nothing to
+		// ask: a removed skill page has to leave the registry, and the
+		// row is the only record that it was one.
+		if a.wasSkill(ctx, tx, id) {
+			a.noteSkill()
+		}
 		_, err := tx.ExecContext(ctx, `DELETE FROM pages WHERE id = ?`, id)
 		return err
 	}
@@ -167,6 +250,13 @@ func (a *Applier) applyPage(ctx context.Context, tx *sql.Tx, change coord.Change
 	skill := 0
 	if a.skills != nil && a.skills.IsSkill(page.Body) {
 		skill = 1
+	}
+	if skill == 1 || a.wasSkill(ctx, tx, id) {
+		// EITHER DIRECTION. A page that became a skill has to reach the
+		// registry, and one that STOPPED being a skill has to leave it:
+		// a registry that only heard about arrivals would serve an
+		// evicted skill's last-good body for ever.
+		a.noteSkill()
 	}
 	onboarding := 0
 	if NormalizeTitle(page.Title) == NormalizeTitle(OnboardingTitle) {

@@ -412,3 +412,51 @@ func placeholders(n int) string {
 	}
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
+
+// SkillPages are the tool-skill pages in one container, with their bodies.
+//
+// # Why this is its own read rather than a List plus a Get each
+//
+// A listing deliberately carries no body — fifty pages at 512 KiB each is
+// twenty-five megabytes to draw a list of titles — so the caller that
+// genuinely needs bodies would otherwise issue one query per page. The
+// tool-skills container is the one place that is true, and it is small: a
+// company with twenty MCP servers has twenty skills, not twenty thousand.
+//
+// TRASHED PAGES ARE EXCLUDED. A skill somebody removed must leave the
+// registry, and a walk that returned it would put it straight back — the
+// replace is wholesale, so what this returns IS the registry.
+func (r *Reader) SkillPages(ctx context.Context, container string) ([]Page, error) {
+	if err := r.ready(); err != nil {
+		return nil, err
+	}
+	container = strings.ToUpper(strings.TrimSpace(container))
+	if container == "" {
+		return nil, nil
+	}
+	rows, err := r.db.SQL().QueryContext(ctx, `
+		SELECT document FROM pages
+		WHERE container = ? AND skill = 1 AND status <> ?
+		ORDER BY title`, container, string(StatusTrashed))
+	if err != nil {
+		return nil, fmt.Errorf("pages: list the skills in %s: %w", container, err)
+	}
+	defer rows.Close()
+	var out []Page
+	for rows.Next() {
+		var document string
+		if err := rows.Scan(&document); err != nil {
+			return nil, fmt.Errorf("pages: scan a skill page: %w", err)
+		}
+		page, err := DecodePage([]byte(document))
+		if err != nil {
+			// LEFT OUT rather than failing the walk: one page a newer
+			// build wrote must not cost the company every other skill.
+			log.WarnContext(ctx, "pages_skill_undecodable", "container", container,
+				"error", err.Error())
+			continue
+		}
+		out = append(out, page)
+	}
+	return out, rows.Err()
+}
