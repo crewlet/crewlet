@@ -305,7 +305,7 @@ func (p *Projector) applyBatch(ctx context.Context, changes []*coord.Change) err
 		}
 		return cmp.Compare(a.Revision, b.Revision)
 	})
-	return p.db.Tx(ctx, func(tx *sql.Tx) error {
+	if err := p.db.Tx(ctx, func(tx *sql.Tx) error {
 		for _, change := range changes {
 			if err := p.applier.Apply(ctx, tx, *change); err != nil {
 				return applyError(p.family, change.Key, change.Revision, err)
@@ -315,7 +315,15 @@ func (p *Projector) applyBatch(ctx context.Context, changes []*coord.Change) err
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	// AFTER THE COMMIT — see [Applier.Committed]. A failed batch does not
+	// reach here, which is the point: a side effect fired for rows that
+	// rolled back would have the registry re-read a page that was never
+	// applied.
+	p.applier.Committed(ctx)
+	return nil
 }
 
 // recordKey writes what the reconcile compares against.

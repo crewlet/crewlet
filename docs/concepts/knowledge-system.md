@@ -170,7 +170,30 @@ Static org configuration (mission, vision, policies, role profile, team roster, 
 
 ## Publishing knowledge docs
 
-Most shared knowledge is authored directly in the backend by humans and agents. For docs an operator wants to keep in version control — onboarding pages, runbooks, playbooks — the import CLI publishes local markdown:
+Most shared knowledge is authored directly by humans and agents — a seat calls
+`write_page` (native) or the vendor's own MCP tools (Confluence). For docs an
+operator wants to keep in **version control** — onboarding pages, runbooks,
+playbooks — there are two paths, one per backend.
+
+### On the native backend: your own assistant
+
+There is no import CLI, and there does not need to be one. Point any MCP client
+at [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant)
+with your API token and tell it what to publish:
+
+> Publish everything under `examples/nimbus-docs/` — one container per
+> directory, the page title from each file's first `# H1`.
+
+It calls `write_page` per file, with your token's own name on each page as the
+author. That handles the parts a flag-driven CLI handles badly: the parent
+chain, a title that already exists (`save_page` with the version it read), and
+a file that turns out to be a [tool skill](tool-skills.md) rather than prose.
+
+The [reserved containers](#accessible-containers) are refused to it, exactly as
+they are to a seat — a page written into the tool-skills container would be
+injected into a phase as an instruction rather than read as knowledge.
+
+### On Confluence: the import CLI
 
 ```
 crewlet confluence import <company.yaml> [DIR]
@@ -185,6 +208,9 @@ Knowledge docs follow a **directory-based convention** — the files are pure pr
 
 ```
 examples/nimbus-docs/
+├── HOME/
+│   └── Onboarding.md          → the ROOT container: the page every seat
+│                                reads before its own team's
 ├── ENG/
 │   └── Onboarding.md          → space ENG,  title "Onboarding"
 ├── LEAD/
@@ -194,6 +220,11 @@ examples/nimbus-docs/
 └── PROD/
     └── Onboarding.md          → space PROD, title "Onboarding"
 ```
+
+`HOME` is `knowledge.root_space`'s default. It holds what is true of the
+whole company, which is what makes it worth a container of its own: the
+alternative is the same four paragraphs in every team's `Onboarding`, where
+three of the four copies go stale and nobody can tell which.
 
 ```markdown
 # Onboarding

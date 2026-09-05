@@ -42,6 +42,7 @@ type rowApplier struct {
 
 	mu      sync.Mutex
 	applies int
+	commits int
 	fail    error
 }
 
@@ -87,6 +88,20 @@ func (a *rowApplier) Order(string) int { return 0 }
 func (a *rowApplier) Reset(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `DELETE FROM projection_probe`)
 	return err
+}
+
+// Committed counts the post-commit hook, so the "a failed batch fires no side
+// effect" case can assert on it.
+func (a *rowApplier) Committed(context.Context) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.commits++
+}
+
+func (a *rowApplier) committed() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.commits
 }
 
 func (a *rowApplier) breakWith(err error) {
@@ -507,4 +522,39 @@ func waitFor(t *testing.T, want func() bool, why string) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatal(why)
+}
+
+// THE POST-COMMIT HOOK FIRES ONLY FOR A BATCH THAT LANDED.
+//
+// It is what tells the tool-skill registry to re-read its container, and the
+// registry's replace is WHOLESALE — so a hook fired for rows that rolled back
+// would have it re-read a page that was never applied, and on a rebuild that
+// is the difference between the company's skills and none of them.
+func TestTheCommitHookFiresOnlyForABatchThatLanded(t *testing.T) {
+	t.Parallel()
+	docs := memory.NewFleet()
+	db := openStore(t)
+	applier := newRowApplier(t, db, projection.FamilyWork)
+	p := newProjector(t, docs, db, applier)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() { _ = p.Run(ctx) }()
+	waitFor(t, p.Hydrated, "the projector never hydrated")
+
+	put(t, docs, projection.FamilyWork, "i.one", `{"n":1}`)
+	waitFor(t, func() bool { return applier.committed() > 0 },
+		"a committed batch fired no post-commit hook")
+	landed := applier.committed()
+
+	// A batch that FAILS must fire nothing. The projector re-enters
+	// through its reconcile after a failure, so the count is allowed to
+	// grow again once the applier is healthy — what must not happen is a
+	// hook for the batch that broke.
+	applier.breakWith(errors.New("apply refused"))
+	put(t, docs, projection.FamilyWork, "i.two", `{"n":2}`)
+	time.Sleep(200 * time.Millisecond)
+	if got := applier.committed(); got > landed {
+		t.Errorf("a failed batch fired %d post-commit hooks", got-landed)
+	}
 }

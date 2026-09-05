@@ -1,6 +1,8 @@
 package pages_test
 
 import (
+	"sync"
+
 	"context"
 	"path/filepath"
 	"strings"
@@ -34,7 +36,7 @@ func projected(t *testing.T) (*pages.Store, *store.DB, *projection.Projector) {
 		t.Fatal(err)
 	}
 	p, err := projection.New(projection.Options{
-		Documents: docs, DB: db, Applier: pages.NewApplier(skillWhen("<!--skill-->")),
+		Documents: docs, DB: db, Applier: pages.NewApplier(skillWhen("<!--skill-->"), nil),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -249,7 +251,7 @@ func TestABootReconcileNeverDropsAPagesHistory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	p, err := projection.New(projection.Options{
-		Documents: docs, DB: db, Applier: pages.NewApplier(nil),
+		Documents: docs, DB: db, Applier: pages.NewApplier(nil, nil),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -370,4 +372,89 @@ func TestAParentCycleDoesNotHangARead(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("reading a page in a parent cycle hung")
 	}
+}
+
+// A TOOL SKILL REACHES THE REGISTRY, AND LEAVES IT.
+//
+// A skill page is machinery: the change feed deliberately drops its changes
+// rather than waking a team about a procedure written for one phase of one
+// turn, so there is no delivery to hang a resync off. The APPLY is the other
+// thing that sees every page change, and it is what tells the registry to
+// re-read.
+//
+// BOTH DIRECTIONS matter and only one is obvious. A page that becomes a skill
+// has to arrive; a page that STOPS being one — edited into prose, or removed
+// — has to leave, and a registry that only heard about arrivals would serve
+// an evicted skill's last-good body for ever.
+func TestASkillPageMovingTellsTheRegistry(t *testing.T) {
+	t.Parallel()
+	docs := memory.NewFleet()
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "skills.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	s, err := pages.NewStore(pages.Options{Documents: docs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var told int
+	notified := func() {
+		mu.Lock()
+		told++
+		mu.Unlock()
+	}
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return told
+	}
+
+	p, err := projection.New(projection.Options{
+		Documents: docs, DB: db,
+		Applier: pages.NewApplier(skillWhen("<!--skill-->"), notified),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() { _ = p.Run(ctx) }()
+	settle(t, func() bool { return p.Hydrated() }, "the projector never hydrated")
+
+	// AN ORDINARY PAGE TELLS NOBODY. A hook that fired on every page
+	// would have the registry re-read its container on every wiki edit,
+	// which on a busy company is a walk per keystroke somebody saves.
+	before := count()
+	write(t, s, agent("eng"), pages.NewPage{
+		Container: "ENG", Title: "a runbook", Body: "ordinary prose",
+	})
+	settle(t, func() bool {
+		return rowCount(t, db, `SELECT COUNT(*) FROM pages`) == 1
+	}, "the ordinary page never projected")
+	if got := count(); got != before {
+		t.Errorf("an ordinary page told the registry %d times", got-before)
+	}
+
+	// ARRIVAL.
+	skill := write(t, s, agent("eng"), pages.NewPage{
+		Container: "TS", Title: "using the tracker", Body: "<!--skill--> how to",
+	})
+	settle(t, func() bool { return count() > before }, "a new skill page told the registry nothing")
+	arrived := count()
+
+	// DEPARTURE: edited into ordinary prose. The row's PREVIOUS skill
+	// flag is the only record that it was one, and it is gone the moment
+	// the batch commits — so the applier has to ask inside its own
+	// transaction.
+	if _, err := s.SavePage(t.Context(), agent("eng"), skill.Page.ID, pages.Save{
+		BaseVersion: skill.Page.Version, Body: ptr("just prose now"),
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	settle(t, func() bool { return count() > arrived },
+		"a page that stopped being a skill told the registry nothing, so an "+
+			"evicted skill would keep serving its last-good body")
 }

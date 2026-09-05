@@ -815,6 +815,20 @@ colleague's answer comes back by waking a seat, and there is nobody here for
 it to reach) and `run_sandbox` (a detached run resumes a suspended phase that
 does not exist).
 
+### Seeding a knowledge base with it
+
+On the native backend this endpoint is also how a directory of version-
+controlled markdown gets published — there is no import CLI for it and there
+does not need to be one:
+
+> Publish everything under `examples/nimbus-docs/` — one container per
+> directory, the page title from each file's first `# H1`.
+
+The assistant calls `write_page` per file. That handles what a flag-driven CLI
+handles badly: the parent chain, a title that already exists (`save_page` with
+the version it read), and a file that turns out to be a tool skill rather than
+prose. The reserved containers are refused to it exactly as they are to a seat.
+
 ### Who a write is attributed to
 
 The **token's own name** — the key in `api.auth.tokens` — with author kind

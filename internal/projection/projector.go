@@ -50,6 +50,26 @@ type Applier interface {
 	// Reset drops every row this applier owns, for a rebuild.
 	Reset(ctx context.Context, tx *sql.Tx) error
 
+	// Committed runs after a batch's transaction has COMMITTED, for the
+	// side effects an apply cannot take inside one.
+	//
+	// The projector is the only thing that knows a batch landed, and some
+	// consequences of a change are not rows: the tool-skill registry has
+	// to re-read its container when a skill page moves, and nothing else
+	// sees that happen — the change feed deliberately drops those changes
+	// rather than waking a team about a procedure written for one phase of
+	// one turn.
+	//
+	// AFTER THE COMMIT, never inside it, for two reasons that both bite: a
+	// callback running mid-transaction reads rows the batch has not
+	// committed, and a slow one holds the projection's write lock while
+	// every other change queues behind it.
+	//
+	// It is called on EVERY committed batch, not only interesting ones —
+	// deciding what is interesting is the applier's own business, and a
+	// projector that tried would need the applier's grammar.
+	Committed(ctx context.Context)
+
 	// Order ranks a key for a batch, lower first.
 	//
 	// # Why the projector cannot decide this itself

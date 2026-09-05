@@ -24,6 +24,14 @@ type Applier struct{}
 // NewApplier builds the work family's applier.
 func NewApplier() *Applier { return &Applier{} }
 
+// Committed implements [projection.Applier]: nothing.
+//
+// The tracker's consequences are all ROWS. What the pages applier uses the
+// hook for — re-reading the tool-skill registry when a skill page moves — has
+// no counterpart here: every reader of an item reads the projection, and the
+// wakes are the change feed's business rather than the projection's.
+func (a *Applier) Committed(context.Context) {}
+
 // Family is the family this applier serves.
 func (a *Applier) Family() projection.Family { return coord.FamilyWork }
 
