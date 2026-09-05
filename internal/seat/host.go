@@ -133,6 +133,30 @@ type Config struct {
 	// Hooks is what the engine does with a seat. Nil is legal.
 	Hooks Hooks
 
+	// Ready reports whether this node may take on NEW seats right now.
+	// Nil always admits, which is the deployment with nothing to wait for.
+	//
+	// # Why this is not the Seats list, and not the acquire hook
+	//
+	// Returning an empty seat list would DECOMMISSION every seat this node
+	// already holds — the sweep converges in both directions, so "no
+	// seats" reads as "the company deleted them all". Refusing in the
+	// acquire hook would take the lease first and hand it straight back,
+	// spending a claim, a release and a per-seat backoff on a condition
+	// that is about the NODE rather than the seat.
+	//
+	// So it gates only the claim half. A node that is not ready keeps
+	// everything it holds, keeps renewing, keeps SHEDDING to capacity —
+	// an over-subscribed node must still give seats back while it waits —
+	// and simply takes nothing new. That is what makes it safe to flip
+	// false at any time rather than only at boot: this node's own copy of
+	// the company's records going stale is a reason to stop taking work,
+	// never a reason to drop the work already in hand.
+	//
+	// It runs on the sweep path and must not block: read a flag, do not
+	// query a store.
+	Ready func() bool
+
 	TTL               time.Duration
 	HeartbeatInterval time.Duration
 	SweepInterval     time.Duration
@@ -159,6 +183,7 @@ type Host struct {
 	owner    string
 	nodeID   string
 	seats    func() []placement.Seat
+	ready    func() bool
 	profile  placement.NodeProfile
 	status   func(context.Context) coord.NodeStatus
 	hooks    Hooks
@@ -237,6 +262,7 @@ func New(cfg Config) (*Host, error) {
 		owner:        cfg.Owner,
 		nodeID:       cfg.NodeID,
 		seats:        cfg.Seats,
+		ready:        cfg.Ready,
 		profile:      profile,
 		status:       cfg.Status,
 		hooks:        cfg.Hooks,

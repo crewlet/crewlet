@@ -7,7 +7,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/maintenance"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/work"
 )
 
 // THE assertion whose absence was the bug. Every one of these tables ships a
@@ -56,7 +58,20 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// naming it was the only place that showed.
 		"counterparty_profiles",
 		"events",
+		// The NATIVE backends' own records, and the only entries here
+		// that sweep something the FLEET shares rather than this node's
+		// store. They earn a place for the reason every other one does:
+		// a change key is written on every edit and a title claim
+		// outlives the crash that left it, and the coordination store's
+		// usual answer — a bucket's own age — cannot express either,
+		// because items, comments, changes and claims live in one
+		// family and only some of them age out.
+		"page_changes",
+		"page_orphans",
+		"page_revisions",
 		"scheduled_runs",
+		"work_changes",
+		"work_orphans",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("swept tables:\n got %v\nwant %v", got, want)
@@ -80,6 +95,14 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
 		"chat_thread_follows":   maintenance.FollowRetention,
 		"counterparty_profiles": maintenance.CounterpartyRetention,
+		// The native backends' change horizons. Obviously past the tick
+		// today; here so that a later reader shortening one — the
+		// tempting edit, since these are the largest key sets a company
+		// holds — has to reckon with the same rule as every other.
+		"work_changes": work.ChangeRetention,
+		"page_changes": pages.ChangeRetention,
+		"work_orphans": work.OrphanGrace,
+		"page_orphans": pages.ClaimGrace,
 	} {
 		if horizon <= maintenance.Interval {
 			t.Errorf("%s retention (%v) is not longer than the %v tick",

@@ -72,6 +72,41 @@ type WorkDeps struct {
 	// its unit's. Empty makes the project argument required, which is the
 	// honest state for a seat whose unit owns none.
 	DefaultProject func(handle string) string
+
+	// Await blocks until this node's projection has applied a revision.
+	//
+	// THE READ-YOUR-WRITES SEAM, and it is what makes a tool loop
+	// coherent: a write goes to the fleet's coordination record while
+	// every read goes to this node's projection, so a turn that files an
+	// item and then lists its project would not see what it just filed —
+	// and a model that cannot see its own write files it again. It is
+	// applied after every write here for that reason, never before a
+	// read.
+	//
+	// Nil skips the wait, which is right for a caller that has
+	// established the ordering some other way. A failure is LOGGED AND
+	// IGNORED rather than failing the tool: the write landed, and telling
+	// a model its create failed when the item exists is the one answer
+	// that produces a duplicate.
+	Await func(ctx context.Context, revision uint64) error
+}
+
+// settle waits for a write to reach this node's projection.
+//
+// Best effort by design — see [WorkDeps.Await]. The wait is bounded by the
+// projector's own budget, so a wedged projection costs a tool call a couple
+// of seconds rather than the turn.
+func (d WorkDeps) settle(ctx context.Context, revision uint64) {
+	if d.Await == nil || revision == 0 {
+		return
+	}
+	if err := d.Await(ctx, revision); err != nil {
+		log.WarnContext(ctx, "work_write_not_projected_yet",
+			"revision", revision, "error", err.Error(),
+			"detail", "the write landed on the fleet's record; this node's own "+
+				"copy has not caught up, so a list in this same turn may not "+
+				"show it yet")
+	}
 }
 
 // MentionResolver turns the handles a comment's text names into seats.
@@ -365,6 +400,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if err != nil {
 		return failed(writeFailure(CreateWorkItemTool, err)), nil
 	}
+	t.deps.settle(ctx, got.Revision)
 	return jsonResult(map[string]any{
 		"key": got.Item.Key, "id": got.Item.ID, "status": got.Item.Status,
 		"assignee": got.Item.Assignee, "revision": got.Revision,
@@ -465,6 +501,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if err != nil {
 		return failed(writeFailure(UpdateWorkItemTool, err)), nil
 	}
+	t.deps.settle(ctx, got.Revision)
 	return jsonResult(map[string]any{
 		"key": got.Item.Key, "status": got.Item.Status,
 		"assignee": got.Item.Assignee, "revision": got.Revision,
@@ -606,6 +643,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return failed(writeFailure(CommentOnWorkTool, err)), nil
 	}
+	t.deps.settle(ctx, written.Revision)
 	return jsonResult(map[string]any{
 		"comment_id": comment.ID, "item": detail.Item.Key,
 		"mentioned": comment.Mentions, "revision": written.Revision,

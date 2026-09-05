@@ -8,7 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
+	"github.com/crewlet/crewlet/internal/work"
 )
 
 // maintenanceDutyName is the fleet singleton the retention sweep claims.
@@ -57,6 +59,27 @@ func (e *Engine) startMaintenance(ctx context.Context) {
 		// closed one are decisions, so they are taken under the same
 		// singleton duty as every other sweep rather than by a clock.
 		jobs = append(jobs, maintenance.ChannelJobs(a2a.NewCoordStore(fleet))...)
+		// The NATIVE backends' own records, on the same edge and for a
+		// related reason: their family holds several classes under one
+		// grammar, and only some of them age out — so no bucket age can
+		// express the retention and it is taken as a decision here.
+		//
+		// Contributed only where THIS node runs the backend, which is
+		// what makes it correct to sweep a fleet-wide record from a
+		// per-node job list: the duty is a singleton, so exactly one
+		// node's list runs per tick, and a node with no backend
+		// contributes nothing rather than an empty sweep.
+		if e.native != nil {
+			if e.native.work != nil {
+				jobs = append(jobs, maintenance.TrackerJobs(
+					work.NewSweeper(fleet, nil),
+					work.ChangeRetention, work.OrphanGrace)...)
+			}
+			if e.native.pages != nil {
+				jobs = append(jobs, maintenance.KnowledgeJobs(
+					pages.NewSweeper(fleet, nil), pages.ChangeRetention)...)
+			}
+		}
 	}
 
 	e.maintenance = maintenance.New(maintenance.Options{

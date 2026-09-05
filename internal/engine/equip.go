@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
@@ -77,6 +78,8 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if e.skills != nil {
 		deps.ToolSkills = e.skills
 	}
+	deps.Work = e.workDeps(c)
+	deps.Pages = e.pageDeps(c)
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err
 	}
@@ -238,10 +241,16 @@ func (e *Engine) tuneBatching(c *Company) {
 // that reads the company it used to be, silently, since a stale-credential
 // search returns an empty result exactly like a real one.
 func knowledgeSearch(e *Engine, c *Company) builtin.KnowledgeSearcher {
-	if c.Config.Integrations.Confluence == nil {
+	if c.Config.KnowledgeBackendFor() == config.KnowledgeNone {
 		// A NIL INTERFACE, not a live adapter over a nil searcher: the
 		// tool is omitted rather than registered-and-empty, so a seat is
 		// never offered a search its company cannot serve.
+		//
+		// THE BACKEND, not the presence of an `integrations.confluence`
+		// block: a company on the native knowledge base configures no
+		// vendor at all, and gating on the vendor block would have left
+		// every native company's seats without search_knowledge while
+		// the pages they were meant to find were sitting in the index.
 		return nil
 	}
 	return liveKnowledge{engine: e}

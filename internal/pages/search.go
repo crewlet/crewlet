@@ -38,29 +38,32 @@ import (
 type Searcher struct {
 	index *projection.Indexer
 
-	// excluded are the containers a search never returns: the tool-skills
-	// container, whose pages are machinery a seat told to read one would
-	// follow as an instruction.
-	excluded []string
+	// skills names the tool-skills container, whose pages a search never
+	// returns: they are machinery, and a seat told to read one would
+	// follow it as an instruction.
+	//
+	// READ PER CALL, never captured. `knowledge.skills_container` is Tier
+	// B, so an apply can move it — and a searcher holding the old key
+	// would keep hiding a container that is now ordinary knowledge while
+	// returning every page of the one that is now machinery, for as long
+	// as the process ran.
+	skills func() string
 }
 
 // SearcherOptions configure a searcher.
 type SearcherOptions struct {
 	Index *projection.Indexer
 
-	// SkillsContainer is the reserved tool-skills container, excluded from
-	// every result. Empty for a company that has turned tool skills off,
-	// where nothing is reserved and nothing is excluded.
-	SkillsContainer string
+	// SkillsContainer names the reserved tool-skills container, excluded
+	// from every result. A FUNCTION because the value is live config; nil,
+	// or one returning empty, excludes nothing — which is the company that
+	// has turned tool skills off.
+	SkillsContainer func() string
 }
 
 // NewSearcher builds the native knowledge searcher.
 func NewSearcher(opts SearcherOptions) *Searcher {
-	s := &Searcher{index: opts.Index}
-	if key := strings.ToUpper(strings.TrimSpace(opts.SkillsContainer)); key != "" {
-		s.excluded = append(s.excluded, key)
-	}
-	return s
+	return &Searcher{index: opts.Index, skills: opts.SkillsContainer}
 }
 
 var _ knowledge.Searcher = (*Searcher)(nil)
@@ -153,12 +156,11 @@ const searchOverfetch = 3
 
 // isExcluded reports a container a search never returns.
 func (s *Searcher) isExcluded(container string) bool {
-	for _, key := range s.excluded {
-		if strings.EqualFold(container, key) {
-			return true
-		}
+	if s.skills == nil {
+		return false
 	}
-	return false
+	key := strings.TrimSpace(s.skills())
+	return key != "" && strings.EqualFold(container, key)
 }
 
 // scopeOf is the org-wide read scope, or nil for unscoped.

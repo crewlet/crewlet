@@ -118,6 +118,41 @@ func matchesName(token, name string) bool {
 	return strings.TrimRight(token, ".-") == name
 }
 
+// Mentions are the names an `@` addresses in a body, lowercased,
+// deduplicated, in the order they appear.
+//
+// THE SPINE'S OWN GRAMMAR, exported for the backends whose names are the
+// engine's own — a seat handle, not a vendor username — so the native
+// tracker and knowledge base read a mention exactly as the chat surfaces
+// already do. A vendor whose usernames follow a different rule brings its
+// own (see [gitlab.Mentions], [github.Mentions]); a backend the engine
+// itself hosts must not, because a fourth spelling of "what is a mention"
+// would let one surface wake a seat that another does not.
+//
+// DELIBERATELY PERMISSIVE about what it returns — `@here`, `@all`, a handle
+// nobody has — because the caller intersects the result against the seats it
+// can route to. Filtering here would mean this function had to know the
+// company, and the intersection has to happen anyway.
+//
+// Trailing sentence punctuation is trimmed, so "thanks @agent-swe." names
+// the seat. A handle that genuinely ends in `.` or `-` cannot exist — see
+// [org.ValidHandle] — so nothing is lost by it.
+func Mentions(text string) []string {
+	var (
+		out  []string
+		seen = map[string]bool{}
+	)
+	for token := range mentionTokens(text) {
+		name := strings.TrimRight(token, ".-")
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
 // mentionTokens yields the lowercased name after each `@` that begins a
 // mention.
 //

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -15,17 +16,32 @@ const Source = "page"
 
 // Translator turns a change record into the delivery the parser reads.
 type Translator struct {
-	// skills is the container whose pages wake nobody. A tool skill is
+	// skills names the container whose pages wake nobody. A tool skill is
 	// machinery, and an edit to one must not notify a team about a
 	// procedure written for a phase of a turn.
-	skills string
+	//
+	// READ PER CHANGE, never captured, for the reason [Searcher] gives:
+	// `knowledge.skills_container` is Tier B, and a feed is per-NODE — it
+	// follows a coordination family and is deliberately not rebuilt by an
+	// apply, so a captured key would outlive every configuration that
+	// moved it.
+	skills func() string
 }
 
 // NewTranslator builds the knowledge base's feed translator.
 //
-// skills is the reserved tool-skills container, empty for a company that has
-// turned tool skills off.
-func NewTranslator(skills string) *Translator { return &Translator{skills: skills} }
+// skills names the reserved tool-skills container. Nil, or a function
+// returning empty, quiets nothing — which is the company that has turned
+// tool skills off.
+func NewTranslator(skills func() string) *Translator { return &Translator{skills: skills} }
+
+// skillsContainer is the reserved container this instant, or empty.
+func (t *Translator) skillsContainer() string {
+	if t.skills == nil {
+		return ""
+	}
+	return strings.TrimSpace(t.skills())
+}
 
 // Family is the family this translator serves.
 func (t *Translator) Family() coord.Family { return coord.FamilyPages }
@@ -52,7 +68,8 @@ func (t *Translator) Translate(ctx context.Context, change coord.Change) (change
 			"page", record.Snapshot.Title)
 		return changefeed.Delivery{}, false, nil
 	}
-	if t.skills != "" && record.Snapshot.Container == t.skills {
+	if skills := t.skillsContainer(); skills != "" &&
+		strings.EqualFold(record.Snapshot.Container, skills) {
 		// A TOOL SKILL. The sync worker picks it up on its own walk;
 		// waking a team about it would put a procedure written for one
 		// phase of one turn in front of somebody as knowledge.
