@@ -146,6 +146,17 @@ holds the KV buckets carrying the fleet's shared records — the token counter,
 the completion ledger, open agent-to-agent asks, claimed scheduled fires,
 detached (and billed) sandbox runs.
 
+**On the native backends it is the company's own record.** With
+`tracker.backend: native` or `knowledge.backend: native` — the defaults — every
+work item and every page lives in those same buckets. An unset `store_dir`
+then means the whole tracker and the whole wiki are gone on the next restart,
+and nothing reports a loss: the company simply appears to have no work. The
+engine logs `native_backend_on_an_ephemeral_stream` at error level on every
+boot that is in that state, and it is the one startup line worth grepping for.
+It is not refused, because a test and an ingress-only node legitimately run
+this way and nothing here can tell them from a deployment somebody forgot to
+finish.
+
 > **The clustered embedded broker has no authentication and no TLS. Run it on
 > a trusted network.**
 >

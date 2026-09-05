@@ -134,7 +134,9 @@ The team lead's executor system prompt includes a compact team roster (names + h
 
 ## External PM Tool as Source of Truth
 
-Task lifecycle lives in the PM tool (Jira, GitHub/GitLab issues), not in the engine, which keeps no task state at all — no assignee map, no dependency graph, no reconciliation poller. A mirror of somebody else's task state is a cache with no invalidation story; keeping nothing means there is nothing to be stale. See [Task Engine](../concepts/task-engine.md).
+On a VENDOR tracker, task lifecycle lives in the PM tool (Jira, GitHub/GitLab issues) and the engine keeps no task state at all — no assignee map, no dependency graph, no reconciliation poller. A mirror of somebody else's task state is a cache with no invalidation story; keeping nothing means there is nothing to be stale.
+
+On the NATIVE tracker — `tracker.backend: native`, the default — the engine holds the record itself, and the argument above does not apply to it: there is no other copy to disagree with, no webhook to miss, and nothing to reconcile because nothing is being reconciled. The two are opposite answers to one question rather than variations on a design, and each is coherent on its own terms. See [The Tracker](../concepts/task-engine.md).
 
 This avoids duplicating task state and keeps the audit trail in the tool the team already uses.
 

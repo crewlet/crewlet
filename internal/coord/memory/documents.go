@@ -3,12 +3,14 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // The document families in memory.
@@ -203,6 +205,9 @@ func (f *Fleet) CreateDocument(_ context.Context, family coord.Family, key strin
 	if key == "" {
 		return false, errors.New("coord/memory: a document create needs a key")
 	}
+	if err := checkSize(key, value); err != nil {
+		return false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	d := f.docs()
@@ -223,6 +228,9 @@ func (f *Fleet) CreateDocument(_ context.Context, family coord.Family, key strin
 
 // UpdateDocument writes at a version.
 func (f *Fleet) UpdateDocument(_ context.Context, family coord.Family, key string, value []byte, version uint64) (bool, error) {
+	if err := checkSize(key, value); err != nil {
+		return false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	d := f.docs()
@@ -458,4 +466,23 @@ func (w *memWatcher) Stop() error {
 func clone(r coord.Record) coord.Record {
 	r.Value = slices.Clone(r.Value)
 	return r
+}
+
+// checkSize enforces the transport ceiling the real backend has.
+//
+// THE TWIN HAS TO REFUSE WHAT THE BROKER REFUSES, which is the whole reason
+// both run one contract suite: a document a test accepts must be one
+// production accepts. Without it, the one failure that is NOT worth retrying
+// would be reachable only against a real broker — and the code path that
+// tells it from an outage would be exercised nowhere.
+//
+// The ceiling is the QUEUE's, not a second number: both estates ride the same
+// broker on the default topology, and a document limit that differed from the
+// event limit would be two numbers to keep equal for no reader's benefit.
+func checkSize(key string, value []byte) error {
+	if len(value) <= queue.MaxPayloadBytes {
+		return nil
+	}
+	return fmt.Errorf("%w: %s encodes to %d bytes, over the %d-byte ceiling",
+		coord.ErrDocumentTooLarge, key, len(value), queue.MaxPayloadBytes)
 }
