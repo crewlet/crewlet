@@ -62,6 +62,26 @@ type NodeStatus struct {
 	// StartedAt is when the ENGINE started, which on a split deployment is
 	// a different process on a different clock from the API's own start.
 	StartedAt time.Time
+
+	// Projections is how many of this node's document projections have
+	// caught up, out of how many it runs. Zero of zero is a node running
+	// no native backend, which is every company on the vendor ones.
+	//
+	// # Why it is here and not on /ready
+	//
+	// A node mid-hydration is HEALTHY. It serves its dashboard, answers
+	// its probes and runs the duties it holds; what it does not do is
+	// take on NEW seats, because a seat whose tools read an incomplete
+	// projection answers "there is no such item" — and a seat acts on
+	// that. So the fact belongs where an operator asking "why is the new
+	// node holding nothing" can see it, which is the fleet view, and NOT
+	// where it would take the node out of rotation.
+	//
+	// Two integers rather than a bool: "3 of 5" and "0 of 2" are the two
+	// readings an operator needs to tell apart, and a bool collapses
+	// them.
+	ProjectionsReady int
+	ProjectionsTotal int
 }
 
 // Meta renders the status for a lease's Meta map.
@@ -75,6 +95,13 @@ func (s NodeStatus) Meta() map[string]any {
 	}
 	if !s.StartedAt.IsZero() {
 		out["started_at"] = s.StartedAt.UTC().Format(time.RFC3339)
+	}
+	if s.ProjectionsTotal > 0 {
+		// OMITTED where the node runs none, so a peer on the vendor
+		// backends reads absent rather than "0 of 0" — which a reader
+		// would otherwise have to know is not a stalled projection.
+		out["projections_ready"] = s.ProjectionsReady
+		out["projections_total"] = s.ProjectionsTotal
 	}
 	return out
 }
@@ -94,8 +121,10 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 		return NodeStatus{}, false
 	}
 	status := NodeStatus{
-		InFlight: intFromMeta(raw["in_flight"]),
-		Posture:  stringFromMeta(raw["posture"]),
+		InFlight:         intFromMeta(raw["in_flight"]),
+		Posture:          stringFromMeta(raw["posture"]),
+		ProjectionsReady: intFromMeta(raw["projections_ready"]),
+		ProjectionsTotal: intFromMeta(raw["projections_total"]),
 	}
 	status.Draining, _ = raw["draining"].(bool)
 	if at, err := time.Parse(time.RFC3339, stringFromMeta(raw["started_at"])); err == nil {

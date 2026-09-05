@@ -166,6 +166,19 @@ type Engine struct {
 	// state — see learning.Reflector.
 	reflector *learning.Reflector
 
+	// native is this node's copy of the company's own tracker and
+	// knowledge base: the projectors, their index, and the read and write
+	// sides over them. Nil on a company running the vendor backends, which
+	// is the whole switch — see native.go.
+	//
+	// On the ENGINE rather than on an epoch, because a projector follows a
+	// coordination FAMILY and a family does not change when a company
+	// revision does. Rebuilding it on an apply would drop the projection
+	// and re-run a boot reconcile on every configuration change, which for
+	// a company that edits its org chart twice a day is a projection that
+	// is never hydrated.
+	native *native
+
 	// env is this node's ${VAR} resolver: the secret store in front of the
 	// process environment, refreshed on every apply. One per node rather
 	// than one per call site — see secrets.go for why that matters.
@@ -433,6 +446,19 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err := e.buildSandboxRuntime(company); err != nil {
 		return fail(fmt.Errorf("engine: sandbox: %w", err))
 	}
+	// BEFORE equip too, and for exactly the same reason: the ten native
+	// tracker and knowledge tools are registered only where their halves
+	// exist, so a node that equipped first would run a company on the
+	// native backends whose seats have no way to read or write them.
+	//
+	// It does NOT wait for hydration — the reconcile is O(keys), and a
+	// node that blocked here would serve no dashboard, answer no probe and
+	// run no duty until it finished. Seat acquisition is what waits; see
+	// [Engine.NativeHydrated].
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := e.startNative(ctx, company); err != nil {
+		return fail(err)
+	}
 	// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the epoch is
 	// current, and one that found an empty registry would run a seat with
 	// no tools at all — a company that boots cleanly and can do nothing.
@@ -471,8 +497,18 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// deleted role no longer has and never claim a new one. The
 		// host's own doc asks for exactly this and the binding did the
 		// opposite.
-		Seats:   func() []placement.Seat { return e.Company().Seats() },
-		Profile: e.profile,
+		Seats: func() []placement.Seat { return e.Company().Seats() },
+		// A seat whose mailbox attached before this node's projection had
+		// caught up would answer "there is no such item" to its own
+		// tools — and that is an answer a seat ACTS on: it files the
+		// duplicate, it tells a person their link is dead. So a node
+		// mid-hydration keeps every seat it holds and claims nothing new
+		// until its copy of the company's records is current.
+		//
+		// Trivially true on a company running the vendor backends, which
+		// have no projection to wait for.
+		SeatsAdmitted: e.NativeHydrated,
+		Profile:       e.profile,
 		// WHAT THIS NODE IS DOING, advertised to peers on every
 		// heartbeat. Only the node running a seat knows its in-flight
 		// count and its drain state, and /health answers about whichever
@@ -547,6 +583,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// The two background passes, after the node exists: both are fleet
 	// singletons claimed under its own incarnation.
 	e.startLearningBackground(ctx)
+	// BEFORE notifications, because a feed publishes onto the same inbound
+	// edge the service consumes: started after, the changes committed in
+	// the window between would reach the record and wake nobody.
+	e.startNativeFeeds(ctx)
 	if err := e.startNotifications(ctx, e.Company()); err != nil {
 		return fail(fmt.Errorf("engine: %w", err))
 	}
@@ -712,6 +752,11 @@ func (e *Engine) Stop(ctx context.Context) {
 	e.stopLearning()
 	e.stopScheduler()
 	e.stopCooldownRefresh()
+	// BEFORE backends.Close, for the same reason and with more at stake:
+	// the projectors and the indexer both write, and an apply landing
+	// after the close would fail its transaction mid-batch and leave the
+	// cursor ahead of the rows it claims to describe.
+	e.stopNative()
 	e.node.Stop(ctx)
 	// AFTER the seats are released, so a per-role child is normally
 	// already gone with its seat. This is the backstop for the ones that
@@ -959,6 +1004,16 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 	if n := e.node; n != nil {
 		if host := n.Host(); host != nil {
 			status.Draining = host.Draining()
+		}
+	}
+	// The native projections, so an operator asking why a fresh node holds
+	// no seats can see the answer in the fleet view rather than inferring
+	// it from an empty claim list. See [coord.NodeStatus.ProjectionsReady]
+	// for why this is not a readiness signal.
+	for _, p := range e.NativeStatus() {
+		status.ProjectionsTotal++
+		if p.Hydrated {
+			status.ProjectionsReady++
 		}
 	}
 	if fn := e.posture.Load(); fn != nil {

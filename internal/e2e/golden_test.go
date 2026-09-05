@@ -298,8 +298,17 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	// the whole reason it is a phase rather than a hint inside the
 	// executor's prompt, where it could spend the turn's budget on reading
 	// and starve submit_work.
-	if len(got) > 0 && got[0] != "onboarding" {
-		t.Errorf("the first model call was %q, not the onboarding pass", got[0])
+	//
+	// THE FIRST PHASE, not the first model call. The turn-start prefetch
+	// reaches the same endpoint for its own auxiliary passes — the memory
+	// filter, the knowledge query, the episode summary — and it runs
+	// before any phase by design: the context a turn reasons over is
+	// FROZEN before the runner exists, so a self_iterate loop cannot move
+	// the system prompt underneath a turn. Those passes are labelled
+	// `aux:` for exactly this reason and are not what this invariant is
+	// about.
+	if first := firstPhase(got); first != "onboarding" {
+		t.Errorf("the first phase was %q, not the onboarding pass; calls = %v", first, got)
 	}
 
 	// --- what reached the socket -------------------------------------- //
@@ -733,4 +742,14 @@ func TestATurnsEventsJoinTheTriggersTrace(t *testing.T) {
 		t.Errorf("%d lines carried the trace id but none carried a span id",
 			len(lines))
 	}
+}
+
+// firstPhase is the first non-auxiliary call the model saw, or "" for none.
+func firstPhase(calls []string) string {
+	for _, call := range calls {
+		if !strings.HasPrefix(call, "aux:") {
+			return call
+		}
+	}
+	return ""
 }

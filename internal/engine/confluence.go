@@ -313,22 +313,29 @@ func (e *Engine) startConfluenceSkillSync(ctx context.Context, c *Company) {
 
 // Knowledge is the company's knowledge-base searcher, or nil.
 //
-// ONE BACKEND, and Confluence is it. The seam stays an interface anyway —
-// [knowledge.Searcher] is declared by its consumers, so a second backend is
-// a new implementation rather than a rewrite of everything that searches.
+// EXACTLY ONE per company, which is the seam's own rule and not a limitation
+// of this function: "what do we already know about this" must not depend on
+// which searcher was asked, so `knowledge.backend` picks one and config
+// refuses a company that configures two. The NATIVE one is answered first
+// because it is the default; a company on `backend: confluence` has no
+// native projector at all, so the branch is a nil check rather than a
+// preference.
 //
 // Nil means no backend is wired, and every consumer treats that as "search
 // nothing" rather than as an error — a turn must not die because a company
 // has no wiki.
 func (e *Engine) Knowledge() knowledge.Searcher {
+	// A NIL INTERFACE, never a typed nil wrapping a nil pointer: the
+	// consumers check `searcher == nil`, and a typed nil passes that check
+	// and then answers as though a search had run and found nothing —
+	// indistinguishable from a real empty result, and it hides the fact
+	// that nothing is configured.
+	if native := e.NativeSearcher(); native != nil {
+		return native
+	}
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
 	if e.notify.confluence.searcher == nil {
-		// A NIL INTERFACE, not a typed nil wrapping a nil pointer: the
-		// consumers check `searcher == nil`, and a typed nil passes that
-		// check and then answers as though a search had run and found
-		// nothing — which is indistinguishable from a real empty result
-		// and hides the fact that nothing is configured.
 		return nil
 	}
 	return e.notify.confluence.searcher

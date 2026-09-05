@@ -412,14 +412,44 @@ knowledge:
 // nil: consumers check `searcher == nil`, and a typed nil passes that check
 // and then answers as though a search had run and found nothing — which
 // hides the fact that nothing is configured.
+//
+// It takes SAYING SO now. A company that declares nothing runs the native
+// knowledge base, so `backend: none` is the gesture that means none — and
+// this test is the one place that distinguishes "off" from "not mentioned".
 func TestNoKnowledgeBackendIsANilInterface(t *testing.T) {
 	t.Parallel()
-	e := newEngine(t, engine.Options{})
+	doc := companyDoc + `
+knowledge:
+  backend: none
+`
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	if got := e.Knowledge(); got != nil {
 		t.Fatalf("a company with no knowledge base got %T", got)
+	}
+}
+
+// A COMPANY THAT DECLARES NOTHING RUNS THE NATIVE KNOWLEDGE BASE, and its
+// searcher is this node's own index rather than a vendor's.
+//
+// The default is what almost every company will run, so it is the case worth
+// pinning: an engine whose Knowledge() answered nil here would give every
+// seat an empty knowledge block and no search tool, on a company whose pages
+// are sitting in its own store.
+func TestTheDefaultKnowledgeBackendIsTheNativeOne(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	searcher := e.Knowledge()
+	if searcher == nil {
+		t.Fatal("a company that declares no backend got no searcher")
+	}
+	if got := searcher.Backend(); got != "native" {
+		t.Errorf("the default searcher answers for %q, want the native one", got)
 	}
 }
 

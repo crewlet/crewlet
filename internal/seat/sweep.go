@@ -100,7 +100,12 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 
 	var claimed []string
 	var blocked int
-	if !draining {
+	// AFTER the shed above, deliberately: a node that is not ready must
+	// still give back seats it holds beyond its share, or a fleet whose
+	// newest member is mid-hydration cannot rebalance onto it and its
+	// oldest member stays over-subscribed for as long as that takes.
+	withheld := !draining && !h.admits()
+	if !draining && !withheld {
 		h.mu.Lock()
 		// Undead seats count against capacity: this process may still be
 		// serving them, so taking on more work would over-subscribe a node
@@ -113,6 +118,17 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 		if room > 0 {
 			claimed, blocked = h.claimUpTo(ctx, plan.Eligible, room)
 		}
+	}
+
+	if withheld {
+		// EVERY PASS, at debug: this is a state a node sits in for
+		// minutes on a large company, and an operator asking why a fresh
+		// node is holding nothing needs one line that says so rather
+		// than a healthy-looking sweep with an empty claim list.
+		log.DebugContext(ctx, "seat_claims_withheld", "node", h.nodeID,
+			"held", len(h.held), "capacity", plan.Capacity,
+			"hint", "this node is not ready to run new seats yet; it keeps what "+
+				"it holds and claims nothing until it is")
 	}
 
 	if len(plan.Unplaceable) > 0 {
@@ -132,6 +148,7 @@ func (h *Host) Sweep(ctx context.Context) SweepResult {
 		Lost:              released,
 		Unplaceable:       plan.Unplaceable,
 		BlockedByProtocol: blocked,
+		Withheld:          withheld,
 	}
 	// A copy, never &result: a heartbeat appends to the stored record, and
 	// the value returned here would otherwise be the same object.
@@ -631,4 +648,28 @@ func (h *Host) giveUpLease(ctx context.Context, lease coord.Lease) {
 	if _, err := h.backend.Release(ctx, lease.Resource, h.owner, lease.Epoch); err != nil {
 		log.WarnContext(ctx, "node_presence_release_unavailable", "node", h.nodeID, "error", err)
 	}
+}
+
+// admits reports whether this node may claim new seats.
+//
+// A nil gate admits, and a PANICKING one admits too: the gate is a
+// convenience for the caller, and a node that stopped claiming for ever
+// because a status function paniced once would be a worse failure than the
+// one the gate was added to prevent. The panic is logged where it can be
+// found.
+func (h *Host) admits() (ok bool) {
+	if h.ready == nil {
+		return true
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("seat_ready_check_failed", "node", h.nodeID, "panic", r,
+				"stack", string(debug.Stack()),
+				"hint", "the readiness gate panicked, so this pass claimed as though "+
+					"the node were ready; a gate that cannot answer must not stop a "+
+					"fleet placing seats for ever")
+			ok = true
+		}
+	}()
+	return h.ready()
 }

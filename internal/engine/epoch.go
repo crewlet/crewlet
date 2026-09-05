@@ -150,6 +150,11 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	e.reconcileJira(ctx, next)
 	e.reconcileGitLab(ctx, next)
 	e.reconcileGitHub(ctx, next)
+	// The NATIVE backends' parsers are on the same edge and rebuilt for
+	// the same reason. Their projectors, index, stores and feeds are NOT:
+	// those follow a coordination family, which a company revision does
+	// not change — see [Engine.reconcileNative].
+	e.reconcileNative(ctx, next)
 	applied = append(applied, "integrations")
 
 	previous := e.Company()
