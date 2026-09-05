@@ -46,6 +46,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"secrets", secretCases},
 		{"integrations", integrationCases},
 		{"documents", documentCases},
+		{"oversize", oversizeCases},
 		{"feed", feedCases},
 	}
 	for _, g := range groups {

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 )
@@ -178,6 +179,12 @@ func (p *Parser) directed(base notify.Inbound, targets []target, actor string, r
 		out = append(out, notify.Routed{
 			Inbound: withVia(base, t.via),
 			To:      notify.Recipient{Handle: t.handle},
+			// DERIVED, so a redelivery is recognisable as one. The
+			// feed's claim is the first dedupe layer and it FAILS
+			// OPEN — a coordination store that cannot be reached
+			// must not stop notifications — so this is what catches
+			// what slips through. See [changefeed.WakeID].
+			WakeID: changefeed.WakeID(base.Metadata[MetaChangeID], t.handle),
 		})
 	}
 	if dropped > 0 {
@@ -215,6 +222,7 @@ func (p *Parser) leadCopy(base notify.Inbound, project, actor string, reg *notif
 	return []notify.Routed{{
 		Inbound: withVia(base, ViaLeadFallback),
 		To:      notify.Recipient{Handle: lead},
+		WakeID:  changefeed.WakeID(base.Metadata[MetaChangeID], lead),
 	}}
 }
 

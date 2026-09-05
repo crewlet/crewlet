@@ -2,6 +2,7 @@ package coord
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -412,6 +413,24 @@ type Feeder interface {
 	// where the fleet left it.
 	FeedDocuments(ctx context.Context, family Family, class, group string) (Feed, error)
 }
+
+// ErrDocumentTooLarge is a write the transport will not carry.
+//
+// # Why it is an error from the transport rather than a check at the edge
+//
+// The same reason [queue.ErrTooLarge] is. A document is JSON on the wire and
+// `encoding/json` escapes `<`, `>` and `&` to six bytes each, so one body
+// re-encodes at 1x and another of the same length at 6x — any up-front ratio
+// is wrong for one of them. The content caps in [work] and [pages] bound what
+// a person can write; this bounds what the broker will take, and the two
+// cannot be the same number.
+//
+// It is DISTINCT FROM UNAVAILABLE, which is the whole point: a broker that is
+// down is worth retrying and an oversized document never will be. Without the
+// distinction, a page a hundred kilobytes too big for the operator's broker
+// looks exactly like an outage — and the retry loop that produces is the
+// failure [queue.MaxPayloadBytes] was written down to end.
+var ErrDocumentTooLarge = errors.New("coord: document too large for the transport")
 
 // ErrUnknownFamily names a family this build does not serve.
 func ErrUnknownFamily(f Family) error {

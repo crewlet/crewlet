@@ -157,6 +157,7 @@ type Sources struct {
 	// standalone API's silence into a claim that every surface is
 	// unchecked.
 	Reconciles func(ctx context.Context) []integration.State
+
 	// Work and Pages are this node's projections of the company's own
 	// tracker and knowledge base. Nil leaves their questions unregistered,
 	// which is the honest answer for a company on Jira and Confluence:
