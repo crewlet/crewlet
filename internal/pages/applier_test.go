@@ -300,7 +300,7 @@ func TestTheNativeSearcherFulfilsTheKnowledgeSeam(t *testing.T) {
 
 	indexer := projection.NewIndexer(db)
 	searcher := pages.NewSearcher(pages.SearcherOptions{
-		Index: indexer, SkillsContainer: "TS",
+		Index: indexer, SkillsContainer: func() string { return "TS" },
 	})
 
 	// BUILDING AND EMPTY ARE DIFFERENT ANSWERS. A seat on a freshly joined

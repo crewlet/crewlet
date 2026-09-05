@@ -65,6 +65,28 @@ type PageDeps struct {
 	// container, rather than silently landing somewhere excluded from
 	// every search.
 	Reserved []string
+
+	// Await blocks until this node's projection has applied a revision.
+	// See [WorkDeps.Await]: same seam, same reason, and it matters more
+	// here — a page's SavePage takes the version it read, so a turn that
+	// writes and then re-reads through a projection that has not caught
+	// up gets a stale version and its next save is refused.
+	Await func(ctx context.Context, revision uint64) error
+}
+
+// settle waits for a write to reach this node's projection. Best effort; see
+// [WorkDeps.settle].
+func (d PageDeps) settle(ctx context.Context, revision uint64) {
+	if d.Await == nil || revision == 0 {
+		return
+	}
+	if err := d.Await(ctx, revision); err != nil {
+		log.WarnContext(ctx, "page_write_not_projected_yet",
+			"revision", revision, "error", err.Error(),
+			"detail", "the write landed on the fleet's record; this node's own "+
+				"copy has not caught up, so a read in this same turn may show "+
+				"the previous version")
+	}
 }
 
 func pageActor(turn *turnctx.Turn) (pages.Actor, error) {
@@ -308,6 +330,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if err != nil {
 		return failed(pageWriteFailure(WritePageTool, err)), nil
 	}
+	t.deps.settle(ctx, got.Revision)
 	return jsonResult(map[string]any{
 		"id": got.Page.ID, "container": got.Page.Container,
 		"title": got.Page.Title, "version": got.Page.Version,
@@ -421,6 +444,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	if err != nil {
 		return failed(pageWriteFailure(SavePageTool, err)), nil
 	}
+	t.deps.settle(ctx, got.Revision)
 	return jsonResult(map[string]any{
 		"id": got.Page.ID, "title": got.Page.Title,
 		"version": got.Page.Version, "revision": got.Revision,
@@ -505,6 +529,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if err != nil {
 		return failed(pageWriteFailure(CommentOnPageTool, err)), nil
 	}
+	t.deps.settle(ctx, written.Revision)
 	return jsonResult(map[string]any{
 		"comment_id": comment.ID, "page": detail.Page.Title,
 		"mentioned": comment.Mentions, "revision": written.Revision,

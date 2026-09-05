@@ -199,6 +199,11 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// asking a third-party app again, not for asking this document again,
 	// and the answer just changed here. See [integration.Worker.MarkStale].
 	e.integrations.MarkStale()
+	// The NATIVE backends' parsers are on the same edge and rebuilt for
+	// the same reason. Their projectors, index, stores and feeds are NOT:
+	// those follow a coordination family, which a company revision does
+	// not change — see [Engine.reconcileNative].
+	e.reconcileNative(ctx, next)
 	applied = append(applied, "integrations")
 
 	previous := e.Company()

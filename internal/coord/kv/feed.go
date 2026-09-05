@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -76,7 +77,31 @@ func (f *FleetStore) FeedDocuments(ctx context.Context, family coord.Family, cla
 	if err != nil {
 		return nil, unavailable("open the "+string(family)+" feed", err)
 	}
-	return &kvFeed{consumer: consumer, family: family}, nil
+
+	// THE ITERATOR, NOT Fetch. Fetch blocks for its whole max-wait and
+	// takes no context, so a shutdown landing a millisecond into a pull
+	// waits the pull out — five seconds added to every node stop, on every
+	// feed, measured. Messages() has a Stop that ends a blocked Next at
+	// once, which is what makes the feed's lifetime the caller's context
+	// rather than a timer's.
+	iter, err := consumer.Messages(jetstream.PullMaxMessages(feedFetchBatch))
+	if err != nil {
+		return nil, unavailable("read the "+string(family)+" feed", err)
+	}
+	feed := &kvFeed{iter: iter, family: family, closed: make(chan struct{})}
+
+	// The context is turned into a Stop by a goroutine, because the
+	// iterator has no context of its own. It exits with the feed, so a
+	// long-lived process holds one goroutine per feed rather than one per
+	// read.
+	go func() {
+		select {
+		case <-ctx.Done():
+			feed.stop()
+		case <-feed.closed:
+		}
+	}()
+	return feed, nil
 }
 
 const (
@@ -93,15 +118,15 @@ const (
 	// unlimited default is how one malformed record stops a feed for ever.
 	feedMaxDeliver = 5
 
-	// feedFetchBatch is how many changes one pull asks for.
-	feedFetchBatch = 32
-
-	// feedFetchWait is how long a pull waits before returning empty.
+	// feedFetchBatch is how many changes the iterator keeps in flight.
 	//
-	// Five seconds: long enough that an idle company costs one request per
-	// node per five seconds, short enough that a shutdown is not held that
-	// much longer than it needs to be.
-	feedFetchWait = 5 * time.Second
+	// Thirty-two. The iterator pulls ahead, so this is a buffer rather
+	// than a request size: large enough that an idle-to-busy transition
+	// does not cost a round trip per change, small enough that a node
+	// going away naks a handful rather than a backlog. It is also bounded
+	// from above by [feedMaxAckPending], which is the FLEET's budget —
+	// this is one node's slice of it.
+	feedFetchBatch = 32
 )
 
 // suffixFor is a family's bucket suffix.
@@ -119,46 +144,41 @@ func suffixFor(family coord.Family) (string, error) {
 
 // kvFeed is one durable feed.
 type kvFeed struct {
-	consumer jetstream.Consumer
-	family   coord.Family
+	iter   jetstream.MessagesContext
+	family coord.Family
 
-	// pending holds what the last fetch returned but the caller has not
-	// taken yet. A fetch asks for a batch because one request per change
-	// is a round trip per change on an idle-to-busy transition.
-	pending []jetstream.Msg
-	stopped bool
+	// closed ends the context watcher, and once guards it so a Stop from
+	// the caller and one from a cancelled context are the same Stop. The
+	// iterator's own Stop is idempotent; the channel close is not.
+	closed chan struct{}
+	once   sync.Once
 }
 
 // Next returns the next change, blocking until one arrives.
+//
+// It answers (nil, nil) when the feed has ENDED — stopped by the caller or by
+// its context — which is how the consumer above tells a shutdown from a
+// failure. Every other error is the broker being unreachable, and is the
+// caller's to back off on.
 func (f *kvFeed) Next(ctx context.Context) (*coord.Delivery, error) {
 	for {
-		if f.stopped {
-			return nil, nil
-		}
-		if len(f.pending) > 0 {
-			msg := f.pending[0]
-			f.pending = f.pending[1:]
-			delivery, err := f.deliveryOf(msg)
-			if errors.Is(err, errSkip) {
-				// Handled here — acked and dropped. Take the next rather
-				// than handing the caller an error it has no rule for.
-				continue
-			}
-			return delivery, err
-		}
 		if err := ctx.Err(); err != nil {
 			return nil, nil
 		}
-		batch, err := f.consumer.Fetch(feedFetchBatch, jetstream.FetchMaxWait(feedFetchWait))
+		msg, err := f.iter.Next()
 		if err != nil {
-			return nil, unavailable("fetch from the "+string(f.family)+" feed", err)
-		}
-		for msg := range batch.Messages() {
-			f.pending = append(f.pending, msg)
-		}
-		if err := batch.Error(); err != nil {
+			if errors.Is(err, jetstream.ErrMsgIteratorClosed) {
+				return nil, nil
+			}
 			return nil, unavailable("read from the "+string(f.family)+" feed", err)
 		}
+		delivery, err := f.deliveryOf(msg)
+		if errors.Is(err, errSkip) {
+			// Handled here — acked and dropped. Take the next rather than
+			// handing the caller an error it has no rule for.
+			continue
+		}
+		return delivery, err
 	}
 }
 
@@ -230,15 +250,21 @@ func isPurgeMarker(msg jetstream.Msg) bool {
 // so a restart resumes rather than replays, and a node leaving must not reset
 // where its peers are reading from.
 func (f *kvFeed) Stop() error {
-	f.stopped = true
-	for _, msg := range f.pending {
-		// Un-taken messages are NAKED so a peer gets them at once rather
-		// than after the ack window: this node is going away and has done
-		// nothing with them.
-		_ = msg.Nak()
-	}
-	f.pending = nil
+	f.stop()
 	return nil
+}
+
+// stop ends the iterator once, however it was reached.
+//
+// DRAIN RATHER THAN Stop on the iterator: a drain naks what it has pulled
+// ahead and not yet handed over, so a peer gets those changes at once rather
+// than after the full ack window. This node is going away and has done
+// nothing with them.
+func (f *kvFeed) stop() {
+	f.once.Do(func() {
+		close(f.closed)
+		f.iter.Drain()
+	})
 }
 
 var _ coord.Feeder = (*FleetStore)(nil)

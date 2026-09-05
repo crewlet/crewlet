@@ -417,6 +417,12 @@ type SweepResult struct {
 	// mixed-version gate is indistinguishable from one whose peers simply
 	// hold every seat.
 	BlockedByProtocol int
+	// Withheld says this node declined to claim because it is not ready to
+	// run new seats — see [Config.Ready]. Distinct from every other reason
+	// a pass claims nothing, and the one that is otherwise invisible: a
+	// node at capacity, a node whose peers hold everything and a node
+	// waiting on its own projection all report an identical empty sweep.
+	Withheld bool
 }
 
 // Blocked reports whether the mixed-version gate is what stopped this pass

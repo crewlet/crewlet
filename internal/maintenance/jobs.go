@@ -260,3 +260,87 @@ func LedgerJobs(s ledgerstore.Conversations, conversationRetention time.Duration
 	}
 	return []Job{Purge("conversation_sessions", conversationRetention, s.Purge)}
 }
+
+// TrackerSweeper and KnowledgeSweeper are the slices of the native backends'
+// retention passes this worker calls. Declared here, by the consumer, like
+// every other seam in this tree.
+//
+// Two interfaces rather than one, although the tracker's is a subset: they
+// are two families with two horizons and two sets of classes, and a shared
+// name would say the two backends had one contract when only one of them
+// keeps a version history.
+type TrackerSweeper interface {
+	// SweepChanges purges change records older than cutoff.
+	SweepChanges(ctx context.Context, cutoff time.Time) (int, error)
+
+	// SweepOrphans purges records whose parent is gone and whose grace has
+	// passed.
+	SweepOrphans(ctx context.Context, at time.Time) (int, error)
+}
+
+// KnowledgeSweeper adds the version history the tracker does not keep.
+type KnowledgeSweeper interface {
+	TrackerSweeper
+
+	// SweepRevisions trims each page's history to its cap.
+	SweepRevisions(ctx context.Context) (int, error)
+}
+
+// TrackerJobs is the sweep for the native tracker's coordination records.
+//
+// THE ONE SWEEP HERE THAT DOES NOT TOUCH THIS NODE'S STORE. The projection
+// is derived and rebuildable, so nothing about it needs a retention: what
+// needs one is the RECORD the whole fleet shares, and the coordination
+// store's usual answer — a bucket's own age — cannot serve it, because items,
+// comments, changes and counters live in ONE family and only one class ages
+// out. So it is a decision, taken under the same singleton duty as every
+// other sweep. The projector then applies the purges like any other change,
+// and each node's tables follow with no second pass.
+//
+// Nil contributes nothing, which is what a company running Jira has.
+func TrackerJobs(s TrackerSweeper, changeRetention, orphanGrace time.Duration) []Job {
+	if s == nil {
+		return nil
+	}
+	return []Job{
+		PurgeN("work_changes", changeRetention, s.SweepChanges),
+		{
+			// NO HORIZON: the grace is compared against each record's own
+			// timestamp inside the sweep, because a comment orphaned by a
+			// removal and one written a second ago are told apart by the
+			// comment's age rather than by a cutoff this worker derives.
+			Name: "work_orphans",
+			Run: func(ctx context.Context, now, _ time.Time) (int64, error) {
+				n, err := s.SweepOrphans(ctx, now)
+				return int64(n), err
+			},
+		},
+	}
+}
+
+// KnowledgeJobs is the sweep for the native knowledge base's records.
+func KnowledgeJobs(s KnowledgeSweeper, changeRetention time.Duration) []Job {
+	if s == nil {
+		return nil
+	}
+	return []Job{
+		PurgeN("page_changes", changeRetention, s.SweepChanges),
+		{
+			// NO HORIZON, for the reason the tracker's orphan job has
+			// none, and one more: the cap this trims to is a COUNT rather
+			// than an age, so there is no cutoff that could express it.
+			Name: "page_revisions",
+			Run: func(ctx context.Context, _, _ time.Time) (int64, error) {
+				n, err := s.SweepRevisions(ctx)
+				return int64(n), err
+			},
+		},
+		{
+			Name: "page_orphans",
+			Run: func(ctx context.Context, now, _ time.Time) (int64, error) {
+				n, err := s.SweepOrphans(ctx, now)
+				return int64(n), err
+			},
+		},
+	}
+}

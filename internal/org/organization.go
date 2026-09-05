@@ -146,6 +146,30 @@ func (o *Organization) AgentSeatByHandle(handle string) *Role {
 	return nil
 }
 
+// SeatByHandle returns the seat with this handle, of EITHER kind, or nil.
+//
+// The counterpart to [Organization.AgentSeatByHandle], and the distinction is
+// the caller's purpose rather than a convenience. That one answers "who can I
+// publish an inbox event to", so it must never return a human seat — a human
+// has no inbox and the publish would be dropped. This one answers "is this
+// handle somebody in the company", which is what a MENTION asks: a person
+// named on a work item is notified through the contact transports their seat
+// declares, exactly like a person named in a chat message, and a resolver
+// that skipped them would silently drop every mention of a human colleague.
+//
+// Handles are unique across both kinds, so there is no ambiguity to resolve.
+func (o *Organization) SeatByHandle(handle string) *Role {
+	if handle == "" {
+		return nil
+	}
+	for r := range o.AllRoles() {
+		if r.Handle() == handle {
+			return r
+		}
+	}
+	return nil
+}
+
 // AgentSeatByID returns the agent seat whose derived id is id — the inverse
 // of AgentIDFor.
 //
