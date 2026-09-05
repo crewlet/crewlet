@@ -132,10 +132,27 @@ than hanging.** Accepting connections is not the same as being able to serve
 JetStream: a member answers its client port as soon as it is listening, while
 the metadata group takes seconds to elect a leader — measured at around eight
 on a quiet three-member cluster — and until it has one, creating a replicated
-stream *blocks* instead of failing. So a node waits for its own JetStream to
-become current, up to 60 seconds, and then retries placement for as long as
-the cluster answers "no suitable peers", inside a 30-second provisioning
-deadline per stream. Every other error is returned at once: a bad subject or
+stream *blocks* instead of failing.
+
+There are therefore two waits at boot, in order, and they fail for different
+reasons:
+
+| Wait | Budget | What is happening |
+|---|---|---|
+| **Accepting connections** | 30s solo, **2 min clustered** | The member recovers its file store and, in a cluster, stands up its route listener while its peers are booting too |
+| **JetStream current** | 60s | The metadata group elects a leader and this member catches up with it |
+
+Then placement retries for as long as the cluster answers "no suitable
+peers", inside a 30-second provisioning deadline per stream.
+
+The clustered accept budget is four times the solo one because a member
+starting alongside its peers is competing with them for the same disk and the
+same scheduler, and the asymmetry is stark: failing this wait fails the
+**whole boot**, so a budget that is too short turns a busy host into a node
+that refuses to start and then works on the retry — which during a rolling
+restart is how one slow member takes out the restart. Too long only means a
+genuinely broken server is reported later, and the wait is cancellable, so
+Ctrl-C returns immediately. Every other error is returned at once: a bad subject or
 a conflicting retention does not clear by waiting, and retrying would turn a
 config mistake into a half-minute hang with the same message at the end.
 

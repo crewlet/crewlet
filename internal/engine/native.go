@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/skills"
@@ -67,6 +68,12 @@ type native struct {
 	// searcher answers the knowledge seam natively.
 	searcher *pages.Searcher
 
+	// skillNudge asks the sync worker to re-read the tool-skill
+	// container. Buffered by ONE, because the slot means "re-read" rather
+	// than "re-read once per change": the read is wholesale, so a second
+	// pending nudge would buy a second identical walk.
+	skillNudge chan struct{}
+
 	// run is the context every goroutine this node started runs under, and
 	// stop is what ends it.
 	//
@@ -103,7 +110,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	e.warnIfEphemeral(ctx, boot, tracker, wiki)
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	n := &native{run: runCtx, stop: cancel}
+	n := &native{run: runCtx, stop: cancel, skillNudge: make(chan struct{}, 1)}
 
 	if tracker {
 		p, err := projection.New(projection.Options{
@@ -129,7 +136,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	if wiki {
 		p, err := projection.New(projection.Options{
 			Documents: e.backends.Fleet, DB: e.backends.Store,
-			Applier: pages.NewApplier(skillDetector{}),
+			// The registry re-reads its container when a skill page
+			// moves. Natively there is no page webhook to hang that
+			// off — the change feed deliberately drops those changes
+			// — so the APPLY is what notices; see
+			// [pages.NewApplier].
+			Applier: pages.NewApplier(skillDetector{}, e.nudgeSkills),
 		})
 		if err != nil {
 			cancel()
@@ -180,6 +192,8 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	}
 
 	e.native = n
+	// AFTER e.native is set, because the worker reads through it.
+	e.startNativeSkills()
 	log.InfoContext(ctx, "native_backends_started",
 		"tracker", tracker, "knowledge", wiki)
 	return nil
@@ -693,3 +707,112 @@ func EphemeralRisk(boot *config.Bootstrap, tracker, wiki bool) string {
 	}
 	return ""
 }
+
+// nudgeSkills asks the sync worker to re-read the tool-skill container.
+//
+// # Why a signal and not the work
+//
+// It is called from the projection's POST-COMMIT HOOK, which runs on the
+// projector's own loop — so doing the read here would hold every subsequent
+// change behind a page walk and a registry replace. And it must not spawn a
+// goroutine per call either: an untracked one outlives [Engine.stopNative],
+// which would leave it reading a store that is being closed.
+//
+// So it is a non-blocking send to the one tracked worker below. A send that
+// finds the channel full is DROPPED, and that is correct rather than
+// convenient: the buffered slot already means "re-read", the read is
+// wholesale, and one re-read after N changes is the same answer as N of them.
+func (e *Engine) nudgeSkills() {
+	if e.native == nil || e.native.skillNudge == nil {
+		return
+	}
+	select {
+	case e.native.skillNudge <- struct{}{}:
+	default:
+	}
+}
+
+// startNativeSkills runs the tool-skill sync for the life of this node.
+//
+// # It reads at boot as well as on change
+//
+// A node joining a company whose skills were published months ago sees no
+// change at all, so a registry fed only by changes would be empty on every
+// restart until somebody happened to edit a page.
+//
+// # And it waits for hydration first
+//
+// A walk over a half-projected container is a PARTIAL set, and
+// [Engine.SyncSkills] replaces wholesale — so reading early would silently
+// delete every skill the walk did not reach, and the next read is whenever
+// somebody next edits one.
+func (e *Engine) startNativeSkills() {
+	if e.native == nil || e.native.wiki == nil || e.native.pageReader == nil {
+		return
+	}
+	e.native.done.Add(1)
+	go func() {
+		defer e.native.done.Done()
+		ctx := e.native.run
+		if !e.awaitHydration(ctx) {
+			return
+		}
+		e.syncNativeSkills(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-e.native.skillNudge:
+				e.syncNativeSkills(ctx)
+			}
+		}
+	}()
+}
+
+// awaitHydration blocks until this node's projections have caught up,
+// reporting false if the node stopped first.
+func (e *Engine) awaitHydration(ctx context.Context) bool {
+	ticker := time.NewTicker(hydrationPoll)
+	defer ticker.Stop()
+	for !e.NativeHydrated() {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+	return true
+}
+
+// syncNativeSkills reads the tool-skill container into the registry.
+func (e *Engine) syncNativeSkills(ctx context.Context) {
+	c := e.Company()
+	if c == nil || e.native == nil || e.native.pageReader == nil {
+		return
+	}
+	reader := e.native.pageReader
+	e.syncSkillsFrom(ctx, c, func(ctx context.Context, container string) ([]skills.Page, error) {
+		found, err := reader.SkillPages(ctx, container)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]skills.Page, 0, len(found))
+		for _, page := range found {
+			out = append(out, skills.Page{
+				ID: page.ID, Title: page.Title,
+				Version: page.Version, Text: page.Body,
+			})
+		}
+		return out, nil
+	})
+}
+
+// hydrationPoll is how often the first skill read checks whether the
+// projection has caught up.
+//
+// A quarter-second. The wait is bounded by a boot reconcile, which is
+// hundreds of milliseconds on an ordinary company and minutes on a large one
+// — so the cost of polling is a handful of atomic reads either way, and a
+// condition variable here would be a second thing to keep correct for a wait
+// that happens once per process.
+const hydrationPoll = 250 * time.Millisecond
