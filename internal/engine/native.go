@@ -369,13 +369,13 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 	)
 	if e.native.work != nil {
 		parsers = append(parsers, work.NewParser(work.ParserOptions{
-			Leads: projectLeads(c.Org), BaseURL: e.publicBase,
+			Leads: projectLeads(c.Org), BaseURL: e.publicBase(c),
 		}))
 		prompts = append(prompts, work.Prompt{})
 	}
 	if e.native.pages != nil {
 		parsers = append(parsers, pages.NewParser(pages.ParserOptions{
-			Leads: containerLeads(c.Org), BaseURL: e.publicBase,
+			Leads: containerLeads(c.Org), BaseURL: e.publicBase(c),
 		}))
 		prompts = append(prompts, pages.Prompt{})
 	}

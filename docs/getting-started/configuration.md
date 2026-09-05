@@ -226,7 +226,12 @@ providers:
   llm:
     default:                            # named provider (referenced by roles via `llm: default`)
       type: openai                      # openai | anthropic | openai-compatible | cli-agent
-      model: gpt-4o
+      model: gpt-4o                     # required, and supports ${ENV_VAR}. A reference that
+                                        #   resolves to nothing is REFUSED naming the variable —
+                                        #   unlike a missing api_key, which still builds: every
+                                        #   call then comes back a clean 401 that names the
+                                        #   provider, where a missing model has no such tell and
+                                        #   the request is simply malformed
       api_keys:                         # one or more keys; multiple enables rate-limit rotation
         - "${LLM_API_KEY}"              # supports ${ENV_VAR} references
         # - "${LLM_API_KEY_BACKUP}"     # add more for rate-limit rotation
@@ -240,9 +245,17 @@ providers:
                                         #   a bench is SHARED across the fleet, so a peer's 429 benches the
                                         #   key here too — see concepts/coordination.md
       base_url: "${LLM_BASE_URL}"       # optional — custom endpoint; supports ${ENV_VAR} references.
-                                        #   Required for openai-compatible (it has no vendor default);
-                                        #   on `openai` / `anthropic` it points the vendor's own wire
-                                        #   format at a gateway or proxy instead of the vendor host
+                                        #   REQUIRED for openai-compatible and REFUSED when it is
+                                        #   empty — including when a ${VAR} resolved to nothing.
+                                        #   `openai-compatible` means "not OpenAI", and an empty
+                                        #   base_url would take the OpenAI backend's own default:
+                                        #   the company's whole model traffic sent to
+                                        #   api.openai.com under a key that is not an OpenAI key,
+                                        #   with a 401 naming a vendor nobody configured as the
+                                        #   only symptom.
+                                        #   On `openai` / `anthropic` it is genuinely optional and
+                                        #   points the vendor's own wire format at a gateway or
+                                        #   proxy instead of the vendor host
       timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
       reasoning: false                  # optional — enable reasoning/extended thinking (default: false)
