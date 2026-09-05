@@ -697,6 +697,6 @@ here.
 | The local database and its migrations | `internal/store` | [Database](overview.md#database) · [Backups & restore](../guides/backup.md) |
 | REST, the dashboard, the socket | `internal/api`, `static/dashboard` | [API endpoints](../reference/api-endpoints.md) · [Dashboard design](../reference/dashboard-design.md) |
 | Event rows, live projection, traces | `internal/observe`, `internal/tracing`, `internal/tokens` | [Deployment](../guides/deployment.md) |
-| Why there is no task state | — | [Task engine](task-engine.md) |
+| Which tracker a company runs, and why one of them keeps no state | — | [The tracker](task-engine.md) |
 | DACI, and why it needs no engine | — | [Decision framework](decision-framework.md) |
 | More than one node | `internal/seat/placement` | [Scaling out](scaling.md) · [Running a fleet](../guides/fleet.md) · [Satellite nodes](../guides/satellite-nodes.md) |

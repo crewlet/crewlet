@@ -2,6 +2,15 @@
 
 Crewlet integrates with Jira in two directions: agents control Jira via MCP tools, and Jira pushes events to agents via webhooks.
 
+> **Jira is one of two trackers, and it is not the default.** The engine ships
+> its own — `tracker.backend: native`, which is what a company that says
+> nothing gets — and it needs no site, no project and no per-seat account. Set
+> `tracker.backend: jira` (or declare this block, which derives it) to run
+> Jira instead. Take that path when your *people* already live in Jira or you
+> have a backlog there; the agents cannot tell the difference. There is
+> deliberately no migration between the two — see
+> [The Tracker](../concepts/task-engine.md).
+
 > **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. Webhooks differ by deployment: **Cloud** events arrive via the [Crewlet Forge app](https://github.com/crewlet/forge); **Data Center** uses direct webhook registration (see [Webhooks](#webhooks-jira-pushes-to-agents)).
 
 ---
@@ -182,4 +191,4 @@ flowchart TD
 
 There is no engine-side sync layer, no completion-comment automation, and no reconciliation poller: each MCP-tool action an agent takes fires the next webhook, which wakes the next participant — the same loop a human teammate drives. A webhook delivery that is lost is recovered the way it would be for a human: the issue's next activity (a comment, a transition, a nudge from a colleague) re-notifies the routed agents.
 
-See [Task Engine](../concepts/task-engine.md) for why the engine keeps no task state of its own.
+See [The Tracker](../concepts/task-engine.md) for why the engine keeps no state of its own on this backend — and for the one it ships, which is the default.

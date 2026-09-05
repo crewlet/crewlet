@@ -455,3 +455,49 @@ func TestThePostureGateReachesTriggerAdmission(t *testing.T) {
 		t.Error("a node that converged back never reopened trigger admission")
 	}
 }
+
+// AN IN-MEMORY STREAM CARRIES THE COMPANY'S OWN RECORD NOW, and that is a
+// different fact from the one `store_dir` has always documented.
+//
+// It has always meant "queued events do not survive a restart", which is
+// recoverable: a vendor retries, a schedule fires again. On the native
+// backends it means every item ever filed and every page ever written is gone
+// on the next boot — and nothing reports a loss, because from the engine's
+// side the company simply has no work. So the state is named out loud, and
+// this holds the rule rather than the wording.
+func TestAnEphemeralStreamIsNamedWhenItHoldsTheCompanysRecord(t *testing.T) {
+	t.Parallel()
+	ephemeral := bootstrap(t, func(b *config.Bootstrap) { b.Stream.StoreDir = "" })
+	durable := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	external := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.Type = config.StreamNATS
+		b.Stream.URL = "nats://nats.example.com:4222"
+		b.Stream.StoreDir = ""
+	})
+
+	for name, tc := range map[string]struct {
+		boot          *config.Bootstrap
+		tracker, wiki bool
+		want          string
+	}{
+		"both halves at risk": {ephemeral, true, true, "every work item and every page"},
+		"tracker only":        {ephemeral, true, false, "every work item"},
+		"wiki only":           {ephemeral, false, true, "every page"},
+		// A VENDOR COMPANY LOSES NOTHING HERE: its records are Jira's and
+		// Confluence's, and warning about them would train an operator to
+		// ignore the one line that matters.
+		"no native backend":  {ephemeral, false, false, ""},
+		"a store_dir is set": {durable, true, true, ""},
+		// An EXTERNAL cluster persists on its own terms, which this
+		// process has no way to know. Claiming a risk would be a guess.
+		"an external cluster": {external, true, true, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := engine.EphemeralRisk(tc.boot, tc.tracker, tc.wiki); got != tc.want {
+				t.Errorf("risk = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

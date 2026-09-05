@@ -59,10 +59,13 @@ How the engine works, one subsystem per page:
 
 ## Integrations
 
-Connecting the external surfaces agents work on:
+Connecting the external surfaces agents work on. The tracker and the knowledge
+base are the two that are **optional**: the engine ships its own and runs them
+by default, so Jira and Confluence are the path you take when your *people*
+already live there.
 
-- **[Jira](integrations/jira.md)** — Cloud or Data Center: webhook routing by mention / assignee / watcher / project lead, derived seat account ids, per-role MCP tools, and `crewlet jira provision`
-- **[Confluence](integrations/confluence.md)** — Cloud or Data Center as the knowledge base: live CQL search run as the asking seat, page-change routing, tool-skill pages, and `crewlet confluence import`
+- **[Jira](integrations/jira.md)** — An alternative to the engine's own tracker. Cloud or Data Center: webhook routing by mention / assignee / watcher / project lead, derived seat account ids, per-role MCP tools, and `crewlet jira provision`
+- **[Confluence](integrations/confluence.md)** — An alternative to the engine's own knowledge base, and the one that searches as the asking seat so Confluence's own page permissions are the boundary. Cloud or Data Center: live CQL search, page-change routing, tool-skill pages, and `crewlet confluence import`
 - **[GitLab](integrations/gitlab.md)** — gitlab.com or self-hosted: API-provisioned per-agent service accounts, `crewlet gitlab provision`, webhook routing, per-role MCP tools, sandbox code authoring
 - **[GitHub](integrations/github.md)** — github.com or Enterprise Server: webhook routing by review request / assignment / review verdict / mention, derived seat logins, participant fan-out, organization or per-repository hooks, and `crewlet github provision`
 - **[Slack](integrations/slack.md)** — One app per agent: `crewlet slack provision` builds and installs them from a manifest, per-seat webhook routing with thread follows, a text-carrying working indicator, and the Slack MCP tool server
@@ -80,7 +83,7 @@ Connecting the external surfaces agents work on:
 ## Reference
 
 - **[CLI](reference/cli.md)** — Command reference
-- **[API Endpoints](reference/api-endpoints.md)** — REST API routes and schemas
+- **[API Endpoints](reference/api-endpoints.md)** — REST API routes and schemas, the WebSocket protocol, the work board and page surface over the native backends, and `/operator/mcp` — the company's own tracker and knowledge base served to *your* AI assistant over MCP
 - **[Dashboard Design System](reference/dashboard-design.md)** — The dashboard's screens and its visual system: the one rule (colour carries state, never identity), a palette whose every contrast and separation claim is recomputed from the shipped stylesheet in both themes, what each screen answers that no other one does, the four rules that keep a running turn's transcript from moving under the reader, why the built bundle is committed, and the rules a change has to keep
 - **[Environment Variables](reference/environment-variables.md)** — All configuration env vars
 - **[Design Decisions](reference/design-decisions.md)** — Why certain architectural choices were made

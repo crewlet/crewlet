@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // documentCases certify the fleet's document store.
@@ -326,6 +327,61 @@ func drainToMarker(t *testing.T, w coord.Watcher) []coord.Change {
 			t.Fatalf("the watch produced no caught-up marker in %v", watchBudget)
 		}
 	}
+}
+
+// A DOCUMENT TOO BIG FOR THE TRANSPORT IS ITS OWN FAILURE, not an outage.
+//
+// The distinction is the whole point. A broker that is down is worth
+// retrying, and an oversized document never will be — so a caller that could
+// not tell them apart would retry a page a hundred kilobytes too big for ever,
+// which is the exact loop [queue.MaxPayloadBytes] was written down to end.
+//
+// Certified on BOTH backends because the twin has to refuse what the broker
+// refuses: a document a test accepts must be one production accepts, and
+// without this case the path that reports it would be exercised nowhere.
+var oversizeCases = []fleetCase{
+	{"a document over the transport ceiling is refused, not reported as unavailable", func(h *fleetHarness) {
+		key := coord.DocumentKey("p", "huge")
+		// Past the ceiling by a comfortable margin rather than by a byte:
+		// the two backends bound slightly different things — the twin
+		// counts the value it was handed, the client counts the whole
+		// published message — and a case sitting exactly on the boundary
+		// would be measuring which.
+		huge := make([]byte, queue.MaxPayloadBytes*2)
+		for i := range huge {
+			huge[i] = 'x'
+		}
+
+		_, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, key, huge)
+		if err == nil {
+			h.t.Fatal("an oversized create was accepted")
+		}
+		if !errors.Is(err, coord.ErrDocumentTooLarge) {
+			h.t.Errorf("an oversized create failed with %v, which a caller "+
+				"cannot tell from a broker being down", err)
+		}
+		// AND IT IS NOT UNAVAILABLE. A caller branching on that would
+		// retry, for ever, a write that can never succeed.
+		if errors.Is(err, coord.ErrUnavailable) {
+			h.t.Error("an oversized create reported the store as unavailable")
+		}
+
+		// The same on the update path, which is the one a page SAVE takes
+		// — a page grows past the ceiling by being edited, not by being
+		// created.
+		small := coord.DocumentKey("p", "small")
+		if _, err := h.f.CreateDocument(h.ctx, coord.FamilyPages, small, []byte(`{}`)); err != nil {
+			h.t.Fatalf("seed create: %v", err)
+		}
+		record, ok, err := h.f.Document(h.ctx, coord.FamilyPages, small)
+		if err != nil || !ok {
+			h.t.Fatalf("read back = %v, %v", ok, err)
+		}
+		_, err = h.f.UpdateDocument(h.ctx, coord.FamilyPages, small, huge, record.Version)
+		if !errors.Is(err, coord.ErrDocumentTooLarge) {
+			h.t.Errorf("an oversized update failed with %v", err)
+		}
+	}},
 }
 
 // next reads one change, failing the test if none arrives.

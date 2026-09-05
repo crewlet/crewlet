@@ -88,7 +88,7 @@ type native struct {
 // re-run on an apply. It returns without waiting for hydration: the reconcile
 // is O(keys) and a node that blocked here would not serve its dashboard,
 // answer a probe or run a duty until it finished.
-func (e *Engine) startNative(ctx context.Context, c *Company) error {
+func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Company) error {
 	if e.backends == nil || e.backends.Store == nil || e.backends.Fleet == nil {
 		// A process with no store or no coordination runs no native
 		// backend. That is the standalone API's shape, and it is not an
@@ -100,6 +100,7 @@ func (e *Engine) startNative(ctx context.Context, c *Company) error {
 	if !tracker && !wiki {
 		return nil
 	}
+	e.warnIfEphemeral(ctx, boot, tracker, wiki)
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	n := &native{run: runCtx, stop: cancel}
@@ -624,4 +625,71 @@ func (m seatMentions) Mentions(text string) []string {
 		}
 	}
 	return out
+}
+
+// warnIfEphemeral says out loud when the company's own records will not
+// survive a restart.
+//
+// # Why a warning and not a refusal
+//
+// `stream.store_dir` unset selects an in-memory embedded broker, which is
+// exactly what a test wants and what a stateless ingress-only node can use.
+// The engine cannot tell one of those from an operator who left the field out
+// of a deployment, so refusing here would break the two legitimate cases to
+// catch the mistake.
+//
+// # Why it is worth a line at all
+//
+// The STAKES changed under this field. It has always meant "queued events do
+// not survive a restart", which is recoverable — a vendor retries, a schedule
+// fires again. With a native backend it means the company's tracker and its
+// knowledge base are in that stream: every item ever filed, every page ever
+// written, gone on the next restart, with nothing anywhere reporting a loss
+// because from the engine's side the company simply has no work.
+//
+// So the line names what is at stake rather than restating the field, and it
+// is an ERROR level rather than a warning: this is data loss on a timer, and
+// the only thing standing between an operator and it is noticing.
+func (e *Engine) warnIfEphemeral(ctx context.Context, boot *config.Bootstrap, tracker, wiki bool) {
+	at := EphemeralRisk(boot, tracker, wiki)
+	if at == "" {
+		return
+	}
+	log.ErrorContext(ctx, "native_backend_on_an_ephemeral_stream",
+		"at_risk", at,
+		"detail", "stream.store_dir is unset, so this node's embedded broker "+
+			"keeps its streams in memory — and the company's own records live "+
+			"there. "+at+" this company writes is lost on the next restart, "+
+			"with nothing reporting a loss because the company will simply "+
+			"appear to have no work",
+		"fix", "set stream.store_dir in crewlet.yaml, or run tracker.backend "+
+			"and knowledge.backend against a vendor that keeps the record")
+}
+
+// EphemeralRisk names what an in-memory stream would lose, or "" for none.
+//
+// SPLIT FROM THE LOG LINE so the rule is testable as a value rather than by
+// capturing a logger — which is what the codebase does everywhere the
+// question "would this configuration lose data" has a yes/no answer somebody
+// might change by accident.
+func EphemeralRisk(boot *config.Bootstrap, tracker, wiki bool) string {
+	switch {
+	case boot == nil:
+		return ""
+	case boot.Stream.Type == config.StreamNATS:
+		// An EXTERNAL cluster persists on its own terms, and this process
+		// has no way to know them. Claiming a risk here would train an
+		// operator to ignore the line.
+		return ""
+	case boot.Stream.StoreDir != "":
+		// The operator answered the question.
+		return ""
+	case tracker && wiki:
+		return "every work item and every page"
+	case tracker:
+		return "every work item"
+	case wiki:
+		return "every page"
+	}
+	return ""
 }

@@ -1,6 +1,8 @@
 package notify
 
 import (
+	"github.com/google/uuid"
+
 	"context"
 	"errors"
 	"fmt"
@@ -60,6 +62,27 @@ type Routed struct {
 
 	// To names the recipient in whatever terms the vendor could supply.
 	To Recipient
+
+	// WakeID makes this wake RECOGNISABLE as a duplicate of itself.
+	//
+	// Nil takes a fresh random id, which is right for every vendor edge:
+	// a webhook redelivery is collapsed by the inbound-delivery claim
+	// before a parser ever sees it, and there is nothing deterministic in
+	// a vendor's payload to derive a stable id from anyway.
+	//
+	// The ENGINE'S OWN producers set it, because their first dedupe layer
+	// FAILS OPEN by design — a coordination store that cannot be reached
+	// must not silently stop notifications — and a redelivery that slips
+	// through it needs something else to catch it. A derived id lets the
+	// inbox's same-id dedupe and the fleet completion ledger recognise
+	// the pair; with a random one neither layer can see it, and the seat
+	// is woken twice about one change.
+	//
+	// PER RECIPIENT, because one change legitimately produces several
+	// wakes — an assignment that also names two watchers is three — and
+	// one id for all of them would deliver the first and deduplicate the
+	// rest away. See [changefeed.WakeID], which derives them.
+	WakeID uuid.UUID
 }
 
 // Recipient is an addressee, in any of the forms a vendor can name one.
@@ -479,6 +502,18 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	wake := events.New(out, events.TraceContext{
 		TraceID: ev.TraceID, ParentSpanID: ev.SpanID,
 	})
+	// A DERIVED ID WHERE THE PRODUCER HAD ONE — see [Routed.WakeID]. It
+	// replaces the random one events.New minted rather than being carried
+	// beside it, because the id is what the inbox and the ledger key on
+	// and a second field would be a second thing to remember to check.
+	// A DERIVED ID WHERE THE PRODUCER HAD ONE — see [Routed.WakeID]. It
+	// REPLACES the random one events.New minted rather than riding beside
+	// it, because the id is what the inbox and the fleet completion ledger
+	// key on, and a second field would be a second thing to remember to
+	// check.
+	if r.WakeID != uuid.Nil {
+		wake.ID = r.WakeID
+	}
 	wake.Source = "notify." + r.Source
 	// AND ONTO THE ENVELOPE, which is what the inbox actually partitions
 	// on. The metadata map above travels INSIDE the typed payload, and the

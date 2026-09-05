@@ -1,6 +1,8 @@
 package notify_test
 
 import (
+	"github.com/google/uuid"
+
 	"context"
 	"errors"
 	"strings"
@@ -712,5 +714,60 @@ func TestASharedMetadataMapIsNotStampedInPlace(t *testing.T) {
 	// across deliveries is not accumulating other seats' stamps.
 	if _, stamped := shared[notify.RecipientField]; stamped {
 		t.Fatal("the parser's own metadata map was written through")
+	}
+}
+
+// A PRODUCER'S OWN WAKE ID SURVIVES ONTO THE EVENT, so a duplicate is
+// recognisable as one.
+//
+// The engine's own producers — the native tracker and knowledge base — derive
+// their wake ids from the change and the recipient, because their first
+// dedupe layer FAILS OPEN by design: a coordination store that cannot be
+// reached must not silently stop notifications. What slips through it is
+// caught by the inbox's same-id dedupe and the fleet completion ledger, and
+// both key on the event's ID — so a random id here would make the second
+// layer see two unrelated wakes and run the turn twice.
+func TestADerivedWakeIDReachesTheEvent(t *testing.T) {
+	h := newService(t, nil)
+	derived := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	routed := to(notify.Recipient{Handle: "engineering-lead"}, "please look")
+	routed.WakeID = derived
+	h.parser.out = []notify.Routed{routed}
+
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+	woken := h.inbox(t, "engineering-lead")
+	if len(woken) != 1 {
+		t.Fatalf("woke %d times, want once", len(woken))
+	}
+	if woken[0].ID != derived {
+		t.Errorf("the wake carries id %s, not the producer's derived %s — so a "+
+			"redelivery of the same change would look like a second one",
+			woken[0].ID, derived)
+	}
+}
+
+// A VENDOR EDGE STILL GETS A FRESH ID, and must: a webhook redelivery is
+// collapsed by the inbound-delivery claim before a parser sees it, and there
+// is nothing deterministic in a vendor's payload to derive from. Two
+// genuinely different deliveries that both left WakeID unset must not collide.
+func TestAnUnsetWakeIDIsStillUnique(t *testing.T) {
+	h := newService(t, nil)
+	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "one")}
+	h.svc.Handle(t.Context(), delivery("tracker"))
+	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "two")}
+	h.svc.Handle(t.Context(), delivery("tracker"))
+
+	woken := h.inbox(t, "engineering-lead")
+	if len(woken) < 2 {
+		t.Fatalf("woke %d times, want both deliveries", len(woken))
+	}
+	if woken[0].ID == woken[1].ID {
+		t.Error("two deliveries with no derived id share one wake id, so the " +
+			"second would be deduplicated away")
+	}
+	if woken[0].ID == uuid.Nil {
+		t.Error("a wake with no derived id got the nil uuid")
 	}
 }

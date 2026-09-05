@@ -351,6 +351,13 @@ stream:
                                     #   choice rather than a second backend
   store_dir: "./crewlet-data/stream"  # empty = in-memory: right for a test,
                                     #   and nothing published survives a restart
+                                    #   — which on the default native tracker
+                                    #   and knowledge base means every item and
+                                    #   every page, not just queued events. The
+                                    #   engine logs that at error level on each
+                                    #   boot rather than refusing it, because a
+                                    #   test and an ingress-only node run this
+                                    #   way on purpose
   # url: "nats://nats.internal:4222"  # required for `nats`, REFUSED for
                                     #   embedded — an embedded server has no
                                     #   address, so a url there is read by

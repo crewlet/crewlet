@@ -456,7 +456,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// run no duty until it finished. Seat acquisition is what waits; see
 	// [Engine.NativeHydrated].
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := e.startNative(ctx, company); err != nil {
+	if err := e.startNative(ctx, opts.Bootstrap, company); err != nil {
 		return fail(err)
 	}
 	// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the epoch is

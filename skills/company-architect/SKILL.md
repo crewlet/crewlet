@@ -103,12 +103,20 @@ live-editable, so the first version does not need to be the last.
    sentence of backstory each. This is 90% of the config.
 3. **Where does the founder sit?** They should be *in* the chart — see
    the founder seat under invariants.
-4. **What surfaces does the work live on?** Tracker, knowledge base,
-   chat, code host. Point them at
+4. **What surfaces does the work live on?** Chat and the code host are
+   the ones to ask about; the tracker and the knowledge base **ship with
+   the engine and are on by default**, so a founder needs a positive
+   reason to bring Jira and Confluence rather than a reason not to. The
+   reason is usually about their people — a team already living in Jira
+   should not be asked to watch a second board — and never about the
+   agents, who cannot tell the difference. Say so, then point them at
    [Choosing your stack](https://docs.crewlet.ai/getting-started/choosing-your-stack)
-   rather than re-deriving the trade-offs; it covers hosted vs
-   self-hosted for each. **Do not wire integrations in the first pass**
-   — see the sequencing rule below.
+   rather than re-deriving the trade-offs. **Do not wire integrations in
+   the first pass** — see the sequencing rule below.
+
+   Give each unit a `project` and a `space` in the first pass regardless:
+   on the default backends that is the whole setup, and it is what gives
+   a team somewhere to file work and write things down.
 5. **What model, and what budget?** One `providers.llm` entry is enough
    to start. Ask whether they want a cost ceiling (`token_budget`).
 
@@ -121,9 +129,15 @@ A company with no integrations only reacts to schedules. That is the
 right first milestone, because it proves the engine, the model, and the
 config all work before any external credential is in play.
 
+It is not a hollow one: the tracker and the knowledge base are on by
+default, so that first turn can already file work and write pages, and
+the founder can watch it happen on the Work board and Pages screens. The
+integrations that come later are about where their PEOPLE are, not about
+what the company can do.
+
 **First pass** — no `integrations`, no `mcp_servers`, one LLM provider,
-the org chart, and one schedule on the top seat so a turn actually
-fires:
+the org chart with a `project` and `space` per unit, and one schedule on
+the top seat so a turn actually fires:
 
 ```yaml
 roles:
@@ -254,7 +268,9 @@ workers:
     system_prompt: |
       You research a narrow question against the team's knowledge base.
       Report only what you can point at.
-    tools: [confluence_search, confluence_get_page]
+    # On the default backends these are the engine's own. Swap them for
+    # the vendor's MCP tool names if the company runs Confluence.
+    tools: [search_knowledge, get_page, list_pages]
     output:
       type: object
       properties:

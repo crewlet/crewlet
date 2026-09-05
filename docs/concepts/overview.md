@@ -14,9 +14,9 @@ The framework models the same structures found in real companies:
 
 - **Organizational hierarchy** — departments, teams, and individual roles; seats are held by AI agents or [human teammates](humans-in-the-org.md)
 - **Communication** — channels, direct messages, and external tools (Slack or self-hosted [Mattermost](../integrations/mattermost.md), the work-item tracker, the code host)
-- **Task management** — integrated with external PM tools (Jira, GitHub/GitLab issues)
+- **Task management** — the engine's own work tracker by default (items, threads, hand-offs, a board and an MCP surface), or an external PM tool it deliberately mirrors none of (Jira, GitHub/GitLab issues) — see [The Tracker](task-engine.md)
 - **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code through the [code sandbox](code-sandbox.md)
-- **Knowledge** — query-time knowledge-base search for shared docs + per-agent private diary (vector similarity computed by the database — hybrid vector ∪ recency candidate selection)
+- **Knowledge** — a shared knowledge base behind one seam, either the engine's own pages (BM25 over a per-node index) or a live Confluence search, plus a per-agent private diary (vector similarity computed by the database — hybrid vector ∪ recency candidate selection)
 - **Decision-making** — structured DACI framework with clear authority
 
 ---
@@ -30,13 +30,13 @@ Crewlet treats the organizational hierarchy as its primary orchestration structu
 | **Mental model** | A corporate org chart — departments, teams, and named seats |
 | **Hierarchy** | A native tree: identity, downward delegation, manager-handoff target, and scoping all derive from it |
 | **Communication** | Event-driven pub/sub with org-scoped channels |
-| **Knowledge** | A knowledge base searched live at query time, plus a per-agent private diary |
+| **Knowledge** | A knowledge base — the engine's own, or a vendor's searched live — plus a per-agent private diary |
 | **Decision model** | The DACI framework (Driver / Approver / Contributor / Informed) |
 | **Lifetime** | A long-running, persistent company |
 | **Config style** | A YAML org chart, versioned in the store and edited live |
 | **Extensibility** | A full extension system — providers, hooks, middleware |
 
-The hierarchy is informational + delegation-routing, not a special upward escalation mechanism. When an agent is stuck, it hands off to its manager using the same colleague-surface tools (a chat mention, a work-item comment, A2A) that a human teammate would use; the manager's handle comes from the agent's identity prompt. Engine-detected failures (stall, max-iter, unhandled exception, LLM unavailable) surface to the operator via structured logs and a dashboard `afk` state — see [Turn Engine](turn-engine.md) and [Task Engine](task-engine.md).
+The hierarchy is informational + delegation-routing, not a special upward escalation mechanism. When an agent is stuck, it hands off to its manager using the same colleague-surface tools (a chat mention, a work-item comment, A2A) that a human teammate would use; the manager's handle comes from the agent's identity prompt. Engine-detected failures (stall, max-iter, unhandled exception, LLM unavailable) surface to the operator via structured logs and a dashboard `afk` state — see [Turn Engine](turn-engine.md) and [The Tracker](task-engine.md).
 
 ---
 
@@ -44,7 +44,7 @@ The hierarchy is informational + delegation-routing, not a special upward escala
 
 - **Event-driven** — agents are reactive; events trigger agent work, agent work produces events
 - **Concurrent by default** — a seat's turn, its MCP children and the node's own duties run in parallel, and every shared structure is checked under the race detector
-- **Provider-agnostic** — pluggable LLM, storage, and embedding backends; external tools (including the knowledge base) via MCP
+- **Provider-agnostic** — pluggable LLM, storage, tracker, knowledge and embedding backends; external tools via MCP. Only the LLM is required: the tracker and the knowledge base ship with the engine, so a company with an API key and nothing else runs
 - **Config-driven** — a company is a YAML document, validated against a schema generated from the same types the engine runs on
 - **Extension-oriented** — anything beyond running the company is an extension, not core
 - **Observable** — structured logging, tracing hooks, and metrics from day one
@@ -55,7 +55,7 @@ The hierarchy is informational + delegation-routing, not a special upward escala
 
 ```mermaid
 flowchart TB
-    EXT["<b>External surfaces</b><br/>Slack · Mattermost · Jira · Confluence · GitHub · GitLab"]
+    EXT["<b>External surfaces</b> (all optional)<br/>Slack · Mattermost · Jira · Confluence · GitHub · GitLab"]
     SUPPLY["<b>What a turn consumes</b><br/>an LLM API, or a coding CLI on your own subscription<br/>embeddings · MCP servers · a code sandbox"]
 
     subgraph proc["<b>crewlet run</b> — one process by default; node.roles picks the groups"]
@@ -143,7 +143,7 @@ The `EmbeddingProvider` protocol defines `embed()` (batch text → vectors) and 
 
 One local file, opened by Turso — a pure-Go driver over the SQLite file format — and built from a forward-only migration sequence. There was a second certified driver (mainline SQLite) as an escape hatch, and it is retired: it could not serve a database with rows in it, because it has no vector functions and recall degraded to nothing without saying so. **The engine owns that file exclusively** — a second process pointed at the same path is corruption waiting for a schedule to collide, which is why everything genuinely shared between nodes lives in the coordination KV instead. The load-bearing tables:
 
-- **`agent_diary`** (vector-indexed) — each agent's private observation log; the read-side counterpart of `reflect_and_persist`. Rows are embedded on write; the read path is hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is **not** in the database — the knowledge base is searched live (see [knowledge system](knowledge-system.md)).
+- **`agent_diary`** (vector-indexed) — each agent's private observation log; the read-side counterpart of `reflect_and_persist`. Rows are embedded on write; the read path is hybrid candidate selection (vector top-50 ∪ recency top-50, deduped by row id) handed to an aux-LLM relevance filter. Shared knowledge is a separate read: on the native backend it is this node's own projection of the company's pages, indexed for BM25 search; on Confluence it is a live query with no local copy at all (see [knowledge system](knowledge-system.md)).
 - **`episodes`** (vector-indexed) — one row per completed turn; raw and LLM-compacted aggregates share the same table.
 - **`synthesized_skills` / `synthesized_skill_versions`** — auto-drafted skills the agent can load via `use_skill`, with refinement history.
 - **`counterparty_profiles`** — per-(observer, subject) profiles built up from observed interactions.

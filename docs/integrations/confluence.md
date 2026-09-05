@@ -2,6 +2,17 @@
 
 Crewlet integrates with Confluence bidirectionally: agents read and write Confluence pages via MCP tools, and Confluence pushes content change events to agents via webhooks.
 
+> **Confluence is one of two knowledge backends, and it is not the default.**
+> The engine ships its own — `knowledge.backend: native`, which is what a
+> company that says nothing gets — with pages held as fleet documents and a
+> BM25 search over each node's own index. Set `knowledge.backend: confluence`
+> (or declare this block, which derives it) to run Confluence instead. It
+> buys one thing the native backend does not have: search runs **as the
+> agent's own Atlassian user**, so Confluence's page permissions are the
+> boundary rather than the engine. Exactly one backend per company — a config
+> naming both is refused. See
+> [Knowledge System](../concepts/knowledge-system.md).
+
 > **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. Webhooks differ by deployment: **Cloud** events arrive via the [Crewlet Forge app](https://github.com/crewlet/forge); **Data Center** uses direct webhook registration (see [Webhooks](#webhooks-confluence-pushes-to-agents)).
 
 ---

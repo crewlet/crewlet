@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -146,9 +147,33 @@ func (f *FleetStore) CreateDocument(ctx context.Context, family coord.Family, ke
 		return true, nil
 	case lostCreateRace(err):
 		return false, nil
+	case tooLarge(err):
+		return false, oversized(key, value, err)
 	default:
 		return false, unavailable("create the document", err)
 	}
+}
+
+// tooLarge reports a write the broker refused for its size.
+//
+// The client refuses it LOCALLY, before the wire, against the MaxPayload it
+// read off the server's INFO — which is why this is a client error rather
+// than a connection the broker closes underneath us.
+func tooLarge(err error) bool { return errors.Is(err, nats.ErrMaxPayload) }
+
+// oversized names the document, its size, and what to do about it.
+//
+// THE SIZE IS IN THE MESSAGE, because it is the one number an operator needs
+// and the one the failure otherwise hides: the content caps in [work] and
+// [pages] bound what a person WROTE, and this bounds what the encoded
+// document came to. A page of angle brackets re-encodes at six times its
+// length, so the two are not the same number and no ratio at the edge makes
+// them one.
+func oversized(key string, value []byte, err error) error {
+	return fmt.Errorf("%w: %s encodes to %d bytes, which this broker will not "+
+		"carry. Shorten it, or raise max_payload on the NATS server this fleet "+
+		"dials — the embedded broker is already set to the engine's own "+
+		"ceiling: %w", coord.ErrDocumentTooLarge, key, len(value), err)
 }
 
 // UpdateDocument writes at a version.
@@ -163,6 +188,8 @@ func (f *FleetStore) UpdateDocument(ctx context.Context, family coord.Family, ke
 		return true, nil
 	case lostUpdateRace(err):
 		return false, nil
+	case tooLarge(err):
+		return false, oversized(key, value, err)
 	default:
 		return false, unavailable("update the document", err)
 	}
