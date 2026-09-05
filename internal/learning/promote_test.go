@@ -175,7 +175,7 @@ func TestAUnitWithNoContainerIsSkippedNotFailed(t *testing.T) {
 		seedSibling(t, db, h, "release-"+h, "fetch", "build", "tag", "announce")
 	}
 	unconfigured := unitOf("dev", "sre", "qa")
-	unconfigured.Container, unconfigured.Hint = "", "set confluence_space on it"
+	unconfigured.Container, unconfigured.Hint = "", "set `space` on it"
 
 	w := &fakeWriter{}
 	p, aux := promoter(t, db, w, promotionDraft, unconfigured,

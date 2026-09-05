@@ -157,6 +157,17 @@ type Sources struct {
 	// standalone API's silence into a claim that every surface is
 	// unchecked.
 	Reconciles func(ctx context.Context) []integration.State
+	// Work and Pages are this node's projections of the company's own
+	// tracker and knowledge base. Nil leaves their questions unregistered,
+	// which is the honest answer for a company on Jira and Confluence:
+	// there is no native record for this node to have a copy of.
+	//
+	// Consumer-defined interfaces rather than the concrete readers, like
+	// every other seam here — and the READ side only. Nothing on this
+	// surface writes: a board's edit goes through a seat's tools or the
+	// operator MCP, both of which are attributed to somebody.
+	Work  WorkReader
+	Pages PageReader
 
 	// PublicBase is where third-party apps reach this deployment, RESOLVED,
 	// or nil when this process cannot say.
@@ -205,6 +216,15 @@ func (s Sources) clock() time.Time {
 // that drew "no events" for "this node has no event log" would report a quiet
 // company during a misconfiguration.
 var ErrUnavailable = errors.New("queries: not available on this node")
+
+// ErrNotFound is a question this surface understood, about a record it does
+// not hold.
+//
+// Distinct from [ErrUnavailable] and from a plain failure, because a client
+// acts on all three differently: a dead link to show the person, a retry in a
+// moment, and a bug to report. Folding the first into the third is how a
+// mistyped item key reads to an operator as the server being broken.
+var ErrNotFound = errors.New("queries: no such record")
 
 // Register wires every question these sources can answer.
 //
@@ -263,6 +283,23 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Sandbox != nil {
 		r.Register("sandbox_runs", s.sandboxRuns)
+	}
+	// The NATIVE backends, each gated on its own reader: a company can run
+	// the native tracker on Confluence, or the native knowledge base on
+	// Jira, and registering the pair together would offer one screen a
+	// question its half of the company cannot answer.
+	if s.Work != nil {
+		r.Register("work_items", s.workItems)
+		r.Register("work_item", s.workItem)
+	}
+	if s.Pages != nil {
+		r.Register("pages", s.pageList)
+		r.Register("page", s.page)
+		// A SEPARATE QUESTION from `pages`, not a facet of it: a browser
+		// draws the container list once and the page list on every
+		// navigation, and folding them together would ship every
+		// container's record with every page listing.
+		r.Register("containers", s.containers)
 	}
 	if s.Diary != nil || s.Episodes != nil || s.Skills != nil {
 		r.Register("agent_memory", s.agentMemory)

@@ -64,6 +64,21 @@ const EmptyKnowledgeHint = "(no team documents surfaced at turn start — " +
 	"search your team knowledge base with a focused query once you have " +
 	"gathered more context about what the task actually needs)"
 
+// BuildingKnowledgeHint is what the block says while this node's own index is
+// still catching up.
+//
+// A DIFFERENT SENTENCE from [EmptyKnowledgeHint], and the difference is what
+// it tells the seat to do. "Nothing surfaced" invites a focused re-search,
+// which on a building index will also find nothing; this says the search
+// itself cannot answer yet, so the seat should ask a colleague rather than
+// conclude from an empty result that the company has written nothing down —
+// which on a freshly joined node is true for the whole first index build and
+// false about the company.
+const BuildingKnowledgeHint = "(the knowledge base is not searchable from " +
+	"this node yet — it is still indexing. Pages that exist will not be " +
+	"found by a search right now, so ask a colleague who would know rather " +
+	"than concluding nothing has been written down)"
+
 // knowledgeQuerySystemPrompt turns a task into a search query.
 const knowledgeQuerySystemPrompt = `You turn an AI agent's current task into a search query for its team's knowledge base.
 
@@ -96,6 +111,20 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 	// it saves.
 	if !f.src.Knowledge.CanSearch(r.Seat, r.Org) {
 		return "", 0
+	}
+	// A BACKEND THAT KEEPS AN INDEX can be behind its own projection, and
+	// during that window every search answers empty. Said out loud rather
+	// than searched anyway, and BEFORE the query call: the auxiliary model
+	// round trip would be spent producing a query nothing can match, which
+	// is the same waste CanSearch's gate exists to avoid.
+	//
+	// An optional interface rather than a method on [knowledge.Searcher]:
+	// a live vendor search has no index and nothing to report, so
+	// requiring it of every backend would be implementations of "false".
+	if builder, ok := f.src.Knowledge.(interface {
+		Building(ctx context.Context) bool
+	}); ok && builder.Building(ctx) {
+		return BuildingKnowledgeHint, 0
 	}
 	if r.RequiresRecon {
 		// The trigger is a pointer, so there is nothing worth searching

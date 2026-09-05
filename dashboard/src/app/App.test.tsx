@@ -14,6 +14,8 @@ import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { ALL_NAV } from "./nav.ts";
+import { buildHash } from "./router.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -97,23 +99,17 @@ describe("the shell", () => {
 });
 
 describe("routing", () => {
+  // DERIVED FROM THE NAV, not a hand-written list. The list was one, and a
+  // hand-written one covers exactly the screens somebody remembered to add to
+  // it — so a new nav entry that renders a blank ships green, which is the one
+  // failure this test exists to catch.
   test("every nav route renders a screen rather than a blank", () => {
-    for (const hash of [
-      "#/people",
-      "#/org",
-      "#/runs",
-      "#/conversations",
-      "#/schedules",
-      "#/model",
-      "#/activity",
-      "#/knowledge",
-      "#/spend",
-      "#/fleet",
-      "#/integrations",
-      "#/tools",
-      "#/config",
-      "#/secrets",
-    ]) {
+    const visited = ALL_NAV.map((item) => buildHash(item.path));
+    // The two newest screens are the reason the list is derived: a hand-written
+    // one would not have them.
+    expect(visited).toContain(buildHash(["work"]));
+    expect(visited).toContain(buildHash(["pages"]));
+    for (const hash of visited) {
       location.hash = hash;
       const { view } = mount();
       expect(view.container.querySelector(".screen-inner")?.children.length, hash).toBeGreaterThan(
