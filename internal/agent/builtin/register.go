@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -86,6 +87,12 @@ type Deps struct {
 	// has — and it is the same seam the turn-start prefetch reads, so the
 	// two can never disagree about scope, exclusions or credentials.
 	Knowledge KnowledgeSearcher
+
+	// Work is the native tracker. Both halves nil omits all five tools,
+	// which is what a company running Jira has — and omitting them is the
+	// point: a seat offered a tracker tool against a tracker this company
+	// does not run would reach for it and fail at the call.
+	Work WorkDeps
 }
 
 // Register adds every builtin the given dependencies can support.
@@ -134,6 +141,11 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&runSandbox{launcher: deps.Sandbox}, deps.Sandbox != nil},
 		{&loadToolSkill{skills: deps.ToolSkills, events: deps.Events}, deps.ToolSkills != nil},
 		{&searchKnowledge{search: deps.Knowledge}, deps.Knowledge != nil},
+		{&listWorkItems{deps: deps.Work}, deps.Work.Reader != nil},
+		{&getWorkItem{deps: deps.Work}, deps.Work.Reader != nil},
+		{&createWorkItem{deps: deps.Work}, deps.Work.Writer != nil},
+		{&updateWorkItem{deps: deps.Work}, deps.Work.Writer != nil && deps.Work.Reader != nil},
+		{&commentOnWorkItem{deps: deps.Work}, deps.Work.Writer != nil && deps.Work.Reader != nil},
 	}
 
 	var names []string
@@ -141,7 +153,16 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		if !c.on {
 			continue
 		}
-		if err := reg.RegisterWith(c.tool, tools.OriginBuiltin, annotationsFor(c.tool.Name())); err != nil {
+		opts := []tools.Option{}
+		if slices.Contains(WorkWrites(), c.tool.Name()) {
+			// A DELIVERY. A turn woken by an assignment answers by moving
+			// the item, commenting on it, or filing the follow-up — and
+			// without this the gate sees only builtins, concludes the
+			// turn reached nobody, and corrects it into another round.
+			opts = append(opts, tools.Delivers())
+		}
+		if err := reg.RegisterWith(c.tool, tools.OriginBuiltin,
+			annotationsFor(c.tool.Name()), opts...); err != nil {
 			return names, fmt.Errorf("builtin: %w", err)
 		}
 		names = append(names, c.tool.Name())
@@ -203,6 +224,33 @@ func annotationsFor(name string) tools.Annotations {
 		// nowhere near idempotent: a second call is a second run, a second
 		// box, and a second set of commits.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
+	case ListWorkItemsTool, GetWorkItemTool:
+		// Reads, and idempotent: asking twice costs a round and changes
+		// nothing.
+		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
+	case CreateWorkItemTool:
+		// A write everybody in the company sees, so OpenWorld is Yes and
+		// [mcp.WritesToSharedSurface] reads true — which keeps it away
+		// from a sub-agent acting under its parent's name. Not
+		// destructive (an item is additive) and NOT idempotent: a second
+		// call is a second item, which is the duplicate the tool's own
+		// description tells the model to search for first.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
+	case CommentOnWorkTool:
+		// Shared, additive, and idempotent IN PRACTICE because a comment
+		// made from a turn takes a deterministic id — but declared NOT
+		// idempotent, because the annotation describes the tool a model
+		// is offered and a model calling it twice with different text
+		// says two things. The idempotence is the engine protecting a
+		// re-run turn, not a licence to repeat.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
+	case UpdateWorkItemTool:
+		// Shared, and DESTRUCTIVE: it replaces a title, a description or
+		// an assignee, and the previous value survives only in the change
+		// record. That is what the flag asks — whether a call can undo
+		// somebody's work — and a status flip riding the same tool does
+		// not make the whole tool safe.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes}
 	case RefineSkillTool:
 		// It replaces a body. The prior version is archived, so this is
 		// reversible — which is exactly what Destructive asks about — and

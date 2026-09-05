@@ -54,6 +54,50 @@ func argInt(args map[string]any, key string, fallback int) int {
 	return fallback
 }
 
+// argStrings reads a list-of-strings argument, tolerating the single string a
+// model sends where a list belongs — which they do, constantly, and refusing
+// it costs a round to teach nothing.
+func argStrings(args map[string]any, key string) []string {
+	switch v := args[key].(type) {
+	case []string:
+		return cleanStrings(v)
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			out = append(out, argString(map[string]any{"v": item}, "v"))
+		}
+		return cleanStrings(out)
+	case string:
+		// A COMMA-SEPARATED STRING IS ALSO ACCEPTED, for the same reason:
+		// "backend, api" is what a model writes when it has decided a
+		// list field takes prose, and splitting it is right far more
+		// often than treating it as one label containing a comma.
+		return cleanStrings(strings.Split(v, ","))
+	}
+	return nil
+}
+
+// cleanStrings trims, drops empties and deduplicates, preserving order.
+func cleanStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // failed is a tool result the model can act on.
 //
 // Failed rather than an error: the turn is fine, this call is not, and the
