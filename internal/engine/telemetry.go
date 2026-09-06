@@ -2,14 +2,18 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -193,6 +197,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		summary.ErrorKind = string(res.Breach.Kind)
 	}
 	e.publishEvent(ctx, events.New(summary, t.trace), t.role)
+	e.publishFailure(ctx, t, workKey, res, err)
 
 	e.publishEvent(ctx, events.New(types.TurnCompleted{
 		Agent:       t.agentID,
@@ -228,6 +233,79 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		Interactions:    t.interactions,
 		ConversationKey: t.convKey,
 	}, t.trace), t.role)
+}
+
+// publishFailure publishes the DEDICATED record of why a turn stopped.
+//
+// [turn.Breach]'s own doc says it is "returned on the result rather than
+// published from inside the loop … carried on the breach the caller
+// publishes", and [toolloop.BudgetError]'s says "a phase that stopped because
+// the company ran out of tokens is a different event from one whose provider
+// failed, and they are reported differently". This frame is that caller, and
+// for a long time it published neither: the reason was folded into
+// agent_turn_completed's error/error_kind and the three dedicated types were
+// registered, categorised and documented with no producer.
+//
+// What that cost is a whole dashboard state. `afk` is derived from exactly
+// these three types (internal/api/livestate: llm_unavailable,
+// turn.guard_breach, budget_exhausted) and from nothing else, so no seat could
+// ever reach it — the attention queue's "the engine stopped it" row, the seat
+// screen's AFK banner and the `broken` rail were all unreachable branches.
+//
+// The summary event still carries error/error_kind, and that is not a second
+// copy to keep in step: it is the ONE-LINE reason on a row about the turn,
+// where these are the failure itself, with the chain that was tried, the
+// ceiling that refused and the guard that fired.
+func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry, workKey string,
+	res turn.Result, err error,
+) {
+	// A breach and an error are not exclusive: an unhandled exception is
+	// both, and reporting only one would drop the guard that named it.
+	if res.Breach != nil {
+		e.publishEvent(ctx, events.New(types.TurnGuardBreach{
+			Agent:    t.agentID,
+			RoleName: t.role,
+			Kind:     types.GuardKind(res.Breach.Kind),
+			Detail:   events.ClipDiagnostic(res.Breach.Detail),
+			TurnID:   workKey,
+		}, t.trace), t.role)
+	}
+	if err == nil {
+		return
+	}
+
+	// BUDGET BEFORE PROVIDER. A refused charge is reported by the phase as
+	// its own error and never reaches a provider at all, so the two are
+	// disjoint in practice — but ordering them makes that a property of this
+	// function rather than of whichever wrapper happened to be outermost.
+	var budget *toolloop.BudgetError
+	if errors.As(err, &budget) {
+		e.publishEvent(ctx, events.New(types.BudgetExhausted{
+			Agent:      t.agentID,
+			RoleName:   t.role,
+			BudgetType: types.BudgetScope(budget.Scope),
+			UsedTokens: budget.Used,
+			MaxTokens:  budget.Limit,
+		}, t.trace), t.role)
+		return
+	}
+
+	// EVERY MEMBER FAILED RETRYABLY — the seat has no model left and is
+	// effectively AFK. A non-retryable failure from one member is not this:
+	// it comes back as that backend's own error, the chain never wrapped it,
+	// and calling it "unavailable" would blame a chain that was never walked.
+	var exhausted *chain.Error
+	if errors.As(err, &exhausted) {
+		e.publishEvent(ctx, events.New(types.LLMUnavailable{
+			Agent:         t.agentID,
+			RoleName:      t.role,
+			ProviderChain: exhausted.Attempted,
+			AttemptCount:  len(exhausted.Attempted),
+			LastErrorKind: llm.KindOf(exhausted.Err).String(),
+			LastError:     events.ClipDiagnostic(exhausted.Error()),
+			TurnID:        workKey,
+		}, t.trace), t.role)
+	}
 }
 
 // lastModel names the model that served the last phase to run.
