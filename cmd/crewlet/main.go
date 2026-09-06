@@ -988,6 +988,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// so on a split-role deployment the node answering the
 			// request is never the one that wrote the answer.
 			Reconciles: func(ctx context.Context) []integration.State {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
 				states, err := e.IntegrationStates(ctx)
 				if err != nil {
 					// NIL, which the answer renders as "cannot say"

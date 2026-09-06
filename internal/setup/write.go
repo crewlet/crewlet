@@ -176,6 +176,7 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 				"setup: %s is a credential and this process has no secret store to seal it in",
 				r.ConfigPath)
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		name, writePointer, err := PointerFor(in.Kind, r, r.Stored)
 		if err != nil {
 			return Result{}, err
@@ -194,6 +195,7 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 	now := w.now()
 	written := []string{}
 	for _, p := range secretsToWrite {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := w.Secrets.Set(ctx, p.name, p.value, in.Operator, Source, now); err != nil {
 			// Named, never valued. The name is a fact an operator needs;
 			// the value is the one thing that must not reach a log or a
@@ -210,6 +212,7 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 		if len(written) == 0 {
 			return Result{}, fmt.Errorf("setup: the submission carried no values")
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		id, epoch, err := w.Config.Reload(ctx, in.Summary, in.Operator)
 		if err != nil {
 			return Result{}, err
@@ -249,6 +252,7 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 		return Result{}, err
 	}
 	var seat map[string]any
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := json.Unmarshal(entity, &seat); err != nil {
 		return Result{}, fmt.Errorf("setup: read seat %s: %w", in.Seat, err)
 	}
@@ -264,6 +268,7 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 				in.Kind, field, strings.Join(fields(reqs), ", "))
 		}
 		if r.Kind != KindSecret {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := setPath(seat, r.ConfigPath, typed(r.Kind, value)); err != nil {
 				return Result{}, err
 			}
@@ -275,6 +280,7 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 				"setup: %s is a credential and this process has no secret store to seal it in",
 				r.ConfigPath)
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		name, writePointer, err := PointerFor(in.Kind, r, r.Stored)
 		if err != nil {
 			return Result{}, err
@@ -291,6 +297,7 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 	now := w.now()
 	written := []string{}
 	for _, p := range secretsToWrite {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := w.Secrets.Set(ctx, p.name, p.value, in.Operator, Source, now); err != nil {
 			return Result{}, fmt.Errorf("setup: seal %s: %w", p.name, err)
 		}
@@ -304,6 +311,7 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 		if len(written) == 0 {
 			return Result{}, fmt.Errorf("setup: the submission carried no values")
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		id, epoch, err := w.Config.Reload(ctx, in.Summary, in.Operator)
 		if err != nil {
 			return Result{}, err

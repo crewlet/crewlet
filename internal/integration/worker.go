@@ -371,6 +371,7 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 	state, forget := Observe(state, kind, findings, err, now)
 	switch {
 	case forget:
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := w.store.ForgetIntegration(ctx, kind); err != nil {
 			log.WarnContext(ctx, "integration_status_not_forgotten",
 				"integration", kind.String(), "error", err)

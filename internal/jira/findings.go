@@ -94,15 +94,16 @@ func reasonOr(reason, fallback string) string {
 	return fallback
 }
 
-// rejected marks a refused credential, so [integration.Observe] reports the
-// surface as the operator's to fix rather than as a fault that clears.
+// Status reports the HTTP status a call was refused with, or 0 when the
+// failure was not an API error.
 //
-// The extraction is here because jira's status lives on its own error type;
-// the rule about which statuses count is [integration.Reject]'s.
-func rejected(err error) error {
+// The same accessor GitLab and Mattermost export, for the same reason: a
+// caller deciding what a refusal MEANS needs the number, and the meaning is
+// decided once, in [integration.Reject], rather than per vendor.
+func Status(err error) int {
 	var api *APIError
 	if errors.As(err, &api) {
-		return integration.Reject(err, api.Status)
+		return api.Status
 	}
-	return err
+	return 0
 }

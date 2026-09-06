@@ -10,6 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
+
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // Reconcile brings a GitHub deployment in line with the company config.
@@ -157,7 +159,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		return nil, fmt.Errorf(
 			"github: the credential this run authenticates with was refused, "+
 				"so nothing else it reported would be trustworthy: %w",
-			rejected(err))
+			integration.Reject(err, Status(err)))
 	}
 
 	res := &Result{Login: login}

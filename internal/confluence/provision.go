@@ -101,7 +101,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		return nil, fmt.Errorf(
 			"confluence: the org credential in integrations.confluence.token was "+
 				"refused, so nothing else this run reports would be trustworthy: %w",
-			rejected(err))
+			integration.Reject(err, Status(err)))
 	}
 	res := &Result{Deployment: opts.Client.Deployment(), Account: account}
 
@@ -161,7 +161,8 @@ func reconcileCloud(ctx context.Context, opts Options, base string, res *Result)
 			if err := opts.Client.DeleteWebhook(ctx, current.ID); err != nil {
 				return fmt.Errorf("confluence: replace webhook for %s: %w", event, err)
 			}
-			found = false
+			// No `continue`: falling out of the switch reaches the
+			// create below, which is the second half of a replace.
 		case found && SameTarget(current.URL, target) && sameEvents(current.Events, event):
 			// ALREADY CORRECT, and left exactly as it is. This is the
 			// steady state and the one a re-run spends most of its time
@@ -308,15 +309,16 @@ func (r *Result) Findings() []integration.Finding {
 	return out
 }
 
-// rejected marks a refused credential, so [integration.Observe] reports the
-// surface as the operator's to fix rather than as a fault that clears.
+// Status reports the HTTP status a call was refused with, or 0 when the
+// failure was not an API error.
 //
-// The extraction is here because confluence's status lives on its own error
-// type; the rule about which statuses count is [integration.Reject]'s.
-func rejected(err error) error {
+// The same accessor GitLab and Mattermost export, for the same reason: a
+// caller deciding what a refusal MEANS needs the number, and the meaning is
+// decided once, in [integration.Reject], rather than per vendor.
+func Status(err error) int {
 	var api *APIError
 	if errors.As(err, &api) {
-		return integration.Reject(err, api.Status)
+		return api.Status
 	}
-	return err
+	return 0
 }

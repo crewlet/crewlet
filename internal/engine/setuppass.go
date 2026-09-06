@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"strings"
+
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/github"
@@ -14,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
-	"strings"
 )
 
 // Running a vendor's provisioning from the API rather than from a shell.
@@ -101,7 +102,7 @@ func (e *Engine) setupDuty(kind integration.Kind) setup.Duty {
 // out after a crash for no benefit.
 const setupLeaseTTL = 5 * time.Minute
 
-// sinkFor is the recorder a pass writes minted credentials through.
+// SetupSink is the recorder a pass writes minted credentials through.
 //
 // The SAME type `crewlet <vendor> provision -secret-store` builds, so a
 // credential minted from the dashboard and one minted from a shell land in

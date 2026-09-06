@@ -59,6 +59,9 @@ import "slices"
 // provisioned into it, so a reconcile would have nothing to converge.
 type Kind string
 
+// The surfaces this build reconciles. These values are STORED, in the
+// fleet's coordination store and on the wire, so a rename is a migration
+// rather than an edit.
 const (
 	KindSlack      Kind = "slack"
 	KindMattermost Kind = "mattermost"

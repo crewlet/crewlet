@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"errors"
+
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/config"

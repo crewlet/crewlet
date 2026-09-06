@@ -536,6 +536,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		// string in Values is never mistaken for one.
 		Generate []string `json:"generate"`
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := decode(body, &req); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
 			"detail": err.Error(),
@@ -568,6 +569,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	for field, value := range req.Values {
 		values[field] = value
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := mintInto(values, against, req.Generate); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
 			"detail": err.Error(),
@@ -580,6 +582,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := refuseEmpty(values, against); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
 			"detail": err.Error(),

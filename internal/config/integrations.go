@@ -568,8 +568,6 @@ func (m *Mattermost) validate(path string) error {
 	return p.err()
 }
 
-// hasHTTPScheme reports a URL the clients can actually use, treating a
-// value that still carries a ${VAR} as unknown rather than wrong.
 // IsAtlassianCloud reports an address that is an Atlassian-hosted site.
 //
 // The SAME rule the vendor clients apply (jira.DeploymentOf and
@@ -592,6 +590,8 @@ func IsAtlassianCloud(raw string) bool {
 	return strings.Contains(strings.ToLower(raw), "api.atlassian.com/ex/")
 }
 
+// hasHTTPScheme reports a URL the clients can actually use, treating a
+// value that still carries a ${VAR} as unknown rather than wrong.
 func hasHTTPScheme(url string) bool {
 	return strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") ||
 		envref.Has(url)

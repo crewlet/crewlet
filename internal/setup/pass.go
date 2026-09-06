@@ -94,6 +94,8 @@ var ErrNoPass = errors.New("setup: no provisioning pass for this integration")
 // RunState is where one pass got to.
 type RunState string
 
+// The three states a run reaches. Terminal is done or failed; a run that is
+// neither is still holding its lease.
 const (
 	RunRunning RunState = "running"
 	RunDone    RunState = "done"

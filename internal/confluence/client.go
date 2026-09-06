@@ -39,7 +39,6 @@ var log = logging.Get("confluence")
 // reason about.
 const Backend = "confluence"
 
-// APIPath is the REST prefix under a base address.
 // Deployment is which Confluence this client speaks to.
 //
 // The same enum the Jira client has, and needed for the same reason: webhook
@@ -69,6 +68,7 @@ func DeploymentOf(base string) Deployment {
 	return DataCenter
 }
 
+// APIPath is the REST prefix under a base address.
 const APIPath = "/rest/api"
 
 // wikiPrefix is what a Cloud SITE address needs and a gateway address does

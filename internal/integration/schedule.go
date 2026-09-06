@@ -65,7 +65,7 @@ var DefaultSchedule = Schedule{
 	Operator:    time.Hour,
 }
 
-// withDefaults fills anything left unset.
+// WithDefaults fills anything left unset.
 //
 // A zero duration would otherwise mean "look again immediately", so a field
 // nobody wired becomes a pass every tick against a vendor's API. Falling back
@@ -93,7 +93,7 @@ func (s Schedule) WithDefaults() Schedule {
 	return s
 }
 
-// next returns how long to wait after a report, given how many consecutive
+// Next returns how long to wait after a report, given how many consecutive
 // passes have not settled.
 //
 // settled overrides [Schedule.Settled] for one vendor and is zero when that
