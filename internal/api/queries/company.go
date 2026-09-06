@@ -457,10 +457,15 @@ func integrationOf(row store.EventRecord) string {
 // What counts as carrying a surface is that seat's OWN field for it: a Slack
 // app, a Mattermost identity, a per-seat project or space. A seat with none
 // of them is served by the company-wide account, not by one of its own.
+//
+// THE WALK IS company.EachRole, not a loop over company.Roles: that field is
+// the seats belonging to NO unit, and a company whose agents all sit in units
+// answered an empty list from every caller here. EachRole is exported for
+// this exact reason, and its own doc records the first time a top-level-only
+// lookup shipped.
 func seatsFor(company *config.Company, kind string) []string {
 	out := []string{}
-	for i := range company.Roles {
-		r := &company.Roles[i]
+	for r := range company.EachRole() {
 		var carries bool
 		switch kind {
 		case "slack":
@@ -486,8 +491,8 @@ func seatsFor(company *config.Company, kind string) []string {
 // verify anything at all, since a Slack app with no signing secret cannot.
 func slackSeats(company *config.Company) int {
 	n := 0
-	for i := range company.Roles {
-		if slack := company.Roles[i].Integrations.Slack; slack != nil && slack.SigningSecret != "" {
+	for r := range company.EachRole() {
+		if slack := r.Integrations.Slack; slack != nil && slack.SigningSecret != "" {
 			n++
 		}
 	}

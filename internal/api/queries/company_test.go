@@ -1156,3 +1156,85 @@ func integrationRows(t *testing.T, sources queries.Sources) map[string]map[strin
 	}
 	return out
 }
+
+// A SEAT IN A UNIT IS A SEAT.
+//
+// `roles:` at the top level is the seats belonging to NO unit, and a company
+// of any size puts its agents in units instead. Listing only the top level
+// answered an empty seat list, and a zero count, for every one of them: the
+// Slack row then reported no per-seat app on a company running seven, and its
+// secret_present was computed from a count that was always zero while the
+// routes verified fine. The walk is company.EachRole, which is exported for
+// exactly this and whose own doc records the first time a top-level-only
+// lookup shipped.
+func TestSeatsInUnitsAreReported(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+integrations:
+  mattermost:
+    enabled: true
+    url: https://mm.example.com
+    team: acme
+  slack:
+    typing_status: addressed
+units:
+  - name: Engineering
+    roles:
+      - name: SWE
+        handle: swe
+        llm: zulu
+        integrations:
+          mattermost:
+            bot_token: "${MM}"
+          slack:
+            bot_token: "${BOT}"
+            signing_secret: "${SIG}"
+    children:
+      - name: Platform
+        roles:
+          - name: SRE
+            handle: sre
+            llm: zulu
+            integrations:
+              mattermost:
+                bot_token: "${MM2}"
+`
+	cfg, err := config.ParseCompany([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+	}, "integrations", nil))
+
+	rows, _ := body["integrations"].([]any)
+	byKind := map[string]map[string]any{}
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		byKind[entry["key"].(string)] = entry
+	}
+
+	// A seat one unit deep and a seat two deep, both carrying their own
+	// identity, and neither at the top level.
+	seats, _ := byKind["mattermost"]["seats"].([]any)
+	if len(seats) != 2 {
+		t.Fatalf("mattermost seats = %v, want the two seats in units", seats)
+	}
+	if seats[0] != "SRE" || seats[1] != "SWE" {
+		t.Errorf("mattermost seats = %v, want them sorted", seats)
+	}
+
+	// And the Slack count, which decides whether the row claims a secret at
+	// all, sees the one seat that has an app.
+	if present := byKind["slack"]["secret_present"]; present != true {
+		t.Errorf("slack secret_present = %v, want true: one seat in a unit "+
+			"carries a signing secret", present)
+	}
+}
