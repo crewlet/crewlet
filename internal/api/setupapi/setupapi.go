@@ -49,6 +49,15 @@ import (
 
 var log = logging.Get("api.setup")
 
+// PassDeadline bounds one provisioning pass.
+//
+// Just inside the fleet lease a pass holds (internal/engine's
+// setupLeaseTTL, 5 minutes), because the lease is what stops two operators
+// minting at the same vendor at once and it is not renewed mid-pass. A pass
+// that outlived it would still be writing at the vendor with nothing left
+// holding anyone else off.
+const PassDeadline = 4 * time.Minute
+
 // MaxBody bounds one submission.
 //
 // Small on purpose: the largest thing a submission carries is a vendor API

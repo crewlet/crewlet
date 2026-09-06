@@ -165,7 +165,24 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		in.Sink = sink
 	}
 
-	run, err := s.passes.Start(r.Context(), kind, in, uuid.NewString())
+	// DETACHED FROM THE REQUEST, and bounded on its own.
+	//
+	// A pass WRITES AT THE VENDOR: it creates accounts, mints tokens and
+	// registers webhooks. Run on the request's own context, a browser tab
+	// closing or a reverse proxy hitting its read timeout cancels it
+	// mid-way, and what is left behind is an account created with no
+	// credential sealed, or a credential sealed with no pointer written.
+	// The next pass then either duplicates the account or reports a
+	// half-finished integration nobody asked for. Nothing about the
+	// operator's connection should decide that.
+	//
+	// The deadline is the LEASE's, not a guess: the fleet lease that stops
+	// two operators minting at once is not renewed mid-pass, so a pass
+	// outliving it would be running unprotected. Timing out just inside it
+	// keeps the two facts in step.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), PassDeadline)
+	defer cancel()
+	run, err := s.passes.Start(ctx, kind, in, uuid.NewString())
 	// THE TRANSIENT CREDENTIAL IS DROPPED THE MOMENT THE PASS RETURNS.
 	// It can create accounts at the vendor, and the difference between a
 	// one-time grant and a standing power is exactly how long it is held.

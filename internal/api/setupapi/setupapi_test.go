@@ -541,16 +541,30 @@ type recordingPass struct {
 	err      error
 	release  chan struct{}
 	needs    *setup.Requirement
+	// watchCtx, when set, receives the context's error at the moment the
+	// pass stops waiting: nil if it was released normally.
+	watchCtx chan error
 }
 
 func (*recordingPass) Kind() integration.Kind      { return integration.KindGitHub }
 func (p *recordingPass) Needs() *setup.Requirement { return p.needs }
 
-func (p *recordingPass) Run(_ context.Context, in setup.PassInput) ([]integration.Finding, error) {
+func (p *recordingPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	p.mu.Lock()
 	p.calls = append(p.calls, in)
-	release := p.release
+	release, watch := p.release, p.watchCtx
 	p.mu.Unlock()
+	if watch != nil {
+		// Report what the context did rather than what it was: a pass
+		// that writes at a vendor cares only whether it was cut off.
+		select {
+		case <-ctx.Done():
+			watch <- ctx.Err()
+		case <-release:
+			watch <- nil
+		}
+		return p.findings, p.err
+	}
 	if release != nil {
 		<-release
 	}
@@ -1021,4 +1035,51 @@ func TestAnUnknownSeatIsRefused(t *testing.T) {
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404: %s", res.Code, res.Body)
 	}
+}
+
+// A PASS OUTLIVES THE REQUEST THAT ASKED FOR IT.
+//
+// The pass WRITES AT THE VENDOR: it creates accounts, mints tokens and
+// registers webhooks. Run on the request's own context, a browser tab closing
+// or a reverse proxy hitting its read timeout cancels it mid-way, and what is
+// left behind is an account created with no credential sealed, or a
+// credential sealed with no pointer written. The next pass then duplicates
+// the account or reports a half-finished integration nobody asked for.
+//
+// So the handler detaches. This asserts the pass does NOT see the request's
+// cancellation, which is the only observable difference.
+func TestAPassDoesNotSeeTheRequestBeingCancelled(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	pass := &recordingPass{release: make(chan struct{}), watchCtx: make(chan error, 1)}
+	s.withPass(t, pass)
+	s.seedGitHub(t)
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/setup/integrations/github/provision", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		s.mux.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+
+	// Cancel the request while the pass is mid-flight, then let it finish.
+	cancel()
+	close(pass.release)
+
+	select {
+	case err := <-pass.watchCtx:
+		if err != nil {
+			t.Fatalf("the pass saw %v from the request's context: a closed tab "+
+				"can abandon a run that is creating accounts at the vendor", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pass never finished")
+	}
+	<-served
 }
