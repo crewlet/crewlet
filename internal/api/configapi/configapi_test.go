@@ -1301,3 +1301,72 @@ func TestEveryWriteRouteTakesTheSummaryFromEitherChannel(t *testing.T) {
 		})
 	}
 }
+
+// --- reload ---------------------------------------------------------------- //
+
+// A ROTATED SECRET NEEDS AN ACTIVATION, and no other route on this surface
+// produces one without an edit.
+//
+// A ${VAR} in the company config is resolved when a provider or a transport
+// is constructed, from a snapshot taken at apply time. Writing a new value
+// into the secret store therefore changes nothing in a running process: the
+// pointer in the document is already correct, so there is no patch to make,
+// and with no activation there is no apply and no refreshed snapshot. This is
+// the gesture that closes that, and re-activating an unchanged revision is
+// precisely why the activation pointer is append-only.
+func TestReloadRepublishesTheActiveDocumentUnchanged(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	first := s.do(t, http.MethodPut, "/config", companyDoc,
+		map[string]string{"X-Summary": "first import"})
+	if first.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", first.Code, first.Body)
+	}
+	before := decode(t, first)["revision_id"]
+
+	res := s.do(t, http.MethodPost, "/config/reload", "", nil)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("reload = %d, want 201: %s", res.Code, res.Body)
+	}
+	body := decode(t, res)
+	if body["revision_id"] == before {
+		t.Fatal("reload re-pointed at the same revision; every node reads the " +
+			"pointer, so nothing would re-apply")
+	}
+
+	// A NEW revision, and byte-identical to the one it replaced: the
+	// document did not change, only the epoch did.
+	diff := s.do(t, http.MethodGet,
+		"/config/revisions/"+body["revision_id"].(string)+"/diff", "", nil)
+	if diff.Code != http.StatusOK {
+		t.Fatalf("diff = %d: %s", diff.Code, diff.Body)
+	}
+	changes, _ := decode(t, diff)["changes"].([]any)
+	if len(changes) != 0 {
+		t.Fatalf("reload changed the document: %v", changes)
+	}
+
+	// And it says what it was, in the history an operator reads.
+	list := s.do(t, http.MethodGet, "/config/revisions", "", nil)
+	var revisions []map[string]any
+	if err := json.Unmarshal(list.Body.Bytes(), &revisions); err != nil {
+		t.Fatalf("decode revisions: %v", err)
+	}
+	if revisions[0]["summary"] != "reload configuration" {
+		t.Errorf("summary = %v, want the default reload sentence", revisions[0]["summary"])
+	}
+}
+
+// With nothing active there is nothing to re-publish, and saying so beats
+// activating an empty document.
+func TestReloadRefusesWhenNothingIsActive(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	res := s.do(t, http.MethodPost, "/config/reload", "", nil)
+	if res.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", res.Code, res.Body)
+	}
+	if got := decode(t, res)["error"]; got != "no_active_revision" {
+		t.Errorf("error = %v", got)
+	}
+}

@@ -133,6 +133,7 @@ each operator-gated for the same reason the prefix is.
 | `PUT` | `/config` | Replace the active revision. Body JSON or `Content-Type: application/yaml`. Requires a revision summary — an `X-Summary` header, **or** a top-level `_summary` key in the body. Conditional via `If-Match` / `If-None-Match` — see [below](#conditional-requests) |
 | `OPTIONS` | `/config` | `204` with `Allow` and `Accept-Patch: application/merge-patch+json` |
 | `PATCH` | `/config` | Merge one or more sections into the active revision — see [below](#patch-config--the-narrower-write) |
+| `POST` | `/config/reload` | Re-publish the active document unchanged, so every node re-applies and re-reads the secret store. See [below](#post-configreload-after-a-secret-changes) |
 | `POST` | `/config/revisions/{id}/revert` | Create a new active revision whose payload equals revision `{id}` |
 
 #### `PATCH /config` — the narrower write
@@ -320,6 +321,34 @@ Response (`200 OK`):
 Payloads are NOT included — fetch a specific revision via `GET /config/revisions/{id}` for the full JSON.
 
 ---
+
+
+#### `POST /config/reload`: after a secret changes
+
+Takes no body and changes nothing. It stores a **new revision carrying the
+same document** and activates it, which advances the epoch and makes every
+node apply again.
+
+That is the gesture a rotated credential needs, and no other route performs
+it. A secret lives in the company config as a `${VAR}` pointer, resolved when
+a provider or a transport is constructed, from a snapshot taken at apply time.
+Writing a new value with `PUT /secrets/{name}` therefore changes nothing in a
+running process: the pointer is already correct, so there is no patch to make,
+and with no activation there is no apply and no refreshed snapshot.
+Re-activating an unchanged revision is exactly why the activation pointer is
+append-only rather than keyed on a revision id.
+
+A new revision rather than a re-pointed old one, for the same reason a revert
+writes one: the history stays append-only, so "the credentials were reloaded
+at 04:12" is a fact somebody can find later. `X-Summary` names it; unset, it
+records `reload configuration`.
+
+Answers `201 {"revision_id", "epoch"}`, `409 no_active_revision` when nothing
+is configured, and `503 no_control_plane` on a process that cannot activate.
+
+The command-line equivalent is [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate)
+naming the revision that is already current.
+
 
 ## Live Stream
 

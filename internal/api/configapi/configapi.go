@@ -17,7 +17,6 @@ package configapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -135,6 +134,12 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	// THE NARROWER WRITE. See merge.go for why one patch route covers
 	// every section rather than one route per section.
 	mux.HandleFunc("PATCH /config", s.patch)
+	// RE-PUBLISH THE ACTIVE DOCUMENT UNCHANGED, which is the gesture a
+	// rotated SECRET needs and the one thing no other route on this
+	// surface performs: the pointer in the config is already correct, so
+	// there is no patch to make, and with no activation there is no apply
+	// and no refreshed secret snapshot. See [Service.Reload].
+	mux.HandleFunc("POST /config/reload", s.reload)
 	mux.HandleFunc("GET /config/revisions", s.listRevisions)
 	mux.HandleFunc("GET /config/revisions/{id}", s.getRevision)
 	mux.HandleFunc("GET /config/revisions/{id}/diff", s.diff)
@@ -498,52 +503,87 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prior, err := s.open(active)
+	applied, err := s.Apply(r.Context(), ApplyRequest{
+		Patch: body, Summary: summary, Operator: operatorOf(r), Expect: active.ID,
+	})
 	if err != nil {
-		s.fail(w, "open the active revision", err)
+		s.refuseApply(w, err)
 		return
 	}
-	// MERGED IN THE STORED SHAPE, not the authored one: the active
-	// revision is normalised JSON, and merging onto anything else would
-	// make the result depend on how the document was originally written.
-	document, err := json.Marshal(prior)
-	if err != nil {
-		s.fail(w, "encode the active revision", err)
-		return
-	}
-	merged, err := applyMergePatch(document, body)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_patch", "detail": err.Error(),
+	writeJSON(w, http.StatusCreated,
+		map[string]any{"revision_id": applied.RevisionID, "epoch": applied.Epoch})
+}
+
+// refuseApply maps an [Service.Apply] failure onto this surface's answers.
+//
+// ONE MAPPING, so a programmatic caller and an HTTP one cannot disagree about
+// what a stale base, an unreadable patch or an invalid company means.
+func (s *Service) refuseApply(w http.ResponseWriter, err error) {
+	var raced *RacedError
+	var patchErr *PatchError
+	var invalid *ValidationError
+	switch {
+	case errors.Is(err, ErrNoControlPlane):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "no_control_plane",
+			"detail": "this process has no coordination store, so it cannot " +
+				"activate a revision",
+			"hint": "post to a node running the engine",
 		})
-		return
-	}
-	// PARSED STRICTLY, which is what makes a typo in a patch a 400 rather
-	// than a silently ignored section: the authored reader refuses an
-	// unknown field, and it accepts the normalised form the merge emits.
-	incoming, err := parseDocument(merged)
-	if err != nil {
+	case errors.Is(err, ErrNoActiveRevision):
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "no_active_revision",
+			"hint": "there is nothing to patch; import a company first, or " +
+				"use PUT /config to send a whole document",
+		})
+	case errors.As(err, &raced):
+		body := map[string]any{
+			"error": "revision_advanced", "your_base": raced.Base,
+			"hint": "another write activated first; this revision was stored " +
+				"but not activated. Re-read /config and send the edit again",
+		}
+		if raced.Stored != "" {
+			body["stored_revision_id"] = raced.Stored
+		}
+		if raced.Current != "" {
+			body["current_revision_id"] = raced.Current
+		}
+		writeJSON(w, http.StatusConflict, body)
+	case errors.As(err, &patchErr):
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_patch", "detail": err.Error(),
+			"error": "invalid_patch", "detail": patchErr.Err.Error(),
 			"hint": "the patched document was refused; an unknown key in a " +
 				"patch is refused here rather than ignored",
 		})
-		return
-	}
-	// The masks a caller was shown come back as the values they hide, the
-	// same as on the full write: a patch built from a redacted GET must
-	// not replace a credential with "__redacted__".
-	incoming.RestoreRedacted(prior)
-	if err := incoming.Validate(); err != nil {
+	case errors.As(err, &invalid):
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "validation_error", "detail": err.Error(),
+			"error": "validation_error", "detail": invalid.Err.Error(),
 			"hint": "a patch is validated as the WHOLE document it produces, " +
 				"so a section that is fine on its own is still refused when " +
 				"it leaves the company invalid",
 		})
+	default:
+		s.fail(w, "apply the config", err)
+	}
+}
+
+// reload serves POST /config/reload.
+//
+// No body, and no If-Match: it changes nothing, so there is no edit to lose a
+// race with. What it produces is a new revision carrying the SAME document,
+// which advances the epoch and makes every node re-apply — re-reading the
+// secret store as it does, which is the whole point.
+func (s *Service) reload(w http.ResponseWriter, r *http.Request) {
+	// HEADER ONLY, like revert: this route reads no body, and it already
+	// knows what it did, so an unset summary defaults rather than
+	// answering 400.
+	applied, err := s.Reload(r.Context(), strings.TrimSpace(r.Header.Get("X-Summary")), operatorOf(r))
+	if err != nil {
+		s.refuseApply(w, err)
 		return
 	}
-	s.store(w, r, incoming, active.ID, summary)
+	writeJSON(w, http.StatusCreated,
+		map[string]any{"revision_id": applied.RevisionID, "epoch": applied.Epoch})
 }
 
 // revert serves POST /config/revisions/{id}/revert.
@@ -590,96 +630,24 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 }
 
 // store seals and activates a document, and answers.
+//
+// The HTTP half of [Service.activate]: it owns the status codes and the JSON
+// and nothing about the ordering, which lives in one place beside the
+// programmatic caller.
 func (s *Service) store(w http.ResponseWriter, r *http.Request, company *config.Company, parent, summary string) {
-	if s.plane == nil {
-		// REFUSED, not stored. Writing a revision this process cannot
-		// point the fleet at would answer 201 for a change that never
-		// takes effect anywhere — the exact failure the control plane
-		// exists to remove.
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "no_control_plane",
-			"detail": "this process has no coordination store, so it cannot " +
-				"activate a revision",
-			"hint": "post to a node running the engine",
-		})
-		return
-	}
-	document, err := json.Marshal(company)
+	applied, err := s.activate(r.Context(), company, parent, summary, operatorOf(r))
 	if err != nil {
-		s.fail(w, "encode the config", err)
+		s.refuseApply(w, err)
 		return
 	}
-	payload, err := secrets.Seal(s.cipher, document)
-	if err != nil {
-		s.fail(w, "seal the config", err)
-		return
-	}
-	operator, _ := auth.OperatorFrom(r.Context())
-	at := s.now()
-	// STORED FIRST, then pointed at. A crash between the two leaves a
-	// revision nothing points at — inert, and recoverable with `crewlet
-	// config activate <id>` — while the other order would point the fleet
-	// at a revision no node can read.
-	//
-	// A COMMAND rather than a route: this surface serves no activate, and
-	// the nearest thing it does serve, POST /config/revisions/{id}/revert,
-	// stores a NEW revision carrying the old payload rather than pointing
-	// back at the orphan.
-	id, err := s.configs.InsertActive(r.Context(), store.Revision{
-		ParentID: parent, Source: "api", CreatedBy: operator,
-		Summary: summary, Payload: payload, CreatedAt: at,
-	})
-	if err != nil {
-		s.fail(w, "store the config", err)
-		return
-	}
-	// The SEALED payload travels with the pointer. It is stored here too
-	// — this node's own history, diffs and revert targets read that table
-	// — but the fleet's copy is what every OTHER node applies from, and
-	// without it a live config change reached exactly this node.
-	//
-	// EXPECT IS THE REVISION THIS EDIT WAS BUILT ON, which is what `parent`
-	// already means: every write on this surface reads the active revision,
-	// derives from it, and names it as the parent. Passing it makes the flip
-	// a compare-and-set, so a concurrent write on ANY node is refused here
-	// rather than silently overwritten — and that holds whether or not the
-	// caller sent If-Match, because the server knows what it read.
-	//
-	// Empty on a first import, where there is nothing to have raced with.
-	published, err := s.plane.Activate(r.Context(), coord.ActivationRequest{
-		RevisionID: id, Summary: summary, Payload: payload, At: at, Expect: parent,
-	})
-	if errors.Is(err, coord.ErrActivationRaced) {
-		// THE REVISION IS KEPT, not unwound. It is stored, valid and
-		// inert — the operator's work survives as history they can
-		// revert to — and this node's reconciler adopts whichever
-		// revision actually won at its next tick. Unwinding instead
-		// would mean a second write that can itself fail, on the path
-		// where something has already gone wrong.
-		log.InfoContext(r.Context(), "config_activation_raced",
-			"revision", id, "expected", parent, "by", operator)
-		current, _, terr := s.plane.Target(r.Context())
-		body := map[string]any{
-			"error": "revision_advanced", "your_base": parent,
-			"stored_revision_id": id,
-			"hint": "another write activated first; this revision was stored " +
-				"but not activated. Re-read /config and send the edit again",
-		}
-		if terr == nil {
-			body["current_revision_id"] = current.RevisionID
-		}
-		writeJSON(w, http.StatusConflict, body)
-		return
-	}
-	if err != nil {
-		s.fail(w, "activate the config", err)
-		return
-	}
-	s.nudge(r.Context(), id, summary, operator)
-	log.InfoContext(r.Context(), "config_revision_written",
-		"revision", id, "epoch", published.Epoch, "by", operator, "summary", summary)
 	writeJSON(w, http.StatusCreated,
-		map[string]any{"revision_id": id, "epoch": published.Epoch})
+		map[string]any{"revision_id": applied.RevisionID, "epoch": applied.Epoch})
+}
+
+// operatorOf is who the guard authenticated on this request, or empty.
+func operatorOf(r *http.Request) string {
+	operator, _ := auth.OperatorFrom(r.Context())
+	return operator
 }
 
 // nudge tells every node an activation happened.
