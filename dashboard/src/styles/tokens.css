@@ -115,11 +115,23 @@
   --r-full: 999px;
 
   /* ---- Layout ---------------------------------------------------------- */
-  /* The rail's own inset. Each nav row adds its --space-2 on top, so text
-     and icons settle at --nav-gutter + 8px from the sidebar's edge. */
-  --nav-gutter: var(--space-3);
+  /* The rail's geometry, in TWO parts, because a row's EDGE and a row's TEXT
+     want different insets: the edge is the click target and the active tint,
+     and it should reach most of the rail's width; the text wants to sit off
+     that edge far enough to read as a row rather than as a label stuck to a
+     border. --nav-gutter insets the rail (so it is where a row's background
+     begins) and --nav-row-pad insets the content inside the row, which puts
+     every glyph at the sum of the two from the sidebar's edge.
+
+     Splitting it is what lets the rows be widened without moving one glyph:
+     shrink the gutter, grow the pad by the same step, and the sum — the
+     vertical line the mark, the group labels and the item text all start on —
+     does not move. Anything in the rail with no row of its own (the brand,
+     the group labels) adds the two rather than carrying a literal, which is
+     the drift that once put the mark 4px left of every nav label. */
+  --nav-gutter: var(--space-2);
+  --nav-row-pad: var(--space-3);
   --sidebar-w: 236px;
-  --sidebar-w-collapsed: 60px;
   --topbar-h: 52px;
   /* Prose and forms get a measure. Tables and charts deliberately do not:
      they are the one content that genuinely wants the whole viewport. */

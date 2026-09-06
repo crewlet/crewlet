@@ -127,6 +127,17 @@ Three elevation steps: on the dark theme a panel is lifted by the light along
 its top edge, because a shadow is invisible against near-black; on light the
 shadow does the work. One recipe, two grounds, no second component.
 
+The sidebar's inset is the one place that scale is split in two, because a rail
+row has two edges that want different things. `--nav-gutter` insets the rail —
+it is where a row's own background, hover and active tint begin, so it decides
+how much of the rail's width the click target covers. `--nav-row-pad` insets
+the content inside that row. Every glyph in the rail therefore lands on the sum
+of the two, and anything with no row of its own — the brand lockup, the group
+labels — adds them rather than carrying a literal. That is what lets the rows
+be widened without moving one glyph: shrink the gutter, grow the pad by the
+same step, and the vertical line the mark, the group labels and the item text
+share does not move.
+
 ---
 
 ## Information architecture
