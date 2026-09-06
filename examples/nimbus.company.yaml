@@ -232,11 +232,96 @@ providers:
   #   api_key: "${OPENAI_API_KEY}"
   #   dimensions: 1536
 
-  # THERE IS NO `sandbox:` BLOCK.  A code sandbox authors code and opens a
-  # merge request, which needs a code host this company does not
-  # configure.  Add `providers.sandbox` together with a code host — see
-  # docs/concepts/code-sandbox.md, which carries the git-auth recipe a
-  # sandboxed seat needs to push under its own identity.
+  # ── The code sandbox: the engine host, `direct` ─────────────────────
+  #
+  # A sandbox is a place for an agent to RUN CODE, and it is worth having
+  # with or without a code host: the three engineering seats below get a
+  # `run_sandbox` tool during Execute that hands a brief to a coding agent
+  # with a real shell, a real editor and a real working directory.  With
+  # no code host wired up, what comes back is the work itself — a
+  # prototype, a benchmark, an answer that needed running rather than
+  # reasoning — reported into the turn and then into chat.  Add a code
+  # host later and the same runs start opening merge requests, with the
+  # git-auth recipe from docs/integrations/gitlab.md as the only addition.
+  #
+  # A coding run is DETACHED: the tool starts it, the executor's loop
+  # suspends, and the engine resumes that same loop when the run
+  # finishes — minutes later, possibly after a restart.  Nothing parks a
+  # goroutine on a running job.
+  #
+  # NO EXTRA CREDENTIAL.  `default_coding_agent: claude-code` is the same
+  # CLI as the LLM above, and on a LOCAL cell the backend seeds that
+  # provider's credential files into the box and writes the refreshed one
+  # back afterwards — so the coding agent runs on the same subscription
+  # `crewlet llm login` already established.  (That seeding is exactly why
+  # a remote `e2b` cell would NOT work here: the credential files carry a
+  # refresh token whose rotation is fleet state and deliberately never
+  # leave the engine host, so a remote box needs a headless token —
+  # `crewlet llm login default -capture-token` — instead.  The engine
+  # refuses such a run up front rather than provisioning a box that
+  # cannot authenticate.)
+  sandbox:
+    # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST, and
+    # each seat picks one with `role.sandbox.run_in`.  This company
+    # configures the ENGINE HOST only — each coding job runs as a process
+    # tree on the machine running `crewlet run`, with no remote account,
+    # no API key and nothing to provision.
+    local:
+      # The local backend serves two cells, chosen per seat:
+      #
+      #   run_in: direct     state isolation only — each box gets its own
+      #                      HOME, XDG directories and an allowlisted
+      #                      environment (never the engine's own tokens),
+      #                      and file steps writing outside the box are
+      #                      refused — but the coding agent runs as the
+      #                      engine's user with the engine's filesystem
+      #                      access.  The right trade for your own
+      #                      machine, the wrong one for a shared host.
+      #
+      #   run_in: container  real host isolation.  Needs an image carrying
+      #                      the coding-agent CLI, and is where a local
+      #                      box is SIZED (run_args takes --cpus/--memory,
+      #                      mirroring how a remote box is sized by its
+      #                      template):
+      #
+      #                        image: "your-registry/coding-agent:latest"
+      #                        runtime: auto      # auto | docker | podman
+      #                        run_args: ["--cpus", "2", "--memory", "4g"]
+      state_dir: "./nimbus-data/sandboxes"       # box directories; removed at teardown,
+                                                 #   and orphans from a crashed engine are
+                                                 #   reaped on the next create
+    # WHERE A SEAT THAT NAMES NONE RUNS.  Required whenever the catalogue
+    # offers more than one cell — and `local:` alone is two, because it
+    # serves `direct` and `container`.  There is deliberately no implicit
+    # answer: `direct` runs the coding agent as the engine's user, which
+    # is a trade to make deliberately and never one to inherit by
+    # accident.
+    default_run_in: direct                       # direct | container | e2b
+    default_coding_agent: claude-code            # same CLI as providers.llm.default, so the
+                                                 #   box needs no credential of its own
+    default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
+    default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); on a local cell that costs disk rather than a provider's snapshot bill, but it is still held, so the engine reaps it after this long and re-seeds. 0 = never pause, always re-seed; omit the key entirely for this 1800s default.
+    # THE ONLY ENGINE-SIDE BOUND ON A RUNAWAY CODING AGENT.  A coding job
+    # is deliberately never force-stopped on a clock (see
+    # default_timeout_seconds), so without this nothing stops one that is
+    # thrashing rather than working.  The shipped default is 0 —
+    # uncapped — which is right for a company whose task sizes an operator
+    # has measured, and wrong for this one: these runs are unattended, on
+    # your own machine, spending your own plan window.  60 rounds is a
+    # genuine multi-file task at 20-60 seconds a round, so a run that has
+    # stopped making progress is caught inside an hour rather than at the
+    # end of the window.  Raise it the day a real task hits it.
+    default_max_turns: 60
+    # NO ENGINE-WIDE `setup:` STEPS, and that is a `direct`-specific
+    # decision rather than an omission.  Setup commands run in a shell —
+    # and under `direct` that shell is YOUR machine, as your user, so the
+    # `apt-get install` a step would use to provision a Go or Node
+    # toolchain for a remote box would install it on the engine host
+    # instead.  A `direct` box inherits whatever toolchains the machine
+    # already has, which is the point of choosing it.  Provision
+    # deliberately with `run_in: container` and an image, or with `e2b`.
+    # (File steps are not merely discouraged here: a step writing a system
+    # path is REFUSED under `direct`, naming the mode.)
 
 # Turn engine — executor/reviewer settings.  Includes the round-cap
 # extension judge: when the executor exhausts its base round cap without
@@ -771,7 +856,7 @@ units:
               you agree on with reflect_and_persist.
         roles:
           - name: Agent SWE
-            goal: "Own Nimbus's control plane — nimbuscore (the Go HTTP/REST service) and nimbusk0s (the worker image). Take the work the CTO hands you, think it through properly, and come back with a concrete design, its trade-offs, and what you need from anyone else to land it"
+            goal: "Own Nimbus's control plane — nimbuscore (the Go HTTP/REST service) and nimbusk0s (the worker image). Take the work the CTO hands you, think it through properly, build and run the parts that answer a question faster than an argument does, and come back with a concrete design, its trade-offs, and what you need from anyone else to land it"
             backstory: >
               Senior backend engineer with many years building cloud-native infrastructure
               control planes in Go.  Deep hands-on experience with Kubernetes internals
@@ -785,6 +870,7 @@ units:
             responsibilities:
               - "Own the control plane: nimbuscore's API surface and nimbusk0s's behaviour"
               - "Take what the CTO hands you, work the design out end to end, and report back with the approach, the trade-offs, and the risks"
+              - "Use `run_sandbox` when running the thing settles it: a spike, a benchmark, a reproduction, a script that proves the interface works. Say what you ran and what it showed"
               - "Agree endpoint contracts with the AI Systems Engineer before either side builds against them"
               - "Say early and clearly when an ask is under-specified — before doing the work, not after"
               - "Keep the CTO and the channel current on what you are actually working on"
@@ -794,19 +880,41 @@ units:
               - Read the whole ask before responding; if the acceptance criteria are missing, ask the person who gave it to you in that thread before starting.
               - When you take something on, say so in the engineering channel — this company has no board, so an unannounced start is invisible work.
               - When you finish a piece of design or analysis, post what you concluded and how to check it, not just that you are done.
+              - A sandbox run is DETACHED and can take minutes — say in the channel that you are starting one and what you expect from it, then report what actually came back. Do not describe code you have not run as if you had.
+              - The box is a scratch machine, not a repository — nothing survives teardown. Bring back the finding, the numbers, and the code that matters, in your reply.
               - When you hit a bug or an edge case, name it in the channel and say whether you are absorbing it or it needs its own piece of work — never silently expand scope.
               - Persist decisions, patterns and lessons with `reflect_and_persist` after each piece of work; it is the only place they will survive.
               - If something you were handed actually belongs to the Frontend SWE (UI) or the AI Systems Engineer (framework runtime), say so in the thread and hand it back rather than doing it anyway.
             mcp_env:
               mattermost:
                 MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_SWE}"
+            # Code-runtime sandbox: during Execute this seat can call
+            # `run_sandbox`, which hands a brief to a coding agent with a
+            # real shell and a real working directory on the engine host,
+            # suspends the turn, and resumes it with what came back.
+            # Control-plane work: nimbuscore's Go service and the nimbusk0s worker image.
+            sandbox:
+              enabled: true
+              # `run_in:` picks this seat's cell from providers.sandbox
+              # above — direct | container | e2b. Omitted here, so it
+              # inherits providers.sandbox.default_run_in (direct). A seat
+              # whose generated code must not touch this host names
+              # `container` here and nothing else changes.
+              #
+              # `coding_agent:` is inherited too (claude-code), which is
+              # what lets the box reuse this seat's own subscription login.
+              mcp:                                # MCP surface INSIDE the box
+                servers: [mattermost]             # a detached run outlives the turn that started it, so chat is the one surface it can say "still going" on
+                # Scoping is server-level only — the coding agent gets every
+                # tool the listed servers expose (there is no per-tool allowlist:
+                # OpenCode has none, and claude-code runs bypassPermissions).
             integrations:
               mattermost:
                 bot_token: "${MATTERMOST_TOKEN_SWE}"
                 channel: engineering
 
           - name: Agent Frontend SWE
-            goal: "Own the Nimbus Console and the marketing website — design the AI-services management UI (models, fine-tuning, datasets, jobs) the product promises, and keep the console's plan in lock-step with what the control plane can actually serve"
+            goal: "Own the Nimbus Console and the marketing website — design the AI-services management UI (models, fine-tuning, datasets, jobs) the product promises, prototype the parts worth seeing before arguing about, and keep the console's plan in lock-step with what the control plane can actually serve"
             backstory: >
               Senior frontend engineer who has shipped enterprise developer-tooling UIs
               at scale.  You live in React + Vite + TypeScript, and you have strong
@@ -824,6 +932,7 @@ units:
               - "Own the console and the website — take work for both, and turn nobody else's work into your own"
               - "Plan the AI Services pages the console promises: Models, Fine-tuning, Datasets, Jobs, Serving Endpoints — agree the API shape with the SWE first"
               - "Say what the console needs from the control plane, early enough that the SWE can build it"
+              - "Use `run_sandbox` to build a real prototype when a description of a UI is worse than the UI — then report what you learned from it, not just that you built it"
               - "Report progress and blockers in the engineering channel where the CTO can see them"
               - "Raise design questions with the PM before designing UX that has no precedent in the console"
               - "Do not take on nimbuscore, nimbusk0s, or the Phase-2 framework — coordinate in the channel instead"
@@ -836,13 +945,33 @@ units:
             mcp_env:
               mattermost:
                 MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_FE}"
+            # Code-runtime sandbox: during Execute this seat can call
+            # `run_sandbox`, which hands a brief to a coding agent with a
+            # real shell and a real working directory on the engine host,
+            # suspends the turn, and resumes it with what came back.
+            # Console and website work: React + Vite + TypeScript.
+            sandbox:
+              enabled: true
+              # `run_in:` picks this seat's cell from providers.sandbox
+              # above — direct | container | e2b. Omitted here, so it
+              # inherits providers.sandbox.default_run_in (direct). A seat
+              # whose generated code must not touch this host names
+              # `container` here and nothing else changes.
+              #
+              # `coding_agent:` is inherited too (claude-code), which is
+              # what lets the box reuse this seat's own subscription login.
+              mcp:                                # MCP surface INSIDE the box
+                servers: [mattermost]             # same reason as the other engineering seats — a long run is invisible until it finishes
+                # Scoping is server-level only — the coding agent gets every
+                # tool the listed servers expose (there is no per-tool allowlist:
+                # OpenCode has none, and claude-code runs bypassPermissions).
             integrations:
               mattermost:
                 bot_token: "${MATTERMOST_TOKEN_FE}"
                 channel: engineering
 
           - name: Agent AI Systems Engineer
-            goal: "Design the Phase-2 Nimbus AI framework — a Python-first, open framework that runs on Nimbus clusters and unifies distributed training, fine-tuning, batch inference, and online serving. Own its runtime, SDK, CLI, and the contract it needs from the control plane"
+            goal: "Design the Phase-2 Nimbus AI framework — a Python-first, open framework that runs on Nimbus clusters and unifies distributed training, fine-tuning, batch inference, and online serving. Own its runtime, SDK, CLI, and the contract it needs from the control plane, and write the SDK you are proposing rather than only describing it"
             backstory: >
               Distributed-systems engineer who has built large-scale AI workload runtimes
               (Ray, KubeRay, Dask, cluster-scale job schedulers, vLLM/TGI-style serving
@@ -863,12 +992,12 @@ units:
               - "Own the Phase-2 framework: its core surfaces (Python SDK, CLI, runtime scheduler, worker protocol) and the control-plane integration it depends on"
               - "Work out the architecture and post the decisions — the actor model, scheduler design, GPU scheduling strategy, dataloader pipeline, serving stack — with the alternatives you rejected"
               - "Propose new control-plane endpoints to the SWE as a concrete contract, and do not design the framework side until it is agreed"
-              - "Describe the end-to-end example (hello-train, hello-serve) you would ship first, so DevRel can build a story on it"
+              - "Write the end-to-end example (hello-train, hello-serve) you would ship first with `run_sandbox`, run it, and report what it took — so DevRel can build a story on something that actually executed"
               - "Escalate to the CTO when an architecture choice has cross-team implications (control-plane API changes, console UX impact, a large dependency)"
               - "Do not take on nimbuscore, nimbusk0s, the console, or the website — raise it with the owning seat instead"
               - "Keep the PM and DevRel current on what is coming, on your own initiative"
             behavioral_guidelines:
-              - Before designing anything, write out the ten lines of Python a user would type — then design backwards into the runtime from there.
+              - Before designing anything, write out the ten lines of Python a user would type — then design backwards into the runtime from there. `run_sandbox` gives you a real interpreter — run them.
               - For any feature needing a new control-plane endpoint, put the endpoint shape to the SWE in the engineering channel and treat your side as blocked until they agree it.
               - Post the reasoning for every non-trivial design choice; a decision nobody can find is a decision the company will relitigate.
               - If you cannot describe a public surface in ten lines, the API is wrong — say so rather than shipping the description you have.
@@ -877,6 +1006,26 @@ units:
             mcp_env:
               mattermost:
                 MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_AI}"
+            # Code-runtime sandbox: during Execute this seat can call
+            # `run_sandbox`, which hands a brief to a coding agent with a
+            # real shell and a real working directory on the engine host,
+            # suspends the turn, and resumes it with what came back.
+            # Phase-2 framework work: the Python SDK, runtime and CLI.
+            sandbox:
+              enabled: true
+              # `run_in:` picks this seat's cell from providers.sandbox
+              # above — direct | container | e2b. Omitted here, so it
+              # inherits providers.sandbox.default_run_in (direct). A seat
+              # whose generated code must not touch this host names
+              # `container` here and nothing else changes.
+              #
+              # `coding_agent:` is inherited too (claude-code), which is
+              # what lets the box reuse this seat's own subscription login.
+              mcp:                                # MCP surface INSIDE the box
+                servers: [mattermost]             # same reason as the other engineering seats — a long run is invisible until it finishes
+                # Scoping is server-level only — the coding agent gets every
+                # tool the listed servers expose (there is no per-tool allowlist:
+                # OpenCode has none, and claude-code runs bypassPermissions).
             integrations:
               mattermost:
                 bot_token: "${MATTERMOST_TOKEN_AI}"

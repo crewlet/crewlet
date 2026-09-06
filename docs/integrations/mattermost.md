@@ -768,9 +768,12 @@ The example org in [`examples/nimbus.company.yaml`](https://github.com/crewlet/c
 **is** the shortest way to try this. It is a seven-seat company whose only
 integration is Mattermost and whose only model is a coding CLI you already
 subscribe to — so there is no Atlassian site to stand up, no code host, no
-metered API key, and nothing that has to reach the engine from outside. Add
-a tracker, a wiki or a code host afterwards, once you have seen the loop
-work; each has its own page and nothing here has to be undone first.
+metered API key, and nothing that has to reach the engine from outside. Its
+three engineering seats also run code, in a [sandbox](../concepts/code-sandbox.md)
+on the engine host that reuses the same CLI login, so that costs nothing extra
+to set up either. Add a tracker, a wiki or a code host afterwards, once you
+have seen the loop work; each has its own page and nothing here has to be
+undone first.
 
 Two things the config expects of you, both once:
 

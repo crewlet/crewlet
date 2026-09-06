@@ -331,11 +331,13 @@ the same network.
 
 The bundled **Nimbus example** (`examples/nimbus.company.yaml` +
 `examples/nimbus.config.yaml`) is a complete seven-seat reference company that
-makes one pick from each row of this page and nothing more: chat on
-**Mattermost**, and the model a **coding CLI on your own subscription**. Every
-other row is deliberately empty — no tracker, no knowledge base, no code host,
-no sandbox — which is what lets the whole thing run from one compose profile
-and one `crewlet llm login`:
+makes one pick from each row of this page that costs nothing extra to stand
+up: chat on **Mattermost**, the model a **coding CLI on your own
+subscription**, and the code sandbox on the **engine host** (`run_in: direct`),
+which reuses that same subscription login rather than needing an account of its
+own. The rows that need somebody else's service — a tracker, a knowledge base,
+a code host — are deliberately empty, which is what lets the whole thing run
+from one compose profile and one `crewlet llm login`:
 
 ```bash
 docker compose --profile mattermost up -d --wait

@@ -165,11 +165,11 @@ The dashboard and webhook API come up with the engine. The full
 first turn with no integrations at all, then wiring in the real ones.
 
 > **Want a whole company to run?** `examples/nimbus.company.yaml` is a complete
-> seven-seat reference org — chat on Mattermost, and its model a coding CLI you
-> already subscribe to, so it needs no API key and no service beyond the chat
-> server in this repo's compose file. Every setting carries its reasoning in a
-> comment, and a tracker, a wiki, a code host or a code sandbox each add on top
-> without undoing any of it.
+> seven-seat reference org — chat on Mattermost, its model a coding CLI you
+> already subscribe to, and a code sandbox on the engine host that reuses that
+> same login. No API key, and no service beyond the chat server in this repo's
+> compose file. Every setting carries its reasoning in a comment, and a tracker,
+> a wiki or a code host each add on top without undoing any of it.
 
 > **Rather not write it by hand?** An AI assistant can interview you and author
 > both files, checking its own work against the shipped JSON Schema — see
