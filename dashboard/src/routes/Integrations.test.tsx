@@ -9,7 +9,7 @@
  * answer is worth pinning.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { CATALOG, EntryRow, Reconcile, phaseTone, rollUp } from "./Integrations.tsx";
 import type { IntegrationRow } from "~/protocol/types.ts";
@@ -186,10 +186,11 @@ test("an unknown phase is never the tool's ready state", () => {
   expect(broken.tag).toBe("degraded");
 });
 
-// THE DETAILS ARE STILL THERE. The row leads with the tool, and the counts,
-// the inbound path and the findings sit under a disclosure rather than
-// disappearing: an operator who needs to know why can open it.
-test("a configured tool folds its surfaces under a disclosure", () => {
+// THE CARD LEADS WITH THE TOOL, and the plumbing is behind a disclosure that
+// starts closed: an operator scanning six integrations wants six names and
+// six states, not six paragraphs. Opening it shows the counts, the paths and
+// what the loop found, per surface.
+test("a configured tool discloses its surfaces", () => {
   render(
     <EntryRow
       entry={atlassian}
@@ -200,18 +201,33 @@ test("a configured tool folds its surfaces under a disclosure", () => {
     />,
   );
   expect(screen.getByText("Atlassian")).toBeTruthy();
-  expect(screen.getByText("Details")).toBeTruthy();
+  // Closed to begin with: nothing from the body is on screen.
+  expect(screen.queryByText("/webhooks/jira")).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
   expect(screen.getByText("Jira")).toBeTruthy();
   expect(screen.getByText("Confluence")).toBeTruthy();
   expect(screen.getByText("/webhooks/jira")).toBeTruthy();
   expect(screen.getByText(/in: 4/)).toBeTruthy();
 });
 
-// A tool nobody set up has no details to open, and says so in its tag.
-test("an absent tool has no disclosure", () => {
+// A TOOL NOBODY SET UP HAS NOTHING TO DISCLOSE, so it gets no disclosure: a
+// chevron that opens an empty box is a control that lies.
+test("an absent tool is a plain card with no disclosure", () => {
   render(<EntryRow entry={slack} rows={rowsOf()} />);
   expect(screen.getByText("not configured")).toBeTruthy();
-  expect(screen.queryByText("Details")).toBeNull();
+  expect(screen.queryByRole("button", { name: /details/i })).toBeNull();
+  // And it still says what the tool is for, because the catalogue is what
+  // tells a reader the engine serves it at all.
+  expect(screen.getByText("Team communication")).toBeTruthy();
+});
+
+// CONNECTED FIRST. An operator comes here to finish something, so what is
+// already working belongs above the catalogue of what is not.
+test("a set-up tool sorts above one that is not", () => {
+  const rows = rowsOf({ key: "datadog", configured: true });
+  const order = [...CATALOG].sort((a, b) => Number(isSetUp(b, rows)) - Number(isSetUp(a, rows)));
+  expect(order[0]?.key).toBe("datadog");
 });
 
 // A READY PHASE DOES NOT SILENCE A REFUSED WEBHOOK SECRET.
@@ -299,7 +315,7 @@ test("the phase order is the engine's", () => {
 
 // --- the action slot -------------------------------------------------------- //
 
-import { actionFor, sectionsFor } from "./Integrations.tsx";
+import { actionFor, isSetUp, sectionsFor } from "./Integrations.tsx";
 import type { SetupToolState } from "~/protocol/types.ts";
 
 function toolState(over: Partial<SetupToolState>): SetupToolState {

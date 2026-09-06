@@ -512,6 +512,21 @@ export function sectionsFor(
   return out;
 }
 
+/**
+ * One integration, as a card.
+ *
+ * THE SHAPE THE CONSOLE USES, and it is two states of one object rather than
+ * two components. A tool nobody has connected is a bordered card: mark, name,
+ * what it is for, and the one action that starts it. A connected one is the
+ * same card with a header that discloses a body, so it reads as the thing it
+ * already was, just taller.
+ *
+ * The body is where the engine's own plumbing lives: a row per surface with
+ * its counts, its path and what the reconcile loop last found, and for a
+ * per-seat vendor a row per agent. None of that belongs in the header, which
+ * is what the previous layout got wrong: an operator scanning six
+ * integrations wants six names and six states, not six paragraphs.
+ */
 export function EntryRow({
   entry,
   rows,
@@ -530,6 +545,7 @@ export function EntryRow({
   /** A pass this row started and is waiting on. */
   running?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
   const state = rollUp(entry, rows);
   const present = presentSurfaces(entry, rows);
   const absent = present.length === 0;
@@ -539,75 +555,138 @@ export function EntryRow({
   // hook and its Forge relay registers nothing, so the buttons are per
   // surface and named when there is more than one.
   const passable = tools.filter((t) => t.can_provision && t.satisfied);
+  const seats = tools.flatMap((t) => t.seats ?? []);
+  const bodyID = `int-body-${entry.key}`;
+
+  // A FRAGMENT, not a wrapper: the header already has one actions row, and
+  // nesting a second inside it would put a flex container in a flex
+  // container for nothing.
+  const actions = (
+    <>
+      <Badge tone={state.tone} outline={state.outline} dot={!state.outline}>
+        {state.tag}
+      </Badge>
+      {action && onConnect && (
+        <Button
+          size="sm"
+          variant={action.label === "Manage" ? "ghost" : "primary"}
+          onClick={() => onConnect(action.blocks)}
+          disabled={running}
+        >
+          {action.label}
+        </Button>
+      )}
+      {/* THE PASS, and only where this build has one. Offering it everywhere
+          would give an operator a button that discovers on a press that
+          there is nothing behind it. */}
+      {onPass &&
+        passable.map((tool) => (
+          <Button
+            key={tool.key}
+            size="sm"
+            onClick={() => onPass(tool, false)}
+            disabled={running}
+            title={`Register what ${tool.key} needs at the vendor`}
+          >
+            {running ? "Running" : passable.length > 1 ? `Set up ${tool.key}` : "Run setup"}
+          </Button>
+        ))}
+      {onPass && passable.length > 0 && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => onPass(passable[0]!, true)}
+          disabled={running}
+        >
+          Recheck
+        </Button>
+      )}
+    </>
+  );
+
+  // NOT CONNECTED IS A PLAIN CARD. There is nothing to disclose, so it gets
+  // no disclosure: a chevron that opens an empty box is a control that lies.
+  if (absent) {
+    return (
+      <div className="int-card int-card-absent">
+        <span className="int-brand" aria-hidden>
+          <VendorMark vendor={entry.vendor} />
+        </span>
+        <span className="int-heading">
+          <span className="int-name">{entry.name}</span>
+          <span className="int-desc">{entry.description}</span>
+        </span>
+        <div className="int-card-actions">{actions}</div>
+      </div>
+    );
+  }
 
   return (
-    <div className={absent ? "list-row int-row int-row-absent" : "list-row int-row"}>
-      <span className="int-row-icon" aria-hidden>
-        <VendorMark vendor={entry.vendor} />
-      </span>
-      <div className="int-row-text">
-        <span className="int-row-name">{entry.name}</span>
-        <span className="int-row-desc">{entry.description}</span>
-        {state.status && (
-          <span className={state.attention ? "int-row-status attention" : "int-row-status"}>
-            {state.attention && <Icon name="alert" size="sm" />}
-            {state.status}
+    <section className="int-card">
+      <div className="int-card-head">
+        {/* THE DISCLOSURE IS THE IDENTITY BLOCK, not the whole header, so the
+            row's own buttons are not nested inside a button and a keyboard
+            reader gets one predictable target. */}
+        <button
+          type="button"
+          className="int-card-toggle"
+          aria-expanded={open}
+          aria-controls={bodyID}
+          onClick={() => setOpen((was) => !was)}
+        >
+          <span className="int-brand" aria-hidden>
+            <VendorMark vendor={entry.vendor} />
           </span>
-        )}
-        {!absent && (
-          <details className="int-details">
-            <summary className="int-summary">Details</summary>
-            <div className="col gap-3 int-details-body">
-              {present.map((p) => (
-                <SurfaceDetail key={p.surface.key} surface={p.surface} row={p.row} />
-              ))}
-            </div>
-          </details>
-        )}
-      </div>
-      <div className="int-row-state">
-        <Badge tone={state.tone} outline={state.outline} dot={!state.outline}>
-          {state.tag}
-        </Badge>
-        {action && onConnect && (
-          <Button
-            size="sm"
-            variant={action.label === "Manage" ? "ghost" : "primary"}
-            onClick={() => onConnect(action.blocks)}
-            disabled={running}
+          <span className="int-heading">
+            <span className="int-name">{entry.name}</span>
+            <span className={state.attention ? "int-desc attention" : "int-desc"}>
+              {state.attention && <Icon name="alert" size="sm" />}
+              {state.status ?? entry.description}
+            </span>
+          </span>
+        </button>
+        <div className="int-card-actions">
+          <button
+            type="button"
+            className={open ? "int-chevron is-open" : "int-chevron"}
+            aria-expanded={open}
+            aria-controls={bodyID}
+            aria-label={open ? `Hide ${entry.name} details` : `Show ${entry.name} details`}
+            onClick={() => setOpen((was) => !was)}
           >
-            {action.label}
-          </Button>
-        )}
-        {/* THE PASS, and only where this build has one. Offering it
-            everywhere would give an operator a button that discovers on a
-            press that there is nothing behind it. Setup first, because a
-            pass writes at the vendor and the engine refuses one against a
-            half-configured integration anyway. */}
-        {onPass &&
-          passable.map((tool) => (
-            <Button
-              key={tool.key}
-              size="sm"
-              onClick={() => onPass(tool, false)}
-              disabled={running}
-              title={`Register what ${tool.key} needs at the vendor`}
-            >
-              {running ? "Running" : passable.length > 1 ? `Set up ${tool.key}` : "Run setup"}
-            </Button>
+            <Icon name="chevronDown" size="sm" />
+          </button>
+          {actions}
+        </div>
+      </div>
+
+      {open && (
+        <div className="int-card-body" id={bodyID}>
+          {present.map((p) => (
+            <SurfaceDetail key={p.surface.key} surface={p.surface} row={p.row} />
           ))}
-        {onPass && passable.length > 0 && (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => onPass(passable[0]!, true)}
-            disabled={running}
-          >
-            Recheck
-          </Button>
-        )}
-      </div>
-    </div>
+          {seats.length > 0 && (
+            <ul className="int-seats">
+              {seats.map((seat) => (
+                <li key={seat.handle} className="int-seat">
+                  <span className="int-seat-name">{seat.name || seat.handle}</span>
+                  <span className="int-seat-detail">
+                    {seat.public_url ? (
+                      <code className="inline">{seat.inbound_path}</code>
+                    ) : (
+                      seat.inbound_path
+                    )}
+                  </span>
+                  <Badge tone={seat.satisfied ? "positive" : "neutral"} outline={!seat.satisfied}>
+                    {seat.satisfied ? "ready" : "not set up"}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -650,6 +729,18 @@ function useSetup(): {
     guarded,
     reload,
   };
+}
+
+/**
+ * Whether this company has set a tool up at all.
+ *
+ * The sort key, and it reads the SAME rows the card does rather than the
+ * setup listing: the listing is guarded, so a reader with no operator token
+ * would otherwise see the whole catalogue reorder itself the moment they
+ * signed in.
+ */
+export function isSetUp(entry: Entry, rows: Map<string, IntegrationRow>): boolean {
+  return entry.surfaces.some((s) => rows.has(s.key));
 }
 
 /** Which catalogue row a surface belongs to, so a running pass disables it. */
@@ -813,45 +904,46 @@ export function Integrations() {
 
       {loading && !data && <Skeleton rows={6} />}
       <QueryState error={error} loading={loading} empty={undefined}>
-        {CAPABILITIES.map((cap) => (
-          <Panel
-            key={cap.id}
-            title={cap.title}
-            subtitle={cap.description}
-            icon={cap.icon}
-            padding="none"
-          >
-            <div className="list">
-              {CATALOG.filter((e) => e.capability === cap.id).map((entry) => (
-                <EntryRow
-                  key={entry.key}
-                  entry={entry}
-                  rows={rows}
-                  sections={sectionsFor(entry, setup.byKey)}
-                  onConnect={(blocks) =>
-                    setDialog({
-                      title: entry.name,
-                      sections: sectionsFor(entry, setup.byKey),
-                      blocks,
-                    })
+        {/* CONNECTED FIRST, then the rest, in one flat list rather than
+            grouped into panels. This is the shape the console's own
+            Integrations page has, and the reason is the reading order: an
+            operator comes here to finish something, so what is already
+            working belongs above the catalogue of what is not, and a
+            capability heading over a group of one is chrome around a single
+            row. The catalogue's order still runs messaging, tasks, code,
+            observability, so related tools stay adjacent without the panel
+            around them. */}
+        <div className="int-list">
+          {[...CATALOG]
+            .sort((a, b) => Number(isSetUp(b, rows)) - Number(isSetUp(a, rows)))
+            .map((entry) => (
+              <EntryRow
+                key={entry.key}
+                entry={entry}
+                rows={rows}
+                sections={sectionsFor(entry, setup.byKey)}
+                onConnect={(blocks) =>
+                  setDialog({
+                    title: entry.name,
+                    sections: sectionsFor(entry, setup.byKey),
+                    blocks,
+                  })
+                }
+                onPass={(tool, readOnly) => {
+                  // A pass that writes at the vendor is confirmed first, and
+                  // a pass that needs an administrator credential collects
+                  // it there. A check writes nothing, so it runs on the
+                  // press.
+                  if (readOnly) {
+                    void runPass(tool, true);
+                    return;
                   }
-                  onPass={(tool, readOnly) => {
-                    // A pass that writes at the vendor is confirmed first,
-                    // and a pass that needs an administrator credential
-                    // collects it there. A check writes nothing, so it
-                    // runs on the press.
-                    if (readOnly) {
-                      void runPass(tool, true);
-                      return;
-                    }
-                    setPassing({ tool, title: entry.name });
-                  }}
-                  running={running === entry.key}
-                />
-              ))}
-            </div>
-          </Panel>
-        ))}
+                  setPassing({ tool, title: entry.name });
+                }}
+                running={running === entry.key}
+              />
+            ))}
+        </div>
         {data && configured.length === 0 && (
           <Empty
             icon="plug"

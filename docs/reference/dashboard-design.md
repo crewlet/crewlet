@@ -575,6 +575,12 @@ rendered idle from the first phase to the last.
    invisible is a button an operator presses twice.
 8. **No screen renders a credential.** The setup dialog shows the `${VAR}` a
    field points at and never a value, because no route returns one.
+9. **A card is one object in two states.** The Integrations screen draws one
+   bordered card per tool rather than rows in a shared panel, so a connected
+   one can grow a body and still read as the thing it already was. A row that
+   expands inside a list of rows pushes its neighbours around and reads as the
+   list breaking. The disclosure is the identity block, never the whole
+   header, so the card's own buttons are not nested inside a button.
 7. **Every screen, section and filter is in the URL**, and obeys the
    push/replace table above.
 8. **A screen subscribes to the slices it reads and no others.**
