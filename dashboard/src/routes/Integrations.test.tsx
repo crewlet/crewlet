@@ -318,9 +318,9 @@ function toolState(over: Partial<SetupToolState>): SetupToolState {
 // eventually tell an operator two different things in one row.
 test("the action follows the state", () => {
   const ready = rollUp(atlassian, rowsOf({ key: "jira", configured: true }));
-  expect(actionFor(ready, toolState({ configured: false }))?.label).toBe("Connect");
-  expect(actionFor(ready, toolState({ satisfied: false }))?.label).toBe("Continue");
-  expect(actionFor(ready, toolState({}))?.label).toBe("Manage");
+  expect(actionFor(ready, [toolState({ configured: false })])?.label).toBe("Connect");
+  expect(actionFor(ready, [toolState({ satisfied: false })])?.label).toBe("Continue");
+  expect(actionFor(ready, [toolState({})])?.label).toBe("Manage");
 
   // A row a person owes something on offers Fix, narrowed to the fields
   // that clear what the loop found.
@@ -332,14 +332,35 @@ test("the action follows the state", () => {
       reconcile: { phase: "degraded", actor: "admin", detail: "x" },
     }),
   );
-  const fix = actionFor(owed, toolState({}));
+  const fix = actionFor(owed, [toolState({})]);
   expect(fix?.label).toBe("Fix");
   expect(fix?.blocks).toBe("credential_missing");
+});
+
+// A TOOL IS COMPLETE ONLY WHEN EVERY CONFIGURED SURFACE IS. Atlassian with
+// Jira set up and Confluence half done is neither Connect nor Manage: it is a
+// tool with something left to do, and reading only the first surface would
+// have called it finished.
+test("one unfinished surface makes the whole tool unfinished", () => {
+  const ready = rollUp(atlassian, rowsOf({ key: "jira", configured: true }));
+  const mixed = actionFor(ready, [
+    toolState({ key: "jira", configured: true, satisfied: true }),
+    toolState({ key: "confluence", configured: true, satisfied: false }),
+  ]);
+  expect(mixed?.label).toBe("Continue");
+
+  // And a surface nobody has configured does not make the tool unfinished:
+  // a company using Jira and not Confluence is not half broken.
+  const partial = actionFor(ready, [
+    toolState({ key: "jira", configured: true, satisfied: true }),
+    toolState({ key: "confluence", configured: false, satisfied: false }),
+  ]);
+  expect(partial?.label).toBe("Manage");
 });
 
 // A tool this build knows nothing about offers nothing: a button that
 // discovers on a press that there is no surface behind it is worse than none.
 test("a tool with no setup surface offers no action", () => {
   const state = rollUp(slack, rowsOf({ key: "slack", configured: true }));
-  expect(actionFor(state, undefined)).toBeNull();
+  expect(actionFor(state, [])).toBeNull();
 });

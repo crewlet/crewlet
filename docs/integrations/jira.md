@@ -6,6 +6,16 @@ Crewlet integrates with Jira in two directions: agents control Jira via MCP tool
 
 ---
 
+## Setting it up from the dashboard
+
+The Integrations screen collects the site address, the account email and the
+API token, generates the webhook secret, and then **Run setup** registers the
+hook: the same pass `crewlet jira provision` runs. Atlassian appears as one
+tool there, with Jira and Confluence as sections, because one Atlassian
+account and one Forge app serve both.
+
+See [Running the provisioning pass](../reference/api-endpoints.md#running-the-provisioning-pass).
+
 ## Configuration
 
 The `integrations.jira` block is **non-tool config** — the admin/service account for org-level REST calls (watcher lookups) and the inbound webhook secret. The Jira MCP *tool* server is a separate `mcp_servers` entry shared with Confluence (name it `atlassian`):

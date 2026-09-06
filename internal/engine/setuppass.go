@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
+	"strings"
 )
 
 // Running a vendor's provisioning from the API rather than from a shell.
@@ -28,14 +31,21 @@ import (
 
 // setupPasses are the vendors this build can provision over the API.
 //
-// GitHub first, and alone for now, because it is the vendor whose pass
-// neither creates an account nor issues a credential at the vendor: it reads
-// the organization, mints a webhook secret that is the ENGINE's own value on
-// both ends, and registers a hook. Every other pass creates something a
-// person owns, and putting one of those behind a button is a separate
-// decision (see the note on the reconcile loop's registrations).
+// The three whose passes neither create an account nor issue a credential AT
+// the vendor. Each reads the instance, mints a webhook credential whose value
+// is the engine's own on both ends, and registers a hook, and none of them
+// produces anything a person then owns and has to be told about.
+//
+// GitLab, Mattermost and Slack are deliberately absent. Their passes create
+// service accounts and mint per-seat tokens, which is a different kind of act
+// to put behind a button, and one that wants its own confirmation naming
+// exactly what will be created.
 func (e *Engine) setupPasses() []setup.Pass {
-	return []setup.Pass{&githubPass{engine: e}}
+	return []setup.Pass{
+		&githubPass{engine: e},
+		&jiraPass{engine: e},
+		&confluencePass{engine: e},
+	}
 }
 
 // SetupRunner is the pass runner this node serves, or nil when it has no
@@ -85,6 +95,90 @@ func (e *Engine) SetupSink(operator string) (provision.TokenSink, error) {
 	}
 	return provision.NewSecretStoreSink(
 		fleetsecrets.New(e.backends.Fleet, e.cipher), operator), nil
+}
+
+// jiraPass adapts jira.Reconcile to the pass contract.
+type jiraPass struct{ engine *Engine }
+
+func (*jiraPass) Kind() integration.Kind { return integration.KindJira }
+
+// Needs is nil: the org account already in the config is what registers the
+// hook, so there is no second administrator credential to ask for.
+func (*jiraPass) Needs() *setup.Requirement { return nil }
+
+func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.Jira
+	if cfg == nil {
+		return nil, integration.ErrNotConfigured
+	}
+	env := p.engine.resolver()
+	base := jiraBaseURL(cfg, env)
+	token := strings.TrimSpace(env.Value(cfg.Token))
+	if base == "" || token == "" {
+		// The same two facts the loop reports as findings, and reported
+		// the same way here: a pass that cannot reach the instance has
+		// observed nothing, and calling that a fault would send an
+		// operator looking for an outage.
+		return []integration.Finding{{
+			Kind: integration.FindingCredentialMissing,
+			Detail: "the Jira site address or the org token did not resolve, so " +
+				"this pass could not reach the instance",
+		}}, nil
+	}
+	client, err := jira.NewClient(jira.ClientOptions{
+		URL: base, Email: env.Value(cfg.Email), Token: token,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: jira pass: %w", err)
+	}
+	res, err := jira.Reconcile(ctx, jira.Options{
+		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
+		Sink: in.Sink, WebhookBase: in.WebhookBase,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: jira pass: %w", err)
+	}
+	return res.Findings(), nil
+}
+
+// confluencePass adapts confluence.Reconcile to the pass contract.
+type confluencePass struct{ engine *Engine }
+
+func (*confluencePass) Kind() integration.Kind { return integration.KindConfluence }
+
+func (*confluencePass) Needs() *setup.Requirement { return nil }
+
+func (p *confluencePass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.Confluence
+	if cfg == nil {
+		return nil, integration.ErrNotConfigured
+	}
+	env := p.engine.resolver()
+	base := confluenceBaseURL(cfg, env)
+	token := strings.TrimSpace(env.Value(cfg.Token))
+	if base == "" || token == "" {
+		return []integration.Finding{{
+			Kind: integration.FindingCredentialMissing,
+			Detail: "the Confluence site address or the org token did not resolve, " +
+				"so this pass could not reach the instance",
+		}}, nil
+	}
+	client, err := confluence.NewClient(confluence.ClientOptions{
+		URL: base, Email: env.Value(cfg.Email), Token: token,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: confluence pass: %w", err)
+	}
+	res, err := confluence.Reconcile(ctx, confluence.Options{
+		Client: client, Config: cfg, Value: env.Value,
+		Sink: in.Sink, WebhookBase: in.WebhookBase, Recreate: in.Recreate,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: confluence pass: %w", err)
+	}
+	return res.Findings(), nil
 }
 
 // githubPass adapts github.Reconcile to the pass contract.

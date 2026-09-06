@@ -458,34 +458,50 @@ function SurfaceDetail({ surface, row }: { surface: Surface; row: IntegrationRow
  */
 export function actionFor(
   state: EntryState,
-  setup: SetupToolState | undefined,
+  tools: SetupToolState[],
 ): { label: string; blocks?: string } | null {
-  if (!setup) return null;
-  if (!setup.configured) return { label: "Connect" };
-  if (!setup.satisfied) return { label: "Continue" };
+  if (tools.length === 0) return null;
+  // A TOOL IS CONFIGURED WHEN ANY OF ITS SURFACES IS, and complete only when
+  // every configured one is. Atlassian with Jira set up and Confluence not is
+  // neither "connect" nor "done": it is a tool with something left to do.
+  const configured = tools.filter((t) => t.configured);
+  if (configured.length === 0) return { label: "Connect" };
+  if (configured.some((t) => !t.satisfied)) return { label: "Continue" };
   if (state.attention) {
     // Narrowed to the fields that clear what the loop actually found, so a
-    // Fix opens the two inputs that matter rather than the whole form.
+    // Fix opens the inputs that matter rather than the whole form.
     return { label: "Fix", blocks: "credential_missing" };
   }
   return { label: "Manage" };
 }
 
+/** The surfaces of one tool, with the setup state the engine answered for each. */
+export function sectionsFor(
+  entry: Entry,
+  byKey: Map<string, SetupToolState>,
+): { name: string; tool: SetupToolState }[] {
+  const out: { name: string; tool: SetupToolState }[] = [];
+  for (const surface of entry.surfaces) {
+    const tool = byKey.get(surface.key);
+    if (tool) out.push({ name: surface.name, tool });
+  }
+  return out;
+}
+
 export function EntryRow({
   entry,
   rows,
-  setup,
-  revision,
+  sections,
   onConnect,
   onPass,
   running,
 }: {
   entry: Entry;
   rows: Map<string, IntegrationRow>;
-  setup?: SetupToolState;
-  revision?: string;
-  onConnect?: (tool: SetupToolState, blocks?: string) => void;
-  /** Run the vendor's provisioning pass, or a read-only check of it. */
+  /** The engine's setup state per surface this tool is made of. */
+  sections?: { name: string; tool: SetupToolState }[];
+  onConnect?: (blocks?: string) => void;
+  /** Run a surface's provisioning pass, or a read-only check of it. */
   onPass?: (tool: SetupToolState, readOnly: boolean) => void;
   /** A pass this row started and is waiting on. */
   running?: boolean;
@@ -493,7 +509,12 @@ export function EntryRow({
   const state = rollUp(entry, rows);
   const present = presentSurfaces(entry, rows);
   const absent = present.length === 0;
-  const action = actionFor(state, setup);
+  const tools = (sections ?? []).map((s) => s.tool);
+  const action = actionFor(state, tools);
+  // A pass belongs to a SURFACE, not to a tool: Atlassian's Jira registers a
+  // hook and its Forge relay registers nothing, so the buttons are per
+  // surface and named when there is more than one.
+  const passable = tools.filter((t) => t.can_provision && t.satisfied);
 
   return (
     <div className={absent ? "list-row int-row int-row-absent" : "list-row int-row"}>
@@ -524,11 +545,11 @@ export function EntryRow({
         <Badge tone={state.tone} outline={state.outline} dot={!state.outline}>
           {state.tag}
         </Badge>
-        {action && setup && onConnect && (
+        {action && onConnect && (
           <Button
             size="sm"
             variant={action.label === "Manage" ? "ghost" : "primary"}
-            onClick={() => onConnect(setup, action.blocks)}
+            onClick={() => onConnect(action.blocks)}
             disabled={running}
           >
             {action.label}
@@ -536,23 +557,30 @@ export function EntryRow({
         )}
         {/* THE PASS, and only where this build has one. Offering it
             everywhere would give an operator a button that discovers on a
-            press that there is nothing behind it. Setup first: a pass
-            writes at the vendor and must not run against a
-            half-configured integration, which the engine refuses anyway. */}
-        {setup?.can_provision && setup.satisfied && onPass && (
-          <>
-            <Button size="sm" onClick={() => onPass(setup, false)} disabled={running}>
-              {running ? "Running" : "Run setup"}
-            </Button>
+            press that there is nothing behind it. Setup first, because a
+            pass writes at the vendor and the engine refuses one against a
+            half-configured integration anyway. */}
+        {onPass &&
+          passable.map((tool) => (
             <Button
+              key={tool.key}
               size="sm"
-              variant="ghost"
-              onClick={() => onPass(setup, true)}
+              onClick={() => onPass(tool, false)}
               disabled={running}
+              title={`Register what ${tool.key} needs at the vendor`}
             >
-              Recheck
+              {running ? "Running" : passable.length > 1 ? `Set up ${tool.key}` : "Run setup"}
             </Button>
-          </>
+          ))}
+        {onPass && passable.length > 0 && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => onPass(passable[0]!, true)}
+            disabled={running}
+          >
+            Recheck
+          </Button>
         )}
       </div>
     </div>
@@ -600,13 +628,22 @@ function useSetup(): {
   };
 }
 
+/** Which catalogue row a surface belongs to, so a running pass disables it. */
+function entryOwning(surfaceKey: string): string {
+  return CATALOG.find((e) => e.surfaces.some((s) => s.key === surfaceKey))?.key ?? surfaceKey;
+}
+
 export function Integrations() {
   // Traffic counters are not pushed, and they move slowly; a minute is the
   // right cadence for "is anything arriving at all".
   const { data, loading, error } = useQuery("integrations", undefined, { pollMs: 60_000 });
   const setup = useSetup();
   const toast = useToast();
-  const [dialog, setDialog] = useState<{ tool: SetupToolState; blocks?: string } | null>(null);
+  const [dialog, setDialog] = useState<{
+    title: string;
+    sections: { name: string; tool: SetupToolState }[];
+    blocks?: string;
+  } | null>(null);
   const [running, setRunning] = useState("");
   const [lastRun, setLastRun] = useState<SetupRun | null>(null);
 
@@ -618,7 +655,7 @@ export function Integrations() {
    * reconcile loop writes, so the next poll of `integrations` carries it.
    */
   async function runPass(tool: SetupToolState, readOnly: boolean): Promise<void> {
-    setRunning(tool.key);
+    setRunning(entryOwning(tool.key));
     setLastRun(null);
     try {
       const run = (await rest.post(
@@ -692,8 +729,8 @@ export function Integrations() {
 
       {dialog && (
         <SetupDialog
-          tool={dialog.tool}
-          title={CATALOG.find((e) => e.key === dialog.tool.key)?.name ?? dialog.tool.key}
+          sections={dialog.sections}
+          title={dialog.title}
           blocks={dialog.blocks}
           onClose={() => setDialog(null)}
           onDone={setup.reload}
@@ -746,8 +783,14 @@ export function Integrations() {
                   key={entry.key}
                   entry={entry}
                   rows={rows}
-                  setup={setup.byKey.get(entry.key)}
-                  onConnect={(tool, blocks) => setDialog({ tool, blocks })}
+                  sections={sectionsFor(entry, setup.byKey)}
+                  onConnect={(blocks) =>
+                    setDialog({
+                      title: entry.name,
+                      sections: sectionsFor(entry, setup.byKey),
+                      blocks,
+                    })
+                  }
                   onPass={(tool, readOnly) => void runPass(tool, readOnly)}
                   running={running === entry.key}
                 />

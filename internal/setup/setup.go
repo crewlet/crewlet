@@ -173,6 +173,19 @@ type Requirement struct {
 	// Seat is the handle a per-seat requirement belongs to, empty for a
 	// company-wide one.
 	Seat string `json:"seat,omitempty"`
+
+	// Stored is what the config document holds at ConfigPath right now: a
+	// literal, a `${VAR}`, or nothing. NEVER SERIALISED, which is what the
+	// `json:"-"` is doing and why it is safe to carry a credential here at
+	// all: this value can be a literal secret on a company that wrote one,
+	// and it exists only so the write path can tell a `${VAR}` it may
+	// write through from a literal it must refuse.
+	//
+	// It is set by the vendor that declared the requirement, because that
+	// function has already read the block. The alternative was a second
+	// switch over every config path in the API layer, which is the same
+	// list written twice and eventually two lists that disagree.
+	Stored string `json:"-"`
 }
 
 // Satisfied reports whether this requirement needs nothing further.
@@ -314,6 +327,42 @@ func PointerFor(kind integration.Kind, r Requirement, current string) (name stri
 		return existing, false, nil
 	}
 	return "", false, &ErrLiteralInConfig{Path: r.ConfigPath}
+}
+
+// Held, Plain and Toggle are the three answers a vendor gives per field, and
+// together they are what a Requirement needs to know about the document: is
+// something written down, is it usable, and what exactly is written.
+//
+// Three functions rather than one with a flag, because the three cases are
+// genuinely different questions and picking the wrong one has a visible
+// consequence. A credential is HELD: it may be a `${VAR}`, so present and
+// resolved are two facts and the gap between them is a silent outage. A plain
+// setting is PLAIN: nothing resolves an organization name, so written down is
+// the whole of it, and claiming "cannot say" would put a permanent unknown on
+// a field an operator reads straight off GET /config. A toggle is neither: it
+// is present when it is ON, because reporting `false` as written down would
+// make a paused integration look complete.
+
+// Held is a value that may be a `${VAR}`, resolved through this process.
+func Held(value string, resolve func(string) (string, bool)) (bool, *bool, string) {
+	present, resolved := Resolution(value, resolve)
+	return present, resolved, value
+}
+
+// Plain is a value nothing resolves: written down is the whole of it.
+func Plain(value string) (bool, *bool, string) {
+	present := strings.TrimSpace(value) != ""
+	yes := present
+	return present, &yes, value
+}
+
+// Toggle is on or off. Present means ON.
+func Toggle(on bool) (bool, *bool, string) {
+	yes := on
+	if on {
+		return true, &yes, "true"
+	}
+	return false, &yes, "false"
 }
 
 // Resolution reports what a value in the document amounts to.

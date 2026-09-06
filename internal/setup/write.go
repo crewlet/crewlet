@@ -106,12 +106,10 @@ type Writer struct {
 
 // Write applies a submission: secrets first, then the config, then publish.
 //
-// current reads what the ACTIVE document holds at a config path, which is how
-// a secret requirement decides between minting a new pointer, writing through
-// an existing one, and refusing a literal.
-func (w Writer) Write(
-	ctx context.Context, reqs []Requirement, in Submission, current func(path string) string,
-) (Result, error) {
+// The requirements carry what the document holds today, in [Requirement.Stored],
+// which is how a secret requirement decides between minting a new pointer,
+// writing through an existing one, and refusing a literal.
+func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (Result, error) {
 	if w.Config == nil {
 		return Result{}, fmt.Errorf("setup: no config surface on this process")
 	}
@@ -160,7 +158,7 @@ func (w Writer) Write(
 				"setup: %s is a credential and this process has no secret store to seal it in",
 				r.ConfigPath)
 		}
-		name, writePointer, err := PointerFor(in.Kind, r, current(r.ConfigPath))
+		name, writePointer, err := PointerFor(in.Kind, r, r.Stored)
 		if err != nil {
 			return Result{}, err
 		}

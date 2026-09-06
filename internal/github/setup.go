@@ -120,13 +120,12 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 		},
 	}
 
-	yes := enabled
-	reqs[0].Present, reqs[0].Resolved = enabled, &yes
-	reqs[1].Present, reqs[1].Resolved = setup.Resolution(secret, resolve)
-	reqs[2].Present, reqs[2].Resolved = setup.Resolution(token, resolve)
-	reqs[3].Present, reqs[3].Resolved = literal(url)
-	reqs[4].Present, reqs[4].Resolved = literal(org)
-	reqs[5].Present, reqs[5].Resolved = literal(orgHook)
+	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Toggle(enabled)
+	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Held(secret, resolve)
+	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Held(token, resolve)
+	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Plain(url)
+	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Plain(org)
+	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Plain(orgHook)
 	return reqs
 }
 
@@ -160,12 +159,4 @@ func choices() []setup.Choice {
 		out = append(out, choice)
 	}
 	return out
-}
-
-// literal is the resolution of a plain config value: written down is the
-// whole of it.
-func literal(value string) (bool, *bool) {
-	present := value != ""
-	yes := present
-	return present, &yes
 }

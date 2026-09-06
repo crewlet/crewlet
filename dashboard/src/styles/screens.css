@@ -878,6 +878,15 @@ details > summary.int-summary::-webkit-details-marker {
 .int-surface-head {
   align-items: center;
 }
+/* A section heading inside the setup dialog, for a tool the engine reaches
+   over more than one surface. */
+.int-section {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 .int-findings {
   margin: var(--space-1) 0 0;
   padding-left: var(--space-4);

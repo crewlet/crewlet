@@ -255,6 +255,19 @@ func (r *recorder) Reload(_ context.Context, summary, _ string) (string, int64, 
 	return "rev-2", 8, nil
 }
 
+// withStored copies a requirement list with one field's stored value set,
+// which is how a test says "the document already holds this here".
+func withStored(reqs []setup.Requirement, field, stored string) []setup.Requirement {
+	out := make([]setup.Requirement, len(reqs))
+	copy(out, reqs)
+	for i := range out {
+		if out[i].Field == field {
+			out[i].Stored = stored
+		}
+	}
+	return out
+}
+
 func writer(rec *recorder) setup.Writer {
 	return setup.Writer{Secrets: rec, Config: rec, Now: func() time.Time { return pinned }}
 }
@@ -281,7 +294,7 @@ func TestTheSecretIsWrittenBeforeTheConfigPointsAtIt(t *testing.T) {
 		Kind:    integration.KindDatadog,
 		Values:  map[string]string{"webhook_token": "s3cr3t-value", "route_to": "sre-lead"},
 		Summary: "connect datadog", Operator: "founder",
-	}, func(string) string { return "" })
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,15 +333,11 @@ func TestTheSecretIsWrittenBeforeTheConfigPointsAtIt(t *testing.T) {
 func TestRotatingAValueStillAdvancesTheEpoch(t *testing.T) {
 	t.Parallel()
 	rec := &recorder{}
-	result, err := writer(rec).Write(context.Background(), datadogReqs, setup.Submission{
+	rotating := withStored(datadogReqs, "webhook_token", "${DATADOG_WEBHOOK_TOKEN}")
+	result, err := writer(rec).Write(context.Background(), rotating, setup.Submission{
 		Kind:    integration.KindDatadog,
 		Values:  map[string]string{"webhook_token": "fresh"},
 		Summary: "rotate datadog", Operator: "founder",
-	}, func(path string) string {
-		if path == "integrations.datadog.webhook_token" {
-			return "${DATADOG_WEBHOOK_TOKEN}"
-		}
-		return ""
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -350,7 +359,7 @@ func TestAnUnknownFieldIsRefusedBeforeAnythingIsWritten(t *testing.T) {
 	_, err := writer(rec).Write(context.Background(), datadogReqs, setup.Submission{
 		Kind:   integration.KindDatadog,
 		Values: map[string]string{"webhook_token": "tok", "site": "eu"},
-	}, func(string) string { return "" })
+	})
 	if err == nil {
 		t.Fatal("an unknown field was accepted")
 	}
@@ -368,10 +377,11 @@ func TestAnUnknownFieldIsRefusedBeforeAnythingIsWritten(t *testing.T) {
 func TestALiteralInTheConfigIsRefused(t *testing.T) {
 	t.Parallel()
 	rec := &recorder{}
-	_, err := writer(rec).Write(context.Background(), datadogReqs, setup.Submission{
+	held := withStored(datadogReqs, "webhook_token", "already-a-plain-token")
+	_, err := writer(rec).Write(context.Background(), held, setup.Submission{
 		Kind:   integration.KindDatadog,
 		Values: map[string]string{"webhook_token": "tok"},
-	}, func(string) string { return "already-a-plain-token" })
+	})
 	var literal *setup.ErrLiteralInConfig
 	if !errors.As(err, &literal) {
 		t.Fatalf("err = %v, want a literal refusal", err)
@@ -390,7 +400,7 @@ func TestAFailedPatchLeavesTheSealedValueAndNamesIt(t *testing.T) {
 	result, err := writer(rec).Write(context.Background(), datadogReqs, setup.Submission{
 		Kind:   integration.KindDatadog,
 		Values: map[string]string{"webhook_token": "tok"},
-	}, func(string) string { return "" })
+	})
 	if err == nil {
 		t.Fatal("a failed patch was reported as success")
 	}
@@ -412,7 +422,7 @@ func TestAStaleBaseIsRefusedBeforeAnythingIsSealed(t *testing.T) {
 		Kind:   integration.KindDatadog,
 		Values: map[string]string{"webhook_token": "tok"},
 		Expect: "rev-1",
-	}, func(string) string { return "" })
+	})
 	var stale *setup.ErrStaleBase
 	if !errors.As(err, &stale) {
 		t.Fatalf("err = %v, want a stale-base refusal", err)
@@ -437,7 +447,7 @@ func TestAToggleIsWrittenAsABoolean(t *testing.T) {
 	}}
 	if _, err := writer(rec).Write(context.Background(), reqs, setup.Submission{
 		Kind: integration.KindDatadog, Values: map[string]string{"enabled": "true"},
-	}, func(string) string { return "" }); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(rec.events[0], `"enabled":true`) {
@@ -457,7 +467,7 @@ func TestAListPositionIsRefused(t *testing.T) {
 	}}
 	_, err := writer(rec).Write(context.Background(), reqs, setup.Submission{
 		Kind: integration.KindSlack, Values: map[string]string{"bot_token": "x"},
-	}, func(string) string { return "" })
+	})
 	if err == nil || !strings.Contains(err.Error(), "list position") {
 		t.Fatalf("err = %v, want a refusal naming the list position", err)
 	}

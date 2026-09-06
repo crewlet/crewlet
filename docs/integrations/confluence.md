@@ -6,6 +6,16 @@ Crewlet integrates with Confluence bidirectionally: agents read and write Conflu
 
 ---
 
+## Setting it up from the dashboard
+
+The Integrations screen collects the site address, the account email and the
+API token, generates whichever webhook credential your deployment needs (a
+signing secret for Data Center, a shared token for Cloud), and then **Run
+setup** registers the hooks: the same pass `crewlet confluence provision`
+runs. It appears under Atlassian, beside Jira.
+
+See [Running the provisioning pass](../reference/api-endpoints.md#running-the-provisioning-pass).
+
 ## Configuration
 
 The `integrations.confluence` block is **non-tool config** — the admin/service account for org-level REST calls and the inbound webhook secret. Org-wide knowledge spaces live in the separate `knowledge:` block. The Confluence MCP *tool* server is a separate `mcp_servers` entry, shared with Jira under the name `atlassian`:

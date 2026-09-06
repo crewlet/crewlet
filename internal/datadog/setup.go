@@ -105,23 +105,13 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 	// The toggle is present when it is ON. Reporting `false` as written
 	// down would make a paused integration look complete, and the whole
 	// question this list answers is what is still missing.
-	yes := enabled
-	reqs[0].Present, reqs[0].Resolved = enabled, &yes
-	present, resolved := setup.Resolution(token, resolve)
-	reqs[1].Present, reqs[1].Resolved = present, resolved
+	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Toggle(enabled)
+	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Held(token, resolve)
 	// Neither of the last two is a secret, so what the document says IS
 	// what this process has: present and resolved are the same fact, and
 	// claiming otherwise would put a permanent "cannot say" on a field an
 	// operator can read straight off GET /config.
-	reqs[2].Present, reqs[2].Resolved = literal(routeTo)
-	reqs[3].Present, reqs[3].Resolved = literal(handleTag)
+	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Plain(routeTo)
+	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Plain(handleTag)
 	return reqs
-}
-
-// literal is the resolution of a plain config value: written down is the
-// whole of it.
-func literal(value string) (bool, *bool) {
-	present := value != ""
-	yes := present
-	return present, &yes
 }

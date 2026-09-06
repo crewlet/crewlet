@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -23,35 +22,6 @@ func decode(body []byte, into any) error {
 		return err
 	}
 	return nil
-}
-
-// valueAt reads what the active document holds at a config path.
-//
-// Only the paths this build serves setup for. A switch rather than
-// reflection over the struct tags: reflection would answer for a path no
-// requirement declares, which is precisely the case a typo produces, and it
-// would answer confidently.
-func valueAt(company *config.Company, path string) string {
-	if company == nil {
-		return ""
-	}
-	switch path {
-	case "integrations.public_base_url":
-		return company.Integrations.PublicBaseURL
-	case "integrations.datadog.webhook_token":
-		if d := company.Integrations.Datadog; d != nil {
-			return d.WebhookToken
-		}
-	case "integrations.datadog.route_to":
-		if d := company.Integrations.Datadog; d != nil {
-			return d.RouteTo
-		}
-	case "integrations.datadog.handle_tag":
-		if d := company.Integrations.Datadog; d != nil {
-			return d.HandleTag
-		}
-	}
-	return ""
 }
 
 // mintInto generates the values the caller asked the engine to produce.

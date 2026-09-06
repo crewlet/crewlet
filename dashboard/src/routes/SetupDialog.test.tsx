@@ -83,7 +83,14 @@ afterEach(() => {
 // EVERY WORD COMES FROM THE ENGINE. Nothing about any vendor is in the
 // component, which is what makes adding one a Go change and no screen work.
 test("the form is rendered from the requirement list", () => {
-  render(<SetupDialog tool={tool} title="Datadog" onClose={() => {}} onDone={() => {}} />);
+  render(
+    <SetupDialog
+      sections={[{ name: "Datadog", tool }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
   expect(screen.getByText("Fallback seat")).toBeDefined();
   expect(screen.getByText("Owner tag key")).toBeDefined();
   expect(screen.getByText(/Accept Datadog deliveries/)).toBeDefined();
@@ -93,7 +100,12 @@ test("the form is rendered from the requirement list", () => {
 // asking them to invent a password.
 test("a mintable secret offers no input", () => {
   const { container } = render(
-    <SetupDialog tool={tool} title="Datadog" onClose={() => {}} onDone={() => {}} />,
+    <SetupDialog
+      sections={[{ name: "Datadog", tool }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
   );
   expect(screen.getByText(/Crewlet will generate this/)).toBeDefined();
   // And no password box anywhere: the one secret on this form is minted.
@@ -111,7 +123,12 @@ test("a stored secret shows its pointer, never a value", () => {
     ),
   };
   const { container } = render(
-    <SetupDialog tool={stored} title="Datadog" onClose={() => {}} onDone={() => {}} />,
+    <SetupDialog
+      sections={[{ name: "Datadog", tool: stored }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
   );
   expect(screen.getByText(/Stored as \$\{DATADOG_WEBHOOK_TOKEN\}/)).toBeDefined();
   expect(container.querySelectorAll('input[type="password"]').length).toBe(0);
@@ -133,7 +150,14 @@ test("submitting asks for the mint and sends only what was filled in", async () 
   const spy = stubFetch(
     () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
   );
-  render(<SetupDialog tool={tool} title="Datadog" onClose={() => {}} onDone={() => {}} />);
+  render(
+    <SetupDialog
+      sections={[{ name: "Datadog", tool }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
   fireEvent.click(screen.getByText("Save"));
   await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
@@ -165,7 +189,14 @@ test("a literal_in_config refusal is shown against its field", async () => {
         { status: 409 },
       ),
   );
-  render(<SetupDialog tool={tool} title="Datadog" onClose={() => {}} onDone={() => {}} />);
+  render(
+    <SetupDialog
+      sections={[{ name: "Datadog", tool }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
   fireEvent.click(screen.getByText("Save"));
   expect(await screen.findByRole("alert")).toBeDefined();
   expect(screen.getByText(/holds a value here rather than a/)).toBeDefined();

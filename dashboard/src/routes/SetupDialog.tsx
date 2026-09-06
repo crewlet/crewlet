@@ -63,26 +63,44 @@ function pointerNote(r: SetupRequirement): string {
   return r.secret_name ? "Stored as ${" + r.secret_name + "}" : "Already stored";
 }
 
+/** One engine surface inside a tool's dialog. */
+export interface SetupSection {
+  /** The surface's own name: Jira, Confluence, the Forge relay. */
+  name: string;
+  tool: SetupToolState;
+}
+
 export function SetupDialog({
-  tool,
+  sections,
   title,
   blocks,
-  revision,
   onClose,
   onDone,
 }: {
-  tool: SetupToolState;
-  /** The vendor's own name, which the catalogue has and the API does not. */
+  /**
+   * The surfaces this tool is made of. Usually one; Atlassian is three,
+   * because a company thinks in Atlassian and the engine reaches it over
+   * Jira, Confluence and the Forge relay. Each section submits to its own
+   * vendor block, which is what keeps every write atomic on the thing it
+   * changes.
+   */
+  sections: SetupSection[];
+  /** The tool's own name, which the catalogue has and the API does not. */
   title: string;
   /** Narrow to the fields clearing one finding. */
   blocks?: string;
-  /** The revision the requirement list was read against. */
-  revision?: string;
   onClose: () => void;
   onDone: () => void;
 }) {
   const toast = useToast();
-  const shown = useMemo(() => fieldsFor(tool.requirements, blocks), [tool.requirements, blocks]);
+  const shownBy = useMemo(() => {
+    const out = new Map<string, SetupRequirement[]>();
+    for (const section of sections) {
+      out.set(section.tool.key, fieldsFor(section.tool.requirements, blocks));
+    }
+    return out;
+  }, [sections, blocks]);
+  const shown = useMemo(() => [...shownBy.values()].flat(), [shownBy]);
 
   // A field the engine already holds is left alone unless the operator asks
   // to replace it: sending it back would rewrite a working credential with
@@ -105,38 +123,56 @@ export function SetupDialog({
     return true;
   }
 
-  async function submit(): Promise<void> {
-    setBusy(true);
-    setError("");
-    setFieldErrors({});
-    // Only what the operator actually touched, plus the mints they left in
-    // place. A field sent back unchanged is a field rewritten for no reason.
+  /** What one section would send: only what was touched, plus its mints. */
+  function payloadFor(reqs: SetupRequirement[]): {
+    values: Record<string, string>;
+    generate: string[];
+  } {
     const send: Record<string, string> = {};
     const generate: string[] = [];
-    for (const r of shown) {
+    for (const r of reqs) {
       if (r.kind === "secret" && r.mintable) {
         if (!r.present || replacing[r.field]) generate.push(r.field);
         continue;
       }
       const value = values[r.field];
       if (value === undefined) continue;
+      // A field the engine already holds is left alone unless the operator
+      // asked to replace it: sending it back would rewrite a working
+      // credential with whatever a form rendered.
       if (r.kind === "secret" && r.present && !replacing[r.field]) continue;
       send[r.field] = value;
     }
-    if (Object.keys(send).length === 0 && generate.length === 0) {
+    return { values: send, generate };
+  }
+
+  async function submit(): Promise<void> {
+    setBusy(true);
+    setError("");
+    setFieldErrors({});
+
+    // ONE REQUEST PER SURFACE, and only for the surfaces that have
+    // something to send. Each is atomic on its own vendor block, so a
+    // refusal on the second leaves the first landed rather than half
+    // applied to one document.
+    const work = sections
+      .map((section) => ({ section, body: payloadFor(shownBy.get(section.tool.key) ?? []) }))
+      .filter(({ body }) => Object.keys(body.values).length > 0 || body.generate.length > 0);
+    if (work.length === 0) {
       setError("Nothing to submit: fill in a field, or choose to replace a stored one.");
       setBusy(false);
       return;
     }
     try {
-      const body = (await rest.post(`/setup/integrations/${tool.key}/inputs`, {
-        values: send,
-        generate,
-        ...(revision ? { if_match: revision } : {}),
-      })) as Submitted;
-      toast.ok(
-        body.reloaded ? `${title} credentials rotated and republished` : `${title} connected`,
-      );
+      let rotated = false;
+      for (const { section, body } of work) {
+        const answer = (await rest.post(
+          `/setup/integrations/${section.tool.key}/inputs`,
+          body,
+        )) as Submitted;
+        rotated = rotated || answer.reloaded === true;
+      }
+      toast.ok(rotated ? `${title} credentials rotated and republished` : `${title} connected`);
       onDone();
       onClose();
     } catch (err) {
@@ -193,105 +229,30 @@ export function SetupDialog({
         </>
       }
     >
-      {tool.public_url && (
-        <div className="banner neutral">
-          <Icon name="link" size="sm" />
-          <span className="col" style={{ gap: 4 }}>
-            <span>
-              {title} delivers to <code className="inline">{tool.public_url}</code>
-            </span>
-            <span className="t-caption">
-              Paste that into the vendor's own webhook settings. The engine does not register it for
-              you.
-            </span>
-          </span>
-        </div>
-      )}
-
-      {shown.map((r) => {
-        const note = pointerNote(r);
+      {sections.map((section) => {
+        const reqs = shownBy.get(section.tool.key) ?? [];
+        if (reqs.length === 0) return null;
         return (
-          <div key={r.field} className="col gap-1">
-            {r.kind === "secret" && r.mintable ? (
-              <div className="field">
-                <label>{r.label}</label>
-                <span className="hint">
-                  {r.present && !replacing[r.field]
-                    ? note
-                    : "Crewlet will generate this and seal it in the secret store."}
+          <div key={section.tool.key} className="col gap-3">
+            {/* A HEADING ONLY WHERE THERE IS MORE THAN ONE. On Slack the
+                dialog is already titled Slack, and a "Slack" heading under
+                it is a word that says nothing. */}
+            {sections.length > 1 && <strong className="int-section">{section.name}</strong>}
+            {section.tool.public_url && !section.tool.can_provision && (
+              <div className="banner neutral">
+                <Icon name="link" size="sm" />
+                <span className="col" style={{ gap: 4 }}>
+                  <span>
+                    Deliveries arrive at <code className="inline">{section.tool.public_url}</code>
+                  </span>
+                  <span className="t-caption">
+                    Paste that into the vendor's own settings. This engine registers no webhook for{" "}
+                    {section.name}.
+                  </span>
                 </span>
-                {/* A REFUSAL BELONGS BESIDE ITS FIELD EVEN WHEN THE FIELD HAS
-                    NO INPUT. A mintable secret is exactly the case where the
-                    engine can answer literal_in_config, because the operator
-                    never sees the slot it refuses to overwrite. */}
-                {fieldErrors[r.field] && (
-                  <span className="hint field-error" role="alert">
-                    {fieldErrors[r.field]}
-                  </span>
-                )}
-                {r.present && !replacing[r.field] && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setReplacing((c) => ({ ...c, [r.field]: true }))}
-                  >
-                    Generate a new one
-                  </Button>
-                )}
-              </div>
-            ) : editable(r) ? (
-              <Field
-                label={r.label}
-                kind={r.kind === "toggle" ? "choice" : (r.kind as FieldKind)}
-                value={values[r.field] ?? ""}
-                onChange={(v) => setValues((c) => ({ ...c, [r.field]: v }))}
-                required={r.required}
-                error={fieldErrors[r.field]}
-                choices={
-                  r.kind === "toggle"
-                    ? [
-                        { value: "true", label: "On" },
-                        { value: "false", label: "Off" },
-                      ]
-                    : r.choices?.map((c) => ({
-                        value: c.value,
-                        label: c.label,
-                        hint: c.hint,
-                      }))
-                }
-                help={
-                  <>
-                    {r.help}
-                    {r.where && <> {r.where}</>}
-                    {r.vendor_url && (
-                      <>
-                        {" "}
-                        <a href={r.vendor_url} target="_blank" rel="noreferrer">
-                          Open at the vendor
-                        </a>
-                      </>
-                    )}
-                  </>
-                }
-              />
-            ) : (
-              <div className="field">
-                <label>{r.label}</label>
-                <span className="hint">{note}</span>
-                {fieldErrors[r.field] && (
-                  <span className="hint field-error" role="alert">
-                    {fieldErrors[r.field]}
-                  </span>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setReplacing((c) => ({ ...c, [r.field]: true }))}
-                >
-                  Replace
-                </Button>
               </div>
             )}
+            {reqs.map((r) => renderField(r))}
           </div>
         );
       })}
@@ -311,11 +272,94 @@ export function SetupDialog({
         <code className="inline">${"{VAR}"}</code> pointing at them. Nothing on this page is ever
         sent back to a browser.
       </span>
-      {!tool.satisfied && (
-        <Badge tone="caution" outline>
-          setup incomplete
-        </Badge>
-      )}
     </Dialog>
   );
+
+  function renderField(r: SetupRequirement) {
+    const note = pointerNote(r);
+    return (
+      <div key={r.field} className="col gap-1">
+        {r.kind === "secret" && r.mintable ? (
+          <div className="field">
+            <label>{r.label}</label>
+            <span className="hint">
+              {r.present && !replacing[r.field]
+                ? note
+                : "Crewlet will generate this and seal it in the secret store."}
+            </span>
+            {/* A REFUSAL BELONGS BESIDE ITS FIELD EVEN WHEN THE FIELD HAS
+                    NO INPUT. A mintable secret is exactly the case where the
+                    engine can answer literal_in_config, because the operator
+                    never sees the slot it refuses to overwrite. */}
+            {fieldErrors[r.field] && (
+              <span className="hint field-error" role="alert">
+                {fieldErrors[r.field]}
+              </span>
+            )}
+            {r.present && !replacing[r.field] && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setReplacing((c) => ({ ...c, [r.field]: true }))}
+              >
+                Generate a new one
+              </Button>
+            )}
+          </div>
+        ) : editable(r) ? (
+          <Field
+            label={r.label}
+            kind={r.kind === "toggle" ? "choice" : (r.kind as FieldKind)}
+            value={values[r.field] ?? ""}
+            onChange={(v) => setValues((c) => ({ ...c, [r.field]: v }))}
+            required={r.required}
+            error={fieldErrors[r.field]}
+            choices={
+              r.kind === "toggle"
+                ? [
+                    { value: "true", label: "On" },
+                    { value: "false", label: "Off" },
+                  ]
+                : r.choices?.map((c) => ({
+                    value: c.value,
+                    label: c.label,
+                    hint: c.hint,
+                  }))
+            }
+            help={
+              <>
+                {r.help}
+                {r.where && <> {r.where}</>}
+                {r.vendor_url && (
+                  <>
+                    {" "}
+                    <a href={r.vendor_url} target="_blank" rel="noreferrer">
+                      Open at the vendor
+                    </a>
+                  </>
+                )}
+              </>
+            }
+          />
+        ) : (
+          <div className="field">
+            <label>{r.label}</label>
+            <span className="hint">{note}</span>
+            {fieldErrors[r.field] && (
+              <span className="hint field-error" role="alert">
+                {fieldErrors[r.field]}
+              </span>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setReplacing((c) => ({ ...c, [r.field]: true }))}
+            >
+              Replace
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  }
 }

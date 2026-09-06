@@ -33,9 +33,11 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -283,6 +285,26 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		reqs = github.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
+	case integration.KindJira:
+		block := company.Integrations.Jira
+		reqs = jira.Requirements(block, s.resolve)
+		// THE FORGE APP ID RIDES WITH JIRA, and it belongs to neither
+		// surface on its own: one app relays both Jira and Confluence
+		// events, so the id is one value with two consumers. Listing it
+		// on both would be two forms writing one field, and giving it a
+		// vendor of its own would put a card on the screen for something
+		// that is a delivery path rather than a tool. Jira is where an
+		// operator opens Atlassian first, so it is asked there.
+		reqs = append(reqs, s.forgeRequirement(company))
+		// THE ATLASSIAN BLOCKS HAVE NO `enabled` FIELD. Their presence IS
+		// the switch, which is why a disconnect removes the block rather
+		// than flipping a flag, and why enabled tracks configured here
+		// rather than being invented.
+		configured, enabled = block != nil, block != nil
+	case integration.KindConfluence:
+		block := company.Integrations.Confluence
+		reqs = confluence.Requirements(block, s.resolve)
+		configured, enabled = block != nil, block != nil
 	default:
 		return ToolState{}, false
 	}
@@ -300,6 +322,35 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	return state, true
 }
 
+// forgeRequirement is the app id an Atlassian Cloud relay is verified
+// against.
+//
+// Not a secret: it is the audience claim on a token whose SIGNATURE is
+// checked against Atlassian's published keys, so it is an identifier and safe
+// to display. But it plays the same role as one here, because with no app id
+// there is nothing to check the token against and the route refuses every
+// relayed delivery.
+func (s *Service) forgeRequirement(company *config.Company) setup.Requirement {
+	r := setup.Requirement{
+		Field:      "forge_app_id",
+		Label:      "Forge app id",
+		Kind:       setup.KindID,
+		ConfigPath: "integrations.forge_app_id",
+		Required:   false,
+		Help: "Only for an Atlassian Cloud site relaying through the Crewlet " +
+			"Forge app. It is the audience a relayed token must carry: with " +
+			"none, every delivery on the Forge route is refused. One app " +
+			"covers both Jira and Confluence.",
+		Blocks: integration.FindingCredentialMissing,
+	}
+	// Resolved through THIS NODE's chain like everything else: an app id
+	// is normally a literal, and a literal is present and resolved by
+	// definition, but a company that wrote it as a ${VAR} deserves the
+	// same honest answer about it as about a credential.
+	r.Present, r.Resolved = setup.Resolution(company.Integrations.ForgeAppID, s.resolve)
+	return r
+}
+
 // inboundPath is where a vendor's deliveries arrive.
 //
 // Only the surfaces this build serves setup for. It is the same path the
@@ -311,6 +362,13 @@ func inboundPath(kind integration.Kind) string {
 		return "/webhooks/datadog"
 	case integration.KindGitHub:
 		return "/webhooks/github"
+	case integration.KindJira:
+		return "/webhooks/jira"
+	case integration.KindConfluence:
+		// The Data Center route. Cloud registers one hook per event under
+		// this prefix, which is why the URL an operator copies is not a
+		// single path and the setup surface shows the base instead.
+		return "/webhooks/confluence"
 	default:
 		return ""
 	}
@@ -392,7 +450,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	result, err := s.writer.Write(r.Context(), state.Requirements, setup.Submission{
 		Kind: kind, Values: values, Seat: req.Seat,
 		Summary: summary, Operator: operatorOf(r), Expect: req.IfMatch,
-	}, func(path string) string { return valueAt(company, path) })
+	})
 	if err != nil {
 		s.refuse(w, r, err, result)
 		return
@@ -466,7 +524,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		if req.Kind != setup.KindSecret {
 			continue
 		}
-		if name, _, err := setup.PointerFor(kind, req, valueAt(company, req.ConfigPath)); err == nil {
+		if name, _, err := setup.PointerFor(kind, req, req.Stored); err == nil {
 			orphaned = append(orphaned, name)
 		}
 	}

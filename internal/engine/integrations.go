@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
@@ -70,6 +71,10 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 
 	regs := []integration.Registration{
 		{Reconciler: &jiraConverger{engine: e}},
+		// The wiki, whose pass had a Findings() and no reader: it could
+		// say what it saw and nothing asked, so a company's Confluence
+		// status was null forever while the surface could be broken.
+		{Reconciler: &confluenceConverger{engine: e}},
 		{Reconciler: &githubConverger{engine: e}},
 	}
 
@@ -163,19 +168,21 @@ func (c *jiraConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 		// because nothing at Jira will ever change it.
 		return []integration.Finding{{
 			Kind: integration.FindingCredentialMissing,
-			Detail: fmt.Sprintf(
-				"neither integrations.jira.url (%q) nor cloud_id (%q) resolved "+
-					"to anything, so there is nowhere to read the instance",
-				cfg.URL, cfg.CloudID),
+			Detail: "neither integrations.jira.url nor integrations.jira.cloud_id " +
+				"resolved to anything, so there is nowhere to read the instance",
 		}}, nil
 	}
 	token := strings.TrimSpace(env.Value(cfg.Token))
 	if token == "" {
+		// THE PATH, NOT THE VALUE. This slot normally holds a ${VAR} and
+		// quoting it would be helpful, but the one time this branch is
+		// reached on a company that wrote a literal, the thing it would
+		// print is the credential. A finding is stored on the fleet and
+		// rendered on a screen.
 		return []integration.Finding{{
 			Kind: integration.FindingCredentialMissing,
-			Detail: fmt.Sprintf(
-				"integrations.jira.token (%q) resolved to nothing, so the org "+
-					"account cannot read the instance", cfg.Token),
+			Detail: "integrations.jira.token resolved to nothing, so the org " +
+				"account cannot read the instance",
 		}}, nil
 	}
 
@@ -205,6 +212,69 @@ func (c *jiraConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 		return nil, fmt.Errorf("engine: jira reconcile: %w", err)
 	}
 	return res.Findings(), nil
+}
+
+// confluenceConverger reports what the wiki looks like now.
+//
+// It has a Findings() and had no reader: the pass could say what it saw and
+// nothing asked it, so every company's Confluence status was null forever
+// while the surface it describes could be entirely broken.
+type confluenceConverger struct{ engine *Engine }
+
+func (confluenceConverger) Kind() integration.Kind { return integration.KindConfluence }
+
+func (c *confluenceConverger) Reconcile(ctx context.Context) ([]integration.Finding, error) {
+	company := c.engine.Company()
+	cfg := company.Config.Integrations.Confluence
+	if cfg == nil {
+		return nil, integration.ErrNotConfigured
+	}
+	env := c.engine.resolver()
+
+	base := confluenceBaseURL(cfg, env)
+	if base == "" {
+		return []integration.Finding{{
+			Kind: integration.FindingCredentialMissing,
+			Detail: "neither integrations.confluence.url nor " +
+				"integrations.confluence.cloud_id resolved to anything, so there " +
+				"is nowhere to read the instance",
+		}}, nil
+	}
+	token := strings.TrimSpace(env.Value(cfg.Token))
+	if token == "" {
+		// THE PATH, NOT THE VALUE, for the reason the tracker's own
+		// branch above states.
+		return []integration.Finding{{
+			Kind: integration.FindingCredentialMissing,
+			Detail: "integrations.confluence.token resolved to nothing, so the " +
+				"org account cannot read the instance",
+		}}, nil
+	}
+	client, err := confluence.NewClient(confluence.ClientOptions{
+		URL: base, Email: env.Value(cfg.Email), Token: token,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: confluence reconcile: %w", err)
+	}
+	// NO SINK AND NO WEBHOOK BASE, for the reason every converger here
+	// states: a base is permission to register a hook and mint the token
+	// that goes in its URL, and neither is a decision a timer makes.
+	res, err := confluence.Reconcile(ctx, confluence.Options{
+		Client: client, Config: cfg, Value: env.Value,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: confluence reconcile: %w", err)
+	}
+	return res.Findings(), nil
+}
+
+// confluenceBaseURL is the REST base this node reads the wiki on.
+func confluenceBaseURL(cfg *config.Confluence, env *config.Resolver) string {
+	resolved := config.Confluence{
+		URL:     strings.TrimSpace(env.Value(cfg.URL)),
+		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
+	}
+	return resolved.BaseURL()
 }
 
 // githubConverger reports what the code host looks like now.

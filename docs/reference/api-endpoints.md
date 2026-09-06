@@ -406,6 +406,8 @@ not the company has configured it:
 ```
 
 `kind` is one of `secret`, `url`, `id`, `choice`, `text`, `handle`, `toggle`.
+Each vendor's own package declares its list, so the surface serves a vendor it
+has no screen for and the dashboard renders a vendor it has no code for.
 A `secret` is sealed and never echoed; a `toggle` is a JSON boolean in the
 document; a `handle` must name a seat this company has.
 
@@ -503,6 +505,18 @@ failed did not observe anything.
 `recreate_webhooks` re-registers with a fresh secret and is **destructive
 across deployments**: the previous secret stops working everywhere else this
 company runs.
+
+### One tool, several surfaces
+
+The engine reaches Atlassian over three of these keys: `jira`, `confluence`
+and the Forge relay. Each is its own block in the company document and its own
+entry here, and each is written on its own, which is what keeps a submission
+atomic on the thing it changes. A screen that presents them as one tool asks
+for one section per key and submits one request per section.
+
+The Forge app id is the exception, and it rides with `jira`: one app relays
+both surfaces, so it is one value with two consumers. Listing it under both
+would be two forms writing one field.
 
 ### Disconnecting
 
