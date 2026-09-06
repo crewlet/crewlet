@@ -774,6 +774,60 @@ export interface ConfigDiff {
   changes: ConfigChange[];
 }
 
+// ---------------------------------------------------------------------------
+// Setup
+// ---------------------------------------------------------------------------
+
+/**
+ * One input an integration cannot work without, as `/setup` answers it.
+ *
+ * The screen renders a form from these and knows nothing about any vendor:
+ * every word a person reads is carried here, so adding a vendor adds no
+ * branch to a component. See internal/setup for what each field means.
+ */
+export interface SetupRequirement {
+  field: string;
+  label: string;
+  kind: "secret" | "url" | "id" | "choice" | "text" | "handle" | "toggle";
+  config_path: string;
+  secret_name?: string;
+  required: boolean;
+  mintable?: boolean;
+  help?: string;
+  where?: string;
+  vendor_url?: string;
+  choices?: { value: string; label: string; hint?: string }[];
+  format?: string;
+  /** The reconcile finding this input being absent produces. */
+  blocks?: string;
+  /** The document names something here: a literal or a ${VAR}. */
+  present: boolean;
+  /** Three-valued, as everywhere: null is "this process cannot say". */
+  resolved?: boolean | null;
+  seat?: string;
+}
+
+export interface SetupToolState {
+  key: string;
+  configured: boolean;
+  enabled: boolean;
+  requirements: SetupRequirement[];
+  /** Nothing REQUIRED is outstanding. Not a health claim. */
+  satisfied: boolean;
+  inbound_path?: string;
+  public_url?: string;
+}
+
+export interface SetupListing {
+  tools: SetupToolState[];
+  public_base_url: {
+    value: string;
+    present: boolean;
+    resolved?: boolean | null;
+    config_path: string;
+  };
+}
+
 export interface SecretRow {
   name: string;
   key_id: string;

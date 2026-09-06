@@ -22,14 +22,18 @@
  * claim that the tool is fine.
  */
 
+import { useCallback, useEffect, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Empty, Panel, Skeleton } from "~/ui/primitives.tsx";
+import { Badge, Button, Empty, Panel, Skeleton } from "~/ui/primitives.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
+import { SetupDialog } from "./SetupDialog.tsx";
+import { rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, ReconcileStatus } from "~/protocol/types.ts";
+import type { SetupListing, SetupToolState } from "~/protocol/types.ts";
 
 type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
 
@@ -443,10 +447,46 @@ function SurfaceDetail({ surface, row }: { surface: Surface; row: IntegrationRow
   );
 }
 
-export function EntryRow({ entry, rows }: { entry: Entry; rows: Map<string, IntegrationRow> }) {
+/**
+ * What the row's button does, from what the engine says about the tool.
+ *
+ * A PURE FUNCTION of (satisfied, phase, actor), so the action and the state
+ * tag beside it can never tell an operator two different things. Empty means
+ * no action: nothing a person does moves a surface the engine or the vendor
+ * is still working on.
+ */
+export function actionFor(
+  state: EntryState,
+  setup: SetupToolState | undefined,
+): { label: string; blocks?: string } | null {
+  if (!setup) return null;
+  if (!setup.configured) return { label: "Connect" };
+  if (!setup.satisfied) return { label: "Continue" };
+  if (state.attention) {
+    // Narrowed to the fields that clear what the loop actually found, so a
+    // Fix opens the two inputs that matter rather than the whole form.
+    return { label: "Fix", blocks: "credential_missing" };
+  }
+  return { label: "Manage" };
+}
+
+export function EntryRow({
+  entry,
+  rows,
+  setup,
+  revision,
+  onConnect,
+}: {
+  entry: Entry;
+  rows: Map<string, IntegrationRow>;
+  setup?: SetupToolState;
+  revision?: string;
+  onConnect?: (tool: SetupToolState, blocks?: string) => void;
+}) {
   const state = rollUp(entry, rows);
   const present = presentSurfaces(entry, rows);
   const absent = present.length === 0;
+  const action = actionFor(state, setup);
 
   return (
     <div className={absent ? "list-row int-row int-row-absent" : "list-row int-row"}>
@@ -477,15 +517,67 @@ export function EntryRow({ entry, rows }: { entry: Entry; rows: Map<string, Inte
         <Badge tone={state.tone} outline={state.outline} dot={!state.outline}>
           {state.tag}
         </Badge>
+        {action && setup && onConnect && (
+          <Button
+            size="sm"
+            variant={action.label === "Manage" ? "ghost" : "primary"}
+            onClick={() => onConnect(setup, action.blocks)}
+          >
+            {action.label}
+          </Button>
+        )}
       </div>
     </div>
   );
+}
+
+/**
+ * What each tool still needs, from /setup.
+ *
+ * A SECOND READ, and it has to be: /integrations is an ordinary read served
+ * to anybody the anonymous-read posture allows, while this one is guarded in
+ * full because it names the credentials a company holds. A deployment where
+ * the operator has no token still gets the whole screen, minus the buttons.
+ */
+function useSetup(): {
+  byKey: Map<string, SetupToolState>;
+  base: SetupListing["public_base_url"] | null;
+  guarded: boolean;
+  reload: () => void;
+} {
+  const [listing, setListing] = useState<SetupListing | null>(null);
+  const [guarded, setGuarded] = useState(false);
+
+  const reload = useCallback(() => {
+    void (async () => {
+      try {
+        setListing((await rest.get("/setup/integrations")) as SetupListing);
+        setGuarded(false);
+      } catch (err) {
+        // A refusal is not an empty answer. The screen keeps every read it
+        // already has and simply offers no writes.
+        setListing(null);
+        setGuarded(err instanceof RestError && err.unauthorized);
+      }
+    })();
+  }, []);
+
+  useEffect(reload, [reload]);
+
+  return {
+    byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
+    base: listing?.public_base_url ?? null,
+    guarded,
+    reload,
+  };
 }
 
 export function Integrations() {
   // Traffic counters are not pushed, and they move slowly; a minute is the
   // right cadence for "is anything arriving at all".
   const { data, loading, error } = useQuery("integrations", undefined, { pollMs: 60_000 });
+  const setup = useSetup();
+  const [dialog, setDialog] = useState<{ tool: SetupToolState; blocks?: string } | null>(null);
 
   const rows = new Map((data?.integrations ?? []).map((r) => [r.key, r]));
   const configured = CATALOG.filter((e) => e.surfaces.some((s) => rows.has(s.key)));
@@ -502,6 +594,50 @@ export function Integrations() {
         }
       />
 
+      {/* THE ADDRESS EVERY INBOUND VENDOR IS BUILT ON, rendered once. It is
+          one setting, and a screen that asked for it per vendor would ask the
+          operator to keep seven copies consistent. */}
+      {setup.base && !setup.base.present && (
+        <div className="banner caution">
+          <Icon name="alert" size="sm" />
+          <span className="col" style={{ gap: 4 }}>
+            <span>No public address is set, so no vendor can deliver to this engine.</span>
+            <span className="t-caption">
+              Set <code className="inline">{setup.base.config_path}</code> to the HTTPS address
+              vendors reach this deployment on. Chat over an outbound socket, Mattermost, is
+              unaffected.
+            </span>
+          </span>
+        </div>
+      )}
+      {setup.base?.present && (
+        <div className="banner neutral">
+          <Icon name="link" size="sm" />
+          <span>
+            Vendors reach this engine at <code className="inline">{setup.base.value}</code>
+          </span>
+        </div>
+      )}
+      {setup.guarded && (
+        <div className="banner neutral">
+          <Icon name="key" size="sm" />
+          <span>
+            Setting an integration up needs an operator token. This screen is showing what it can
+            read without one.
+          </span>
+        </div>
+      )}
+
+      {dialog && (
+        <SetupDialog
+          tool={dialog.tool}
+          title={CATALOG.find((e) => e.key === dialog.tool.key)?.name ?? dialog.tool.key}
+          blocks={dialog.blocks}
+          onClose={() => setDialog(null)}
+          onDone={setup.reload}
+        />
+      )}
+
       {loading && !data && <Skeleton rows={6} />}
       <QueryState error={error} loading={loading} empty={undefined}>
         {CAPABILITIES.map((cap) => (
@@ -514,7 +650,13 @@ export function Integrations() {
           >
             <div className="list">
               {CATALOG.filter((e) => e.capability === cap.id).map((entry) => (
-                <EntryRow key={entry.key} entry={entry} rows={rows} />
+                <EntryRow
+                  key={entry.key}
+                  entry={entry}
+                  rows={rows}
+                  setup={setup.byKey.get(entry.key)}
+                  onConnect={(tool, blocks) => setDialog({ tool, blocks })}
+                />
               ))}
             </div>
           </Panel>

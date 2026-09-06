@@ -171,7 +171,7 @@ meets their company first and the engine last.
 | | Knowledge | `#/knowledge?q=` | `knowledge` — the company's own live search |
 | **Cost** | Spend & budgets | `#/spend?window=` | the pushed spend rollup, the `tokens` query for other windows, and `budgets` |
 | **Operations** | Fleet | `#/fleet` | `fleet` — the lease table |
-| | Integrations | `#/integrations` | `integrations` |
+| | Integrations | `#/integrations` | `integrations`, plus `/setup/integrations` over REST *(operator-gated)* |
 | | Tools | `#/tools?q=&origin=` | the pushed tool catalogue |
 | | Configuration | `#/config?lens=&revision=` | `config` / `config_audit` / `config_diff` *(operator-gated)* |
 | | Secrets | `#/secrets` | the names and provenance the fleet holds — **never a value** *(operator-gated)* |
@@ -569,6 +569,12 @@ rendered idle from the first phase to the last.
    keyed row uses an identity that survives the row's own lifecycle.
 6. **Every empty state says why it is empty** and what would fill it, and
    distinguishes "nothing happened" from "nothing could be read".
+7. **A write says what happened.** Every write goes through
+   `protocol/rest.ts` and reports its outcome: a toast on success, and the
+   engine's own refusal beside the field it names. A button whose result is
+   invisible is a button an operator presses twice.
+8. **No screen renders a credential.** The setup dialog shows the `${VAR}` a
+   field points at and never a value, because no route returns one.
 7. **Every screen, section and filter is in the URL**, and obeys the
    push/replace table above.
 8. **A screen subscribes to the slices it reads and no others.**
