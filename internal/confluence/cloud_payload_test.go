@@ -95,3 +95,116 @@ func TestCloudPayloadWithoutAnEventRoutesNowhere(t *testing.T) {
 		t.Fatalf("an unstamped Cloud payload routed to %+v", routed)
 	}
 }
+
+// A CLOUD REPLY names its page in NEITHER place a top-level comment does: its
+// parent is the comment being replied to, and the page is one level further
+// up. This variant carries NO self URL on the reply, so the parent chain is
+// the only thing that can answer and the walk is what the test pins.
+const cloudReplyCreated = `{"comment":{"idAsString":"41713699","creatorAccountId":"712020:actor","spaceKey":"ENG","spaceId":28672112,"parent":{"idAsString":"41713685","spaceKey":"ENG","contentType":"comment","id":"41713685","parent":{"idAsString":"41746440","spaceKey":"ENG","self":"https://example.atlassian.net/wiki/spaces/ENG/pages/41746440/x","id":"41746440","title":"crewlet webhook variants","contentType":"page","version":2}},"id":"41713699","contentType":"comment","version":1},"accountType":"customer","timestamp":1788716599000,"userAccountId":"712020:actor"}`
+
+// And this variant is the reply as delivered when the parent comment names no
+// parent of its own: the self URL's /pages/<id>/ segment is then the only
+// place the page appears at all, so it pins the fallback rather than the walk.
+const cloudReplyBareParent = `{"comment":{"idAsString":"41713699","creatorAccountId":"712020:actor","spaceKey":"ENG","spaceId":28672112,"parent":{"idAsString":"41713685","spaceKey":"ENG","contentType":"comment","id":"41713685"},"self":"https://example.atlassian.net/wiki/spaces/ENG/pages/41746440/x?focusedCommentId=41713699","id":"41713699","contentType":"comment","version":1},"accountType":"customer","timestamp":1788716599000,"userAccountId":"712020:actor"}`
+
+// A REPLY REACHES SOMEBODY, and reaches them on the PAGE's key.
+//
+// Refusing a comment parent outright, which is what a guard written against
+// mis-keying did, dropped every Cloud reply before mentions, watchers or the
+// space lead were ever considered: replies are most of a wiki thread, so a
+// seat asked in one was never woken at all. Keying on the parent COMMENT is
+// the other half of the same bug, since the reply then coalesces with nothing
+// and never joins the thread it belongs to.
+func TestACloudReplyRoutesOnItsPagesKey(t *testing.T) {
+	t.Parallel()
+	for name, payload := range map[string]string{
+		"through the parent chain": cloudReplyCreated,
+		"through the self URL":     cloudReplyBareParent,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := confluence.NewParser(confluence.ParserOptions{
+				SiteURL: "https://example.atlassian.net/wiki",
+				Leads:   map[string]string{"ENG": "eng-lead"},
+			})
+			routed, err := p.Parse(context.Background(),
+				cloudDelivery(t, "comment_created", payload), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(routed) == 0 {
+				t.Fatal("a Cloud reply routed to nobody")
+			}
+			if got := routed[0].Inbound.Metadata["page_id"]; got != "41746440" {
+				t.Fatalf("page_id = %q, want the page's; the parent comment's "+
+					"41713685 keys the reply away from its own thread", got)
+			}
+			if got := routed[0].Inbound.Metadata["space"]; got != "ENG" {
+				t.Errorf("space = %q", got)
+			}
+		})
+	}
+}
+
+// AND A REPLY COALESCES WITH THE THREAD IT IS IN. The page is the
+// conversation for this vendor, so a comment and a reply to it are one
+// trigger rather than two turns.
+func TestACloudReplyAndItsParentShareAConversation(t *testing.T) {
+	t.Parallel()
+	p := confluence.NewParser(confluence.ParserOptions{
+		SiteURL: "https://example.atlassian.net/wiki",
+		Leads:   map[string]string{"ENG": "eng-lead"},
+	})
+	parse := func(payload string) map[string]string {
+		routed, err := p.Parse(context.Background(),
+			cloudDelivery(t, "comment_created", payload), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(routed) == 0 {
+			t.Fatal("routed to nobody")
+		}
+		return routed[0].Inbound.Metadata
+	}
+	top := (confluence.Prompt{}).ConversationKey(parse(cloudCommentCreated), "")
+	reply := (confluence.Prompt{}).ConversationKey(parse(cloudReplyCreated), "")
+	if top == "" || top != reply {
+		t.Fatalf("a comment keys on %q and a reply to it on %q", top, reply)
+	}
+}
+
+// The two bodies docs/integrations/confluence.md tells an operator to paste
+// into a Confluence Automation rule, with the smart values rendered. Kept
+// here so the recipe is pinned by the parser rather than by a reader trying
+// it: a body the docs recommend that routes to nobody is a silent outage the
+// operator has no way to attribute.
+const (
+	automationPageBody    = `{"page":{"id":"41746440","title":"Deploy runbook","version":{"number":"3"}},"space":{"key":"ENG"},"userAccountId":"712020:actor"}`
+	automationCommentBody = `{"comment":{"id":"5001","parent":{"id":"41746440","title":"Deploy runbook","contentType":"page"}},"space":{"key":"ENG"},"userAccountId":"712020:actor"}`
+)
+
+func TestTheDocumentedAutomationBodiesRoute(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct{ event, body string }{
+		"a page":    {"page_updated", automationPageBody},
+		"a comment": {"comment_created", automationCommentBody},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := confluence.NewParser(confluence.ParserOptions{
+				SiteURL: "https://example.atlassian.net/wiki",
+				Leads:   map[string]string{"ENG": "eng-lead"},
+			})
+			routed, err := p.Parse(context.Background(), cloudDelivery(t, c.event, c.body), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(routed) != 1 || routed[0].To.Handle != "eng-lead" {
+				t.Fatalf("routed = %+v, want the ENG lead", routed)
+			}
+			if got := routed[0].Inbound.Metadata["page_id"]; got != "41746440" {
+				t.Errorf("page_id = %q", got)
+			}
+		})
+	}
+}
