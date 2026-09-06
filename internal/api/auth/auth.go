@@ -47,7 +47,13 @@ var log = logging.Get("api.auth")
 // const somewhere else and a second `HasPrefix` beside it — and the two would
 // have drifted the day a third surface was added, each staying
 // self-consistent while one of them stopped being consulted.
-var GuardedPrefixes = []string{"/config", "/secrets"}
+//   - /setup: connecting an integration. It answers with the NAMES of the
+//     credentials a company holds, which of them are unset, and the vendor
+//     pages an administrator would visit, and it writes both the secret
+//     store and the company document. Reads included, for the same reason
+//     /secrets guards its listing: the map of what a company has not
+//     configured is worth as much to an attacker as the configuration.
+var GuardedPrefixes = []string{"/config", "/secrets", "/setup"}
 
 // AlwaysGuarded reports whether a path is on one of those surfaces.
 func AlwaysGuarded(path string) bool {

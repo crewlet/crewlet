@@ -2,6 +2,17 @@
 
 Datadog reaches Crewlet through its **Webhooks integration**, which posts a monitor's payload to a URL you configure. A firing monitor becomes an inbound event on the same path as everything else, so a seat is woken by an alert exactly as it is by a comment on a merge request.
 
+## Setting it up from the dashboard
+
+The Integrations screen connects Datadog without a shell: it asks for the
+fallback seat, generates the shared token, seals it, points the config at it
+and activates, then shows you the URL to paste into Datadog's own webhook
+form. Everything below describes what that writes, and is what you edit by
+hand if you would rather.
+
+See [Setting an integration up](../reference/api-endpoints.md#setting-an-integration-up)
+for the routes behind it.
+
 ## Configuration
 
 ```yaml

@@ -43,6 +43,16 @@ import (
 // vendor sends.
 func (e *Engine) Resolve(value string) string { return e.resolver().Value(value) }
 
+// LookupSecret answers what ONE ${VAR} name resolves to on this node, and
+// whether anything answered.
+//
+// Three-valued in the way that matters to an operator surface: the bool
+// separates "the store and the environment both have nothing for this name"
+// from "it resolved to the empty string", and the setup screen renders those
+// differently. Resolve cannot make that distinction, because expansion
+// treats an empty answer as found.
+func (e *Engine) LookupSecret(name string) (string, bool) { return e.resolver().LookupOK(name) }
+
 // resolver is the chain this node resolves ${VAR} through.
 //
 // Never nil: a node with no store, or no keyring, resolves from the

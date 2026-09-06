@@ -84,6 +84,25 @@ func (s *Service) documentOf(ctx context.Context) (*config.Company, store.Revisi
 	return company.Redact(), revision, nil
 }
 
+// ActiveRevision is the id of the revision the fleet is running.
+//
+// The token every conditional write is built against: a caller reads state,
+// derives an edit, and names what it read so a concurrent write is refused
+// rather than silently overwritten.
+func (s *Service) ActiveRevision(ctx context.Context) (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("configapi: no store on this node")
+	}
+	revision, found, err := s.configs.Active(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", ErrNoActiveRevision
+	}
+	return revision.ID, nil
+}
+
 // Revisions is the history, newest first, metadata only.
 func (s *Service) Revisions(ctx context.Context, limit, offset int) ([]map[string]any, error) {
 	if s == nil {

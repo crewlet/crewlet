@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
@@ -94,6 +95,12 @@ type Options struct {
 	// Config serves /config. Nil serves none, which is what a process with
 	// no store genuinely has.
 	Config *configapi.Service
+
+	// Setup serves /setup: collecting what an integration still needs and
+	// writing it, half into the sealed store and half into the company
+	// document. Nil serves none, which is what a process with no company
+	// configuration has to answer.
+	Setup *setupapi.Service
 
 	// Secrets serves /secrets — the fleet's credential store. Nil serves
 	// none, which is what a process that cannot reach the coordination
@@ -263,6 +270,11 @@ func New(opts Options) *App {
 	// default topology, so no second process can write the store — and its
 	// listing alone says which credentials a company holds.
 	opts.Secrets.Routes(mux)
+	// The third, and the newest: connecting an integration without a
+	// shell. Guarded by the same prefix rule for the same reason, and
+	// reads included — the list of which credentials a company has NOT
+	// configured is worth as much to an attacker as the ones it has.
+	opts.Setup.Routes(mux)
 	a.handler = a.guard.Middleware(mux)
 	return a
 }

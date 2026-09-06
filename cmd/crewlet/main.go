@@ -31,10 +31,12 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -893,6 +895,23 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Fleet: e.Backends().Fleet, Cipher: cipher,
 		ActiveKeyID: boot.Secrets.ActiveKeyID,
 	})
+	// Connecting an integration from the dashboard. It writes through the
+	// TWO surfaces above rather than reaching for the store and the plane
+	// itself: a credential is sealed by the same store /secrets serves,
+	// and the pointer to it lands through the same merge, validation and
+	// activation PATCH /config performs.
+	setupSurface := setupapi.New(setupapi.Options{
+		Company: func() *config.Company { return companyConfig(e) },
+		Config:  configSurface,
+		// The fleet's own store. A nil fleet leaves this nil, and every
+		// secret write then answers 503 rather than storing plaintext.
+		Secrets: fleetsecrets.New(e.Backends().Fleet, cipher),
+		// THIS NODE'S resolution chain, so a requirement can say whether
+		// a ${VAR} actually resolved rather than only whether somebody
+		// wrote one down. That gap is the silent outage the whole
+		// secret_usable family exists to surface.
+		Resolve: e.LookupSecret,
+	})
 
 	// The contextcheck exemption is for the two PUSH TICKS this constructor
 	// registers — the roster re-send and the health frame. Both manufacture
@@ -1002,6 +1021,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		}),
 		Config:  configSurface,
 		Secrets: secretSurface,
+		Setup:   setupSurface,
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return companySecrets(e) },
 			Publisher: e.Backends().Queue,

@@ -1,0 +1,514 @@
+// Package setupapi serves /setup: connecting an integration from the
+// dashboard rather than from a shell.
+//
+// # Why it is not part of /integrations
+//
+// `GET /integrations` is registered as an ordinary read, so on the default
+// posture it serves without a token. What this surface answers is a different
+// class of thing: the NAMES of the credentials a company holds, which are
+// unset, the vendor pages an administrator would visit, and the fields a
+// caller can write. Adding that to the anonymous-read answer would hand an
+// unauthenticated reader a map of what to attack. So it is its own prefix,
+// added to the always-guarded list beside /config and /secrets, and every
+// call here needs an operator token, reads included.
+//
+// # It never returns a value
+//
+// A requirement says whether a value is present and whether it resolved. It
+// never carries the value, and no route here reads one: the single route in
+// this binary that can return a secret needs an explicit flag and logs the
+// access, and a dashboard anybody holding the token can open is not where
+// that trade gets made. What IS safe to show, and what makes the screen
+// useful, is the `${VAR}` name a field points at.
+package setupapi
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/setup"
+)
+
+var log = logging.Get("api.setup")
+
+// MaxBody bounds one submission.
+//
+// Small on purpose: the largest thing a submission carries is a vendor API
+// token, and every one of those is under a kilobyte. A cap this size makes
+// the route uninteresting as a way to spend memory, and a caller that hits it
+// has sent the wrong thing rather than a large one.
+const MaxBody = 64 << 10
+
+// The refusals this surface answers with, beyond the shared ones.
+const (
+	codeUnknownKind      = httpjson.Code("unknown_kind")
+	codeNoControlPlane   = httpjson.Code("no_control_plane")
+	codeNoActiveRevision = httpjson.Code("no_active_revision")
+	codeRevisionAdvanced = httpjson.Code("revision_advanced")
+	codeLiteralInConfig  = httpjson.Code("literal_in_config")
+	codeValidationError  = httpjson.Code("validation_error")
+	codeInvalidInput     = httpjson.Code("invalid_input")
+	codeNoKeyring        = httpjson.Code("no_keyring")
+)
+
+// Options wire the service.
+type Options struct {
+	// Company reads the ACTIVE document. Nil serves no surface: with no
+	// company there is nothing to describe and nothing to patch.
+	Company func() *config.Company
+
+	// Config is the write path, the same one PATCH /config drives.
+	Config *configapi.Service
+
+	// Secrets seals a submitted credential. Nil is a node with no
+	// keyring, which every secret write refuses rather than storing
+	// plaintext.
+	Secrets setup.Secrets
+
+	// Resolve turns a ${VAR} name into what this process actually
+	// resolved. Nil is a process that cannot say, and every requirement
+	// then answers `resolved: null` rather than claiming false.
+	Resolve func(string) (string, bool)
+
+	// Now is injectable so a test can pin a secret row's timestamp.
+	Now func() time.Time
+}
+
+// Service serves /setup.
+type Service struct {
+	company func() *config.Company
+	config  *configapi.Service
+	writer  setup.Writer
+	resolve func(string) (string, bool)
+	secrets setup.Secrets
+}
+
+// New builds the service, or nil when this process has no company to set up.
+func New(opts Options) *Service {
+	if opts.Company == nil {
+		return nil
+	}
+	return &Service{
+		company: opts.Company,
+		config:  opts.Config,
+		resolve: opts.Resolve,
+		secrets: opts.Secrets,
+		writer: setup.Writer{
+			Secrets: opts.Secrets,
+			Config:  configWriter{opts.Config},
+			Now:     opts.Now,
+		},
+	}
+}
+
+// Routes registers the surface, or says why it did not.
+func (s *Service) Routes(mux *http.ServeMux) {
+	if s == nil {
+		log.Warn("setup_surface_disabled",
+			"hint", "this process serves no company configuration, so /setup is not served here")
+		return
+	}
+	mux.HandleFunc("GET /setup/integrations", s.list)
+	mux.HandleFunc("GET /setup/integrations/{kind}", s.one)
+	mux.HandleFunc("POST /setup/integrations/{kind}/inputs", s.inputs)
+	mux.HandleFunc("DELETE /setup/integrations/{kind}", s.disconnect)
+}
+
+// configWriter adapts the config surface to what setup.Writer needs.
+//
+// The interface is the CONSUMER's — three strings and a patch — so the setup
+// package does not import an HTTP service to perform a write, and a test can
+// drive it with something that is not one.
+type configWriter struct{ svc *configapi.Service }
+
+func (c configWriter) Apply(
+	ctx context.Context, patch []byte, summary, operator, expect string,
+) (string, int64, error) {
+	applied, err := c.svc.Apply(ctx, configapi.ApplyRequest{
+		Patch: patch, Summary: summary, Operator: operator, Expect: expect,
+	})
+	return applied.RevisionID, applied.Epoch, err
+}
+
+func (c configWriter) Current(ctx context.Context) (string, error) {
+	return c.svc.ActiveRevision(ctx)
+}
+
+func (c configWriter) Reload(ctx context.Context, summary, operator string) (string, int64, error) {
+	applied, err := c.svc.Reload(ctx, summary, operator)
+	return applied.RevisionID, applied.Epoch, err
+}
+
+// ToolState is one integration's setup state.
+//
+// The reconcile half is deliberately NOT here. That answer already exists on
+// GET /integrations, built from the fleet's own status rows, and a second
+// surface deriving it from the same inputs is how two screens start
+// disagreeing about whether an integration is healthy. This one answers the
+// question only it can: what is still missing, and where does it go.
+type ToolState struct {
+	Kind         integration.Kind    `json:"key"`
+	Configured   bool                `json:"configured"`
+	Enabled      bool                `json:"enabled"`
+	Requirements []setup.Requirement `json:"requirements"`
+
+	// Satisfied reports that nothing REQUIRED is outstanding. It is not a
+	// health claim: a satisfied integration can still be refusing every
+	// delivery for a reason no input fixes.
+	Satisfied bool `json:"satisfied"`
+
+	// InboundPath is where this vendor's deliveries arrive, and PublicURL
+	// is that path on the address vendors reach this deployment at. Empty
+	// when the surface has no inbound route, or when no base is set.
+	InboundPath string `json:"inbound_path,omitempty"`
+	PublicURL   string `json:"public_url,omitempty"`
+}
+
+// list serves GET /setup/integrations.
+func (s *Service) list(w http.ResponseWriter, r *http.Request) {
+	company := s.company()
+	if company == nil {
+		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+			"hint": "no company configuration is active; import one before connecting an integration",
+		})
+		return
+	}
+	tools := make([]ToolState, 0, len(integration.Kinds))
+	for _, kind := range integration.Kinds {
+		state, ok := s.state(company, kind)
+		if !ok {
+			continue
+		}
+		tools = append(tools, state)
+	}
+	base := company.Integrations.WebhookBase()
+	present, resolved := setup.Resolution(company.Integrations.PublicBaseURL, s.resolve)
+	httpjson.Write(w, http.StatusOK, map[string]any{
+		"tools": tools,
+		// THE ADDRESS EVERY INBOUND VENDOR IS BUILT ON, answered once
+		// rather than repeated in each tool: it is one setting, and a
+		// screen that asked for it seven times would be asking the
+		// operator to keep seven copies consistent.
+		"public_base_url": map[string]any{
+			"value": base, "present": present, "resolved": resolved,
+			"config_path": "integrations.public_base_url",
+		},
+	})
+}
+
+// one serves GET /setup/integrations/{kind}.
+func (s *Service) one(w http.ResponseWriter, r *http.Request) {
+	kind := integration.Kind(r.PathValue("kind"))
+	company := s.company()
+	if company == nil {
+		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+			"hint": "no company configuration is active",
+		})
+		return
+	}
+	state, ok := s.state(company, kind)
+	if !ok {
+		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
+			"detail": "this build serves no setup for " + string(kind),
+			"hint":   "one of " + kindList(),
+		})
+		return
+	}
+	httpjson.Write(w, http.StatusOK, state)
+}
+
+// state builds one tool's answer, or reports that this build has no setup for
+// it yet.
+//
+// AN EXPLICIT ABSENCE rather than an empty requirement list: a vendor whose
+// requirements nobody has written down would otherwise answer "nothing is
+// missing" and the screen would show a Connect button that collects nothing.
+func (s *Service) state(company *config.Company, kind integration.Kind) (ToolState, bool) {
+	var reqs []setup.Requirement
+	var configured, enabled bool
+	switch kind {
+	case integration.KindDatadog:
+		block := company.Integrations.Datadog
+		reqs = datadog.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	default:
+		return ToolState{}, false
+	}
+	state := ToolState{
+		Kind: kind, Configured: configured, Enabled: enabled,
+		Requirements: reqs,
+		Satisfied:    len(setup.Outstanding(reqs)) == 0,
+		InboundPath:  inboundPath(kind),
+	}
+	if base := company.Integrations.WebhookBase(); base != "" && state.InboundPath != "" {
+		state.PublicURL = base + state.InboundPath
+	}
+	return state, true
+}
+
+// inboundPath is where a vendor's deliveries arrive.
+//
+// Only the surfaces this build serves setup for. It is the same path the
+// integrations answer reports, and the two are checked against each other by
+// a test rather than by a reader's memory.
+func inboundPath(kind integration.Kind) string {
+	switch kind {
+	case integration.KindDatadog:
+		return "/webhooks/datadog"
+	default:
+		return ""
+	}
+}
+
+func kindList() string {
+	names := make([]string, 0, len(integration.Kinds))
+	for _, k := range integration.Kinds {
+		names = append(names, string(k))
+	}
+	return strings.Join(names, ", ")
+}
+
+// inputs serves POST /setup/integrations/{kind}/inputs.
+func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
+	kind := integration.Kind(r.PathValue("kind"))
+	company := s.company()
+	if company == nil {
+		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+			"hint": "no company configuration is active",
+		})
+		return
+	}
+	state, ok := s.state(company, kind)
+	if !ok {
+		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
+			"hint": "one of " + kindList(),
+		})
+		return
+	}
+
+	body, err := httpjson.ReadBody(w, r, MaxBody)
+	if err != nil {
+		httpjson.Refuse(w, err)
+		return
+	}
+	var req struct {
+		IfMatch string            `json:"if_match"`
+		Summary string            `json:"summary"`
+		Seat    string            `json:"seat"`
+		Values  map[string]string `json:"values"`
+		// Generate names the MINTABLE fields the caller wants the engine
+		// to produce. Separate from Values so a client cannot ask for a
+		// mint and supply a value in the same breath, and so an empty
+		// string in Values is never mistaken for one.
+		Generate []string `json:"generate"`
+	}
+	if err := decode(body, &req); err != nil {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
+			"detail": err.Error(),
+		})
+		return
+	}
+
+	values := map[string]string{}
+	for field, value := range req.Values {
+		values[field] = value
+	}
+	if err := mintInto(values, state.Requirements, req.Generate); err != nil {
+		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
+			"detail": err.Error(),
+		})
+		return
+	}
+	if len(values) == 0 {
+		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
+			"detail": "the submission carried no values",
+		})
+		return
+	}
+	if err := refuseEmpty(values, state.Requirements); err != nil {
+		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
+			"detail": err.Error(),
+		})
+		return
+	}
+
+	summary := auditSummary(kind, req.Summary)
+	result, err := s.writer.Write(r.Context(), state.Requirements, setup.Submission{
+		Kind: kind, Values: values, Seat: req.Seat,
+		Summary: summary, Operator: operatorOf(r), Expect: req.IfMatch,
+	}, func(path string) string { return valueAt(company, path) })
+	if err != nil {
+		s.refuse(w, r, err, result)
+		return
+	}
+
+	// NAMES, NEVER VALUES, in the log and in the answer alike. The names
+	// are a fact an operator needs; a submitted value must not reach a log
+	// line, an error detail or a response body.
+	log.InfoContext(r.Context(), "setup_inputs_written",
+		"kind", kind, "revision", result.RevisionID, "epoch", result.Epoch,
+		"secrets", strings.Join(result.Secrets, ","), "reloaded", result.Reloaded,
+		"operator", operatorOf(r))
+
+	after := s.company()
+	fresh := state
+	if after != nil {
+		if refreshed, ok := s.state(after, kind); ok {
+			fresh = refreshed
+		}
+	}
+	httpjson.Write(w, http.StatusCreated, map[string]any{
+		"revision_id": result.RevisionID, "epoch": result.Epoch,
+		"wrote_secrets": result.Secrets, "reloaded": result.Reloaded,
+		"state": fresh,
+	})
+}
+
+// disconnect serves DELETE /setup/integrations/{kind}.
+//
+// It removes the BLOCK from the company document and nothing else. The sealed
+// values stay: they are named by nothing now, which is inert, and deleting a
+// credential an operator may be sharing with another deployment is not a
+// decision a disconnect button gets to make on its own. `crewlet secrets
+// unset` is the deliberate path, and the setup answer names what is orphaned.
+func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
+	kind := integration.Kind(r.PathValue("kind"))
+	company := s.company()
+	if company == nil {
+		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+			"hint": "no company configuration is active",
+		})
+		return
+	}
+	state, ok := s.state(company, kind)
+	if !ok {
+		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
+			"hint": "one of " + kindList(),
+		})
+		return
+	}
+	if !state.Configured {
+		// Already absent. Answering 200 rather than 404 because the
+		// caller's goal is a company without this integration, and it
+		// has one.
+		httpjson.Write(w, http.StatusOK, map[string]any{"key": kind, "removed": false})
+		return
+	}
+	patch := []byte(`{"integrations":{"` + string(kind) + `":null}}`)
+	applied, err := s.config.Apply(r.Context(), configapi.ApplyRequest{
+		Patch:    patch,
+		Summary:  "disconnect " + string(kind),
+		Operator: operatorOf(r),
+		Expect:   strings.TrimSpace(r.Header.Get("If-Match")),
+	})
+	if err != nil {
+		s.refuse(w, r, err, setup.Result{})
+		return
+	}
+	orphaned := []string{}
+	for _, req := range state.Requirements {
+		if req.Kind != setup.KindSecret {
+			continue
+		}
+		if name, _, err := setup.PointerFor(kind, req, valueAt(company, req.ConfigPath)); err == nil {
+			orphaned = append(orphaned, name)
+		}
+	}
+	log.InfoContext(r.Context(), "setup_disconnected",
+		"kind", kind, "revision", applied.RevisionID, "operator", operatorOf(r))
+	httpjson.Write(w, http.StatusOK, map[string]any{
+		"key": kind, "removed": true,
+		"revision_id": applied.RevisionID, "epoch": applied.Epoch,
+		// NAMED, not deleted. An operator who wants them gone runs
+		// `crewlet secrets unset`, having read this list.
+		"orphaned_secrets": orphaned,
+	})
+}
+
+// refuse maps a write failure onto this surface's answers.
+func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, partial setup.Result) {
+	var literal *setup.ErrLiteralInConfig
+	var stale *setup.ErrStaleBase
+	var raced *configapi.RacedError
+	var invalid *configapi.ValidationError
+	var patchErr *configapi.PatchError
+	switch {
+	case errors.As(err, &literal):
+		httpjson.FailWith(w, http.StatusConflict, codeLiteralInConfig, map[string]string{
+			"path": literal.Path,
+			"detail": "this field holds a value rather than a ${VAR} reference, so " +
+				"there is no variable to write the credential into",
+			"hint": "replace it with a whole ${VAR} reference, or clear it and submit again",
+		})
+	case errors.As(err, &stale):
+		// REFUSED BEFORE ANYTHING WAS WRITTEN, which is the difference
+		// from the config surface's own raced answer: there is no stored
+		// revision to name, because nothing was stored.
+		httpjson.FailWith(w, http.StatusConflict, codeRevisionAdvanced, map[string]string{
+			"your_base": stale.Base, "current_revision_id": stale.Current,
+			"hint": "the configuration changed since you read it; re-read the " +
+				"setup state and submit again",
+		})
+	case errors.As(err, &raced):
+		extra := map[string]string{
+			"your_base": raced.Base,
+			"hint": "another write activated first; re-read the setup state and " +
+				"submit again",
+		}
+		if raced.Current != "" {
+			extra["current_revision_id"] = raced.Current
+		}
+		if raced.Stored != "" {
+			extra["stored_revision_id"] = raced.Stored
+		}
+		httpjson.FailWith(w, http.StatusConflict, codeRevisionAdvanced, extra)
+	case errors.As(err, &invalid):
+		httpjson.FailWith(w, http.StatusBadRequest, codeValidationError, map[string]string{
+			"detail": invalid.Err.Error(),
+			"hint": "the values are checked as the whole company document they " +
+				"produce, so a field that is fine on its own is still refused " +
+				"when it leaves the company invalid",
+		})
+	case errors.As(err, &patchErr):
+		httpjson.FailWith(w, http.StatusBadRequest, codeValidationError, map[string]string{
+			"detail": patchErr.Err.Error(),
+		})
+	case errors.Is(err, configapi.ErrNoControlPlane):
+		httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoControlPlane, map[string]string{
+			"hint": "this process has no coordination store, so it cannot activate a revision",
+		})
+	case errors.Is(err, configapi.ErrNoActiveRevision):
+		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+			"hint": "import a company configuration first",
+		})
+	case s.secrets == nil:
+		httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoKeyring, map[string]string{
+			"detail": "this node has no secrets.keys, so a credential cannot be sealed",
+			"hint":   "run `crewlet secrets keygen` and install one",
+		})
+	default:
+		// THE DETAIL GOES TO THE LOG, never to the caller: a vendor's own
+		// refusal can quote the config value it was given, which on a
+		// company holding a literal would echo the credential.
+		log.ErrorContext(r.Context(), "setup_write_failed",
+			"error", err.Error(), "secrets", strings.Join(partial.Secrets, ","))
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+	}
+}
+
+// operatorOf is who the guard authenticated, or empty.
+func operatorOf(r *http.Request) string {
+	operator, _ := auth.OperatorFrom(r.Context())
+	return operator
+}

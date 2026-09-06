@@ -240,6 +240,10 @@ by a process that can reach the [coordination store](../concepts/coordination.md
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address vendors reach this deployment on |
+| `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state |
+| `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
+| `DELETE` | `/setup/integrations/{kind}` | Remove the integration's block, naming the secrets it leaves behind |
 | `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` and `source`. **Never a value** |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator |
@@ -348,6 +352,119 @@ is configured, and `503 no_control_plane` on a process that cannot activate.
 
 The command-line equivalent is [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate)
 naming the revision that is already current.
+
+
+
+## Setting an integration up
+
+Connecting an integration means putting values in two places: a credential
+into the fleet's sealed secret store, and everything else into the company
+document. `/setup` is the surface that does both, in the one order that is
+safe, so the dashboard never has to sequence it and never holds a credential
+across two requests.
+
+**Guarded in full, reads included**, on the same terms as `/config` and
+`/secrets`: this surface answers with the *names* of the credentials a company
+holds, which of them are unset, and the vendor pages an administrator would
+visit. That is a map of what to attack, and it is not something the
+anonymous-read posture opens.
+
+### The requirement list
+
+`GET /setup/integrations/{kind}` answers what that vendor needs, whether or
+not the company has configured it:
+
+```json
+{
+  "key": "datadog",
+  "configured": false,
+  "enabled": false,
+  "satisfied": false,
+  "inbound_path": "/webhooks/datadog",
+  "public_url": "https://engine.example.com/webhooks/datadog",
+  "requirements": [
+    {
+      "field": "webhook_token",
+      "label": "Shared token",
+      "kind": "secret",
+      "config_path": "integrations.datadog.webhook_token",
+      "secret_name": "DATADOG_WEBHOOK_TOKEN",
+      "required": true,
+      "mintable": true,
+      "help": "...",
+      "where": "...",
+      "vendor_url": "https://app.datadoghq.com/integrations/webhooks",
+      "blocks": "credential_missing",
+      "present": false,
+      "resolved": null
+    }
+  ]
+}
+```
+
+`kind` is one of `secret`, `url`, `id`, `choice`, `text`, `handle`, `toggle`.
+A `secret` is sealed and never echoed; a `toggle` is a JSON boolean in the
+document; a `handle` must name a seat this company has.
+
+`present` and `resolved` are the same two facts `secret_present` and
+`secret_usable` are, asked per field: written down, and actually usable in
+this process. `resolved` is `null` where nothing resolved the document.
+`blocks` names the [reconcile finding](../concepts/integration-reconcile.md)
+that this input being absent produces, which is what lets a row reporting
+`credential_missing` offer exactly the fields that clear it.
+
+`mintable` means the engine can generate the value, so nobody should be asked
+to invent it. **No route here ever returns a value.**
+
+### Supplying them
+
+```bash
+curl -X POST https://engine.example.com/setup/integrations/datadog/inputs \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+        "if_match": "<revision_id>",
+        "values": {"enabled": "true", "route_to": "sre-lead"},
+        "generate": ["webhook_token"]
+      }'
+```
+
+`generate` is separate from `values` on purpose: a client that could send both
+under one key would eventually send a weak token by accident, and a field can
+be one or the other, never both.
+
+What the route does, in this order:
+
+1. **Refuses a stale base.** `if_match` names the revision the requirement
+   list was read against. A submission built on an older one is refused
+   *before anything is sealed*, so a caller working from a stale page does not
+   end up with a credential in the store that nothing points at.
+2. **Seals every credential**, under the name the vendor declared or one
+   derived as `VENDOR_FIELD[_HANDLE]`. The row records `source: "setup"`.
+3. **Patches the document** with the non-secret values and, for a credential
+   whose slot was empty, a whole `${VAR}` pointing at the name from step 2.
+   A slot that already holds a `${VAR}` is written *through*, which is what
+   makes rotating a credential a change to the store and not to the company.
+   A slot holding a literal is `409 literal_in_config`, naming the path:
+   overwriting it would edit the company from a setup form and destroy a
+   credential somebody put there on purpose.
+4. **Activates**, through the same merge, validation and compare-and-set
+   `PATCH /config` performs. When the pointer needed no change (a rotation)
+   it [reloads](#post-configreload-after-a-secret-changes) instead, because a
+   value written into the store after the last apply is invisible to every
+   running seat until something activates. The answer says `"reloaded": true`
+   when that is what happened.
+
+Answers `201 {"revision_id", "epoch", "wrote_secrets", "reloaded", "state"}`.
+Refusals: `400 invalid_input`, `400 validation_error`, `404 unknown_kind`,
+`409 revision_advanced`, `409 literal_in_config`, `409 no_active_revision`,
+`503 no_control_plane`, `503 no_keyring`.
+
+### Disconnecting
+
+`DELETE /setup/integrations/{kind}` removes the block and **nothing else**.
+The sealed values stay, named in `orphaned_secrets`: a credential an operator
+may be sharing with another deployment is not something a disconnect button
+decides about on its own, and `crewlet secrets unset` is the deliberate path.
 
 
 ## Live Stream
