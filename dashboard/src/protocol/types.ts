@@ -510,6 +510,40 @@ export interface FleetAnswer {
   target_epoch: number;
 }
 
+/** One observation a reconcile pass made that is not "fine". */
+export interface ReconcileFinding {
+  kind: string;
+  subject?: string;
+  detail?: string;
+  action_url?: string;
+}
+
+/**
+ * What the reconcile loop last found for one surface.
+ *
+ * The row's `reconcile` is THREE-VALUED like every count beside it: an object
+ * is a real finding, and `null` is either a process with no loop to ask (a
+ * standalone API) or a surface the loop has not reached yet. Neither is a
+ * claim that the surface is healthy.
+ */
+export interface ReconcileStatus {
+  /** unconfigured | awaiting_admin | provisioning | activating | degraded | ready */
+  phase: string;
+  /** "" | engine | provider | admin | operator — who has to act. */
+  actor?: string;
+  detail?: string;
+  action_url?: string;
+  /** settled | waiting | blocked */
+  outcome?: string;
+  attempts?: number;
+  last_error?: string;
+  last_attempt_at?: string | null;
+  settled_at?: string | null;
+  next_attempt_at?: string | null;
+  /** Everything the pass saw, not only what the phase was derived from. */
+  findings?: ReconcileFinding[];
+}
+
 export interface IntegrationRow {
   key: string;
   label?: string;
@@ -519,6 +553,8 @@ export interface IntegrationRow {
   inbound?: number | null;
   outbound?: number | null;
   routed?: number | null;
+  /** Null means "nothing here can say", never "this surface is fine". */
+  reconcile?: ReconcileStatus | null;
   [key: string]: unknown;
 }
 
