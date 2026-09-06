@@ -1092,6 +1092,24 @@ kbd {
 .toast.positive svg {
   color: var(--positive);
 }
+.toast-close {
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.toast-close:hover {
+  color: var(--text);
+}
+
+/* The refusal under a field. Caution rather than critical: the operator is
+   mid-form and can fix it, which is not the same as something being broken. */
+.field-error {
+  color: var(--caution-ink);
+}
 
 /* ---- Chart -------------------------------------------------------------- */
 
