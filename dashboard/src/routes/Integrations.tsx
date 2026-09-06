@@ -184,7 +184,7 @@ export function phaseTone(phase: string): Tone {
  * `degraded` sits ABOVE `activating` deliberately: a degraded integration is
  * still working, and one still coming up is not.
  */
-const PHASE_ORDER = [
+export const PHASE_ORDER = [
   "unconfigured",
   "awaiting_admin",
   "provisioning",
