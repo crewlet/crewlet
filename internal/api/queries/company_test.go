@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
@@ -1067,4 +1068,91 @@ func TestAnUnreadableEventLogReportsNullOutcomes(t *testing.T) {
 			}
 		}
 	}
+}
+
+// THE THREE-VALUED RECONCILE FIELD, and the third value is the one that took
+// a subsystem to be able to say at all.
+//
+// A standalone API has no loop to ask, and reporting that as "no surface has
+// been reconciled" would put an alarming claim on a screen that had asked the
+// wrong node. So null is "cannot say", an absent entry is "the loop has not
+// reached this surface yet", and a present one is a real finding.
+func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+
+	t.Run("cannot say", func(t *testing.T) {
+		t.Parallel()
+		rows := integrationRows(t, queries.Sources{
+			Company: func() *config.Company { return cfg },
+		})
+		for kind, row := range rows {
+			if got, present := row["reconcile"]; !present || got != nil {
+				t.Errorf("%s reconcile = %v, want null on a process with no "+
+					"loop to ask", kind, got)
+			}
+		}
+	})
+
+	t.Run("a finding", func(t *testing.T) {
+		t.Parallel()
+		rows := integrationRows(t, queries.Sources{
+			Company: func() *config.Company { return cfg },
+			Reconciles: func(context.Context) []integration.State {
+				return []integration.State{{
+					Kind: integration.KindGitLab,
+					Report: integration.Report{
+						Phase: integration.PhaseDegraded, Actor: integration.ActorAdmin,
+						Detail:    "ceo needs maintainer on api-gateway",
+						ActionURL: "https://gitlab.example.com/api-gateway/-/settings",
+					},
+					Findings: []integration.Finding{
+						{Kind: integration.FindingGrantShort, Subject: "ceo"},
+						{Kind: integration.FindingGrantExcess, Subject: "cto"},
+					},
+					Outcome:  integration.OutcomeBlocked,
+					Attempts: 2,
+				}}
+			},
+		})
+
+		got, _ := rows["gitlab"]["reconcile"].(map[string]any)
+		if got == nil {
+			t.Fatalf("gitlab carries no reconcile status: %v", rows["gitlab"]["reconcile"])
+		}
+		if got["phase"] != "degraded" || got["actor"] != "admin" {
+			t.Errorf("phase/actor = %v/%v, want degraded/admin", got["phase"], got["actor"])
+		}
+		if got["detail"] != "ceo needs maintainer on api-gateway" {
+			t.Errorf("detail = %v", got["detail"])
+		}
+		// THE FINDINGS TRAVEL TOO, and not only the one the report
+		// promoted: the report says what to do next and the findings say
+		// what is actually wrong, and an operator who fixes the first
+		// should not wait a full pass to learn there was a second.
+		findings, _ := got["findings"].([]any)
+		if len(findings) != 2 {
+			t.Fatalf("carried %d findings, want both", len(findings))
+		}
+		// A surface the loop has not reached is absent rather than
+		// asserted, which is not the same as the process being unable to
+		// say: the field is null either way, and only the presence of
+		// OTHER rows' answers tells them apart.
+		if got := rows["mattermost"]["reconcile"]; got != nil {
+			t.Errorf("mattermost reconcile = %v, want null until the loop reaches it", got)
+		}
+	})
+}
+
+// integrationRows answers the question and indexes the rows by surface.
+func integrationRows(t *testing.T, sources queries.Sources) map[string]map[string]any {
+	t.Helper()
+	body := asMap(t, answer(t, sources, "integrations", nil))
+	rows, _ := body["integrations"].([]any)
+	out := map[string]map[string]any{}
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		out[entry["key"].(string)] = entry
+	}
+	return out
 }

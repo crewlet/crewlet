@@ -35,6 +35,7 @@ import (
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
@@ -943,6 +944,23 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Knowledge: e.Knowledge(),
 			Config:    configSurface,
 			Budget:    e.Backends().Fleet,
+			// What the reconcile loop last found for each surface. The
+			// FLEET's record, not this node's: the loop is a worker duty,
+			// so on a split-role deployment the node answering the
+			// request is never the one that wrote the answer.
+			Reconciles: func(ctx context.Context) []integration.State {
+				states, err := e.IntegrationStates(ctx)
+				if err != nil {
+					// NIL, which the answer renders as "cannot say"
+					// rather than as "nothing has been reconciled". The
+					// two send an operator in opposite directions, and
+					// an unreachable coordination store is not evidence
+					// about anybody's integrations.
+					log.Warn("integration_status_unreadable", "error", err)
+					return nil
+				}
+				return states
+			},
 			// The DURABLE record of detached coding runs. Read rather
 			// than projected: a run parked on a person's question can
 			// wait days, and the live projection sweeps long before

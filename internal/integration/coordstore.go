@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -21,8 +22,24 @@ import (
 type CoordStore struct{ statuses coord.Integrations }
 
 // NewCoordStore wraps the fleet's integration statuses.
-func NewCoordStore(statuses coord.Integrations) *CoordStore {
-	return &CoordStore{statuses: statuses}
+//
+// # It REFUSES a nil backend rather than wrapping one
+//
+// A constructor that took whatever it was handed would return a perfectly
+// non-nil *CoordStore holding a nil interface, which satisfies [Store], which
+// [New] then accepts because its own nil check sees a value. The failure lands
+// on the first tick, inside a detached goroutine, as a nil dereference that
+// takes the process down. That is exactly what happened when this was wired
+// on a node with no coordination store, so the refusal is here rather than at
+// each call site: a caller cannot forget a check the type will not let them
+// skip.
+func NewCoordStore(statuses coord.Integrations) (*CoordStore, error) {
+	if statuses == nil {
+		return nil, errors.New(
+			"integration: a reconcile status store needs a coordination " +
+				"backend; a node with none cannot record what a pass finds")
+	}
+	return &CoordStore{statuses: statuses}, nil
 }
 
 var _ Store = (*CoordStore)(nil)

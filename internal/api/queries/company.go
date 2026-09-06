@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
@@ -139,6 +140,15 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	}
 	seen := s.deliveryTraffic(ctx)
 	in := company.Integrations
+	// ONE READ for the whole answer. Every row asks the same question of
+	// the same coordination bucket, and a per-row read would put seven
+	// round trips on a screen refresh.
+	//
+	// Nil when this process cannot say, which a standalone API honestly
+	// is, and which is NOT the same claim as "nothing has been
+	// reconciled". A row then carries a null reconcile rather than one
+	// asserting that nobody has ever checked.
+	reconciled, reconcileKnown := s.reconcileStates(ctx)
 
 	// Nil when no engine is co-located; an empty-but-non-nil list is a real
 	// answer meaning nothing routes, so the two must not collapse.
@@ -210,6 +220,20 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 			row["secret_usable"] = nil
 		default:
 			row["secret_usable"] = boolPtr(slices.Contains(verifiable, kind))
+		}
+		// THREE-VALUED again, and the third value is the one that took a
+		// subsystem to be able to say at all: null means nothing is
+		// checking this surface from here, an absent entry means the loop
+		// has not reached it yet, and a present one is a real finding.
+		// Before the reconcile loop existed this answer had no honest
+		// form, which is why the doc comment above still says it never
+		// infers health: it does not, and now it does not have to.
+		if !reconcileKnown {
+			row["reconcile"] = nil
+		} else if state, checked := reconciled[kind]; checked {
+			row["reconcile"] = reconcileRow(state)
+		} else {
+			row["reconcile"] = nil
 		}
 		// Every row carries seats, so the view never reads undefined.
 		// An empty list is a real answer — nobody holds credentials of
@@ -577,4 +601,75 @@ func countOrNil(counts map[string]int, kind string) any {
 		return nil
 	}
 	return counts[kind]
+}
+
+// reconcileStates reads what the loop last found, keyed by surface.
+//
+// The second result is whether this process could say at all, kept apart from
+// an empty map for the same reason [Sources.Routed] keeps them apart: a
+// standalone API has nothing to ask, and reporting that as "no surface has
+// been reconciled" would put an alarming claim on a screen that had simply
+// asked the wrong node.
+func (s Sources) reconcileStates(ctx context.Context) (map[string]integration.State, bool) {
+	if s.Reconciles == nil {
+		return nil, false
+	}
+	states := s.Reconciles(ctx)
+	if states == nil {
+		return nil, false
+	}
+	out := make(map[string]integration.State, len(states))
+	for _, state := range states {
+		out[state.Kind.String()] = state
+	}
+	return out, true
+}
+
+// reconcileRow renders one surface's status for the wire.
+//
+// The FINDINGS travel as well as the report, because the two answer different
+// questions: the report says what to do next, and the findings say what is
+// actually wrong. A company with a broken webhook and four under-granted
+// seats reports the webhook, and an operator who fixes it should not have to
+// wait a full pass to discover there were four more things behind it.
+func reconcileRow(state integration.State) map[string]any {
+	row := map[string]any{
+		"phase":      string(state.Report.Phase),
+		"actor":      string(state.Report.Actor),
+		"detail":     state.Report.Detail,
+		"action_url": state.Report.ActionURL,
+		"outcome":    string(state.Outcome),
+		"attempts":   state.Attempts,
+		"last_error": state.LastError,
+		"findings":   reconcileFindings(state.Findings),
+	}
+	// Rendered as instants, so an absent one is absent rather than the
+	// zero time, which prints as 1970 and reads as a real answer.
+	row["last_attempt_at"] = instantOrNil(state.LastAttemptAt)
+	row["settled_at"] = instantOrNil(state.SettledAt)
+	row["next_attempt_at"] = instantOrNil(state.NextAttemptAt)
+	return row
+}
+
+// reconcileFindings renders the findings list, never nil so a view does not
+// have to read undefined.
+func reconcileFindings(findings []integration.Finding) []map[string]any {
+	out := make([]map[string]any, 0, len(findings))
+	for _, f := range findings {
+		out = append(out, map[string]any{
+			"kind":       string(f.Kind),
+			"subject":    f.Subject,
+			"detail":     f.Detail,
+			"action_url": f.ActionURL,
+		})
+	}
+	return out
+}
+
+// instantOrNil renders a timestamp, or null for one that was never set.
+func instantOrNil(at time.Time) any {
+	if at.IsZero() {
+		return nil
+	}
+	return at.UTC().Format(time.RFC3339)
 }

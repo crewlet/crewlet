@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
 	"github.com/crewlet/crewlet/internal/maintenance"
@@ -242,7 +243,8 @@ type Engine struct {
 	// the engine for the same reason the sandbox machinery is: it is a
 	// loop this process runs, and rebuilding it on an apply would start a
 	// second one against the same rows.
-	maintenance *maintenance.Worker
+	maintenance  *maintenance.Worker
+	integrations *integration.Worker
 
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
@@ -499,6 +501,10 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return fail(fmt.Errorf("engine: sandbox waiter: %w", err))
 	}
 	e.startMaintenance(ctx)
+	// Beside the sweep, and a fleet singleton on the same terms: two nodes
+	// reconciling one vendor at the same moment can each create an identity
+	// for one seat, and no later pass can detect or repair that.
+	e.startIntegrations(ctx)
 	e.startMemorySync(ctx)
 	e.startScheduler(ctx)
 	// The credential pools were attached to the fleet's ledger by equip,
@@ -653,6 +659,7 @@ func (e *Engine) Stop(ctx context.Context) {
 	e.stopSandbox()
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
+	e.stopIntegrations()
 	// AFTER the drain, which released every seat and flushed each one's
 	// memory on the way out. Stopping it before the drain would leave the
 	// releases to the flush alone, which is the bounded path rather than

@@ -70,8 +70,26 @@ type Reconciler interface {
 	// the loop classifies and reports. An error is the engine or the vendor
 	// failing to look at that world at all, which the loop records as a
 	// fault and retries.
+	//
+	// [ErrNotConfigured] is the third answer, and it is neither of those.
 	Reconcile(ctx context.Context) ([]Finding, error)
 }
+
+// ErrNotConfigured reports a surface whose block has left the company.
+//
+// # Why a sentinel rather than a registration the apply rebuilds
+//
+// The company document is edited live, so the set of configured surfaces
+// moves under a running loop. The obvious answer is to tear the worker down
+// and build a new one on every apply, and it is worse than it looks: the
+// worker is a fleet singleton holding a lease, so rebuilding it on an
+// unrelated config change drops that lease and hands a peer a duty it will
+// hold until the TTL lapses, for a company whose integrations did not change.
+//
+// So registration is static, every reconciler reads the LIVE config on each
+// pass, and one that finds its own block gone says so. The loop then forgets
+// its status, exactly as it forgets a kind nothing registered.
+var ErrNotConfigured = errors.New("integration: this surface is not configured")
 
 // Registration is one reconciler and what is specific to its cadence.
 type Registration struct {
@@ -317,6 +335,16 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 	state.LastAttemptAt = now
 
 	switch {
+	case errors.Is(err, ErrNotConfigured):
+		// The block left the company document between this pass being
+		// scheduled and it running. Forgotten rather than recorded: a
+		// status for a surface nobody configured would sit in the fleet
+		// view describing an integration that is gone.
+		if err := w.store.ForgetIntegration(ctx, kind); err != nil {
+			log.WarnContext(ctx, "integration_status_not_forgotten",
+				"integration", kind.String(), "error", err)
+		}
+		return
 	case err != nil:
 		// A FAULT IS A WAIT. Almost every one is a vendor briefly
 		// unreachable, and none of the rest is fixed by giving up. The

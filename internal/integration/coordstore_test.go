@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 )
 
@@ -13,7 +14,7 @@ import (
 // every field the API renders intact. A phase that came back empty would
 // render as an integration nobody has ever looked at.
 func TestCoordStoreRoundTrip(t *testing.T) {
-	store := NewCoordStore(memory.NewFleet())
+	store := newCoordStore(t, memory.NewFleet())
 	ctx := context.Background()
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 
@@ -74,7 +75,7 @@ func TestCoordStoreSkipsAnUndecodableStatus(t *testing.T) {
 	if err := fleet.PutIntegrationStatus(ctx, "gitlab", []byte("{not json")); err != nil {
 		t.Fatalf("PutIntegrationStatus: %v", err)
 	}
-	store := NewCoordStore(fleet)
+	store := newCoordStore(t, fleet)
 	if err := store.SaveIntegration(ctx, State{Kind: KindSlack, Report: Ready()}); err != nil {
 		t.Fatalf("SaveIntegration: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestCoordStoreTrustsTheKeyOverTheDocument(t *testing.T) {
 		t.Fatalf("PutIntegrationStatus: %v", err)
 	}
 
-	rows, err := NewCoordStore(fleet).LoadIntegrations(ctx)
+	rows, err := newCoordStore(t, fleet).LoadIntegrations(ctx)
 	if err != nil {
 		t.Fatalf("LoadIntegrations: %v", err)
 	}
@@ -111,7 +112,7 @@ func TestCoordStoreTrustsTheKeyOverTheDocument(t *testing.T) {
 // answer reads as "no surface has ever been reconciled", which sends the loop
 // to re-provision a company it cannot currently see.
 func TestCoordStoreRaisesOnAnUnreachableStore(t *testing.T) {
-	_, err := NewCoordStore(brokenStatuses{}).LoadIntegrations(context.Background())
+	_, err := newCoordStore(t, brokenStatuses{}).LoadIntegrations(context.Background())
 	if err == nil {
 		t.Fatal("an unreachable store answered with no error")
 	}
@@ -120,7 +121,7 @@ func TestCoordStoreRaisesOnAnUnreachableStore(t *testing.T) {
 // A surface with no name is refused rather than written under an empty key,
 // where nothing would ever read it back.
 func TestCoordStoreRefusesAnUnnamedSurface(t *testing.T) {
-	err := NewCoordStore(memory.NewFleet()).SaveIntegration(context.Background(), State{})
+	err := newCoordStore(t, memory.NewFleet()).SaveIntegration(context.Background(), State{})
 	if err == nil {
 		t.Fatal("a status with no surface was accepted")
 	}
@@ -133,3 +134,23 @@ func (brokenStatuses) IntegrationStatuses(context.Context) (map[string][]byte, e
 }
 func (brokenStatuses) PutIntegrationStatus(context.Context, string, []byte) error { return nil }
 func (brokenStatuses) DeleteIntegrationStatus(context.Context, string) error      { return nil }
+
+// newCoordStore builds a store, failing the test rather than the tick.
+func newCoordStore(t *testing.T, statuses coord.Integrations) *CoordStore {
+	t.Helper()
+	store, err := NewCoordStore(statuses)
+	if err != nil {
+		t.Fatalf("NewCoordStore: %v", err)
+	}
+	return store
+}
+
+// A nil backend is refused at construction. Wrapped, it would be a non-nil
+// *CoordStore holding a nil interface, which satisfies Store, which New then
+// accepts, and the failure lands on the first tick inside a detached
+// goroutine as a nil dereference that takes the process down.
+func TestCoordStoreRefusesANilBackend(t *testing.T) {
+	if _, err := NewCoordStore(nil); err == nil {
+		t.Fatal("a nil coordination backend was wrapped rather than refused")
+	}
+}
