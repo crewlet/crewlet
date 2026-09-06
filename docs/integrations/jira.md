@@ -2,7 +2,7 @@
 
 Crewlet integrates with Jira in two directions: agents control Jira via MCP tools, and Jira pushes events to agents via webhooks.
 
-> **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. Webhooks differ by deployment: **Cloud** events arrive via the [Crewlet Forge app](https://github.com/crewlet/forge); **Data Center** uses direct webhook registration (see [Webhooks](#webhooks-jira-pushes-to-agents)).
+> **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. Webhooks are registered the same way on both deployments (see [Webhooks](#webhooks-jira-pushes-to-agents)); the [Crewlet Forge app](https://github.com/crewlet/forge) is an optional alternative on Cloud.
 
 ---
 
@@ -39,7 +39,7 @@ mcp_servers:
 
 **`site_url` is the base for links a person opens.** With a `cloud_id`, the REST base is `api.atlassian.com/ex/jira/{cloud_id}`, which is not somewhere a browser can go — so without `site_url` the engine omits the link from a notification rather than printing one that looks right and opens nothing. With a plain `url` it defaults to that.
 
-For **Cloud** webhooks, install the [Crewlet Forge app](https://github.com/crewlet/forge) which forwards events via Forge Remote to `POST /webhooks/forge`; that route is verified by the app's invocation token against `integrations.forge_app_id`. The `webhook_secret` field is only used for Data Center deployments, and validation does not require it for a Cloud config.
+On **Cloud**, `webhook_secret` is used exactly as it is on Data Center: the engine registers an admin webhook signed with it. Validation still does not *require* it for a Cloud config, because a company on the Forge relay has no HMAC in its path at all; what stops that being a silent gap is that the reconcile refuses to register a hook it cannot sign, and says so. The Forge route remains available and is verified by the app's invocation token against `integrations.forge_app_id`.
 
 ---
 
@@ -76,11 +76,21 @@ The project identity is set once on the unit's `integrations.jira.project` — i
 
 ## Webhooks (Jira Pushes to Agents)
 
-Jira Cloud and Data Center use different webhook models. Cloud uses the **Crewlet Forge app**; Data Center uses direct webhook registration.
+Both deployments register a webhook the same way, through the admin webhook API. On Cloud the **Crewlet Forge app** is an optional alternative.
 
-### Jira Cloud — Forge App
+### Jira Cloud — an admin webhook (the default)
 
-Install the [Crewlet Forge app](https://github.com/crewlet/forge) from the Atlassian Marketplace (or via a private installation link). The Forge app currently forwards these Jira issue events to the Crewlet backend:
+**Cloud registers an ordinary webhook, exactly as Data Center does.** `crewlet jira provision -public-url https://your-engine.example.com` creates it, signs it with the secret in `integrations.jira.webhook_secret`, and the `/webhooks/jira` route verifies the `X-Hub-Signature` it sends.
+
+This used to say Cloud needed the Forge app, on the premise that a Cloud webhook belongs to an app and refuses an API token. That is true of the **dynamic** webhook API (`/rest/api/3/webhook`), which answers `403 Only Connect and OAuth 2.0 apps can use this operation`. It is not true of the **admin** webhook API (`/rest/webhooks/1.0/webhook`), which is what the engine calls: a Jira administrator authenticates there with an ordinary API token, the hooks never expire, and every event and JQL filter is available.
+
+The account whose token is in `integrations.jira.token` needs the **Administer Jira** global permission to register one.
+
+Jira Cloud requires the URL to be **HTTPS with a certificate from a trusted CA**, and permits only a fixed set of ports (443 among them; **port 80 is rejected**). A tunnel such as `cloudflared` satisfies both; a self-signed certificate does not.
+
+### Jira Cloud — the Forge app (optional)
+
+The [Crewlet Forge app](https://github.com/crewlet/forge) remains supported and is the alternative when you would rather not expose an inbound URL to Jira directly, or you are already running it. It forwards these Jira issue events:
 
 - `avi:jira:created:issue` — new ticket created
 - `avi:jira:updated:issue` — ticket field changed (status, assignee, priority, etc.)
@@ -159,7 +169,7 @@ Jira issues no credentials on a provisioner's behalf — a Cloud API token is cr
 - **Whether every project the org chart names exists**, and whether Jira's own project lead agrees with the org chart's. A disagreement is reported, never failed: a human manager owning a project while an agent triages it is an ordinary arrangement. A project the instance does not have is almost always a typo, and the typo is a routing gap nothing else reports.
 - **The inbound webhook**, on Data Center: registered at `<public-url>/webhooks/jira`, subscribed to exactly the events the parser routes, with the whole body and an HMAC secret. If `webhook_secret` resolves to nothing, a fresh secret is minted into the `${VAR}` it points at and recorded in the sink you chose. A secret that already resolves is used as-is — re-registering with a fresh one would make the instance sign every delivery with a key the running engine does not hold. `-recreate-webhook` forces a rotation, which invalidates the secret every other deployment of this company holds.
 
-On **Cloud** the webhook step is skipped with a note rather than attempted: a dynamic webhook there belongs to an app, so the endpoint refuses an API token however privileged it is. Cloud events arrive through the Forge app instead.
+On **Cloud** the webhook is registered exactly as it is on Data Center, through the admin webhook API. The account needs the *Administer Jira* global permission. If you are on the Forge relay instead, leave `-public-url` off and the step is skipped.
 
 Without `-public-url` nothing is registered and the run says so. A hook pointing at the wrong host is worse than no hook, because the instance then reports a healthy integration that delivers into the void. A hook somebody else registered is reported and never touched.
 

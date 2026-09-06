@@ -316,19 +316,6 @@ func ensureWebhook(ctx context.Context, opts Options) (string, []string, error) 
 				"delivers nothing and the integration looks idle rather than " +
 				"unconfigured"}, nil
 	}
-	if opts.Client.Deployment() == Cloud {
-		// NOT A FAILURE, and not something a better credential fixes. On
-		// Cloud a dynamic webhook belongs to an app, so this endpoint
-		// refuses an API token however privileged it is. The Forge route
-		// is how Cloud events reach this engine.
-		return "", []string{
-			"webhook registration was skipped: this is a Cloud instance, where " +
-				"a webhook belongs to an app rather than to an API token. Cloud " +
-				"events reach the engine through the Forge app on " +
-				"/webhooks/forge, which is verified by its invocation token and " +
-				"needs integrations.forge_app_id rather than a webhook secret"}, nil
-	}
-
 	secret, notes, err := webhookSecret(ctx, opts, target)
 	if err != nil {
 		return "", notes, err

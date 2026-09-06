@@ -211,10 +211,17 @@ func (j *Jira) validate(path string) error {
 				"which is the one routing input a Jira webhook never carries")
 	}
 	if strings.TrimSpace(j.WebhookSecret) == "" && cloud == "" {
-		// CLOUD IS EXEMPT: its events arrive through the Forge app on
-		// /webhooks/forge, verified by the app's invocation token, and
-		// there is no HMAC secret in that path at all. Requiring one
-		// would refuse the correct Cloud config.
+		// CLOUD IS EXEMPT, and stays exempt now that it can register an
+		// admin webhook of its own. The reason changed rather than
+		// disappearing: a Cloud company may take EITHER route, and one
+		// on the Forge relay has no HMAC secret in its path at all, so
+		// requiring one here would refuse a correct config.
+		//
+		// What stops that becoming a silent gap is where the refusal
+		// moved to: the reconcile will not register a hook without a
+		// secret to sign it with, so a Cloud company that chose webhooks
+		// is told at the moment it tries to register one, by the command
+		// that was going to do it.
 		probs.add(at(path, "webhook_secret"), ErrMissing,
 			"required for a Data Center instance — the /webhooks/jira route "+
 				"has nothing to verify a delivery with otherwise, and answers "+

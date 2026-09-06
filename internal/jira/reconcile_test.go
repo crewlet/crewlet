@@ -455,7 +455,21 @@ func TestAForeignHookIsLeftAlone(t *testing.T) {
 // a better credential fixes: on Cloud a dynamic webhook belongs to an app.
 // A run that reported a 403 there would send an operator to rotate a token
 // that is fine.
-func TestCloudSkipsWebhookRegistrationAndSaysWhy(t *testing.T) {
+// CLOUD REGISTERS ITS OWN WEBHOOK, and this test is the inversion of the one
+// it replaces.
+//
+// The reconcile used to skip registration on Cloud and tell the operator to
+// install a Forge app, on the premise that "on Cloud a dynamic webhook
+// belongs to an app, so this endpoint refuses an API token". That is true of
+// /rest/api/3/webhook and false of /rest/webhooks/1.0/webhook, which is the
+// endpoint this client actually calls. Verified against a live Cloud site:
+// GET answers 200, POST answers 201 with isSigned true, and the app-only
+// endpoint answers 403 "Only Connect and OAuth 2.0 apps can use this
+// operation".
+//
+// The cost of the wrong premise was total: a Cloud company got no webhook at
+// all from the command whose job is to register one.
+func TestCloudRegistersItsOwnWebhook(t *testing.T) {
 	t.Parallel()
 	inst := newInstance(t)
 	inst.accounts["Bearer org-token"] = "acct-org"
@@ -467,25 +481,27 @@ func TestCloudSkipsWebhookRegistrationAndSaysWhy(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := jira.Reconcile(context.Background(), jira.Options{
-		Client: client,
-		Config: &config.Jira{CloudID: "acme", Token: "t"},
-		Org:    company(),
-		Value:  func(v string) string { return v },
-		Sink:   newSink(),
-		// A base IS given: the point is that Cloud skips anyway.
+		Client:      client,
+		Config:      &config.Jira{CloudID: "acme", Token: "t", WebhookSecret: "${JIRA_WEBHOOK_SECRET}"},
+		Org:         company(),
+		Value:       func(v string) string { return v },
+		Sink:        newSink(),
 		WebhookBase: "https://engine.example.com",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Hooked != "" {
-		t.Errorf("a Cloud run claimed to register a hook: %q", res.Hooked)
+	if res.Hooked != "https://engine.example.com/webhooks/jira" {
+		t.Errorf("a Cloud run registered %q", res.Hooked)
 	}
-	if len(inst.created) != 0 {
-		t.Errorf("a Cloud run posted to the hook endpoint: %v", inst.created)
+	if len(inst.created) != 1 {
+		t.Fatalf("a Cloud run posted %d hooks, want 1: %v", len(inst.created), inst.created)
 	}
-	if !strings.Contains(strings.Join(res.Notes, " "), "/webhooks/forge") {
-		t.Errorf("the operator is not told where Cloud events arrive: %v", res.Notes)
+	// AND IT IS SIGNED. The secret is the route's only credential, so a
+	// hook registered without one is an endpoint that answers 503 to every
+	// delivery it would otherwise have routed.
+	if got, _ := inst.created[0]["secret"].(string); got == "" {
+		t.Errorf("the Cloud hook was registered with no secret: %v", inst.created[0])
 	}
 }
 

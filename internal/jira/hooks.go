@@ -8,17 +8,33 @@ import (
 
 // The webhook half of the client.
 //
-// # A different REST surface, and only one deployment has it
+// # A different REST surface, and BOTH deployments have it
 //
 // Webhook administration lives at /rest/webhooks/1.0, outside the versioned
-// /rest/api tree, which is why it does not go through [Client.api]. And it
-// answers only on Data Center: on Cloud a dynamic webhook belongs to an
-// APP — a Connect or Forge installation — so an API token gets a refusal no
-// matter what it is allowed to do elsewhere. The reconcile checks the
-// deployment before it calls, rather than reading a 401 here as a bad
-// credential and sending an operator to rotate a token that is fine.
+// /rest/api tree, which is why it does not go through [Client.api].
+//
+// It answers on Cloud as well as Data Center, and that is worth stating
+// plainly because this file used to say the opposite. The confusion is
+// between two different endpoints that both register webhooks:
+//
+//   - /rest/api/3/webhook is the DYNAMIC webhook API. It genuinely is
+//     app-only: an API token gets
+//     `403 Only Connect and OAuth 2.0 apps can use this operation`,
+//     however privileged the account. Its hooks also expire after 30 days
+//     unless refreshed, and it serves a narrower set of events.
+//   - /rest/webhooks/1.0/webhook is the ADMIN webhook API, which is this
+//     one. A Jira administrator authenticates with an ordinary API token
+//     over Basic auth, the hooks never expire, and every event and JQL
+//     filter is available.
+//
+// Reading the first endpoint's restriction as a property of the product
+// rather than of that endpoint cost Cloud its webhook registration
+// entirely: the reconcile skipped it and told the operator to install a
+// Forge app instead. Verified against a live Cloud site, which answers 200
+// to a GET here, 201 to a POST, and 403 on /rest/api/3/webhook with the
+// message quoted above.
 
-// hooksPath is the Data Center webhook administration prefix.
+// hooksPath is the webhook administration prefix, on both deployments.
 const hooksPath = "/rest/webhooks/1.0/webhook"
 
 // WebhookEvents are the events the engine's hook subscribes to.
