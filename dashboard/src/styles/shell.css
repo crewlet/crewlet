@@ -19,18 +19,20 @@
 
 /* The brand had no vertical padding at all — a two-line lockup inside a fixed
    52px box, so it sat against the top edge — and its 12px inset put the mark
-   4px left of where every nav label starts. The left inset now MATCHES the
-   nav: the group's own 8px plus each item's 8px. */
-/* ONE inset for the whole rail, so the mark, the group labels and the item
+   4px left of where every nav label starts.
+
+   ONE inset for the whole rail, so the mark, the group labels and the item
    text all start on the same vertical line. It is composed rather than
-   repeated: the rail pads by --nav-gutter and each row pads by its own
-   --space-2, and the brand adds the two because it has no row of its own. */
+   repeated: the rail pads by --nav-gutter and each row pads by --nav-row-pad,
+   and the brand adds the two because it has no row of its own — so it follows
+   either one when it moves, instead of being a literal somebody has to
+   remember to move with it. */
 .brand {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   min-height: var(--topbar-h);
-  padding: var(--space-4) calc(var(--nav-gutter) + var(--space-2)) var(--space-3);
+  padding: var(--space-4) calc(var(--nav-gutter) + var(--nav-row-pad)) var(--space-3);
   flex: none;
 }
 .brand img {
@@ -62,19 +64,22 @@
   gap: var(--space-1);
 }
 .nav-group-label {
-  padding: var(--space-3) var(--space-2) var(--space-1);
+  padding: var(--space-3) var(--nav-row-pad) var(--space-1);
   font-size: var(--fs-3xs);
   font-weight: var(--fw-medium);
   letter-spacing: var(--track-wide);
   text-transform: uppercase;
   color: var(--text-faint);
 }
+/* The row is the click target and the active tint, so it takes as much of the
+   rail's width as the gutter leaves it; its own padding, not the rail's, is
+   what holds the label off that edge. */
 .nav-item {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   height: var(--row-h);
-  padding: 0 var(--space-2);
+  padding: 0 var(--nav-row-pad);
   border-radius: var(--r-sm);
   color: var(--text-secondary);
   font-size: var(--fs-xs);
@@ -138,12 +143,15 @@
    places — reachable, configured, in flight, node. It replaces a coloured dot
    whose three states were the only health surface in the product while
    everything behind it was on the wire and reached no screen. */
+/* A row in the rail like any other, so it takes the nav's inset rather than a
+   square one of its own: its dot lands on the same vertical line as every nav
+   icon above it. */
 .engine-pill {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  padding: var(--space-2);
+  padding: var(--space-2) var(--nav-row-pad);
   border-radius: var(--r-sm);
   font-size: var(--fs-2xs);
   color: var(--text-muted);
