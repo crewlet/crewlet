@@ -607,15 +607,18 @@
   border-radius: var(--r-xs);
   align-items: baseline;
 }
-.diff-line[data-op="add"] {
+/* THE SERVER'S OWN WORDS: configapi.Change.Kind is added / removed / changed.
+   These selectors read add / remove / replace, which no answer has ever
+   carried, so every diff line rendered unstyled. */
+.diff-line[data-kind="added"] {
   background: var(--positive-soft);
   color: var(--positive-ink);
 }
-.diff-line[data-op="remove"] {
+.diff-line[data-kind="removed"] {
   background: var(--critical-soft);
   color: var(--critical-ink);
 }
-.diff-line[data-op="replace"] {
+.diff-line[data-kind="changed"] {
   background: var(--caution-soft);
   color: var(--caution-ink);
 }

@@ -110,13 +110,13 @@ export function ConfigScreen() {
             <Panel title="Revisions" icon="clock" count={(audit.data ?? []).length} padding="none">
               <DataTable<RevisionMeta>
                 rows={audit.data ?? []}
-                rowKey={(r) => r.id}
+                rowKey={(r) => r.revision_id}
                 defaultSort={{ key: "at", dir: "desc" }}
                 onRowClick={(r) => {
-                  setRevision(r.id);
+                  setRevision(r.revision_id);
                   setLens("diff");
                 }}
-                isSelected={(r) => r.id === revision}
+                isSelected={(r) => r.revision_id === revision}
                 columns={[
                   {
                     key: "at",
@@ -134,8 +134,8 @@ export function ConfigScreen() {
                     header: "Revision",
                     cell: (r) => (
                       <span className="row gap-1">
-                        <code className="inline">{r.id.slice(0, 10)}</code>
-                        {r.active && <Badge tone="positive">active</Badge>}
+                        <code className="inline">{r.revision_id.slice(0, 10)}</code>
+                        {r.is_active && <Badge tone="positive">active</Badge>}
                       </span>
                     ),
                   },
@@ -153,8 +153,8 @@ export function ConfigScreen() {
                     key: "author",
                     header: "By",
                     shrink: true,
-                    sortValue: (r) => r.author,
-                    cell: (r) => r.author || <span className="faint">—</span>,
+                    sortValue: (r) => r.created_by,
+                    cell: (r) => r.created_by || <span className="faint">—</span>,
                   },
                 ]}
               />
@@ -191,15 +191,17 @@ export function ConfigScreen() {
                 >
                   <div className="col" style={{ gap: 2 }}>
                     {(diff.data?.changes ?? []).map((c, i) => (
-                      <div key={i} className="diff-line" data-op={c.op}>
-                        <span>{c.op === "add" ? "+" : c.op === "remove" ? "−" : "~"}</span>
+                      <div key={i} className="diff-line" data-kind={c.kind}>
+                        <span>
+                          {c.kind === "added" ? "+" : c.kind === "removed" ? "\u2212" : "~"}
+                        </span>
                         <span className="truncate">{c.path}</span>
                         <span className="truncate">
-                          {c.op === "add"
+                          {c.kind === "added"
                             ? JSON.stringify(c.to)
-                            : c.op === "remove"
+                            : c.kind === "removed"
                               ? JSON.stringify(c.from)
-                              : `${JSON.stringify(c.from)} → ${JSON.stringify(c.to)}`}
+                              : `${JSON.stringify(c.from)} \u2192 ${JSON.stringify(c.to)}`}
                         </span>
                       </div>
                     ))}

@@ -740,19 +740,38 @@ export interface AgentAnswer {
 // Config
 // ---------------------------------------------------------------------------
 
+/**
+ * One revision, as `configapi.meta` writes it.
+ *
+ * The field names are the SERVER's. They were `id`, `author` and `active`
+ * here, which no answer has ever carried: the screen read `undefined` for
+ * every one of them and threw on the first `.slice(10)`. A shape declared
+ * from memory rather than from the emitter is a screen that renders once and
+ * then never again.
+ */
 export interface RevisionMeta {
-  id: string;
-  epoch?: string;
+  revision_id: string;
+  parent_revision_id?: string;
   summary: string;
-  author: string;
+  source: string;
+  created_by: string;
   created_at: string;
-  active?: boolean;
+  activated_at?: string;
+  is_active?: boolean;
+}
+
+/** One difference, as `configapi.Change` writes it: `kind`, not `op`. */
+export interface ConfigChange {
+  path: string;
+  kind: "added" | "removed" | "changed";
+  from?: unknown;
+  to?: unknown;
 }
 
 export interface ConfigDiff {
   from: string;
   to: string;
-  changes: { op: string; path: string; from?: unknown; to?: unknown }[];
+  changes: ConfigChange[];
 }
 
 export interface SecretRow {
