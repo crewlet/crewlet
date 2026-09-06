@@ -147,7 +147,7 @@ Conventions used by the [Datadog integration](../integrations/datadog.md).
 |----------|-------------|-----------------|
 | `DATADOG_WEBHOOK_TOKEN` | The shared token compared against the `X-Crewlet-Token` header on every delivery (`integrations.datadog.webhook_token`). **Treat it as a signing key**: Datadog's webhook can attach headers only with fixed values, so there is nothing varying with the payload to sign, and this constant-time comparison is the entire authentication. A replayed delivery is indistinguishable from a fresh one and anyone holding the token can forge an alert. Rotate it the way you would a signing secret. | Generate one: `openssl rand -base64 32`, then set the same value as the header in Datadog > Integrations > Webhooks |
 
-`integrations.datadog.route_to` and `handle_tag` are **not** secrets and belong in the company document as plain values, not as `${VAR}` references. `route_to` is required when the block is enabled: it names the seat an alert wakes when no monitor tag names an owner, and without it those alerts are verified, counted and delivered to nobody. See [Routing](../integrations/datadog.md#routing-is-by-ownership-not-by-mention).
+`integrations.public_base_url`, `integrations.datadog.route_to` and `handle_tag` are **not** secrets and belong in the company document as plain values, not as `${VAR}` references. `route_to` is required when the block is enabled: it names the seat an alert wakes when no monitor tag names an owner, and without it those alerts are verified, counted and delivered to nobody. See [Routing](../integrations/datadog.md#routing-is-by-ownership-not-by-mention).
 
 ---
 

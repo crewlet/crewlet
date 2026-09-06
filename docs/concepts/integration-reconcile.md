@@ -87,6 +87,8 @@ flowchart LR
 
 **It does not rotate a credential that works.** A vendor serves a token once, so the tempting reading of "reconcile" is to mint every pass, and that is an outage on a timer: the engine is authenticating with the old value, and rotating revokes what every running agent is using. Rotation is a flag on the subcommand.
 
+**It does not register webhooks.** `integrations.public_base_url` tells the engine where a vendor reaches it, and the loop deliberately does not pass that address into a vendor pass. Every vendor reads a non-empty webhook base as *permission to act*: it mints a signing secret when the config's `${VAR}` resolves to nothing, and creates or updates the hook when it does. Neither is something a loop running unattended every few minutes may do. Judging ingress read-only needs an inspection path that does not exist yet, so the loop reports what a read of the vendor establishes and says nothing about ingress at all.
+
 **It does not provision unattended.** Only surfaces whose pass is read-only run on the loop. Today that is **Jira** and **GitHub**: neither vendor issues a credential on a provisioner's behalf, so their pass resolves each seat's identity and reads the instance, and with no sink and no public base URL it writes nothing at all. GitLab, Mattermost and Slack each create service accounts and mint tokens and refuse to run without a sink to record them in, so there is no read-only posture to put them in, and running them on a timer would be the engine provisioning a vendor on its own schedule. Those stay on `crewlet <vendor> provision`.
 
 ---

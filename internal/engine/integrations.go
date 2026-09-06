@@ -176,6 +176,15 @@ func (c *jiraConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	// the pass resolves each seat's identity and reads the instance, and
 	// registers nothing. It is the same posture `crewlet jira provision
 	// -dry-run` runs in.
+	//
+	// THE BASE IS WITHHELD DELIBERATELY, even though the company now
+	// carries one. ensureWebhook takes a non-empty base as permission to
+	// act: it mints when the secret does not resolve, and creates or
+	// updates the hook when it does, neither of which a loop running
+	// unattended every few minutes may do. Judging ingress here needs a
+	// read-only inspection path that does not exist yet, so this reports
+	// what a read of the instance can establish and says nothing about
+	// ingress at all.
 	res, err := jira.Reconcile(ctx, jira.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
 	})
@@ -202,6 +211,9 @@ func (c *githubConverger) Reconcile(ctx context.Context) ([]integration.Finding,
 	if err != nil {
 		return nil, fmt.Errorf("engine: github reconcile: %w", err)
 	}
+	// No sink and no webhook base, for the reason the tracker's pass
+	// states above: a base is permission to register, and this runs
+	// unattended.
 	res, err := github.Reconcile(ctx, github.Options{
 		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
 	})

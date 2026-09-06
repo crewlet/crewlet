@@ -270,9 +270,14 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 	// same mint-into-${VAR} contract the seat tokens follow. Empty when
 	// signing_secret is a literal, which the reconcile refuses rather than
 	// half-configuring.
+	// RESOLVED ONCE, for the reason the Slack command states: the value is
+	// read in three places here and three separate reads of the flag is
+	// how one of them disagrees with the others.
+	base := webhookBase(*publicURL, &company.Integrations)
+
 	signingVar := soleVarOf(cfg.SigningSecret)
 	signing := gitlab.PlanSigningSecret(
-		env.Value(cfg.SigningSecret), signingVar, *rotate, *publicURL != "")
+		env.Value(cfg.SigningSecret), signingVar, *rotate, base != "")
 
 	// THE PLAN IS PRINTED EITHER WAY, and it is the SAME plan the run
 	// uses. A --dry-run that re-derived it separately would be a second
@@ -315,7 +320,7 @@ func runGitLabProvision(args []string, stdout, stderr io.Writer) error {
 
 	res, err := gitlab.Reconcile(ctx, gitlab.Options{
 		Client: client, Config: cfg, Plan: plan, Sink: sink,
-		WebhookBase:      *publicURL,
+		WebhookBase:      base,
 		SigningSecret:    env.Value(cfg.SigningSecret),
 		SigningSecretVar: signingVar,
 		Rotate:           *rotate, Decommission: *decommission, ExpiryDays: expiry,
@@ -767,4 +772,22 @@ func skillsContainer(flagValue, envVar, fromConfig string) string {
 		return strings.ToUpper(v)
 	}
 	return fromConfig
+}
+
+// webhookBase is the address a vendor reaches this deployment on: the flag
+// when one was passed, and the company document's own value otherwise.
+//
+// THE FLAG WINS, and only when it is non-empty. It is the one-off override —
+// a staging tunnel, a run against a second site — while the document is what
+// every other reader of this value sees, the reconcile loop included. A flag
+// that won even when unset would make an operator who simply forgot it
+// silently re-point a working hook at "".
+func webhookBase(flagValue string, in *config.Integrations) string {
+	if v := strings.TrimSpace(flagValue); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	if in == nil {
+		return ""
+	}
+	return in.WebhookBase()
 }

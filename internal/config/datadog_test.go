@@ -100,3 +100,76 @@ func TestAConfiguredHandleTagIsUsedAndFolded(t *testing.T) {
 		t.Fatalf("the tag key is %q, want %q", got, "owner")
 	}
 }
+
+// THE ADDRESS A VENDOR REACHES THIS DEPLOYMENT ON is refused here rather than
+// discovered by the vendor. Every webhook URL is built on it, so a value
+// missing its scheme registers a hook the vendor reports as healthy and
+// delivers nowhere, which is the exact failure this field exists to close.
+func TestAPublicBaseURLWithoutASchemeIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, base := range []string{"crewlet.example.com", "//crewlet.example.com"} {
+		t.Run(base, func(t *testing.T) {
+			t.Parallel()
+			err := validateCompanyDoc(t, "integrations:\n  public_base_url: \""+base+"\"")
+			if err == nil {
+				t.Fatalf("public_base_url %q was accepted", base)
+			}
+			if !strings.Contains(err.Error(), "public_base_url") {
+				t.Errorf("error %q does not name the field", err)
+			}
+		})
+	}
+}
+
+// And a real one is accepted, so the rule is a check rather than a refusal of
+// everything.
+func TestAPublicBaseURLWithASchemeIsAccepted(t *testing.T) {
+	t.Parallel()
+	err := validateCompanyDoc(t, "integrations:\n  public_base_url: \"https://crewlet.example.com\"")
+	if err != nil {
+		t.Fatalf("a valid public_base_url was refused: %v", err)
+	}
+}
+
+// A TRAILING SLASH IS TRIMMED ONCE, here, rather than by each of the five
+// callers that build a URL on it. A base ending in "/" yields
+// "…//webhooks/jira", which some vendors normalise, some reject, and some
+// accept while signing the unnormalised form.
+func TestTheWebhookBaseIsTrimmed(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"https://crewlet.example.com/":   "https://crewlet.example.com",
+		"https://crewlet.example.com///": "https://crewlet.example.com",
+		"  https://crewlet.example.com ": "https://crewlet.example.com",
+		"":                               "",
+	}
+	for in, want := range cases {
+		in := config.Integrations{PublicBaseURL: in}
+		if got := in.WebhookBase(); got != want {
+			t.Errorf("WebhookBase() = %q, want %q", got, want)
+		}
+	}
+}
+
+// validateCompanyDoc parses and validates a company document carrying body at
+// the top level.
+func validateCompanyDoc(t *testing.T, body string) error {
+	t.Helper()
+	doc := `
+name: Acme
+providers:
+  llm:
+    fast:
+      type: anthropic
+      model: claude-golden
+` + body + `
+roles:
+  - name: SWE
+    llm: fast
+`
+	c, err := config.ParseCompany([]byte(doc))
+	if err != nil {
+		return err
+	}
+	return c.Validate()
+}

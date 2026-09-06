@@ -35,10 +35,61 @@ type Integrations struct {
 	// audience claim must match it. Required when the Forge app is used —
 	// the endpoint rejects every request without it.
 	ForgeAppID string `yaml:"forge_app_id,omitempty" json:"forge_app_id,omitempty" desc:"Forge app id, verified against a relayed Cloud event's invocation token. Required for Jira or Confluence Cloud."`
+
+	// PublicBaseURL is where a vendor reaches THIS deployment: the HTTPS
+	// base every webhook path is built on.
+	//
+	// # Why it belongs in the company document
+	//
+	// It was a flag on five subcommands (`-public-url`) and nowhere else,
+	// which made it a fact only the person running a command knew. Two
+	// things need it that are not a person running a command:
+	//
+	//   - The reconcile loop, to say anything at all about ingress. Every
+	//     vendor Result reports the hook a RUN registered, which is empty
+	//     for a read-only pass by construction, so without this the loop
+	//     cannot tell a company whose webhook is missing from one it was
+	//     never asked to register. It therefore says nothing, which is
+	//     honest and useless.
+	//   - Anything that has to build a URL for a vendor to call back on,
+	//     which is what a self-service app deployment needs.
+	//
+	// It is NOT a secret and should be a literal rather than a ${VAR}: a
+	// reference that resolves to nothing yields a hook pointing at "",
+	// which a vendor accepts and then delivers nowhere.
+	//
+	// Empty is meaningful and is the default: it means this deployment has
+	// no address a vendor can reach, which is the honest state of an
+	// engine on a laptop. Nothing is guessed from it, because a hook
+	// pointing at the wrong host is worse than no hook, and a subcommand's
+	// `-public-url` still overrides it for a one-off run.
+	PublicBaseURL string `yaml:"public_base_url,omitempty" json:"public_base_url,omitempty" desc:"HTTPS base a vendor reaches this deployment on, e.g. https://crewlet.example.com. Empty means no inbound address."`
+}
+
+// WebhookBase is the base every inbound path is built on, without a trailing
+// slash, or empty when this deployment has no inbound address.
+//
+// Trimmed here rather than at each caller, because five of them would each
+// have to remember: a base ending in "/" yields "…//webhooks/jira", which
+// some vendors normalise, some reject, and some accept while signing the
+// unnormalised form.
+func (i *Integrations) WebhookBase() string {
+	return strings.TrimRight(strings.TrimSpace(i.PublicBaseURL), "/")
 }
 
 func (i *Integrations) validate(path string) error {
 	var p problems
+
+	// A URL that is not one is refused HERE rather than discovered by a
+	// vendor. Every webhook path is built on this, so a value missing its
+	// scheme registers a hook the vendor reports as healthy and delivers
+	// nowhere, which is the failure mode this whole field exists to close.
+	if base := strings.TrimSpace(i.PublicBaseURL); base != "" && !hasHTTPScheme(base) {
+		p.add(at(path, "public_base_url"), ErrUnknownValue,
+			"%q must start with http:// or https:// — it is the base every "+
+				"webhook URL is built on, so a value without a scheme yields "+
+				"an address the vendor accepts and never reaches", i.PublicBaseURL)
+	}
 
 	if i.Jira != nil {
 		p.wrap(i.Jira.validate(at(path, "jira")))

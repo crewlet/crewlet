@@ -483,6 +483,10 @@
           "$ref": "#/$defs/Mattermost",
           "description": "Mattermost instance and team. Absent = disabled."
         },
+        "public_base_url": {
+          "description": "HTTPS base a vendor reaches this deployment on, e.g. https://crewlet.example.com. Empty means no inbound address.",
+          "type": "string"
+        },
         "slack": {
           "$ref": "#/$defs/Slack",
           "description": "Slack working-indicator settings. Each seat carries its own app under role.integrations.slack. Absent = disabled."
