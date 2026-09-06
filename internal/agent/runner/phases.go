@@ -687,7 +687,15 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// A chain even for one member. The wrapper is a pass-through there, and
 	// uniform behaviour is worth more than the allocation: a one-member seat
 	// and a three-member one then fail, log and report identically.
-	provider, err := chain.New(members, chain.Options{})
+	//
+	// OnFallback is wired HERE rather than inside the chain because this is
+	// the innermost frame that knows which turn and which iteration the
+	// hand-off belongs to. The callback fires synchronously from inside the
+	// chain's own loop, before the next member is tried, so `ctx` and
+	// `iteration` are the ones the failing call ran under.
+	provider, err := chain.New(members, chain.Options{
+		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, ph, iteration, f) },
+	})
 	if err != nil {
 		return fail(fmt.Errorf("runner: %s: %w", ph, err))
 	}

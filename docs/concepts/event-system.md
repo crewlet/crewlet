@@ -243,7 +243,12 @@ TurnGuardBreach            # runtime invariant fired (stall / max_iter /
                            # scheduled_timeout). Drives the dashboard `afk`
                            # state
 LLMUnavailable             # the fallback chain is exhausted. Drives `afk` too
-ProviderFallback           # the chain moved to its next provider
+ProviderFallback           # the chain moved to its next provider. One per
+                           # provider CALL, not per phase — a benched member
+                           # is a hand-off on every round — and addressed to
+                           # the turn, phase and iteration it happened in.
+                           # `to_provider_key` is empty on the last member,
+                           # where the next event is LLMUnavailable
 SubagentBatched, PromptSize, ExecuteMissingTool
 PhaseToolActivated, PhaseToolSkillBlocked, SkillTelemetryWriteFailed
 

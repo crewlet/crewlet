@@ -174,6 +174,10 @@ type buildOpts struct {
 	agentRun runner.AgentLauncher
 	resume   *runner.Resume
 	pub      queue.Publisher
+	// execChain overrides the executor's provider keys, so a test can give
+	// the phase a real fallback chain rather than the single key the
+	// fixture's seat runs on.
+	execChain org.ProviderKeys
 }
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
@@ -229,6 +233,9 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 	// resolution falls back to it, which is the counterfactual the golden
 	// suite asserts.
 	role.LLM = org.ProviderKeys{"executor"}
+	if len(opts.execChain) > 0 {
+		role.LLM = opts.execChain
+	}
 	role.LLMReview = org.ProviderKeys{"reviewer"}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 

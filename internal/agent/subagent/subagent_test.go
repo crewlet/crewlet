@@ -16,8 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -2412,5 +2414,76 @@ func TestAWorkersNarrationSharesItsRoundsWithItsToolCalls(t *testing.T) {
 		if n.Round < 1 || n.Round > res.Rounds {
 			t.Errorf("narration numbered round %d on a worker that ran %d", n.Round, res.Rounds)
 		}
+	}
+}
+
+// --- the provider chain, when a worker's own model is benched ---------------
+
+// benched is a member that fails the way a spent key does — retryably, so the
+// chain moves on rather than returning the error to the caller.
+type benched struct{ model string }
+
+func (b benched) Model() string { return b.model }
+
+func (b benched) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return nil, &llm.Error{
+		Kind: llm.KindRateLimit, Provider: "p", Model: b.model,
+		Err: errors.New("rate limited"),
+	}
+}
+
+// A worker's hand-off is the PARENT TURN's fact, and it has to reach the event
+// store addressed as one.
+//
+// The seat's own phases publish these; for a while its fan-out did not, and a
+// chain is unstable exactly where the fan-out is. The turn id is what makes
+// the row selectable at all — without it the hand-off is an anonymous line in
+// the log rather than something the turn that caused it can show.
+func TestAWorkersProviderHandOffIsPublishedAgainstTheParentTurn(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub"}
+	cfg := baseConfig(t, w, p)
+	cfg.Models = models(t,
+		phase.Entry{Key: "benched", Provider: benched{model: "benched-model"}},
+		phase.Entry{Key: "default", Provider: p})
+	cfg.Seat.Role.LLMSubagent = org.ProviderKeys{"benched", "default"}
+	cfg.ParentRemaining = 0
+	cfg.Turn = &turnctx.Turn{ID: "t-9", Seat: cfg.Seat.Role, Org: cfg.Seat.Org}
+	pub := &publisher{}
+	cfg.Publisher = pub
+
+	if res := one(t, cfg, request("read_file")); res.Status != subagent.StatusOK {
+		t.Fatalf("worker did not finish on the second member: %+v", res)
+	}
+
+	var got []*types.ProviderFallback
+	for _, ev := range pub.events {
+		if f, ok := events.DataAs[*types.ProviderFallback](ev); ok {
+			got = append(got, f)
+		}
+	}
+	if len(got) == 0 {
+		t.Fatal("a worker walked past a benched member and published nothing")
+	}
+	f := got[0]
+	for _, c := range []struct{ field, got, want string }{
+		{"turn_id", f.TurnID, "t-9"},
+		{"role", f.RoleName, "CTO"},
+		// SUBAGENT, not execute: a reader has to be able to tell the seat's
+		// own executor falling through from one of its workers doing it.
+		{"phase", string(f.Phase), "subagent"},
+		{"from_provider_key", f.FromProviderKey, "benched"},
+		{"to_provider_key", f.ToProviderKey, "default"},
+		{"error_kind", f.ErrorKind, llm.KindRateLimit.String()},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.field, c.got, c.want)
+		}
+	}
+	// The envelope's source is the only attribution the payload's role does
+	// not already carry, and it is what a role-less consumer reads.
+	if actor := pub.events[0].Actor(); actor != "CTO" {
+		t.Errorf("actor = %q, want CTO", actor)
 	}
 }

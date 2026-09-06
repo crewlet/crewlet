@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -326,6 +327,39 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int, sys
 // openingRound is the RoundNum of the update published before a phase's first
 // provider call. See [emitter.started].
 const openingRound = -1
+
+// fallback records one hand-off inside a phase's provider chain.
+//
+// Wired at the two places a chain is built, because the chain itself must not
+// publish: it is handed to a sub-agent and to every phase alike, and a
+// provider that knew about the event stream would have to be given a turn id
+// it has no business holding. [chain.Options.OnFallback] exists for exactly
+// this, and for a while nothing wired it — so the type was registered,
+// categorised, documented and asserted in tests while no code path could
+// produce one. An event nobody publishes reads, from every screen, as a
+// company whose providers never fail.
+//
+// Fire-and-log like every publish here: a hand-off the operator cannot see is
+// worse than one they cannot see published, and neither is worth failing a
+// turn that is still running on the next provider.
+func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f chain.Fallback) {
+	if !e.on() {
+		return
+	}
+	e.publish(ctx, events.New(types.ProviderFallback{
+		Agent:     e.turn.AgentID,
+		RoleName:  e.role,
+		TurnID:    e.turn.ID,
+		Iteration: iteration,
+		Phase:     types.Phase(ph),
+		// Carried through verbatim, EMPTY To included: the chain writes
+		// "" for its last member on purpose, and substituting a
+		// placeholder would name a provider that does not exist.
+		FromProviderKey: f.From,
+		ToProviderKey:   f.To,
+		ErrorKind:       f.Kind.String(),
+	}, e.traceFor(ctx)))
+}
 
 // progress publishes one in-flight round.
 func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, res toolloop.Result) {

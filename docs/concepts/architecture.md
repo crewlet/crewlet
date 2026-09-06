@@ -223,7 +223,11 @@ decision.** The backend *classifies* and does nothing else — it never retries.
 The credential pool decides whether the **key** is at fault: a rate-limit or
 auth failure benches that key for a cooldown and the next call leases another,
 least-in-flight. The fallback chain decides whether the **model** is worth
-abandoning and moves to the next one in the role's chain. That is why the same
+abandoning and moves to the next one in the role's chain, publishing a
+`provider_fallback` event for each hand-off — addressed to the turn, the phase
+and the iteration it happened in, so a chain that only flaps under load is
+visible on the turn that paid for it rather than only in aggregate. Exhausting
+the chain publishes `llm_unavailable` and fails the turn. That is why the same
 429 produces three different behaviours at three different altitudes, and why
 cooldowns are fleet state rather than per-process: a limit belongs to the key at
 the vendor, so four nodes should not each pay their own 429 to learn it.
