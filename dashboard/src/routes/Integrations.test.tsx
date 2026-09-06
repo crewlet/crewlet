@@ -416,12 +416,15 @@ test("a per-seat vendor with no seat set up is unfinished", () => {
   expect(action?.label).toBe("Continue");
 });
 
-// --- the copy on the buttons ------------------------------------------------ //
+// --- where a per-surface control lives -------------------------------------- //
 
-// A BUTTON NAMES THE SURFACE THE WAY THE CATALOGUE DOES, not the way the wire
-// does. `tool.key` is "confluence", so reading it straight put an internal
-// identifier, lowercased, in front of the reader: "Set up confluence".
-test("a per-surface pass button uses the catalogue's name", () => {
+// A PASS BELONGS TO A SURFACE, so its button sits in that surface's row
+// rather than in the card's header. Putting them in the header made Atlassian
+// the only card in the list with four controls in it, purely because it is
+// the only tool with more than one provisionable surface, and nothing on
+// screen explained why.
+test("a per-surface pass sits in that surface's row, not the header", () => {
+  const passes: string[] = [];
   render(
     <EntryRow
       entry={atlassian}
@@ -430,24 +433,36 @@ test("a per-surface pass button uses the catalogue's name", () => {
         { name: "Jira", tool: toolState({ key: "jira", can_provision: true }) },
         { name: "Confluence", tool: toolState({ key: "confluence", can_provision: true }) },
       ]}
-      onPass={() => {}}
+      onPass={(tool) => passes.push(tool.key)}
     />,
   );
-  expect(screen.getByRole("button", { name: "Set up Jira" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Set up Confluence" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: /confluence$/ })).toBeNull();
+
+  // Closed, the header offers no pass at all.
+  expect(screen.queryByRole("button", { name: "Run setup" })).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  const runs = screen.getAllByRole("button", { name: "Run setup" });
+  expect(runs.length).toBe(2);
+  expect(screen.getAllByRole("button", { name: "Recheck" }).length).toBe(2);
+
+  // And each one runs ITS OWN surface. A single handler for the card would
+  // have provisioned Jira from the Confluence row.
+  fireEvent.click(runs[1]!);
+  expect(passes).toEqual(["confluence"]);
 });
 
-// ONE SURFACE NEEDS NO NAME. Naming it would make the common case read
-// "Set up GitHub" on a card whose heading already says GitHub.
-test("a single-surface tool's pass button is unnamed", () => {
+// A surface this build cannot provision offers nothing: a button that
+// discovers on a press that there is nothing behind it is worse than none.
+test("a surface with no pass behind it gets no button", () => {
   render(
     <EntryRow
-      entry={CATALOG.find((e) => e.key === "github")!}
-      rows={rowsOf({ key: "github", configured: true })}
-      sections={[{ name: "GitHub", tool: toolState({ key: "github", can_provision: true }) }]}
+      entry={CATALOG.find((e) => e.key === "datadog")!}
+      rows={rowsOf({ key: "datadog", configured: true })}
+      sections={[{ name: "Datadog", tool: toolState({ key: "datadog", can_provision: false }) }]}
       onPass={() => {}}
     />,
   );
-  expect(screen.getByRole("button", { name: "Run setup" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /Show Datadog details/ }));
+  expect(screen.queryByRole("button", { name: "Run setup" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Recheck" })).toBeNull();
 });

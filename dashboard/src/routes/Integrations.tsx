@@ -417,7 +417,18 @@ export function Reconcile({
  * One surface inside a tool's details: its own phase, what arrived and what
  * became of it, where it listens, and what the loop found.
  */
-function SurfaceRow({ surface, row }: { surface: Surface; row: IntegrationRow }) {
+function SurfaceRow({
+  surface,
+  row,
+  onPass,
+  running,
+}: {
+  surface: Surface;
+  row: IntegrationRow;
+  /** Run this surface's provisioning pass, or a read-only check of it. */
+  onPass?: (readOnly: boolean) => void;
+  running?: boolean;
+}) {
   return (
     <li className="int-row">
       <div className="int-row-identity">
@@ -462,6 +473,17 @@ function SurfaceRow({ surface, row }: { surface: Surface; row: IntegrationRow })
           <Badge outline>paused</Badge>
         ) : null}
       </div>
+
+      {onPass && (
+        <div className="int-row-actions">
+          <Button size="sm" onClick={() => onPass(false)} disabled={running}>
+            {running ? "Running" : "Run setup"}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => onPass(true)} disabled={running}>
+            Recheck
+          </Button>
+        </div>
+      )}
 
       <Reconcile status={row.reconcile} detail={row.detail} />
     </li>
@@ -570,21 +592,21 @@ export function EntryRow({
   const absent = present.length === 0;
   const tools = (sections ?? []).map((s) => s.tool);
   const action = actionFor(state, tools);
-  // A pass belongs to a SURFACE, not to a tool: Atlassian's Jira registers a
-  // hook and its Forge relay registers nothing, so the buttons are per
-  // surface and named when there is more than one.
-  const passable = tools.filter((t) => t.can_provision && t.satisfied);
-  // The catalogue's name for a surface, not its wire key: `tool.key` is
-  // "confluence", and a button that reads "Set up confluence" has put an
-  // internal identifier in front of the reader.
-  const surfaceName = (key: string) =>
-    entry.surfaces.find((surface) => surface.key === key)?.name ?? entry.name;
   const seats = tools.flatMap((t) => t.seats ?? []);
   const bodyID = `int-body-${entry.key}`;
 
   // A FRAGMENT, not a wrapper: the header already has one actions row, and
   // nesting a second inside it would put a flex container in a flex
   // container for nothing.
+  //
+  // THE HEADER CARRIES ONE ACTION, whatever the tool is made of. The
+  // per-surface passes used to sit here too, which made Atlassian the only
+  // card in the list with four controls in its header ("Manage", "Set up
+  // Jira", "Set up Confluence", "Recheck") purely because it is the only tool
+  // with more than one provisionable surface. A reader cannot tell that from
+  // looking, so the row simply read as inconsistent. They belong beside the
+  // surface they act on, in the body, which is where the console puts a
+  // per-item control as well.
   const actions = (
     <>
       <Badge tone={state.tone} outline={state.outline}>
@@ -598,35 +620,6 @@ export function EntryRow({
           disabled={running}
         >
           {action.label}
-        </Button>
-      )}
-      {/* THE PASS, and only where this build has one. Offering it everywhere
-          would give an operator a button that discovers on a press that
-          there is nothing behind it. */}
-      {onPass &&
-        passable.map((tool) => (
-          <Button
-            key={tool.key}
-            size="sm"
-            onClick={() => onPass(tool, false)}
-            disabled={running}
-            title={`Register what ${surfaceName(tool.key)} needs at the vendor`}
-          >
-            {running
-              ? "Running"
-              : passable.length > 1
-                ? `Set up ${surfaceName(tool.key)}`
-                : "Run setup"}
-          </Button>
-        ))}
-      {onPass && passable.length > 0 && (
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => onPass(passable[0]!, true)}
-          disabled={running}
-        >
-          Recheck
         </Button>
       )}
     </>
@@ -695,9 +688,25 @@ export function EntryRow({
               works), and two lists put an arbitrary seam down the middle of a
               Slack card whose every row is a seat. */}
           <ul className="int-rows">
-            {present.map((p) => (
-              <SurfaceRow key={p.surface.key} surface={p.surface} row={p.row} />
-            ))}
+            {present.map((p) => {
+              const tool = tools.find((t) => t.key === p.surface.key);
+              return (
+                <SurfaceRow
+                  key={p.surface.key}
+                  surface={p.surface}
+                  row={p.row}
+                  // Only where this build has a pass behind the button.
+                  // Offering it everywhere would give an operator a control
+                  // that discovers on a press that there is nothing to do.
+                  onPass={
+                    onPass && tool && tool.can_provision && tool.satisfied
+                      ? (readOnly) => onPass(tool, readOnly)
+                      : undefined
+                  }
+                  running={running}
+                />
+              );
+            })}
             {seats.map((seat) => (
               <li key={seat.handle} className="int-row">
                 <div className="int-row-identity">
