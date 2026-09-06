@@ -125,6 +125,32 @@ Conventions used by the [GitLab integration](../integrations/gitlab.md). Apart f
 
 ---
 
+## GitHub
+
+Conventions used by the [GitHub integration](../integrations/github.md). All of them are `${VAR}` references in the company YAML, resolved through the [secret store first and the environment behind it](../concepts/secret-store.md).
+
+Unlike GitLab, **nothing here is minted for you**: GitHub issues no credential on a provisioner's behalf, so `crewlet github provision` registers webhooks and *reports* which account each seat's own token authenticates as. The tokens themselves are ones you create.
+
+| Variable | Description | Where to get it |
+|----------|-------------|-----------------|
+| `GITHUB_WEBHOOK_SECRET` | HMAC secret every inbound delivery is verified against (`integrations.github.webhook_secret`), and the route's only credential. A route with nothing to check against answers **503** rather than accepting a delivery. | `crewlet github provision` mints one into this variable when it is empty, or GitHub > repository/org > Webhooks |
+| `GITHUB_ENGINE_TOKEN` | Org read token for participant fan-out (`integrations.github.token`). **Optional**, and its absence is a documented degradation rather than a failure: without it an event reaches whoever the payload names, and only people merely watching a thread go unheard. | A PAT or GitHub App installation token |
+| `GITHUB_TOKEN_<SEAT>` | Per-agent token (each role's `mcp_env.github`, e.g. `GITHUB_TOKEN_SENIOR`). This is what makes a seat a real GitHub identity: a seat with none receives no review request, assignment or mention at all, which is the one finding `crewlet github provision` exists to surface. | A PAT on that agent's own GitHub account |
+
+---
+
+## Datadog
+
+Conventions used by the [Datadog integration](../integrations/datadog.md).
+
+| Variable | Description | Where to get it |
+|----------|-------------|-----------------|
+| `DATADOG_WEBHOOK_TOKEN` | The shared token compared against the `X-Crewlet-Token` header on every delivery (`integrations.datadog.webhook_token`). **Treat it as a signing key**: Datadog's webhook can attach headers only with fixed values, so there is nothing varying with the payload to sign, and this constant-time comparison is the entire authentication. A replayed delivery is indistinguishable from a fresh one and anyone holding the token can forge an alert. Rotate it the way you would a signing secret. | Generate one: `openssl rand -base64 32`, then set the same value as the header in Datadog > Integrations > Webhooks |
+
+`integrations.datadog.route_to` and `handle_tag` are **not** secrets and belong in the company document as plain values, not as `${VAR}` references. `route_to` is required when the block is enabled: it names the seat an alert wakes when no monitor tag names an owner, and without it those alerts are verified, counted and delivered to nobody. See [Routing](../integrations/datadog.md#routing-is-by-ownership-not-by-mention).
+
+---
+
 ## Email
 
 | Variable | Description |
