@@ -57,6 +57,11 @@ export function fieldsFor(reqs: SetupRequirement[], blocks?: string): SetupRequi
   return matching.length ? matching : reqs;
 }
 
+/** A section's identity: the vendor, plus the seat when there is one. */
+function sectionKey(section: SetupSection): string {
+  return section.seat ? `${section.tool.key}/${section.seat}` : section.tool.key;
+}
+
 /** A satisfied secret shows what it points at; nothing else needs a note. */
 function pointerNote(r: SetupRequirement): string {
   if (r.kind !== "secret" || !r.present) return "";
@@ -68,6 +73,11 @@ export interface SetupSection {
   /** The surface's own name: Jira, Confluence, the Forge relay. */
   name: string;
   tool: SetupToolState;
+  /**
+   * The seat this section is for, on a vendor whose credentials live on the
+   * seat. Its requirements replace the tool's, and the submission names it.
+   */
+  seat?: string;
 }
 
 export function SetupDialog({
@@ -93,10 +103,16 @@ export function SetupDialog({
   onDone: () => void;
 }) {
   const toast = useToast();
+  // Keyed by SECTION rather than by vendor, because a per-seat vendor has
+  // one section per seat and they all carry the same vendor key.
   const shownBy = useMemo(() => {
     const out = new Map<string, SetupRequirement[]>();
     for (const section of sections) {
-      out.set(section.tool.key, fieldsFor(section.tool.requirements, blocks));
+      const reqs =
+        section.seat === undefined
+          ? section.tool.requirements
+          : ((section.tool.seats ?? []).find((s) => s.handle === section.seat)?.requirements ?? []);
+      out.set(sectionKey(section), fieldsFor(reqs, blocks));
     }
     return out;
   }, [sections, blocks]);
@@ -156,7 +172,7 @@ export function SetupDialog({
     // refusal on the second leaves the first landed rather than half
     // applied to one document.
     const work = sections
-      .map((section) => ({ section, body: payloadFor(shownBy.get(section.tool.key) ?? []) }))
+      .map((section) => ({ section, body: payloadFor(shownBy.get(sectionKey(section)) ?? []) }))
       .filter(({ body }) => Object.keys(body.values).length > 0 || body.generate.length > 0);
     if (work.length === 0) {
       setError("Nothing to submit: fill in a field, or choose to replace a stored one.");
@@ -166,10 +182,10 @@ export function SetupDialog({
     try {
       let rotated = false;
       for (const { section, body } of work) {
-        const answer = (await rest.post(
-          `/setup/integrations/${section.tool.key}/inputs`,
-          body,
-        )) as Submitted;
+        const answer = (await rest.post(`/setup/integrations/${section.tool.key}/inputs`, {
+          ...body,
+          ...(section.seat ? { seat: section.seat } : {}),
+        })) as Submitted;
         rotated = rotated || answer.reloaded === true;
       }
       toast.ok(rotated ? `${title} credentials rotated and republished` : `${title} connected`);
@@ -230,10 +246,10 @@ export function SetupDialog({
       }
     >
       {sections.map((section) => {
-        const reqs = shownBy.get(section.tool.key) ?? [];
+        const reqs = shownBy.get(sectionKey(section)) ?? [];
         if (reqs.length === 0) return null;
         return (
-          <div key={section.tool.key} className="col gap-3">
+          <div key={sectionKey(section)} className="col gap-3">
             {/* A HEADING ONLY WHERE THERE IS MORE THAN ONE. On Slack the
                 dialog is already titled Slack, and a "Slack" heading under
                 it is a word that says nothing. */}

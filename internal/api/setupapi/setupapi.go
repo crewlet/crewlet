@@ -24,6 +24,7 @@ package setupapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -43,6 +44,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/slack"
 )
 
 var log = logging.Get("api.setup")
@@ -180,6 +182,27 @@ func (c configWriter) Reload(ctx context.Context, summary, operator string) (str
 	return applied.RevisionID, applied.Epoch, err
 }
 
+// Seat and SetSeat are the per-seat write, through the entity route: a seat
+// is addressed by its handle, because a merge patch cannot reach one element
+// of a list without replacing the list.
+func (c configWriter) Seat(ctx context.Context, handle string) ([]byte, error) {
+	entity, err := c.svc.Entity(ctx, "roles", handle)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(entity)
+}
+
+func (c configWriter) SetSeat(
+	ctx context.Context, handle string, body []byte, summary, operator, expect string,
+) (string, int64, error) {
+	applied, err := c.svc.ApplyEntity(ctx, configapi.ApplyEntityRequest{
+		Kind: "roles", ID: handle, Body: body,
+		Summary: summary, Operator: operator, Expect: expect,
+	})
+	return applied.RevisionID, applied.Epoch, err
+}
+
 // ToolState is one integration's setup state.
 //
 // The reconcile half is deliberately NOT here. That answer already exists on
@@ -212,6 +235,26 @@ type ToolState struct {
 	// NeedsOperator is the transient vendor administrator credential the
 	// pass asks for on every run, or null. Never stored.
 	NeedsOperator *setup.Requirement `json:"needs_operator,omitempty"`
+
+	// Seats are the per-seat requirement lists, for a vendor whose
+	// credentials live on the seat rather than on the company. Slack is
+	// the one: each agent has its own app, so each has its own bot token
+	// and signing secret, and a submission names the seat it is for.
+	Seats []SeatState `json:"seats,omitempty"`
+}
+
+// SeatState is one seat's setup for a per-seat vendor.
+type SeatState struct {
+	Handle       string              `json:"handle"`
+	Name         string              `json:"name,omitempty"`
+	Requirements []setup.Requirement `json:"requirements"`
+	Satisfied    bool                `json:"satisfied"`
+
+	// InboundPath is where this SEAT's deliveries arrive, which on a
+	// per-seat vendor differs per seat, and PublicURL is that path on the
+	// address vendors reach this deployment at.
+	InboundPath string `json:"inbound_path,omitempty"`
+	PublicURL   string `json:"public_url,omitempty"`
 }
 
 // list serves GET /setup/integrations.
@@ -275,6 +318,7 @@ func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 // missing" and the screen would show a Connect button that collects nothing.
 func (s *Service) state(company *config.Company, kind integration.Kind) (ToolState, bool) {
 	var reqs []setup.Requirement
+	var seats []SeatState
 	var configured, enabled bool
 	switch kind {
 	case integration.KindDatadog:
@@ -317,13 +361,40 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		reqs = mattermost.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
+	case integration.KindSlack:
+		// THE ONLY PER-SEAT VENDOR. Its company block carries the working
+		// indicator and nothing that authenticates; every credential is on
+		// a seat, because every agent has its own Slack app.
+		block := company.Integrations.Slack
+		reqs = slack.CompanyRequirements(block)
+		seats = slackSeats(company, s.resolve)
+		// CONFIGURED WHEN ANY SEAT IS, not when the company block exists:
+		// the block is optional settings, and a company with seven working
+		// Slack apps and no block is fully configured.
+		for _, seat := range seats {
+			if len(seat.Requirements) > 0 && seat.Requirements[0].Present {
+				configured, enabled = true, true
+				break
+			}
+		}
 	default:
 		return ToolState{}, false
+	}
+	satisfied := len(setup.Outstanding(reqs)) == 0
+	for _, seat := range seats {
+		// A TOOL IS SATISFIED WHEN EVERY SEAT THAT HAS STARTED IS. A seat
+		// nobody has set up does not make the tool unfinished, because a
+		// company running Slack for three of its ten agents chose that.
+		if seat.Requirements[0].Present && !seat.Satisfied {
+			satisfied = false
+			break
+		}
 	}
 	state := ToolState{
 		Kind: kind, Configured: configured, Enabled: enabled,
 		Requirements:  reqs,
-		Satisfied:     len(setup.Outstanding(reqs)) == 0,
+		Seats:         seats,
+		Satisfied:     satisfied,
 		InboundPath:   inboundPath(kind),
 		CanProvision:  s.passes.Serves(kind),
 		NeedsOperator: s.passes.Needs(kind),
@@ -361,6 +432,41 @@ func (s *Service) forgeRequirement(company *config.Company) setup.Requirement {
 	// same honest answer about it as about a credential.
 	r.Present, r.Resolved = setup.Resolution(company.Integrations.ForgeAppID, s.resolve)
 	return r
+}
+
+// slackSeats is every agent seat's own Slack setup.
+//
+// EVERY AGENT, not only the ones already configured: the list is what a
+// screen renders a form from, so leaving out the seats that have no app yet
+// would leave an operator no way to give one to them. Human seats are
+// excluded, because a person's Slack account is not something this engine
+// provisions or holds a token for.
+func slackSeats(company *config.Company, resolve func(string) (string, bool)) []SeatState {
+	base := company.Integrations.WebhookBase()
+	out := []SeatState{}
+	for role := range company.EachRole() {
+		// THROUGH THE SEAT, which is where the derivation lives: a handle
+		// defaults from the name, and "is this a person" is the org
+		// model's question rather than the config's. Deriving either here
+		// would be a second implementation of an identity rule.
+		seat := role.Seat()
+		if !seat.IsAgent() {
+			continue
+		}
+		handle := seat.Handle()
+		reqs := slack.Requirements(handle, role, resolve)
+		state := SeatState{
+			Handle: handle, Name: role.Name,
+			Requirements: reqs,
+			Satisfied:    len(setup.Outstanding(reqs)) == 0,
+			InboundPath:  "/webhooks/slack/" + handle,
+		}
+		if base != "" {
+			state.PublicURL = base + state.InboundPath
+		}
+		out = append(out, state)
+	}
+	return out
 }
 
 // inboundPath is where a vendor's deliveries arrive.
@@ -437,11 +543,32 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A SUBMISSION IS FOR A SEAT OR FOR THE COMPANY, and the requirement
+	// list it is checked against differs. Slack's credentials live on the
+	// seat, so a submission naming one is measured against that seat's
+	// own list rather than the company block's.
+	against := state.Requirements
+	if req.Seat != "" {
+		found := false
+		for _, seat := range state.Seats {
+			if seat.Handle == req.Seat {
+				against, found = seat.Requirements, true
+				break
+			}
+		}
+		if !found {
+			httpjson.FailWith(w, http.StatusNotFound, codeInvalidInput, map[string]string{
+				"detail": "no seat called " + req.Seat + " takes per-seat setup for " + string(kind),
+			})
+			return
+		}
+	}
+
 	values := map[string]string{}
 	for field, value := range req.Values {
 		values[field] = value
 	}
-	if err := mintInto(values, state.Requirements, req.Generate); err != nil {
+	if err := mintInto(values, against, req.Generate); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
 			"detail": err.Error(),
 		})
@@ -453,7 +580,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if err := refuseEmpty(values, state.Requirements); err != nil {
+	if err := refuseEmpty(values, against); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
 			"detail": err.Error(),
 		})
@@ -461,7 +588,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	summary := auditSummary(kind, req.Summary)
-	result, err := s.writer.Write(r.Context(), state.Requirements, setup.Submission{
+	result, err := s.writer.Write(r.Context(), against, setup.Submission{
 		Kind: kind, Values: values, Seat: req.Seat,
 		Summary: summary, Operator: operatorOf(r), Expect: req.IfMatch,
 	})

@@ -511,6 +511,39 @@ credential each agent is currently authenticating with.
 account whose seat left the configuration stays a command-line gesture,
 because a company mid-edit looks exactly like one that removed a seat.
 
+### Per-seat setup
+
+Slack is the one vendor whose credentials live on the **seat** rather than on
+the company: each agent has its own Slack app, so each has its own bot token
+and signing secret. Its tool state carries a `seats` array, one entry per agent
+seat, each with its own requirement list, its own `inbound_path`, and its own
+`satisfied`.
+
+A submission for one of them names it:
+
+```json
+{"seat": "sre-lead", "values": {"bot_token": "...", "signing_secret": "..."}}
+```
+
+Those write through the **entity route** rather than a merge patch, because a
+merge patch replaces an array wholesale and patching the roster to change one
+seat would delete every other one. The engine addresses the seat by its handle,
+which is its identity rather than its position, and everything the submission
+did not send stays exactly as stored.
+
+Every agent seat is listed, configured or not: the list is what a screen
+renders a form from, so leaving out a seat with no app yet would leave an
+operator no way to give it one. Human seats are excluded, because a person's
+Slack account is not something this engine holds a token for.
+
+**It does not create the apps.** That goes through Slack's app-manifest API,
+which authenticates with a configuration token Slack issues only by hand and
+which an organisation may decline to allow at all, so
+[`crewlet slack provision`](cli.md) remains the automated path where those
+tokens are available. What this surface does is make a hand-created app usable
+without one: it takes the two values Slack shows on the app's own page and
+seals them.
+
 ### One tool, several surfaces
 
 The engine reaches Atlassian over three of these keys: `jira`, `confluence`

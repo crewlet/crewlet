@@ -934,3 +934,90 @@ func TestTheOperatorCredentialReachesThePassAndIsNotKept(t *testing.T) {
 		}
 	}
 }
+
+// --- per-seat setup ---------------------------------------------------------- //
+
+// SLACK IS PER SEAT, and the list names every AGENT rather than only the ones
+// already configured: the list is what a screen renders a form from, so
+// leaving out the seats that have no app yet would leave an operator no way to
+// give one to them.
+func TestSlackAnswersOneListPerAgentSeat(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/slack", "", nil))
+	seats, _ := state["seats"].([]any)
+	if len(seats) != 2 {
+		t.Fatalf("seats = %v, want one per agent", seats)
+	}
+	first, _ := seats[0].(map[string]any)
+	if first["handle"] != "cto" && first["handle"] != "sre-lead" {
+		t.Errorf("handle = %v", first["handle"])
+	}
+	// Each seat's route is its own: a delivery is addressed to a seat here,
+	// which is the whole reason the credentials are per seat too.
+	if first["inbound_path"] != "/webhooks/slack/"+first["handle"].(string) {
+		t.Errorf("inbound_path = %v", first["inbound_path"])
+	}
+	reqs, _ := first["requirements"].([]any)
+	if len(reqs) != 3 {
+		t.Fatalf("a seat declares %d requirements", len(reqs))
+	}
+	// NOTHING CARRIES A VALUE, per seat as everywhere else.
+	for _, row := range reqs {
+		if _, leaked := row.(map[string]any)["value"]; leaked {
+			t.Error("a per-seat requirement carries a value")
+		}
+	}
+}
+
+// A PER-SEAT SUBMISSION WRITES THROUGH THE SEAT, not through a merge patch: a
+// patch replaces an array wholesale, so patching the roster to change one seat
+// would delete every other one.
+func TestAPerSeatSubmissionLeavesTheOtherSeatsAlone(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/slack/inputs", `{
+		"seat": "sre-lead",
+		"values": {"bot_token": "xoxb-one", "signing_secret": "sig-one"}
+	}`, nil)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
+	// The credentials are sealed under names that carry the handle, so two
+	// seats never share one.
+	for _, name := range []string{"SLACK_BOT_TOKEN_SRE_LEAD", "SLACK_SIGNING_SECRET_SRE_LEAD"} {
+		if _, ok := s.vault.get(name); !ok {
+			t.Errorf("%s was not sealed", name)
+		}
+	}
+	// AND THE OTHER SEAT SURVIVES, which is what a merge patch would have
+	// destroyed.
+	doc := s.do(t, http.MethodGet, "/config", "", nil)
+	if !strings.Contains(doc.Body.String(), `"cto"`) {
+		t.Fatalf("the other seat is gone from the document: %s", doc.Body)
+	}
+	if !strings.Contains(doc.Body.String(), "${SLACK_BOT_TOKEN_SRE_LEAD}") {
+		t.Fatalf("the seat does not point at its sealed token: %s", doc.Body)
+	}
+	if strings.Contains(doc.Body.String(), "xoxb-one") {
+		t.Fatal("the document holds the credential itself")
+	}
+}
+
+// A submission naming a seat that takes no per-seat setup is refused by name
+// rather than written somewhere unexpected.
+func TestAnUnknownSeatIsRefused(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/slack/inputs",
+		`{"seat": "nobody", "values": {"bot_token": "x"}}`, nil)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", res.Code, res.Body)
+	}
+}

@@ -54,6 +54,16 @@ type Config interface {
 	// the time Apply refuses, the credential is already in the store
 	// under a name nothing points at.
 	Current(ctx context.Context) (string, error)
+
+	// Seat reads one seat's whole entity, as JSON, and SetSeat writes it
+	// back under the same handle.
+	//
+	// A SEPARATE PATH FROM Apply, and it has to be: a merge patch replaces
+	// an array wholesale, so patching `roles` to change one seat would
+	// delete every other one. The entity route addresses a seat by its
+	// handle, which is its identity rather than its position.
+	Seat(ctx context.Context, handle string) ([]byte, error)
+	SetSeat(ctx context.Context, handle string, body []byte, summary, operator, expect string) (revisionID string, epoch int64, err error)
 }
 
 // Source is the value the secret store records for a row this package wrote,
@@ -130,6 +140,14 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 	byField := map[string]Requirement{}
 	for _, r := range reqs {
 		byField[r.Field] = r
+	}
+
+	// A PER-SEAT SUBMISSION IS A DIFFERENT WRITE, and it is decided here
+	// rather than per field: every requirement in one submission belongs
+	// to the same seat or to none, because the screen collects one seat's
+	// form at a time.
+	if in.Seat != "" {
+		return w.writeSeat(ctx, reqs, in)
 	}
 
 	// The patch is built BEFORE anything is written, so a submission naming
@@ -210,6 +228,95 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 		// second write on the path where one has already failed. The
 		// caller re-submits, the write is idempotent by name, and
 		// `crewlet secrets` lists anything genuinely orphaned.
+		return Result{Secrets: written}, err
+	}
+	return Result{RevisionID: id, Epoch: epoch, Secrets: written}, nil
+}
+
+// writeSeat is the per-seat half: the same ordering, through the entity route.
+//
+// The order is the same and for the same reasons: the credential is sealed
+// first, then the seat's own document is given a `${VAR}` pointing at it, then
+// the epoch advances. What differs is only the address, because a seat is
+// addressed by its handle and a merge patch cannot reach one.
+func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission) (Result, error) {
+	byField := map[string]Requirement{}
+	for _, r := range reqs {
+		byField[r.Field] = r
+	}
+	entity, err := w.Config.Seat(ctx, in.Seat)
+	if err != nil {
+		return Result{}, err
+	}
+	var seat map[string]any
+	if err := json.Unmarshal(entity, &seat); err != nil {
+		return Result{}, fmt.Errorf("setup: read seat %s: %w", in.Seat, err)
+	}
+
+	changed := false
+	type pending struct{ name, value string }
+	var secretsToWrite []pending
+	for field, value := range in.Values {
+		r, ok := byField[field]
+		if !ok {
+			return Result{}, fmt.Errorf(
+				"setup: %s has no field %q; the requirement list names %s",
+				in.Kind, field, strings.Join(fields(reqs), ", "))
+		}
+		if r.Kind != KindSecret {
+			if err := setPath(seat, r.ConfigPath, typed(r.Kind, value)); err != nil {
+				return Result{}, err
+			}
+			changed = true
+			continue
+		}
+		if w.Secrets == nil {
+			return Result{}, fmt.Errorf(
+				"setup: %s is a credential and this process has no secret store to seal it in",
+				r.ConfigPath)
+		}
+		name, writePointer, err := PointerFor(in.Kind, r, r.Stored)
+		if err != nil {
+			return Result{}, err
+		}
+		secretsToWrite = append(secretsToWrite, pending{name: name, value: value})
+		if writePointer {
+			if err := setPath(seat, r.ConfigPath, "${"+name+"}"); err != nil {
+				return Result{}, err
+			}
+			changed = true
+		}
+	}
+
+	now := w.now()
+	written := []string{}
+	for _, p := range secretsToWrite {
+		if err := w.Secrets.Set(ctx, p.name, p.value, in.Operator, Source, now); err != nil {
+			return Result{}, fmt.Errorf("setup: seal %s: %w", p.name, err)
+		}
+		written = append(written, p.name)
+	}
+
+	if !changed {
+		// The pointer was already right and only the value rotated, which
+		// a running process cannot see until an activation refreshes its
+		// snapshot.
+		if len(written) == 0 {
+			return Result{}, fmt.Errorf("setup: the submission carried no values")
+		}
+		id, epoch, err := w.Config.Reload(ctx, in.Summary, in.Operator)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{RevisionID: id, Epoch: epoch, Secrets: written, Reloaded: true}, nil
+	}
+
+	body, err := json.Marshal(seat)
+	if err != nil {
+		return Result{}, fmt.Errorf("setup: encode seat %s: %w", in.Seat, err)
+	}
+	id, epoch, err := w.Config.SetSeat(ctx, in.Seat, body, in.Summary, in.Operator, in.Expect)
+	if err != nil {
 		return Result{Secrets: written}, err
 	}
 	return Result{RevisionID: id, Epoch: epoch, Secrets: written}, nil

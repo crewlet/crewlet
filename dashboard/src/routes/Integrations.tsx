@@ -468,6 +468,12 @@ export function actionFor(
   const configured = tools.filter((t) => t.configured);
   if (configured.length === 0) return { label: "Connect" };
   if (configured.some((t) => !t.satisfied)) return { label: "Continue" };
+  // A per-seat vendor with no seat set up yet is not connected, whatever its
+  // company block says: a Slack company with no agent holding an app is a
+  // company where nothing can post.
+  if (configured.some((t) => t.seats && t.seats.length > 0 && !t.seats.some((s) => s.satisfied))) {
+    return { label: "Continue" };
+  }
   if (state.attention) {
     // Narrowed to the fields that clear what the loop actually found, so a
     // Fix opens the inputs that matter rather than the whole form.
@@ -476,15 +482,32 @@ export function actionFor(
   return { label: "Manage" };
 }
 
-/** The surfaces of one tool, with the setup state the engine answered for each. */
+/**
+ * The sections of one tool's dialog: the surfaces the engine reaches it over,
+ * and for a vendor whose credentials live on the SEAT, one per agent.
+ *
+ * Slack is the per-seat one, because each agent has its own app. Every agent
+ * gets a section whether or not it has one yet: a seat with no app is exactly
+ * the seat somebody opened this dialog to give one to.
+ */
 export function sectionsFor(
   entry: Entry,
   byKey: Map<string, SetupToolState>,
-): { name: string; tool: SetupToolState }[] {
-  const out: { name: string; tool: SetupToolState }[] = [];
+): { name: string; tool: SetupToolState; seat?: string }[] {
+  const out: { name: string; tool: SetupToolState; seat?: string }[] = [];
   for (const surface of entry.surfaces) {
     const tool = byKey.get(surface.key);
-    if (tool) out.push({ name: surface.name, tool });
+    if (!tool) continue;
+    if (tool.seats && tool.seats.length > 0) {
+      // The company-wide block first, when it has anything to set, then a
+      // section per seat.
+      if (tool.requirements.length > 0) out.push({ name: surface.name, tool });
+      for (const seat of tool.seats) {
+        out.push({ name: seat.name || seat.handle, tool, seat: seat.handle });
+      }
+      continue;
+    }
+    out.push({ name: surface.name, tool });
   }
   return out;
 }

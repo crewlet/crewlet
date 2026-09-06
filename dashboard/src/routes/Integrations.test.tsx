@@ -299,7 +299,7 @@ test("the phase order is the engine's", () => {
 
 // --- the action slot -------------------------------------------------------- //
 
-import { actionFor } from "./Integrations.tsx";
+import { actionFor, sectionsFor } from "./Integrations.tsx";
 import type { SetupToolState } from "~/protocol/types.ts";
 
 function toolState(over: Partial<SetupToolState>): SetupToolState {
@@ -363,4 +363,39 @@ test("one unfinished surface makes the whole tool unfinished", () => {
 test("a tool with no setup surface offers no action", () => {
   const state = rollUp(slack, rowsOf({ key: "slack", configured: true }));
   expect(actionFor(state, [])).toBeNull();
+});
+
+// --- a per-seat vendor ------------------------------------------------------ //
+
+// SLACK GETS A SECTION PER SEAT, because each agent has its own app and so its
+// own bot token. A seat with no app yet is exactly the seat somebody opened
+// this dialog to give one to, so it is listed too.
+test("a per-seat vendor becomes one section per agent", () => {
+  const slackTool = toolState({
+    key: "slack",
+    configured: true,
+    requirements: [],
+    seats: [
+      { handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true },
+      { handle: "cto", name: "CTO", requirements: [], satisfied: false },
+    ],
+  });
+  const sections = sectionsFor(slack, new Map([["slack", slackTool]]));
+  expect(sections.map((s) => s.seat)).toEqual(["sre-lead", "cto"]);
+  expect(sections.map((s) => s.name)).toEqual(["SRE Lead", "CTO"]);
+});
+
+// A company whose Slack block exists and whose seats hold no app is not
+// connected: nothing can post.
+test("a per-seat vendor with no seat set up is unfinished", () => {
+  const state = rollUp(slack, rowsOf({ key: "slack", configured: true }));
+  const action = actionFor(state, [
+    toolState({
+      key: "slack",
+      configured: true,
+      satisfied: true,
+      seats: [{ handle: "cto", requirements: [], satisfied: false }],
+    }),
+  ]);
+  expect(action?.label).toBe("Continue");
 });

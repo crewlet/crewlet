@@ -820,6 +820,20 @@ export interface SetupToolState {
   can_provision?: boolean;
   /** The transient vendor credential its pass asks for, never stored. */
   needs_operator?: SetupRequirement | null;
+  /**
+   * Per-seat setup, for a vendor whose credentials live on the seat rather
+   * than on the company. Slack is the one: each agent has its own app.
+   */
+  seats?: SetupSeatState[];
+}
+
+export interface SetupSeatState {
+  handle: string;
+  name?: string;
+  requirements: SetupRequirement[];
+  satisfied: boolean;
+  inbound_path?: string;
+  public_url?: string;
 }
 
 /** One provisioning pass, live or finished. */

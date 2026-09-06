@@ -218,6 +218,7 @@ type recorder struct {
 	failSet error
 	failApp error
 	active  string
+	seat    []byte
 }
 
 func (r *recorder) Set(_ context.Context, name, value, by, source string, _ time.Time) error {
@@ -238,6 +239,24 @@ func (r *recorder) Apply(_ context.Context, patch []byte, summary, _, expect str
 	}
 	r.events = append(r.events, "patch:"+string(patch)+" summary="+summary+" expect="+expect)
 	return "rev-1", 7, nil
+}
+
+func (r *recorder) Seat(_ context.Context, handle string) ([]byte, error) {
+	if r.seat == nil {
+		return []byte(`{"name":"` + handle + `","handle":"` + handle + `"}`), nil
+	}
+	return r.seat, nil
+}
+
+func (r *recorder) SetSeat(
+	_ context.Context, handle string, body []byte, summary, _, expect string,
+) (string, int64, error) {
+	if r.failApp != nil {
+		return "", 0, r.failApp
+	}
+	r.events = append(r.events,
+		"seat:"+handle+" body="+string(body)+" summary="+summary+" expect="+expect)
+	return "rev-3", 9, nil
 }
 
 func (r *recorder) Current(context.Context) (string, error) {
@@ -452,6 +471,50 @@ func TestAToggleIsWrittenAsABoolean(t *testing.T) {
 	}
 	if !strings.Contains(rec.events[0], `"enabled":true`) {
 		t.Fatalf("the patch carries %s, want a JSON boolean", rec.events[0])
+	}
+}
+
+// A PER-SEAT SUBMISSION WRITES THROUGH THE SEAT, and the path it sets is
+// relative to it. A merge patch replaces an array wholesale, so patching the
+// roster to change one seat would delete every other one.
+func TestAPerSeatSubmissionWritesThroughTheSeat(t *testing.T) {
+	t.Parallel()
+	rec := &recorder{seat: []byte(`{"name":"SRE Lead","handle":"sre-lead"}`)}
+	reqs := []setup.Requirement{{
+		Field: "bot_token", Kind: setup.KindSecret, Required: true,
+		ConfigPath: "integrations.slack.bot_token", Seat: "sre-lead",
+		SecretName: "SLACK_BOT_TOKEN_SRE_LEAD",
+	}}
+	result, err := writer(rec).Write(context.Background(), reqs, setup.Submission{
+		Kind: integration.KindSlack, Seat: "sre-lead",
+		Values: map[string]string{"bot_token": "xoxb-value"}, Operator: "founder",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.events) != 2 {
+		t.Fatalf("events = %v", rec.events)
+	}
+	// The secret first, then the seat, exactly as the company-wide path.
+	if !strings.HasPrefix(rec.events[0], "secret:SLACK_BOT_TOKEN_SRE_LEAD") {
+		t.Fatalf("the first write was %q", rec.events[0])
+	}
+	if !strings.HasPrefix(rec.events[1], "seat:sre-lead") {
+		t.Fatalf("the second write was %q", rec.events[1])
+	}
+	// THE POINTER, NEVER THE VALUE, and spliced into the seat that was
+	// read rather than replacing it.
+	if strings.Contains(rec.events[1], "xoxb-value") {
+		t.Fatalf("the seat carries the credential: %s", rec.events[1])
+	}
+	if !strings.Contains(rec.events[1], `"bot_token":"${SLACK_BOT_TOKEN_SRE_LEAD}"`) {
+		t.Fatalf("the seat does not point at the secret: %s", rec.events[1])
+	}
+	if !strings.Contains(rec.events[1], `"handle":"sre-lead"`) {
+		t.Fatalf("the write dropped what it did not send: %s", rec.events[1])
+	}
+	if len(result.Secrets) != 1 {
+		t.Errorf("wrote_secrets = %v", result.Secrets)
 	}
 }
 

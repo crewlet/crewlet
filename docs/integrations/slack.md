@@ -13,6 +13,22 @@ Both end in the same place: per-agent credentials referenced from the company YA
 
 ---
 
+## Setting it up from the dashboard
+
+The Integrations screen shows one section per agent, because on Slack the
+credentials belong to the seat: each agent has its own app, so each has its own
+bot token and signing secret. Paste the two values Slack shows on the app's own
+page and the engine seals them, gives the seat a `${VAR}` pointing at each, and
+activates. Each seat's own delivery address is shown beside its fields.
+
+**It does not create the apps.** Creating one goes through Slack's app-manifest
+API, which authenticates with an app configuration token Slack issues only by
+hand from its own pages, and which your organisation may not permit at all.
+Where those tokens are available, [`crewlet slack provision`](#automated-setup-crewlet-slack-provision)
+below remains the automated path and does the whole thing. Where they are not,
+create each app by hand as the [manual setup](#manual-setup) describes, install
+it to the workspace, and wire it up from the dashboard.
+
 ## Configure in YAML
 
 `integrations.slack: {}` (org-level) is a marker that enables the outbound Slack **transport**; its one setting is [`typing_status`](#working-status-is-thinking). The Slack **MCP tool** server is a separate `mcp_servers` entry (`shared: false`). Per agent, the Slack identity has two consumers: the **transport** reads `role.integrations.slack` (`bot_token`, `signing_secret`, optional `channel`), and the **Slack MCP subprocess** reads `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`. Name the same `${VAR}` in both — one credential, two readers, no secret duplicated:
