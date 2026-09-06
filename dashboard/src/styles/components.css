@@ -194,19 +194,31 @@
   mix-blend-mode: luminosity;
 }
 
+/* THE CONSOLE'S TAG, to the pixel: a soft tinted pill with a border in its
+   own hue, not a bare word on a grey chip. The border is what makes a status
+   read as a discrete object at a glance, and its absence is why these looked
+   like stray text beside the vendor names.
+   The tint is drawn from `currentColor` rather than a per-variant token, so
+   one rule covers every variant and a new one cannot ship without its border:
+   each variant already sets `color` to its own ink step. */
 .badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-1);
-  padding: 1px var(--space-2);
-  border-radius: var(--r-xs);
-  font-size: var(--fs-3xs);
+  min-height: calc(var(--row-h-sm) - 2px);
+  padding: 3px var(--space-2);
+  border-radius: var(--r-sm);
+  /* 12px. tokens.css names this step "dense secondary text, badges", which is
+     what a badge should always have been using. */
+  font-size: var(--fs-2xs);
   font-weight: var(--fw-medium);
+  line-height: 1;
   letter-spacing: 0.01em;
   white-space: nowrap;
   background: var(--surface-inset);
   color: var(--text-secondary);
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
 }
 .badge.positive {
   background: var(--positive-soft);

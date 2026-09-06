@@ -455,7 +455,7 @@ function SurfaceRow({ surface, row }: { surface: Surface; row: IntegrationRow })
           </Badge>
         )}
         {row.reconcile ? (
-          <Badge tone={phaseTone(row.reconcile.phase)} dot>
+          <Badge tone={phaseTone(row.reconcile.phase)}>
             {row.reconcile.phase.replace(/_/g, " ")}
           </Badge>
         ) : row.enabled === false ? (
@@ -587,7 +587,7 @@ export function EntryRow({
   // container for nothing.
   const actions = (
     <>
-      <Badge tone={state.tone} outline={state.outline} dot={!state.outline}>
+      <Badge tone={state.tone} outline={state.outline}>
         {state.tag}
       </Badge>
       {action && onConnect && (
