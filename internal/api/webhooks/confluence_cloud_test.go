@@ -135,3 +135,30 @@ func TestConfluenceCloud_AcceptsTheTokenInAHeaderToo(t *testing.T) {
 		t.Fatalf("got %d, want 200: %s", res.Code, res.Body)
 	}
 }
+
+// TWO SAVES OF ONE PAGE ARE TWO EVENTS, and on this route the body is the
+// only thing that can say so: Cloud sends no per-delivery identifier, so the
+// claim is on the body hash. A Confluence Automation body that named only the
+// page id and title was byte-identical across two saves inside the claim
+// window, so the second was answered as a duplicate and woke nobody. The
+// recipe in docs/integrations/confluence.md carries the page version for
+// exactly this reason, and this is what holds it there.
+func TestConfluenceCloud_TwoSavesOfOnePageAreTwoEvents(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+
+	body := func(version string) []byte {
+		return []byte(`{"page":{"id":"41746440","title":"Deploy runbook","version":{"number":"` +
+			version + `"}},"space":{"key":"ENG"},"userAccountId":"712020:actor"}`)
+	}
+	for _, version := range []string{"3", "4"} {
+		res := e.post(t, "/webhooks/confluence/page_updated?token=conf-token", body(version), nil)
+		if res.Code != http.StatusOK {
+			t.Fatalf("version %s got %d: %s", version, res.Code, res.Body)
+		}
+	}
+	if e.published.count() != 2 {
+		t.Fatalf("published %d events for two saves; a body with no per-event "+
+			"field collapses them into one", e.published.count())
+	}
+}

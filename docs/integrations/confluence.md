@@ -122,22 +122,30 @@ Confluence Automation's **Send web request** action is Atlassian's documented wa
 
 One rule per event, built in **Space settings** (or **Global automation**) with the trigger that matches the path:
 
-| Trigger | Path |
-|---|---|
-| a page is published | `/webhooks/confluence/page_created` |
-| a page is edited | `/webhooks/confluence/page_updated` |
-| a comment is added | `/webhooks/confluence/comment_created` |
+| Trigger | Path | Body |
+|---|---|---|
+| a page is published | `/webhooks/confluence/page_created` | the page body below |
+| a page is edited | `/webhooks/confluence/page_updated` | the page body below |
+| a comment is added | `/webhooks/confluence/comment_created` | the comment body below |
 
 The action is **Send web request** with:
 
 - **URL**: `https://your-engine.example.com/webhooks/confluence/<event>` (the path above)
 - **Method**: `POST`
 - **Headers**: `X-Crewlet-Token` set to the value of `integrations.confluence.webhook_token`, with **Hidden** ticked, and `Content-Type: application/json`
-- **Body**: custom data, on one line:
+- **Body**: custom data, on one line. The page body:
 
 ```
-{"page":{"id":"{{page.id}}","title":{{page.title.asJsonString}}},"space":{"key":"{{space.key}}"},"userAccountId":"{{initiator.accountId}}"}
+{"page":{"id":"{{page.id}}","title":{{page.title.asJsonString}},"version":{"number":"{{page.version.number}}"}},"space":{"key":"{{space.key}}"},"userAccountId":"{{initiator.accountId}}"}
 ```
+
+and the comment body:
+
+```
+{"comment":{"id":"{{comment.id}}","parent":{"id":"{{page.id}}","title":{{page.title.asJsonString}},"contentType":"page"}},"space":{"key":"{{space.key}}"},"userAccountId":"{{initiator.accountId}}"}
+```
+
+**The version number and the comment id are not decoration: they are what stops two events collapsing into one.** This route has no per-delivery identifier to claim, so it claims a hash of the body (see [Delivery deduplication](#delivery-deduplication) below), and a body carrying only a page id and a title is byte-identical for two saves of the same page five minutes apart. The second would be answered `200 {"status":"duplicate"}` and wake nobody. `{{page.version.number}}` changes on every save and `{{comment.id}}` is unique per comment, so each event keys as itself.
 
 The engine answers `200` and logs `webhook_received source=confluence`; a wrong or missing token answers `401`. Use the rule's own validate step and one real edit to confirm the smart values render on your site before relying on the rule.
 
@@ -193,7 +201,9 @@ Inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature
 
 ### Delivery deduplication
 
-Data Center deliveries are claimed fleet-wide on the `X-Atlassian-Webhook-Identifier` the instance sends, which is stable across its own retries — so a redelivery is answered `200 {"status":"duplicate"}` and wakes nobody. The claim lasts five minutes. A route whose provider sends no such header — the Forge relay always, and a Data Center build that does not set one — is claimed on a **hash of the raw body** instead. The payload is what stays identical across a provider's own retry, and byte identity is deliberately preferred to derived coordinates: every field left out of a coordinate set is a way for two *different* events to collapse into one, and a collapsed event is a message nobody ever answers. A hash cannot do that — any difference at all yields a different key. See [Webhook deliveries are deduplicated at the edge](../reference/design-decisions.md#webhook-deliveries-are-deduplicated-at-the-edge).
+Data Center deliveries are claimed fleet-wide on the `X-Atlassian-Webhook-Identifier` the instance sends, which is stable across its own retries — so a redelivery is answered `200 {"status":"duplicate"}` and wakes nobody. The claim lasts five minutes. A route whose provider sends no such header — the Cloud token route and the Forge relay always, and a Data Center build that does not set one — is claimed on a **hash of the raw body** instead.
+
+**On the Cloud token route the body is the whole key**, so what the sender puts in it decides what counts as one event. Confluence's own registered hooks carry the content id, its version and a timestamp, and are therefore distinct per event without help. An Automation rule carries only what its body template names, which is why the recipe above includes the page version and the comment id: a template without them makes two saves of one page within the claim window indistinguishable, and the second wakes nobody. The payload is what stays identical across a provider's own retry, and byte identity is deliberately preferred to derived coordinates: every field left out of a coordinate set is a way for two *different* events to collapse into one, and a collapsed event is a message nobody ever answers. A hash cannot do that — any difference at all yields a different key. See [Webhook deliveries are deduplicated at the edge](../reference/design-decisions.md#webhook-deliveries-are-deduplicated-at-the-edge).
 
 ---
 
