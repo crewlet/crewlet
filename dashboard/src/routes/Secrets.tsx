@@ -20,7 +20,7 @@ import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { fmtDateTime, relTime, tsKey, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { rest, RestError } from "~/protocol/index.ts";
+import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
 import type { SecretRow } from "~/protocol/index.ts";
 
 export function Secrets() {
@@ -61,6 +61,9 @@ export function Secrets() {
   useEffect(() => {
     void load();
   }, [load]);
+  // This screen's refusal names the missing token, so supplying one has to
+  // refresh it in place rather than waiting for a reload.
+  useEffect(() => onTokenChanged(() => void load()), [load]);
 
   const list = rows ?? [];
   const fromStore = list.filter((r) => r.source === "store").length;

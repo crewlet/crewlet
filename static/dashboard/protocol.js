@@ -232,10 +232,11 @@ function apiToken() {
 function storeToken(token) {
 	try {
 		localStorage.setItem(TOKEN_KEY, String(token ?? "").trim());
-		return true;
 	} catch {
 		return false;
 	}
+	announce();
+	return true;
 }
 var listeners = /* @__PURE__ */ new Set();
 /** Ask for the token dialog. A no-op when no shell is mounted. */
@@ -247,14 +248,36 @@ function onTokenRequested(listener) {
 	listeners.add(listener);
 	return () => listeners.delete(listener);
 }
+/**
+* The symmetric signal: the token CHANGED.
+*
+* The socket learns through `setToken` + `reconnect`, which the shell calls
+* from the dialog. Every REST-backed surface learned nothing at all: it had
+* fetched once on mount, so setting a token left `/setup` and `/secrets`
+* still showing the refusal that prompted the reader to set one. The screen
+* said "needs an operator token", the reader supplied it, and nothing moved.
+*
+* Fired from `storeToken` and `clearToken` themselves rather than from the
+* dialog, so a future writer cannot forget to announce it.
+*/
+var changed = /* @__PURE__ */ new Set();
+/** Subscribe to token changes. Returns the unsubscribe. */
+function onTokenChanged(listener) {
+	changed.add(listener);
+	return () => changed.delete(listener);
+}
+function announce() {
+	for (const listener of changed) listener();
+}
 /** Forget the stored token. Returns false if the browser refused the write. */
 function clearToken() {
 	try {
 		localStorage.removeItem(TOKEN_KEY);
-		return true;
 	} catch {
 		return false;
 	}
+	announce();
+	return true;
 }
 //#endregion
 //#region src/protocol/api.ts
@@ -760,4 +783,4 @@ var rest = {
 	del: (path, headers) => send("DELETE", path, void 0, headers)
 };
 //#endregion
-export { LiveSocket, MAX_EVENTS, RestError, Store, api, apiToken, clearToken, onTokenRequested, requestToken, rest, storeToken };
+export { LiveSocket, MAX_EVENTS, RestError, Store, api, apiToken, clearToken, onTokenChanged, onTokenRequested, requestToken, rest, storeToken };

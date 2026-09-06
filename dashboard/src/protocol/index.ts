@@ -14,5 +14,12 @@ export type { StoreState, Slice } from "./store.ts";
 export { LiveSocket } from "./socket.ts";
 export { api } from "./api.ts";
 export { rest, RestError } from "./rest.ts";
-export { apiToken, storeToken, clearToken, requestToken, onTokenRequested } from "./authToken.ts";
+export {
+  apiToken,
+  storeToken,
+  clearToken,
+  requestToken,
+  onTokenRequested,
+  onTokenChanged,
+} from "./authToken.ts";
 export type * from "./types.ts";
