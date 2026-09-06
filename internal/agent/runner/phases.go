@@ -1137,9 +1137,47 @@ func (r *Runner) executorActive(snapshot tools.Snapshot) []string {
 		if phaseScoped[e.Name()] {
 			continue
 		}
+		if e.Name() == RunSandboxTool && !r.offersSandbox() {
+			continue
+		}
 		out = append(out, e.Name())
 	}
 	return out
+}
+
+// offersSandbox reports whether run_sandbox would do anything for this seat.
+//
+// THE TOOL IS REGISTERED PER EPOCH, not per seat: the engine wires its
+// launcher once for the whole company, so every seat's registry carries it the
+// moment any seat could run code. Both refusals below therefore had to be
+// discovered by CALLING it — a wasted round each time, on a tool the model was
+// shown and reasonably believed in, which is the failure the launcher's own
+// nil-means-omit rule exists to prevent ("a model shown a tool that always
+// fails learns to distrust the whole catalogue"). Worse than the round: a seat
+// that PLANNED around a box it will never get delivers nothing while looking
+// like it tried.
+//
+// The two seats it is useless to:
+//
+//   - A seat with no enabled role.sandbox gate. The launcher refuses with
+//     "this seat's sandbox is not enabled", and the gate is the only thing
+//     that ever said the seat does code work.
+//   - A seat whose executor IS a coding agent in agent mode. It already holds
+//     a shell, an editor and a checkout; a second box beside it would give the
+//     seat two filesystems with the work in the one the turn cannot see. The
+//     launcher refuses that too (role.sandbox.run_in: self), and this is the
+//     surface that must not offer it in the first place.
+//
+// Read from cfg.AgentRun rather than re-derived from the seat's provider
+// entry: the launcher being present IS the fact that this executor runs as
+// somebody else's agentic loop, and a second derivation is a second thing to
+// keep in step with it.
+func (r *Runner) offersSandbox() bool {
+	if r.cfg.AgentRun != nil {
+		return false
+	}
+	seat := r.cfg.Seat.Role
+	return seat != nil && seat.Sandbox != nil && seat.Sandbox.Enabled
 }
 
 // phaseScoped names the first-party tools that belong to ONE phase and must

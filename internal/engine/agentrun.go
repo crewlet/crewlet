@@ -253,22 +253,3 @@ func (l *agentLauncher) runTurnRef(ctx context.Context) sandbox.TurnRef {
 		Depth: l.turn.Depth, Chain: l.turn.Chain,
 	}
 }
-
-// AgentModeSeat reports whether a seat's executor runs as its CLI's own
-// agentic run, for the surface that must not also offer it run_sandbox.
-//
-// A seat whose executor IS a coding agent with a shell has no use for a second
-// box beside it: two filesystems, and the one doing the work invisible to the
-// other. That is what role.sandbox.run_in `self` names — see
-// [config.PlacementSelf].
-func (c *Company) AgentModeSeat(seat *org.Role) bool {
-	if c.Models == nil || seat == nil {
-		return false
-	}
-	member, err := c.Models.Head(seat, phase.Execute)
-	if err != nil {
-		return false
-	}
-	agent, isCLI := member.Provider.(*cliagent.Provider)
-	return isCLI && agent.AgentMode()
-}
