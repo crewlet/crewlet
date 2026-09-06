@@ -296,3 +296,50 @@ test("the phase order is the engine's", () => {
   expect(state.tag).toBe("activating");
   expect(state.status).toBe("Confluence: coming up");
 });
+
+// --- the action slot -------------------------------------------------------- //
+
+import { actionFor } from "./Integrations.tsx";
+import type { SetupToolState } from "~/protocol/types.ts";
+
+function toolState(over: Partial<SetupToolState>): SetupToolState {
+  return {
+    key: "github",
+    configured: true,
+    enabled: true,
+    satisfied: true,
+    requirements: [],
+    ...over,
+  };
+}
+
+// THE ACTION IS A PURE FUNCTION of what the engine says, and of the same
+// inputs the state tag beside it is derived from. Two derivations would
+// eventually tell an operator two different things in one row.
+test("the action follows the state", () => {
+  const ready = rollUp(atlassian, rowsOf({ key: "jira", configured: true }));
+  expect(actionFor(ready, toolState({ configured: false }))?.label).toBe("Connect");
+  expect(actionFor(ready, toolState({ satisfied: false }))?.label).toBe("Continue");
+  expect(actionFor(ready, toolState({}))?.label).toBe("Manage");
+
+  // A row a person owes something on offers Fix, narrowed to the fields
+  // that clear what the loop found.
+  const owed = rollUp(
+    atlassian,
+    rowsOf({
+      key: "jira",
+      configured: true,
+      reconcile: { phase: "degraded", actor: "admin", detail: "x" },
+    }),
+  );
+  const fix = actionFor(owed, toolState({}));
+  expect(fix?.label).toBe("Fix");
+  expect(fix?.blocks).toBe("credential_missing");
+});
+
+// A tool this build knows nothing about offers nothing: a button that
+// discovers on a press that there is no surface behind it is worse than none.
+test("a tool with no setup surface offers no action", () => {
+  const state = rollUp(slack, rowsOf({ key: "slack", configured: true }));
+  expect(actionFor(state, undefined)).toBeNull();
+});

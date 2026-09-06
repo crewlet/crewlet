@@ -900,6 +900,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// itself: a credential is sealed by the same store /secrets serves,
 	// and the pointer to it lands through the same merge, validation and
 	// activation PATCH /config performs.
+	// The fleet's integration status, which both the reconcile loop and a
+	// pass run from the dashboard write.
+	integrationStatus, err := e.IntegrationStore()
+	if err != nil {
+		log.Warn("setup_status_unavailable", "error", err,
+			"hint", "a provisioning pass will run and its findings will not reach the screen")
+	}
 	setupSurface := setupapi.New(setupapi.Options{
 		Company: func() *config.Company { return companyConfig(e) },
 		Config:  configSurface,
@@ -911,6 +918,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// wrote one down. That gap is the silent outage the whole
 		// secret_usable family exists to surface.
 		Resolve: e.LookupSecret,
+		// The vendors this build can provision over the API, the recorder
+		// their minted credentials go through, and the fleet row a pass
+		// writes its findings to. That last one is the SAME row the
+		// reconcile loop writes: a pass an operator ran and a tick that
+		// ran a minute later must not disagree about an integration.
+		Passes: e.SetupRunner(nil),
+		Sink:   e.SetupSink,
+		Status: integrationStatus,
 	})
 
 	// The contextcheck exemption is for the two PUSH TICKS this constructor

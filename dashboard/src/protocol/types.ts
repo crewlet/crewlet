@@ -816,6 +816,22 @@ export interface SetupToolState {
   satisfied: boolean;
   inbound_path?: string;
   public_url?: string;
+  /** This build runs a provisioning pass for this vendor. */
+  can_provision?: boolean;
+  /** The transient vendor credential its pass asks for, never stored. */
+  needs_operator?: SetupRequirement | null;
+}
+
+/** One provisioning pass, live or finished. */
+export interface SetupRun {
+  run_id: string;
+  key: string;
+  state: "running" | "done" | "failed";
+  started_at: string;
+  ended_at?: string;
+  findings?: ReconcileFinding[];
+  error?: string;
+  report?: ReconcileStatus;
 }
 
 export interface SetupListing {

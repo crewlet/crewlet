@@ -28,12 +28,13 @@ import { QueryState } from "~/components/common.tsx";
 import { Badge, Button, Empty, Panel, Skeleton } from "~/ui/primitives.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
+import { useToast } from "~/ui/Toast.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, ReconcileStatus } from "~/protocol/types.ts";
-import type { SetupListing, SetupToolState } from "~/protocol/types.ts";
+import type { SetupListing, SetupRun, SetupToolState } from "~/protocol/types.ts";
 
 type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
 
@@ -476,12 +477,18 @@ export function EntryRow({
   setup,
   revision,
   onConnect,
+  onPass,
+  running,
 }: {
   entry: Entry;
   rows: Map<string, IntegrationRow>;
   setup?: SetupToolState;
   revision?: string;
   onConnect?: (tool: SetupToolState, blocks?: string) => void;
+  /** Run the vendor's provisioning pass, or a read-only check of it. */
+  onPass?: (tool: SetupToolState, readOnly: boolean) => void;
+  /** A pass this row started and is waiting on. */
+  running?: boolean;
 }) {
   const state = rollUp(entry, rows);
   const present = presentSurfaces(entry, rows);
@@ -522,9 +529,30 @@ export function EntryRow({
             size="sm"
             variant={action.label === "Manage" ? "ghost" : "primary"}
             onClick={() => onConnect(setup, action.blocks)}
+            disabled={running}
           >
             {action.label}
           </Button>
+        )}
+        {/* THE PASS, and only where this build has one. Offering it
+            everywhere would give an operator a button that discovers on a
+            press that there is nothing behind it. Setup first: a pass
+            writes at the vendor and must not run against a
+            half-configured integration, which the engine refuses anyway. */}
+        {setup?.can_provision && setup.satisfied && onPass && (
+          <>
+            <Button size="sm" onClick={() => onPass(setup, false)} disabled={running}>
+              {running ? "Running" : "Run setup"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onPass(setup, true)}
+              disabled={running}
+            >
+              Recheck
+            </Button>
+          </>
         )}
       </div>
     </div>
@@ -577,7 +605,41 @@ export function Integrations() {
   // right cadence for "is anything arriving at all".
   const { data, loading, error } = useQuery("integrations", undefined, { pollMs: 60_000 });
   const setup = useSetup();
+  const toast = useToast();
   const [dialog, setDialog] = useState<{ tool: SetupToolState; blocks?: string } | null>(null);
+  const [running, setRunning] = useState("");
+  const [lastRun, setLastRun] = useState<SetupRun | null>(null);
+
+  /**
+   * Run a vendor's pass, or check it.
+   *
+   * The outcome is a toast plus the run's own findings, and the row's state
+   * tag updates on its own: the engine wrote the same fleet status the
+   * reconcile loop writes, so the next poll of `integrations` carries it.
+   */
+  async function runPass(tool: SetupToolState, readOnly: boolean): Promise<void> {
+    setRunning(tool.key);
+    setLastRun(null);
+    try {
+      const run = (await rest.post(
+        `/setup/integrations/${tool.key}/${readOnly ? "check" : "provision"}`,
+        {},
+      )) as SetupRun;
+      setLastRun(run);
+      toast.ok(readOnly ? "Checked" : "Setup pass finished");
+      setup.reload();
+    } catch (err) {
+      if (err instanceof RestError) {
+        const run = err.body.run as SetupRun | undefined;
+        if (run) setLastRun(run);
+        toast.failed(err.detail || err.hint || err.code || "The pass was refused.");
+      } else {
+        toast.failed(String(err));
+      }
+    } finally {
+      setRunning("");
+    }
+  }
 
   const rows = new Map((data?.integrations ?? []).map((r) => [r.key, r]));
   const configured = CATALOG.filter((e) => e.surfaces.some((s) => rows.has(s.key)));
@@ -638,6 +700,36 @@ export function Integrations() {
         />
       )}
 
+      {/* WHAT THE LAST PASS ACTUALLY DID. The row's tag says what the
+          integration is now; this says what the run reported, which is the
+          half an operator needs while fixing something. */}
+      {lastRun && (
+        <Panel
+          title={lastRun.state === "failed" ? "The last pass failed" : "The last pass"}
+          icon="activity"
+          actions={
+            <Button size="sm" variant="ghost" onClick={() => setLastRun(null)}>
+              Dismiss
+            </Button>
+          }
+        >
+          <div className="col gap-2">
+            {lastRun.error && <span className="t-caption">{lastRun.error}</span>}
+            {lastRun.report?.detail && <span className="t-caption">{lastRun.report.detail}</span>}
+            {(lastRun.findings ?? []).map((f, i) => (
+              <span key={`${f.kind}:${f.subject ?? ""}:${i}`} className="t-caption">
+                {f.detail || `${f.kind.replace(/_/g, " ")}${f.subject ? `: ${f.subject}` : ""}`}
+              </span>
+            ))}
+            {!lastRun.error && (lastRun.findings ?? []).length === 0 && (
+              <span className="t-caption faint">
+                The pass found nothing to report, which is what a working integration looks like.
+              </span>
+            )}
+          </div>
+        </Panel>
+      )}
+
       {loading && !data && <Skeleton rows={6} />}
       <QueryState error={error} loading={loading} empty={undefined}>
         {CAPABILITIES.map((cap) => (
@@ -656,6 +748,8 @@ export function Integrations() {
                   rows={rows}
                   setup={setup.byKey.get(entry.key)}
                   onConnect={(tool, blocks) => setDialog({ tool, blocks })}
+                  onPass={(tool, readOnly) => void runPass(tool, readOnly)}
+                  running={running === entry.key}
                 />
               ))}
             </div>

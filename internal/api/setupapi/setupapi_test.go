@@ -11,10 +11,15 @@ import (
 	"testing"
 	"time"
 
+	"errors"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -520,5 +525,354 @@ func TestDisconnectingWhatIsAbsentIsNotAnError(t *testing.T) {
 	}
 	if decode(t, res)["removed"] != false {
 		t.Error("an absent integration reported a removal")
+	}
+}
+
+// --- the provisioning pass --------------------------------------------------- //
+
+// recordingPass stands in for a vendor's Reconcile. It records what it was
+// given, which is the whole question these tests ask: does the route hand a
+// pass the two things that let it write, and only when it should.
+type recordingPass struct {
+	mu       sync.Mutex
+	calls    []setup.PassInput
+	findings []integration.Finding
+	err      error
+	release  chan struct{}
+}
+
+func (*recordingPass) Kind() integration.Kind    { return integration.KindGitHub }
+func (*recordingPass) Needs() *setup.Requirement { return nil }
+
+func (p *recordingPass) Run(_ context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	p.mu.Lock()
+	p.calls = append(p.calls, in)
+	release := p.release
+	p.mu.Unlock()
+	if release != nil {
+		<-release
+	}
+	return p.findings, p.err
+}
+
+func (p *recordingPass) last() (setup.PassInput, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.calls) == 0 {
+		return setup.PassInput{}, 0
+	}
+	return p.calls[len(p.calls)-1], len(p.calls)
+}
+
+// statusStore is the fleet row a pass writes to.
+type statusStore struct {
+	mu     sync.Mutex
+	states map[integration.Kind]integration.State
+	forgot []integration.Kind
+}
+
+func (s *statusStore) SaveIntegration(_ context.Context, state integration.State) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.states == nil {
+		s.states = map[integration.Kind]integration.State{}
+	}
+	s.states[state.Kind] = state
+	return nil
+}
+
+func (s *statusStore) ForgetIntegration(_ context.Context, kind integration.Kind) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forgot = append(s.forgot, kind)
+	delete(s.states, kind)
+	return nil
+}
+
+func (s *statusStore) LoadIntegrations(context.Context) ([]integration.State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]integration.State, 0, len(s.states))
+	for _, state := range s.states {
+		out = append(out, state)
+	}
+	return out, nil
+}
+
+func (s *statusStore) get(kind integration.Kind) (integration.State, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.states[kind]
+	return state, ok
+}
+
+// withPass rebuilds the surface with a provisioning pass wired in.
+func (s *surface) withPass(t *testing.T, pass *recordingPass) (*statusStore, *setup.Runner) {
+	t.Helper()
+	status := &statusStore{}
+	runner := setup.NewRunner([]setup.Pass{pass}, nil, func() time.Time { return pinned })
+	s.mux = http.NewServeMux()
+	setupapi.New(setupapi.Options{
+		Company: s.company, Config: s.config, Secrets: s.vault,
+		Resolve: s.vault.get,
+		Passes:  runner,
+		Sink: func(operator string) (provision.TokenSink, error) {
+			return provision.NewSecretStoreSink(sinkStore{s.vault}, operator), nil
+		},
+		Status: status,
+		Now:    func() time.Time { return pinned },
+	}).Routes(s.mux)
+	s.config.Routes(s.mux)
+	return status, runner
+}
+
+// sinkStore adapts the vault to what a secret-store sink needs.
+type sinkStore struct{ v *vault }
+
+func (s sinkStore) Set(ctx context.Context, name, value, by, source string, at time.Time) error {
+	return s.v.Set(ctx, name, value, by, source, at)
+}
+
+func (s sinkStore) Get(_ context.Context, name string) (string, error) {
+	value, ok := s.v.get(name)
+	if !ok {
+		return "", secrets.ErrNotFound
+	}
+	return value, nil
+}
+
+func (s sinkStore) Unset(_ context.Context, name string) (bool, error) {
+	s.v.mu.Lock()
+	defer s.v.mu.Unlock()
+	_, ok := s.v.values[name]
+	delete(s.v.values, name)
+	return ok, nil
+}
+
+// seedGitHub puts a complete GitHub block in place, with a public base.
+func (s *surface) seedGitHub(t *testing.T) {
+	t.Helper()
+	res := s.do(t, http.MethodPatch, "/config", `{"integrations":{
+		"public_base_url":"https://engine.example.com",
+		"github":{"enabled":true,"webhook_secret":"${GH_SECRET}",
+		"provisioning":{"org":"acme"}}}}`,
+		map[string]string{
+			"Content-Type": "application/merge-patch+json",
+			"X-Summary":    "github by hand",
+		})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("seed github = %d: %s", res.Code, res.Body)
+	}
+	// The secret has to RESOLVE, or the requirement is outstanding and the
+	// pass is refused before it runs, which is a different test.
+	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", "test", "test", pinned); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// THE PASS IS HANDED THE TWO THINGS THE LOOP WITHHOLDS. A base is permission
+// to register a hook and a sink is permission to mint a credential, and a
+// person pressing the button is what supplies both.
+func TestAProvisionPassGetsASinkAndABase(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	pass := &recordingPass{}
+	status, _ := s.withPass(t, pass)
+	s.seedGitHub(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/provision", `{}`, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
+	in, calls := pass.last()
+	if calls != 1 {
+		t.Fatalf("the pass ran %d times", calls)
+	}
+	if in.Sink == nil {
+		t.Error("the pass got no sink, so it can mint nothing")
+	}
+	if in.WebhookBase != "https://engine.example.com" {
+		t.Errorf("webhook base = %q", in.WebhookBase)
+	}
+	// And the outcome landed on the fleet row the loop reads.
+	if _, ok := status.get(integration.KindGitHub); !ok {
+		t.Error("the pass wrote no status, so the screen would not update")
+	}
+}
+
+// A CHECK IS THE SAME PASS WITH NEITHER. It answers "is it working now"
+// without the engine writing anything at the vendor.
+func TestACheckRunsTheSamePassReadOnly(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	pass := &recordingPass{}
+	s.withPass(t, pass)
+	s.seedGitHub(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/check", `{}`, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
+	in, calls := pass.last()
+	if calls != 1 {
+		t.Fatalf("the pass ran %d times", calls)
+	}
+	if in.Sink != nil || in.WebhookBase != "" {
+		t.Fatalf("a check was given permission to write: sink=%v base=%q",
+			in.Sink != nil, in.WebhookBase)
+	}
+}
+
+// A PASS IS REFUSED AGAINST A HALF-CONFIGURED INTEGRATION, naming what is
+// missing. It writes at the vendor, so running it on a guess is worse than
+// not running it.
+func TestAPassIsRefusedWhileSomethingIsOutstanding(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	pass := &recordingPass{}
+	s.withPass(t, pass)
+	// enabled, and with a secret that resolves to nothing.
+	res := s.do(t, http.MethodPatch, "/config",
+		`{"integrations":{"public_base_url":"https://engine.example.com",
+		  "github":{"enabled":true,"webhook_secret":"${GH_MISSING}"}}}`,
+		map[string]string{
+			"Content-Type": "application/merge-patch+json",
+			"X-Summary":    "half",
+		})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("seed = %d: %s", res.Code, res.Body)
+	}
+
+	got := s.do(t, http.MethodPost, "/setup/integrations/github/provision", `{}`, nil)
+	if got.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", got.Code, got.Body)
+	}
+	body := decode(t, got)
+	if body["error"] != "requirements_outstanding" {
+		t.Fatalf("error = %v", body["error"])
+	}
+	fields, _ := body["fields"].([]any)
+	if len(fields) == 0 {
+		t.Error("the refusal names nothing to fix")
+	}
+	if _, calls := pass.last(); calls != 0 {
+		t.Error("a refused pass ran anyway")
+	}
+}
+
+// WITHOUT A PUBLIC BASE A PASS REGISTERS NOTHING, so it is refused by name
+// rather than run to report success having done nothing.
+func TestAProvisionPassNeedsAPublicBase(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	pass := &recordingPass{}
+	s.withPass(t, pass)
+	res := s.do(t, http.MethodPatch, "/config",
+		`{"integrations":{"github":{"enabled":true,"webhook_secret":"${GH_SECRET}"}}}`,
+		map[string]string{
+			"Content-Type": "application/merge-patch+json", "X-Summary": "no base",
+		})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("seed = %d: %s", res.Code, res.Body)
+	}
+	if err := s.vault.Set(t.Context(), "GH_SECRET", "s", "test", "test", pinned); err != nil {
+		t.Fatal(err)
+	}
+
+	got := s.do(t, http.MethodPost, "/setup/integrations/github/provision", `{}`, nil)
+	if got.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", got.Code, got.Body)
+	}
+	if decode(t, got)["error"] != "no_public_base_url" {
+		t.Errorf("error = %v", decode(t, got)["error"])
+	}
+	if _, calls := pass.last(); calls != 0 {
+		t.Error("a pass ran with no base")
+	}
+}
+
+// A SECOND PASS IS REFUSED WHILE ONE RUNS. Minting twice is not something a
+// retry should paper over, so the second caller is told rather than queued.
+func TestASecondPassIsRefusedWhileOneRuns(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	pass := &recordingPass{release: make(chan struct{})}
+	s.withPass(t, pass)
+	s.seedGitHub(t)
+
+	done := make(chan int, 1)
+	go func() {
+		done <- s.do(t, http.MethodPost, "/setup/integrations/github/provision", `{}`, nil).Code
+	}()
+	// Wait for the first to be inside the pass.
+	for range 200 {
+		if _, calls := pass.last(); calls == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	second := s.do(t, http.MethodPost, "/setup/integrations/github/provision", `{}`, nil)
+	if second.Code != http.StatusConflict {
+		t.Fatalf("second pass = %d, want 409: %s", second.Code, second.Body)
+	}
+	if decode(t, second)["error"] != "pass_in_flight" {
+		t.Errorf("error = %v", decode(t, second)["error"])
+	}
+	close(pass.release)
+	if code := <-done; code != http.StatusOK {
+		t.Fatalf("the first pass = %d", code)
+	}
+}
+
+// A FAILED PASS IS A FACT ABOUT THE INTEGRATION, recorded as the loop records
+// one: activating, actor engine, findings dropped. Hiding it would leave the
+// screen showing the last good answer under a fresh timestamp.
+func TestAFailedPassIsRecordedAsAFault(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	pass := &recordingPass{err: errors.New("github refused the credential")}
+	status, _ := s.withPass(t, pass)
+	s.seedGitHub(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/provision", `{}`, nil)
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502: %s", res.Code, res.Body)
+	}
+	state, ok := status.get(integration.KindGitHub)
+	if !ok {
+		t.Fatal("a failed pass recorded nothing")
+	}
+	if state.Report.Phase != integration.PhaseActivating || state.Report.Actor != integration.ActorEngine {
+		t.Errorf("phase/actor = %v/%v, want the fault shape the loop writes",
+			state.Report.Phase, state.Report.Actor)
+	}
+	if state.LastError == "" {
+		t.Error("the fault carries no error")
+	}
+	if len(state.Findings) != 0 {
+		t.Error("a failed pass kept findings it never observed")
+	}
+}
+
+// A vendor with no pass says so rather than answering 404 or running nothing.
+func TestAVendorWithNoPassSaysSo(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	s.withPass(t, &recordingPass{})
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/provision", `{}`, nil)
+	if res.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", res.Code, res.Body)
+	}
+	if decode(t, res)["error"] != "not_provisionable" {
+		t.Errorf("error = %v", decode(t, res)["error"])
 	}
 }

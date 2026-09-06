@@ -71,7 +71,7 @@ var DefaultSchedule = Schedule{
 // nobody wired becomes a pass every tick against a vendor's API. Falling back
 // is the difference between a missing setting being a missing setting and it
 // being a self-inflicted rate limit.
-func (s Schedule) withDefaults() Schedule {
+func (s Schedule) WithDefaults() Schedule {
 	if s.Settled <= 0 {
 		s.Settled = DefaultSchedule.Settled
 	}
@@ -103,7 +103,7 @@ func (s Schedule) withDefaults() Schedule {
 // costs twenty minutes of waiting, while GitLab answers the same question in
 // one listing. One number would either hammer Slack or let everything else
 // drift for an hour.
-func (s Schedule) next(report Report, attempts int, settled time.Duration) time.Duration {
+func (s Schedule) Next(report Report, attempts int, settled time.Duration) time.Duration {
 	switch {
 	case report.Phase == PhaseReady:
 		if settled > 0 {

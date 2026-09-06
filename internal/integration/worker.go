@@ -198,7 +198,7 @@ func New(opts Options) (*Worker, error) {
 	}
 	return &Worker{
 		byKind: byKind, order: order, store: opts.Store,
-		schedule: opts.Schedule.withDefaults(), claim: opts.ClaimDuty,
+		schedule: opts.Schedule.WithDefaults(), claim: opts.ClaimDuty,
 		interval: interval, now: now,
 	}, nil
 }
@@ -331,50 +331,23 @@ func (w *Worker) reconcile(ctx context.Context, kind Kind, state State, now time
 	reg := w.byKind[kind]
 	findings, err := reg.Reconciler.Reconcile(ctx)
 
-	state.Kind = kind
-	state.LastAttemptAt = now
-
+	// THE FOLD IS integration.Observe, shared with the pass an operator
+	// runs from the dashboard: a status row must not depend on which
+	// surface produced it.
+	state, forget := Observe(state, kind, findings, err, now)
 	switch {
-	case errors.Is(err, ErrNotConfigured):
-		// The block left the company document between this pass being
-		// scheduled and it running. Forgotten rather than recorded: a
-		// status for a surface nobody configured would sit in the fleet
-		// view describing an integration that is gone.
+	case forget:
 		if err := w.store.ForgetIntegration(ctx, kind); err != nil {
 			log.WarnContext(ctx, "integration_status_not_forgotten",
 				"integration", kind.String(), "error", err)
 		}
 		return
 	case err != nil:
-		// A FAULT IS A WAIT. Almost every one is a vendor briefly
-		// unreachable, and none of the rest is fixed by giving up. The
-		// findings are dropped rather than kept: a pass that failed did
-		// not observe the world, and rendering a previous pass's
-		// observations under this pass's timestamp would age a stale
-		// answer into a current one.
-		state.Report = Report{
-			Phase: PhaseActivating, Actor: ActorEngine,
-			Detail: "the last pass could not read this integration",
-		}
-		state.Findings = nil
-		state.Attempts++
-		state.LastError = truncateError(err.Error())
 		log.WarnContext(ctx, "integration_reconcile_failed",
 			"integration", kind.String(), "attempts", state.Attempts, "error", err)
-	default:
-		state.Report = Classify(findings)
-		state.Findings = findings
-		state.LastError = ""
-		if state.Report.Phase == PhaseReady {
-			state.Attempts = 0
-			state.SettledAt = now
-		} else {
-			state.Attempts++
-		}
 	}
 
-	state.Outcome = state.Report.Outcome()
-	state.NextAttemptAt = now.Add(w.schedule.next(state.Report, state.Attempts, reg.Settled))
+	state.NextAttemptAt = now.Add(w.schedule.Next(state.Report, state.Attempts, reg.Settled))
 
 	if err := w.store.SaveIntegration(ctx, state); err != nil {
 		// The pass still happened, and its work at the vendor is durable.

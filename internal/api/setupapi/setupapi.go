@@ -34,8 +34,10 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -80,6 +82,18 @@ type Options struct {
 	// then answers `resolved: null` rather than claiming false.
 	Resolve func(string) (string, bool)
 
+	// Passes are the vendors this build can provision over the API. Nil
+	// serves the three pass routes as "not provisionable", which is the
+	// honest answer on a node with no secret store to mint into.
+	Passes *setup.Runner
+
+	// Sink builds the recorder a pass writes minted credentials through.
+	Sink func(operator string) (provision.TokenSink, error)
+
+	// Status is where a pass records what it found: the SAME fleet row the
+	// reconcile loop writes, so the two cannot disagree.
+	Status Status
+
 	// Now is injectable so a test can pin a secret row's timestamp.
 	Now func() time.Time
 }
@@ -91,6 +105,10 @@ type Service struct {
 	writer  setup.Writer
 	resolve func(string) (string, bool)
 	secrets setup.Secrets
+	passes  *setup.Runner
+	sink    sinkFactory
+	status  Status
+	clock   func() time.Time
 }
 
 // New builds the service, or nil when this process has no company to set up.
@@ -103,6 +121,10 @@ func New(opts Options) *Service {
 		config:  opts.Config,
 		resolve: opts.Resolve,
 		secrets: opts.Secrets,
+		passes:  opts.Passes,
+		sink:    opts.Sink,
+		status:  opts.Status,
+		clock:   opts.Now,
 		writer: setup.Writer{
 			Secrets: opts.Secrets,
 			Config:  configWriter{opts.Config},
@@ -122,6 +144,11 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /setup/integrations/{kind}", s.one)
 	mux.HandleFunc("POST /setup/integrations/{kind}/inputs", s.inputs)
 	mux.HandleFunc("DELETE /setup/integrations/{kind}", s.disconnect)
+	// The two that RUN something at the vendor, and the read that follows
+	// one. See pass.go for why check and provision are one function.
+	mux.HandleFunc("POST /setup/integrations/{kind}/provision", s.provision)
+	mux.HandleFunc("POST /setup/integrations/{kind}/check", s.check)
+	mux.HandleFunc("GET /setup/integrations/{kind}/runs/{id}", s.runByID)
 }
 
 // configWriter adapts the config surface to what setup.Writer needs.
@@ -172,6 +199,15 @@ type ToolState struct {
 	// when the surface has no inbound route, or when no base is set.
 	InboundPath string `json:"inbound_path,omitempty"`
 	PublicURL   string `json:"public_url,omitempty"`
+
+	// CanProvision reports that this build runs a provisioning pass for
+	// this vendor, so the screen offers the button rather than discovering
+	// on a press that there is nothing behind it.
+	CanProvision bool `json:"can_provision"`
+
+	// NeedsOperator is the transient vendor administrator credential the
+	// pass asks for on every run, or null. Never stored.
+	NeedsOperator *setup.Requirement `json:"needs_operator,omitempty"`
 }
 
 // list serves GET /setup/integrations.
@@ -242,14 +278,21 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		reqs = datadog.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
+	case integration.KindGitHub:
+		block := company.Integrations.GitHub
+		reqs = github.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
 	default:
 		return ToolState{}, false
 	}
 	state := ToolState{
 		Kind: kind, Configured: configured, Enabled: enabled,
-		Requirements: reqs,
-		Satisfied:    len(setup.Outstanding(reqs)) == 0,
-		InboundPath:  inboundPath(kind),
+		Requirements:  reqs,
+		Satisfied:     len(setup.Outstanding(reqs)) == 0,
+		InboundPath:   inboundPath(kind),
+		CanProvision:  s.passes.Serves(kind),
+		NeedsOperator: s.passes.Needs(kind),
 	}
 	if base := company.Integrations.WebhookBase(); base != "" && state.InboundPath != "" {
 		state.PublicURL = base + state.InboundPath
@@ -266,6 +309,8 @@ func inboundPath(kind integration.Kind) string {
 	switch kind {
 	case integration.KindDatadog:
 		return "/webhooks/datadog"
+	case integration.KindGitHub:
+		return "/webhooks/github"
 	default:
 		return ""
 	}

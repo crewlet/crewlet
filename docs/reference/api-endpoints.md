@@ -244,6 +244,9 @@ by a process that can reach the [coordination store](../concepts/coordination.md
 | `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state |
 | `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
 | `DELETE` | `/setup/integrations/{kind}` | Remove the integration's block, naming the secrets it leaves behind |
+| `POST` | `/setup/integrations/{kind}/provision` | Run the vendor's provisioning pass: mint what it needs, register its webhook |
+| `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the vendor took |
+| `GET` | `/setup/integrations/{kind}/runs/{id}` | One pass, as the node that executed it remembers it |
 | `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` and `source`. **Never a value** |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator |
@@ -458,6 +461,48 @@ Answers `201 {"revision_id", "epoch", "wrote_secrets", "reloaded", "state"}`.
 Refusals: `400 invalid_input`, `400 validation_error`, `404 unknown_kind`,
 `409 revision_advanced`, `409 literal_in_config`, `409 no_active_revision`,
 `503 no_control_plane`, `503 no_keyring`.
+
+### Running the provisioning pass
+
+Some vendors need something done *at* them, not just written down: a webhook
+registered, a signing secret minted and pushed. That is the vendor's
+provisioning pass, and `POST /setup/integrations/{kind}/provision` is what
+runs it.
+
+**The reconcile loop deliberately cannot do this.** It runs the same vendor
+function every few minutes with no sink and no public base, and those two
+absences are what make it safe unattended: a base is permission to register a
+webhook, and a sink is permission to mint a credential. This route supplies
+both, because a person asked for it.
+
+`can_provision` on a tool's state says whether this build has a pass for it.
+`needs_operator`, when present, is a transient vendor administrator credential
+the pass asks for on every run: it is never stored, never logged, and dropped
+the moment the pass returns, because a one-time grant held permanently is a
+standing power.
+
+Refusals worth knowing: `409 requirements_outstanding` names the fields still
+missing (a pass writes at the vendor and must not run against a
+half-configured integration), `409 no_public_base_url` when nothing has told
+the engine what address vendors reach it on, and `409 pass_in_flight` when
+another pass for the same vendor is already running. That last one is a
+refusal rather than a queue on purpose: minting twice is not something a retry
+should paper over.
+
+`POST /setup/integrations/{kind}/check` runs the **same pass with neither**,
+which makes it read-only. It is what answers "did what I just fixed at the
+vendor take" without the engine writing anything.
+
+Both record their outcome on the same fleet integration status the reconcile
+loop writes, through the same fold, so a pass run by hand and a tick that runs
+a minute later cannot disagree, and the Integrations screen updates with no
+extra plumbing. A pass that **failed** is recorded too, as the loop records
+one: phase `activating`, actor `engine`, findings dropped, because a pass that
+failed did not observe anything.
+
+`recreate_webhooks` re-registers with a fresh secret and is **destructive
+across deployments**: the previous secret stops working everywhere else this
+company runs.
 
 ### Disconnecting
 

@@ -13,8 +13,8 @@ func TestNextTurnsOnTheActor(t *testing.T) {
 	degradedAdmin := Report{Phase: PhaseDegraded, Actor: ActorAdmin}
 	degradedOperator := Report{Phase: PhaseDegraded, Actor: ActorOperator}
 
-	admin := s.next(degradedAdmin, 1, 0)
-	operator := s.next(degradedOperator, 1, 0)
+	admin := s.Next(degradedAdmin, 1, 0)
+	operator := s.Next(degradedOperator, 1, 0)
 	if admin != s.AdminBase {
 		t.Fatalf("a first admin wait is %s, want %s", admin, s.AdminBase)
 	}
@@ -34,7 +34,7 @@ func TestOperatorWaitDoesNotBackOff(t *testing.T) {
 	s := DefaultSchedule
 	report := Report{Phase: PhaseUnconfigured, Actor: ActorOperator}
 	for _, attempts := range []int{1, 2, 10, 1000} {
-		if got := s.next(report, attempts, 0); got != s.Operator {
+		if got := s.Next(report, attempts, 0); got != s.Operator {
 			t.Fatalf("after %d attempts the operator wait is %s, want %s",
 				attempts, got, s.Operator)
 		}
@@ -50,7 +50,7 @@ func TestAdminWaitDoublesAndCaps(t *testing.T) {
 
 	var previous time.Duration
 	for attempts := 1; attempts <= 20; attempts++ {
-		got := s.next(report, attempts, 0)
+		got := s.Next(report, attempts, 0)
 		if got <= 0 {
 			t.Fatalf("attempt %d produced a wait of %s, which every caller "+
 				"reads as already due", attempts, got)
@@ -105,17 +105,17 @@ func TestSettledOverrideAppliesOnlyWhenReady(t *testing.T) {
 	s := DefaultSchedule
 	const slack = 2 * time.Hour
 
-	if got := s.next(Ready(), 0, slack); got != slack {
+	if got := s.Next(Ready(), 0, slack); got != slack {
 		t.Fatalf("a settled surface waited %s, want its own %s", got, slack)
 	}
-	if got := s.next(Ready(), 0, 0); got != s.Settled {
+	if got := s.Next(Ready(), 0, 0); got != s.Settled {
 		t.Fatalf("a surface with no override waited %s, want the shared %s", got, s.Settled)
 	}
 	// The override is a SETTLED interval. A surface that is waiting on the
 	// vendor must not inherit it, or a rate-limited vendor would also be
 	// the slowest one to finish provisioning.
 	working := Report{Phase: PhaseProvisioning, Actor: ActorEngine}
-	if got := s.next(working, 1, slack); got != s.WaitingBase {
+	if got := s.Next(working, 1, slack); got != s.WaitingBase {
 		t.Fatalf("a provisioning surface waited %s, want the %s waiting base",
 			got, s.WaitingBase)
 	}
@@ -124,12 +124,12 @@ func TestSettledOverrideAppliesOnlyWhenReady(t *testing.T) {
 // A zero duration means "look again immediately", so a schedule nobody wired
 // would be a pass every tick against every vendor's API.
 func TestWithDefaultsFillsEveryField(t *testing.T) {
-	got := Schedule{}.withDefaults()
+	got := Schedule{}.WithDefaults()
 	if got != DefaultSchedule {
 		t.Fatalf("an empty schedule filled to %+v, want %+v", got, DefaultSchedule)
 	}
 	// A value somebody set is kept.
-	custom := Schedule{Settled: time.Minute}.withDefaults()
+	custom := Schedule{Settled: time.Minute}.WithDefaults()
 	if custom.Settled != time.Minute {
 		t.Fatalf("a set Settled became %s", custom.Settled)
 	}

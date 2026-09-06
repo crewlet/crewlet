@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -115,4 +116,56 @@ type Store interface {
 	// somebody types the vendor subcommand's decommission flag and reads
 	// what it is about to delete. See this package's doc.
 	ForgetIntegration(ctx context.Context, kind Kind) error
+}
+
+// Observe folds one pass's outcome into a state.
+//
+// THE SAME RULE WHATEVER RAN THE PASS. The loop's tick and an operator
+// pressing a button in the dashboard are the same event as far as this record
+// is concerned, and two callers writing it two ways is how a status row
+// starts disagreeing with the surface that produced it. So the three
+// outcomes, and what each does to the record, live here rather than inside
+// the worker's loop.
+//
+// forget reports [ErrNotConfigured]: the block left the company document, so
+// the row is removed rather than recorded. A status for a surface nobody
+// configured would sit in a fleet view describing an integration that is
+// gone.
+//
+// The caller sets NextAttemptAt, through [Schedule.Next], because the cadence
+// is the loop's business and a pass run by hand does not change it.
+func Observe(state State, kind Kind, findings []Finding, err error, now time.Time) (next State, forget bool) {
+	state.Kind = kind
+	state.LastAttemptAt = now
+
+	switch {
+	case errors.Is(err, ErrNotConfigured):
+		return state, true
+	case err != nil:
+		// A FAULT IS A WAIT. Almost every one is a vendor briefly
+		// unreachable, and none of the rest is fixed by giving up. The
+		// findings are DROPPED rather than kept: a pass that failed did
+		// not observe the world, and rendering a previous pass's
+		// observations under this pass's timestamp would age a stale
+		// answer into a current one.
+		state.Report = Report{
+			Phase: PhaseActivating, Actor: ActorEngine,
+			Detail: "the last pass could not read this integration",
+		}
+		state.Findings = nil
+		state.Attempts++
+		state.LastError = truncateError(err.Error())
+	default:
+		state.Report = Classify(findings)
+		state.Findings = findings
+		state.LastError = ""
+		if state.Report.Phase == PhaseReady {
+			state.Attempts = 0
+			state.SettledAt = now
+		} else {
+			state.Attempts++
+		}
+	}
+	state.Outcome = state.Report.Outcome()
+	return state, false
 }

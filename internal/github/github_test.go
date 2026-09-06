@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -1570,5 +1571,36 @@ func TestOnlyAnAskAddressesTheSeat(t *testing.T) {
 		if addressed(reason) {
 			t.Errorf("%q addresses the seat and is news about a thread it follows", reason)
 		}
+	}
+}
+
+// A MISSING ORG CREDENTIAL IS A FINDING, NOT A FAULT.
+//
+// The token is optional on this host and its absence is a documented
+// degradation: fan-out is off and a thread's watchers hear nothing. Refusing
+// the run instead made the loop record "the last pass could not read this
+// integration", which sends an operator looking for an outage rather than for
+// an unset variable, and left the credential_missing branch of Findings
+// unreachable from the loop that needs it most.
+func TestAPassWithNoOrgCredentialReportsItRatherThanFailing(t *testing.T) {
+	t.Parallel()
+	res, err := github.Reconcile(t.Context(), github.Options{
+		Config: &config.GitHub{Enabled: true},
+	})
+	if err != nil {
+		t.Fatalf("a pass with no credential failed: %v", err)
+	}
+	if res == nil {
+		t.Fatal("no result")
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingCredentialMissing {
+		t.Fatalf("findings = %+v, want one credential_missing", findings)
+	}
+	// And it says nothing about ingress or identity, because it read
+	// neither: a run with no credential that claimed a webhook was missing
+	// would be reporting on something it never looked at.
+	if res.Login != "" || len(res.Seats) != 0 || len(res.Hooks) != 0 {
+		t.Errorf("a credential-less run reported %+v", res)
 	}
 }

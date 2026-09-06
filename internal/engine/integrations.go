@@ -111,14 +111,27 @@ func (e *Engine) Integrations() *integration.Worker { return e.integrations }
 // not the node that holds the duty, because an operator running
 // `-roles ingress` has put the API and the seats on separate hosts.
 func (e *Engine) IntegrationStates(ctx context.Context) ([]integration.State, error) {
-	if e.backends == nil || e.backends.Fleet == nil {
-		return nil, nil
-	}
-	store, err := integration.NewCoordStore(e.backends.Fleet)
-	if err != nil {
+	store, err := e.IntegrationStore()
+	if err != nil || store == nil {
 		return nil, err
 	}
 	return store.LoadIntegrations(ctx)
+}
+
+// IntegrationStore is the fleet row every pass writes its findings to.
+//
+// Exported because a pass an operator runs from the dashboard writes the SAME
+// row the reconcile loop writes, and a second store built beside it would let
+// the two disagree about an integration's state depending on which surface
+// last touched it.
+//
+// Nil with no error is a node with no coordination store: there is nowhere
+// for a status to live, which is a real posture rather than a failure.
+func (e *Engine) IntegrationStore() (*integration.CoordStore, error) {
+	if e.backends == nil || e.backends.Fleet == nil {
+		return nil, nil
+	}
+	return integration.NewCoordStore(e.backends.Fleet)
 }
 
 // stopIntegrations ends the loop, waiting for a pass in flight.
@@ -227,8 +240,8 @@ func (c *githubConverger) Reconcile(ctx context.Context) ([]integration.Finding,
 //
 // The org token is OPTIONAL on this host, and its absence is a documented
 // degradation rather than a failure, so a nil client is a valid thing to hand
-// the pass: it then reports every seat's identity and no organization-level
-// finding.
+// the pass: it reports credential_missing and reads nothing, which is what an
+// operator needs to see and not the fault this used to produce.
 func githubReconcileClient(cfg *config.GitHub, env *config.Resolver) (*github.Client, error) {
 	token := strings.TrimSpace(env.Value(cfg.Token))
 	if token == "" {
