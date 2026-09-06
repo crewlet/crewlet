@@ -299,10 +299,27 @@ func TestVerifiableNamesWhatCouldActuallyAcceptADelivery(t *testing.T) {
 			[]string{"confluence", "forge", "github", "jira"},
 		},
 		{
-			// Mattermost holds a websocket rather than a route, and Slack's
-			// material is per seat. Neither is a delivery this can verify.
+			// Mattermost holds a websocket rather than a route: there is no
+			// delivery to verify, and its absence here is "nothing to say".
 			"a chat surface with no route to verify",
-			webhooks.Secrets{Slack: map[string]string{"ceo": "s"}},
+			webhooks.Secrets{},
+			nil,
+		},
+		{
+			// SLACK IS PER SEAT AND STILL A ROUTE. One seat whose signing
+			// secret resolved means a delivery addressed to that seat would
+			// be accepted, which is the question this answers. Leaving it
+			// out told every working Slack company its deliveries were
+			// being refused.
+			"one slack seat whose signing secret resolved",
+			webhooks.Secrets{Slack: map[string]string{"ceo": "s", "cto": ""}},
+			[]string{"slack"},
+		},
+		{
+			// And a map of seats that all hold an unresolved reference
+			// verifies nothing, exactly as an unresolved GitLab key does.
+			"slack seats whose secrets did not resolve",
+			webhooks.Secrets{Slack: map[string]string{"ceo": "", "cto": ""}},
 			nil,
 		},
 	} {

@@ -1167,10 +1167,20 @@ a route refusing every delivery while the config shows a secret and the
 vendor's settings page shows a healthy hook — with nothing anywhere naming the
 variable. For GitLab the bar is higher than non-empty: the value must be
 `whsec_` over standard base64 of a 32-byte key, the only shape the vendor
-signs with. `null` means this process cannot say — a standalone API has no
-engine whose resolution to read — or the surface has no secret to resolve.
+signs with. For Slack, whose material is one signing secret per seat, it is
+lower: **one** seat whose secret resolved makes the surface usable, because a
+delivery addressed to that seat's path would be accepted, and a seat whose own
+secret is unresolved is reported by that seat's identity finding rather than by
+the whole surface. `null` means this process cannot say — a standalone API has
+no engine whose resolution to read — or the surface has no secret to resolve.
 
 Only the booleans are ever returned; no secret value leaves the process.
+
+`seats` lists the agents carrying their **own** identity on that surface — a
+Slack app, a Mattermost bot, a per-seat project or space — wherever they sit in
+the hierarchy. A seat in a unit is a seat: the list walks the whole tree, not
+just the top-level `roles:` block, which is by definition the seats belonging to
+no unit.
 
 `routes` is the third of the same family: whether a **verified** delivery
 would wake a seat. The three fail independently, and an operator staring at a

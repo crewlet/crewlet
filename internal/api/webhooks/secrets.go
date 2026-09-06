@@ -64,8 +64,18 @@ type Secrets struct {
 // The rule is per surface and it is the ROUTE's own: GitLab needs a key the
 // vendor could have signed with, not merely a non-empty string, because a
 // value that is not one cannot be the HMAC key for any delivery. Mattermost
-// is absent by design — it holds a websocket rather than a route, so there is
-// no delivery to verify — and so is Slack, whose material is per seat.
+// is absent by design: it holds a websocket rather than a route, so there is
+// no delivery to verify at all, and the operator surface reads its absence
+// here as "nothing to say" rather than as a refusal.
+//
+// SLACK IS PER SEAT, and it belongs here on the same question every other
+// surface answers: would a real delivery be accepted right now. It is
+// verifiable when AT LEAST ONE seat's signing secret resolved, because a
+// delivery addressed to that seat's path would be. Leaving it out did not
+// read as "nothing to say" the way Mattermost's absence does, because the
+// company row does carry a secret_present for Slack: so secret_usable was
+// false for every Slack company that had ever worked, and the dashboard told
+// each of them that every delivery was being refused.
 func (s Secrets) Verifiable() []string {
 	var out []string
 	if whsec.Valid(s.GitLab) {
@@ -88,6 +98,16 @@ func (s Secrets) Verifiable() []string {
 	} {
 		if pair.secret != "" {
 			out = append(out, pair.kind)
+		}
+	}
+	// One seat is enough. A company with ten Slack apps and one unresolved
+	// ${VAR} is not a company whose Slack is unverifiable; it is one seat
+	// whose deliveries are refused, and that is what the per-seat
+	// identity findings are for.
+	for _, secret := range s.Slack {
+		if secret != "" {
+			out = append(out, "slack")
+			break
 		}
 	}
 	slices.Sort(out)
