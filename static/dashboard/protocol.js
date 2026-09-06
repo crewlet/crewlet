@@ -653,4 +653,111 @@ var LiveSocket = class {
 	}
 };
 //#endregion
-export { LiveSocket, MAX_EVENTS, Store, api, apiToken, clearToken, onTokenRequested, requestToken, storeToken };
+//#region src/protocol/rest.ts
+/**
+* The dashboard's one REST transport: every write, and the guarded reads the
+* socket has no question for.
+*
+* The socket remains the data channel for state. This is not a second one: it
+* carries the requests that are not questions about state at all. Writes never
+* go over the socket, deliberately — its token rides the query string on the
+* handshake, and a channel whose credential appears in a proxy log is not
+* where a credential-bearing write belongs (see internal/api/auth's own note
+* on that). And a handful of reads exist only as REST, `GET /secrets` above
+* all, because no query in the registry answers them.
+*
+* ONE MODULE, for the reason `api.ts` states about itself: a screen reaching
+* for its own transport takes its client from somewhere, and the somewhere the
+* Fleet screen chose was a context field the shell never populated, so it
+* shipped dead. Everything here is a plain function over `fetch` against
+* `location.origin`, which is where the dashboard is served from and the only
+* origin the engine answers on (it writes no CORS header at all).
+*
+* Every call carries the operator bearer token. The engine guards `/config`,
+* `/secrets` and `/setup` in full, reads included, whatever the anonymous-read
+* posture is, so a call with no token is refused rather than silently served.
+*/
+/**
+* What the engine said when it refused.
+*
+* `status` alone is not enough to act on: the setup surface distinguishes a
+* revision that moved under the caller from a config slot holding a literal
+* from a fleet with no keyring, and all three are a 409 or a 503. The engine
+* answers those with a `code`, and the screen branches on it.
+*/
+var RestError = class extends Error {
+	status;
+	code;
+	detail;
+	hint;
+	/** Everything else the body carried, for a caller that needs a field. */
+	body;
+	constructor(status, body) {
+		const code = typeof body.error === "string" ? body.error : "";
+		const detail = typeof body.detail === "string" ? body.detail : "";
+		super(detail || code || `HTTP ${status}`);
+		this.name = "RestError";
+		this.status = status;
+		this.code = code;
+		this.detail = detail;
+		this.hint = typeof body.hint === "string" ? body.hint : "";
+		this.body = body;
+	}
+	/** Whether the engine refused the credential rather than the request. */
+	get unauthorized() {
+		return this.status === 401 || this.status === 403;
+	}
+};
+/**
+* A refusal that never reached the engine: DNS, a dropped connection, a proxy
+* answering HTML. Status 0, so a caller testing `status === 409` cannot
+* mistake it for an answer.
+*/
+function offline(err) {
+	return new RestError(0, {
+		error: "unreachable",
+		detail: err instanceof Error ? err.message : "the engine could not be reached"
+	});
+}
+async function send(method, path, body, headers = {}) {
+	const token = apiToken();
+	const init = {
+		method,
+		headers: {
+			...token ? { Authorization: "Bearer " + token } : {},
+			...body === void 0 ? {} : { "Content-Type": "application/json" },
+			...headers
+		},
+		...body === void 0 ? {} : { body: JSON.stringify(body) }
+	};
+	let response;
+	try {
+		response = await fetch(location.origin + path, init);
+	} catch (err) {
+		throw offline(err);
+	}
+	const text = await response.text().catch(() => "");
+	let parsed = null;
+	if (text !== "") try {
+		parsed = JSON.parse(text);
+	} catch {
+		throw new RestError(response.ok ? 502 : response.status, {
+			error: "unreadable_body",
+			detail: "the engine answered something that is not JSON"
+		});
+	}
+	if (!response.ok) {
+		const body = parsed && typeof parsed === "object" ? parsed : {};
+		throw new RestError(response.status, body);
+	}
+	return parsed;
+}
+var rest = {
+	get: (path) => send("GET", path),
+	post: (path, body, headers) => send("POST", path, body ?? {}, headers),
+	put: (path, body, headers) => send("PUT", path, body ?? {}, headers),
+	patch: (path, body, headers) => send("PATCH", path, body ?? {}, headers),
+	del: (path, headers) => send("DELETE", path, void 0, headers)
+};
+//#endregion
+export { LiveSocket, MAX_EVENTS, RestError, Store, api, apiToken, clearToken, onTokenRequested, requestToken, rest, storeToken };
