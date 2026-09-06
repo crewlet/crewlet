@@ -1,6 +1,7 @@
 package kv
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -19,7 +20,7 @@ import (
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why ELEVEN buckets and not one
+// # Why TWELVE buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -54,6 +55,12 @@ import (
 //	           actively dangerous: a credential is not short-horizon state,
 //	           and a bucket that expired one would de-authenticate a
 //	           company on a timer nobody set
+//	integrations
+//	           none at all, for the budget counter's reason: an
+//	           integration's reconcile status is standing state, and one
+//	           that expired would make a converged surface read as one
+//	           nobody has looked at, sending the loop to re-provision
+//	           against a vendor it had already agreed with
 //
 // Putting two of those in one bucket would give one of them the other's
 // retention, and every such mistake is silent — a cooldown that expired in a
@@ -68,18 +75,19 @@ import (
 // different revisions rather than racing over a counter this engine keeps.
 
 const (
-	rateSuffix     = "_rate"
-	claimsSuffix   = "_claims"
-	ledgerSuffix   = "_ledger"
-	cooldownSuffix = "_cooldowns"
-	statusSuffix   = "_status"
-	configSuffix   = "_config"
-	budgetSuffix   = "_budgets"
-	channelSuffix  = "_channels"
-	firesSuffix    = "_fires"
-	runsSuffix     = "_sandbox_runs"
-	secretsSuffix  = "_secrets"
-	activationKey  = "activation"
+	rateSuffix         = "_rate"
+	claimsSuffix       = "_claims"
+	ledgerSuffix       = "_ledger"
+	cooldownSuffix     = "_cooldowns"
+	statusSuffix       = "_status"
+	configSuffix       = "_config"
+	budgetSuffix       = "_budgets"
+	channelSuffix      = "_channels"
+	firesSuffix        = "_fires"
+	runsSuffix         = "_sandbox_runs"
+	secretsSuffix      = "_secrets"
+	integrationsSuffix = "_integrations"
+	activationKey      = "activation"
 	// payloadKey holds the CURRENT revision's sealed body, in the same
 	// bucket as the pointer and for the same reason: neither may expire,
 	// and a payload in a bucket the pointer is not in could age out from
@@ -91,7 +99,7 @@ const (
 // FleetConfig is what a [FleetStore] needs at construction. Every duration is
 // a BUCKET's retention; see the file doc for why each is its own bucket.
 type FleetConfig struct {
-	// BucketPrefix names the eleven buckets. Empty means "crewlet", matching
+	// BucketPrefix names the twelve buckets. Empty means "crewlet", matching
 	// the lease store — two companies on one NATS account are separated by
 	// giving them different prefixes.
 	BucketPrefix string
@@ -170,17 +178,18 @@ func (c *FleetConfig) normalize() error {
 
 // FleetStore is the JetStream KV [coord.Fleet].
 type FleetStore struct {
-	rate      jetstream.KeyValue
-	claims    jetstream.KeyValue
-	ledger    jetstream.KeyValue
-	cooldowns jetstream.KeyValue
-	status    jetstream.KeyValue
-	config    jetstream.KeyValue
-	budgets   jetstream.KeyValue
-	channels  jetstream.KeyValue
-	secrets   jetstream.KeyValue
-	fires     jetstream.KeyValue
-	runs      jetstream.KeyValue
+	rate         jetstream.KeyValue
+	claims       jetstream.KeyValue
+	ledger       jetstream.KeyValue
+	cooldowns    jetstream.KeyValue
+	status       jetstream.KeyValue
+	config       jetstream.KeyValue
+	budgets      jetstream.KeyValue
+	channels     jetstream.KeyValue
+	secrets      jetstream.KeyValue
+	fires        jetstream.KeyValue
+	runs         jetstream.KeyValue
+	integrations jetstream.KeyValue
 
 	rateWindow time.Duration
 	freshness  time.Duration
@@ -188,7 +197,7 @@ type FleetStore struct {
 
 var _ coord.Fleet = (*FleetStore)(nil)
 
-// OpenFleet creates or adopts the eleven buckets and returns the backend.
+// OpenFleet creates or adopts the twelve buckets and returns the backend.
 //
 // Idempotent and safe to call from every node at once, like [Open]: creating
 // a bucket that already exists with the same shape is a no-op, and a changed
@@ -251,6 +260,8 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0},
 		{&store.secrets, secretsSuffix,
 			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0},
+		{&store.integrations, integrationsSuffix,
+			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0},
 	} {
 		got, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {
@@ -1473,4 +1484,65 @@ func (f *FleetStore) DeleteSandboxRun(ctx context.Context, turnID string, versio
 	default:
 		return false, unavailable("delete the sandbox run", err)
 	}
+}
+
+// ---- the integration reconcile status ---------------------------------- //
+
+// IntegrationStatuses returns every recorded status, keyed by surface.
+func (f *FleetStore) IntegrationStatuses(ctx context.Context) (map[string][]byte, error) {
+	keys, err := f.integrations.ListKeys(ctx)
+	if err != nil {
+		return nil, unavailable("list the integration statuses", err)
+	}
+	out := map[string][]byte{}
+	for key := range keys.Keys() {
+		entry, err := f.integrations.Get(ctx, key)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			// Deleted between the listing and the read, which is the
+			// reconcile loop forgetting a surface whose block has just
+			// left the company document. Skipped rather than raised: it
+			// is the outcome the caller wanted.
+			continue
+		}
+		if err != nil {
+			return nil, unavailable("read an integration status", err)
+		}
+		kind, ok := decodeKey(key)
+		if !ok {
+			// A key this backend did not write. Skipped rather than
+			// guessed at, exactly as the fleet listing does: inventing a
+			// surface name would put a row nothing reconciles into an
+			// operator's status page.
+			continue
+		}
+		// COPIED. The entry's buffer belongs to the client and the caller
+		// keeps this past the loop iteration.
+		out[kind] = bytes.Clone(entry.Value())
+	}
+	return out, nil
+}
+
+// PutIntegrationStatus records one surface's status.
+func (f *FleetStore) PutIntegrationStatus(ctx context.Context, kind string, value []byte) error {
+	if kind == "" {
+		return errors.New("coord/kv: an integration status needs a surface name")
+	}
+	if _, err := f.integrations.Put(ctx, encodeKey(kind), value); err != nil {
+		return unavailable("record the integration status", err)
+	}
+	return nil
+}
+
+// DeleteIntegrationStatus drops a surface's status.
+//
+// Purge rather than Delete, matching the sandbox runs above: a Delete leaves a
+// tombstone revision, and a bucket with no TTL keeps every one of them for the
+// life of the deployment. A surface an operator adds and removes a few times
+// while wiring a company would otherwise accumulate history nothing reads.
+func (f *FleetStore) DeleteIntegrationStatus(ctx context.Context, kind string) error {
+	err := f.integrations.Purge(ctx, encodeKey(kind))
+	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return unavailable("delete the integration status", err)
+	}
+	return nil
 }

@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -29,16 +30,17 @@ import (
 type Fleet struct {
 	mu sync.Mutex
 
-	windows   map[windowKey]int
-	claims    map[string]time.Time
-	worked    map[string]workedEntry
-	cooldowns map[string]time.Time
-	applies   map[string]coord.NodeApply
-	budgets   map[string]coord.Usage
-	channels  map[string]coord.Channel
-	fires     map[string]time.Time
-	runs      map[string]coord.Record
-	secrets   map[string]coord.SecretRecord
+	windows      map[windowKey]int
+	claims       map[string]time.Time
+	worked       map[string]workedEntry
+	cooldowns    map[string]time.Time
+	applies      map[string]coord.NodeApply
+	budgets      map[string]coord.Usage
+	channels     map[string]coord.Channel
+	fires        map[string]time.Time
+	runs         map[string]coord.Record
+	secrets      map[string]coord.SecretRecord
+	integrations map[string][]byte
 
 	epoch   int64
 	target  coord.Activation
@@ -61,16 +63,17 @@ var _ coord.Fleet = (*Fleet)(nil)
 // NewFleet returns an empty twin.
 func NewFleet() *Fleet {
 	return &Fleet{
-		windows:   map[windowKey]int{},
-		claims:    map[string]time.Time{},
-		worked:    map[string]workedEntry{},
-		cooldowns: map[string]time.Time{},
-		applies:   map[string]coord.NodeApply{},
-		budgets:   map[string]coord.Usage{},
-		channels:  map[string]coord.Channel{},
-		fires:     map[string]time.Time{},
-		runs:      map[string]coord.Record{},
-		secrets:   map[string]coord.SecretRecord{},
+		windows:      map[windowKey]int{},
+		claims:       map[string]time.Time{},
+		worked:       map[string]workedEntry{},
+		cooldowns:    map[string]time.Time{},
+		applies:      map[string]coord.NodeApply{},
+		budgets:      map[string]coord.Usage{},
+		channels:     map[string]coord.Channel{},
+		fires:        map[string]time.Time{},
+		runs:         map[string]coord.Record{},
+		secrets:      map[string]coord.SecretRecord{},
+		integrations: map[string][]byte{},
 	}
 }
 
@@ -646,4 +649,42 @@ func (f *Fleet) DeleteSecret(_ context.Context, name string) (bool, error) {
 	}
 	delete(f.secrets, name)
 	return true, nil
+}
+
+// ---- the integration reconcile status ---------------------------------- //
+
+// IntegrationStatuses returns every recorded status, keyed by surface.
+func (f *Fleet) IntegrationStatuses(context.Context) (map[string][]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string][]byte, len(f.integrations))
+	for kind, value := range f.integrations {
+		// CLONED on the way out, as on the way in. A caller handed the
+		// stored slice could mutate what the next reader sees, which the
+		// KV backend makes impossible and a twin has to model rather than
+		// merely usually get away with.
+		out[kind] = bytes.Clone(value)
+	}
+	return out, nil
+}
+
+// PutIntegrationStatus records one surface's status.
+func (f *Fleet) PutIntegrationStatus(_ context.Context, kind string, value []byte) error {
+	if kind == "" {
+		return errors.New("coord/memory: an integration status needs a surface name")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.integrations[kind] = bytes.Clone(value)
+	return nil
+}
+
+// DeleteIntegrationStatus drops a surface's status. Deleting one that is not
+// there is the outcome asked for rather than an error, matching the KV
+// backend's purge of an absent key.
+func (f *Fleet) DeleteIntegrationStatus(_ context.Context, kind string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.integrations, kind)
+	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -43,6 +44,7 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) coord.Fleet) {
 		{"fires", fireCases},
 		{"sandbox_runs", runCases},
 		{"secrets", secretCases},
+		{"integrations", integrationCases},
 	}
 	for _, g := range groups {
 		t.Run(g.name, func(t *testing.T) {
@@ -1846,3 +1848,125 @@ var secretCases = []fleetCase{{
 		}
 	},
 }}
+
+// ---- the integration reconcile status ---------------------------------- //
+
+func (h *fleetHarness) putIntegration(kind, value string) {
+	h.t.Helper()
+	if err := h.f.PutIntegrationStatus(h.ctx, kind, []byte(value)); err != nil {
+		h.t.Fatalf("PutIntegrationStatus(%q): %v", kind, err)
+	}
+}
+
+func (h *fleetHarness) integrations() map[string][]byte {
+	h.t.Helper()
+	got, err := h.f.IntegrationStatuses(h.ctx)
+	if err != nil {
+		h.t.Fatalf("IntegrationStatuses: %v", err)
+	}
+	return got
+}
+
+func (h *fleetHarness) integrationNames() []string {
+	h.t.Helper()
+	names := slices.Collect(maps.Keys(h.integrations()))
+	slices.Sort(names)
+	return names
+}
+
+var integrationCases = []fleetCase{
+	{"a recorded status reads back byte for byte", func(h *fleetHarness) {
+		// The value is OPAQUE to this store: internal/integration
+		// marshals a phase, an actor, a sentence and a findings list into
+		// it, and a backend that re-encoded on the way through would
+		// hand the reader a document its producer never wrote.
+		const status = `{"kind":"gitlab","report":{"phase":"degraded","actor":"admin"}}`
+		h.putIntegration("gitlab", status)
+
+		got := h.integrations()
+		if string(got["gitlab"]) != status {
+			t := h.t
+			t.Fatalf("read back %q, want %q", got["gitlab"], status)
+		}
+	}},
+
+	{"a surface with no status is absent rather than empty", func(h *fleetHarness) {
+		// The loop reads a missing key as "never reconciled, so due now".
+		// A backend that answered with a zero-length value instead would
+		// make that surface parse as a status whose phase is the empty
+		// string, which is not a phase.
+		h.putIntegration("slack", `{"kind":"slack"}`)
+		if _, present := h.integrations()["gitlab"]; present {
+			h.t.Fatal("a surface nothing recorded came back present")
+		}
+	}},
+
+	{"the last write wins", func(h *fleetHarness) {
+		// No compare-and-set, deliberately: the worker duty makes one
+		// node the only writer, so there is no second writer to race.
+		h.putIntegration("gitlab", `{"attempts":1}`)
+		h.putIntegration("gitlab", `{"attempts":2}`)
+		if got := string(h.integrations()["gitlab"]); got != `{"attempts":2}` {
+			h.t.Fatalf("read back %q, want the second write", got)
+		}
+	}},
+
+	{"every recorded surface is listed", func(h *fleetHarness) {
+		h.putIntegration("gitlab", `{}`)
+		h.putIntegration("slack", `{}`)
+		h.putIntegration("datadog", `{}`)
+		want := []string{"datadog", "gitlab", "slack"}
+		if got := h.integrationNames(); !slices.Equal(got, want) {
+			h.t.Fatalf("listed %v, want %v", got, want)
+		}
+	}},
+
+	{"a deleted status is gone and the rest survive", func(h *fleetHarness) {
+		h.putIntegration("gitlab", `{}`)
+		h.putIntegration("slack", `{}`)
+		if err := h.f.DeleteIntegrationStatus(h.ctx, "gitlab"); err != nil {
+			h.t.Fatalf("DeleteIntegrationStatus: %v", err)
+		}
+		want := []string{"slack"}
+		if got := h.integrationNames(); !slices.Equal(got, want) {
+			h.t.Fatalf("listed %v, want %v", got, want)
+		}
+	}},
+
+	{"deleting a status that is not there is the outcome asked for", func(h *fleetHarness) {
+		// The loop forgets every surface the company no longer declares,
+		// on every tick, so this is the common path rather than an edge
+		// case. Raising here would fill an operator's log with warnings
+		// about work that was already done.
+		if err := h.f.DeleteIntegrationStatus(h.ctx, "never-recorded"); err != nil {
+			h.t.Fatalf("deleting an absent status: %v", err)
+		}
+	}},
+
+	{"a surface name that is not a bare word survives the round trip", func(h *fleetHarness) {
+		// The KV backend escapes a key on the way in and unescapes it on
+		// the way out, and the mapping has to be injective in both
+		// directions. Nothing in integration.Kinds needs escaping today,
+		// which is exactly why a backend that got this wrong would go
+		// unnoticed until the first surface that did.
+		const kind = "self-hosted:gitlab.example"
+		h.putIntegration(kind, `{"kind":"gitlab"}`)
+		if _, present := h.integrations()[kind]; !present {
+			h.t.Fatalf("listed %v, want it to contain %q", h.integrationNames(), kind)
+		}
+	}},
+
+	{"a status the caller mutates afterwards does not change the store", func(h *fleetHarness) {
+		// A caller reusing its marshalling buffer is ordinary, and a
+		// backend that kept the caller's slice would have the next
+		// reader see whatever that buffer holds by then.
+		value := []byte(`{"attempts":1}`)
+		if err := h.f.PutIntegrationStatus(h.ctx, "gitlab", value); err != nil {
+			h.t.Fatalf("PutIntegrationStatus: %v", err)
+		}
+		copy(value, []byte(`{"attempts":9}`))
+		if got := string(h.integrations()["gitlab"]); got != `{"attempts":1}` {
+			h.t.Fatalf("read back %q after the caller reused its buffer", got)
+		}
+	}},
+}
