@@ -23,21 +23,23 @@ func (r *Result) Findings() []integration.Finding {
 	}
 	var out []integration.Finding
 
-	// INGRESS BEFORE IDENTITIES, which the classifier enforces by rank
-	// rather than by the order they are appended here. Appended in this
-	// order anyway, so a reader of the raw findings list sees them the way
-	// the report will.
-	if r.Hooked == "" {
-		// A run with no WebhookBase skips registration deliberately
-		// rather than guessing a host, and that is a configuration gap
-		// rather than a vendor refusal: nothing at Jira will fix it.
-		out = append(out, integration.Finding{
-			Kind: integration.FindingIngressBlocked,
-			Detail: "no webhook is registered on this instance, so nothing " +
-				"Jira does reaches an agent. Set the engine's public base URL " +
-				"and re-run `crewlet jira provision`",
-		})
-	}
+	// # NOTHING IS SAID ABOUT INGRESS, and the silence is deliberate
+	//
+	// [Result.Hooked] is the webhook this RUN registered, not the one the
+	// instance holds, and it is empty in two states that are nothing like
+	// each other. A read-only pass registers nothing by construction, so
+	// it is always empty there. And on Cloud it is always empty even for a
+	// fully working company, because a Cloud webhook belongs to an app
+	// rather than to an API token and those events arrive through the
+	// Forge relay instead.
+	//
+	// Reading either as "no webhook is registered" would park a healthy
+	// integration on a block nobody can clear. Answering honestly needs
+	// the instance's own hook list compared against this deployment's
+	// public base URL, and that URL is not on the integrations block at
+	// all today: every vendor subcommand takes it as -public-url. So this
+	// reports what a read of the instance can actually establish, and
+	// ingress stays with the subcommand that has the URL.
 
 	for _, seat := range r.Seats {
 		if seat.Routes() {

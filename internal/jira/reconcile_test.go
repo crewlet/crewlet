@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
@@ -269,8 +270,17 @@ func TestTheReconcileChecksEveryDeclaredProject(t *testing.T) {
 	if len(byKey) != 2 {
 		t.Fatalf("checked %v", res.Projects)
 	}
-	if got := byKey["OPZ"]; got.Exists || got.Detail == "" {
-		t.Errorf("a project the instance does not have was reported fine: %+v", got)
+	// A PROJECT THE INSTANCE DOES NOT HAVE, and Detail is EMPTY for it.
+	//
+	// The two together are the claim: the instance answered, and the
+	// answer was 404. Detail is reserved for a read that FAILED, so a
+	// company document naming a project that does not exist and an
+	// instance that timed out are told apart. They were not, and they want
+	// opposite treatment downstream: one is a typo an operator must fix
+	// and the other is worth another look in thirty seconds.
+	if got := byKey["OPZ"]; got.Exists || got.Detail != "" {
+		t.Errorf("a project the instance does not have was not reported as "+
+			"absent: %+v", got)
 	}
 	// The lead's own project agrees: the org chart's lead IS the account
 	// Jira calls the project lead.
@@ -633,5 +643,117 @@ func TestTheSeatWalkIsBounded(t *testing.T) {
 	}
 	if byHandle["qa"].Account != "" {
 		t.Errorf("the seat with no credential resolved to %q", byHandle["qa"].Account)
+	}
+}
+
+// THE FINDINGS ARE WHAT THE RECONCILE LOOP READS, so what the operator sees
+// on the dashboard comes from here rather than from the CLI's own printout.
+//
+// A seat whose credential the instance refuses is the one finding this
+// command exists to surface, and it must survive the trip into the shared
+// vocabulary rather than being visible only to somebody running the
+// subcommand and reading its output.
+func TestFindingsReportASeatWithNoAccount(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+
+	res, err := run(t, inst, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := res.Findings()
+
+	var swe *integration.Finding
+	for i, f := range findings {
+		if f.Subject == "swe" {
+			swe = &findings[i]
+		}
+	}
+	if swe == nil {
+		t.Fatalf("no finding names the seat whose credential was refused: %+v", findings)
+	}
+	if swe.Kind != integration.FindingIdentityFailed {
+		t.Errorf("kind is %q, want %q", swe.Kind, integration.FindingIdentityFailed)
+	}
+	if !strings.Contains(swe.Detail, "swe") {
+		t.Errorf("detail %q does not name the seat", swe.Detail)
+	}
+
+	// And the report an operator reads names it too, rather than only the
+	// findings list behind it.
+	report := integration.Classify(findings)
+	if report.Phase == integration.PhaseReady {
+		t.Fatalf("a company with an unreachable seat classified ready: %+v", report)
+	}
+}
+
+// A PROJECT THE INSTANCE DOES NOT HAVE is almost always a typo in the company
+// document, and a silent one: the webhook arrives, the key matches no lead,
+// and the issue reaches nobody.
+func TestFindingsReportAProjectTheInstanceDoesNotHave(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	inst.accounts["Bearer swe-token"] = "acct-swe"
+	inst.accounts["Bearer qa-token"] = "acct-qa"
+	// Deliberately no projects registered, so every declared key is absent.
+
+	res, err := run(t, inst, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, f := range res.Findings() {
+		if f.Kind == integration.FindingUnknownTier {
+			found = true
+			if f.Subject == "" {
+				t.Errorf("a missing project finding names no project: %+v", f)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no finding reports a declared project the instance lacks: %+v",
+			res.Findings())
+	}
+}
+
+// NOTHING IS SAID ABOUT INGRESS, and the silence is the fix rather than a
+// gap. Result.Hooked is the webhook this RUN registered, and it is empty both
+// for a read-only pass and for a perfectly healthy Cloud company whose events
+// arrive through the Forge relay. Reading either as "no webhook is
+// registered" would park a working integration on a block nobody can clear.
+func TestFindingsSayNothingAboutIngress(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	inst.accounts["Bearer swe-token"] = "acct-swe"
+	inst.accounts["Bearer qa-token"] = "acct-qa"
+	inst.projects["ENG"] = "Engineering"
+	inst.projects["QA"] = "Quality"
+
+	// No public base URL, which is the posture the reconcile loop runs in.
+	res, err := run(t, inst, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Hooked != "" {
+		t.Fatalf("the premise is wrong: this run registered %q", res.Hooked)
+	}
+	for _, f := range res.Findings() {
+		if f.Kind == integration.FindingIngressBlocked {
+			t.Fatalf("a read-only pass reported ingress blocked: %+v", f)
+		}
+	}
+	// What the company IS reported as here is driven by its seats (the
+	// fixture has one with no credential at all), which is the point: the
+	// phase reflects something an operator can act on rather than a
+	// webhook this pass was never asked to register.
+	if report := integration.Classify(res.Findings()); report.Actor == integration.ActorNobody &&
+		report.Phase != integration.PhaseReady {
+		t.Fatalf("a report with no actor is not ready: %+v", report)
 	}
 }

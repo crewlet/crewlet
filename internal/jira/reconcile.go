@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -276,7 +277,22 @@ func checkProjects(ctx context.Context, opts Options, seats []SeatIdentity) []Pr
 	for i, key := range keys {
 		out[i] = ProjectCheck{Key: key, OrgLead: leads[key]}
 		project, err := opts.Client.ProjectOf(ctx, key)
-		if err != nil {
+		switch {
+		case err == nil:
+		case notFound(err):
+			// THE INSTANCE ANSWERED, and the answer was that there is no
+			// such project. Exists stays false and Detail stays EMPTY,
+			// which is what separates this from a read that failed.
+			//
+			// Collapsing the two was the bug: [ProjectCheck.Exists]
+			// promises "a project the instance does not have, which is
+			// almost always a typo in the org chart", and every failure
+			// produced that same shape, so a typo and a timed-out
+			// instance were indistinguishable. Downstream they want
+			// opposite treatment: one is a document an operator must fix
+			// and the other is worth another look in thirty seconds.
+			continue
+		default:
 			out[i].Detail = err.Error()
 			continue
 		}
@@ -394,4 +410,15 @@ func webhookTarget(base string) string {
 		return ""
 	}
 	return base + "/webhooks/jira"
+}
+
+// notFound reports a refusal that means the instance has no such thing.
+//
+// Through [APIError.Status] rather than by matching the message, which is
+// exactly what that type exists for: the wording of a Jira refusal differs by
+// version and by locale, and a substring match on it is a check that stops
+// working when somebody's instance is in German.
+func notFound(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound
 }

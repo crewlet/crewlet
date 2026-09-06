@@ -30,21 +30,24 @@ func (r *Result) Findings() []integration.Finding {
 		})
 	}
 
-	if len(r.Hooks) == 0 {
-		out = append(out, integration.Finding{
-			Kind: integration.FindingIngressBlocked,
-			Detail: "no webhook target is registered, so nothing GitHub does " +
-				"reaches an agent. Set the engine's public base URL and re-run " +
-				"`crewlet github provision`",
-		})
-	}
+	// A TARGET THIS RUN TRIED AND COULD NOT HOOK, and only that.
+	//
+	// An EMPTY hook list is deliberately not a finding, because it is what
+	// a read-only pass produces by construction: with no public base URL
+	// the run registers nothing and reports nothing, and reading that as
+	// "no webhook target is registered" would park every company on a
+	// block nobody can clear. That URL is not on the integrations block
+	// today (every vendor subcommand takes it as -public-url), so ingress
+	// convergence stays with the subcommand that has it.
+	//
+	// A target that WAS attempted and refused is a different fact, and it
+	// is reported per target rather than once: a partial hook-up is the
+	// state this vendor actually reaches, an org hook the credential may
+	// not create beside repositories it may.
 	for _, hook := range r.Hooks {
 		if hook.Hooked() {
 			continue
 		}
-		// PER TARGET, because a partial hook-up is the state this vendor
-		// actually reaches: an org hook the credential may not create,
-		// beside repositories it may.
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,
 			Subject: hook.Target.String(),
