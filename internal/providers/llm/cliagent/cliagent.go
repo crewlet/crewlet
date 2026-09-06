@@ -206,6 +206,12 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	seat := llm.SeatOf(ctx)
 	callID := CallOf(ctx)
 
+	// THE SYSTEM PROMPT ON ITS OWN CHANNEL where the CLI has one. Lifted
+	// before the transcript is rendered, so it is never both.
+	var system string
+	if len(p.profile.SystemPromptArgs) > 0 {
+		system, req = SplitSystem(req)
+	}
 	prompt, err := RenderPrompt(req)
 	if err != nil {
 		return nil, p.fail(llm.KindFatal, 0, err)
@@ -258,6 +264,18 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			req.Send(llm.Delta{Content: firstString(doc, p.profile.TextPaths)})
 		}
 	}
+	if system != "" {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		args, err := systemArgs(p.profile.SystemPromptArgs, system, checkout.Work)
+		if err != nil {
+			return nil, p.fail(llm.KindFatal, 0, err)
+		}
+		in.args = append(in.args, args...)
+	}
+	// THE PROMPT LAST, and after the system args for the same reason the
+	// profile puts the model flag before it: a CLI taking its prompt on
+	// argv reads the first non-flag argument, so anything appended after it
+	// is read as part of the prompt.
 	if p.profile.mode() == PromptArgv {
 		in.args = append(in.args, prompt)
 	} else {

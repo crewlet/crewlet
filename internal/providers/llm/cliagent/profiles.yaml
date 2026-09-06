@@ -51,6 +51,22 @@ claude-code:
     - "TodoWrite"
   local_tools: denied
   model_args: ["--model", "{model}"]
+  # THE SYSTEM PROMPT ON ITS OWN CHANNEL, replacing Claude Code's default
+  # rather than appending to it. Measured against 2.1.263: with --append-,
+  # the model still opens with "I'm Claude Code, here to help with your
+  # software engineering tasks" — a coding-agent identity over the top of
+  # whatever seat it is actually serving — and the default prose costs ~3.5k
+  # input tokens on every round of every phase for guidance about tools this
+  # profile denies. Replacing it leaves the web tools working (measured: a
+  # WebFetch probe still fetches).
+  #
+  # The -file variant, not the inline one: a seat's system prompt carries the
+  # org chart, its policies, its roster and its own memory, and argv is
+  # readable by every account on the machine. It is undocumented in
+  # `claude --help` on 2.1.263 but accepted (the help text names it in
+  # passing, under --add-dir); an operator on a build that drops it overrides
+  # this with ["--system-prompt", "{system}"].
+  system_prompt_args: ["--system-prompt-file", "{file}"]
   prompt_mode: stdin
   output: json
   text_paths: [["result"]]

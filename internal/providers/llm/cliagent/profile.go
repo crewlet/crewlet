@@ -241,6 +241,31 @@ type Profile struct {
 	// PromptMode is stdin (the default) or argv.
 	PromptMode PromptMode `yaml:"prompt_mode,omitempty"`
 
+	// SystemPromptArgs carries the system prompt on its OWN channel rather
+	// than as the first section of the transcript, where a CLI has a flag
+	// for it. Empty leaves it in the transcript, which is what a CLI with
+	// no such flag can take.
+	//
+	// A system prompt folded into the prompt text arrives as USER content:
+	// the model is asked to treat an ordinary message as its standing
+	// instructions, and a vendor whose default prompt says what it is
+	// ("I'm Claude Code, here to help with your software engineering
+	// tasks") keeps saying so over the top of a seat's own identity.
+	//
+	// Two placeholders, and the difference is not cosmetic:
+	//
+	//   {file}    the text is written to a private file in the per-call
+	//             working directory and the PATH is substituted. Prefer
+	//             this always. A seat's system prompt carries the org
+	//             chart, its policies, its backstory, its roster and its
+	//             personal-memory and knowledge prefetches.
+	//   {system}  the text is substituted INTO ARGV, where /proc/<pid>/cmdline
+	//             makes it readable by every account on the machine and
+	//             ARG_MAX bounds it (256 KB on macOS) — the same limit the
+	//             copilot profile's argv prompt already lives under. Only
+	//             for a CLI that offers no file variant.
+	SystemPromptArgs []string `yaml:"system_prompt_args,omitempty"`
+
 	// Output is how stdout is encoded.
 	Output OutputMode `yaml:"output,omitempty"`
 
