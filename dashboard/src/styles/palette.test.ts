@@ -238,23 +238,53 @@ for (const theme of ["light", "dark"] as const) {
       expect(failures).toEqual([]);
     });
 
-    test("the accent is the most saturated thing on the page", () => {
-      // Not vanity: the accent marks the ONE current selection, and it can
-      // only do that if nothing else competes. A status hue that out-saturated
-      // it would pull the eye to a badge instead of to where the reader is.
+    test("the accent out-saturates every hue that is not a status", () => {
+      // The accent marks the ONE current selection, and it can only do that
+      // if the CHROME does not compete: a phase pill or a chart series that
+      // out-saturated it would pull the eye away from where the reader is.
+      //
+      // CATEGORICAL hues are exempt, and that is a deliberate narrowing of
+      // the rule rather than a hole in it.
+      //
+      // The palette is now the design system's, whose brand colour is a muted
+      // blue where the previous accent was a saturated violet. Two families
+      // now sit above it, and neither can be pulled down:
+      //
+      //   - the status fills, because a red alert SHOULD out-shout the
+      //     current selection; that is the one case where pulling the eye to
+      //     a badge is the right outcome.
+      //   - the three phase hues, because their saturation is constrained
+      //     FROM BELOW by the separability test above. Desaturating execute
+      //     to sit under a muted blue accent was tried, and it collided with
+      //     onboarding under protan and deutan simulation, which trades a
+      //     real accessibility guarantee for an aesthetic one.
+      //
+      // What is left is what the rule was always protecting: the chart series
+      // are chrome, they carry no state, and they stay below the accent.
       const accent = chroma(opaque(tokens, "--accent"));
-      for (const token of [...FILL_STEPS.filter((t) => t !== "--accent"), ...VIZ]) {
+      for (const token of VIZ) {
         // --viz-1 IS the accent hue, so it is allowed to match.
         if (token === "--viz-1") continue;
         expect(chroma(opaque(tokens, token)), `${token} vs --accent`).toBeLessThanOrEqual(accent);
       }
     });
 
-    test("the ground is lifted off pure black / pure white", () => {
+    test("the ground and the panels are distinct, so depth needs no shadow", () => {
+      // This used to assert an off-white ground, because the light theme put
+      // white cards on it. The design system's light theme inverts that
+      // arrangement — a white page carrying grey cards — so the literal test
+      // contradicted the palette while the PROPERTY it existed for still
+      // held. That property is asserted instead: whichever way round they
+      // are, ground and panel must differ, or every card edge on the screen
+      // depends on a border nobody guaranteed.
       const bg = opaque(tokens, "--bg");
-      const sum = bg.r + bg.g + bg.b;
-      if (theme === "dark") expect(sum).toBeGreaterThan(12);
-      else expect(sum).toBeLessThan(760);
+      const panel = opaque(tokens, "--surface-1");
+      const apart = Math.abs(bg.r - panel.r) + Math.abs(bg.g - panel.g) + Math.abs(bg.b - panel.b);
+      expect(apart, "--bg and --surface-1 are the same colour").toBeGreaterThan(6);
+
+      // And the dark ground stays off pure black, which is unchanged: pure
+      // black behind near-white text is the combination that halates.
+      if (theme === "dark") expect(bg.r + bg.g + bg.b).toBeGreaterThan(12);
     });
   });
 }
