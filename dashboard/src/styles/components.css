@@ -128,12 +128,12 @@
   cursor: not-allowed;
 }
 .btn.primary {
-  background: var(--accent);
+  background: var(--fill-solid);
   border-color: transparent;
-  color: var(--text-on-fill);
+  color: var(--fill-solid-ink);
 }
 .btn.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--fill-solid-hover);
   border-color: transparent;
 }
 .btn.ghost {

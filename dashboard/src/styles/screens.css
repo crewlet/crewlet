@@ -799,14 +799,12 @@
   gap: var(--space-4);
   padding: var(--space-4) var(--space-6);
 }
-/* Dimmed, not hidden. The catalogue is what says the engine serves it. */
-.int-card-absent .int-name,
-.int-card-absent .int-desc {
-  color: var(--text-muted);
-}
-.int-card-absent .int-brand {
-  opacity: 0.55;
-}
+/* NOT DIMMED. An unconfigured tool is the one a reader came here to set up,
+   so it is the last thing that should look switched off: greying it reads as
+   "unavailable" when it means "available, and yours to connect". The state is
+   already said twice, in the badge and in the action beside it, and colour
+   here carries STATE and never identity. The only difference from a connected
+   card is that there is nothing yet to disclose. */
 .int-card-absent:hover {
   border-color: var(--border);
 }
@@ -937,53 +935,90 @@
 .int-card-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-6);
+  padding: var(--space-1) var(--space-6) var(--space-3);
   border-top: 1px solid var(--border-subtle);
 }
 
-.int-surface {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-.int-surface-name {
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  color: var(--text);
-}
-.int-surface-head {
-  align-items: center;
-}
-
-/* The per-seat roster, for a vendor whose credentials live on the seat. */
-.int-seats {
+/* ONE ROW PER THING THE CARD IS MADE OF, surfaces and seats alike, separated
+   by a rule rather than by whitespace. The body used to stack loose lines of
+   prose, which made a tool with three surfaces read as one paragraph with no
+   edges: nothing said where Jira stopped and Confluence began. */
+.int-rows {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
 }
-.int-seat {
+.int-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-3);
-  padding: var(--space-2) 0;
+  padding: var(--space-3) 0;
   border-top: 1px solid var(--border-subtle);
 }
-.int-seat:first-child {
+.int-row:first-child {
   border-top: none;
 }
-.int-seat-name {
-  font-size: var(--fs-xs);
-  color: var(--text);
+
+/* The identity column takes the slack, so every badge in the list lands on
+   the same right edge however long a name or a path is. */
+.int-row-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
-}
-.int-seat-detail {
   flex: 1;
+}
+.int-row-name {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text);
+}
+.int-row-detail {
   font-size: var(--fs-2xs);
   color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+/* The counts and the inbound path, on the detail line rather than in a row of
+   their own: they are what the surface IS, not a second subject. */
+.int-row-facts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.int-row-badges {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* A FINDING TAKES THE FULL WIDTH BENEATH ITS ROW rather than squeezing into
+   the detail line: it is a sentence, often a vendor's own error text, and
+   truncating the one line that says what to do is the opposite of useful. */
+.int-row-note {
+  flex-basis: 100%;
+  display: flex;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.int-row-note-text {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.int-row-note-when {
+  color: var(--text-faint);
 }
 
 /* THE DISCLOSURE INSIDE THE BODY IS THE ONLY CONTROL IN ITS ROW, so it is

@@ -183,6 +183,20 @@
   --heading: #0a0d13; /*        16.7:1 */
   --text-on-fill: #ffffff;
 
+  /* ---- Colour: the neutral solid fill -----------------------------------
+     The step a PRIMARY control is filled with. Deliberately not the accent:
+     the accent is the product's own violet and belongs to identity, so
+     spending it on every Connect button makes the one genuinely branded
+     surface indistinguishable from a row of ordinary actions. A neutral
+     inversion (near-black on light, near-white on dark) reads as "this is
+     the action" on both themes without borrowing the mark's colour, and it
+     is what the console's own primary button does. Its ink step is the
+     surface it sits on, so the pair inverts together and can never drift
+     into white-on-white. */
+  --fill-solid: #14181f;
+  --fill-solid-hover: #2a303a;
+  --fill-solid-ink: #ffffff;
+
   /* ---- Colour: accent ---------------------------------------------------
      One violet, and it is the mark's own colour, which is what keeps the logo
      belonging to the page rather than sitting on it. `--accent` is a FILL
@@ -313,6 +327,10 @@
     --heading: #f6f7fa; /*        13.8:1 */
     --text-on-fill: #ffffff;
 
+    --fill-solid: #f6f7fa;
+    --fill-solid-hover: #ffffff;
+    --fill-solid-ink: #14181f;
+
     --accent: #8347ff;
     --accent-hover: #9463ff;
     --accent-ink: #ab92ff;
@@ -383,6 +401,10 @@
   --text-faint: #6a7280;
   --heading: #f6f7fa;
   --text-on-fill: #ffffff;
+
+  --fill-solid: #f6f7fa;
+  --fill-solid-hover: #ffffff;
+  --fill-solid-ink: #14181f;
 
   --accent: #8347ff;
   --accent-hover: #9463ff;

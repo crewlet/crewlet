@@ -33,7 +33,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { PassDialog } from "./PassDialog.tsx";
-import { requestToken, rest, RestError } from "~/protocol/index.ts";
+import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, ReconcileStatus } from "~/protocol/types.ts";
 import type { SetupListing, SetupRun, SetupToolState } from "~/protocol/types.ts";
 
@@ -347,8 +347,23 @@ function Count({ value, label }: { value: number | null | undefined; label: stri
  * A green tick here would be exactly the invented health this screen has
  * always refused to show.
  */
-export function Reconcile({ status }: { status: ReconcileStatus | null | undefined }) {
-  if (!status) return null;
+export function Reconcile({
+  status,
+  detail,
+}: {
+  status: ReconcileStatus | null | undefined;
+  /** The surface's own one-line summary, when the loop has nothing to add. */
+  detail?: string | null;
+}) {
+  if (!status) {
+    // A surface with no loop still has a sentence worth showing, and dropping
+    // it here is what left a paused integration explaining nothing at all.
+    return detail ? (
+      <div className="int-row-note">
+        <span className="int-row-note-text">{detail}</span>
+      </div>
+    ) : null;
+  }
 
   const actor = actorLabel(status.actor);
   // The findings the phase was NOT derived from. The report says what to do
@@ -357,41 +372,42 @@ export function Reconcile({ status }: { status: ReconcileStatus | null | undefin
   const rest = (status.findings ?? []).slice(1);
 
   return (
-    <div className="col gap-1">
-      {actor && <span className="t-caption faint">{actor}</span>}
+    <div className="int-row-note">
+      <span className="int-row-note-text">
+        {status.detail && <span>{status.detail}</span>}
+        {actor && <span className="int-row-note-when">{actor}</span>}
 
-      {status.detail && <span className="t-caption">{status.detail}</span>}
+        {status.action_url && (
+          <a href={status.action_url} target="_blank" rel="noreferrer">
+            Open where this is fixed
+          </a>
+        )}
 
-      {status.action_url && (
-        <a className="t-caption" href={status.action_url} target="_blank" rel="noreferrer">
-          Open where this is fixed
-        </a>
-      )}
+        {status.last_error && (
+          <span className="int-row-note-when" title="the last pass could not read this surface">
+            Last pass failed: {status.last_error}
+          </span>
+        )}
 
-      {status.last_error && (
-        <span className="t-caption faint" title="the last pass could not read this surface">
-          Last pass failed: {status.last_error}
+        {rest.length > 0 && (
+          <details>
+            <summary className="int-summary">
+              {rest.length} more finding{rest.length === 1 ? "" : "s"}
+            </summary>
+            <ul className="col gap-1 int-findings">
+              {rest.map((f, i) => (
+                <li key={`${f.kind}:${f.subject ?? ""}:${i}`}>
+                  {f.detail || `${f.kind.replace(/_/g, " ")}${f.subject ? `: ${f.subject}` : ""}`}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+
+        <span className="int-row-note-when">
+          {status.settled_at ? `settled ${fmtDateTime(status.settled_at)}` : "not settled yet"}
+          {status.next_attempt_at ? ` · next check ${fmtDateTime(status.next_attempt_at)}` : ""}
         </span>
-      )}
-
-      {rest.length > 0 && (
-        <details>
-          <summary className="int-summary">
-            {rest.length} more finding{rest.length === 1 ? "" : "s"}
-          </summary>
-          <ul className="col gap-1 int-findings">
-            {rest.map((f, i) => (
-              <li key={`${f.kind}:${f.subject ?? ""}:${i}`} className="t-caption">
-                {f.detail || `${f.kind.replace(/_/g, " ")}${f.subject ? `: ${f.subject}` : ""}`}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-
-      <span className="t-caption faint">
-        {status.settled_at ? `settled ${fmtDateTime(status.settled_at)}` : "not settled yet"}
-        {status.next_attempt_at ? ` · next check ${fmtDateTime(status.next_attempt_at)}` : ""}
       </span>
     </div>
   );
@@ -401,18 +417,25 @@ export function Reconcile({ status }: { status: ReconcileStatus | null | undefin
  * One surface inside a tool's details: its own phase, what arrived and what
  * became of it, where it listens, and what the loop found.
  */
-function SurfaceDetail({ surface, row }: { surface: Surface; row: IntegrationRow }) {
+function SurfaceRow({ surface, row }: { surface: Surface; row: IntegrationRow }) {
   return (
-    <div className="int-surface">
-      <div className="row wrap gap-2 int-surface-head">
-        <span className="int-surface-name">{surface.name}</span>
-        {row.reconcile ? (
-          <Badge tone={phaseTone(row.reconcile.phase)} dot>
-            {row.reconcile.phase.replace(/_/g, " ")}
-          </Badge>
-        ) : row.enabled === false ? (
-          <Badge outline>paused</Badge>
-        ) : null}
+    <li className="int-row">
+      <div className="int-row-identity">
+        <span className="int-row-name">{surface.name}</span>
+        <span className="int-row-detail int-row-facts">
+          {/* The three counts GET /integrations answers with. Read together:
+              "128 arrived" alone cannot tell a working surface from one whose
+              every delivery reaches nobody. */}
+          <Count value={row.inbound} label="in" />
+          <Count value={row.skipped} label="dropped" />
+          <Count value={row.coalesced} label="merged" />
+          {typeof row.inbound_path === "string" && row.inbound_path && (
+            <code className="inline">{String(row.inbound_path)}</code>
+          )}
+        </span>
+      </div>
+
+      <div className="int-row-badges">
         {row.secret_usable === false && (
           <Badge
             tone="caution"
@@ -431,21 +454,17 @@ function SurfaceDetail({ surface, row }: { surface: Surface; row: IntegrationRow
             routes nowhere
           </Badge>
         )}
+        {row.reconcile ? (
+          <Badge tone={phaseTone(row.reconcile.phase)} dot>
+            {row.reconcile.phase.replace(/_/g, " ")}
+          </Badge>
+        ) : row.enabled === false ? (
+          <Badge outline>paused</Badge>
+        ) : null}
       </div>
-      {row.detail && <span className="t-caption faint">{row.detail}</span>}
-      <div className="row wrap gap-3">
-        {/* The three counts GET /integrations answers with. Read together:
-            "128 arrived" alone cannot tell a working surface from one whose
-            every delivery reaches nobody. */}
-        <Count value={row.inbound} label="in" />
-        <Count value={row.skipped} label="dropped" />
-        <Count value={row.coalesced} label="merged" />
-        {typeof row.inbound_path === "string" && row.inbound_path && (
-          <code className="inline t-caption faint">{String(row.inbound_path)}</code>
-        )}
-      </div>
-      <Reconcile status={row.reconcile} />
-    </div>
+
+      <Reconcile status={row.reconcile} detail={row.detail} />
+    </li>
   );
 }
 
@@ -671,28 +690,34 @@ export function EntryRow({
 
       {open && (
         <div className="int-card-body" id={bodyID}>
-          {present.map((p) => (
-            <SurfaceDetail key={p.surface.key} surface={p.surface} row={p.row} />
-          ))}
-          {seats.length > 0 && (
-            <ul className="int-seats">
-              {seats.map((seat) => (
-                <li key={seat.handle} className="int-seat">
-                  <span className="int-seat-name">{seat.name || seat.handle}</span>
-                  <span className="int-seat-detail">
-                    {seat.public_url ? (
+          {/* ONE LIST, surfaces and seats together. They are two kinds of the
+              same thing to a reader (a part of this tool, and whether it
+              works), and two lists put an arbitrary seam down the middle of a
+              Slack card whose every row is a seat. */}
+          <ul className="int-rows">
+            {present.map((p) => (
+              <SurfaceRow key={p.surface.key} surface={p.surface} row={p.row} />
+            ))}
+            {seats.map((seat) => (
+              <li key={seat.handle} className="int-row">
+                <div className="int-row-identity">
+                  <span className="int-row-name">{seat.name || seat.handle}</span>
+                  <span className="int-row-detail">
+                    {seat.inbound_path ? (
                       <code className="inline">{seat.inbound_path}</code>
                     ) : (
-                      seat.inbound_path
+                      "no inbound path yet"
                     )}
                   </span>
+                </div>
+                <div className="int-row-badges">
                   <Badge tone={seat.satisfied ? "positive" : "neutral"} outline={!seat.satisfied}>
                     {seat.satisfied ? "ready" : "not set up"}
                   </Badge>
-                </li>
-              ))}
-            </ul>
-          )}
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </section>
@@ -731,6 +756,9 @@ function useSetup(): {
   }, []);
 
   useEffect(reload, [reload]);
+  // A refusal here is the one the banner asks the reader to fix, so the fix
+  // has to land on this screen without a reload.
+  useEffect(() => onTokenChanged(reload), [reload]);
 
   return {
     byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
