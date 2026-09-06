@@ -234,3 +234,75 @@ func TestAnEventWithNoRoleIsHarmless(t *testing.T) {
 		t.Error("a role-less event created an empty-named seat")
 	}
 }
+
+func TestATurnCompletingReturnsTheSeatToIdle(t *testing.T) {
+	t.Parallel()
+	// WITHOUT A REFLECTION BEHIND IT. reflection_completed was the only entry
+	// in the state map that anything publishes AND that returns a seat to
+	// idle, and the reflector returns without publishing it on five paths —
+	// among them "no workers configured", which is every turn of a company
+	// running with learning off. Those seats went to working on their first
+	// turn and stayed there for the life of the process, rendering mid-phase
+	// in a phase that had ended.
+	s := livestate.New()
+	base := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "review", "iteration": 1}
+	s.Apply(env("agent_phase_started", base))
+	s.Apply(env("agent_phase_completed", base, at("2026-06-14T12:00:05+00:00")))
+	s.Apply(env("agent_turn_completed",
+		map[string]any{"role": "Lead", "turn_id": "tn-1", "total_tokens": 10},
+		at("2026-06-14T12:00:06+00:00")))
+
+	got := overlayOf(t, s, "Lead")
+	if got.State != "idle" {
+		t.Errorf("state = %q, want idle once the turn is over", got.State)
+	}
+	if got.CurrentPhase != nil {
+		t.Errorf("current phase = %v, want null", *got.CurrentPhase)
+	}
+	if got.LiveCall != nil {
+		t.Error("a completed turn left a live call on screen")
+	}
+}
+
+func TestTheEndOfONETurnDoesNotClearTheNEXTOne(t *testing.T) {
+	t.Parallel()
+	// Both events that end a turn arrive asynchronously and neither is
+	// ordered against the next turn's work: reflection runs on its own
+	// consumer seconds later, and the projection reads every type through one
+	// wildcard subscription where cross-topic order is not guaranteed. The
+	// clear used to be unconditional, so a seat several rounds into its next
+	// turn had the row a reader was watching wiped and its state reported as
+	// idle.
+	//
+	// The timestamp guard does not cover it: applyProgress deliberately never
+	// advances stateTS, so a seat whose only events since the phase boundary
+	// are progress rounds still carries the older stamp.
+	for _, ending := range []string{"agent_turn_completed", "reflection_completed"} {
+		t.Run(ending, func(t *testing.T) {
+			t.Parallel()
+			s := livestate.New()
+			next := map[string]any{
+				"role": "Lead", "turn_id": "tn-2", "phase": "execute", "iteration": 1,
+			}
+			s.Apply(env("agent_phase_started", next, at("2026-06-14T12:00:10+00:00")))
+			s.Apply(env("agent_turn_progress",
+				with(next, map[string]any{"round_num": 2, "response": "working"}),
+				streamOnly, at("2026-06-14T12:00:11+00:00")))
+
+			// The previous turn's ending, arriving late.
+			s.Apply(env(ending, map[string]any{"role": "Lead", "turn_id": "tn-1"},
+				at("2026-06-14T12:00:12+00:00")))
+
+			got := overlayOf(t, s, "Lead")
+			if got.LiveCall == nil {
+				t.Fatal("the next turn's live call was wiped by the previous turn's ending")
+			}
+			if got.LiveCall.TurnID != "tn-2" {
+				t.Errorf("live call turn = %q, want tn-2", got.LiveCall.TurnID)
+			}
+			if got.State != "working" {
+				t.Errorf("state = %q, want working — the seat is mid-turn", got.State)
+			}
+		})
+	}
+}

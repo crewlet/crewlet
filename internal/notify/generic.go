@@ -15,7 +15,7 @@ import (
 //   - It renders the body in full, because for a source the spine knows
 //     nothing about, the body is all the context there is.
 //   - It therefore reports no recon needed: the trigger IS the context, so
-//     the Plan-phase filters have something real to filter against.
+//     the turn-start filters have something real to filter against.
 //   - It derives no conversation key, so its events are never merged. Merging
 //     two triggers the spine cannot tell apart loses one of them.
 //   - It supersedes nothing, because it has no idea which of this vendor's
@@ -32,6 +32,12 @@ func (Generic) Source() string { return "" }
 // RequiresRecon is false: an unrecognised source has no API to read a
 // conversation's membership from, so the text has to decide alone.
 func (Generic) RequiresRecon(Inbound) bool { return false }
+
+// Addressed is false: an unrecognised source has no routing vocabulary to
+// read an ask out of, and the trigger's own evaluation block already tells
+// the seat to decide from the text. False is the safe half — see
+// [Prompt.Addressed].
+func (Generic) Addressed(Inbound) bool { return false }
 
 // ConversationKey is empty for an unrecognised source, which coalesces
 // nothing — the honest answer when the backend cannot say what a thread is.

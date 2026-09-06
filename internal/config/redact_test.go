@@ -328,7 +328,7 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		// Numeric caps that merely count tokens.
 		"TokenBudget": true, "BudgetTokens": true, "SummarizeMaxTokens": true,
 		"CompactionBudgetTokens": true, "MaxTokens": true, "TokenExpiryDays": true,
-		"ReasoningBudgetTokens": true, "SubagentMinPerChildTokens": true,
+		"ReasoningBudgetTokens": true, "MinTokensPerTask": true,
 		"SandboxMinBudgetTokens": true,
 		// Scope NAMES minted onto a token, not the token.
 		"TokenScopes": true,

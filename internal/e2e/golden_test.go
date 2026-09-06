@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -198,6 +199,24 @@ func (n *node) wake(t *testing.T, handle, text string) {
 // wakeInTrace is wake with a chosen trace, so a test can follow it through.
 func (n *node) wakeInTrace(t *testing.T, handle, text string, tc events.TraceContext) {
 	t.Helper()
+	n.publishWake(t, handle, text, "", tc)
+}
+
+// wakeInConversation is wake on a named thread, the way a real chat message
+// arrives: the notification service stamps the conversation onto the envelope
+// and the inbox partitions on it.
+//
+// Separate from [node.wake] rather than folded into it, because the stamp is
+// what the inbox COALESCES on — two stamped wakes are one digest turn, which
+// is right for a thread and wrong for the tests that wake a seat twice and
+// expect two turns.
+func (n *node) wakeInConversation(t *testing.T, handle, text, conversation string) {
+	t.Helper()
+	n.publishWake(t, handle, text, conversation, events.TraceContext{})
+}
+
+func (n *node) publishWake(t *testing.T, handle, text, conversation string, tc events.TraceContext) {
+	t.Helper()
 	body := text
 	ev := events.New(types.ExternalNotification{
 		NotificationSource: "slack",
@@ -213,6 +232,7 @@ func (n *node) wakeInTrace(t *testing.T, handle, text string, tc events.TraceCon
 		Body:        text,
 		SalientBody: &body,
 	}, tc)
+	notify.Stamp(ev, conversation)
 	if err := n.engine.Backends().Queue.Publish(t.Context(),
 		topics.AgentInbox(handle), ev); err != nil {
 		t.Fatalf("wake %s: %v", handle, err)
@@ -263,20 +283,21 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 			return false
 		}
 		phases, _ := r["by_phase"].([]any)
-		return len(phases) == 4 // onboarding, plan, execute, review
+		return len(phases) == 3 // onboarding, execute, review
 	})
 	cancel()
 
 	// --- what the model was actually asked ---------------------------- //
 	got := n.model.seen()
-	for _, want := range []string{"onboarding", "plan", "execute", "review"} {
+	for _, want := range []string{"onboarding", "execute", "review"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("the %s phase never ran; phases = %v", want, got)
 		}
 	}
-	// Onboarding runs BEFORE Plan and on its own budget — that is the whole
-	// reason it is a phase rather than a hint inside Plan's prompt, where it
-	// could spend the plan budget on reading and starve submit_plan.
+	// Onboarding runs BEFORE the executor and on its own budget — that is
+	// the whole reason it is a phase rather than a hint inside the
+	// executor's prompt, where it could spend the turn's budget on reading
+	// and starve submit_work.
 	if len(got) > 0 && got[0] != "onboarding" {
 		t.Errorf("the first model call was %q, not the onboarding pass", got[0])
 	}
@@ -313,7 +334,7 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 			phases[p] = true
 		}
 	}
-	for _, want := range []string{"onboarding", "plan", "execute", "review"} {
+	for _, want := range []string{"onboarding", "execute", "review"} {
 		if !phases[want] {
 			t.Errorf("no live call named the %s phase; saw %v", want, phases)
 		}
@@ -332,9 +353,9 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		t.Errorf("the rollup reports %v tokens for a turn that ran three "+
 			"phases", totals["total_tokens"])
 	}
-	if n, _ := totals["calls"].(float64); n != 4 {
+	if n, _ := totals["calls"].(float64); n != 3 {
 		t.Errorf("the rollup counted %v calls, want one per phase "+
-			"(onboarding, plan, execute, review)", totals["calls"])
+			"(onboarding, execute, review)", totals["calls"])
 	}
 
 	// --- and what the store kept -------------------------------------- //

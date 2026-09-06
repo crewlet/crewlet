@@ -5,7 +5,7 @@ trigger:
     - tool: mattermost_post_message
     - mcp_server: atlassian
     - tool: a2a_ask
-phases: [plan, review]
+phases: [execute, review]
 required: false
 title: Getting unstuck — manager handoff
 summary: |

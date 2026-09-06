@@ -3,7 +3,7 @@ key: skill:observed_directives
 trigger:
   any_of:
     - tool: mattermost_post_message
-phases: [plan]
+phases: [execute]
 title: Sharing observed directives
 summary: |
   If a stakeholder told you a standing team rule (not a one-off

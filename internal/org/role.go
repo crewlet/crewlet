@@ -346,6 +346,18 @@ type RoleSandboxMCP struct {
 type RoleSandbox struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
+	// RunIn names the cell this seat's code work runs in: direct,
+	// container or e2b — or self, which is the executor's OWN agent-mode
+	// run and the one value with no providers.sandbox backend behind it.
+	// Empty inherits the provider default, resolved at LAUNCH rather than
+	// at config time, so a catalogue change reaches seats that never named
+	// one.
+	//
+	// A plain string rather than the config enum, like every other field
+	// here: this package is the runtime shape and does not import config.
+	// The closed set and what each cell means live on config.Placement.
+	RunIn string `yaml:"run_in,omitempty" json:"run_in,omitempty"`
+
 	// CodingAgent overrides the provider-wide default for this seat only.
 	// Empty inherits it, resolved at launch rather than at config time so a
 	// provider swap reaches seats that never named one.
@@ -430,9 +442,7 @@ type Role struct {
 	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero"`
 
 	// The per-phase chains. Each falls back to LLM when unset.
-	LLMPlan    ProviderKeys `yaml:"llm_plan,omitempty" json:"llm_plan,omitzero"`
-	LLMExecute ProviderKeys `yaml:"llm_execute,omitempty" json:"llm_execute,omitzero"`
-	LLMReview  ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero"`
+	LLMReview ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero"`
 	// LLMSubagent runs ephemeral sub-agents spawned from this seat.
 	LLMSubagent ProviderKeys `yaml:"llm_subagent,omitempty" json:"llm_subagent,omitzero"`
 	// LLMAuxiliary runs the cheap work the learning subsystem drives —
@@ -445,9 +455,14 @@ type Role struct {
 	// model is the right default.
 	LLMJudge ProviderKeys `yaml:"llm_judge,omitempty" json:"llm_judge,omitzero"`
 	// LLMSandbox runs the coding agent inside the sandbox. It falls back to
-	// LLMExecute before LLM: sandboxed work IS this seat's Execute phase,
-	// just running somewhere else.
+	// LLM, because sandboxed work IS this seat's own work — just running
+	// somewhere else — and LLM is what that work runs on.
 	LLMSandbox ProviderKeys `yaml:"llm_sandbox,omitempty" json:"llm_sandbox,omitzero"`
+
+	// Workers narrows which of the company's delegate templates this seat
+	// may hand work to. Empty means every one — see config.Role.Workers,
+	// which is where the rule and its reason live.
+	Workers []string `yaml:"workers,omitempty" json:"workers,omitempty"`
 
 	// LearningEnabled overrides the system-wide learning setting for this
 	// seat. Unset inherits it; false skips every reflection worker for this
@@ -525,8 +540,6 @@ func (r *Role) humanForbidden() []string {
 		set  bool
 	}{
 		{"llm", len(r.LLM) > 0},
-		{"llm_plan", len(r.LLMPlan) > 0},
-		{"llm_execute", len(r.LLMExecute) > 0},
 		{"llm_review", len(r.LLMReview) > 0},
 		{"llm_subagent", len(r.LLMSubagent) > 0},
 		{"llm_auxiliary", len(r.LLMAuxiliary) > 0},
@@ -534,6 +547,7 @@ func (r *Role) humanForbidden() []string {
 		{"llm_sandbox", len(r.LLMSandbox) > 0},
 		{"sandbox", r.Sandbox != nil},
 		{"token_budget", r.TokenBudget != 0},
+		{"workers", len(r.Workers) > 0},
 		{"learning_enabled", r.LearningEnabled.IsSet()},
 		{"schedules", len(r.Schedules) > 0},
 		{"slack", !r.Slack.IsZero()},

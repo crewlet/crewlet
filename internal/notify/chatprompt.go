@@ -83,6 +83,15 @@ func (ChatPrompt) DigestBody(_, body string) string { return body }
 // direct message carries its own body and needs no such trip.
 func (ChatPrompt) RequiresRecon(n Inbound) bool { return n.Metadata["thread_ts"] != "" }
 
+// Addressed implements [Prompt] through the same rule the working-status
+// indicator uses.
+//
+// ONE IMPLEMENTATION, deliberately: the indicator says "this agent is working
+// on your message" and the delivery check says "this agent owes your message
+// an answer", and the two disagreeing would raise a spinner on a turn allowed
+// to end in silence, or end one in silence after raising a spinner.
+func (p ChatPrompt) Addressed(n Inbound) bool { return Addressed(n.Metadata, p.DMPrefix) }
+
 // IsDirect reports whether an event happened in a direct conversation.
 func (p ChatPrompt) IsDirect(metadata map[string]string) bool {
 	if slices.Contains(p.DirectKinds, metadata["channel_type"]) {

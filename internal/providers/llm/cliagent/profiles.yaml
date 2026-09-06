@@ -21,6 +21,13 @@ claude-code:
   # engine does not control. The tool denials make it a text model — Crewlet's
   # tools ride the prompt envelope, and a CLI editing files in its own sandbox
   # is invisible to the tool registry, the permission model and redaction.
+  #
+  # Web is the one local tool that stays ON, and it has to be ALLOWED rather
+  # than merely not denied: print mode never prompts, and a permission-gated
+  # tool that is not on the allow list is refused, so a seat that was told it
+  # could fetch would have found it could not. A fetch is a read — it never
+  # gates delivery — and a subscription seat must not have less reach than the
+  # same CLI at a terminal.
   complete_args:
     - "-p"
     - "--output-format"
@@ -29,6 +36,9 @@ claude-code:
     - "--safe-mode"
     - "--strict-mcp-config"
     - "--disable-slash-commands"
+    - "--allowedTools"
+    - "WebFetch"
+    - "WebSearch"
     - "--disallowedTools"
     - "Bash"
     - "Read"
@@ -36,11 +46,10 @@ claude-code:
     - "Edit"
     - "Glob"
     - "Grep"
-    - "WebFetch"
-    - "WebSearch"
     - "Task"
     - "NotebookEdit"
     - "TodoWrite"
+  local_tools: denied
   model_args: ["--model", "{model}"]
   prompt_mode: stdin
   output: json
@@ -93,8 +102,21 @@ codex:
   version_args: ["--version"]
   # read-only sandbox for the same reason as Claude's tool denials, and
   # --skip-git-repo-check because the per-call scratch directory is
-  # deliberately not a repository.
-  complete_args: ["exec", "--json", "--sandbox", "read-only", "--skip-git-repo-check", "-"]
+  # deliberately not a repository. The sandbox also cuts the shell's network,
+  # which is fine — the shell is denied — but the model's OWN web search is a
+  # separate tool that the config defaults to an offline index; `live` is the
+  # setting that reaches the web, passed as a config override so no file has
+  # to be seeded.
+  complete_args:
+    - "exec"
+    - "--json"
+    - "--sandbox"
+    - "read-only"
+    - "--skip-git-repo-check"
+    - "-c"
+    - 'web_search="live"'
+    - "-"
+  local_tools: denied
   model_args: ["--model", "{model}"]
   prompt_mode: stdin
   output: jsonl
@@ -133,6 +155,17 @@ gemini-cli:
   written_for: "Gemini CLI 0.1x (`gemini --version`)"
   version_args: ["--version"]
   complete_args: ["--output-format", "json", "--approval-mode", "default"]
+  # Gemini takes its tool policy from settings.json in its config directory,
+  # which is under the seat HOME. Local tools are excluded from discovery
+  # (both the current and the pre-rename tool names, so the file holds across
+  # the releases it may meet), and the web tools are put on the no-confirmation
+  # list, because a headless run cannot answer a confirmation prompt and a
+  # fetch that waited for one would simply fail. The pre-1.0 top-level key is
+  # written beside the nested one for the same reason.
+  local_tools: denied
+  seed_files:
+    - path: .gemini/settings.json
+      content: '{"tools":{"exclude":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"],"allowed":["web_fetch","web_search","google_web_search"]},"excludeTools":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"]}'
   model_args: ["--model", "{model}"]
   prompt_mode: stdin
   output: json
@@ -165,6 +198,11 @@ qwen-code:
   written_for: "Qwen Code 0.1x (`qwen --version`), a Gemini CLI fork"
   version_args: ["--version"]
   complete_args: ["--output-format", "json", "--approval-mode", "default"]
+  # A Gemini CLI fork: same settings shape, same tool names, its own directory.
+  local_tools: denied
+  seed_files:
+    - path: .qwen/settings.json
+      content: '{"tools":{"exclude":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"],"allowed":["web_fetch","web_search","google_web_search"]},"excludeTools":["run_shell_command","read_file","write_file","edit_file","replace","glob","grep","search_file_content","list_directory","read_many_files","save_memory"]}'
   model_args: ["--model", "{model}"]
   prompt_mode: stdin
   output: json
@@ -188,6 +226,15 @@ opencode:
   written_for: "OpenCode 0.4x (`opencode --version`)"
   version_args: ["--version"]
   complete_args: ["run", "--print-logs=false"]
+  # OpenCode takes its tool policy from opencode.json under XDG_CONFIG_HOME,
+  # which the child environment points inside the seat HOME. Every rule is an
+  # explicit allow or deny — never ask, which a headless run cannot answer.
+  # `question` is denied for the same reason: it is the tool that asks a
+  # person. Explicit denies hold in every mode, including --auto.
+  local_tools: denied
+  seed_files:
+    - path: .config/opencode/opencode.json
+      content: '{"$schema":"https://opencode.ai/config.json","permission":{"read":"deny","edit":"deny","glob":"deny","grep":"deny","bash":"deny","task":"deny","skill":"deny","lsp":"deny","question":"deny","external_directory":"deny","webfetch":"allow","websearch":"allow"}}'
   model_args: ["--model", "{model}"]
   prompt_mode: argv
   output: text
@@ -218,6 +265,16 @@ cursor-agent:
   written_for: "Cursor Agent 2.x (`cursor-agent --version`)"
   version_args: ["--version"]
   complete_args: ["-p", "--output-format", "json"]
+  # Cursor reads a permissions block from the project's .cursor/cli.json —
+  # the per-call scratch directory IS the project, so the file is seeded there
+  # on every call. Its user-level file, cli-config.json, is the login file
+  # this profile seeds and syncs back, so the policy is kept out of it. Deny
+  # takes precedence over allow.
+  local_tools: denied
+  seed_files:
+    - path: .cursor/cli.json
+      in: work
+      content: '{"permissions":{"allow":["WebFetch(*)"],"deny":["Shell(*)","Write(*)","Read(*)"]}}'
   model_args: ["--model", "{model}"]
   prompt_mode: stdin
   output: json
@@ -244,7 +301,22 @@ copilot:
   vendor: openai
   written_for: "GitHub Copilot CLI 0.3x (`copilot --version`)"
   version_args: ["--version"]
-  complete_args: ["-p"]
+  # The tool flags come BEFORE -p, so nothing here can be read as the prompt,
+  # which is appended last. Denies win over allows; the web tools are
+  # allowed explicitly so a non-interactive run does not wait on approval.
+  complete_args:
+    - "--deny-tool"
+    - "shell"
+    - "--deny-tool"
+    - "write"
+    - "--deny-tool"
+    - "read"
+    - "--allow-tool"
+    - "web_fetch"
+    - "--allow-tool"
+    - "web_search"
+    - "-p"
+  local_tools: denied
   model_args: ["--model", "{model}"]
   # The prompt goes on argv, so a long transcript is bounded by ARG_MAX
   # (~2 MB on Linux, 256 KB on macOS) and fails at exec rather than at the
@@ -273,6 +345,13 @@ grok:
   written_for: "Grok CLI 0.1x (`grok --version`)"
   version_args: ["--version"]
   complete_args: ["-p"]
+  # No per-tool denial exists on this CLI, and its --sandbox flag restricts
+  # the network along with the filesystem — which would cut the web tools
+  # this backend keeps on. So the stance is declared honestly and
+  # `crewlet llm doctor` measures it: its shell probe reports whether this
+  # build ran a command on the engine host.
+  local_tools: vendor-default
+  local_tools_note: "grok exposes no per-tool denial, and --sandbox would also cut the network the web tools need"
   model_args: ["--model", "{model}"]
   prompt_mode: argv
   output: text

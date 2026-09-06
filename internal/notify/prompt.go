@@ -16,7 +16,9 @@ import (
 //
 //   - Build renders the trigger a seat is woken with.
 //   - RequiresRecon says whether that trigger is the context or a POINTER at
-//     it, which the Plan-phase prefetches read.
+//     it, which the turn-start prefetches read.
+//   - Addressed says whether somebody is waiting on this seat for an answer,
+//     which the turn engine's delivery check reads.
 //   - ConversationKey identifies the conversation, for inbox partitioning.
 //   - DigestBody is the supersede rule when several of them merge.
 //
@@ -39,11 +41,29 @@ type Prompt interface {
 	//
 	// A webhook saying "PR #42 got a comment" tells a seat where the work
 	// is, not what it is: the seat has to fetch the thread before it has
-	// any context. When this is true the Plan-phase relevance filters skip
+	// any context. When this is true the turn-start relevance filters skip
 	// their auxiliary model call, because filtering against a bare pointer
-	// is near-guaranteed to be worth nothing and the planner is already
+	// is near-guaranteed to be worth nothing and the agent is already
 	// told to re-query after it has looked.
 	RequiresRecon(n Inbound) bool
+
+	// Addressed reports that somebody is waiting on THIS seat for an
+	// answer: a direct message, a personal mention, an assignment.
+	//
+	// The turn engine reads it as the half of "did this turn deliver?" a
+	// model cannot get wrong — an addressed turn may not end in silence,
+	// because to the person who asked, silence is indistinguishable from a
+	// message that was lost. An unaddressed one may end having done
+	// nothing at all, which is what makes triage cheap.
+	//
+	// Only the vendor can say which of its events are an ask. A tracker's
+	// answer is its own routing reason (assigned, mentioned); a chat
+	// backend's is the channel type and whether the seat was named. So it
+	// is asked here rather than pattern-matched centrally, and the
+	// conservative answer is FALSE: a seat wrongly told nobody is waiting
+	// keeps the freedom to stay silent, while one wrongly told somebody is
+	// must post something on every broadcast it observes.
+	Addressed(n Inbound) bool
 
 	// ConversationKey is the SOURCE-LOCAL identity of the conversation.
 	//

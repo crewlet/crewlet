@@ -30,7 +30,7 @@ const (
 	// DefaultTimeout bounds one embedding call.
 	//
 	// SHORT, and much shorter than a completion's, because of where this
-	// sits: a Plan-phase prefetch runs it before a person sees anything,
+	// sits: a turn-start prefetch runs it before a person sees anything,
 	// and the caller's fallback for a slow embedder — no similarity
 	// search — is cheap. Waiting two minutes to avoid it would be the
 	// wrong trade in the one place the trade is obvious.

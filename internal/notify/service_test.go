@@ -492,10 +492,18 @@ func TestARateLimitedSeatIsNotWoken(t *testing.T) {
 
 // The valve FAILS OPEN. A limiter that cannot be reached must not stop real
 // notifications — it is a valve, not a gate.
+//
+// FALSE BESIDE THE ERROR, which is the shape the only production valve
+// actually returns: a counter that cannot read its bucket cannot report a
+// count, so every one of its error paths comes back paired with false. This
+// case used to pass true, which no implementation produces — so it exercised a
+// branch nothing reaches, and the service dropped every inbound notification
+// for every seat for as long as the coordination store was unreachable while
+// this stayed green.
 func TestAnUnreachableValveStillDelivers(t *testing.T) {
 	h := newService(t, nil)
 	h.limit = 5
-	h.valve.allow, h.valve.err = true, errors.New("counter unreachable")
+	h.valve.allow, h.valve.err = false, errors.New("counter unreachable")
 	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "hi")}
 
 	h.svc.Handle(t.Context(), delivery("tracker"))

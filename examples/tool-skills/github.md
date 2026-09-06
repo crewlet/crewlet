@@ -2,7 +2,7 @@
 key: mcp:github
 trigger:
   mcp_server: github
-phases: [plan, execute]
+phases: [execute]
 title: GitHub tools
 summary: |
   Read / search code + issues + PRs; review, comment, and track work.

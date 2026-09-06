@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // Every Tier B rejection, with the field path an operator can search for.
@@ -87,48 +89,37 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"providers.embeddings.model", ErrMissing,
 		},
 		{
-			"local sandbox with no block",
-			"name: Acme\nproviders:\n  sandbox:\n    type: local\n",
-			"providers.sandbox.local", ErrMissing,
-		},
-		{
-			"a local block on a backend that is not local",
-			"name: Acme\nproviders:\n  sandbox:\n    type: fake\n    local: {containment: direct}\n",
-			"providers.sandbox.local", ErrConflict,
-		},
-		{
-			// THE BACKEND IS A CHOICE, and every default is wrong in a
+			// A CATALOGUE IS A CHOICE, and every default is wrong in a
 			// way nobody sees: `local` runs the coding agent on this
-			// host, `none` turns code work off while the config says it
-			// is on, and the default this replaced named a backend the
-			// engine had no code to build.
+			// host, an absent block turns code work off while the
+			// config says it is on, and the default this replaced named
+			// a backend the engine had no code to build.
 			"a sandbox block that names no backend",
 			"name: Acme\nproviders:\n  sandbox:\n    default_coding_agent: opencode\n",
-			"providers.sandbox.type", ErrMissing,
-		},
-		{
-			"container containment with no image",
-			"name: Acme\nproviders:\n  sandbox:\n    type: local\n    local: {containment: container}\n",
-			"providers.sandbox.local.image", ErrMissing,
-		},
-		{
-			"image on direct containment",
-			"name: Acme\nproviders:\n  sandbox:\n    type: local\n    local: {containment: direct, image: acme/box}\n",
-			"providers.sandbox.local.image", ErrConflict,
+			"providers.sandbox", ErrMissing,
 		},
 		{
 			"unbounded pause",
-			"name: Acme\nproviders:\n  sandbox:\n    type: fake\n    default_pause_ttl_seconds: -1\n",
+			"name: Acme\nproviders:\n  sandbox:\n    fake: true\n    default_pause_ttl_seconds: -1\n",
 			"providers.sandbox.default_pause_ttl_seconds", ErrOutOfRange,
 		},
 		{
 			"a negative company-wide round cap",
-			"name: Acme\nproviders:\n  sandbox:\n    type: fake\n    default_max_turns: -5\n",
+			"name: Acme\nproviders:\n  sandbox:\n    fake: true\n    default_max_turns: -5\n",
 			"providers.sandbox.default_max_turns", ErrOutOfRange,
 		},
 		{
+			// A seat that runs code in a company with no catalogue is
+			// offered nothing and told nowhere: the gate reads as
+			// working configuration and its code work quietly never
+			// happens.
+			"a seat that runs code with no catalogue at all",
+			"name: Acme\nroles:\n  - name: SWE\n    sandbox: {enabled: true}\n",
+			"roles[0].sandbox.enabled", ErrMissing,
+		},
+		{
 			"a setup step that does nothing",
-			"name: Acme\nproviders:\n  sandbox:\n    type: fake\n    setup:\n      - name: empty\n",
+			"name: Acme\nproviders:\n  sandbox:\n    fake: true\n    setup:\n      - name: empty\n",
 			"providers.sandbox.setup[0]", ErrMissing,
 		},
 
@@ -140,8 +131,8 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		},
 		{
 			"a budget fraction above one",
-			"name: Acme\nturn_engine:\n  subagent_budget_fraction: 1.5\n",
-			"turn_engine.subagent_budget_fraction", ErrOutOfRange,
+			"name: Acme\nturn_engine:\n  delegation:\n    budget_fraction: 1.5\n",
+			"turn_engine.delegation.budget_fraction", ErrOutOfRange,
 		},
 		{
 			"a ceiling below its own base",
@@ -500,5 +491,46 @@ func TestJiraDataCentreNeedsNoSeparateSiteURL(t *testing.T) {
 	if jira.BaseURL() != "https://jira.example.com" ||
 		jira.ShareableBaseURL() != "https://jira.example.com" {
 		t.Errorf("base = %q, shareable = %q", jira.BaseURL(), jira.ShareableBaseURL())
+	}
+}
+
+// THE TWO COALESCING CEILINGS ARE ENFORCED, AND THE WINDOW'S IS THE
+// CONTRACT'S OWN NUMBER.
+//
+// queue.BatchOptions clamps the window regardless of who set the field —
+// programmatic construction bypasses validation entirely — and internal/queue
+// states that "config validation mirrors this cap". A second literal here made
+// that a claim nothing checked. The batch cap had no ceiling at all, on a knob
+// that multiplies the dominant repeated content of every round of a turn.
+func TestTheCoalescingCeilingsAreTheOnesTheContractEnforces(t *testing.T) {
+	t.Parallel()
+	if coalesceWindowMax != queue.MaxLingerSeconds {
+		t.Errorf("the config ceiling is %v and the contract clamps at %v: a window "+
+			"between them validates and is then silently cut",
+			coalesceWindowMax, queue.MaxLingerSeconds)
+	}
+	for _, tc := range []struct {
+		yaml  string
+		field string
+	}{
+		{"name: Acme\nnotification_coalesce_max_batch: 101\n", "notification_coalesce_max_batch"},
+		{"name: Acme\nnotification_coalesce_max_batch: 0\n", "notification_coalesce_max_batch"},
+		{"name: Acme\nnotification_coalesce_window_seconds: 60.5\n", "notification_coalesce_window_seconds"},
+	} {
+		_, err := ParseCompany([]byte(tc.yaml))
+		if err == nil || !strings.Contains(err.Error(), tc.field) {
+			t.Errorf("%q: err = %v, want a report naming %s", tc.yaml, err, tc.field)
+		}
+	}
+	// And the counterfactual: the boundary values are accepted, or the
+	// assertions above pass for a validator that refuses everything.
+	for _, ok := range []string{
+		"name: Acme\nnotification_coalesce_max_batch: 100\n",
+		"name: Acme\nnotification_coalesce_max_batch: 1\n",
+		"name: Acme\nnotification_coalesce_window_seconds: 60\n",
+	} {
+		if _, err := ParseCompany([]byte(ok)); err != nil {
+			t.Errorf("%q was refused: %v", ok, err)
+		}
 	}
 }

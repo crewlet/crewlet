@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,9 +115,10 @@ roles:
 	}
 }
 
-// llm_sandbox falls back to llm_execute before llm, because sandboxed work IS
-// this seat's Execute phase running somewhere else.
-func TestTheSandboxModelFallsBackThroughExecute(t *testing.T) {
+// llm_sandbox falls back to `llm`, which IS the seat's own model: the turn's
+// work happens in one conversation, so there is no separate executor key to
+// inherit — sandboxed work is that same work, done somewhere else.
+func TestTheSandboxModelFallsBackToTheSeatsOwn(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	c := companyFor(t, `
 name: Acme
@@ -132,11 +136,33 @@ roles:
   - name: Engineer
     handle: eng
     llm: big
-    llm_execute: coder
 `)
 	got, _, _ := sandboxLLM(c, seatNamed(t, c, "Engineer"))
+	if got == nil || got.Model != "gpt-4o" {
+		t.Fatalf("the sandbox model = %+v, want the seat's own model", got)
+	}
+	// And its own key still wins, or the fallback would be the only path.
+	c = companyFor(t, `
+name: Acme
+providers:
+  llm:
+    big:
+      type: openai
+      model: gpt-4o
+      api_keys: ["${OPENAI_API_KEY}"]
+    coder:
+      type: openai
+      model: gpt-4o-coder
+      api_keys: ["${OPENAI_API_KEY}"]
+roles:
+  - name: Engineer
+    handle: eng
+    llm: big
+    llm_sandbox: coder
+`)
+	got, _, _ = sandboxLLM(c, seatNamed(t, c, "Engineer"))
 	if got == nil || got.Model != "gpt-4o-coder" {
-		t.Fatalf("the sandbox model = %+v, want the seat's Execute model", got)
+		t.Fatalf("the sandbox model = %+v, want llm_sandbox's own", got)
 	}
 }
 
@@ -261,56 +287,87 @@ func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
 	}
 }
 
-// EVERY BACKEND THE CONFIG ACCEPTS IS ONE THIS ENGINE CAN BUILD.
+// EVERY PLACEMENT THE CONFIG ACCEPTS IS ONE THIS ENGINE CAN BUILD.
 //
-// `config.SandboxTypes` is the closed set an operator's `type:` is checked
-// against, and `buildSandboxProvider` is what turns one into a running
-// backend. Nothing connects them, and when they last disagreed the config's
-// DEFAULT was the offender: `providers.sandbox: {}` validated, reported a
-// configured sandbox on every operator surface, and failed at the first
-// coding run with an error naming a backend nobody had written.
+// `config.Placements` is the closed set a `run_in:` is checked against, and
+// `buildSandboxProvider` is what turns one into a running backend. Nothing
+// connects them, and when they last disagreed the config's DEFAULT was the
+// offender: `providers.sandbox: {}` validated, reported a configured sandbox
+// on every operator surface, and failed at the first coding run with an error
+// naming a backend nobody had written.
 //
 // It fails in the direction that is hardest to see — the config says yes and
 // the runtime says no — and only for a company that actually runs code, so a
 // boot proves nothing. Hence a test that walks the set.
-func TestEveryConfiguredSandboxTypeCanBeBuilt(t *testing.T) {
+func TestEveryConfiguredPlacementCanBeBuilt(t *testing.T) {
 	t.Parallel()
-	for _, kind := range config.SandboxTypes {
-		spec := &config.SandboxProvider{Type: kind}
-		if kind == config.SandboxE2B {
+	// EXACTLY ONE CELL IS EXEMPT, and it is exempt because it is not a
+	// backend: `self` is the executor's own agent-mode run, so nothing
+	// builds a provider for it. Asserted rather than assumed, so a fifth
+	// cell added tomorrow cannot quietly join the exemption.
+	for _, p := range config.Placements {
+		if p.NeedsBackend() != (p != config.PlacementSelf) {
+			t.Fatalf("%q disagrees with itself about needing a backend", p)
+		}
+	}
+	for _, placement := range config.BackendPlacements() {
+		spec := &config.SandboxProvider{
 			// The one backend with a required credential of its own: the
 			// API authenticates every call, so a provider built without
 			// a key would report a configured sandbox and 401 at the
 			// first create.
-			spec.APIKey = "e2b_test_key"
+			E2B: &config.E2BSandbox{APIKey: "e2b_test_key"},
+			// An image, because one of the two local cells needs it and
+			// a backend that cannot be built for `container` is exactly
+			// what this test exists to catch.
+			Local: &config.LocalSandbox{Image: "example.invalid/box:1"},
 		}
-		if kind == config.SandboxLocal {
-			// The one backend with a required block of its own: type
-			// local with none would silently take `direct` containment,
-			// which runs the coding agent as the engine's user.
-			spec.Local = &config.LocalSandbox{Containment: config.ContainmentDirect}
-		}
-		if kind == config.SandboxNone {
-			// Not a backend — it is how an operator says "no code work",
-			// and buildSandbox never reaches the switch for it.
-			if spec.Enabled() {
-				t.Errorf("%q reports itself enabled, so the engine would try "+
-					"to build a backend for the value that means there is none", kind)
-			}
-			continue
+		if !spec.Configured(placement) {
+			t.Fatalf("a catalogue with every backend does not configure %q, so "+
+				"the closed set names a cell providers.sandbox cannot hold", placement)
 		}
 		// NO RESOLVER: this asks whether each backend can be CONSTRUCTED,
 		// and a nil resolver hands the literal through, which is what an
 		// in-process caller wrote.
-		provider, err := buildSandboxProvider(spec, nil)
+		provider, err := buildSandboxProvider(spec, nil, placement)
 		if err != nil {
-			t.Errorf("providers.sandbox.type %q is accepted by the config and "+
-				"cannot be built: %v", kind, err)
+			t.Errorf("run_in %q is accepted by the config and cannot be "+
+				"built: %v", placement, err)
 			continue
 		}
 		if provider == nil {
-			t.Errorf("providers.sandbox.type %q built no provider and no error, "+
-				"so a sandbox-enabled seat plans around a box it never gets", kind)
+			t.Errorf("run_in %q built no provider and no error, so a "+
+				"sandbox-enabled seat plans around a box it never gets", placement)
+		}
+	}
+}
+
+// A CATALOGUE WITH NOTHING IN IT IS NOT A SANDBOX, and the distinction is the
+// one an operator's half-finished edit lands on: `providers.sandbox: {}`
+// parses, and if it reported itself enabled the engine would build a manager
+// with no backends and offer run_sandbox to every gated seat.
+func TestAnEmptyCatalogueIsNotEnabled(t *testing.T) {
+	t.Parallel()
+	if (&config.SandboxProvider{}).Enabled() {
+		t.Error("an empty catalogue reports itself enabled")
+	}
+	if (&config.SandboxProvider{Fake: true}).Enabled() != true {
+		t.Error("the double does not report itself enabled")
+	}
+}
+
+// THE DOUBLE ANSWERS EVERY CELL, so a demonstration config differs from a
+// real one in exactly one line rather than in the placement every seat names.
+func TestTheDoubleAnswersEveryPlacement(t *testing.T) {
+	t.Parallel()
+	spec := &config.SandboxProvider{Fake: true}
+	for _, placement := range config.BackendPlacements() {
+		provider, err := buildSandboxProvider(spec, nil, placement)
+		if err != nil {
+			t.Fatalf("the double cannot serve %q: %v", placement, err)
+		}
+		if provider.Kind() != "fake" {
+			t.Errorf("placement %q built %q, not the double", placement, provider.Kind())
 		}
 	}
 }
@@ -376,5 +433,54 @@ func TestTheWaiterDutyTTLFollowsItsCadenceAndItsBucket(t *testing.T) {
 				t.Fatal("the duty asks to outlive its bucket; the KV refuses that on every claim")
 			}
 		})
+	}
+}
+
+// leftover is a seat's remaining allowance, or a counter that cannot be read.
+type leftover struct {
+	left int
+	err  error
+}
+
+func (l leftover) Remaining(context.Context) (int, error) { return l.left, l.err }
+
+// THE PRE-FLIGHT FLOOR, three-valued like every other budget read in this
+// engine. turn_engine.sandbox_min_budget_tokens was validated, schema'd and
+// documented and read by nothing, so a company that set it got a new revision
+// and no behaviour.
+func TestACodingRunIsRefusedBelowTheBudgetFloor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Below the floor: refused, and the message says what to do instead —
+	// a coding run costs a box, a clone and a toolchain install before it
+	// produces a token.
+	err := sandboxHeadroom(ctx, leftover{left: 500}, 2000)
+	if err == nil {
+		t.Fatal("a seat with 500 tokens launched a run needing 2000")
+	}
+	for _, want := range []string{"500", "2000", "your own tools"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal is missing %q: %v", want, err)
+		}
+	}
+
+	// A READ THAT FAILED is refused too: launching a box on an unknown
+	// budget is how a company discovers its ceiling by spending past it.
+	if err := sandboxHeadroom(ctx,
+		leftover{err: errors.New("the coordination store is unreachable")}, 2000); err == nil {
+		t.Error("a run launched on a budget nobody could read")
+	}
+
+	// And the two states that legitimately pass, or the assertions above
+	// hold for a floor that refuses everything.
+	if err := sandboxHeadroom(ctx, leftover{left: 50_000}, 2000); err != nil {
+		t.Errorf("a seat with headroom was refused: %v", err)
+	}
+	if err := sandboxHeadroom(ctx, nil, 2000); err != nil {
+		t.Errorf("a company with no token budget was refused: %v", err)
+	}
+	if err := sandboxHeadroom(ctx, leftover{left: 0}, 0); err != nil {
+		t.Errorf("an unset floor refused a run: %v", err)
 	}
 }

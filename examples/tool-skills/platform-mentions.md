@@ -10,7 +10,7 @@ trigger:
     - tool: confluence_add_comment
     - tool: confluence_create_page
     - tool: confluence_update_page
-phases: [plan, execute]
+phases: [execute]
 title: Mentioning teammates
 summary: |
   Per-platform mention markup (Jira / Confluence / Mattermost) + shareable

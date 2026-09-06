@@ -50,7 +50,6 @@ roles:
 turn_engine:
   max_iterations: 1
   max_tool_rounds: 3
-  plan_max_tool_rounds: 3
 `
 
 // tickInterval is the shared tick's cadence here. Short enough that the spend
@@ -135,17 +134,22 @@ func startWith(t *testing.T, amend func(doc string) string) *node {
 //
 // Keyed on the tools the request offers rather than on call ORDER: a phase that
 // retries, a rescue, or an extension all send another request, and a script
-// that counted would answer the second Plan call with Execute's reply. What
-// distinguishes the phases is what they can invoke — submit_plan, submit_review,
-// or neither — which is exactly the fact the runner varies.
+// that counted would answer the second executor call with the reviewer's
+// reply. What distinguishes the phases is what they can invoke — submit_work,
+// submit_review, or neither — which is exactly the fact the runner varies.
 type scriptedModel struct {
 	url string
 
 	mu      sync.Mutex
 	calls   []string
 	offered []string
+	// bodies is the raw request body of every call, so a test can read what
+	// came BACK from a tool as well as what went out — a tool result rides
+	// the conversation, not the system prompt.
+	bodies [][]byte
+
 	// systems is the SYSTEM prompt of every call, which is where the
-	// Plan-phase prefetch's blocks land. Captured because "the block was
+	// turn-start prefetch's blocks land. Captured because "the block was
 	// rendered" and "the model was shown it" are different claims and only
 	// the second one matters.
 	systems []string
@@ -161,13 +165,40 @@ type scriptedModel struct {
 	// engaged records whether the extra call has already been made this
 	// turn, so the executor calls the tool once and then answers.
 	engaged bool
+
+	// searchQuery makes the executor call search_knowledge once with that
+	// query. Opt-in for the same reason engages is: the phase-count
+	// assertions elsewhere are written against a one-round executor.
+	searchQuery string
+	searched    bool
 }
 
-// engageOnExecute makes the next turn's Execute phase call a tool.
+// engageOnExecute makes the next turn's executor call a tool.
 func (m *scriptedModel) engageOnExecute() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.engages, m.engaged = true, false
+}
+
+// searchOnExecute makes the next turn's executor call search_knowledge once
+// before it submits, which is what a real seat does when its turn-start
+// knowledge block came back empty.
+func (m *scriptedModel) searchOnExecute(query string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.searchQuery, m.searched = query, false
+}
+
+// shouldSearch reports whether this executor round is the searching one, and
+// marks it spent.
+func (m *scriptedModel) shouldSearch() (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.searchQuery == "" || m.searched {
+		return "", false
+	}
+	m.searched = true
+	return m.searchQuery, true
 }
 
 // shouldEngage reports whether this Execute round is the tool-calling one,
@@ -198,6 +229,7 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 	names := slices.Sorted(maps.Keys(offered))
 	m.offered = append(m.offered, strings.Join(names, "+"))
 	m.systems = append(m.systems, systemPrompt(raw))
+	m.bodies = append(m.bodies, raw)
 	m.mu.Unlock()
 
 	// Keyed on the tool that DISTINGUISHES each phase, in the order that
@@ -207,32 +239,45 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 	var reply string
 	switch {
 	case offered["submit_review"]:
-		// Checked FIRST. Review's system prompt embeds Plan's tool log as
-		// evidence, so the string "submit_plan" appears in a Review
-		// request too — matching on the whole body answered Review with a
-		// plan, which never submitted, which rescued into a second round.
-		// Measured: [plan execute plan plan plan].
+		// Checked FIRST. The reviewer's system prompt embeds the
+		// executor's tool log as evidence, so the string "submit_work"
+		// appears in a review request too — matching on the whole body
+		// answered the reviewer with a work submission, which never
+		// submitted, which rescued into a second round.
 		m.saw("review")
 		reply = toolUse("submit_review", map[string]any{
 			"decision":       "done",
 			"final_artifact": "Three PRs merged, one incident, zero regressions.",
 		})
-	case offered["submit_plan"]:
-		m.saw("plan")
-		reply = toolUse("submit_plan", map[string]any{
-			"decision":  "plan",
-			"reasoning": "Answer the founder with the weekly numbers.",
-			// No tools: this company has no delivery tool registered, and
-			// naming one would make the delivery gate judge a phantom.
-			"tools_needed":     []string{},
-			"steps":            []map[string]string{{"intent": "reply", "approach": "state the numbers"}},
-			"success_criteria": []string{"the founder has the numbers"},
+	case offered["submit_work"]:
+		if query, ok := m.shouldSearch(); ok {
+			m.saw("execute")
+			reply = toolUse("search_knowledge", map[string]any{"query": query})
+			break
+		}
+		if m.shouldEngage() {
+			// The round that CALLS something. Recorded as execute like
+			// the submitting round, because it is the same phase — what
+			// differs is that this turn leaves an observable trace, which
+			// is the condition every learning worker is gated on.
+			m.saw("execute")
+			reply = toolUse("list_mcp_server_tools", map[string]any{})
+			break
+		}
+		m.saw("execute")
+		reply = toolUse("submit_work", map[string]any{
+			// `delivered` with no cited call, which is honest here: this
+			// company registers no delivery tool and nobody is waiting on
+			// the turn, so the answer IS the artifact and the engine
+			// demands a citation only where a tool was the way to deliver.
+			"outcome": "delivered",
+			"summary": "Three PRs merged, one incident, zero regressions.",
 		})
 	case offered["mark_onboarded"]:
-		// The first-turn pass, before Plan and on its own budget. A model
-		// that never marked would burn all ten rounds and retry next turn
-		// — correct behaviour, and thirty seconds of it in a test, which
-		// is how this case came to exist.
+		// The first-turn pass, before the executor and on its own budget.
+		// A model that never marked would burn all ten rounds and retry
+		// next turn — correct behaviour, and thirty seconds of it in a
+		// test, which is how this case came to exist.
 		m.saw("onboarding")
 		reply = toolUse("mark_onboarded", map[string]any{
 			"notes": "Read the team pages; deploys go out on Thursdays.",
@@ -246,13 +291,6 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		pass := auxiliaryPass(raw)
 		m.saw("aux:" + pass)
 		reply = textReply(auxiliaryAnswer(pass))
-	case m.shouldEngage():
-		// The round that CALLS something. Recorded as execute like the
-		// answering round, because it is the same phase — what differs
-		// is that this turn leaves an observable trace, which is the
-		// condition every learning worker is gated on.
-		m.saw("execute")
-		reply = toolUse("list_mcp_server_tools", map[string]any{})
 	default:
 		m.saw("execute")
 		reply = textReply("Three PRs merged, one incident, zero regressions.")
@@ -317,10 +355,10 @@ func auxiliaryAnswer(pass string) string {
 // offeredTools names the tools a Messages request actually offers.
 //
 // The TOOL DEFINITIONS, not the prose. What distinguishes the phases is what
-// each can invoke — submit_plan, submit_review, or neither — and that is a
+// each can invoke — submit_work, submit_review, or neither — and that is a
 // structured field. Substring-matching the body reads the same names out of
 // prompts that merely mention them, which is exactly how the first version of
-// this answered Review with a plan.
+// this answered the reviewer with a work submission.
 func offeredTools(raw []byte) map[string]bool {
 	var req struct {
 		Tools []struct {
@@ -354,6 +392,41 @@ func (m *scriptedModel) systemPrompts() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]string(nil), m.systems...)
+}
+
+// toolResults is every tool_result block the model was handed back, flattened.
+//
+// What a tool ANSWERED is only visible here: it rides the conversation as a
+// user-role content block, never the system prompt, so a test asserting that a
+// tool's output reached the model has nowhere else to read it.
+func (m *scriptedModel) toolResults() []string {
+	m.mu.Lock()
+	bodies := append([][]byte(nil), m.bodies...)
+	m.mu.Unlock()
+
+	var out []string
+	for _, raw := range bodies {
+		var req struct {
+			Messages []struct {
+				Content []struct {
+					Type    string `json:"type"`
+					Content any    `json:"content"`
+				} `json:"content"`
+			} `json:"messages"`
+		}
+		if json.Unmarshal(raw, &req) != nil {
+			continue
+		}
+		for _, msg := range req.Messages {
+			for _, block := range msg.Content {
+				if block.Type != "tool_result" {
+					continue
+				}
+				out = append(out, fmt.Sprint(block.Content))
+			}
+		}
+	}
+	return out
 }
 
 // systemPrompt reads a Messages request's system block, which the SDK sends

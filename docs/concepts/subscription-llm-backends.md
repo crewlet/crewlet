@@ -101,9 +101,9 @@ anyone else.
 
 ### Concurrency within a seat
 
-Batched [sub-agents](turn-engine.md) run in parallel and belong to the
+Delegated [workers](turn-engine.md#workers) run in parallel and belong to the
 *same* agent, so they share that seat's home — sharing memory between an
-agent and its own sub-agents is harmless by definition. Pruning is keyed
+agent and its own workers is harmless by definition. Pruning is keyed
 to the seat's in-flight count crossing zero: the first concurrent call
 wipes and seeds, the last one to finish wipes again. Parallelism inside a
 seat is preserved; nothing crosses a seat or a turn.
@@ -125,13 +125,178 @@ sequenceDiagram
 
 ---
 
-## Tool calls
+## Two modes: a text model, or the agent itself
+
+A cli-agent entry runs one of two ways, named on the entry with
+`cli.mode`. There is deliberately **no default beyond `text`** and no
+inference, because both are defensible for the same CLI on the same
+seat.
+
+| | `mode: text` (default) | `mode: agent` |
+|---|---|---|
+| Who drives the loop | Crewlet's own tool loop | the CLI's |
+| The CLI's shell and editor | denied | **enabled** — that is the point |
+| Crewlet's tools | ride the prompt envelope; the engine executes them | reach the run over the [MCP bridge](#the-tool-bridge) |
+| Where it runs | a subprocess of this engine | a sandbox box (`cli.run_in`) |
+| Lifetime | one call, inside the phase | **detached** — outlives the turn, resumes it later |
+| Needs | a login on this host | a login *plus* `providers.sandbox` and a reachable bridge URL |
+
+**Text mode is predictable**: the tool log is the engine's own, every
+call goes through the permission model and redaction, and it works with
+no reachable API. **Agent mode is the vendor's own harness**: a real
+shell, a real editor and a real checkout, which is what makes it worth
+having for code work.
+
+Only the **executor** branches. Every other phase — the reviewer, a
+delegated worker, the summariser, the round-cap judge — is a text call on
+the same entry, and a seat pointing `llm` at an agent-mode entry keeps
+all of them. The reviewer in particular stays native and stays a separate
+model call: the point of a reviewer is that it is not the thing being
+reviewed.
+
+### Agent mode
+
+```yaml
+providers:
+  llm:
+    subscription:
+      type: cli-agent
+      model: sonnet
+      cli:
+        agent: claude-code
+        mode: agent                    # text (default) | agent
+        run_in: direct                 # direct | container | e2b
+```
+
+`run_in` names a cell of [`providers.sandbox`](code-sandbox.md), and it
+sits on the **entry** rather than on the seat because it is a property of
+this runtime: the CLI's subscription login lives on the engine host, so
+`direct` and `container` reach it directly while a remote cell needs the
+headless token instead. Want both? Make two entries and point each seat
+at the one that is right for it — the same way you already choose between
+two models. Empty takes `providers.sandbox.default_run_in`.
+
+The cell is checked like a seat's, at validation rather than at the
+seat's first turn: it must be one the catalogue configures, an empty one
+needs a default to fall to, and agent mode in a company with no
+`providers.sandbox` at all is refused outright. The backend behind the
+cell is built for it, so `run_in: container` needs `local.image` exactly
+as a seat's would. `self` is not accepted here — it is a *seat's* answer,
+meaning "my code work rides my executor's run", and an agent-mode entry
+**is** that run. Only entries some seat's executor actually resolves to
+are checked and built for; an entry nobody runs on is checked the day a
+seat points at it. A seat that names no `llm` resolves the company-wide
+fallback (the entry called `default`, else the first declared), so an
+agent-mode entry can be reached without any seat naming it — but a
+**human seat** never resolves one at all: it is addressable and never
+spawned, so it runs no executor and reaches no entry.
+
+The credential guard that refuses a remote run whose login cannot follow
+it (see [Code Sandbox](code-sandbox.md#failure-modes)) reads **this**
+entry for an agent-mode run — the run *is* the executor — and the seat's
+`llm_sandbox` only for `run_sandbox` work.
+
+An agent-mode run is a **detached coding run** and reuses that machinery
+whole: the executor phase suspends, the run's state goes on a durable row
+in the [coordination store](coordination.md), the completion poll collects
+it, and the *same turn* resumes — possibly in another process on another
+node, days later. Nothing about that is new for agent mode; see
+[Code Sandbox](code-sandbox.md#how-a-coding-task-runs).
+
+#### The tool bridge
+
+The seat's tools cannot be shipped into the box: most are MCP children
+holding the **seat's** credentials, several are engine control, and the
+whole point of a sandbox is that its credentials are not the company's.
+So the box gets exactly one MCP server — on the engine, named `crewlet` —
+and every call comes back out through the *same* `tools.Surface` a native
+loop would call. A tool denied natively is denied there; the skill guard,
+the recording and the failure shape are the ones already tested. That
+name is **reserved**: an `mcp_servers` entry may not use it, because the
+bridge is written into every agent-mode box's server list under it and
+would replace the entry there. The bridge advertises the seat's *live*
+tool set — a tool the coding agent activates mid-run with `activate_tool`
+is listed and callable on its next request, over the connection it already
+holds — and every MCP session the box opened is closed the moment the run
+ends, whatever ended it.
+
+The endpoint is a per-run URL carrying a signed token that expires with
+the run, and the session is closed the moment the run ends, whatever
+ended it. Set **`CREWLET_MCP_BRIDGE_URL`** to a URL a sandbox can reach;
+without it agent mode is **refused** at launch rather than started — a
+coding agent with none of the seat's tools cannot answer anybody, cannot
+touch a ticket and cannot submit its work.
+
+> **In a fleet, that URL must address the node itself — not a load
+> balancer in front of several, and not a standalone API process.** A
+> session is a live tool surface: the seat's MCP children, its skill
+> guard, its per-turn recording, all objects in the process that claimed
+> the seat. Signing shares *authentication* across a fleet; it does not
+> and could not share the surface. Each node mints its endpoint from its
+> own value, so a per-node-addressable one is correct and a shared one
+> sends calls to peers that never held the session. Those answer 401
+> forever, and the response deliberately cannot say why — but the log
+> can, and does: `mcp_bridge_unresolved` names this setting when the
+> token is one the fleet signed.
+
+The run ends by calling `submit_work` over that bridge, exactly as a
+native loop ends by calling it locally, so the outcome vocabulary and the
+rescue path are shared. A run that stops without submitting is rescued as
+`incomplete` and judged on its record — the engine never reads the prose
+a CLI happened to end with as a delivery.
+
+Every bridged call is appended to the run's own durable row, bounded at
+200 with the **middle** dropped, because that log is the whole record a
+resume has: the process collecting a run may not be the one that launched
+it, and without it a restart mid-run would leave the reviewer judging a
+turn whose entire tool log is gone.
+
+#### Code work inside the run
+
+A seat whose executor already holds a shell has no use for a second box
+beside it — two filesystems, with the work in the one the turn cannot
+see. That is what [`role.sandbox.run_in: self`](code-sandbox.md#where-code-work-runs)
+names: code work rides the executor's own run, `run_sandbox` refuses with
+a message saying to use the shell it already has, and no second box is
+provisioned. `self` is refused on any other runtime, and is not offerable
+as a company-wide default.
+
+## Tool calls in text mode
 
 Every one of these CLIs has its own tools — file edits, shell, web
-fetch. Crewlet does **not** use them: they run in the CLI's sandbox,
+fetch. In **text mode** Crewlet does **not** use them: they run in the CLI's sandbox,
 invisible to the [tool registry](../guides/tools-and-mcp.md), the
 permission model, secret redaction, and the event stream. Routing agent
 work through them would fork the engine's tool surface in two.
+
+So every profile **denies the CLI's shell and file tools** wherever the
+vendor offers a way to, and each says how: a flag on the command line
+(Claude Code's `--disallowedTools`, Copilot's `--deny-tool`, Codex's
+read-only sandbox) or a settings file the engine writes into the seat's
+own home or the per-call working directory before every call (Gemini's
+`settings.json`, OpenCode's `opencode.json`, Cursor's `.cursor/cli.json`).
+The shell is the one that matters: the seat's home and environment are
+isolated, but the filesystem is not, and a CLI with a shell on the engine
+host reads whatever the engine user can read. A vendor with no such
+switch is declared as `local_tools: vendor-default` with a note saying
+which switch is missing — and `crewlet llm doctor` **measures** the
+stance rather than trusting it (see [Operating it](#operating-it)).
+
+**Web is the one local tool that stays on.** A subscription seat must
+not have less reach than the same CLI at a terminal, and a fetch is a
+read — it never gates a delivery. Where a vendor gates its web tools
+behind an approval a headless run cannot answer, the profile allows them
+explicitly (`--allowedTools WebFetch WebSearch`, Copilot's
+`--allow-tool`); where its default web search answers from an offline
+index, the profile switches it live (Codex's `web_search="live"`). What
+the CLI reads on the web is not in the engine's event stream — the cost
+of an unrecorded read, accepted. Seats on API models reach the web the
+way they reach everything external, through the MCP servers you configure.
+
+Both stances are profile fields, so an operator can override them like
+any other — `cli.overrides.local_tools`, `cli.overrides.local_tools_note`,
+and `cli.overrides.seed_files` (a list of `{path, in: home|work, content}`;
+lists replace wholesale).
 
 Instead the CLI is used strictly as a text model, and the tool channel
 rides in the prompt:
@@ -382,6 +547,8 @@ providers:
       model: sonnet                    # passed to the CLI's --model
       cli:
         agent: claude-code             # or codex | gemini-cli | opencode | …
+        mode: text                     # text (default) | agent — see above
+        run_in: ""                     # agent mode only: direct | container | e2b
 
         state_dir: /var/lib/crewlet/llm-cli/claude
         # Where credentials and per-seat homes live. Empty uses
@@ -438,8 +605,8 @@ through.
 ## Per-phase models
 
 Nothing changes. Phase selection resolves by `providers.llm` **key**,
-and the resolver never looks at a provider's type — so `llm_plan`,
-`llm_execute`, `llm_review`, `llm_subagent`, `llm_auxiliary`,
+and the resolver never looks at a provider's type — so `llm`,
+`llm_review`, `llm_subagent`, `llm_auxiliary`,
 `llm_judge` and `llm_sandbox` all behave exactly as they do for API
 entries, including mixing the two kinds in one role and including
 list-form fallback chains. See
@@ -467,8 +634,8 @@ providers:
 
 roles:
   - name: Engineer
-    llm_plan: opus-sub              # deep reasoning on the subscription
-    llm_execute: [sonnet-sub, cheap]  # subscription first, key when spent
+    llm: [opus-sub, cheap]          # the executor: subscription first, key when spent
+    llm_review: sonnet-sub          # the reviewer, on a cheaper subscription model
     llm_auxiliary: cheap            # see the latency note below
 ```
 
@@ -490,7 +657,7 @@ processes, so two entries at the default of 4 can run 8 CLI processes at
 once. Size them together against the engine host's memory.
 
 **Auxiliary work is the one phase to think twice about.** Every
-reflection, summarisation and Plan-phase relevance prefetch goes through
+reflection, summarisation and the turn-start relevance prefetch goes through
 `llm_auxiliary`, and each one pays a process launch on this backend.
 Point it at a cheap API model unless you have no key at all. (Crewlet
 does handle the latency: the auxiliary call's 60-second deadline is
@@ -645,13 +812,19 @@ crewlet llm logout default            # revoke locally + delete credentials
 
 `doctor` is the command that matters. It checks the binary is on `PATH`,
 runs its version probe, reports whether a login is present, says whether
-token counts will be real or estimated — and then runs **a real
-completion with a real tool**, because a profile can look perfect and
-still not produce a parseable tool call:
+token counts will be real or estimated — and then runs **three real
+completions**: a smoke test with a real tool, because a profile can look
+perfect and still not produce a parseable tool call; a **shell probe**,
+which asks the CLI to run `date +%s` with its own shell and believes it
+only if the answer is within minutes of the engine's clock (a model can
+write a token it was asked to echo, but it cannot guess the current
+epoch); and a **web probe**, which asks the CLI to fetch a public
+endpoint that reports its own clock and applies the same test:
 
 ```
 provider      : subscription
 cli agent     : claude-code
+mode          : text (a model behind the engine's tool loop)
 binary        : /usr/local/bin/claude
 version       : 2.0.31 (Claude Code)
 written for   : Claude Code CLI 2.x (`claude --version`)
@@ -660,12 +833,44 @@ credentials   : present
 token env     : set
 token usage   : reported by CLI
 smoke test    : ok — 812 in / 34 out
+local tools   : denied by profile — probe: refused
+web           : ok — fetched https://www.cloudflare.com/cdn-cgi/trace
 problems      : none
 ```
 
-One caveat worth stating plainly: `doctor` spends a real completion. On a
-subscription that is a few thousand tokens of your plan's allowance, which
-is why `-no-smoke` exists for a scripted health check that runs often.
+On an **agent-mode** entry the report carries two more lines, and both
+check something that fails at a seat's *first turn* and nowhere earlier:
+
+```
+mode          : agent (the CLI runs the executor)
+agent runtime : runner: "claude-code" is registered
+              : tool bridge: https://engine.example.com
+```
+
+The **runner** line is whether this build can actually drive that CLI as
+a coding agent. Agent mode reuses the coding-agent runners rather than
+growing a second way to invoke the same binary, and there are two of
+them — `claude-code` and `opencode`. An entry naming any other CLI in
+agent mode validates cleanly, appears in the schema and reports a
+configured provider, then refuses the moment a seat has work. The
+**tool bridge** line is `CREWLET_MCP_BRIDGE_URL`: without it every
+agent-mode launch is refused, because a coding agent with none of the
+seat's tools cannot answer anybody, touch a ticket or submit its work.
+
+A text-mode entry reports neither, rather than reporting that it would
+not work in a mode it is not in.
+
+A profile that says `denied` while the shell ran is a problem naming the
+installed version, because the vendor's switch is not taking effect on
+it; a `vendor-default` profile whose shell ran is a problem stating the
+trust you are taking on; a web tool that could not fetch is a problem
+pointing at the vendor's sandbox flags and the egress proxy the child
+environment was told about.
+
+One caveat worth stating plainly: `doctor` spends three real completions.
+On a subscription that is a few thousand tokens of your plan's allowance,
+which is why `-no-smoke` exists for a scripted health check that runs
+often — it skips all three and says so on each line.
 
 ---
 
@@ -674,14 +879,18 @@ is why `-no-smoke` exists for a scripted health check that runs often.
 - **The CLI runs on the engine host.** It must be installed there, and
   the engine process must be able to execute it. This is not a remote
   service.
+- **Agent mode needs more than a login.** A CLI with a coding-agent
+  runner, a `providers.sandbox` catalogue to place the run in, and a
+  bridge URL a box can dial. `crewlet llm doctor` checks all of it —
+  see [Operating it](#operating-it).
 - **Code work needs one more decision.** A subscription *can* back the
   [code sandbox](code-sandbox.md), two ways. On any backend including
   remote E2B, the headless token travels: `crewlet llm login <key>
   -capture-token` and Claude Code in the box bills your plan. For a CLI
   that mints no such token (Codex, Gemini CLI), use
-  [`providers.sandbox.type: local`](code-sandbox.md#local-sandboxes),
-  where the coding agent runs on the engine host and reads the login
-  directly. The credential *files* never travel to a remote box: they
+  a [local cell](code-sandbox.md#local-sandboxes) — `providers.sandbox.local`
+  plus `run_in: direct` or `container` — where the coding agent runs on
+  the engine host and reads the login directly. The credential *files* never travel to a remote box: they
   carry a refresh token whose rotation is shared fleet state.
 - **Latency.** Process launch plus model call. Point `llm_auxiliary` at
   a cheap API-key model rather than paying process startup for every

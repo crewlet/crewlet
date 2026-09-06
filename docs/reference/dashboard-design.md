@@ -27,7 +27,7 @@ So colour is spent in exactly four places:
 | | What it means | How many |
 |---|---|---|
 | **Status** | positive · caution · critical · info | 4, fixed |
-| **Phase** | plan · execute · review | 3, fixed |
+| **Phase** | onboarding · execute · review | 3, fixed |
 | **Accent** | *where the reader is* — the active nav row, the primary button, the focus ring, the on filter | 1 |
 | **Data** | a chart series, inside a chart that carries a legend | 5 + a neutral residual |
 
@@ -127,6 +127,17 @@ Three elevation steps: on the dark theme a panel is lifted by the light along
 its top edge, because a shadow is invisible against near-black; on light the
 shadow does the work. One recipe, two grounds, no second component.
 
+The sidebar's inset is the one place that scale is split in two, because a rail
+row has two edges that want different things. `--nav-gutter` insets the rail —
+it is where a row's own background, hover and active tint begin, so it decides
+how much of the rail's width the click target covers. `--nav-row-pad` insets
+the content inside that row. Every glyph in the rail therefore lands on the sum
+of the two, and anything with no row of its own — the brand lockup, the group
+labels — adds them rather than carrying a literal. That is what lets the rows
+be widened without moving one glyph: shrink the gutter, grow the pad by the
+same step, and the vertical line the mark, the group labels and the item text
+share does not move.
+
 ---
 
 ## Information architecture
@@ -225,6 +236,28 @@ rules fix it, and each one names a specific mechanism:
    the entrance animation replayed, the row relocated from the end of the list
    into its chronological slot, and its expanded state was lost with the key it
    was filed under. Now a live phase *becomes* a finished phase in place.
+
+   **A phase has to HAVE a finished half for that to mean anything**, and for a
+   while it did not. A screen reads two sources — the seat overlay's `live_call`
+   and a query answered ONCE, at mount — and the projection clears `live_call`
+   the instant a phase completes. Nothing delivered the durable record to a tab
+   already open, so a turn watched to its end did not become finished: it
+   *disappeared*, most completely on a seat's first turn, where the mount-time
+   history is empty and the page was left saying the seat had never run at all.
+   The record was on the wire the whole time — the `event` push carries the
+   whole `agent_phase_completed` envelope, payload included, and is sent BEFORE
+   the overlay that clears the call — so the store keeps the recent ones
+   (`MAX_PHASES`) and every screen merges them over its own query answer through
+   the same `fromPhaseEvent` the stored half uses. Same function, same key, so
+   the streamed record and the one the query would return next time are the same
+   row.
+
+   That buffer is bounded on the retained PAYLOADS, not on a row count: a phase
+   carries its verbatim system prompt, its response and every tool result, which
+   is why the server itself caps one page of these at 60. It is company-wide and
+   drop-oldest, so it is a supplement rather than a guarantee — a fleet busy
+   enough to evict a record a tab still wants renders that turn with a phase
+   missing, and the reload that supersedes it is authoritative.
 2. **One block per round: thought, speech, then calls.** A round groups
    `round_narration[]` and `tool_executions[]` on the `round` they share,
    and rounds only ever append — so nothing above an insertion point can
@@ -245,17 +278,33 @@ rules fix it, and each one names a specific mechanism:
 3. **The model's words are prose; JSON is monospace.** Reasoning and speech
    get a proportional face, real leading and a bounded measure. Monospace
    stays where it carries meaning — tool arguments and tool results.
-4. **Grouping is structural; colour is semantic.** Rounds are separated by a
-   numbered rail and a two-step alternating tint, not by a hue apiece: a
-   colour per round would read as meaning something and mean nothing, which
-   is the same objection as a colour per agent and worse at nine rounds. A
-   round's node takes colour for exactly three states — normal, contains a
-   failed call, in flight — because "which round went wrong" and "where is
-   it now" are the two questions a reader brings to a running turn.
+4. **Grouping is structural; colour is semantic.** A round is BRACKETED by a
+   rail running from its numbered node down its own content, and adjacent
+   rounds are told apart by a two-step alternating tint — not by a hue
+   apiece: a colour per round would read as meaning something and mean
+   nothing, which is the same objection as a colour per agent and worse at
+   nine rounds. A round's node takes colour for exactly three states —
+   normal, contains a failed call, in flight — because "which round went
+   wrong" and "where is it now" are the two questions a reader brings to a
+   running turn.
+
+   Bounding a round and separating it from the next one are two jobs, and
+   only the second was being done. The rail was drawn strictly *between*
+   rounds and the tint only on even ones, so a phase with a single round —
+   the common case — got neither, and rendered as a bare numeral in the
+   gutter beside a flat stack of look-alike disclosure rows: the thinking
+   and the call it asked for read as siblings. The round's content also sat
+   on three different left edges, because a disclosure head carries its own
+   inset and the model's speech carried none. One bracket per round, one
+   left edge, and 24px between rounds against 8px inside one.
 5. **A running phase tails; a finished one flows.** While live the ledger is
    bounded and follows the newest round, but only while the reader is
    already at the bottom — following regardless yanks them off whatever
-   they stopped to read.
+   they stopped to read. What does NOT change is the ledger's frame: it is
+   the same border and padding either way, and only the height bound and the
+   scroll come and go. The frame used to be part of the tailing rule, so the
+   transcript grew a box the moment a phase went live and lost it again the
+   moment it completed — rule 9's defect, one level down.
 
    The engine STREAMS: a round's text arrives while the model is writing
    it, coalesced to five frames a second, and the round in flight rides
@@ -332,8 +381,9 @@ while somebody was reading one, and splicing a phase in at the top pushes
 everything below it down by a card — mid-sentence, every few seconds on a busy
 company.
 
-Two rules, and they are the same rule the round ledger already follows —
-**the page moves only when the reader is not reading**:
+Three rules, the first two of which are the same rule the round ledger already
+follows — **the page moves only when the reader is not reading** — and the third
+of which is what makes them worth having at all:
 
 - **Running and settled are different lists.** A live phase changes every
   couple of hundred milliseconds; a finished one never changes again.
@@ -346,6 +396,22 @@ Two rules, and they are the same rule the round ledger already follows —
   they are counted and offered: *"3 new turns finished while you were
   reading — show"*. Keyed on identity, never position, so a row that UPDATES
   in place — a round landing, a phase completing — is never held back.
+
+  **And identity reaches across the two lists.** A running turn lives in the
+  live region; when it finishes it leaves that region and arrives in the
+  settled list with a key that list has never admitted — so the row a reader
+  had been watching for four minutes was replaced by *"1 new turn finished
+  while you were reading"*. It was on their screen a moment earlier: it is not
+  new to them, whatever list it was in. Each screen passes the keys it is
+  rendering live, and they are admitted without the scroll check.
+
+- **The live half of a screen does not wait on the stored half.** The seat's
+  Model activity tab wrapped its turns in the query-state component, which
+  renders nothing while a query is in flight and a banner *instead of* its
+  children when one fails. So a turn happening right now was invisible until
+  the event store answered — and invisible for good on a node that keeps no
+  event log, where the answer is a permanent `no_event_store`. The query's
+  state renders beside the turns now, never in place of them.
 
 The seat screen makes the same split, where it answers a second question:
 which of these turns is happening right now, readable at a glance from the

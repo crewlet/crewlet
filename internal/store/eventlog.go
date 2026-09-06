@@ -753,10 +753,18 @@ WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 // same number, so the page and the answer agree about where history stops.
 const AgentPhaseLimit = 50
 
+// The event_time floor is EventHistory, the same one every other read of this
+// table applies — and it was the one read without it. The floor is the hard
+// bottom of paging, so a read that does not apply it answers below it: the
+// rows in EventRetention's day of slack, and on a node whose maintenance
+// singleton is not sweeping, rows of any age. A seat's own page then showed
+// turns the company-wide Phases read excludes, which is the one comparison an
+// operator makes to decide whether a seat has gone quiet.
 const agentPhaseSQL = `
 SELECT ` + listColumns + `, payload
 FROM crewlet_events
-WHERE event_type = 'agent_phase_completed' AND (agent_id = ? OR agent_role = ?)`
+WHERE event_type = 'agent_phase_completed' AND event_time >= ?
+  AND (agent_id = ? OR agent_role = ?)`
 
 // agentPhaseCursorSQL is the same read, one page older.
 //
@@ -789,7 +797,7 @@ func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, b
 		return nil, nil
 	}
 	query := agentPhaseSQL
-	args := []any{agentID, agentRole}
+	args := []any{EncodeTime(now().Add(-EventHistory)), agentID, agentRole}
 	if before != nil && before.ID != "" {
 		query += agentPhaseCursorSQL
 		args = append(args, EncodeTime(before.Time), before.ID)

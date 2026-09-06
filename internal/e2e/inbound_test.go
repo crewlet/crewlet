@@ -65,9 +65,16 @@ func routed(handle, body string, meta map[string]string) notify.Routed {
 }
 
 // inbox collects what lands on a seat's inbox topic.
+//
+// THE ENVELOPES TOO, not only the decoded payloads. The broker partitions a
+// seat's inbox on the envelope's own bag (see notify.Stamp / notify.KeyOf),
+// and the metadata copy inside the payload is what a PROMPT renders from — so
+// a conversation-key assertion made against the payload copy cannot fail for
+// the bug it describes, which is the key never reaching the envelope at all.
 type inbox struct {
-	mu   sync.Mutex
-	seen []*types.ExternalNotification
+	mu        sync.Mutex
+	seen      []*types.ExternalNotification
+	envelopes []*events.Event
 }
 
 func watchInbox(t *testing.T, n *node, handle string) *inbox {
@@ -79,6 +86,7 @@ func watchInbox(t *testing.T, n *node, handle string) *inbox {
 			if got, ok := events.DataAs[*types.ExternalNotification](ev); ok {
 				box.mu.Lock()
 				box.seen = append(box.seen, got)
+				box.envelopes = append(box.envelopes, ev)
 				box.mu.Unlock()
 			}
 			return queue.Ack()
@@ -176,6 +184,16 @@ func TestAVerifiedDeliveryWakesTheSeat(t *testing.T) {
 	}
 	if got := woken.Metadata[notify.KeyField]; got != "stub:C1:p1" {
 		t.Fatalf("the conversation key reads %q", got)
+	}
+	// AND ON THE ENVELOPE, which is the copy that actually partitions the
+	// inbox. The metadata one above is what a prompt renders from; while
+	// the key was written to it alone every partition fell back to the
+	// event's own id, so ten comments on one thread woke a seat ten times.
+	box.mu.Lock()
+	envelope := box.envelopes[0]
+	box.mu.Unlock()
+	if got := notify.KeyOf(envelope); got != "stub:C1:p1" {
+		t.Fatalf("the broker would partition this on %q", got)
 	}
 }
 

@@ -49,8 +49,6 @@ type ProviderKeys = org.ProviderKeys
 // back to Default; a flat llm_<phase> field on the seat wins over both.
 type PhaseLLM struct {
 	Default   ProviderKeys `yaml:"default,omitempty" json:"default,omitzero"`
-	Plan      ProviderKeys `yaml:"plan,omitempty" json:"plan,omitzero"`
-	Execute   ProviderKeys `yaml:"execute,omitempty" json:"execute,omitzero"`
 	Review    ProviderKeys `yaml:"review,omitempty" json:"review,omitzero"`
 	Subagent  ProviderKeys `yaml:"subagent,omitempty" json:"subagent,omitzero"`
 	Auxiliary ProviderKeys `yaml:"auxiliary,omitempty" json:"auxiliary,omitzero"`
@@ -155,7 +153,7 @@ func (p PhaseLLM) MarshalJSON() ([]byte, error) {
 // phases lists every chain in the order a per-phase mapping declares them,
 // so IsZero, the fallback resolution and the schema all read one list.
 func (p *PhaseLLM) phases() []ProviderKeys {
-	return []ProviderKeys{p.Default, p.Plan, p.Execute, p.Review, p.Subagent, p.Auxiliary, p.Judge, p.Sandbox}
+	return []ProviderKeys{p.Default, p.Review, p.Subagent, p.Auxiliary, p.Judge, p.Sandbox}
 }
 
 // IsZero reports that nothing was configured, which is what lets both

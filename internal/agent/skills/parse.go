@@ -91,8 +91,7 @@ func Parse(text string, from Source) (Skill, error) {
 // looks from every angle like a skill nobody wrote.
 func parsePhases(names []string) ([]prompts.Phase, error) {
 	known := []prompts.Phase{
-		prompts.PhasePlan, prompts.PhaseExecute,
-		prompts.PhaseReview, prompts.PhaseSubagent,
+		prompts.PhaseExecute, prompts.PhaseReview, prompts.PhaseSubagent,
 	}
 	var out []prompts.Phase
 	for _, name := range names {

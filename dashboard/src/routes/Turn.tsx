@@ -17,37 +17,75 @@ import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { Badge, Button, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDateTime, fmtDuration, oldestFirst, tsKey } from "~/lib/format.ts";
-import { fromPhaseEvent, type PhaseRecord } from "~/lib/phases.ts";
+import {
+  fromLiveCall,
+  fromPhaseEvent,
+  mergePhases,
+  streamedPhases,
+  type PhaseRecord,
+} from "~/lib/phases.ts";
+import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, FeedRow } from "~/protocol/index.ts";
 
 export function TurnScreen({ turnId }: { turnId: string }) {
   const nav = useNavigator();
   const { data, loading, error } = useQuery("turn", { turn_id: turnId });
 
+  const agents = useAgents();
+  const phaseEvents = usePhaseEvents();
+
   const events = useMemo(() => [...(data?.events ?? [])].sort(oldestFirst), [data]);
 
-  const phases = useMemo<PhaseRecord[]>(
-    () =>
-      events
-        .filter((e) => e.type === "agent_phase_completed")
-        .map((e) => fromPhaseEvent(e))
-        .filter((r): r is PhaseRecord => r !== null)
-        // Within a turn, oldest first: a turn is read forwards.
-        .sort((a, b) => tsKey(a.at) - tsKey(b.at)),
-    [events],
-  );
+  // The phases the `turn` query knew about, plus the ones that have landed on
+  // the stream since it was answered, plus whichever phase is running now.
+  //
+  // The query is answered ONCE, at mount, so on a turn opened WHILE IT RUNS —
+  // the deep link out of a running turn card — it used to be the whole page:
+  // the phases that finished afterwards never arrived, the phase in flight was
+  // never on the page at all, and a turn deep-linked the moment it started
+  // answered with nothing and stayed that way.
+  const phases = useMemo<PhaseRecord[]>(() => {
+    const answered = events
+      .filter((e) => e.type === "agent_phase_completed")
+      .map((e) => fromPhaseEvent(e))
+      .filter((r): r is PhaseRecord => r !== null);
+    const streamed = streamedPhases(phaseEvents, (r) => r.turnId === turnId);
+    const live = agents
+      .filter((a) => a.live_call && a.live_call.turn_id === turnId)
+      .map((a) => fromLiveCall(a.live_call!, a.role));
+    // Within a turn, oldest first: a turn is read forwards. `mergePhases`
+    // orders newest first, which is right for a feed and wrong here.
+    return mergePhases([...streamed, ...answered], live).sort((a, b) => tsKey(a.at) - tsKey(b.at));
+  }, [events, phaseEvents, agents, turnId]);
 
+  const running = phases.some((p) => p.live);
   const completed = events.find((e) => e.type === "agent_turn_completed");
   const other = events.filter(
     (e) => e.type !== "agent_phase_completed" && e.type !== "agent_turn_progress",
   );
 
   const role = phases[0]?.role ?? (completed?.actor || "");
-  const from = events.length ? tsKey(events[0]!.timestamp) : 0;
-  const to = events.length ? tsKey(events[events.length - 1]!.timestamp) : 0;
+  // THE SPAN OVER EVERYTHING THE PAGE HOLDS, not over the query's answer alone.
+  // Read off `events` only, a turn whose phases all arrived on the stream
+  // reported a duration of "—" beside a phase list several minutes long.
+  const first = phases[0];
+  const last = phases[phases.length - 1];
+  const from = Math.min(
+    ...[
+      events.length ? tsKey(events[0]!.timestamp) : Infinity,
+      first ? tsKey(first.startedAt) : Infinity,
+    ],
+  );
+  const to = Math.max(
+    ...[events.length ? tsKey(events[events.length - 1]!.timestamp) : 0, last ? tsKey(last.at) : 0],
+  );
   // The turn's own record carries an exact wall clock; the span between its
   // first and last event is the fallback, and the screen says which it used.
   const durationMs = (completed?.payload?.duration_ms as number | undefined) ?? null;
+  // The turn's trace, from whichever half of the page has it. A turn opened
+  // while it runs has no query answer to read it off.
+  const traceId =
+    events[0]?.trace_id || phaseEvents.find((e) => e.payload?.turn_id === turnId)?.trace_id || "";
 
   return (
     <>
@@ -68,12 +106,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 The seat
               </Button>
             )}
-            {events[0]?.trace_id && (
-              <Button
-                size="sm"
-                icon="gitBranch"
-                onClick={() => nav.to(["traces", events[0]!.trace_id])}
-              >
+            {traceId && (
+              <Button size="sm" icon="gitBranch" onClick={() => nav.to(["traces", traceId])}>
                 Trace
               </Button>
             )}
@@ -85,8 +119,14 @@ export function TurnScreen({ turnId }: { turnId: string }) {
       <QueryState
         error={error}
         loading={loading}
+        // GATED ON WHAT THE PAGE HOLDS, not on the query's answer alone.
+        // `QueryState` renders this INSTEAD of its children, so a turn whose
+        // phases are all arriving on the stream — a turn deep-linked the
+        // moment it started, which answers the query with nothing — rendered
+        // "No events for this turn" while phase after phase streamed in
+        // behind it.
         empty={
-          events.length
+          events.length || phases.length
             ? undefined
             : {
                 title: "No events for this turn",
@@ -132,7 +172,13 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               icon="check"
               label="Review outcome"
               value={String(completed?.payload?.review_outcome ?? "—")}
-              sub={completed ? "from the turn's own record" : "no turn_completed event"}
+              sub={
+                completed
+                  ? "from the turn's own record"
+                  : running
+                    ? "still running"
+                    : "no turn_completed event"
+              }
             />
           </StatRow>
         </Panel>
@@ -163,9 +209,18 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             ))}
             {!other.length && (
               <div className="empty inline">
-                <span className="empty-title">Nothing but the phases</span>
+                {/* A RUNNING turn has not been asked about since it started.
+                    Its phases arrive on the stream, but these rows carry no
+                    turn id on the wire and cannot be picked out of the live
+                    feed — so "nothing else happened" is a claim this page
+                    cannot make until it is re-asked. */}
+                <span className="empty-title">
+                  {running ? "Nothing else yet" : "Nothing but the phases"}
+                </span>
                 <span className="empty-sub">
-                  No fallback, no guard breach, no separate delivery.
+                  {running
+                    ? "This turn is still running; reload once it has finished to see anything it published beside its phases."
+                    : "No fallback, no guard breach, no separate delivery."}
                 </span>
               </div>
             )}

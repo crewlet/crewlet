@@ -19,7 +19,7 @@ import (
 // newDirect mints a direct-mode provider rooted in a temp dir.
 func newDirect(t *testing.T) *Local {
 	t.Helper()
-	local, err := NewLocal(LocalOptions{Containment: Direct, StateDir: t.TempDir()})
+	local, err := NewLocal(LocalOptions{Placement: Direct, StateDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewLocal: %v", err)
 	}
@@ -41,7 +41,7 @@ func mustCreate(t *testing.T, local *Local, spec Spec) Sandbox {
 // ---------------------------------------------------------------------
 
 func TestContainerModeRefusesToStartWithoutAnImage(t *testing.T) {
-	_, err := NewLocal(LocalOptions{Containment: Container, StateDir: t.TempDir()})
+	_, err := NewLocal(LocalOptions{Placement: Container, StateDir: t.TempDir()})
 	if err == nil {
 		t.Fatal("a container box with no image fails only once an agent tries to use it — refuse at config time")
 	}
@@ -50,9 +50,9 @@ func TestContainerModeRefusesToStartWithoutAnImage(t *testing.T) {
 	}
 }
 
-func TestAnUnknownContainmentIsRefused(t *testing.T) {
-	if _, err := NewLocal(LocalOptions{Containment: "chroot", StateDir: t.TempDir()}); err == nil {
-		t.Fatal("an unknown containment was accepted")
+func TestAPlacementTheLocalBackendDoesNotServeIsRefused(t *testing.T) {
+	if _, err := NewLocal(LocalOptions{Placement: E2B, StateDir: t.TempDir()}); err == nil {
+		t.Fatal("a remote placement was accepted by the local backend")
 	}
 }
 
@@ -504,7 +504,7 @@ func TestAReconnectedBoxStillWritesARefreshedLoginBack(t *testing.T) {
 	}
 
 	// A fresh engine, holding nothing but the id.
-	fresh, err := NewLocal(LocalOptions{Containment: Direct, StateDir: local.root})
+	fresh, err := NewLocal(LocalOptions{Placement: Direct, StateDir: local.root})
 	if err != nil {
 		t.Fatalf("NewLocal: %v", err)
 	}

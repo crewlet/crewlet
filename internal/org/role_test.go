@@ -98,8 +98,6 @@ func TestHumanSeatRejectsEveryRuntimeField(t *testing.T) {
 		set   func(*Role)
 	}{
 		{"llm", func(r *Role) { r.LLM = ProviderKeys{"gpt-4o"} }},
-		{"llm_plan", func(r *Role) { r.LLMPlan = ProviderKeys{"gpt-4o"} }},
-		{"llm_execute", func(r *Role) { r.LLMExecute = ProviderKeys{"gpt-4o"} }},
 		{"llm_review", func(r *Role) { r.LLMReview = ProviderKeys{"gpt-4o"} }},
 		{"llm_subagent", func(r *Role) { r.LLMSubagent = ProviderKeys{"gpt-4o"} }},
 		{"llm_auxiliary", func(r *Role) { r.LLMAuxiliary = ProviderKeys{"gpt-4o"} }},

@@ -296,14 +296,14 @@ func (s *SkillCurator) validate(path string) error {
 	return p.err()
 }
 
-// PersonalMemory is the read side of a seat's own memory: the Plan-phase
+// PersonalMemory is the read side of a seat's own memory: the turn-start
 // digest and the mid-turn refresh tool. Writes are governed by the reflect
 // block, not by this.
 type PersonalMemory struct {
 	// MaxRefreshesPerTurn caps distinct mid-turn refreshes. Repeats with
 	// the same hint are served from an idempotency cache and do not count.
 	// A call at the cap returns an error rather than silently no-opping,
-	// so the planner notices and stops trying.
+	// so the agent notices and stops trying.
 	MaxRefreshesPerTurn int `yaml:"max_refreshes_per_turn,omitempty" json:"max_refreshes_per_turn,omitempty" js:"min=0" desc:"Distinct memory refreshes one turn may make."`
 }
 

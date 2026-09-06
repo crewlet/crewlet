@@ -195,14 +195,14 @@ func TestATerminatingToolEndsTheLoop(t *testing.T) {
 	// going spends rounds re-deciding something already done — and, worse,
 	// invites a second delivery.
 	p := &scriptedProvider{turns: []llm.Completion{
-		{ToolCalls: []llm.ToolCall{toolCall("1", "submit_plan")}},
-		{ToolCalls: []llm.ToolCall{toolCall("2", "submit_plan")}},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "submit_work")}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "submit_work")}},
 	}}
-	s := &fakeSurface{tools: []llm.ToolDef{def("submit_plan")}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
 
 	res, err := toolloop.Run(t.Context(), toolloop.Config{
 		Provider: p, Surface: s, MaxRounds: 5,
-		TerminateAfter: []string{"submit_plan"},
+		TerminateAfter: []string{"submit_work"},
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -224,9 +224,9 @@ func TestARequiredToolCallIsEnforcedNotRequested(t *testing.T) {
 	// produces nothing at all.
 	p := &scriptedProvider{turns: []llm.Completion{
 		{Content: "I think the plan should be..."}, // no tool call
-		{ToolCalls: []llm.ToolCall{toolCall("1", "submit_plan")}},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "submit_work")}},
 	}}
-	s := &fakeSurface{tools: []llm.ToolDef{def("submit_plan")}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
 
 	res, err := toolloop.Run(t.Context(), toolloop.Config{
 		Provider: p, Surface: s, MaxRounds: 5, ToolChoice: "required",
@@ -242,7 +242,7 @@ func TestARequiredToolCallIsEnforcedNotRequested(t *testing.T) {
 	// usually misread the surface rather than refused it.
 	var corrected bool
 	for _, m := range res.Messages {
-		if m.Role == llm.RoleUser && strings.Contains(m.Content, "submit_plan") {
+		if m.Role == llm.RoleUser && strings.Contains(m.Content, "submit_work") {
 			corrected = true
 		}
 	}
@@ -257,7 +257,7 @@ func TestTheForcedRetryIsBounded(t *testing.T) {
 	// budget on re-prompts.
 	prose := llm.Completion{Content: "still prose"}
 	p := &scriptedProvider{turns: []llm.Completion{prose, prose, prose, prose, prose}}
-	s := &fakeSurface{tools: []llm.ToolDef{def("submit_plan")}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
 
 	res, err := toolloop.Run(t.Context(), toolloop.Config{
 		Provider: p, Surface: s, MaxRounds: 10, ToolChoice: "required",

@@ -252,17 +252,17 @@ func TestARenderedIterationCarriesWhatTheNextRoundActsOn(t *testing.T) {
 	t.Parallel()
 	got := RenderIterations([]Iteration{{
 		Iteration:     1,
-		PlanSummary:   "post the summary to #eng",
-		ExecuteCalls:  []Call{{Name: "slack_post", Args: map[string]any{"channel": "C0ENG"}}},
-		ExecuteText:   "Posted the weekly summary.",
+		Intent:        "post the summary to #eng",
+		Calls:         []Call{{Name: "slack_post", Args: map[string]any{"channel": "C0ENG"}}},
+		Text:          "Posted the weekly summary.",
 		ReviewNotes:   "the link was wrong, repost with the corrected one",
 		CompletedWork: "the #eng post landed",
 	}}, []string{"activate_tool"})
 
 	for _, want := range []string{
 		"### Iteration 1",
-		"Planned: post the summary to #eng",
-		"Execute called:",
+		"Set out to: post the summary to #eng",
+		"Called:",
 		"C0ENG",
 		"Produced: Posted the weekly summary.",
 		"Reviewer, on what already landed: the #eng post landed",
@@ -272,22 +272,25 @@ func TestARenderedIterationCarriesWhatTheNextRoundActsOn(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
-	// Plan called nothing, and that has to SAY so — the round where Plan
-	// silently made no calls is indistinguishable from a rendering bug
-	// without it.
-	if !strings.Contains(got, "Plan called:\n(none)") {
-		t.Errorf("an empty Plan phase left no trace:\n%s", got)
+}
+
+func TestARoundThatCalledNothingSaysSo(t *testing.T) {
+	t.Parallel()
+	// A round where the executor silently made no calls is
+	// indistinguishable from a rendering bug without an explicit "(none)".
+	got := RenderIterations([]Iteration{{Iteration: 1, Intent: "triage"}}, nil)
+	if !strings.Contains(got, "Called:\n(none)") {
+		t.Errorf("a round that called nothing left no trace:\n%s", got)
 	}
 }
 
-func TestMetaToolsAreFilteredFromBothPhases(t *testing.T) {
+func TestMetaToolsAreFilteredFromTheCallList(t *testing.T) {
 	t.Parallel()
 	// A meta-tool is never a delivery, so in a record whose only job is
 	// "what already happened that matters" it is pure noise.
 	got := RenderIterations([]Iteration{{
-		Iteration:    1,
-		PlanCalls:    []Call{{Name: "activate_tool"}},
-		ExecuteCalls: []Call{{Name: "activate_tool"}, {Name: "slack_post"}},
+		Iteration: 1,
+		Calls:     []Call{{Name: "activate_tool"}, {Name: "slack_post"}},
 	}}, []string{"activate_tool"})
 
 	if strings.Contains(got, "activate_tool") {
@@ -306,10 +309,10 @@ func TestAnIterationRoundTripsThroughJSON(t *testing.T) {
 	// exists to prevent, reached by a different road.
 	want := Iteration{
 		Iteration:     2,
-		PlanSummary:   "retry the post",
-		ExecuteCalls:  []Call{{Name: "slack_post", Args: map[string]any{"channel": "C0ENG"}, Failed: true, Result: "rate limited"}},
+		Intent:        "retry the post",
+		Calls:         []Call{{Name: "slack_post", Args: map[string]any{"channel": "C0ENG"}, Failed: true, Result: "rate limited"}},
 		Reads:         []string{"jira_get_issue"},
-		ExecuteText:   "draft",
+		Text:          "draft",
 		CompletedWork: "nothing landed",
 	}
 	blob, err := json.Marshal(want)
@@ -354,7 +357,7 @@ func TestBuildSessionKeepsStructureWholeAndElidesOnlyArguments(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("z", 6000)
 	got := BuildSession(SessionInput{
-		Trigger: long, PlanSummary: long, PlanReasoning: long,
+		Trigger: long, Intent: long,
 		Reply: long, CompletedWork: long,
 		Calls: []Call{{Name: "slack_post", Args: map[string]any{"text": long, "channel": "C1"}}},
 	})
@@ -363,8 +366,7 @@ func TestBuildSessionKeepsStructureWholeAndElidesOnlyArguments(t *testing.T) {
 		value string
 	}{
 		{"trigger", got.Trigger},
-		{"plan summary", got.PlanSummary},
-		{"reasoning", got.PlanReasoning},
+		{"intent", got.Intent},
 		{"reply", got.Reply},
 		{"completed work", got.CompletedWork},
 	} {
@@ -419,7 +421,7 @@ func TestATrimmedHistorySaysHowMuchItDropped(t *testing.T) {
 func TestAPriorRoundsOutputIsTailElidedNotHeadCut(t *testing.T) {
 	t.Parallel()
 	produced := "<think>" + strings.Repeat("reasoning ", 2000) + "</think>\nTHE DRAFT ENDS HERE."
-	got := RenderIterations([]Iteration{{Iteration: 1, ExecuteText: produced}}, nil)
+	got := RenderIterations([]Iteration{{Iteration: 1, Text: produced}}, nil)
 	if !strings.Contains(got, "THE DRAFT ENDS HERE.") {
 		t.Error("the deliverable at the end of the round was cut away")
 	}
@@ -430,7 +432,7 @@ func TestAPriorRoundsOutputIsTailElidedNotHeadCut(t *testing.T) {
 		t.Error("the cut is silent")
 	}
 	// And the record itself is untouched: this is a render bound.
-	whole := RenderIterations([]Iteration{{Iteration: 1, ExecuteText: "short"}}, nil)
+	whole := RenderIterations([]Iteration{{Iteration: 1, Text: "short"}}, nil)
 	if !strings.Contains(whole, "Produced: short") {
 		t.Errorf("a short round was altered: %q", whole)
 	}
@@ -487,17 +489,17 @@ func TestHistoryDropsFromTheOldestEndAndAlwaysKeepsOne(t *testing.T) {
 func TestASessionReadsAsTheSeatsOwnPast(t *testing.T) {
 	t.Parallel()
 	got := renderSession(Session{
-		TurnID:      "0189d4c2-aaaa-bbbb-cccc-ddddddddddd0",
-		At:          "2026-08-20T09:00:00Z",
-		Trigger:     "@alice: can you repost the summary?",
-		PlanSummary: "repost with the fixed link",
-		Calls:       "- slack_post({\"channel\":\"C1\"}) → success",
-		Reply:       "Reposted with the corrected link.",
+		TurnID:  "0189d4c2-aaaa-bbbb-cccc-ddddddddddd0",
+		At:      "2026-08-20T09:00:00Z",
+		Trigger: "@alice: can you repost the summary?",
+		Intent:  "repost with the fixed link",
+		Calls:   "- slack_post({\"channel\":\"C1\"}) → success",
+		Reply:   "Reposted with the corrected link.",
 	})
 	for _, want := range []string{
 		"### 2026-08-20T09:00:00Z (turn 0189d4c2)",
 		"Triggered by: @alice",
-		"You planned: repost",
+		"You set out to: repost",
 		"You called:",
 		"You replied: Reposted",
 	} {

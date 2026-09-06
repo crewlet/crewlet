@@ -49,9 +49,10 @@ through a REST API, with no restart for role, provider, or integration changes.<
 </td>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/turn-engine.svg" width="64" alt=""><br>
-<b>Plan → Execute → Review</b><br>
-<sub>Every turn is planned, executed against explicit success criteria, then judged —
-and looped back when the work isn't done.</sub>
+<b>Execute → Review</b><br>
+<sub>One agentic loop decides and acts with everything it has read still in front of
+it, then an adversarial reviewer judges the record — and loops it back when the
+work isn't done.</sub>
 </td>
 </tr>
 <tr>
@@ -81,19 +82,20 @@ surfaces you already use.</sub>
 ## How a turn works
 
 A trigger — a chat message, a work-item webhook, a schedule — wakes exactly one
-agent, which runs a three-phase turn:
+agent, which runs a two-stage turn:
 
 ```mermaid
 flowchart LR
-    T["Trigger<br/><i>chat · work item · schedule</i>"] --> P
-    P["<b>Plan</b><br/>decide the steps,<br/>pick the tools"] --> E["<b>Execute</b><br/>tool loop, or a<br/>coding agent in a sandbox"]
-    E --> R["<b>Review</b><br/>judge against the<br/>plan's success criteria"]
+    T["Trigger<br/><i>chat · work item · schedule</i>"] --> E
+    E["<b>Execute</b><br/>one loop: discover tools,<br/>act, then say what it did"] --> R["<b>Review</b><br/>judge the record:<br/>what actually ran"]
     R -->|done| S["Work shipped:<br/>comments, MRs, docs"]
-    R -->|self_iterate| P
+    R -->|self_iterate| E
 ```
 
-Each phase gets its own narrow prompt, its own tool surface, and can run on its own
-model — a frontier model to plan, a cheap one to summarize. See
+Deciding and acting are ONE conversation, so a tool result the agent read is still
+in front of it when it acts on that result — and it discovers the tools it needs
+as it goes instead of naming them in advance. The reviewer is a separate, narrower
+prompt on its own model — a frontier model to work, a cheap one to check. See
 [Turn Engine](docs/concepts/turn-engine.md).
 
 ---
@@ -175,7 +177,7 @@ Crewlet is the engine; the surfaces your agents work on are yours to choose — 
 |---|---|
 | **LLM** | [Anthropic](docs/getting-started/quickstart.md#llm-options), OpenAI, or **any OpenAI-compatible endpoint** — including your own vLLM / LiteLLM gateway |
 | **Tracker** | [Jira](docs/integrations/jira.md) — Cloud or Data Center — or [GitLab](docs/integrations/gitlab.md) / [GitHub](docs/integrations/github.md) issues |
-| **Knowledge base** | [Confluence](docs/integrations/confluence.md) — the search behind every Plan phase, run as the asking seat |
+| **Knowledge base** | [Confluence](docs/integrations/confluence.md) — searched at turn start and on demand, run as the asking seat |
 | **Code host** | [GitLab](docs/integrations/gitlab.md) — gitlab.com or self-hosted — or [GitHub](docs/integrations/github.md), github.com or Enterprise Server |
 | **Chat** | [Mattermost](docs/integrations/mattermost.md) — self-hosted, one bot identity per agent — or [Slack](docs/integrations/slack.md), one app per agent |
 | **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container; Claude Code or OpenCode as the coding agent |

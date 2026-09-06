@@ -32,24 +32,32 @@ const DefaultPauseTTL = 1800 * time.Second
 // DefaultCodingAgent is the runner a provider that names none resolves to.
 const DefaultCodingAgent = "claude-code"
 
-// ConfigError reports providers.sandbox being misconfigured — an unknown or
-// unavailable type, or a coding agent with no registered runner.
+// ConfigError reports providers.sandbox being misconfigured — a placement
+// with no backend behind it, or a coding agent with no registered runner.
 type ConfigError struct{ msg string }
 
 func (e *ConfigError) Error() string { return e.msg }
 
 // ManagerOptions configures a [Manager].
 type ManagerOptions struct {
-	Provider Provider
-	Runners  map[string]Runner
+	// Providers is the CATALOGUE: one backend per placement a company
+	// configured. A placement absent from this map is one no seat may run
+	// in, which is refused where the seat is resolved rather than where
+	// the box is created — a turn that has already spent its rounds is the
+	// wrong place to learn the config was incomplete.
+	Providers map[Placement]Provider
+
+	// DefaultPlacement is where a seat that names none runs. It MUST be a
+	// key of Providers: a default naming a backend nobody configured is
+	// the failure this whole reshape exists to make impossible, and it is
+	// checked here rather than at the first coding run.
+	DefaultPlacement Placement
+
+	Runners map[string]Runner
 
 	// DefaultCodingAgent is the effective agent when a role leaves
 	// role.sandbox.coding_agent empty. Empty takes [DefaultCodingAgent].
 	DefaultCodingAgent string
-
-	// DefaultTemplate is providers.sandbox's template, used when a role
-	// names none.
-	DefaultTemplate string
 
 	// DefaultTimeout is the box TTL. Zero takes [DefaultBoxTimeout].
 	DefaultTimeout time.Duration
@@ -93,11 +101,11 @@ type ManagerOptions struct {
 // on demand. Teardown is the caller's — a turn that fails still reclaims its
 // box, which is why Acquire hands ownership over rather than tracking it.
 type Manager struct {
-	provider Provider
-	runners  map[string]Runner
+	providers map[Placement]Provider
+	placement Placement
+	runners   map[string]Runner
 
 	codingAgent string
-	template    string
 	timeout     time.Duration
 	pauseTTL    time.Duration
 	maxTurns    int
@@ -107,17 +115,27 @@ type Manager struct {
 
 // NewManager validates the options and returns the manager.
 func NewManager(opts ManagerOptions) (*Manager, error) {
-	if opts.Provider == nil {
+	if len(opts.Providers) == 0 {
 		return nil, &ConfigError{msg: "providers.sandbox: no provider configured"}
+	}
+	for placement, provider := range opts.Providers {
+		if !placement.Valid() {
+			return nil, &ConfigError{msg: fmt.Sprintf(
+				"providers.sandbox: %q is not a placement (have: %v)", placement, Placements)}
+		}
+		if provider == nil {
+			return nil, &ConfigError{msg: fmt.Sprintf(
+				"providers.sandbox: placement %q has no backend", placement)}
+		}
 	}
 	if len(opts.Runners) == 0 {
 		return nil, &ConfigError{msg: "providers.sandbox: no coding-agent runners registered"}
 	}
 	m := &Manager{
-		provider:    opts.Provider,
+		providers:   maps.Clone(opts.Providers),
+		placement:   opts.DefaultPlacement,
 		runners:     maps.Clone(opts.Runners),
 		codingAgent: opts.DefaultCodingAgent,
-		template:    opts.DefaultTemplate,
 		timeout:     opts.DefaultTimeout,
 		maxTurns:    max(opts.DefaultMaxTurns, 0),
 		setup:       slices.Clone(opts.DefaultSetup),
@@ -125,6 +143,26 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	}
 	if m.codingAgent == "" {
 		m.codingAgent = DefaultCodingAgent
+	}
+	if m.placement == "" && len(m.providers) == 1 {
+		// One backend is not a choice, so nothing is being decided for the
+		// operator. More than one without a default is a catalogue whose
+		// EVERY CALLER NAMES ITS CELL — config validation holds that for
+		// each seat and each agent-mode entry — and it is never resolved
+		// by map order here: that order is random, so the company would
+		// run somewhere different on every restart. A caller that names
+		// none against such a catalogue is refused by [Manager.Provider]
+		// at its launch, naming the field to set.
+		for placement := range m.providers {
+			m.placement = placement
+		}
+	}
+	if m.placement != "" {
+		if _, ok := m.providers[m.placement]; !ok {
+			return nil, &ConfigError{msg: fmt.Sprintf(
+				"providers.sandbox.default_run_in %q has no backend configured (have: %v)",
+				m.placement, slices.Sorted(maps.Keys(m.providers)))}
+		}
 	}
 	if m.timeout == 0 {
 		m.timeout = DefaultBoxTimeout
@@ -146,9 +184,47 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 	return m, nil
 }
 
-// Provider is the configured provider, for reconnect-by-id and for the pause
-// reaper's kill.
-func (m *Manager) Provider() Provider { return m.provider }
+// Provider is the backend for one placement, for reconnect-by-id and for the
+// pause reaper's kill.
+//
+// (Provider, error) RATHER THAN (Provider, bool), because the caller reaches
+// it holding a run row that names a placement, and the three answers there are
+// "this backend", "this build has no such placement" and "this company did not
+// configure it" — the last two are an operator's problem and must reach a log
+// saying which, not a nil the caller turns into "the box is gone".
+func (m *Manager) Provider(placement Placement) (Provider, error) {
+	if placement == "" {
+		placement = m.placement
+	}
+	if placement == "" {
+		// A caller that named no cell against a catalogue with no
+		// default. Validation refuses this company, so reaching it means
+		// a row or a spec built by hand — and the honest answer names
+		// both fields that would have settled it, not "no backend for
+		// the empty string".
+		return nil, &ConfigError{msg: fmt.Sprintf(
+			"no cell named for this run and providers.sandbox names no "+
+				"default_run_in (configured: %v): set one, or name the cell "+
+				"on the seat's role.sandbox.run_in or the entry's cli.run_in",
+			slices.Sorted(maps.Keys(m.providers)))}
+	}
+	provider, ok := m.providers[placement]
+	if !ok {
+		return nil, &ConfigError{msg: fmt.Sprintf(
+			"no sandbox backend configured for placement %q (have: %v)",
+			placement, slices.Sorted(maps.Keys(m.providers)))}
+	}
+	return provider, nil
+}
+
+// DefaultPlacement is where a seat that names none runs. Empty when the
+// catalogue names no default and holds more than one cell — a company whose
+// every seat names its own — and then [Manager.Provider] refuses a run that
+// names none rather than picking one.
+func (m *Manager) DefaultPlacement() Placement { return m.placement }
+
+// Placements are the cells this company configured, for the operator surface.
+func (m *Manager) Placements() []Placement { return slices.Sorted(maps.Keys(m.providers)) }
 
 // DefaultCodingAgent is the effective agent for a role that names none.
 func (m *Manager) DefaultCodingAgent() string { return m.codingAgent }
@@ -176,8 +252,10 @@ func (m *Manager) RunnerFor(codingAgent string) (Runner, error) {
 // an explicit zero means "never pause, always re-seed from git" — two
 // genuinely different instructions that a single zero value cannot carry.
 type SpecInput struct {
+	// Placement is the seat's run_in. Empty takes the provider default.
+	Placement Placement
+
 	CodingAgent string
-	Template    string
 	Timeout     time.Duration
 	PauseTTL    *time.Duration
 
@@ -194,19 +272,19 @@ type SpecInput struct {
 // BuildSpec overlays per-role inputs onto the provider defaults.
 func (m *Manager) BuildSpec(in SpecInput) Spec {
 	spec := Spec{
+		Placement:       in.Placement,
 		CodingAgent:     in.CodingAgent,
-		Template:        in.Template,
 		TimeoutSec:      m.timeout.Seconds(),
 		PauseTTLSec:     m.pauseTTL.Seconds(),
 		MaxTurns:        m.maxTurns,
 		Env:             maps.Clone(in.Env),
 		CredentialFiles: maps.Clone(in.CredentialFiles),
 	}
+	if spec.Placement == "" {
+		spec.Placement = m.placement
+	}
 	if spec.CodingAgent == "" {
 		spec.CodingAgent = m.codingAgent
-	}
-	if spec.Template == "" {
-		spec.Template = m.template
 	}
 	if in.Timeout > 0 {
 		spec.TimeoutSec = in.Timeout.Seconds()
@@ -243,7 +321,11 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 	if err != nil {
 		return nil, nil, err
 	}
-	box, err := m.provider.Create(ctx, spec)
+	provider, err := m.Provider(spec.Placement)
+	if err != nil {
+		return nil, nil, err
+	}
+	box, err := provider.Create(ctx, spec)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -267,7 +349,8 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 		names = append(names, step.Name)
 	}
 	log.DebugContext(ctx, "sandbox_acquired",
-		"sandbox_id", box.ID(), "coding_agent", spec.CodingAgent, "setup_steps", names)
+		"sandbox_id", box.ID(), "placement", string(spec.Placement),
+		"coding_agent", spec.CodingAgent, "setup_steps", names)
 	return box, runner, nil
 }
 
@@ -293,15 +376,20 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 // same box and checkout: Connect auto-resumes a paused box. No re-Install and
 // no setup re-apply — the box already carries the ask shim, the work dir, and
 // the launch's provisioning.
-func (m *Manager) Reconnect(ctx context.Context, sandboxID, codingAgent string) (Sandbox, Runner, error) {
+func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, codingAgent string) (Sandbox, Runner, error) {
 	runner, err := m.RunnerFor(codingAgent)
 	if err != nil {
 		return nil, nil, err
 	}
-	box, err := m.provider.Connect(ctx, sandboxID)
+	provider, err := m.Provider(placement)
 	if err != nil {
 		return nil, nil, err
 	}
-	log.DebugContext(ctx, "sandbox_reconnected", "sandbox_id", sandboxID, "coding_agent", codingAgent)
+	box, err := provider.Connect(ctx, sandboxID)
+	if err != nil {
+		return nil, nil, err
+	}
+	log.DebugContext(ctx, "sandbox_reconnected", "sandbox_id", sandboxID,
+		"placement", string(placement), "coding_agent", codingAgent)
 	return box, runner, nil
 }

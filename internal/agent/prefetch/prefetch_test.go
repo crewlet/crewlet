@@ -624,6 +624,36 @@ func TestASearchThatFindsNothingSaysToLookAgain(t *testing.T) {
 	}
 }
 
+// THE COUNT IS NOT DERIVABLE FROM THE BLOCK, which is the whole reason it is
+// carried out separately: a search that ran and matched nothing renders the
+// hint, which is non-empty prose. Told only "the block has bytes in it", the
+// prefetch telemetry cannot tell a wired-up knowledge base with nothing to
+// say from one surfacing six runbooks — so an operator watching hit rate for
+// a misconfiguration sees the same number either way.
+func TestTheKnowledgeCountSeparatesPagesFromTheEmptyHint(t *testing.T) {
+	t.Parallel()
+	found := fetch(t, prefetch.Sources{
+		Knowledge: &searcher{hits: []knowledge.Hit{
+			{Title: "Staging runbook", Snippet: "how the proxy is wired"},
+			{Title: "Rollback drill", Snippet: "who to page"},
+		}},
+		Models: models{provider: &aux{answers: []string{"q"}}},
+	}, request(t))
+	if found.RelevantKnowledgeHits != 2 {
+		t.Errorf("two pages rendered as %d hits", found.RelevantKnowledgeHits)
+	}
+
+	empty := fetch(t, prefetch.Sources{
+		Knowledge: &searcher{}, Models: models{provider: &aux{answers: []string{"q"}}},
+	}, request(t))
+	if empty.RelevantKnowledge == "" {
+		t.Fatal("the empty search rendered no hint, so this case proves nothing")
+	}
+	if empty.RelevantKnowledgeHits != 0 {
+		t.Errorf("the empty hint reported %d hits", empty.RelevantKnowledgeHits)
+	}
+}
+
 // ── episode recall ──
 
 func TestRecallRendersWhatAPastTurnWasAndHowItWent(t *testing.T) {

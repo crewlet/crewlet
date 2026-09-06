@@ -147,14 +147,14 @@ export function Tools() {
         <div className="banner neutral">
           <span className="col" style={{ gap: 4 }}>
             <span>
-              A Plan or Execute prompt lists <strong>server names</strong>, not tool names — a role
-              with 50–150 MCP tools would push 15–25 KB of catalogue into every call.
+              An executor prompt lists <strong>server names</strong>, not tool names — a role with
+              50–150 MCP tools would push 15–25 KB of catalogue into every call.
             </span>
             <span className="t-caption">
               The model calls <code className="inline">list_mcp_server_tools(server)</code> to see
               what a server offers, then <code className="inline">activate_tool(name)</code> to
-              promote one into the schemas it can actually invoke. Activation is for read-only recon
-              during Plan; anything that writes is named in the plan for Execute to use.
+              promote one into the schemas it can actually invoke. It activates what it needs the
+              moment it needs it — there is no separate planning pass to name a tool in advance.
             </span>
           </span>
         </div>

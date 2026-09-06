@@ -31,7 +31,7 @@ subcommand below is served by it.
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key |
 | `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and login state |
-| `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns (`-no-smoke` stops before the completion) |
+| `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before all three real calls) |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's credential files |
@@ -546,7 +546,13 @@ that work is established here rather than in the config document. `KEY` is the
 logged in. **`doctor`** is the one to run before a company's first turn: it
 checks the CLI is installed, the credentials answer, and — unless you pass
 `-no-smoke` — that a real completion comes back, which is the only check that
-catches a plan whose quota is exhausted.
+catches a plan whose quota is exhausted. The same run measures two claims the
+profile makes rather than trusting them: that the CLI's own **shell is
+refused** (it runs on the engine host, so a denial that stopped working is a
+seat reading whatever the engine user can read) and that its **web tool
+reaches the network** (the one local tool every profile deliberately keeps
+on). Both are believed only on evidence a model cannot invent — the current
+clock, read by the tool.
 
 **`login`** has four shapes because the vendors do:
 
@@ -788,7 +794,7 @@ crewlet confluence import <company.yaml> <directory> [-space KEY] [-prune]
 
 Publishes a tree of authored markdown into Confluence. **One walk, two destinations, decided by the file**: a file whose frontmatter declares a `trigger:` is a [tool skill](../concepts/tool-skills.md) and goes to `integrations.confluence.skills_space` with the leading code block the engine parses back out; everything else is a knowledge doc, published as prose into the space its parent directory names, titled by its first `# H1`.
 
-The routing is the FILE'S, not the directory's, because a skill is identified by what it declares — an operator who files one under `ENG/` still means a skill, and publishing it there as prose would put an instruction meant for one phase of one turn into every planner's context.
+The routing is the FILE'S, not the directory's, because a skill is identified by what it declares — an operator who files one under `ENG/` still means a skill, and publishing it there as prose would put an instruction meant for one phase of one turn into every seat's context.
 
 **Every target space is checked before a single page is written.** A typo in a directory name would otherwise be discovered half way through, leaving an operator to work out which pages landed. The importer never *creates* a space: that names a container the whole company then works in, and it is not this command's guess to make.
 
@@ -808,7 +814,7 @@ The routing is the FILE'S, not the directory's, because a skill is identified by
 | `-config` | Tier A config naming this node's store and keyring, for resolving the `${VAR}`s in the company's `confluence:` block. |
 | `-dry-run` | Print the plan and write or delete nothing. |
 
-A company that has turned tool skills off (`integrations.confluence.skills_space: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every planner searches.
+A company that has turned tool skills off (`integrations.confluence.skills_space: ""`) has no space for a skill file to go to: a tree containing one **stops the walk** naming both the setting and `-space`, rather than filing an instruction meant for one phase of one turn into a space every seat searches.
 
 See [Confluence Integration](../integrations/confluence.md#publishing-local-pages-from-your-machine-cli).
 
@@ -825,8 +831,8 @@ Confluence skills space against a throwaway registry and prints what admitted,
 so you can see what the next boot will see. The read-only diagnostic beside
 the importer, and it exists because the registry is populated by one walk at
 boot, so a page that fails to
-admit is **invisible** — the only symptom is guidance that never appears in a
-Plan prompt.
+admit is **invisible** — the only symptom is guidance that never appears in an
+executor prompt.
 
 ```
 TS holds 12 page(s): 9 skill(s), 3 ordinary page(s).

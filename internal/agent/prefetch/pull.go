@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// The PULL side of the same two searches the Plan phase pushes.
+// The PULL side of the same two searches the turn-start prefetch pushes.
 //
 // Both blocks this file exposes are the prefetch's own, re-run on demand: the
 // vector recall behind `## Relevant prior work`, and the auxiliary relevance

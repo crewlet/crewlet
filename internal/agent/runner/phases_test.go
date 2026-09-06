@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -27,9 +28,9 @@ import (
 // surface is both robust and closer to the truth — the offered tools ARE what
 // distinguishes the phases.
 type scriptedProvider struct {
-	plan, execute, review, onboarding []llm.Completion
-	seen                              []llm.Request
-	n                                 map[string]int
+	execute, review, onboarding []llm.Completion
+	seen                        []llm.Request
+	n                           map[string]int
 }
 
 func (p *scriptedProvider) Model() string { return "scripted" }
@@ -40,11 +41,11 @@ func (p *scriptedProvider) Complete(_ context.Context, req llm.Request) (*llm.Co
 	if p.n == nil {
 		p.n = map[string]int{}
 	}
-	i := min(p.n[which], len(script)-1)
-	p.n[which]++
 	if len(script) == 0 {
 		return &llm.Completion{Content: "(no script)"}, nil
 	}
+	i := min(p.n[which], len(script)-1)
+	p.n[which]++
 	c := script[i]
 	return &c, nil
 }
@@ -52,15 +53,13 @@ func (p *scriptedProvider) Complete(_ context.Context, req llm.Request) (*llm.Co
 func (p *scriptedProvider) scriptFor(req llm.Request) (string, []llm.Completion) {
 	offered := toolNames(req.Tools)
 	switch {
-	case slices.Contains(offered, runner.SubmitPlanTool):
-		return "plan", p.plan
 	case slices.Contains(offered, runner.SubmitReviewTool):
 		return "review", p.review
 	case slices.Contains(offered, runner.MarkOnboardedTool):
-		// Checked AFTER the submit tools, because it is the pass that
-		// offers mark_onboarded and NEITHER of them: Plan used to offer
-		// mark_onboarded too, and keying on it first answered a plan with
-		// an onboarding mark. See runner.phaseScoped.
+		// Checked BEFORE the executor, because onboarding is the pass that
+		// offers mark_onboarded and the executor is deliberately denied it:
+		// a seat that could mark itself from inside the executor would
+		// permanently skip orientation. See runner.phaseScoped.
 		return "onboarding", p.onboarding
 	default:
 		return "execute", p.execute
@@ -91,7 +90,42 @@ func submitCall(t *testing.T, name, argsJSON string) llm.Completion {
 	}
 }
 
+// submitWork is the ordinary ending for a round that delivered nothing: the
+// executor's starting surface carries no MCP tool, so a fixture that has not
+// discovered one cannot honestly cite a delivery.
+func submitWork(t *testing.T) llm.Completion {
+	t.Helper()
+	return submitCall(t, runner.SubmitWorkTool,
+		`{"outcome":"blocked","summary":"nothing to do here","evidence":"no write tool yet"}`)
+}
+
+// activate is the discovery half of a delivery. MCP TOOLS ARE NOT ON THE
+// STARTING SURFACE — that is the whole point of discovery — so a fixture that
+// posts has to promote the tool first, exactly as a real turn does.
+func activate(name string) llm.Completion {
+	return llm.Completion{ToolCalls: []llm.ToolCall{
+		{ID: "act", Name: "activate_tool", Arguments: map[string]any{"name": name}},
+	}}
+}
+
+// deliver is the ordinary three-round delivery: discover, call, report.
+func deliver(t *testing.T, summary string) []llm.Completion {
+	t.Helper()
+	return []llm.Completion{
+		activate("slack_post"),
+		{ToolCalls: []llm.ToolCall{{ID: "post", Name: "slack_post"}}},
+		submitCall(t, runner.SubmitWorkTool,
+			`{"outcome":"delivered","summary":"`+summary+`","deliveries":["slack_post"]}`),
+	}
+}
+
 func text(s string) llm.Completion { return llm.Completion{Content: s} }
+
+// workFor is a plain delivered submission, for tests that drive Review
+// directly and do not care what the executor did.
+func workFor(summary string) turn.Work {
+	return turn.Work{Outcome: turn.OutcomeDelivered, Summary: summary}
+}
 
 type stubTool struct {
 	name string
@@ -117,6 +151,14 @@ func fixture(t *testing.T, prov *scriptedProvider) (*runner.Runner, *scriptedPro
 	return r, prov, reg
 }
 
+// unaddressedFixture is the same runner for a turn nobody asked for, so
+// no_action is a legitimate submission rather than one the decoder refuses.
+func unaddressedFixture(t *testing.T, prov *scriptedProvider) (*runner.Runner, *scriptedProvider) {
+	t.Helper()
+	r, _ := build(t, []phase.Entry{{Key: "default", Provider: prov}}, turn.ReplyNone)
+	return r, prov
+}
+
 // runnerWithModels builds a runner over an explicit provider set, so a test
 // can give each phase its own model.
 func runnerWithModels(t *testing.T, entries []phase.Entry) *runner.Runner {
@@ -125,8 +167,30 @@ func runnerWithModels(t *testing.T, entries []phase.Entry) *runner.Runner {
 	return r
 }
 
-func build(t *testing.T, entries []phase.Entry) (*runner.Runner, *tools.Registry) {
+// buildOpts are the knobs a test varies on the shared fixture. Zero is the
+// native tool loop with somebody waiting, which is what most tests want.
+type buildOpts struct {
+	reply    turn.Reply
+	agentRun runner.AgentLauncher
+	resume   *runner.Resume
+	pub      queue.Publisher
+}
+
+func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
 	t.Helper()
+	waiting := turn.ReplyTool
+	if len(reply) > 0 {
+		waiting = reply[0]
+	}
+	return buildWith(t, entries, buildOpts{reply: waiting})
+}
+
+func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Runner, *tools.Registry) {
+	t.Helper()
+	waiting := opts.reply
+	if waiting == "" {
+		waiting = turn.ReplyTool
+	}
 	reg := tools.NewRegistry()
 	for _, tl := range []stubTool{{name: "lookup_colleague"}, {name: "reflect"}} {
 		if err := reg.Register(tl, tools.OriginBuiltin); err != nil {
@@ -159,23 +223,26 @@ func build(t *testing.T, entries []phase.Entry) (*runner.Runner, *tools.Registry
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
-	// Each phase names its own key when one is configured. With only a
-	// default present these all miss and resolution falls back to it, which
-	// is the counterfactual the golden suite asserts.
-	role.LLMPlan = org.ProviderKeys{"planner"}
-	role.LLMExecute = org.ProviderKeys{"executor"}
+	// The reviewer names its own key when one is configured; the executor
+	// runs on `llm`, which is what makes it the seat's model rather than a
+	// second spelling of one. With only a default present both miss and
+	// resolution falls back to it, which is the counterfactual the golden
+	// suite asserts.
+	role.LLM = org.ProviderKeys{"executor"}
 	role.LLMReview = org.ProviderKeys{"reviewer"}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 
 	r, err := runner.New(runner.Config{
-		Seat:     prompts.Seat{Org: organization, Role: role},
-		Registry: reg,
-		Models:   models,
-		Caps: runner.Caps{
-			PlanRounds: 4, ExecuteRounds: 6, ReviewRounds: 3,
-		},
-		Task:     "post the weekly summary",
-		AlwaysOn: []string{"reflect"},
+		Seat:      prompts.Seat{Org: organization, Role: role},
+		Registry:  reg,
+		Models:    models,
+		Caps:      runner.Caps{ExecutorRounds: 6},
+		Task:      "post the weekly summary",
+		Reply:     waiting,
+		AgentRun:  opts.agentRun,
+		Resume:    opts.resume,
+		Publisher: opts.pub,
+		Turn:      runner.Turn{ID: "t-1", AgentID: "a-1"},
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -183,28 +250,36 @@ func build(t *testing.T, entries []phase.Entry) (*runner.Runner, *tools.Registry
 	return r, reg
 }
 
-func TestPlanReturnsWhatTheModelSubmitted(t *testing.T) {
+func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 	t.Parallel()
-	r, _, _ := fixture(t, &scriptedProvider{plan: []llm.Completion{submitCall(t, runner.SubmitPlanTool, `{
-		"decision":"plan","reasoning":"post it",
-		"tools_needed":["slack_post"],
-		"steps":[{"intent":"post","approach":"Weekly: three PRs."}],
-		"success_criteria":["the post exists"]}`)}})
+	r, _, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{
+		activate("slack_post"),
+		{ToolCalls: []llm.ToolCall{{ID: "a", Name: "slack_post", Arguments: map[string]any{"channel": "C1"}}}},
+		submitCall(t, runner.SubmitWorkTool, `{
+			"outcome":"delivered","summary":"posted the weekly summary",
+			"deliveries":["slack_post"],"open_questions":"which channel next week?"}`),
+	}})
 
-	p, surface, err := r.Plan(context.Background(), 1, "", nil)
+	w, surface, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
-		t.Fatalf("Plan: %v", err)
+		t.Fatalf("Execute: %v", err)
 	}
-	if p.Decision != turn.PlanRun {
-		t.Errorf("decision = %s", p.Decision)
+	if w.Outcome != turn.OutcomeDelivered {
+		t.Errorf("outcome = %s", w.Outcome)
 	}
-	if !slices.Equal(p.ToolsNeeded, []string{"slack_post"}) {
-		t.Errorf("tools_needed = %v", p.ToolsNeeded)
+	if w.Summary != "posted the weekly summary" {
+		t.Errorf("summary = %q", w.Summary)
 	}
-	if !strings.Contains(p.Summary, "Weekly: three PRs.") {
-		t.Errorf("the step's approach was lost:\n%s", p.Summary)
+	if !slices.Equal(w.Deliveries, []string{"slack_post"}) {
+		t.Errorf("deliveries = %v", w.Deliveries)
 	}
-	// The surface handed back is what the delivery gate judges against, so
+	if w.OpenQuestions == "" {
+		t.Error("the executor's open questions were dropped")
+	}
+	if w.Rescued {
+		t.Error("a submitted outcome was marked as the engine's own")
+	}
+	// The surface handed back is what the delivery check judges against, so
 	// it must describe the whole catalogue and not just what was offered.
 	if !slices.Contains(surface.MCPTools, "slack_post") {
 		t.Errorf("surface MCP tools = %v", surface.MCPTools)
@@ -214,221 +289,179 @@ func TestPlanReturnsWhatTheModelSubmitted(t *testing.T) {
 	}
 }
 
-func TestThePlannerIsNotHandedEveryMCPTool(t *testing.T) {
+// EVERY FIRST-PARTY TOOL, and the MCP surface behind discovery. Choosing in
+// advance is what the planner used to do — against a catalogue it was never
+// shown — and every wrong guess became a tool the actor did not have when it
+// turned out to need it.
+func TestTheExecutorGetsTheWholeFirstPartySurfaceAndDiscovery(t *testing.T) {
 	t.Parallel()
-	// A real server publishes dozens and a planner shown all of them plans
+	r, prov, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{submitWork(t)}})
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	offered := toolNames(prov.requestsFor("execute")[0].Tools)
+	slices.Sort(offered)
+	want := []string{
+		"activate_tool", "list_mcp_server_tools", "lookup_colleague", "reflect",
+		runner.SubmitWorkTool,
+	}
+	slices.Sort(want)
+	if !slices.Equal(offered, want) {
+		t.Errorf("offered %v, want %v", offered, want)
+	}
+	// A real server publishes dozens and a model shown all of them acts
 	// against a wall of text. Discovery is a tool call, which also keeps the
 	// prompt prefix stable while a server's catalogue changes underneath.
-	r, prov, _ := fixture(t, &scriptedProvider{plan: []llm.Completion{submitCall(t, runner.SubmitPlanTool, `{"decision":"plan","tools_needed":["slack_post"]}`)}})
-	if _, _, err := r.Plan(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Plan: %v", err)
-	}
-	offered := toolNames(prov.requestsFor("plan")[0].Tools)
 	if slices.Contains(offered, "slack_post") {
-		t.Errorf("the planner was offered an MCP tool directly: %v", offered)
+		t.Errorf("an MCP tool was offered directly: %v", offered)
 	}
-	if !slices.Contains(offered, runner.SubmitPlanTool) {
-		t.Errorf("the planner was not offered its own submission tool: %v", offered)
-	}
-	if !slices.Contains(offered, "lookup_colleague") {
-		t.Errorf("the planner was not offered the first-party tools: %v", offered)
-	}
-	// But the CATALOGUE names the server, or it cannot plan to discover it.
-	if !strings.Contains(prov.requestsFor("plan")[0].Messages[0].Content, "slack") {
-		t.Error("the planner's prompt does not name the MCP server")
+	// But the CATALOGUE names the server, or discovery has nothing to aim
+	// at.
+	if !strings.Contains(prov.requestsFor("execute")[0].Messages[0].Content, "slack") {
+		t.Error("the prompt does not name the MCP server")
 	}
 }
 
-func TestAPlannerThatNeverSubmittedFallsBackWithoutInventingAPlan(t *testing.T) {
+// THE RESCUE PATH. An executor that ran out of rounds, or simply stopped, has
+// produced text and no account of itself. Discarding the turn wastes
+// everything it did; calling it delivered puts words in its mouth on the one
+// question that matters.
+func TestAnExecutorThatNeverSubmittedIsRescuedAsIncomplete(t *testing.T) {
 	t.Parallel()
-	// Discarding the turn wastes everything the phase did; inventing a full
-	// plan puts words in its mouth. A direct plan carrying its own text is
-	// the honest middle.
-	r, _, _ := fixture(t, &scriptedProvider{plan: []llm.Completion{text("I think we should post something.")}})
-	p, _, err := r.Plan(context.Background(), 1, "", nil)
+	r, _, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{text("I posted something.")}})
+	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
-		t.Fatalf("Plan: %v", err)
+		t.Fatalf("Execute: %v", err)
 	}
-	if p.Decision != turn.PlanDirect {
-		t.Errorf("decision = %s, want direct", p.Decision)
+	if w.Outcome != turn.OutcomeIncomplete {
+		t.Errorf("outcome = %s, want incomplete", w.Outcome)
 	}
-	if !strings.Contains(p.Reasoning, "post something") {
-		t.Errorf("the phase's own text was discarded: %q", p.Reasoning)
+	if !strings.Contains(w.Text, "posted something") {
+		t.Errorf("the phase's own text was discarded: %q", w.Text)
 	}
-	if len(p.ToolsNeeded) != 0 {
-		t.Errorf("tools_needed = %v, want nothing invented", p.ToolsNeeded)
+	// AS TEXT, NOT AS INTENT. The executor gave no account of itself, and
+	// Summary is the intent line — rendered whole to every later round and
+	// kept whole in the conversation ledger — so the transcript copied into
+	// it went out unbounded, twice per round, under a heading calling it
+	// the executor's own account.
+	if w.Summary != "" {
+		t.Errorf("a rescue wrote an intent the executor never gave: %q", w.Summary)
 	}
-	// AND IT SAYS SO. Without the mark, the word `direct` is
-	// indistinguishable from a decision the planner actually made — and
-	// the turn loop skips Review on that word. A rescue also names no
-	// tools, so the delivery gate cannot force Review back on either:
-	// both nets miss, and a turn that delivered nothing reports done.
-	if !p.Rescued {
-		t.Error("a synthesised decision was returned as if the planner had made it")
+	// AND IT SAYS SO. Without the mark, the word is indistinguishable from
+	// one the executor chose — and every fast path in the loop turns on
+	// telling "the executor decided this" from "nothing decided anything".
+	if !w.Rescued {
+		t.Error("a synthesised outcome was returned as if the executor had made it")
 	}
 }
 
-// The counterfactual, so the mark cannot quietly become "always true".
-//
-// The payload carries a step because validation refuses a `direct` that names
-// neither steps nor tools — "has decided nothing" — so this is what a real
-// chosen `direct` looks like coming off the wire.
-func TestASubmittedPlanIsNotMarkedRescued(t *testing.T) {
-	t.Parallel()
-	r, _, _ := fixture(t, &scriptedProvider{plan: []llm.Completion{
-		submitCall(t, runner.SubmitPlanTool, `{"decision":"direct",
-			"reasoning":"answering in the thread",
-			"steps":[{"intent":"reply","approach":"Answer in the thread."}]}`),
-	}})
-	p, _, err := r.Plan(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Plan: %v", err)
-	}
-	if p.Rescued {
-		t.Error("a plan the planner submitted was marked as the engine's own")
-	}
-}
-
-func TestTheReviewersCorrectionReachesTheNextPlanWithoutRewritingTheAsk(t *testing.T) {
+func TestTheReviewersCorrectionReachesTheNextRoundWithoutRewritingTheAsk(t *testing.T) {
 	t.Parallel()
 	// The task text also feeds knowledge search, the sandbox brief and the
 	// episode record, all of which want the requester's actual ask and not
 	// the engine's running commentary on it. So the correction is prefixed
 	// to the user MESSAGE, not merged into the task.
-	r, prov, _ := fixture(t, &scriptedProvider{plan: []llm.Completion{submitCall(t, runner.SubmitPlanTool, `{"decision":"plan","tools_needed":["slack_post"]}`)}})
-	if _, _, err := r.Plan(context.Background(), 2, "the link was wrong", nil); err != nil {
-		t.Fatalf("Plan: %v", err)
+	r, prov, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{submitWork(t)}})
+	if _, _, err := r.Execute(context.Background(), 2, "the link was wrong", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
 	}
-	user := prov.requestsFor("plan")[0].Messages[1].Content
+	user := prov.requestsFor("execute")[0].Messages[1].Content
 	if !strings.Contains(user, "the link was wrong") {
-		t.Errorf("the correction did not reach the planner:\n%s", user)
+		t.Errorf("the correction did not reach the executor:\n%s", user)
 	}
 	if !strings.Contains(user, "post the weekly summary") {
 		t.Errorf("the original ask was lost:\n%s", user)
 	}
 	// And with no correction the message is byte-identical to its
 	// pre-correction form, which is what keeps the prompt prefix cacheable.
-	r2, prov2, _ := fixture(t, &scriptedProvider{plan: []llm.Completion{submitCall(t, runner.SubmitPlanTool, `{"decision":"plan","tools_needed":["slack_post"]}`)}})
-	if _, _, err := r2.Plan(context.Background(), 1, "   ", nil); err != nil {
-		t.Fatalf("Plan: %v", err)
+	r2, prov2, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{submitWork(t)}})
+	if _, _, err := r2.Execute(context.Background(), 1, "   ", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
 	}
-	if got := prov2.requestsFor("plan")[0].Messages[1].Content; strings.Contains(got, "reviewed") {
+	if got := prov2.requestsFor("execute")[0].Messages[1].Content; strings.Contains(got, "reviewed") {
 		t.Errorf("a blank correction left scaffolding behind:\n%s", got)
 	}
 }
 
-func TestExecuteGetsWhatThePlanNamedPlusTheAlwaysOnSet(t *testing.T) {
-	t.Parallel()
-	// A plan that named its delivery tool should be executing it, not
-	// re-deciding against the full catalogue.
-	r, prov, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{text("posted")}})
-	p := turn.Plan{Decision: turn.PlanRun, ToolsNeeded: []string{"slack_post"}, Summary: "post it"}
-	if _, _, err := r.Execute(context.Background(), 1, p, nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	offered := toolNames(prov.requestsFor("execute")[0].Tools)
-	slices.Sort(offered)
-	// The discovery pair is always present: a phase that cannot discover a
-	// tool cannot recover from a planner that guessed a name wrong, and the
-	// delivery gate's own correction tells it to use exactly these two.
-	want := []string{"activate_tool", "list_mcp_server_tools", "reflect", "slack_post"}
-	if !slices.Equal(offered, want) {
-		t.Errorf("offered %v, want the plan's tool, the always-on set and discovery", offered)
-	}
-}
-
-func TestADirectPlanGetsEverything(t *testing.T) {
-	t.Parallel()
-	// It committed to one shot with no multi-step plan, so it gets the
-	// whole surface to work with.
-	r, prov, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{text("posted")}})
-	p := turn.Plan{Decision: turn.PlanDirect}
-	if _, _, err := r.Execute(context.Background(), 1, p, nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	offered := toolNames(prov.requestsFor("execute")[0].Tools)
-	if !slices.Contains(offered, "slack_post") || !slices.Contains(offered, "slack_history") {
-		t.Errorf("a direct plan was offered %v", offered)
-	}
-}
-
-func TestAPhantomToolIsDroppedAndNamedRatherThanFailingThePhase(t *testing.T) {
-	t.Parallel()
-	// The planner guessed at an MCP surface it could not see. Failing the
-	// phase turns a recoverable mis-guess into a lost turn — but saying
-	// nothing lets the executor assume the tool exists, fail to call it,
-	// and settle for a text reply that delivers nothing.
-	r, prov, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{text("posted")}})
-	p := turn.Plan{Decision: turn.PlanRun, ToolsNeeded: []string{"slack_send_msg", "slack_post"}}
-	if _, _, err := r.Execute(context.Background(), 1, p, nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	offered := toolNames(prov.requestsFor("execute")[0].Tools)
-	if slices.Contains(offered, "slack_send_msg") {
-		t.Errorf("a phantom was offered: %v", offered)
-	}
-	if !slices.Contains(offered, "slack_post") {
-		t.Errorf("the real tool was dropped alongside the phantom: %v", offered)
-	}
-	if !strings.Contains(prov.requestsFor("execute")[0].Messages[0].Content, "slack_send_msg") {
-		t.Error("the executor was not told which name did not resolve")
-	}
-}
-
-func TestExecuteReportsWhatItCalledAndWhatWasMissing(t *testing.T) {
+func TestTheExecutorReportsWhatItCalledAndWhatWasMissing(t *testing.T) {
 	t.Parallel()
 	r, _, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{
+		activate("slack_post"),
 		{ToolCalls: []llm.ToolCall{
 			{ID: "a", Name: "slack_post", Arguments: map[string]any{"channel": "C1"}},
 			{ID: "b", Name: "ghost_tool"},
 		}},
-		text("done"),
+		submitWork(t),
 	}})
-	p := turn.Plan{Decision: turn.PlanRun, ToolsNeeded: []string{"slack_post"}}
-	e, _, err := r.Execute(context.Background(), 1, p, nil)
+	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if e.Text != "done" {
-		t.Errorf("text = %q", e.Text)
+	if len(w.Calls) < 3 {
+		t.Fatalf("calls = %+v", w.Calls)
 	}
-	if len(e.Calls) != 2 {
-		t.Fatalf("calls = %+v", e.Calls)
-	}
-	if e.Calls[0].Name != "slack_post" || e.Calls[0].Args["channel"] != "C1" {
-		t.Errorf("first call = %+v", e.Calls[0])
+	if w.Calls[1].Name != "slack_post" || w.Calls[1].Args["channel"] != "C1" {
+		t.Errorf("the delivery call = %+v", w.Calls[1])
 	}
 	// Membership in the snapshot is the single source of truth. Matching on
 	// the failure TEXT would flag a false positive the moment a legitimate
 	// tool's own output began with the same words.
-	if !slices.Equal(e.MissingTools, []string{"ghost_tool"}) {
-		t.Errorf("missing tools = %v", e.MissingTools)
+	if !slices.Equal(w.MissingTools, []string{"ghost_tool"}) {
+		t.Errorf("missing tools = %v", w.MissingTools)
 	}
 }
 
-func TestReviewJudgesAgainstTheToolLogsVerbatim(t *testing.T) {
+// mark_onboarded is the whole phase-scoped list, and it earns its place:
+// onboarding is its own pass, and a seat that could mark itself from inside
+// the executor would permanently skip orientation.
+func TestTheExecutorIsNotOfferedTheOnboardingMarker(t *testing.T) {
 	t.Parallel()
-	// The header points at the logs as the primary evidence. A reviewer
+	r, prov, _ := fixture(t, &scriptedProvider{execute: []llm.Completion{submitWork(t)}})
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if slices.Contains(toolNames(prov.requestsFor("execute")[0].Tools), runner.MarkOnboardedTool) {
+		t.Error("the executor was offered mark_onboarded")
+	}
+}
+
+func TestReviewJudgesAgainstTheToolLogVerbatim(t *testing.T) {
+	t.Parallel()
+	// The header points at the log as the primary evidence. A reviewer
 	// judging an ELIDED log is judging a summary and calling it evidence —
 	// the budgets belong to the cross-round ledger, not here.
 	body := strings.Repeat("x", 3000)
-	r, prov, _ := fixture(t, &scriptedProvider{review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)}})
-	p := turn.Plan{Decision: turn.PlanRun, Summary: "post it", ToolsNeeded: []string{"slack_post"}}
-	e := turn.Execution{
-		Text:  "posted",
+	r, prov, _ := fixture(t, &scriptedProvider{
+		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+	})
+	w := turn.Work{
+		Outcome: turn.OutcomeDelivered, Summary: "post it", Text: "posted",
 		Calls: []ledger.Call{{Name: "slack_post", Args: map[string]any{"text": body}}},
 	}
-	if _, err := r.Review(context.Background(), 1, p, e, nil); err != nil {
+	if _, err := r.Review(context.Background(), 1, w, nil); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
 	system := prov.requestsFor("review")[0].Messages[0].Content
 	if !strings.Contains(system, body) {
-		t.Error("Review's evidence log was elided")
+		t.Error("the review's evidence log was elided")
 	}
-	// Plan's log renders as "(none)" rather than being omitted: a missing
-	// heading reads as "log unavailable", not "no calls were made".
-	if !strings.Contains(system, "(none)") {
-		t.Errorf("an empty Plan log left no trace:\n%s", system[:min(600, len(system))])
+	if !strings.Contains(system, "post it") {
+		t.Error("the executor's own account did not reach the reviewer")
+	}
+}
+
+// An empty log renders as "(none)" rather than being omitted: a missing
+// heading reads as "log unavailable", not "no calls were made".
+func TestAnEmptyToolLogStillLeavesATrace(t *testing.T) {
+	t.Parallel()
+	r, prov, _ := fixture(t, &scriptedProvider{
+		review: []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+	})
+	if _, err := r.Review(context.Background(), 1, turn.Work{Summary: "s"}, nil); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if !strings.Contains(prov.requestsFor("review")[0].Messages[0].Content, "(none)") {
+		t.Error("an empty tool log left no trace")
 	}
 }
 
@@ -438,7 +471,7 @@ func TestAReviewerThatNeverDecidedDoesNotSilentlyPassTheTurn(t *testing.T) {
 	// judged good" and "nothing judged it", and those look identical
 	// downstream.
 	r, _, _ := fixture(t, &scriptedProvider{review: []llm.Completion{text("looks fine to me")}})
-	got, err := r.Review(context.Background(), 1, turn.Plan{}, turn.Execution{}, nil)
+	got, err := r.Review(context.Background(), 1, turn.Work{}, nil)
 	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
@@ -456,43 +489,62 @@ func TestEachPhaseGetsItsOwnSubmissionToolAndNoneLeaks(t *testing.T) {
 	// shared registry would leave one phase's answer visible to the next —
 	// or to the next turn, still holding the last one's decision.
 	r, prov, reg := fixture(t, &scriptedProvider{
-		plan:    []llm.Completion{submitCall(t, runner.SubmitPlanTool, `{"decision":"plan","tools_needed":["slack_post"]}`)},
-		execute: []llm.Completion{text("posted")},
+		execute: []llm.Completion{submitWork(t)},
 		review:  []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	})
 
-	p, _, err := r.Plan(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Plan: %v", err)
-	}
-	e, _, err := r.Execute(context.Background(), 1, p, nil)
+	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if _, err := r.Review(context.Background(), 1, p, e, nil); err != nil {
+	if _, err := r.Review(context.Background(), 1, w, nil); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
 
 	// Neither name ever reaches the shared registry.
-	for _, name := range []string{runner.SubmitPlanTool, runner.SubmitReviewTool} {
+	for _, name := range []string{runner.SubmitWorkTool, runner.SubmitReviewTool} {
 		if _, ok := reg.Lookup(name); ok {
 			t.Errorf("%s leaked into the shared registry", name)
 		}
 	}
-	// Execute is offered neither.
+	// The executor is offered its own and not the reviewer's.
 	execOffered := toolNames(prov.requestsFor("execute")[0].Tools)
-	for _, name := range []string{runner.SubmitPlanTool, runner.SubmitReviewTool} {
-		if slices.Contains(execOffered, name) {
-			t.Errorf("Execute was offered %s: %v", name, execOffered)
-		}
+	if !slices.Contains(execOffered, runner.SubmitWorkTool) {
+		t.Errorf("the executor was not offered its submission tool: %v", execOffered)
 	}
-	// And Review is offered its own, not Plan's.
+	if slices.Contains(execOffered, runner.SubmitReviewTool) {
+		t.Errorf("the executor was offered the reviewer's tool: %v", execOffered)
+	}
+	// And the reviewer is offered its own, not the executor's.
 	reviewOffered := toolNames(prov.requestsFor("review")[0].Tools)
 	if !slices.Contains(reviewOffered, runner.SubmitReviewTool) {
-		t.Errorf("Review was not offered its submission tool: %v", reviewOffered)
+		t.Errorf("the reviewer was not offered its submission tool: %v", reviewOffered)
 	}
-	if slices.Contains(reviewOffered, runner.SubmitPlanTool) {
-		t.Errorf("Review was offered Plan's submission tool: %v", reviewOffered)
+	if slices.Contains(reviewOffered, runner.SubmitWorkTool) {
+		t.Errorf("the reviewer was offered the executor's tool: %v", reviewOffered)
+	}
+}
+
+// THE REVIEWER HAS NO KNOB. It holds one submission tool, so its budget is a
+// structural fact rather than an operator preference — it used to be silently
+// borrowed from the executor's cap, which gave a phase that calls one tool
+// twenty rounds.
+func TestTheReviewerRunsOnItsOwnBudgetNotTheExecutors(t *testing.T) {
+	t.Parallel()
+	// A reviewer that never submits burns its whole budget and then
+	// rescues, so the round count is observable.
+	r, prov, _ := fixture(t, &scriptedProvider{
+		review: []llm.Completion{
+			{ToolCalls: []llm.ToolCall{{ID: "x", Name: "lookup_colleague"}}},
+		},
+	})
+	if _, err := r.Review(context.Background(), 1, turn.Work{Summary: "s"}, nil); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	// The executor's cap in this fixture is 6; the reviewer's is its own
+	// unexported constant, and must be neither that nor unbounded.
+	if got := len(prov.requestsFor("review")); got == 0 || got > 5 {
+		t.Errorf("the reviewer ran %d rounds, want its own small budget", got)
 	}
 }
 

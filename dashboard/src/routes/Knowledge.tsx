@@ -79,7 +79,7 @@ export function Knowledge() {
         <Empty
           icon="book"
           title="Search the company's shared knowledge"
-          hint="The engine runs this against the configured knowledge backend at query time — the same live search an agent's Plan phase does before it starts work. Nothing is cached here, so there is no staleness window."
+          hint="The engine runs this against the configured knowledge backend at query time — the same live search an agent gets at turn start and can re-run itself with search_knowledge. Nothing is cached here, so there is no staleness window."
         />
       )}
 

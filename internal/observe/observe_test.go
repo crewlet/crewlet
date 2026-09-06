@@ -63,7 +63,7 @@ func (i *ingester) types() []string {
 
 func phaseEvent(role string) *events.Event {
 	ev := events.New(types.AgentPhaseStarted{
-		RoleName: role, TurnID: "t1", Phase: types.PhasePlan,
+		RoleName: role, TurnID: "t1", Phase: types.PhaseExecute,
 	}, events.TraceContext{})
 	ev.Source = role
 	return ev

@@ -35,7 +35,7 @@ import (
 //
 // The one exception is a DRAIN. There the wait is exactly wrong: the node is
 // leaving, the slot it is waiting for is being handed to a peer, and a turn
-// that started mid-drain runs a full multi-minute Plan → Execute → Review
+// that started mid-drain runs a full multi-minute execute → review turn
 // after the operator asked the process to stop. So a drain closes the gate
 // and every waiter leaves immediately, deferring its delivery — which is
 // unacked, so the successor gets it rather than the broker's redelivery

@@ -14,20 +14,19 @@
  * reconnect is an answer about a company that has since moved.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useClient, useConnection } from "./store-hooks.ts";
 import type { QueryMap, QueryName } from "~/protocol/index.ts";
 
 export interface QueryResult<T> {
   data: T | null;
-  /** True only before the FIRST answer. A refetch keeps the last answer on
+  /** True only before the FIRST answer. A poll keeps the last answer on
    *  screen — replacing a rendered table with a skeleton every 30 seconds is
    *  how a polled screen becomes unreadable. */
   loading: boolean;
   /** The engine's machine-readable code (`unauthorized`, `no_event_store`,
    *  `timeout`, …), or null. */
   error: string | null;
-  refetch: () => void;
 }
 
 export interface QueryOptions {
@@ -60,8 +59,6 @@ export function useQuery<K extends QueryName>(
   // The params object is a fresh literal on every render, so it cannot be a
   // dependency. Its serialisation can.
   const key = JSON.stringify(params ?? {});
-  const [nonce, setNonce] = useState(0);
-  const refetch = useCallback(() => setNonce((n) => n + 1), []);
 
   // Which generation of the effect is allowed to write state. A ref rather
   // than a captured boolean so a poll tick started by an earlier generation
@@ -109,7 +106,7 @@ export function useQuery<K extends QueryName>(
     // re-ask; including it unconditionally would re-run every query on every
     // socket blip.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socket, what, key, enabled, pollMs, nonce, refetchOnReconnect && connected]);
+  }, [socket, what, key, enabled, pollMs, refetchOnReconnect && connected]);
 
-  return { ...state, refetch };
+  return state;
 }

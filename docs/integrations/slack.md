@@ -302,7 +302,7 @@ The engine's own transport posts only where the engine itself is speaking, and i
 
 ## Working Status ("is thinking…")
 
-An agent turn takes time — a Plan → Execute → Review pass with tool calls
+An agent turn takes time — an executor → reviewer pass with tool calls
 routinely runs minutes. Without a signal, the human who posted sees
 nothing until the reply lands and cannot tell "the bot is working" from
 "the bot is dead". Crewlet closes that gap: while an agent reasons about a
@@ -365,7 +365,7 @@ the coffee machine…") is safe; plausible-and-specific is not.
 - **Kept alive across long turns.** Slack expires a status after 2
   minutes; the engine re-asserts it every 45 s (two attempts inside every
   expiry window, ~1.3 requests/min against Slack's 600/min per-app limit).
-- **Cleared when the turn ends** — a posted reply, a planner `skip`
+- **Cleared when the turn ends** — a posted reply, a `no_action` outcome
   decision ("not addressed to me"), a failure, or an exhausted budget all
   clear it. Slack also clears it by itself the instant the agent posts
   into the thread; the engine re-asserts only while a later phase is still

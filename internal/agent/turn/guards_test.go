@@ -85,31 +85,24 @@ func TestAStallThatStartsLaterIsStillCaught(t *testing.T) {
 	}
 }
 
-func TestAHigherThresholdWaitsLonger(t *testing.T) {
+// THE THRESHOLD IS A CONSTANT, not a knob: it was a field the loop's settings
+// were meant to fill and never did, so every turn ran on the fallback anyway.
+// Two identical rounds is the earliest point at which "unchanged" is a fact
+// rather than a single sample, and one observation must not abort — that would
+// kill every turn on its first self_iterate.
+func TestADetectorAbortsOnTheSecondIdenticalRoundAndNotTheFirst(t *testing.T) {
 	t.Parallel()
-	s := turn.StallDetector{Threshold: 3}
-	s.Observe("a")
-	s.Observe("a")
-	if s.ShouldAbort() {
-		t.Error("a threshold of 3 aborted after 2")
-	}
-	s.Observe("a")
-	if !s.ShouldAbort() {
-		t.Error("a threshold of 3 did not abort after 3")
-	}
-}
-
-func TestTheZeroDetectorDefaultsToTwo(t *testing.T) {
-	t.Parallel()
-	// A zero threshold must not mean "abort immediately" — that would kill
-	// every turn on its first self_iterate.
 	var s turn.StallDetector
 	if s.ShouldAbort() {
 		t.Fatal("a detector that has observed nothing wants to abort")
 	}
 	s.Observe("a")
 	if s.ShouldAbort() {
-		t.Error("the zero detector aborted after one observation")
+		t.Error("the detector aborted after one observation")
+	}
+	s.Observe("a")
+	if !s.ShouldAbort() {
+		t.Error("two identical rounds did not abort")
 	}
 }
 

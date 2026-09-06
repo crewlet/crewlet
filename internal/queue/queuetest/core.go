@@ -210,7 +210,7 @@ func (s *suite) runCore(t *testing.T) {
 		for _, label := range []string{"e0", "e1", "e2"} {
 			publish(ctx, t, q, topic, newEvent(label))
 		}
-		if backlog := s.caps.Backlog; backlog != nil {
+		if backlog := s.optionalBacklog(t); backlog != nil {
 			awaitState(t, "three retained events", func() bool {
 				return len(backlog(q, topic, group)) == 3
 			})

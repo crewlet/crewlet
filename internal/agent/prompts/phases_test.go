@@ -45,16 +45,37 @@ func TestSubagentPromptAppendsTheMandatedPreamble(t *testing.T) {
 	order(t, p, parent, SubagentPreamble)
 }
 
-// The two prohibitions are structural: a sub-agent that could spawn
-// sub-agents has no depth bound, and one that could contact colleagues would
-// put a short-lived worker's half-formed conclusions on a teammate's desk
-// under the parent's name.
+// The two prohibitions are structural: a worker that could delegate has no
+// depth bound, and one that could contact colleagues would put a short-lived
+// worker's half-formed conclusions on a teammate's desk under the parent's
+// name.
 func TestSubagentPreambleStatesTheInvariants(t *testing.T) {
 	t.Parallel()
 	contains(t, SubagentPreamble,
-		"Do not spawn further sub-agents",
-		"Do not contact colleagues",
-		"concise final answer")
+		"Do not delegate further",
+		"Do not contact colleagues")
+}
+
+// HOW A WORKER ENDS depends on whether it HAS a submission tool, and the two
+// rules must not be interchangeable: telling a worker to call submit_result
+// when its name collided with a granted tool costs it a round to discover
+// that, and telling one that has the tool to answer in prose loses the
+// structured answer the parent asked for.
+func TestAWorkerIsToldHowToEndTheWayItActuallyCan(t *testing.T) {
+	t.Parallel()
+	withTool := BuildSubagent(engineer(), SubagentInput{
+		ParentSystemPrompt: "p", Submits: true,
+	})
+	contains(t, withTool, "submit_result")
+	if strings.Contains(withTool, SubagentProseRule) {
+		t.Error("a worker with a submission tool was told to answer in prose")
+	}
+
+	withoutTool := BuildSubagent(engineer(), SubagentInput{ParentSystemPrompt: "p"})
+	contains(t, withoutTool, "concise final answer")
+	if strings.Contains(withoutTool, "submit_result") {
+		t.Error("a worker with no submission tool was told to call it")
+	}
 }
 
 func TestSubagentPromptOrdersParentThenSkillsThenCatalogueThenPreamble(t *testing.T) {

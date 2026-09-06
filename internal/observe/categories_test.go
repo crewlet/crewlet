@@ -116,7 +116,7 @@ func TestARecordCarriesWhatAListingCanFilterOn(t *testing.T) {
 	// the ones a dashboard actually asks for.
 	ev := events.New(types.AgentPhaseCompleted{
 		Agent: "a-1", RoleName: "CEO", TurnID: "t1",
-		Phase: types.PhasePlan, ConversationKey: "slack:C1",
+		Phase: types.PhaseExecute, ConversationKey: "slack:C1",
 		Failed: true, ErrorKind: "auth",
 	}, events.TraceContext{TraceID: "tr", SpanID: "sp"})
 	ev.Source = "CEO"
@@ -159,7 +159,7 @@ func TestAFailedTagIsOnlySetWhenItFailed(t *testing.T) {
 	// Set only when true, so the tag doubles as the filter. A "false"
 	// written on every row would make the filter match everything.
 	ev := events.New(types.AgentPhaseCompleted{
-		RoleName: "CEO", TurnID: "t1", Phase: types.PhasePlan,
+		RoleName: "CEO", TurnID: "t1", Phase: types.PhaseExecute,
 	}, events.TraceContext{})
 	rec, ok := observe.Record(ev)
 	if !ok {

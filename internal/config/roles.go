@@ -65,6 +65,18 @@ type Role struct {
 
 	BehavioralGuidelines []string `yaml:"behavioral_guidelines,omitempty" json:"behavioral_guidelines,omitempty" desc:"How this seat should work; reaches its prompt."`
 
+	// Workers narrows which of the company's delegate templates this seat
+	// may use. EMPTY MEANS EVERY ONE, which is the useful default: a
+	// company that publishes three workers wants its seats using them, and
+	// requiring each seat to opt in turns a shared library into per-seat
+	// copy-paste. Naming any narrows to exactly those.
+	//
+	// A name that no template defines is refused at load. The runtime
+	// filter would otherwise drop it silently and offer the executor a
+	// shorter list, with nothing anywhere saying a worker was meant to be
+	// there.
+	Workers []string `yaml:"workers,omitempty" json:"workers,omitempty" desc:"Delegate templates this seat may use; empty = every one."`
+
 	// TokenBudget is this seat's own ceiling; 0 is unlimited.
 	TokenBudget int `yaml:"token_budget,omitempty" json:"token_budget,omitempty" js:"min=0" desc:"Per-seat token ceiling; 0 = unlimited."`
 
@@ -75,9 +87,13 @@ type Role struct {
 	// The flat per-phase fields. Each WINS over the same phase inside the
 	// mapping form, so a seat can take a shared mapping and override one
 	// phase without restating the block.
-	LLMPlan      ProviderKeys `yaml:"llm_plan,omitempty" json:"llm_plan,omitzero" desc:"Provider chain for Plan; wins over llm.plan."`
-	LLMExecute   ProviderKeys `yaml:"llm_execute,omitempty" json:"llm_execute,omitzero" desc:"Provider chain for Execute."`
-	LLMReview    ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero" desc:"Provider chain for Review."`
+	//
+	// There is no executor entry, and that is not an omission: `llm` IS the
+	// executor's chain. The turn's work happens in one conversation, so a
+	// second field naming the model that conversation runs on would be two
+	// spellings of one setting — and the phases that remain here are the
+	// SATELLITES an operator points somewhere cheaper.
+	LLMReview    ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero" desc:"Provider chain for the reviewer."`
 	LLMSubagent  ProviderKeys `yaml:"llm_subagent,omitempty" json:"llm_subagent,omitzero" desc:"Provider chain for spawned sub-agents."`
 	LLMAuxiliary ProviderKeys `yaml:"llm_auxiliary,omitempty" json:"llm_auxiliary,omitzero" desc:"Cheap model for reflection and summaries."`
 	LLMJudge     ProviderKeys `yaml:"llm_judge,omitempty" json:"llm_judge,omitzero" desc:"Cheap model for the round-cap extension judge."`
@@ -143,6 +159,16 @@ func (p *RolePlacement) Seat() placement.SeatPlacement {
 type RoleSandbox struct {
 	Enabled bool `yaml:"enabled,omitempty" json:"enabled" desc:"Offer this seat the sandbox tool."`
 
+	// RunIn is WHERE this seat's code work runs, naming one cell of
+	// providers.sandbox. Empty inherits providers.sandbox.default_run_in.
+	//
+	// This is per-seat because it is a decision about ONE SEAT'S WORK: the
+	// seat that must use the operator's own subscription login and the seat
+	// whose generated code must never touch the engine host are different
+	// seats, and the block-wide `type:` this replaced could answer only for
+	// both at once.
+	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b|self" desc:"Where this seat's code work runs; self = inside its own agent-mode executor run. Empty inherits providers.sandbox.default_run_in."`
+
 	// CodingAgent overrides the provider-wide default for this seat only.
 	// Empty inherits it, resolved at LAUNCH rather than at config time, so
 	// a provider swap reaches seats that never named one.
@@ -205,6 +231,13 @@ func (m RoleSandboxMCP) IsZero() bool { return len(m.Servers) == 0 }
 
 func (s *RoleSandbox) validate(path string) error {
 	var p problems
+	if s.RunIn != "" && !slices.Contains(Placements, s.RunIn) {
+		// Only the SPELLING is checked here. Whether the cell is actually
+		// configured is a question about providers.sandbox, and a seat is
+		// validated without it — see (*Company).validateSandboxPlacement.
+		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
+			s.RunIn, names(Placements))
+	}
 	if s.CodingAgent != "" && !slices.Contains(CodingAgents, s.CodingAgent) {
 		p.add(at(path, "coding_agent"), ErrUnknownValue, "%q (want %s)",
 			s.CodingAgent, names(CodingAgents))
@@ -217,7 +250,7 @@ func (s *RoleSandbox) validate(path string) error {
 	if !s.Enabled {
 		// A gate that is off with provisioning under it is an operator who
 		// configured a sandbox and will watch nothing happen.
-		if len(s.Setup) > 0 || len(s.Env) > 0 || len(s.MCP.Servers) > 0 {
+		if len(s.Setup) > 0 || len(s.Env) > 0 || len(s.MCP.Servers) > 0 || s.RunIn != "" {
 			p.add(at(path, "enabled"), ErrConflict,
 				"this seat's sandbox is configured but not enabled, so none of "+
 					"it is read. Set enabled: true, or remove the block")
@@ -383,14 +416,13 @@ func (r *Role) Seat() *org.Role {
 		BehavioralGuidelines: append([]string(nil), r.BehavioralGuidelines...),
 		TokenBudget:          r.TokenBudget,
 		LLM:                  r.LLM.Default,
-		LLMPlan:              pick(r.LLMPlan, r.LLM.Plan),
-		LLMExecute:           pick(r.LLMExecute, r.LLM.Execute),
 		LLMReview:            pick(r.LLMReview, r.LLM.Review),
 		LLMSubagent:          pick(r.LLMSubagent, r.LLM.Subagent),
 		LLMAuxiliary:         pick(r.LLMAuxiliary, r.LLM.Auxiliary),
 		LLMJudge:             pick(r.LLMJudge, r.LLM.Judge),
 		LLMSandbox:           pick(r.LLMSandbox, r.LLM.Sandbox),
 		LearningEnabled:      r.LearningEnabled,
+		Workers:              append([]string(nil), r.Workers...),
 		MCPEnv:               r.MCPEnv.Clone(),
 		Placement:            r.Placement.Seat(),
 		Schedules:            append([]org.Schedule(nil), r.Schedules...),
@@ -423,6 +455,7 @@ func (r *Role) Seat() *org.Role {
 		}
 		seat.Sandbox = &org.RoleSandbox{
 			Enabled:         s.Enabled,
+			RunIn:           string(s.RunIn),
 			CodingAgent:     string(s.CodingAgent),
 			PauseTTLSeconds: s.PauseTTLSeconds,
 			MCP:             org.RoleSandboxMCP{Servers: append([]string(nil), s.MCP.Servers...)},

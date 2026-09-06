@@ -418,7 +418,7 @@ each), then wire them in:
 - Connect a work-item tracker — [Jira](../integrations/jira.md), or the issue
   tracker of the code host you already run
 - Connect a knowledge backend — [Confluence](../integrations/confluence.md) —
-  so shared procedures surface in the Plan-phase `## Relevant knowledge`
+  so shared procedures surface in the executor's `## Relevant knowledge`
   block; publish version-controlled docs with `crewlet confluence import`
 - Connect a code host — [GitLab](../integrations/gitlab.md) or
   [GitHub](../integrations/github.md) — and enable the

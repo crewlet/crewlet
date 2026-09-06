@@ -127,7 +127,7 @@ func (c *fakeCatalogue) SkillsFor(phase Phase, surface Surface) []Skill {
 	for _, s := range c.skills {
 		phases := s.phases
 		if len(phases) == 0 {
-			phases = []Phase{PhasePlan} // the registry's default
+			phases = []Phase{PhaseExecute} // the registry's default
 		}
 		if !slices.Contains(phases, phase) {
 			continue

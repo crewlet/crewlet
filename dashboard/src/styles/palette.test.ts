@@ -92,7 +92,7 @@ const INK_STEPS = [
   "--caution-ink",
   "--critical-ink",
   "--info-ink",
-  "--phase-plan-ink",
+  "--phase-onboarding-ink",
   "--phase-execute-ink",
   "--phase-review-ink",
 ];
@@ -104,7 +104,7 @@ const FILL_STEPS = [
   "--caution",
   "--critical",
   "--info",
-  "--phase-plan",
+  "--phase-onboarding",
   "--phase-execute",
   "--phase-review",
 ];
@@ -178,7 +178,7 @@ for (const theme of ["light", "dark"] as const) {
     });
 
     test("the three phase hues stay separable, including for protan and deutan vision", () => {
-      const phases = ["--phase-plan", "--phase-execute", "--phase-review"];
+      const phases = ["--phase-onboarding", "--phase-execute", "--phase-review"];
       const failures: string[] = [];
       for (const kind of ["normal", "protan", "deutan"] as const) {
         for (let i = 0; i < phases.length; i++) {

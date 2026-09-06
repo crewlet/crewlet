@@ -225,6 +225,42 @@ which needs `providers.sandbox` configured. See
 `crewlet confluence import`, not prompt text in
 the config. See [Tool skills](https://docs.crewlet.ai/concepts/tool-skills).
 
+**`workers:` are helpers, not seats.** A worker template is a
+short-lived delegate a seat's executor hands narrowly-scoped work to
+with `delegate` — it runs inside that seat's turn, has no inbox, no
+memory and no identity, cannot write anywhere, and reports back to the
+seat that called it. Reach for one when a seat repeatedly needs the same
+bounded, read-shaped work done (research a question, summarise a long
+page, check three repositories at once). Reach for a **seat** when the
+work has an owner, needs to be addressable by a person, or has to write
+somewhere.
+
+```yaml
+workers:
+  researcher:
+    description: reads the team's pages and reports what they say, with sources
+    system_prompt: |
+      You research a narrow question against the team's knowledge base.
+      Report only what you can point at.
+    tools: [confluence_search, confluence_get_page]
+    output:
+      type: object
+      properties:
+        findings: {type: string}
+        sources:  {type: array, items: {type: string}}
+      required: [findings]
+```
+
+Two things to get right. **`description` is written for the model
+choosing a worker**, not for the operator reading the file — it is the
+only part of the template the executor sees. And **naming a tool grants
+nothing**: every name still passes the same filter as any delegation, so
+a template can never hand a seat a tool the seat does not already have.
+Declare `output` where the parent will *act* on the answer — fields it
+can index beat prose it has to re-read. Leave `roles[].workers` off
+unless a seat should see a narrower set; empty means every template. See
+[Turn engine — workers](https://docs.crewlet.ai/concepts/turn-engine#workers).
+
 ## Writing style for the fields that become prompts
 
 `mission`, `policies`, `goal`, `backstory`, `responsibilities`, and

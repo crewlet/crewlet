@@ -113,9 +113,43 @@ if (!sawLiveCall) {
   problems.push("no in-flight call ever reached a seat row: a turn would go " +
     "from idle to done with nothing on screen in between");
 }
-for (const want of ["plan", "execute", "review"]) {
+for (const want of ["execute", "review"]) {
   if (!phases.has(want)) {
     problems.push(`no live call named the ${want} phase (saw ${[...phases].join(", ") || "none"})`);
+  }
+}
+
+// THE DURABLE HALF OF A LIVE PHASE, which is the whole reason a turn survives
+// being watched to its end. The projection clears `live_call` the instant a
+// phase completes and the seat page's history query is answered once, at mount
+// — so the only thing that can keep a finished turn on screen is the
+// `agent_phase_completed` envelope the server pushes, PAYLOAD AND ALL, just
+// before the overlay that clears the call. That the payload is on the wire is
+// the server's half of the contract and nothing else here checks it: with the
+// payload stripped the client keeps a payload-free feed row, every phase card
+// disappears the moment its phase lands, and both sides' own suites stay green.
+if (!state.phases.length) {
+  problems.push(
+    "no completed phase reached the store with its payload: a turn watched " +
+      "to its end vanishes from the seat page the moment its review lands",
+  );
+} else {
+  const missing = state.phases.filter((p) => !p.payload || !p.payload.turn_id);
+  if (missing.length) {
+    problems.push(
+      `${missing.length} of ${state.phases.length} phase envelopes carry no ` +
+        "`payload.turn_id`: a phase record cannot be built from them, so the " +
+        "turn they belong to renders with the phase missing",
+    );
+  }
+  const streamed = new Set(state.phases.map((p) => p.payload && p.payload.phase));
+  for (const want of ["execute", "review"]) {
+    if (!streamed.has(want)) {
+      problems.push(
+        `no ${want} phase arrived as a durable record (saw ` +
+          `${[...streamed].filter(Boolean).join(", ") || "none"})`,
+      );
+    }
   }
 }
 
@@ -156,6 +190,7 @@ if (flags.includes("--print")) {
     events: state.events.map((e) => e.type),
     tokens: state.tokens,
     phases: [...phases],
+    completedPhases: state.phases.map((p) => p.payload && p.payload.phase),
   }, null, 2));
 }
 
@@ -166,5 +201,6 @@ if (problems.length) {
 }
 console.log(
   `replay ok: ${frames.length} frames, ${state.agents.length} seats, ` +
-    `${state.events.length} events, phases ${[...phases].join("/")}`,
+    `${state.events.length} events, phases ${[...phases].join("/")}, ` +
+    `${state.phases.length} durable phase records`,
 );

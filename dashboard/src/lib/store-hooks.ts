@@ -80,6 +80,19 @@ export function useEvents() {
   return useSlice(["events"], (s) => s.events);
 }
 
+/**
+ * The phases that COMPLETED while this tab was watching, payload and all.
+ *
+ * Its own slice, not a read off `events`: those rows are payload-free, and a
+ * phase without its payload has no prompts, no response, no tool calls and no
+ * decision. A screen merges these over the history its query answered at mount,
+ * which is what lets a live phase become a finished one in place instead of
+ * disappearing with the `live_call` the projection clears.
+ */
+export function usePhaseEvents() {
+  return useSlice(["phases"], (s) => s.phases);
+}
+
 export function useOrg() {
   return useSlice(["org"], (s) => s.org);
 }
@@ -94,13 +107,6 @@ export function useTokens() {
 
 export function useOrgBudget() {
   return useSlice(["budget"], (s) => s.budget);
-}
-
-export function useSchedules() {
-  return useSlice(["schedules"], (s) => ({
-    schedules: s.schedules,
-    recentRuns: s.recentRuns,
-  }));
 }
 
 /**

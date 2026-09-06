@@ -60,7 +60,7 @@ func TestASeatsPauseTTLOverridesTheEngineWideOne(t *testing.T) {
 func newPauseManager(t *testing.T, pause *time.Duration) *sandbox.Manager {
 	t.Helper()
 	m, err := sandbox.NewManager(sandbox.ManagerOptions{
-		Provider:        sandbox.NewFakeProvider(),
+		Providers:       map[sandbox.Placement]sandbox.Provider{sandbox.E2B: sandbox.NewFakeProvider()},
 		Runners:         map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
 		DefaultPauseTTL: pause,
 	})

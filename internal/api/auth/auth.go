@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
 )
@@ -77,13 +78,16 @@ const AnonymousOperator = config.ReservedOperatorID
 //     anything, which is a stronger check than a shared bearer token. Includes
 //     the Slack OAuth landing page, which a browser reaches mid-install with no
 //     token in hand.
-//   - /otlp/: the per-run signed token in the path IS the credential.
+//   - /otlp/ and /mcp/: the per-run signed token in the path IS the
+//     credential. Both are reached from INSIDE a sandbox, which is the one
+//     place the API's own token must never go — it reads the whole company,
+//     and the box is running generated code. See internal/runtoken.
 //   - the dashboard shell and its assets: the page that prompts for the token
 //     cannot itself require one. It ships no data — every byte it renders comes
 //     from an authenticated fetch.
 //
 // The split is deliberate. A PREFIX exempts everything beneath it, so only the
-// three that genuinely have sub-paths get one, and each ends in a slash, which
+// ones that genuinely have sub-paths get one, and each ends in a slash, which
 // is what stops it exempting a sibling. /health and /ready are single
 // endpoints, so they are exact: as prefixes they would silently have exempted
 // any future route merely starting with those letters — a /health-admin, a
@@ -92,7 +96,7 @@ var unguardedExact = map[string]struct{}{
 	"/": {}, "/dashboard": {}, "/favicon.ico": {}, "/health": {}, "/ready": {},
 }
 
-var unguardedPrefixes = []string{"/webhooks/", "/otlp/", "/static/"}
+var unguardedPrefixes = []string{"/webhooks/", "/otlp/", mcpbridge.PathPrefix, "/static/"}
 
 // readMethods are treated as reads for allow_anonymous_read.
 var readMethods = map[string]struct{}{

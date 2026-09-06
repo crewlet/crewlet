@@ -185,17 +185,20 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	page, _ := w.Body["page"].(map[string]any)
 	comment, _ := w.Body["comment"].(map[string]any)
 	if len(page) == 0 && len(comment) > 0 {
-		// A CLOUD COMMENT carries the page it is on under "parent" rather
-		// than beside itself. Measured against a live site: the top level
-		// has "comment", "userAccountId" and "timestamp" and no "page" at
-		// all, so a parser reading only the sibling key routed every Cloud
-		// comment to nobody. The parent is the page whenever it says so;
-		// a reply's parent is another comment, and that one is left alone
-		// rather than mistaken for the page.
-		if parent, ok := comment["parent"].(map[string]any); ok &&
-			str(parent, "contentType") == "page" {
-			page = parent
-		}
+		// THE COMMENT'S OWN CONTAINER IS THE SECOND PLACE THE PAGE IS NAMED,
+		// and both inbound shapes deliver a comment with no top-level page:
+		// the Forge relay lifts a container only when it was given one, and
+		// Confluence Cloud's own hook puts the page under "parent" with
+		// nothing beside the comment at all (measured against a live site).
+		// The page id is the whole conversation key for this vendor, so a
+		// comment read only from the sibling key had no key at all: it fell
+		// back to its own event id and coalesced with nothing, and three
+		// comments on one page while the seat was busy ran three turns, which
+		// is precisely the case the key exists to collapse. On Cloud it was
+		// worse, since the space lives on the parent too, so every Cloud
+		// comment routed to nobody. Lifting the container here, once, is what
+		// lets the space, the title and the id below all read from one place.
+		page = container(comment)
 	}
 	if len(page) == 0 && len(comment) == 0 {
 		return nil, nil
@@ -572,6 +575,23 @@ func LeadsFrom(o *org.Organization) map[string]string {
 			"candidates", conflict.Candidates)
 	}
 	return leads
+}
+
+// container is the page a comment hangs off, where the payload states one.
+//
+// The Forge relay names it "container", the page always. Confluence's own
+// hook names it "parent", and a parent is the page only when it says so: a
+// reply's parent is another comment, and that one is left alone rather than
+// mistaken for the page, since a comment id keyed as a page id would route
+// the reply to nobody and never coalesce with the thread it belongs to.
+func container(comment map[string]any) map[string]any {
+	if c, ok := comment["container"].(map[string]any); ok {
+		return c
+	}
+	if c, ok := comment["parent"].(map[string]any); ok && str(c, "contentType") == "page" {
+		return c
+	}
+	return nil
 }
 
 func str(m map[string]any, key string) string {

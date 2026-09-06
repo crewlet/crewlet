@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/stream"
@@ -109,6 +110,16 @@ type Options struct {
 	// mints a run's endpoint, and a different process verifies the token.
 	// That is why the token is signed rather than stored.
 	OtelReceiver *sandbox.OtelReceiver
+
+	// Bridge serves a running seat's tool surface to a coding agent over
+	// MCP. Nil serves none, and the route is then ABSENT for the same
+	// reason OtelReceiver's is.
+	//
+	// It belongs to the API for the same reason too: in a SPLIT deployment
+	// this is the externally reachable process, so the engine opens a run's
+	// session and a different process verifies its token. That is why the
+	// token is signed rather than stored — see internal/runtoken.
+	Bridge *mcpbridge.Bridge
 
 	// Budgets is the fleet's token counter. Supplied separately from
 	// Sources.Budget, which is the READ half: a reset is an operator
@@ -241,6 +252,7 @@ func New(opts Options) *App {
 	// giving it one would hand a sandbox the credential that reads the
 	// whole company. Its per-run token is in the path instead.
 	a.mountOTLP(mux, opts.OtelReceiver)
+	a.mountBridge(mux, opts.Bridge)
 	// The config surface. GUARDED in full, reads included: the auth
 	// package makes /config one of the two prefixes never eligible for
 	// allow_anonymous_read, because reading it exposes the whole company

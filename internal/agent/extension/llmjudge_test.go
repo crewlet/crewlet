@@ -267,24 +267,3 @@ func TestAWiredJudgeGrantsRoundsThroughThePolicy(t *testing.T) {
 
 // EACH PHASE IS TOLD ITS OWN WAY OUT.
 //
-// A phase told the wrong way to finish spends its granted rounds trying to
-// exit through a door it does not have. Onboarding is the case that was
-// missing and the one that was silent: told to stop calling tools, an
-// extended onboarding pass never reaches mark_onboarded, so the marker is
-// never stamped and the pass re-runs on every turn that seat ever takes.
-func TestEveryPhaseIsToldHowItActuallyEnds(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		ph   phase.Phase
-		want string
-	}{
-		{phase.Plan, "submit_plan"},
-		{phase.Onboarding, "mark_onboarded"},
-		{phase.Execute, "stop calling tools"},
-		{phase.Review, "stop calling tools"},
-	} {
-		if got := extension.FinishHint(tc.ph); !strings.Contains(got, tc.want) {
-			t.Errorf("FinishHint(%s) = %q, want it to name %q", tc.ph, got, tc.want)
-		}
-	}
-}

@@ -22,13 +22,24 @@
 //
 // # What it costs, measured
 //
-// Two properties an engine might want are not on offer, and both shaped the
+// Three properties an engine might want are not on offer, and each shaped the
 // code above this package. There is no free handoff — every path back to the
 // broker increments the delivery count — and redeliveries return BEHIND
 // never-delivered messages rather than replaying from the head. The first is
 // absorbed by a larger delivery budget (see maxDeliver); the second is why
 // conversation order comes from event timestamps rather than from the broker
 // (see queue.OrderForDispatch).
+//
+// The third is newer and cost a red CI to learn: A CONSUMER'S COUNTERS DO NOT
+// READ YOUR OWN WRITES. The server stores a message and acks the publisher,
+// and only afterwards, on an offloaded goroutine, signals the consumers that
+// increment their pending counts — so a consumer that already existed when
+// the publish landed can report nothing pending for a message the stream
+// demonstrably holds. Measured on the embedded broker at roughly two reads in
+// three from a second connection. Anything that has to be synchronous with a
+// returned publish therefore reads the STREAM's own state, never a consumer's
+// count; see Backlog, which is where the tempting one-round-trip form was and
+// what it did.
 package jetstream
 
 import (

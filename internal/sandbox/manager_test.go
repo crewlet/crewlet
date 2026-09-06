@@ -7,7 +7,9 @@ import (
 
 func specManager(t *testing.T, opts ManagerOptions) *Manager {
 	t.Helper()
-	opts.Provider = NewFakeProvider()
+	if opts.Providers == nil {
+		opts.Providers = map[Placement]Provider{Direct: NewFakeProvider()}
+	}
 	opts.Runners = map[string]Runner{"claude-code": NewFakeRunner("claude-code")}
 	if opts.DefaultCodingAgent == "" {
 		opts.DefaultCodingAgent = "claude-code"
@@ -62,7 +64,7 @@ func TestTheRoundCapOverlaysTheProviderDefault(t *testing.T) {
 func TestTheResolvedCapReachesTheCodingAgent(t *testing.T) {
 	rig := newWaiterRig(t)
 	rig.manager = specManager(t, ManagerOptions{DefaultMaxTurns: 40})
-	rig.manager.provider = rig.provider
+	rig.manager.providers = map[Placement]Provider{Direct: rig.provider}
 	rig.manager.runners = map[string]Runner{"claude-code": rig.runner}
 
 	req := launchReq("t1")

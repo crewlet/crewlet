@@ -45,6 +45,23 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 	return n.Metadata["issue_key"] != ""
 }
 
+// Addressed implements [notify.Prompt]: a mention or an assignment.
+//
+// The SAME two reasons the prompt frames as a directed ask — see the routing
+// reasons above, which are ordered strongest first for exactly this reason. A
+// watcher is following the issue rather than being asked about it, and the
+// lead fallback is the ticket landing somewhere rather than on somebody: a
+// seat obliged to answer either would comment on every field change in its
+// unit's projects.
+func (Prompt) Addressed(n notify.Inbound) bool {
+	switch n.Metadata[RoutedViaField] {
+	case ViaMention, ViaAssignee:
+		return true
+	default:
+		return false
+	}
+}
+
 // ConversationKey implements [notify.Prompt]: the issue is the conversation.
 //
 // Keyed on the ISSUE KEY rather than the numeric id, because the key rides
@@ -212,7 +229,7 @@ func whatChanged(b *strings.Builder, meta map[string]string) {
 // getFullContext is the recon pointer, on the same condition
 // [Prompt.RequiresRecon] answers.
 //
-// The two must agree: the flag tells the Plan phase not to bother filtering
+// The two must agree: the flag tells the turn-start prefetch not to bother filtering
 // against a pointer, and this block is what makes the pointer followable. A
 // flag set without the block sends a seat looking with nothing to look for.
 func getFullContext(b *strings.Builder, meta map[string]string) {

@@ -7,7 +7,7 @@
 // (tools.SeatCallable); a model that spelled a different handle cannot become
 // somebody else by asking.
 //
-// One registration per epoch, not per seat: the catalogue a planner is shown
+// One registration per epoch, not per seat: the catalogue an agent is shown
 // comes from the registry, so a per-seat registration would put N copies of
 // every builtin in it — and the fact that varies per call is the CALLER, not
 // the tool.

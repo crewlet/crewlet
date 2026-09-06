@@ -49,10 +49,14 @@ func TestConformance(t *testing.T) {
 			WithDeliveryAttempts: func(_ *testing.T, attempts int) queue.EventQueue {
 				return memory.New(memory.WithMaxRedeliveries(attempts - 1))
 			},
-			Backlog: func(q queue.EventQueue, topic, group string) []*events.Event {
+			// Total, so there is no failure to report — which is the
+			// point of the signature rather than an exemption from it: the
+			// twin cannot fail to answer, and the backend that can must say
+			// so instead of answering "nothing".
+			Backlog: func(_ *testing.T, q queue.EventQueue, topic, group string) []*events.Event {
 				return q.(*memory.Queue).Backlog(topic, group)
 			},
-			DeadLetters: func(q queue.EventQueue, topic, group string) []*events.Event {
+			DeadLetters: func(_ *testing.T, q queue.EventQueue, topic, group string) []*events.Event {
 				return q.(*memory.Queue).DeadLetters(topic, group)
 			},
 			Attachments: func(q queue.EventQueue) [][2]string {

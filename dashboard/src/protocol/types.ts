@@ -243,6 +243,8 @@ export interface SandboxRun {
   role: string;
   status: string;
   coding_agent: string;
+  /** Which configured cell the run's box is in: direct, container or e2b. */
+  placement: string;
   task_description: string;
   question: string;
   audience: string;
@@ -549,10 +551,20 @@ export interface IntegrationRow {
   label?: string;
   configured: boolean;
   detail?: string;
-  /** Three-valued: a number, or null when this process cannot say. */
+  /** Deliveries the edge accepted. */
   inbound?: number | null;
-  outbound?: number | null;
-  routed?: number | null;
+  /**
+   * The two OUTCOME counts, three-valued: a number, or null when this process
+   * could not read its event log. Reporting that as 0 would claim every
+   * delivery woke a seat on a node that cannot tell.
+   *
+   * They are read together with `inbound` and are misleading apart: "128
+   * arrived" alone cannot tell a working integration from one whose every
+   * delivery reaches nobody, and a seat draining a thread's backlog as one
+   * turn looks like a seat that ignored twelve messages.
+   */
+  skipped?: number | null;
+  coalesced?: number | null;
   /** Null means "nothing here can say", never "this surface is fine". */
   reconcile?: ReconcileStatus | null;
   [key: string]: unknown;

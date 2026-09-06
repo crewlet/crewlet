@@ -36,6 +36,17 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 	return n.Metadata["page_id"] != ""
 }
 
+// Addressed implements [notify.Prompt]: a mention, and only a mention.
+//
+// The one routing this prompt frames as an ask — somebody named the seat in a
+// page or a comment and is waiting for it. A watcher is subscribed to a page
+// it once touched, and a space lead is being told its team's documentation
+// moved; a seat obliged to answer either would comment on every edit in every
+// space its unit owns.
+func (Prompt) Addressed(n notify.Inbound) bool {
+	return n.Metadata[RoutedViaField] == ViaMention
+}
+
 // ConversationKey implements [notify.Prompt]: the page is the conversation.
 //
 // Keyed on the page id, so a burst of edits and the comments about them

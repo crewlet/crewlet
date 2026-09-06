@@ -142,13 +142,13 @@ function Count({ value, label }: { value: number | null | undefined; label: stri
         className="t-caption faint"
         title="this process cannot answer; it is not serving ingress"
       >
-        {label} —
+        {label}: unknown
       </span>
     );
   }
   return (
     <span className="t-caption t-num">
-      {label} {value.toLocaleString()}
+      {label}: {value.toLocaleString()}
     </span>
   );
 }
@@ -320,9 +320,16 @@ function RowFacts({ row }: { row: IntegrationRow }) {
           {f.label}
         </Badge>
       ))}
+      {/*
+        THE THREE THE API ACTUALLY ANSWERS WITH. An earlier revision rendered
+        `outbound` and `routed`, which GET /integrations has never emitted, so
+        both read "unknown" on every row forever, while the two counts that DO
+        arrive, and that the endpoint documents as the ones that make
+        `inbound` mean anything, were dropped on the floor.
+      */}
       <Count value={row.inbound} label="in" />
-      <Count value={row.outbound as number | null | undefined} label="out" />
-      <Count value={row.routed as number | null | undefined} label="routed" />
+      <Count value={row.skipped} label="dropped" />
+      <Count value={row.coalesced} label="merged" />
       {typeof row.inbound_path === "string" && row.inbound_path && (
         <code className="inline t-caption faint">{String(row.inbound_path)}</code>
       )}
@@ -380,7 +387,7 @@ export function Integrations() {
       )}
 
       <Panel padding="none">
-        <StatRow cols={3}>
+        <StatRow cols={4}>
           <Stat
             icon="plug"
             label="Configured"
@@ -393,19 +400,36 @@ export function Integrations() {
             value={
               data?.traffic_known
                 ? rows.reduce((n, r) => n + (r.inbound ?? 0), 0).toLocaleString()
-                : "—"
+                : "unknown"
             }
             sub={data?.traffic_since ? `since ${fmtDateTime(data.traffic_since)}` : ""}
           />
+          {/*
+            WHAT BECAME OF IT, which is the half "Inbound" cannot answer on its
+            own: 128 arrived tells a working integration and one whose every
+            delivery reaches nobody apart not at all. This tile once summed
+            `outbound`, a field GET /integrations does not return, so it read
+            "0 messages the engine sent" on a company sending thousands.
+          */}
           <Stat
-            icon="send"
-            label="Outbound"
+            icon="filter"
+            label="Dropped"
             value={
               data?.traffic_known
-                ? rows.reduce((n, r) => n + (r.outbound ?? 0), 0).toLocaleString()
-                : "—"
+                ? rows.reduce((n, r) => n + (r.skipped ?? 0), 0).toLocaleString()
+                : "unknown"
             }
-            sub="messages the engine sent on a seat's behalf"
+            sub="deliveries the routing gate woke nobody for"
+          />
+          <Stat
+            icon="layers"
+            label="Merged"
+            value={
+              data?.traffic_known
+                ? rows.reduce((n, r) => n + (r.coalesced ?? 0), 0).toLocaleString()
+                : "unknown"
+            }
+            sub="bursts on one conversation that became one turn"
           />
         </StatRow>
       </Panel>
@@ -436,6 +460,7 @@ export function Integrations() {
                       <div className="int-row-text">
                         <span className="int-row-name">{entry.name}</span>
                         <span className="int-row-desc">{entry.description}</span>
+                        {row?.detail && <span className="t-caption faint">{row.detail}</span>}
                         {row && <RowFacts row={row} />}
                         {row && <Reconcile status={row.reconcile} />}
                       </div>

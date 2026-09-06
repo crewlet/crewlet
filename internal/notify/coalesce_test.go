@@ -31,6 +31,11 @@ func (tracker) Build(n notify.Inbound, _ notify.Parties) string {
 // branches exist so a hardcoded answer is visible.
 func (tracker) RequiresRecon(n notify.Inbound) bool { return n.EventType != "message" }
 
+// Addressed: this vendor's assignments name the seat as the one who has to
+// act; everything else it emits is news about something the seat follows.
+// Both branches exist so a hardcoded answer is visible.
+func (tracker) Addressed(n notify.Inbound) bool { return n.EventType == "assigned" }
+
 // A pipeline result reports the outcome of the actor's OWN push, so it
 // reaches them; everything else this vendor emits, they already know about.
 func (tracker) WakesActor(eventType string) bool { return eventType == "pipeline_failed" }
@@ -282,6 +287,40 @@ func TestReconIsRequiredWhenAnyConstituentRequiredIt(t *testing.T) {
 	}, at(0, 1))
 	if merged.ContextRequiresRecon {
 		t.Fatal("recon was required by a merge of events that each said it was not")
+	}
+}
+
+// The same laundering rule for the delivery obligation: one direct ask inside
+// a burst of broadcasts is still somebody waiting for an answer, and a merge
+// that dropped it would let a coalesced turn end in silence on a request.
+func TestAddressedSurvivesAMergeWithUnaddressedTraffic(t *testing.T) {
+	passing := func(n *types.ExternalNotification) { n.Addressed = false }
+	asked := func(n *types.ExternalNotification) { n.Addressed = true }
+
+	merged, _ := notify.Coalesce(prompts(), []types.ExternalNotification{
+		note("ana", "first", "comment", asked),
+		note("bo", "latest", "comment", passing),
+	}, at(0, 1))
+	if !merged.Addressed {
+		t.Fatal("the ask was laundered by the merge — the latest constituent's flag won")
+	}
+	// The counterfactual: without it the assertion above passes for a merge
+	// that hardcodes true.
+	merged, _ = notify.Coalesce(prompts(), []types.ExternalNotification{
+		note("ana", "first", "comment", passing),
+		note("bo", "latest", "comment", passing),
+	}, at(0, 1))
+	if merged.Addressed {
+		t.Fatal("a merge of events that each addressed nobody produced an ask")
+	}
+	// And each constituent keeps its OWN flag, so a worker reasoning per
+	// message can still tell the ask from the traffic around it.
+	merged, _ = notify.Coalesce(prompts(), []types.ExternalNotification{
+		note("ana", "first", "comment", asked),
+		note("bo", "latest", "comment", passing),
+	}, at(0, 1))
+	if len(merged.Messages) != 2 || !merged.Messages[0].Addressed || merged.Messages[1].Addressed {
+		t.Fatalf("per-constituent flags lost: %+v", merged.Messages)
 	}
 }
 

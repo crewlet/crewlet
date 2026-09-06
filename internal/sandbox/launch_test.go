@@ -13,12 +13,12 @@ func launchReq(turnID string) LaunchRequest {
 	return LaunchRequest{
 		Turn: TurnRef{
 			TurnID: turnID, AgentID: "a-1", AgentHandle: "swe", Role: "SWE",
-			ConversationKey: "chat:C1", TraceID: "tr-1", SpanID: "sp-1",
+			ConversationKey: "chat:C1", Reply: "tool",
+			TraceID: "tr-1", SpanID: "sp-1",
 		},
-		Brief:    "Clone example.com/acme/api and fix the failing test",
-		Task:     "get CI green",
-		Criteria: []string{"the suite passes", "a PR is open"},
-		Spec:     Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
+		Brief: "Clone example.com/acme/api and fix the failing test",
+		Task:  "get CI green",
+		Spec:  Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
 	}
 }
 
@@ -45,8 +45,14 @@ func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 	if run.SandboxID != res.SandboxID || run.CommandID != res.CommandID {
 		t.Fatalf("the row does not name the job: %+v", run)
 	}
-	if run.TaskDescription != "get CI green" || len(run.SuccessCriteria) != 2 {
-		t.Fatalf("the plan was not persisted: %+v", run)
+	if run.TaskDescription != "get CI green" {
+		t.Fatalf("the brief was not persisted: %+v", run)
+	}
+	// THE DELIVERY OBLIGATION, persisted because the resumed turn never
+	// sees its trigger: without it a turn somebody asked for comes back
+	// from its coding run free to end in silence.
+	if run.Reply != "tool" {
+		t.Fatalf("who is waiting was not persisted: %+v", run)
 	}
 	if run.ConversationKey != "chat:C1" || run.TraceID != "tr-1" {
 		t.Fatalf("the routing and trace were not persisted: %+v", run)
@@ -91,9 +97,15 @@ func TestTheStartedEventCarriesALabelNotTheWholeBrief(t *testing.T) {
 	}
 }
 
-// The agent is told the task, the goal, what done means, and what its box
-// already provides — the last so it does not spend rounds rediscovering it.
-func TestTheCodingAgentIsToldTheGoalTheCriteriaAndItsEnvironment(t *testing.T) {
+// The agent is told the concrete task, the wider goal it serves, and what its
+// box already provides — the last so it does not spend rounds rediscovering
+// it.
+//
+// There is no success-criteria section: it came from the planner's declared
+// criteria, and with one loop there is no separate plan to declare them. What
+// "done" means is the executor's own brief, written by the frame that will
+// read the answer.
+func TestTheCodingAgentIsToldTheGoalAndItsEnvironment(t *testing.T) {
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
 	req.Setup = []SetupStep{{Name: "git-auth", Brief: "git is already authenticated."}}
@@ -110,13 +122,15 @@ func TestTheCodingAgentIsToldTheGoalTheCriteriaAndItsEnvironment(t *testing.T) {
 	for _, want := range []string{
 		"fix the failing test", // the executor's own ask
 		"get CI green",         // the wider task
-		"the suite passes",     // the criteria
 		"git is already authenticated.",
 		"linear",
 	} {
 		if !strings.Contains(brief, want) {
 			t.Fatalf("the brief does not mention %q:\n%s", want, brief)
 		}
+	}
+	if strings.Contains(brief, "Success criteria") {
+		t.Errorf("the retired criteria section is still rendered:\n%s", brief)
 	}
 }
 

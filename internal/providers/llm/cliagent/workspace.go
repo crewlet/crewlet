@@ -201,6 +201,11 @@ func (w *Workspace) Acquire(seat, callID string) (*Checkout, error) {
 			return nil, fmt.Errorf("cli-agent: preparing %q: %w", d, err)
 		}
 	}
+	// The working directory is this call's own, so its settings files
+	// are written per call rather than per seat generation.
+	if err := w.seedFiles(work, SeedWork); err != nil {
+		return nil, err
+	}
 	state.inflight++
 	return &Checkout{Home: home, Cache: cache, Work: work, ws: w, seat: state}, nil
 }
@@ -295,6 +300,31 @@ func (w *Workspace) seed(home string) error {
 		}
 		if err := copyFile(src, dst); err != nil {
 			return err
+		}
+	}
+	return w.seedFiles(home, SeedHome)
+}
+
+// seedFiles writes the profile's settings files for one scope into root.
+//
+// Written on EVERY seed rather than once: the CLI may rewrite its own
+// settings file during a call, and a vendor's tool policy that quietly
+// changed under a seat is the hole these files exist to close. Verbatim at
+// 0600, parents created, rooted the same way prune's targets are.
+func (w *Workspace) seedFiles(root string, scope SeedScope) error {
+	for _, f := range w.profile.SeedFiles {
+		if f.scope() != scope {
+			continue
+		}
+		dst, err := underRoot(root, f.Path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return fmt.Errorf("cli-agent: preparing %q: %w", filepath.Dir(dst), err)
+		}
+		if err := os.WriteFile(dst, []byte(f.Content), 0o600); err != nil {
+			return fmt.Errorf("cli-agent: writing the seeded settings file %q: %w", dst, err)
 		}
 	}
 	return nil

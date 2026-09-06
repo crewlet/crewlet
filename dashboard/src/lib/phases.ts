@@ -97,8 +97,16 @@ export interface PhaseRecord {
   conversationKey: string;
   toolsAvailable: string[];
   toolCatalogue: string[];
+  /** The named worker behind this call: a learning worker on an
+      `auxiliary` phase, a delegate template on a `subagent` one. */
   worker: string;
+  /** A delegated task's own id, as the executor wrote it. `subagent` only. */
+  taskId: string;
+  /** The phase this one ran UNDER — `execute` for a worker or a judge.
+      Empty on a turn's own phases. */
   hostPhase: string;
+  /** The iteration of that host phase. */
+  hostIteration: number;
   backend: string;
   codingAgent: string;
   trigger: { type?: string; summary?: string; actor?: string; integration?: string } | null;
@@ -234,8 +242,20 @@ function promptRole(messages: PromptMessage[] | null | undefined, role: string):
   return "";
 }
 
-export function phaseKey(turnId: string, phase: string, iteration: number): string {
-  return `${turnId}|${phase}|${iteration}`;
+/**
+ * A phase's identity: `turn|phase|iteration`, plus the task id where there
+ * is one.
+ *
+ * THE TASK ID IS NOT OPTIONAL for a delegated worker. A `delegate` call of
+ * eight runs eight `subagent` phases in one executor round, and without it
+ * they share one key — so the map keeps the last one to arrive and seven
+ * workers, their prompts, their tools and their failures simply are not on
+ * the page. A turn's own phases have no task id and keep the three-part key
+ * they have always had.
+ */
+export function phaseKey(turnId: string, phase: string, iteration: number, taskId = ""): string {
+  const base = `${turnId}|${phase}|${iteration}`;
+  return taskId ? `${base}|${taskId}` : base;
 }
 
 /** A phase still running, from a seat's live overlay. */
@@ -275,7 +295,9 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     toolsAvailable: [],
     toolCatalogue: [],
     worker: "",
+    taskId: "",
     hostPhase: "",
+    hostIteration: 0,
     backend: "",
     codingAgent: "",
     trigger: (call.trigger as PhaseRecord["trigger"]) ?? null,
@@ -292,8 +314,9 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
   const phase = String(p.phase ?? "");
   const turnId = String(p.turn_id ?? "");
   const iteration = num(p.iteration);
+  const taskId = String(p.task_id ?? "");
   return {
-    key: phaseKey(turnId, phase, iteration),
+    key: phaseKey(turnId, phase, iteration, taskId),
     turnId,
     phase,
     iteration,
@@ -325,7 +348,9 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     toolsAvailable: Array.isArray(p.tools_available) ? (p.tools_available as string[]) : [],
     toolCatalogue: Array.isArray(p.tool_catalogue) ? (p.tool_catalogue as string[]) : [],
     worker: String(p.worker ?? ""),
+    taskId,
     hostPhase: String(p.host_phase ?? ""),
+    hostIteration: num(p.host_iteration),
     backend: String(p.backend ?? ""),
     codingAgent: String(p.coding_agent ?? ""),
     trigger: (p.trigger as PhaseRecord["trigger"]) ?? null,
@@ -334,6 +359,39 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     startedAt: ev.timestamp,
     eventId: ev.id,
   };
+}
+
+/**
+ * The phases that completed on the wire while this tab was watching.
+ *
+ * Every screen that renders a phase reads two sources: a query, answered ONCE
+ * at mount, and the seat's live overlay. Neither covers a phase that finishes
+ * while the reader is looking at it — the overlay's `live_call` is cleared the
+ * moment it lands, and the query is never re-asked — so the phase, and with it
+ * the whole turn, went away. Most visibly on a seat's first turn, where the
+ * mount-time history is empty and the page was left saying the seat had never
+ * run at all.
+ *
+ * The durable record is already on the wire: the engine broadcasts the whole
+ * `agent_phase_completed` envelope, payload included, and the store keeps the
+ * recent ones. This is the same `fromPhaseEvent` the stored half goes through,
+ * so a streamed record and the one the same query would return next time are
+ * the same record with the same key — which is what lets it merge in place.
+ *
+ * `keep` narrows the buffer to the screen's own scope (this seat, this turn,
+ * this role filter); the buffer itself is company-wide because one socket
+ * serves every screen.
+ */
+export function streamedPhases(
+  events: readonly EventRecord[],
+  keep: (record: PhaseRecord) => boolean,
+): PhaseRecord[] {
+  const out: PhaseRecord[] = [];
+  for (const ev of events) {
+    const record = fromPhaseEvent(ev);
+    if (record && keep(record)) out.push(record);
+  }
+  return out;
 }
 
 /**
@@ -364,7 +422,16 @@ export function mergePhases(stored: PhaseRecord[], live: PhaseRecord[]): PhaseRe
 export interface TurnGroup {
   turnId: string;
   role: string;
+  /** The turn's OWN phases, in the order they ran. A nested call is not
+      here — it hangs off the phase that made it, see `nested`. */
   phases: PhaseRecord[];
+  /** Nested calls keyed by the key of the phase that made them: the
+      workers a `delegate` call ran, the round-cap judge, a learning
+      worker. `host_phase` and `host_iteration` have always been on the
+      wire and nothing read them, so a fan-out of eight rendered as eight
+      siblings of the turn's own two phases and the reader had to work out
+      which round each belonged to. */
+  nested: Map<string, PhaseRecord[]>;
   /** The newest instant in the group — what the group is ordered by. */
   at: string;
   /** When the turn's OLDEST phase began. Never moves; `at` does. */
@@ -381,16 +448,33 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
   for (const rec of phases) byTurn.set(rec.turnId, [...(byTurn.get(rec.turnId) ?? []), rec]);
   return [...byTurn.entries()]
     .map(([turnId, list]) => {
-      // Within a turn, OLDEST first: a turn is read forwards — plan, then
-      // execute, then review — which is the opposite of a feed.
+      // Within a turn, OLDEST first: a turn is read forwards — onboarding
+      // (first turn only), then execute, then review — which is the opposite
+      // of a feed. A phase not on this list sorts after the ones that are and
+      // then by time, which is right for the nested calls (subagent, judge,
+      // auxiliary) that hang off a host phase.
       const ordered = [...list].sort((a, b) => {
         if (a.iteration !== b.iteration) return a.iteration - b.iteration;
-        const order = ["plan", "execute", "review"];
+        const order = ["onboarding", "execute", "review"];
         const ai = order.indexOf(a.phase);
         const bi = order.indexOf(b.phase);
         if (ai !== bi) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
         return tsKey(a.at) - tsKey(b.at);
       });
+      // A NESTED call belongs UNDER the phase that made it. It is split
+      // out here rather than filtered at render time so every consumer —
+      // the card, the trace tree, the counts — agrees about what a turn's
+      // phases are.
+      const own: PhaseRecord[] = [];
+      const nested = new Map<string, PhaseRecord[]>();
+      for (const rec of ordered) {
+        if (!rec.hostPhase) {
+          own.push(rec);
+          continue;
+        }
+        const host = phaseKey(rec.turnId, rec.hostPhase, rec.hostIteration);
+        nested.set(host, [...(nested.get(host) ?? []), rec]);
+      }
       const at = ordered.reduce((max, r) => (tsKey(r.at) > tsKey(max) ? r.at : max), "");
       // The EARLIEST start across the turn's phases. A turn is "running for"
       // as long as its first phase has been going, not its newest round.
@@ -401,7 +485,8 @@ export function groupTurns(phases: PhaseRecord[]): TurnGroup[] {
       return {
         turnId,
         role: ordered[0]?.role ?? "",
-        phases: ordered,
+        phases: own,
+        nested,
         at,
         startedAt,
         live: ordered.some((r) => r.live),
@@ -432,24 +517,44 @@ export function splitThinking(response: string): { thinking: string; answer: str
   return { thinking: (m[1] ?? "").trim(), answer: (response ?? "").slice(m[0].length) };
 }
 
-/** What a phase's decision means, said in words rather than left as an enum. */
+/**
+ * What a phase's decision means, said in words rather than left as an enum.
+ *
+ * The executor's decision is its OUTCOME — its own last word on the turn —
+ * and `incomplete` is the one word here the model did not write: the engine
+ * synthesises it when the executor never submitted at all. It is labelled as
+ * such, because a reader who cannot tell an engine-written outcome from a
+ * model's own is reading a claim as a commitment.
+ *
+ * An unknown value falls through verbatim rather than being dropped, which is
+ * what keeps a row written by a build this bundle predates readable: the
+ * retired `plan` phase's `plan` / `direct` / `skip` still render as
+ * themselves.
+ */
 export function decisionLabel(phase: string, decision: string): string {
   if (!decision) return "";
   const p = phase.toLowerCase();
-  if (p === "plan") {
+  if (p === "execute") {
     return (
       {
-        plan: "planned the work",
-        direct: "answered directly, no plan needed",
-        skip: "skipped — nothing to do",
+        delivered: "delivered the work",
+        no_action: "nothing to do — ended silently",
+        blocked: "blocked, and said why",
+        incomplete: "never said what it did — the engine marked it incomplete",
       }[decision] ?? decision
     );
   }
   if (p === "review") {
     return (
-      { done: "accepted the work", self_iterate: "sent the turn back to Plan" }[decision] ??
-      decision
+      {
+        done: "accepted the work",
+        self_iterate: "sent the turn back for another round",
+        failed: "failed — the turn will not retry",
+      }[decision] ?? decision
     );
+  }
+  if (p === "onboarding") {
+    return { done: "read its team's pages and marked itself onboarded" }[decision] ?? decision;
   }
   return decision;
 }

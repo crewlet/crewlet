@@ -47,6 +47,31 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 	return reconEvents[n.Metadata["event_type"]]
 }
 
+// addressedEvents are the reasons that are an ASK of this seat rather than
+// news about something it follows.
+//
+// An assignment, a review request and a mention each name the seat as the one
+// who has to act; leaving any of them unanswered looks to the person who
+// wrote it exactly like the webhook never arrived.
+//
+// A PLAIN NOTE IS NOT IN HERE, nor is a close or a failed pipeline. Those
+// reach the seat because it participates in the thread, and a seat obliged to
+// reply to every one of them would post on every state change of every merge
+// request it has ever touched.
+var addressedEvents = map[string]bool{
+	IssueAssigned: true,
+	IssueMention:  true,
+	MRAssigned:    true,
+	MRReview:      true,
+	MRMention:     true,
+	NoteMention:   true,
+}
+
+// Addressed implements [notify.Prompt].
+func (Prompt) Addressed(n notify.Inbound) bool {
+	return addressedEvents[n.Metadata["event_type"]]
+}
+
 // WakesActor implements [notify.Prompt]: only a failed pipeline.
 //
 // THE ONE REAL EXCEPTION TO THE SELF-ACTION RULE in the whole engine. A

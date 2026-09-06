@@ -8,7 +8,7 @@ Illustrations and icons used by the README and the documentation.
 | `crewlet-mascot.svg` | The Crewlet character, on its own dark canvas |
 | `hierarchy.svg` | Feature icon — the org chart as the execution graph |
 | `company-as-code.svg` | Feature icon — the company as versioned config |
-| `turn-engine.svg` | Feature icon — the Plan → Execute → Review loop |
+| `turn-engine.svg` | Feature icon — the executor → reviewer loop |
 | `code-sandbox.svg` | Feature icon — sandboxed code authoring |
 | `knowledge.svg` | Feature icon — knowledge and agent learning |
 | `human-in-loop.svg` | Feature icon — human seats in the org chart |

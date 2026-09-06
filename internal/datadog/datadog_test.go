@@ -261,6 +261,28 @@ func TestAMonitorIsTheConversation(t *testing.T) {
 	}
 }
 
+// ONLY AN OWNER IS ADDRESSED. A tag naming the seat is the company saying the
+// monitor is its, and that turn may not end in silence; the fallback is the
+// alert landing somewhere rather than on somebody, and a seat obliged to
+// answer every untagged monitor would post on each one whether or not it had
+// anything to say.
+func TestOnlyATaggedOwnerIsAddressed(t *testing.T) {
+	addressed := func(via string) bool {
+		return (Prompt{}).Addressed(notify.Inbound{
+			Source:   Backend,
+			Metadata: map[string]string{RoutedViaField: via},
+		})
+	}
+	if !addressed(RoutedViaTag) {
+		t.Error("a monitor tagged as the seat's does not address it")
+	}
+	for _, via := range []string{RoutedViaFallback, ""} {
+		if addressed(via) {
+			t.Errorf("%q addresses the seat and is the alert landing somewhere, not an ask", via)
+		}
+	}
+}
+
 // The prompt asks a tagged owner and a fallback seat for different things.
 // Telling a seat reached by fallback to "investigate and mitigate" starts it
 // on work it may have no context for.

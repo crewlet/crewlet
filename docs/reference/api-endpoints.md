@@ -35,7 +35,7 @@ A body that does not arrive inside its deadline fails the read like any other tr
 > serve without one unless `api.auth.allow_anonymous_read: false` is set, at
 > which point they need the same token — `/ws/stream` included, and it accepts
 > `?token=…` too since browsers cannot set headers on a WebSocket. Never
-> guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, and the
+> guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, `/mcp/*`, and the
 > dashboard shell (`/`, `/dashboard`, `/static/*`). See
 > [Configuration § Auth](../concepts/configuration.md#auth).
 >
@@ -96,6 +96,7 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `POST` | `/webhooks/confluence` | Receive Confluence Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
+| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in agent mode. Per-run token in the path; all three verbs because that is what the transport uses |
 
 Plus the two always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated) and [`/secrets/*`](#secrets--the-companys-credentials-auth-gated).
 
@@ -141,8 +142,8 @@ The registered media type is `application/merge-patch+json`; plain `application/
 
 ```bash
 curl -X PATCH https://engine.example.com/config \
-  -H "Authorization: Bearer $TOKEN" -H "X-Summary: raise the plan round cap" \
-  -d '{"turn_engine": {"plan_max_tool_rounds": 24}}'
+  -H "Authorization: Bearer $TOKEN" -H "X-Summary: raise the executor round cap" \
+  -d '{"turn_engine": {"max_tool_rounds": 32}}'
 ```
 
 - **Deep merge.** `{"providers": {"llm": {"main": {"model": "claude-opus-5"}}}}` changes that model and leaves the provider's type, its keys and every other provider alone.
@@ -640,11 +641,23 @@ It is deliberately never persisted: replaying a live meter from history
 would show a dead process's counters as the current ones.
 
 Each agent's `live_call` is `null` between turns, or
-`{ turn_id, phase, iteration, model, response, tool_executions, round_narration, rounds,
-in_progress }` while an LLM call is under way.  A call whose phase
-failed keeps `in_progress: false` plus `failed: true` and an `error`
-object, so the dashboard renders the failure instead of an answer that
-never arrives.
+`{ turn_id, phase, iteration, model, prompt, prompt_messages, response,
+tool_executions, round_narration, partial_round, rounds, in_progress }` while an
+LLM call is under way.  A call whose phase failed keeps `in_progress: false`
+plus `failed: true` and an `error` object, so the dashboard renders the failure
+instead of an answer that never arrives — and no `partial_round`, because the
+phase is over and nothing is still arriving.
+
+**What the projection carries, and what the wire sends.** The whole call is
+republished to every open dashboard five times a second for the length of a
+phase, so the frames behind it are trimmed and the projection reassembles them:
+the `prompt` and `prompt_messages` are sent **once**, on the phase's opening
+frame, and carried forward from there (a 30 KB system prompt does not change
+mid-phase, and past `queue.MaxPayloadBytes` the publish is refused outright and
+the live row simply stops); a tool result and the joined `response` are sent
+**tail-bounded** on a live frame, because they are what a reader is watching
+the end of. The durable `agent_phase_completed` record keeps every one of them
+verbatim, which is what a reader opens the finished card for.
 
 ### `WS /ws/stream`
 
@@ -704,7 +717,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `sandbox_runs` | — | `GET /sandbox-runs` — `no_pending_store` when no database is configured; the REST twin answers that case with the `degraded` body below |
 | `budgets` | — | `GET /budgets` |
 | `a2a_channels` | — | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
-| `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's Plan phase uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.confluence_spaces`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
+| `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.confluence_spaces`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
 | `integrations` | — | `GET /integrations` |
 | `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
 | `config` | — | `GET /config` *(operator token required)* |
@@ -1085,7 +1098,12 @@ Three refusals, each pointing somewhere different:
 ### `GET /integrations`
 
 Backs the dashboard's **Integrations** screen: how each external surface is
-wired, and what has come through it over the last 24 hours.
+wired, and what has come through it.
+
+The counts are **page-capped, not time-bounded** — the most recent page of the
+delivery log, however long that spans — which is why each response carries the
+timestamp of the oldest delivery it counted. "42 inbound" alone could be an
+hour or a year; "42 since Tuesday" is a measurement.
 
 Integrations had close to no surface at all before this. The dashboard
 branded an event once it had already been accepted and routed, so every
@@ -1274,12 +1292,15 @@ auxiliary worker, agent, and turn.
 Notes:
 
 - `by_phase` covers every phase emitted by the
-  [Turn Engine](../concepts/turn-engine.md): `plan`, `execute`,
-  `review`, `subagent`, `auxiliary`, and `judge` (the round-cap
-  extension judge).
-- `by_worker` covers only `phase == "auxiliary"` rows — the worker
-  name identifies the learning-subsystem caller (e.g.
-  `persist_decider`, `counterparty_profiler`, `skill_synthesizer`).
+  [Turn Engine](../concepts/turn-engine.md): `onboarding`, `execute`,
+  `review`, `subagent` (a delegated worker), `auxiliary`, and `judge`
+  (the round-cap extension judge). A store that predates the two-stage
+  redesign also holds `plan` rows, and they still roll up.
+- `by_worker` covers the rows that name one: an `auxiliary` row's worker
+  is the learning-subsystem caller (e.g. `persist_decider`,
+  `counterparty_profiler`, `skill_synthesizer`), and a `subagent` row's
+  is the `workers:` template it ran — empty on a delegation that wrote
+  its prompt inline.
 - `by_model` is useful when roles override `llm_auxiliary` with a
   cheaper model for reflection / summarisation work.
 - All lists are sorted by `total_tokens` descending; `by_turn` is

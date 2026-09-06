@@ -2,8 +2,8 @@ package queries
 
 import (
 	"context"
-	"strings"
 
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -50,11 +50,17 @@ func (s Sources) sandboxRuns(ctx context.Context, _ Params) (any, error) {
 
 func serialiseRun(run sandbox.PendingRun) map[string]any {
 	return map[string]any{
-		"turn_id":          run.TurnID,
-		"agent_handle":     run.AgentHandle,
-		"role":             run.Role,
-		"status":           run.Status,
-		"coding_agent":     run.CodingAgent,
+		"turn_id":      run.TurnID,
+		"agent_handle": run.AgentHandle,
+		"role":         run.Role,
+		"status":       run.Status,
+		"coding_agent": run.CodingAgent,
+		// WHERE the run is, which became an operator question the moment
+		// providers.sandbox became a catalogue: one company now runs some
+		// seats on the engine host and others in a remote box, and "is
+		// this job on my machine" has no other surface. Empty on a row
+		// written before the field existed.
+		"placement":        run.Placement,
 		"task_description": run.TaskDescription,
 		"question":         run.Question,
 		"audience":         run.Audience,
@@ -73,9 +79,6 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 	}
 }
 
-// eventKeyPrefix marks a conversation key minted from an event id.
-const eventKeyPrefix = "event:"
-
 // answerableInChat reports whether a reply on a chat surface could ever reach
 // this run.
 //
@@ -86,6 +89,10 @@ const eventKeyPrefix = "event:"
 // inbound message can reproduce. Such a run is not answerable through any chat
 // surface, and telling somebody to "reply in the thread" would send them to a
 // thread that does not exist.
+//
+// [notify.Derived] answers exactly that, and this had its own copy of the
+// prefix to answer it with — so a rename of the fallback's namespace would
+// have left this route confidently offering a thread that does not exist.
 func answerableInChat(conversationKey string) bool {
-	return conversationKey != "" && !strings.HasPrefix(conversationKey, eventKeyPrefix)
+	return notify.Derived(conversationKey)
 }

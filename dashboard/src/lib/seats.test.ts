@@ -167,8 +167,8 @@ describe("what a seat is doing", () => {
 
   test("a status line describes live state and never invents one", () => {
     expect(
-      statusLine({ id: "a", role: "Dev A", state: "working", current_phase: "plan" }),
-    ).toContain("planning");
+      statusLine({ id: "a", role: "Dev A", state: "working", current_phase: "execute" }),
+    ).toContain("working on the task");
     expect(statusLine({ id: "a", role: "Dev A", state: "afk", afk_reason: "stall" })).toContain(
       "no forward progress",
     );

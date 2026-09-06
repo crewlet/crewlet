@@ -1,4 +1,4 @@
-// Package prefetch renders the context blocks a Plan-phase prompt is built
+// Package prefetch renders the context blocks an executor's prompt is built
 // with: what this seat remembers, what its company has written down, what it
 // has done before, and who it is talking to.
 package prefetch
@@ -23,12 +23,12 @@ var log = logging.Get("agent.prefetch")
 // # Frozen at turn start, and that is a caching decision
 //
 // Every block here is resolved ONCE per turn and then held. A turn can run
-// its Plan phase several times — a self_iterate loop rebuilds the whole LLM
+// its executor phase several times — a self_iterate loop rebuilds the whole LLM
 // conversation — and a prefetch that re-ran would produce a different system
 // prompt on each pass. Providers cache on an exact prefix, so a system
 // prompt that moves costs the full prompt again on every iteration; worse,
-// the planner would see its context change underneath a decision it is in
-// the middle of making.
+// the executor would see its context change underneath work it is in the
+// middle of doing.
 //
 // The freeze is STRUCTURAL rather than remembered: the blocks are rendered
 // before the turn and handed to the runner as fixed strings, so there is
@@ -38,12 +38,17 @@ var log = logging.Get("agent.prefetch")
 //
 // A store that is unreachable, a model that is not configured, a filter that
 // returns nonsense — every one of them renders an empty block. A turn must
-// not die because a wiki was slow, and a planner given no memory plans worse
+// not die because a wiki was slow, and a seat given no memory works worse
 // than one given the right memory and far better than one given the wrong
 // memory. That last point is why there is no recency-only fallback when the
 // relevance filter fails: preferring "no memory this turn" over "somebody
 // else's memory" is the only safe default for a seat that talks to several
 // people.
+//
+// Which is exactly why every block reports its hit and its rendered size on
+// the prefetch_summary event: degrading silently is the design, and an
+// operator with no per-block signal cannot tell a seat whose stores are empty
+// from one whose stores are unreachable.
 
 // Blocks are the rendered sections, one per prompt heading.
 //
@@ -60,6 +65,14 @@ type Blocks struct {
 	// lives in the team's knowledge base and the engine searches it on the
 	// agent's behalf, so the block always reflects current content.
 	RelevantKnowledge string
+
+	// RelevantKnowledgeHits is how many pages went into that block.
+	//
+	// Carried out because the block alone cannot say: a search that ran
+	// and matched nothing renders EmptyKnowledgeHint, which is non-empty
+	// prose. Telemetry needs the two apart — the prefetch_summary event
+	// reports both.
+	RelevantKnowledgeHits int
 
 	// EpisodeRecall is similar work this seat has done before.
 	EpisodeRecall string
@@ -212,7 +225,7 @@ func New(src Sources) *Fetcher { return &Fetcher{src: src, now: time.Now} }
 //
 // IN PARALLEL because they are independent and each is a round trip: run in
 // sequence, a turn's start would cost the sum of an embedding call, three
-// auxiliary completions and two database reads before the planner sees
+// auxiliary completions and two database reads before the executor sees
 // anything. Wall clock here is the slowest one, not the total.
 //
 // It never returns an error. Each block reports its own failure into the
@@ -232,7 +245,12 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 		})
 	}
 	run(&blocks.PersonalMemory, func() string { return f.personalMemory(ctx, r) })
-	run(&blocks.RelevantKnowledge, func() string { return f.relevantKnowledge(ctx, r) })
+	// Its own goroutine, like the skills block, because it reports a count
+	// alongside its prose.
+	wg.Go(func() {
+		defer recoverKnowledge(&blocks.RelevantKnowledge, &blocks.RelevantKnowledgeHits)
+		blocks.RelevantKnowledge, blocks.RelevantKnowledgeHits = f.relevantKnowledge(ctx, r)
+	})
 	run(&blocks.EpisodeRecall, func() string { return f.episodeRecall(ctx, r) })
 	run(&blocks.CounterpartyProfile, func() string { return f.counterpartyProfile(ctx, r) })
 	// Its own goroutine rather than a run(), because it is the one block that
@@ -261,7 +279,19 @@ func recoverInto(into *string) {
 	}
 }
 
-// recoverSkills is [recoverInto] for the one block with two outputs.
+// recoverKnowledge is [recoverInto] for the knowledge block.
+//
+// The COUNT is cleared with the prose, so a panicked render can never report
+// pages it did not surface.
+func recoverKnowledge(into *string, hits *int) {
+	if r := recover(); r != nil {
+		log.Error("prefetch_block_panicked", "panic", r)
+		*into, *hits = "", 0
+	}
+}
+
+// recoverSkills is [recoverInto] for the skills block, which has two outputs
+// too.
 //
 // BOTH are cleared: ids naming skills whose menu never rendered would be
 // reported as used by a turn that was never told about them, which is the

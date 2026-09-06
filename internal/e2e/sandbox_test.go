@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
@@ -23,6 +25,22 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
+
+// codingConversation is the thread the coding gate's turn arrives on, so the
+// entry the resumed turn files has somewhere to be filed.
+const codingConversation = "slack:C-coding"
+
+// conversation reads a seat's thread history straight from the node's own
+// store, which is where the ledger lives.
+func (n *node) conversation(t *testing.T, handle, key string) []ledger.Session {
+	t.Helper()
+	got, err := ledgerstore.NewConversations(n.engine.Backends().Store).
+		History(context.Background(), handle, key, 0)
+	if err != nil {
+		t.Fatalf("conversation history for %s on %s: %v", handle, key, err)
+	}
+	return got
+}
 
 // GATE G6 — the golden coding turn.
 //
@@ -51,11 +69,10 @@ providers:
       base_url: %s
       api_keys: ["${CREWLET_TEST_KEY}"]
   sandbox:
-    type: local
+    default_run_in: direct
     default_coding_agent: claude-code
     default_pause_ttl_seconds: 1800
     local:
-      containment: direct
       state_dir: %s
     setup:
       # A REAL setup step, which is also how the stand-in coding CLI gets
@@ -87,7 +104,6 @@ roles:
 turn_engine:
   max_iterations: 1
   max_tool_rounds: 4
-  plan_max_tool_rounds: 3
 `
 
 // codingNode is a running node whose seat can run code.
@@ -264,28 +280,33 @@ func newSandboxModel(t *testing.T) *scriptedModel {
 			reply = toolUse("submit_review", map[string]any{
 				"decision": "done", "final_artifact": "The fix is up for review.",
 			})
-		case offered["submit_plan"]:
-			m.saw("plan")
-			reply = toolUse("submit_plan", map[string]any{
-				"decision": "plan", "reasoning": "Hand the code work to a sandbox.",
-				"tools_needed":     []string{"run_sandbox"},
-				"steps":            []map[string]string{{"intent": "fix", "approach": "sandbox"}},
-				"success_criteria": []string{"the suite passes"},
-			})
 		case offered["mark_onboarded"]:
 			m.saw("onboarding")
 			reply = toolUse("mark_onboarded", map[string]any{"notes": "read the handbook"})
-		case sawSandboxResult(raw):
-			// The RESUMED Execute round: the conversation now carries the
-			// tool message the engine spliced in. Answering with prose is
-			// the executor reporting and finishing.
+		case offered["submit_work"] && sawSandboxResult(raw):
+			// The RESUMED executor round: the conversation now carries the
+			// tool message the engine spliced in. Submitting is the
+			// executor reporting and finishing.
 			m.saw("resumed")
-			reply = textReply("The sandbox fixed it and opened a pull request.")
-		default:
+			reply = toolUse("submit_work", map[string]any{
+				"outcome": "delivered",
+				"summary": "The sandbox fixed it and opened a pull request.",
+				// run_sandbox is server-backed and not a known read, so it
+				// IS a delivery the engine's own record can confirm.
+				"deliveries": []string{"run_sandbox"},
+			})
+		case offered["submit_work"]:
 			m.saw("execute")
 			reply = toolUse("run_sandbox", map[string]any{
 				"brief": "Clone example.com/acme/api and fix the failing test",
 			})
+		default:
+			// AN AUXILIARY PASS, not a phase. The prefetch's filters reach
+			// this same endpoint with no tools offered, and counting them
+			// as executor rounds made "the executor opened once" a claim
+			// about the memory filter.
+			m.saw("aux")
+			reply = textReply("")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, reply)
@@ -312,7 +333,10 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
-	n.wake(t, "swe", "the api test is flaking, please fix it")
+	// ON A THREAD, as a chat message arrives. The conversation is what the
+	// resumed turn owes an answer to, and what its ledger entry is filed
+	// under — neither of which can be asserted on a trigger that has none.
+	n.wakeInConversation(t, "swe", "the api test is flaking, please fix it", codingConversation)
 
 	// The SUSPEND: the turn ends with a row that outlives it.
 	waitFor(t, "a detached run to be recorded", func() bool {
@@ -335,16 +359,16 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	})
 
 	seen := n.model.seen()
-	for _, want := range []string{"plan", "execute", "resumed", "review"} {
+	for _, want := range []string{"execute", "resumed", "review"} {
 		if !slices.Contains(seen, want) {
 			t.Fatalf("the %s phase never ran; phases = %v", want, seen)
 		}
 	}
 	// ONE turn, not two. The resumed round re-enters the conversation the
-	// suspend left; a second Plan would mean the engine started a fresh turn
-	// and re-derived a plan for work already done.
-	if got := countOf(seen, "plan"); got != 1 {
-		t.Fatalf("Plan ran %d times; a resume must not re-plan. phases = %v", got, seen)
+	// suspend left; a second opening round would mean the engine started a
+	// fresh turn and re-derived work already done.
+	if got := countOf(seen, "execute"); got != 1 {
+		t.Fatalf("the executor opened %d times; a resume must re-enter. phases = %v", got, seen)
 	}
 	// The box is gone: the resumed Execute made no further run_sandbox call,
 	// so the phase was done with it.
@@ -363,6 +387,25 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	}
 	if argv[i+1] != "7" {
 		t.Fatalf("--max-turns %s, want the seat's own 7", argv[i+1])
+	}
+	// AND THE CONVERSATION KNOWS THE TURN HAPPENED. A turn that ends on the
+	// resume path ends a thread's turn as surely as one that ends on the
+	// inbox path, and only the inbox path recorded it: the thread's history
+	// stopped at the moment the run detached, so the seat's next turn on it
+	// read a conversation in which the coding work had never happened.
+	//
+	// End to end because the two halves are in different processes' worth of
+	// code: the LAUNCH writes the conversation onto the run's row, and the
+	// RESUME — which cannot see the trigger any more — reads it back.
+	history := n.conversation(t, "swe", codingConversation)
+	if len(history) != 1 {
+		t.Fatalf("the resumed turn left %d conversation entries, want 1", len(history))
+	}
+	if history[0].Reply == "" {
+		t.Errorf("the entry carries no reply: %+v", history[0])
+	}
+	if history[0].Decision != "done" {
+		t.Errorf("decision = %q, want the resumed turn's own outcome", history[0].Decision)
 	}
 }
 
@@ -641,9 +684,9 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	waitFor(t, "the recovered run to settle", func() bool {
 		return len(secondNode.activeRuns(t)) == 0
 	})
-	if got := countOf(model.seen(), "plan"); got != 1 {
-		t.Fatalf("Plan ran %d times across the restart; the resume must not re-plan. phases = %v",
-			got, model.seen())
+	if got := countOf(model.seen(), "execute"); got != 1 {
+		t.Fatalf("the executor opened %d times across the restart; the resume must "+
+			"re-enter. phases = %v", got, model.seen())
 	}
 	_ = launched
 }
@@ -665,7 +708,7 @@ func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
 		image = "alpine:3"
 	}
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{
-		Containment: sandbox.Container, StateDir: t.TempDir(),
+		Placement: sandbox.Container, StateDir: t.TempDir(),
 		Image: image, Runtime: filepath.Base(runtime),
 	})
 	if err != nil {

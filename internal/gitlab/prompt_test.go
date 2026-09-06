@@ -168,6 +168,30 @@ func TestOnlyPointerEventsRequireRecon(t *testing.T) {
 	}
 }
 
+// THE ADDRESSED FLAG SPLITS AN ASK FROM NEWS. Leaving an assignment or a
+// mention unanswered looks to the person who wrote it exactly like the
+// webhook never arrived; a seat obliged to reply to every state change of
+// every merge request it has ever touched is noise.
+func TestOnlyAnAskAddressesTheSeat(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []string{
+		gitlab.IssueAssigned, gitlab.IssueMention, gitlab.MRAssigned,
+		gitlab.MRReview, gitlab.MRMention, gitlab.NoteMention,
+	} {
+		if !(gitlab.Prompt{}).Addressed(note(reason, nil)) {
+			t.Errorf("%q does not address the seat", reason)
+		}
+	}
+	for _, reason := range []string{
+		gitlab.NoteComment, gitlab.IssueClosed, gitlab.PipelineFailed,
+		"merge_request.merge",
+	} {
+		if (gitlab.Prompt{}).Addressed(note(reason, nil)) {
+			t.Errorf("%q addresses the seat and is news about a thread it follows", reason)
+		}
+	}
+}
+
 // AN IID IS UNIQUE ONLY WITHIN ITS PROJECT. Two repositories both have a !1,
 // so a key that was just the number would merge a comment on one with a
 // review request on the other.

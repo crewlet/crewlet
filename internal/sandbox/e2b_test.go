@@ -365,22 +365,26 @@ func TestE2BCreateSendsTheDocumentedRequest(t *testing.T) {
 	}
 }
 
-// THE TEMPLATE FALLS BACK IN ORDER: the spec's, the company's, the coding
-// agent's own.
+// THE TEMPLATE FALLS BACK IN ORDER: the company's, then the coding agent's
+// own.
+//
+// There is no per-run template, and that is the point of the pair: sizing is a
+// property of the template, the template is configured on the BACKEND, and the
+// Spec field that used to sit in front of this was set by nobody while looking
+// exactly like a wired knob.
 func TestE2BPicksATemplateInOrder(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name, company, spec, agent, want string
+		name, company, agent, want string
 	}{
-		{"the spec wins", "company-box", "spec-box", "claude-code", "spec-box"},
-		{"then the company's", "company-box", "", "claude-code", "company-box"},
-		{"then the agent's own", "", "", "claude-code", "claude"},
-		{"opencode has its own", "", "", "opencode", "opencode"},
+		{"the company's wins", "company-box", "claude-code", "company-box"},
+		{"then the agent's own", "", "claude-code", "claude"},
+		{"opencode has its own", "", "opencode", "opencode"},
 		// An agent this build does not know gets E2B's bare image, on
 		// which the run fails — which is honest: the config names an
 		// agent nothing here can run, and inventing a template would
 		// hide that behind a runtime error further in.
-		{"an unknown agent gets the bare image", "", "", "cursor", "base"},
+		{"an unknown agent gets the bare image", "", "cursor", "base"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -395,7 +399,7 @@ func TestE2BPicksATemplateInOrder(t *testing.T) {
 				t.Fatal(err)
 			}
 			if _, err := provider.Create(context.Background(), sandbox.Spec{
-				CodingAgent: tc.agent, Template: tc.spec,
+				CodingAgent: tc.agent,
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -870,7 +874,7 @@ func TestE2BKindMatchesTheConfigValue(t *testing.T) {
 	stub := newE2BStub()
 	provider, _ := newE2B(t, stub)
 	if provider.Kind() != "e2b" {
-		t.Fatalf("Kind() = %q, which is not what providers.sandbox.type takes",
+		t.Fatalf("Kind() = %q, which is not what providers.sandbox names the backend",
 			provider.Kind())
 	}
 	box, err := provider.Create(context.Background(), sandbox.Spec{})

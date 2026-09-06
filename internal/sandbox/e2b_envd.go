@@ -71,7 +71,7 @@ const e2bStreamIdleTimeout = 10 * time.Minute
 // round-trip: the transport keeps the connection, and envd keeps the process.
 type idleReader struct {
 	inner io.Reader
-	timer *time.Timer
+	timer idleTimer
 
 	// idle is HELD, because the reset on progress needs the same value the
 	// first arming used. Reading the package constant there instead made
@@ -81,9 +81,41 @@ type idleReader struct {
 	cancel context.CancelFunc
 }
 
+// idleTimer is the countdown a reader arms and re-arms. *time.Timer satisfies
+// it; the interface exists so a test can supply one it drives itself.
+type idleTimer interface {
+	Reset(d time.Duration) bool
+	Stop() bool
+}
+
 func newIdleReader(body io.Reader, cancel context.CancelFunc, idle time.Duration) *idleReader {
+	return newIdleReaderOn(body, cancel, idle,
+		func(d time.Duration, fire func()) idleTimer { return time.AfterFunc(d, fire) })
+}
+
+// newIdleReaderOn is newIdleReader with the countdown supplied.
+//
+// The seam carries ONE assertion that a real clock cannot make honestly.
+// "A delivery re-arms the budget" is shown by a stream that keeps delivering
+// NOT being abandoned, and an abandonment that has not happened has no signal
+// to wait on — so against wall time the case can only sleep, deliver, and
+// assert the timer stayed quiet, which asserts that the TEST's own goroutine
+// was scheduled within the budget. That is a claim about the machine rather
+// than about this reader, and it is false often enough to matter: the case
+// slept 10ms against a 40ms budget and went red on a loaded CI box, on code
+// that was doing exactly what it should.
+//
+// Only the negative needs this. That the armed countdown eventually fires is
+// asserted against a real timer, because waiting for something to HAPPEN is
+// the direction a slow machine helps.
+func newIdleReaderOn(
+	body io.Reader,
+	cancel context.CancelFunc,
+	idle time.Duration,
+	arm func(time.Duration, func()) idleTimer,
+) *idleReader {
 	r := &idleReader{inner: body, idle: idle, cancel: cancel}
-	r.timer = time.AfterFunc(idle, cancel)
+	r.timer = arm(idle, cancel)
 	return r
 }
 

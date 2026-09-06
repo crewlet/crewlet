@@ -64,7 +64,7 @@ func TestTheCatalogueAnswersInAStableOrder(t *testing.T) {
 	)
 	want := []string{"alpha", "middle", "zebra"}
 	for range 8 {
-		got := keysOf(r.Matching(prompts.PhasePlan, prompts.Surface{Tools: []string{"t"}}))
+		got := keysOf(r.Matching(prompts.PhaseExecute, prompts.Surface{Tools: []string{"t"}}))
 		if !slices.Equal(got, want) {
 			t.Fatalf("order = %v, want %v", got, want)
 		}
@@ -76,14 +76,14 @@ func TestTheCatalogueAnswersInAStableOrder(t *testing.T) {
 // about a tool applies wherever that tool can be called.
 func TestPhaseScopingIsOptOut(t *testing.T) {
 	t.Parallel()
-	scoped := skill("planner-only", skills.Trigger{Tool: "t"}, true)
-	scoped.Phases = []prompts.Phase{prompts.PhasePlan}
+	scoped := skill("review-only", skills.Trigger{Tool: "t"}, true)
+	scoped.Phases = []prompts.Phase{prompts.PhaseReview}
 	r := registry(t, scoped, skill("everywhere", skills.Trigger{Tool: "t"}, true))
 
 	on := prompts.Surface{Tools: []string{"t"}}
-	if got := keysOf(r.Matching(prompts.PhasePlan, on)); !slices.Equal(got,
-		[]string{"everywhere", "planner-only"}) {
-		t.Fatalf("plan offered %v", got)
+	if got := keysOf(r.Matching(prompts.PhaseReview, on)); !slices.Equal(got,
+		[]string{"everywhere", "review-only"}) {
+		t.Fatalf("review offered %v", got)
 	}
 	if got := keysOf(r.Matching(prompts.PhaseExecute, on)); !slices.Equal(got,
 		[]string{"everywhere"}) {
@@ -103,7 +103,7 @@ func TestAnEditReplacesTheSkillWholesale(t *testing.T) {
 	if err := r.Upsert(narrowed); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
-	if got := r.Matching(prompts.PhasePlan,
+	if got := r.Matching(prompts.PhaseExecute,
 		prompts.Surface{MCPServers: []string{"slack"}}); len(got) != 0 {
 		t.Fatalf("the removed leaf still matches: %v", keysOf(got))
 	}
@@ -183,7 +183,7 @@ func TestTheCatalogueRendersOperatorVariables(t *testing.T) {
 	})
 	r.SetVariables(map[string]string{"tenant": "nimbus"})
 
-	offered := r.SkillsFor(prompts.PhasePlan, prompts.Surface{Tools: []string{"t"}})
+	offered := r.SkillsFor(prompts.PhaseExecute, prompts.Surface{Tools: []string{"t"}})
 	if len(offered) != 1 {
 		t.Fatalf("offered %+v", offered)
 	}
@@ -226,7 +226,7 @@ func TestALoadedBodyNamesWhatItIs(t *testing.T) {
 func TestANilRegistryAnswersEmpty(t *testing.T) {
 	t.Parallel()
 	var r *skills.Registry
-	if got := r.Matching(prompts.PhasePlan, prompts.Surface{Tools: []string{"t"}}); got != nil {
+	if got := r.Matching(prompts.PhaseExecute, prompts.Surface{Tools: []string{"t"}}); got != nil {
 		t.Fatalf("Matching = %v", got)
 	}
 	if _, ok := r.Get("chat"); ok {

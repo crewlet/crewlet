@@ -51,6 +51,13 @@ func Coalesce(prompts Prompts, evs []types.ExternalNotification, at []time.Time)
 	merged.ContextRequiresRecon = slices.ContainsFunc(ordered, func(c constituent) bool {
 		return c.event.ContextRequiresRecon
 	})
+	// Addressed is the same any(), and conservative in the same direction:
+	// one direct mention inside a burst of broadcasts is still somebody
+	// waiting for an answer, and coalescing it away would let a merge turn
+	// an ask into traffic the seat may ignore.
+	merged.Addressed = slices.ContainsFunc(ordered, func(c constituent) bool {
+		return c.event.Addressed
+	})
 	return merged, true
 }
 
@@ -144,7 +151,7 @@ func digestLine(prompt Prompt, c constituent, duplicate bool) string {
 // supersede rule.
 //
 // ONE resolver for the digest and the merged salient text, so the trigger the
-// planner reads and the text the learning workers embed can never say
+// executor reads and the text the learning workers embed can never say
 // different things about what was said.
 func effectiveBody(prompt Prompt, ev types.ExternalNotification) string {
 	return prompt.DigestBody(eventTypeOf(ev), rawBody(ev))
@@ -248,6 +255,7 @@ func constituents(ordered []constituent) []types.CoalescedMessage {
 			SourceEventType:      c.event.SourceEventType,
 			Metadata:             c.event.Metadata,
 			ContextRequiresRecon: c.event.ContextRequiresRecon,
+			Addressed:            c.event.Addressed,
 		})
 	}
 	return out

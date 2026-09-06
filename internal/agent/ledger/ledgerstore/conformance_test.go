@@ -310,7 +310,7 @@ func TestAppendedEntriesSurviveTheRoundTrip(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			want := ledger.Session{
 				TurnID: "t-1", At: "2026-08-20T09:00:00Z",
-				Trigger: "@alice: ping", PlanSummary: "reply",
+				Trigger: "@alice: ping", Intent: "reply",
 				Calls: "- slack_post({\"channel\":\"C1\"}) → success",
 				Reply: "pong", Decision: "done", CompletedWork: "posted",
 			}

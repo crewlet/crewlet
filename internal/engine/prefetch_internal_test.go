@@ -1,14 +1,20 @@
 package engine
 
 import (
+	"context"
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // What the prefetch is told ABOUT a turn, derived from its trigger.
@@ -170,3 +176,77 @@ func TestAnAnonymousTriggerHasNoSenders(t *testing.T) {
 }
 
 var _ = learning.Subject{}
+
+// ── the prefetch's only signal ──
+
+// EVERY BLOCK DEGRADES TO EMPTY BY DESIGN (internal/agent/prefetch), so a
+// seat whose diary is unreachable, whose auxiliary model is misconfigured and
+// whose knowledge base genuinely has nothing to say all build the same
+// prompt. Without this event an operator has no way to tell them apart —
+// which is what the type spent its whole life doing: it was registered,
+// categorised and documented as "published once per turn", and nothing ever
+// published it.
+func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
+	t.Parallel()
+	q := memory.New()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+
+	got := make(chan types.PrefetchSummary, 1)
+	if err := q.Subscribe(t.Context(), topics.Event("prefetch_summary"), "probe",
+		func(_ context.Context, ev *events.Event) queue.Result {
+			if p, ok := events.DataAs[*types.PrefetchSummary](ev); ok && p != nil {
+				got <- *p
+			}
+			return queue.Ack()
+		}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// Through prefetchFor, not the publisher directly: the wire from the
+	// turn to the event is the half that was missing, and a test that
+	// called the publisher itself would have passed for the whole time
+	// nothing did.
+	e := &Engine{backends: &Backends{Queue: q}}
+	company := &Company{
+		Config: &config.Company{},
+		Org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{
+			{Name: "Tech Lead", DeclaredHandle: "lead"}}},
+	}
+	e.prefetchFor(t.Context(), company, Request{
+		Handle:  "lead",
+		WorkKey: "work-1",
+		Events:  []*events.Event{notification("gitlab", "dev", nil, true)},
+	}, "a pull request got a comment")
+
+	select {
+	case summary := <-got:
+		switch {
+		case summary.RoleName != "Tech Lead" || summary.AgentHandle != "lead":
+			t.Errorf("the summary is attributed to %+v", summary)
+		case summary.TurnID != "work-1":
+			t.Errorf("turn = %q", summary.TurnID)
+		// A node with no store and no models renders nothing at all,
+		// which is exactly the state this event exists to make visible:
+		// a seat running with no memory must not look like a seat whose
+		// stores had nothing to say.
+		case summary.PersonalMemoryHit || summary.EpisodeRecallHit ||
+			summary.CounterpartyHit || summary.SynthesizedSkillsHit:
+			t.Errorf("a block reported a hit with no store behind it: %+v", summary)
+		case summary.RelevantKnowledgeSelectionCount != 0:
+			t.Error("pages were reported with no knowledge backend")
+		// READ OFF THE TRIGGER, not off a model: this pointer webhook is
+		// what gates three of the six searches, and without the flag its
+		// zeroes read as empty stores.
+		case !summary.TriggerRequiresRecon:
+			t.Error("the gate that skipped three searches was not reported")
+		}
+	// BOUNDED, not t.Context(): a summary that is never published must
+	// fail in a second rather than hanging until the package's own
+	// timeout, where it reads as an unrelated suite-wide stall.
+	case <-time.After(5 * time.Second):
+		t.Fatal("no prefetch summary was published")
+	}
+}

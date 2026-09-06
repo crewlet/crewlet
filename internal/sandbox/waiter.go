@@ -316,7 +316,18 @@ const (
 
 // pollOne reconnects and asks the runner whether the job has finished.
 func (w *Waiter) pollOne(ctx context.Context, run PendingRun) pollState {
-	box, err := w.manager.Provider().Connect(ctx, run.SandboxID)
+	provider, err := w.manager.Provider(Placement(run.Placement))
+	if err != nil {
+		// A row naming a cell this build or this company does not have can
+		// never complete, and retrying it every tick would keep the seat
+		// busy forever. Reported as gone, which settles the run and frees
+		// the seat — the operator sees one failure naming the placement
+		// rather than a run that is silently stuck.
+		log.ErrorContext(ctx, "sandbox_poll_no_backend",
+			"turn_id", run.TurnID, "placement", run.Placement, "error", err.Error())
+		return pollGone
+	}
+	box, err := provider.Connect(ctx, run.SandboxID)
 	if err != nil {
 		streak, giveUp := w.fail(run.TurnID)
 		log.WarnContext(ctx, "sandbox_connect_failed",
@@ -430,7 +441,11 @@ func (w *Waiter) reapExpiredPauses(ctx context.Context, runs []PendingRun) int {
 		sandboxID := run.SandboxID
 		// Kill by id: Connect would auto-resume the snapshot, booting the box
 		// back up purely to shut it down.
-		if err := w.manager.Provider().Kill(ctx, sandboxID); err != nil {
+		provider, err := w.manager.Provider(Placement(run.Placement))
+		if err != nil {
+			log.WarnContext(ctx, "sandbox_pause_reap_no_backend",
+				"turn_id", run.TurnID, "placement", run.Placement, "error", err.Error())
+		} else if err := provider.Kill(ctx, sandboxID); err != nil {
 			// An already-gone box is the normal case for an old snapshot;
 			// the row is released either way.
 			log.WarnContext(ctx, "sandbox_pause_reap_kill_failed",

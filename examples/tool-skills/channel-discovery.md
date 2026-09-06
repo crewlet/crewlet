@@ -6,7 +6,7 @@ trigger:
     - tool: mattermost_list_public_channels
     - tool: mattermost_post_message
     - tool: mattermost_search_users
-phases: [plan, execute]
+phases: [execute]
 title: Choosing the right Mattermost channel / surface
 summary: |
   Team channel for team-wide; DM individuals for direct asks; Jira

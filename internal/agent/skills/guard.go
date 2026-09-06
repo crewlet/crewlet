@@ -42,8 +42,9 @@ var ExemptTools = []string{
 	LoaderTool,
 	"activate_tool",
 	"list_mcp_server_tools",
-	"submit_plan",
+	"submit_work",
 	"submit_review",
+	"mark_onboarded",
 }
 
 // Blocked is a refused call, and what the model must do to proceed.
@@ -115,6 +116,42 @@ func NewGuard(r *Registry, phase prompts.Phase, surface prompts.Surface) *Guard 
 		return nil
 	}
 	return &Guard{registry: r, phase: phase, surface: surface, loaded: map[string]bool{}}
+}
+
+// Restore re-arms a guard with the keys a previous slice of the SAME session
+// already loaded.
+//
+// The one legitimate way to hand a guard somebody else's loads, and it exists
+// for exactly one caller: an executor that suspended on a detached coding run
+// is re-entered as the same message history days later, so the bodies it
+// loaded before the suspend are still in front of the model. A guard rebuilt
+// empty would block the very tools that session already unlocked, and the
+// model would be told to load a skill it can see in its own transcript.
+func (g *Guard) Restore(keys []string) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, key := range keys {
+		if key != "" {
+			g.loaded[key] = true
+		}
+	}
+}
+
+// LoadedKeys is what this session has loaded, sorted.
+//
+// Sorted because it is persisted into a suspended conversation's state, and a
+// blob whose key order came from map iteration would differ on every write of
+// the same fact.
+func (g *Guard) LoadedKeys() []string {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Sorted(maps.Keys(g.loaded))
 }
 
 // Loaded records a successful load, unlocking the tools that skill covers.

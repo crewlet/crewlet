@@ -36,9 +36,9 @@ const (
 	//
 	// Not a requeue: a requeue sends these to the topic tail while the
 	// successor replays its prefetched siblings from the head, which
-	// reorders the conversation. Not a NAK either: three redeliveries
-	// dead-letter a perfectly healthy event, and the condition can hold
-	// for minutes.
+	// reorders the conversation. Not a NAK either: the delivery budget is
+	// finite (25), it is shared with real failures, and a condition that
+	// holds for minutes would spend it on a perfectly healthy event.
 	ActionDefer
 
 	// ActionPark — requeue the events, then ack. For a wait that outlasts
@@ -101,6 +101,16 @@ type Screening struct {
 	// read the ledger about) and for the park actions (the list to
 	// requeue).
 	Events []*events.Event
+
+	// AwaitingSandbox marks the ONE park a caller may answer instead of
+	// requeuing: the seat is parked on a detached coding run, and that run
+	// may be waiting on a person's reply that this very delivery carries.
+	//
+	// Named rather than inferred from Reason, which is prose for a log: a
+	// caller matching on the sentence would break silently the first time
+	// it was reworded, and the failure mode is a clarification answer
+	// requeued for ever behind the question it answers.
+	AwaitingSandbox bool
 
 	// NoteDeferred asks the seat host to record that this consumer stopped,
 	// so the next successful renew resumes it.
@@ -181,7 +191,10 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 	case !c.TurnEngineReady:
 		return Screening{Action: ActionPauseAndPark, Reason: "no turn engine", Events: evs}
 	case c.AwaitingSandbox:
-		return Screening{Action: ActionPark, Reason: "awaiting a detached sandbox run", Events: evs}
+		return Screening{
+			Action: ActionPark, Reason: "awaiting a detached sandbox run",
+			AwaitingSandbox: true, Events: evs,
+		}
 	case !c.AdmitsTriggers:
 		return Screening{Action: ActionDefer, Reason: "config posture refuses new work", NoteDeferred: true}
 	}

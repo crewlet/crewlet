@@ -62,14 +62,15 @@ func firstDiff(a, b string) string {
 	return fmt.Sprintf("  identical for %d bytes, then lengths differ: %d vs %d", n, len(a), len(b))
 }
 
-// The Plan phase loops: the planner runs recon, its results come back, and it
-// goes round again. None of that may reach the system prompt — the prefetch
-// blocks are frozen at turn start, and the ledger of what has already run
-// rides the user message.
-func TestPlanPromptIsByteStableAcrossRounds(t *testing.T) {
+// The executor loops: it runs recon, results come back, it acts, it goes round
+// again — and it additionally suspends and resumes around a detached sandbox
+// run. None of that may reach the system prompt: the prefetch blocks are
+// frozen at turn start, and the ledger of what has already run rides the user
+// message.
+func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
-	frozen := PlanInput{
+	frozen := ExecutorInput{
 		ToolCatalogue:     "- post_message: Post to a channel.",
 		AvailableTools:    []string{"post_message", "mark_onboarded", "refresh_memory"},
 		PersonalMemory:    "- prefers short replies",
@@ -79,13 +80,15 @@ func TestPlanPromptIsByteStableAcrossRounds(t *testing.T) {
 	}
 	// What a round actually changes, and where it goes: the user message.
 	var userMessages []string
-	stableAcrossRounds(t, "plan", func(round int) string {
+	stableAcrossRounds(t, "executor", func(round int) string {
 		userMessages = append(userMessages, BuildPhaseUserMessage(UserMessage{
 			TaskDescription: "post the summary",
 			PriorWork:       ledgerAfter(round),
 		}))
-		return BuildPlan(seat, frozen)
-	}, BuildPlan(seat, PlanInput{ToolCatalogue: "- post_message: Post to a channel.", AvailableTools: frozen.AvailableTools}))
+		return BuildExecutor(seat, frozen)
+	}, BuildExecutor(seat, ExecutorInput{
+		ToolCatalogue: "- post_message: Post to a channel.", AvailableTools: frozen.AvailableTools,
+	}))
 
 	// Guard the guard: if the per-round state never moved, the stability
 	// assertion above tested nothing at all.
@@ -103,49 +106,49 @@ func ledgerAfter(round int) string {
 	return b.String()
 }
 
-// Execute loops the same way, and additionally suspends and resumes around a
-// detached sandbox run. Its system prompt is fixed for the whole phase.
-func TestExecutePromptIsByteStableAcrossRounds(t *testing.T) {
-	t.Parallel()
-	seat := lead()
-	frozen := ExecuteInput{
-		PlanSummary:    "1. Gather. 2. Post.",
-		AvailableTools: []string{"post_message"},
-		ToolCatalogue:  "- post_message: Post to a channel.",
-		PhantomTools:   []string{"guessed_tool_name"},
-		Skills:         allSkills(),
-	}
-	stableAcrossRounds(t, "execute",
-		func(int) string { return BuildExecute(seat, frozen) },
-		BuildExecute(seat, ExecuteInput{PlanSummary: "1. Gather. 2. Post."}))
-}
-
 // Review's evidence is assembled once when the phase starts and is fixed for
-// every round of it. It legitimately DIFFERS between iteration 1 and
-// iteration 2 of a turn, because by then the evidence genuinely differs — a
-// round is one model turn inside a phase, an iteration is a whole
-// Plan/Execute/Review pass.
+// every round of it. It legitimately DIFFERS between round 1 and round 2 of a
+// turn, because by then the evidence genuinely differs — a tool round is one
+// model turn inside a phase, a turn round is a whole executor/reviewer pass.
 func TestReviewPromptIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
 	frozen := ReviewInput{
-		PlanSummary:    "1. Gather. 2. Post.",
-		ExecuteSummary: "Posted the summary.",
-		PlanToolLog:    "- read_thread(...) → success",
-		ExecuteToolLog: "- post_message(...) → success",
-		Skills:         allSkills(),
+		Intent:   "Post the summary to #eng.",
+		Outcome:  "delivered",
+		Produced: "Posted the summary.",
+		ToolLog:  "- post_message(...) → success",
+		Skills:   allSkills(),
 	}
 	stableAcrossRounds(t, "review",
 		func(int) string { return BuildReview(seat, frozen) },
-		BuildReview(seat, ReviewInput{PlanSummary: "1. Gather. 2. Post."}))
+		BuildReview(seat, ReviewInput{Intent: "Post the summary to #eng."}))
 
-	// And the iteration case, stated so it is not mistaken for drift: a
+	// And the cross-round case, stated so it is not mistaken for drift: a
 	// second pass carries the ledger the first one did not have.
 	second := frozen
-	second.EarlierIterations = "### Iteration 1\nExecute called:\n- post_message(...) → success"
+	second.EarlierIterations = "### Iteration 1\nCalled:\n- post_message(...) → success"
 	if BuildReview(seat, second) == BuildReview(seat, frozen) {
-		t.Error("the earlier-iterations ledger did not reach the review prompt")
+		t.Error("the earlier-rounds ledger did not reach the review prompt")
 	}
+}
+
+// THE WHOLE TURN is byte-stable too, which is the claim that actually bills:
+// a per-prompt assertion cannot catch a section moving from the executor's
+// prompt into the reviewer's, and with two prompts instead of three there is
+// one less place for a section to hide.
+func TestTheWholeTurnIsByteStableAcrossRounds(t *testing.T) {
+	t.Parallel()
+	seat := lead()
+	exec := ExecutorInput{
+		ToolCatalogue:  "- post_message: Post to a channel.",
+		AvailableTools: []string{"post_message"},
+		Skills:         allSkills(),
+	}
+	review := ReviewInput{Intent: "Post.", Outcome: "delivered", Skills: allSkills()}
+	stableAcrossRounds(t, "turn",
+		func(int) string { return BuildExecutor(seat, exec) + BuildReview(seat, review) },
+		BuildExecutor(seat, ExecutorInput{})+BuildReview(seat, ReviewInput{}))
 }
 
 // Assembly is deterministic for the same inputs, which is a stronger claim
@@ -168,12 +171,12 @@ func TestAssemblyIsDeterministic(t *testing.T) {
 		{key: "mcp:atlassian", mcpServer: "atlassian", summary: "A"},
 		{key: "mcp:mattermost", mcpServer: "mattermost", summary: "M"},
 	}}
-	in := PlanInput{Skills: cat, ToolCatalogue: "- x: does x"}
+	in := ExecutorInput{Skills: cat, ToolCatalogue: "- x: does x"}
 
 	const builds = 200
-	first := BuildPlan(seat, in)
+	first := BuildExecutor(seat, in)
 	for i := 2; i <= builds; i++ {
-		if got := BuildPlan(seat, in); got != first {
+		if got := BuildExecutor(seat, in); got != first {
 			t.Fatalf("build %d of %d differs from the first\n%s", i, builds, firstDiff(first, got))
 		}
 	}
@@ -188,12 +191,12 @@ func TestAssemblyIsDeterministic(t *testing.T) {
 // fail any assertion here — the builder would simply start rendering it.
 //
 // "Iteration" is deliberately NOT on this list: ReviewInput.EarlierIterations
-// is a per-ITERATION input, which is a different thing from a per-round one
-// and is allowed to move between passes of a turn.
+// is a per-TURN-ROUND input, which is a different thing from a per-tool-round
+// one and is allowed to move between passes of a turn.
 func TestNoPhaseInputCarriesARoundCounter(t *testing.T) {
 	t.Parallel()
 	banned := []string{"round", "attempt", "retry"}
-	for _, in := range []any{PlanInput{}, ExecuteInput{}, ReviewInput{}, OnboardingInput{}, SubagentInput{}} {
+	for _, in := range []any{ExecutorInput{}, ReviewInput{}, OnboardingInput{}, SubagentInput{}} {
 		typ := reflect.TypeOf(in)
 		for i := range typ.NumField() {
 			name := strings.ToLower(typ.Field(i).Name)

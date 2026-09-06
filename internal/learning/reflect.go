@@ -85,11 +85,11 @@ func (t Turn) SelfPersisted() bool {
 // Two routes to "it did not", and both produce phantom-directive learning if
 // they are not blocked:
 //
-//   - the planner explicitly opted out (plan_decision skip) — it recognised
-//     the trigger was for somebody else;
-//   - the planner INTENDED to opt out but never called submit_plan, so the
-//     engine coerced the decision to direct and Execute ran with the full
-//     registry and called nothing.
+//   - the turn opted out (plan_decision skip) — nobody was asking this seat
+//     to do anything, and the engine ended it silently;
+//   - the turn engaged with nothing: it finished `done` having called no
+//     tool at all, which is what a seat that read the trigger, recognised it
+//     as somebody else's and then said so only to itself looks like.
 //
 // Either way the agent processed nothing externally observable, and a fact
 // read off the trigger body would teach it a directive it never received:

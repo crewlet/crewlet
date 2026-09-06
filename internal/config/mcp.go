@@ -22,6 +22,22 @@ const (
 // MCPTransports is the closed set.
 var MCPTransports = []MCPTransport{TransportStdio, TransportHTTP}
 
+// BridgeServerName is the name a coding agent in agent mode sees the seat's
+// own tool bridge under — the engine-side MCP server that carries the seat's
+// colleagues, channels, memory and submission into the box.
+//
+// RESERVED: an `mcp_servers` entry may not take it. The engine writes the
+// bridge into every agent-mode box's server list under this key, so a
+// company server of the same name would be overwritten there — its tools
+// gone from the run with no validation error and no log line saying why.
+// Named here rather than in the bridge package because this is where the
+// reservation is enforced, and the bridge and the engine read the one value.
+//
+// "crewlet" rather than the seat's handle because it reaches the CLI's own
+// prompt: a tool called `mcp__swe__reply` reads as somebody else's tool, where
+// `mcp__crewlet__reply` reads as the agent's own.
+const BridgeServerName = "crewlet"
+
 // MCPServer is one tool server.
 //
 // ALL tool servers are declared here — including the ones an integration

@@ -34,9 +34,24 @@ func (Prompt) Source() string { return Backend }
 // carries a rendered title; it does not carry the query, the graph, the
 // recent deploys, or the other monitors that fired at the same moment, which
 // are what make the alert mean anything. The seat has to look before it can
-// act, so the Plan-phase relevance filters skip their auxiliary model call
+// act, so the turn-start relevance filters skip their auxiliary model call
 // rather than filter against a bare pointer.
 func (Prompt) RequiresRecon(notify.Inbound) bool { return true }
+
+// Addressed implements [notify.Prompt]: a monitor tagged as this seat's.
+//
+// The SAME split the prompt frames as "your service and your call" against
+// "establish whether this is even yours". A tag naming the seat is the
+// company saying who owns the monitor, and an owner's turn may not end in
+// silence: the ask below is to say what is affected, or that the threshold
+// is the thing to fix, and either is an answer somebody reads. The fallback
+// is the alert landing somewhere rather than on somebody, and a seat obliged
+// to answer every untagged monitor in the company would post on each one
+// whether or not it had anything to say. False is the conservative half, see
+// [notify.Prompt].
+func (Prompt) Addressed(n notify.Inbound) bool {
+	return n.Metadata[RoutedViaField] == RoutedViaTag
+}
 
 // ConversationKey implements [notify.Prompt]: the MONITOR is the conversation.
 //

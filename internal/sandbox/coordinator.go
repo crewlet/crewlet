@@ -62,6 +62,18 @@ type ResumeRequest struct {
 	// Trigger is the event that caused the resume, carried so the resumed
 	// turn's telemetry names what woke it.
 	Trigger *events.Event
+
+	// CostUSD and DeliveredRefs are what the run reported, for the resumed
+	// phase's own event. The coding agents produce both and nothing carried
+	// them: the phase record's `cost_usd` and `delivered_refs` had no
+	// producer at all, so a subscription CLI's spend — which never passes
+	// through the engine's token meter — was reported nowhere.
+	//
+	// Both are zero when a PERSON's answer resumes a parked clarification:
+	// no new run finished, and claiming a cost for one would double-count
+	// the run that is still going.
+	CostUSD       float64
+	DeliveredRefs []string
 }
 
 // Accountant post-charges a collected run's tokens.
@@ -87,6 +99,20 @@ type CoordinatorOptions struct {
 
 	// Account post-charges collected tokens. Nil skips accounting.
 	Account Accountant
+
+	// Ended is called once for every run this node finishes with, whatever
+	// finished it: collected, failed, torn down or reaped.
+	//
+	// It exists for credentials a run HOLDS rather than for its own state.
+	// An agent-mode run's box dials the engine's tool bridge with a
+	// per-run token, and a session left open is a box that outlived its
+	// run keeping a working key to a live seat's whole surface. The token
+	// expires on its own clock, so this is the difference between a
+	// credential that dies with the job and one that dies in four hours.
+	//
+	// A PARKED run is deliberately not ended: it is waiting on a person,
+	// not finished, and its box will resume into the same session.
+	Ended func(runID string)
 
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
@@ -114,6 +140,7 @@ type Coordinator struct {
 	manager *Manager
 	resume  Resumer
 	account Accountant
+	ended   func(runID string)
 	now     func() time.Time
 
 	// mu guards busy, the seat-level "is a detached run in flight?" answer
@@ -135,7 +162,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	}
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
-		resume: opts.Resume, account: opts.Account, now: opts.Now,
+		resume: opts.Resume, account: opts.Account, ended: opts.Ended,
+		now:  opts.Now,
 		busy: map[string]int{},
 	}
 	if c.now == nil {
@@ -297,7 +325,17 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		return c.park(ctx, run, result)
 	}
 
-	return c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger)
+	return c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
+		CostUSD: result.CostUSD, DeliveredRefs: result.DeliveredRefs,
+	})
+}
+
+// runOutcome is what a finished run reported about itself, for the resumed
+// phase's own record. Zero where no run finished — a person answering a parked
+// clarification resumes the turn without collecting anything.
+type runOutcome struct {
+	CostUSD       float64
+	DeliveredRefs []string
 }
 
 // collect reconnects, reads the result, and PAUSES the box rather than tearing
@@ -305,7 +343,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 // same checkout, and re-provisioning would throw away the working tree.
 func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, error) {
 	manager := c.mgr()
-	box, runner, err := manager.Reconnect(ctx, run.SandboxID, run.CodingAgent)
+	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.CodingAgent)
 	if err != nil {
 		return Result{}, err
 	}
@@ -414,7 +452,10 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversat
 	// The seat goes busy again for the duration of the resume: the parked
 	// run freed it, and re-entering the Execute loop is work like any other.
 	c.markBusy(claimed.AgentHandle)
-	return true, c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger)
+	// NO OUTCOME: this resume collects no run. The box is still parked and
+	// its cost is charged where it is collected, so reporting one here would
+	// bill the same run twice.
+	return true, c.resumeAndSettle(ctx, claimed, answerText(claimed, answer), true, trigger, runOutcome{})
 }
 
 // resumeAndSettle re-enters the suspended loop, then settles the box.
@@ -424,7 +465,7 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversat
 // the next completion. Otherwise the phase is done with the box, so tear it
 // down and mark the run done.
 func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
-	answer string, success bool, trigger *events.Event,
+	answer string, success bool, trigger *events.Event, outcome runOutcome,
 ) error {
 	if len(run.ExecuteState) == 0 {
 		// No suspended conversation to resume, and the turn cannot
@@ -455,6 +496,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 
 	if err := c.resume.Resume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
+		CostUSD: outcome.CostUSD, DeliveredRefs: outcome.DeliveredRefs,
 	}); err != nil {
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
 		// completion redelivers, the claim refuses, and the suspended
@@ -573,12 +615,26 @@ func (c *Coordinator) announceFailure(ctx context.Context, run PendingRun, reaso
 // WithoutCancel rather than Background, so the warnings still carry the
 // turn's values.
 func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
+	// BEFORE THE BOX CHECK, because a run that never got one still ended —
+	// a launch that failed at create is exactly the case where a bridge
+	// session was opened and nothing else will ever close it.
+	if c.ended != nil {
+		c.ended(run.TurnID)
+	}
 	if run.SandboxID == "" {
 		return
 	}
 	killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
 	defer cancel()
-	if err := c.mgr().Provider().Kill(killCtx, run.SandboxID); err != nil {
+	provider, err := c.mgr().Provider(Placement(run.Placement))
+	if err != nil {
+		// The row names a cell this company no longer configures. The box
+		// is unreachable and cannot be reclaimed here, so the row is still
+		// released below — leaving it open would hold the seat's busy count
+		// forever over a box that will expire on its own TTL anyway.
+		log.WarnContext(ctx, "sandbox_teardown_no_backend",
+			"turn_id", run.TurnID, "placement", run.Placement, "error", err.Error())
+	} else if err := provider.Kill(killCtx, run.SandboxID); err != nil {
 		log.WarnContext(ctx, "sandbox_teardown_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
 	}

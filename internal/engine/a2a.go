@@ -58,7 +58,7 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, req Request, r
 		// this same frame with the same trigger and answers then.
 		return
 	}
-	channelID, _ := ask.Payload["channel_id"].(string)
+	channelID := askChannel(ask)
 	if channelID == "" {
 		log.WarnContext(ctx, "a2a_answer_unaddressable", "seat", req.Handle,
 			"detail", "the ask carries no channel id, so there is nowhere to reply")
@@ -146,9 +146,30 @@ func answerContent(res turn.Result) string {
 		"). Please ask again with more detail, or take it up on a shared surface."
 }
 
+// askChannel is the channel an ask opened, and therefore where its answer goes.
+//
+// OFF THE TYPED PAYLOAD. [types.A2ARequest] carries the channel id as a field;
+// the envelope's free-form Payload bag carries nothing at all, because the
+// wake is built with events.New over the typed struct. Reading the bag — which
+// is what this replaced — returned "" for every real ask, so answerColleague
+// logged a2a_answer_unaddressable and returned: every colleague question ran a
+// turn on the target seat and the answer never reached the asker, which the
+// asker experiences as a colleague that never replied.
+func askChannel(ask *events.Event) string {
+	if req, ok := events.DataAs[*types.A2ARequest](ask); ok {
+		return req.ChannelID
+	}
+	return ""
+}
+
 // askedQuestion is the brief the asker sent, echoed back so the woken turn
 // has the context its own turn ended with. See a2a.Answer.Question.
+//
+// Off the typed payload for the reason [askChannel] gives: the bag read this
+// replaced echoed an empty question on every answer.
 func askedQuestion(ask *events.Event) string {
-	content, _ := ask.Payload["content"].(string)
-	return content
+	if req, ok := events.DataAs[*types.A2ARequest](ask); ok {
+		return req.Content
+	}
+	return ""
 }

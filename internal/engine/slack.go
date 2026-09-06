@@ -69,7 +69,6 @@ func (e *Engine) startSlack(ctx context.Context, c *Company, cfg *config.Slack) 
 func statusPhrases(p config.StatusPhrases) map[string][]string {
 	return map[string][]string{
 		"onboarding":        p.Onboarding,
-		"plan":              p.Plan,
 		"execute":           p.Execute,
 		"review":            p.Review,
 		notify.DefaultPhase: p.Default,

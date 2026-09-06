@@ -46,48 +46,76 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // Reference role: a lead, with a roster, three MCP servers, and a 100-tool
 // catalogue.
 //
-// The budget covers the identity scaffold, the recon-then-action rule, the
-// verbose-decline rule, and the slim-catalogue + list_mcp_server_tools
-// discovery flow. The ~50 tokens of discovery prose replaces the typical
-// 1500-token MCP tool listing in a real workload — a net win as soon as one
-// MCP server with more than five tools is wired.
-func TestPlanPromptStaysUnderBudgetWithABigCatalogue(t *testing.T) {
+// The budget covers the identity scaffold, the finish-the-arc rule, the
+// stay-reachable rule, the verbose-decline rule, the submission contract, and
+// the slim-catalogue + list_mcp_server_tools discovery flow. The ~50 tokens
+// of discovery prose replaces the typical 1500-token MCP tool listing in a
+// real workload — a net win as soon as one MCP server with more than five
+// tools is wired.
+//
+// 2400 -> 2200 when the turn collapsed to one loop, which is DOWN: the
+// executor's prompt is the old Plan prompt's identity scaffold plus the act
+// contract Execute carried, minus everything the two-phase split needed — the
+// tools_needed declaration, the phantom-tool warning, and the model-split
+// hint. The frame that DECIDES is now the frame that acts, so nothing has to
+// be described to a second conversation.
+//
+// Measured at ~1994 with a 100-tool catalogue, so this leaves ~10%: enough
+// that a sentence can be added, tight enough that a section cannot.
+func TestTheExecutorPromptStaysUnderBudgetWithABigCatalogue(t *testing.T) {
 	t.Parallel()
 	// 100 tools x ~60 chars = ~6k chars of catalogue = ~1500 tokens.
 	lines := make([]string, 100)
 	for i := range lines {
 		lines[i] = fmt.Sprintf("- tool_%d: Short description of tool number %d.", i, i)
 	}
-	p := BuildPlan(lead(), PlanInput{ToolCatalogue: strings.Join(lines, "\n")})
-	withinBudget(t, "plan", p, 2400)
+	p := BuildExecutor(lead(), ExecutorInput{ToolCatalogue: strings.Join(lines, "\n")})
+	withinBudget(t, "executor", p, 2200)
 }
 
-// Execute is identity + a four-line contract and nothing else.
-func TestExecutePromptIsTiny(t *testing.T) {
-	t.Parallel()
-	withinBudget(t, "execute", BuildExecute(lead(), ExecuteInput{}), 300)
-}
-
-// Review is identity + the decision enum + the tool-delivery / sandbox /
-// duplicate-delivery / missing-tool / blocked rules and the completed_work
-// instruction.
+// Review is identity + the decision enum + the settled-delivery note, the
+// incomplete / sandbox / duplicate-delivery / missing-tool / blocked rules and
+// the completed_work instruction.
 //
 // The original budget was 300 (identity + a six-line enum). The rules added
-// ~290 tokens to prevent real production failures: silent half-finished turns
-// when Plan did not list the right tools; the sandbox rule, which stops
-// Review looping a turn forever by misreading a run_sandbox-delegated
-// investigation as fabrication; and the cross-iteration duplicate rule, which
-// stops a second self_iterate pass re-firing a side effect that already
-// landed. Each maps to a turn-ending bug that was actually observed.
+// ~290 tokens to prevent real production failures: the sandbox rule, which
+// stops the reviewer looping a turn forever by misreading a
+// run_sandbox-delegated investigation as fabrication; and the cross-round
+// duplicate rule, which stops a second pass re-firing a side effect that
+// already landed. Each maps to a turn-ending bug that was actually observed.
 //
 // Raised 560 -> 600 when the duplicate rule had to be keyed on target and
 // content rather than tool name: keyed on the name alone it fired on the
 // in-thread follow-up PriorWorkHeader explicitly asks for, so every corrected
 // turn looped to max_iterations and terminated failed.
 //
+// 600 -> 750 for the two-stage turn: the tool-delivery rule is gone (the
+// engine settles delivery before this prompt is built) and what replaced it
+// is the note saying so plus the incomplete rule, which is what stops a
+// reviewer grading an engine-written outcome as the agent's own verdict.
+//
 // The headroom is small on purpose: the next addition should have to justify
 // itself here, not slip in.
 func TestReviewPromptIsSmall(t *testing.T) {
 	t.Parallel()
-	withinBudget(t, "review", BuildReview(lead(), ReviewInput{}), 600)
+	withinBudget(t, "review", BuildReview(lead(), ReviewInput{}), 750)
+}
+
+// THE WHOLE TURN, which is the number that actually bills.
+//
+// Two prompts where there were three, and the executor's is the only one that
+// carries the scaffold. A budget on each prompt separately cannot catch the
+// regression that matters here — moving a section from one prompt to another
+// leaves both under their own budgets while the turn costs the same.
+//
+// Measured at ~2712, so ~10% headroom, as above.
+func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
+	t.Parallel()
+	lines := make([]string, 100)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("- tool_%d: Short description of tool number %d.", i, i)
+	}
+	whole := BuildExecutor(lead(), ExecutorInput{ToolCatalogue: strings.Join(lines, "\n")}) +
+		BuildReview(lead(), ReviewInput{})
+	withinBudget(t, "turn", whole, 3000)
 }

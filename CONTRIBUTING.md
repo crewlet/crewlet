@@ -279,10 +279,11 @@ make test-e2e   # go test ./internal/e2e/... -race -count=1 -v
 Go's compiler proves the types line up. It cannot prove a backend is wired,
 and this codebase has two shapes where it is not:
 
-- **A config value with no implementation.** `providers.sandbox.type: e2b`
+- **A config value with no implementation.** `role.sandbox.run_in: e2b`
   parses, validates, appears in the generated schema — and the engine refuses
-  it at construction, because that backend is not built. That refusal is the
-  right behaviour; what would be wrong is accepting it and failing later.
+  it at construction, because the company configured no `e2b:` backend. That
+  refusal is the right behaviour; what would be wrong is accepting it and
+  failing later, inside a turn that has already spent its rounds.
 - **A knob nothing reads.** `provisioning.group_webhook` was validated,
   documented and consulted by no code at all, so an operator setting it got
   the default and no error. A config field ships with the code that reads it,

@@ -14,7 +14,7 @@ func skillFile(body string) string {
 key: chat-mentions
 title: Mentioning people on chat
 summary: How to write an @-mention so it actually pings
-phases: [plan, execute]
+phases: [execute, review]
 trigger:
   mcp_server: mattermost
 ---
@@ -42,7 +42,7 @@ func TestASkillIsFrontmatterPlusABody(t *testing.T) {
 	if s.Body != "Write `@username`, not `<@id>`." {
 		t.Fatalf("body = %q", s.Body)
 	}
-	if !slices.Equal(s.Phases, []prompts.Phase{prompts.PhasePlan, prompts.PhaseExecute}) {
+	if !slices.Equal(s.Phases, []prompts.Phase{prompts.PhaseExecute, prompts.PhaseReview}) {
 		t.Fatalf("phases = %v", s.Phases)
 	}
 	if s.SourcePageID != "page-1" || s.SourcePageVersion != 3 {
@@ -59,7 +59,7 @@ func TestASkillIsRequiredUnlessItSaysOtherwise(t *testing.T) {
 		t.Fatal("a skill that says nothing is not required")
 	}
 	advisory := strings.Replace(skillFile("body"),
-		"phases: [plan, execute]", "phases: [plan]\nrequired: false", 1)
+		"phases: [execute, review]", "phases: [execute]\nrequired: false", 1)
 	if parse(t, advisory).Required {
 		t.Fatal("required: false was ignored")
 	}
@@ -81,7 +81,7 @@ func TestAMisspelledKeyIsRefusedRatherThanIgnored(t *testing.T) {
 // angle like a skill nobody wrote.
 func TestAnUnknownPhaseIsRefused(t *testing.T) {
 	t.Parallel()
-	wrong := strings.Replace(skillFile("body"), "[plan, execute]", "[executed]", 1)
+	wrong := strings.Replace(skillFile("body"), "[execute, review]", "[executed]", 1)
 	if _, err := skills.Parse(wrong, skills.Source{}); err == nil {
 		t.Fatal("an unknown phase was accepted")
 	}

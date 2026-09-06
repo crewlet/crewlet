@@ -36,7 +36,7 @@ func (s *suite) runAttachment(t *testing.T) {
 		other.awaitLabels(t, "an untouched group to keep receiving", "e1", "e2")
 		mine.staysAt(t, 1, "a detached pair kept receiving")
 
-		if backlog := s.caps.Backlog; backlog != nil {
+		if backlog := s.optionalBacklog(t); backlog != nil {
 			// RETAINED for whoever attaches next — that is the whole
 			// point of detach being non-destructive.
 			awaitState(t, "e2 to be retained for the next attacher", func() bool {
@@ -76,7 +76,7 @@ func (s *suite) runAttachment(t *testing.T) {
 		publish(ctx, t, q, "topic.b", newConvEvent("e2", "k"))
 		batches.staysAt(t, 1, "a detached batch consumer kept receiving")
 
-		if backlog := s.caps.Backlog; backlog != nil {
+		if backlog := s.optionalBacklog(t); backlog != nil {
 			awaitState(t, "e2 to be retained", func() bool {
 				return equalStrings(labelsOf(backlog(q, "topic.b", "grp")), []string{"e2"})
 			})
@@ -139,7 +139,7 @@ func (s *suite) runAttachment(t *testing.T) {
 
 		publish(ctx, t, q, "seat.inbox", newEvent("held"))
 		j.staysAt(t, 0, "a quiesced attachment took new work")
-		if backlog := s.caps.Backlog; backlog != nil {
+		if backlog := s.optionalBacklog(t); backlog != nil {
 			awaitState(t, "the held event to stay in the mailbox", func() bool {
 				return equalStrings(labelsOf(backlog(q, "seat.inbox", "grp")), []string{"held"})
 			})

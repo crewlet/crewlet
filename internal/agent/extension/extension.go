@@ -32,7 +32,31 @@ type Decision struct {
 	// clamps it, and a judge that says extend while asking for zero gets
 	// the step rather than nothing — see [Policy.Grant].
 	AdditionalRounds int
+
+	// Asked reports that a judge was actually CALLED, whatever came back —
+	// including a call that errored or answered something unparseable.
+	//
+	// It is what tells the caller there is a model call to report and to
+	// charge, and it is deliberately not derivable from the rest: a rescue
+	// with no reason to look at is what "the policy declined to ask" and
+	// "the judge said no" both look like from outside, and those are the two
+	// cases an operator most needs to tell apart. A company whose judge
+	// model is misconfigured and rescues every phase used to be
+	// indistinguishable from one whose phases genuinely deserved no
+	// extension.
+	Asked bool
+
+	// Model is who answered, and InputTokens/OutputTokens what the call
+	// cost. Carried on the decision because the judge is the only frame
+	// that knows and the caller is the only one that can charge it: this
+	// call is outside the tool loop, so nothing else meters it.
+	Model        string
+	InputTokens  int
+	OutputTokens int
 }
+
+// Tokens is what the judge call cost.
+func (d Decision) Tokens() int { return d.InputTokens + d.OutputTokens }
 
 // Rescue builds a refusal carrying why the engine did not even ask.
 func Rescue(reason string) Decision { return Decision{Reason: reason} }
@@ -147,11 +171,12 @@ func (p Policy) Grant(d Decision, used int) int {
 // FinishHint is the closing line of the nudge, and it is phase-specific
 // because the phases END differently.
 //
-// Plan exits by calling its submission tool; Onboarding exits by calling
-// mark_onboarded; Execute and Review exit by returning text with no tool
-// calls. A phase told the wrong way to finish spends its granted rounds
-// trying to exit through a door it does not have, which is the exact failure
-// the extension was granted to avoid.
+// The executor exits by calling `submit_work`, the reviewer by calling
+// `submit_review`, onboarding by calling `mark_onboarded`. Only a sub-agent
+// exits by returning text with no tool call at all. A phase told the wrong
+// way to finish spends its granted rounds trying to leave through a door it
+// does not have, which is the exact failure the extension was granted to
+// avoid.
 //
 // ONBOARDING IS NOT THE DEFAULT, and the difference is not cosmetic. Told to
 // stop calling tools, an extended onboarding pass never reaches
@@ -160,9 +185,13 @@ func (p Policy) Grant(d Decision, used int) int {
 // silent, permanent, per-turn cost, caused by one missing case.
 func FinishHint(ph phase.Phase) string {
 	switch ph {
-	case phase.Plan:
-		return "If you cannot finish in this window, call `submit_plan` with " +
-			"whatever you have so far — a partial plan is better than no plan."
+	case phase.Execute:
+		return "If you cannot finish in this window, call `submit_work` with " +
+			"whatever you have — reporting honestly what is done and what is " +
+			"outstanding is better than being cut off mid-round."
+	case phase.Review:
+		return "If you cannot finish in this window, call `submit_review` with " +
+			"the decision the evidence supports so far."
 	case phase.Onboarding:
 		return "If you cannot finish in this window, call `mark_onboarded` " +
 			"anyway after persisting what you have read — an onboarding pass " +
@@ -211,7 +240,14 @@ func Consider(ctx context.Context, j Judge, p Policy, req Request) (granted int,
 	}
 	decision, err := j.Decide(ctx, req)
 	if err != nil {
-		return 0, Rescue("judge_failed: " + err.Error())
+		// THE SPEND SURVIVES THE FAILURE. A judge that answered something
+		// unparseable still made the call and still cost the tokens, and a
+		// rescue that reported neither is how a misconfigured judge stayed
+		// invisible while billing every exhausted phase.
+		refusal := Rescue("judge_failed: " + err.Error())
+		refusal.Asked, refusal.Model = decision.Asked, decision.Model
+		refusal.InputTokens, refusal.OutputTokens = decision.InputTokens, decision.OutputTokens
+		return 0, refusal
 	}
 	return p.Grant(decision, req.RoundsUsed), decision
 }

@@ -42,8 +42,8 @@ export function vizColor(i: number): string {
 /** Phase is its own fixed identity, not a viz slot — see tokens.css. */
 export function phaseColor(phase: string): string {
   switch ((phase || "").toLowerCase()) {
-    case "plan":
-      return "var(--phase-plan)";
+    case "onboarding":
+      return "var(--phase-onboarding)";
     case "execute":
       return "var(--phase-execute)";
     case "review":
