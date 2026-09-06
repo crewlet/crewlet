@@ -32,6 +32,7 @@ import { useToast } from "~/ui/Toast.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
+import { PassDialog } from "./PassDialog.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, ReconcileStatus } from "~/protocol/types.ts";
 import type { SetupListing, SetupRun, SetupToolState } from "~/protocol/types.ts";
@@ -645,6 +646,7 @@ export function Integrations() {
     blocks?: string;
   } | null>(null);
   const [running, setRunning] = useState("");
+  const [passing, setPassing] = useState<{ tool: SetupToolState; title: string } | null>(null);
   const [lastRun, setLastRun] = useState<SetupRun | null>(null);
 
   /**
@@ -654,13 +656,19 @@ export function Integrations() {
    * tag updates on its own: the engine wrote the same fleet status the
    * reconcile loop writes, so the next poll of `integrations` carries it.
    */
-  async function runPass(tool: SetupToolState, readOnly: boolean): Promise<void> {
+  async function runPass(
+    tool: SetupToolState,
+    readOnly: boolean,
+    operatorCredential = "",
+  ): Promise<void> {
     setRunning(entryOwning(tool.key));
     setLastRun(null);
     try {
       const run = (await rest.post(
         `/setup/integrations/${tool.key}/${readOnly ? "check" : "provision"}`,
-        {},
+        // The credential is sent and never kept: this component drops it
+        // with the dialog, and the engine drops it when the pass returns.
+        readOnly || !operatorCredential ? {} : { operator_credential: operatorCredential },
       )) as SetupRun;
       setLastRun(run);
       toast.ok(readOnly ? "Checked" : "Setup pass finished");
@@ -727,6 +735,19 @@ export function Integrations() {
         </div>
       )}
 
+      {passing && (
+        <PassDialog
+          tool={passing.tool}
+          title={passing.title}
+          onClose={() => setPassing(null)}
+          onRun={(credential) => {
+            const tool = passing.tool;
+            setPassing(null);
+            void runPass(tool, false, credential);
+          }}
+        />
+      )}
+
       {dialog && (
         <SetupDialog
           sections={dialog.sections}
@@ -791,7 +812,17 @@ export function Integrations() {
                       blocks,
                     })
                   }
-                  onPass={(tool, readOnly) => void runPass(tool, readOnly)}
+                  onPass={(tool, readOnly) => {
+                    // A pass that writes at the vendor is confirmed first,
+                    // and a pass that needs an administrator credential
+                    // collects it there. A check writes nothing, so it
+                    // runs on the press.
+                    if (readOnly) {
+                      void runPass(tool, true);
+                      return;
+                    }
+                    setPassing({ tool, title: entry.name });
+                  }}
                   running={running === entry.key}
                 />
               ))}

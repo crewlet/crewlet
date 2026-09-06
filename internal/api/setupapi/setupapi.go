@@ -36,6 +36,7 @@ import (
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -305,6 +306,11 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		block := company.Integrations.Confluence
 		reqs = confluence.Requirements(block, s.resolve)
 		configured, enabled = block != nil, block != nil
+	case integration.KindGitLab:
+		block := company.Integrations.GitLab
+		reqs = gitlab.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
 	default:
 		return ToolState{}, false
 	}
@@ -364,6 +370,8 @@ func inboundPath(kind integration.Kind) string {
 		return "/webhooks/github"
 	case integration.KindJira:
 		return "/webhooks/jira"
+	case integration.KindGitLab:
+		return "/webhooks/gitlab"
 	case integration.KindConfluence:
 		// The Data Center route. Cloud registers one hook per event under
 		// this prefix, which is why the URL an operator copies is not a

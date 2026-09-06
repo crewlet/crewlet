@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/provision"
@@ -36,15 +37,24 @@ import (
 // is the engine's own on both ends, and registers a hook, and none of them
 // produces anything a person then owns and has to be told about.
 //
-// GitLab, Mattermost and Slack are deliberately absent. Their passes create
-// service accounts and mint per-seat tokens, which is a different kind of act
-// to put behind a button, and one that wants its own confirmation naming
-// exactly what will be created.
+// GitLab is here too, and it is a different kind of act: its pass creates a
+// service account per agent, mints a token on each and adds them to a group.
+// Everything it makes outlives the run and is visible to the whole group, so
+// it runs only with a transient administrator credential asked for on every
+// pass and never stored, and it never deletes: decommissioning is left to the
+// command line, because a company mid-edit looks exactly like one that
+// removed a seat.
+//
+// Mattermost and Slack stay on the command line. Mattermost has the same
+// account-creating shape and no reconcile of the form this contract takes;
+// Slack needs an app-configuration token Slack issues only by hand, and an
+// app ledger that lives in a local file.
 func (e *Engine) setupPasses() []setup.Pass {
 	return []setup.Pass{
 		&githubPass{engine: e},
 		&jiraPass{engine: e},
 		&confluencePass{engine: e},
+		&gitlabPass{engine: e},
 	}
 }
 
@@ -177,6 +187,66 @@ func (p *confluencePass) Run(ctx context.Context, in setup.PassInput) ([]integra
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: confluence pass: %w", err)
+	}
+	return res.Findings(), nil
+}
+
+// gitlabPass adapts gitlab.Reconcile to the pass contract.
+type gitlabPass struct{ engine *Engine }
+
+func (*gitlabPass) Kind() integration.Kind { return integration.KindGitLab }
+
+// Needs is the group Owner token. Asked on every run and never stored: it
+// creates accounts and mints tokens on them, which is a standing power if it
+// is kept and a grant with an end if it is not.
+func (*gitlabPass) Needs() *setup.Requirement {
+	req := gitlab.OperatorCredential()
+	return &req
+}
+
+func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.GitLab
+	if cfg == nil || !cfg.Enabled {
+		return nil, integration.ErrNotConfigured
+	}
+	if strings.TrimSpace(in.Operator) == "" {
+		// A FINDING, NOT A FAULT: the operator has not supplied the one
+		// credential this pass cannot mint for itself, which is a fact
+		// about what is missing rather than a failure to look.
+		return []integration.Finding{{
+			Kind: integration.FindingCredentialMissing,
+			Detail: "no group Owner token was supplied, and the seats' own tokens " +
+				"are what this pass mints, so it cannot bootstrap itself from them",
+		}}, nil
+	}
+	env := p.engine.resolver()
+	plan, err := gitlab.PlanFor(company.Org, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("engine: gitlab pass: %w", err)
+	}
+	client, err := gitlab.NewClient(gitlab.ClientOptions{
+		URL: env.Value(cfg.URL), Token: in.Operator,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: gitlab pass: %w", err)
+	}
+	signingVar, _ := provision.SoleVar(cfg.SigningSecret)
+	res, err := gitlab.Reconcile(ctx, gitlab.Options{
+		Client: client, Config: cfg, Plan: plan, Sink: in.Sink,
+		WebhookBase:      in.WebhookBase,
+		SigningSecret:    env.Value(cfg.SigningSecret),
+		SigningSecretVar: signingVar,
+		// ROTATE ONLY WHEN ASKED, and NEVER DECOMMISSION from here.
+		// Rotating revokes the credential every agent is currently
+		// authenticating with, so an operator adding a tenth seat would
+		// take the other nine down; deleting an account because a seat
+		// left the config cannot be told apart from a company mid-edit.
+		// Both stay deliberate gestures on the command line.
+		Rotate: in.Recreate,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: gitlab pass: %w", err)
 	}
 	return res.Findings(), nil
 }

@@ -539,10 +539,11 @@ type recordingPass struct {
 	findings []integration.Finding
 	err      error
 	release  chan struct{}
+	needs    *setup.Requirement
 }
 
-func (*recordingPass) Kind() integration.Kind    { return integration.KindGitHub }
-func (*recordingPass) Needs() *setup.Requirement { return nil }
+func (*recordingPass) Kind() integration.Kind      { return integration.KindGitHub }
+func (p *recordingPass) Needs() *setup.Requirement { return p.needs }
 
 func (p *recordingPass) Run(_ context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	p.mu.Lock()
@@ -874,5 +875,62 @@ func TestAVendorWithNoPassSaysSo(t *testing.T) {
 	}
 	if decode(t, res)["error"] != "not_provisionable" {
 		t.Errorf("error = %v", decode(t, res)["error"])
+	}
+}
+
+// A PASS THAT NEEDS AN ADMINISTRATOR CREDENTIAL SAYS SO, so the screen can
+// collect it rather than starting a run that will report nothing useful.
+func TestAPassDeclaresTheCredentialItNeeds(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	s.withPass(t, &recordingPass{needs: &setup.Requirement{
+		Field: "operator_credential", Label: "Group Owner token",
+		Kind: setup.KindSecret, Required: true,
+	}})
+	s.seedGitHub(t)
+
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
+	needs, _ := state["needs_operator"].(map[string]any)
+	if needs == nil {
+		t.Fatal("the state does not declare the credential its pass needs")
+	}
+	if needs["label"] != "Group Owner token" {
+		t.Errorf("label = %v", needs["label"])
+	}
+	if state["can_provision"] != true {
+		t.Error("can_provision is false on a vendor with a pass")
+	}
+}
+
+// THE TRANSIENT CREDENTIAL REACHES THE PASS AND NOTHING ELSE. It is not
+// sealed, not written into the config, and not echoed back.
+func TestTheOperatorCredentialReachesThePassAndIsNotKept(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	pass := &recordingPass{}
+	s.withPass(t, pass)
+	s.seedGitHub(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/provision",
+		`{"operator_credential":"glpat-owner-token"}`, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
+	in, _ := pass.last()
+	if in.Operator != "glpat-owner-token" {
+		t.Fatalf("the pass got operator %q", in.Operator)
+	}
+	if strings.Contains(res.Body.String(), "glpat-owner-token") {
+		t.Fatal("the answer echoes the administrator credential")
+	}
+	// And nothing sealed it: it is a grant with an end, not a stored one.
+	s.vault.mu.Lock()
+	defer s.vault.mu.Unlock()
+	for name, value := range s.vault.values {
+		if value == "glpat-owner-token" {
+			t.Fatalf("the administrator credential was sealed as %s", name)
+		}
 	}
 }

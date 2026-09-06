@@ -504,7 +504,12 @@ failed did not observe anything.
 
 `recreate_webhooks` re-registers with a fresh secret and is **destructive
 across deployments**: the previous secret stops working everywhere else this
-company runs.
+company runs. On GitLab it also rotates every seat's token, which revokes the
+credential each agent is currently authenticating with.
+
+**No pass on this surface deletes anything.** Decommissioning a service
+account whose seat left the configuration stays a command-line gesture,
+because a company mid-edit looks exactly like one that removed a seat.
 
 ### One tool, several surfaces
 
