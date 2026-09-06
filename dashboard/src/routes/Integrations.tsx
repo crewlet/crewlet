@@ -171,27 +171,33 @@ export function phaseTone(phase: string): Tone {
 }
 
 /**
+ * The engine's own phase order, "furthest-from-working to working": the
+ * `Phases` slice in internal/integration/report.go. Duplicated here because a
+ * TypeScript screen cannot import a Go slice, and kept in that file's order so
+ * the two cannot say different things about which of two surfaces is worse.
+ * `degraded` sits ABOVE `activating` deliberately: a degraded integration is
+ * still working, and one still coming up is not.
+ */
+const PHASE_ORDER = [
+  "unconfigured",
+  "awaiting_admin",
+  "provisioning",
+  "activating",
+  "degraded",
+  "ready",
+];
+
+/**
  * How far from working a phase is, lowest first, so the least ready surface
- * behind a tool is the one its row reports. A phase this build does not know
- * sits between the working phases and ready: it is never presented as ready,
- * and a phase known to be broken still outranks it.
+ * behind a tool is the one its row reports.
+ *
+ * Doubled so a phase this build does not know can sit BETWEEN the worst phase
+ * it knows and ready: such a phase is never presented as the ready one, and
+ * never allowed to mask a surface this build knows is broken.
  */
 function distance(phase: string): number {
-  switch (phase) {
-    case "unconfigured":
-      return 0;
-    case "degraded":
-      return 1;
-    case "awaiting_admin":
-      return 2;
-    case "provisioning":
-    case "activating":
-      return 3;
-    case "ready":
-      return 5;
-    default:
-      return 4;
-  }
+  const at = PHASE_ORDER.indexOf(phase);
+  return at >= 0 ? at * 2 : PHASE_ORDER.length * 2 - 3;
 }
 
 /** Who has to act, phrased for the person reading it. */
@@ -253,53 +259,59 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
   const named = (surface: Surface, text: string) =>
     entry.surfaces.length > 1 ? `${surface.name}: ${text}` : text;
 
-  const reconciled = present
+  // THE TWO INGRESS FAULTS ARE READ WHATEVER THE PHASE SAYS, because the
+  // reconcile loop does not look at ingress at all: the Jira and GitHub
+  // passes run with no webhook base and report nothing about deliveries
+  // (internal/engine/integrations.go), while `secret_usable` is computed
+  // separately from what this process actually resolved. So `ready` and "every
+  // delivery is refused" are not contradictory answers, they are answers to
+  // different questions, and a row that stopped at the phase showed a green
+  // tag over a surface nothing could reach.
+  const unresolved = present.find((p) => p.row.secret_usable === false);
+  const unrouted = present.find((p) => p.row.routes === false);
+  const ingress = unresolved
+    ? named(unresolved.surface, "the webhook secret did not resolve, so every delivery is refused")
+    : unrouted
+      ? named(
+          unrouted.surface,
+          "deliveries are verified and stored, and nothing routes them to a seat",
+        )
+      : undefined;
+
+  const worst = present
     .filter((p) => p.row.reconcile)
-    .sort((a, b) => distance(a.row.reconcile!.phase) - distance(b.row.reconcile!.phase));
-  const worst = reconciled[0];
+    .sort((a, b) => distance(a.row.reconcile!.phase) - distance(b.row.reconcile!.phase))[0];
   if (worst?.row.reconcile) {
-    const phase = worst.row.reconcile.phase;
-    const detail = worst.row.reconcile.detail;
+    const { phase, actor, detail } = worst.row.reconcile;
+    const phaseLine = phase !== "ready" && detail ? named(worst.surface, detail) : undefined;
     return {
       tag: phase.replace(/_/g, " "),
       tone: phaseTone(phase),
       outline: false,
-      status: phase !== "ready" && detail ? named(worst.surface, detail) : undefined,
-      attention: phase !== "ready",
+      // The phase's own sentence when it has one, and the ingress fault
+      // otherwise: a ready phase has nothing to say and must not silence it.
+      status: phaseLine ?? ingress,
+      // ATTENTION MEANS A PERSON IS NEEDED, which is the actor's own
+      // question and not "is the phase ready" (internal/integration/report.go:
+      // "Nothing the engine or a vendor is doing needs a person told about
+      // it"). Marking `provisioning` and `activating` amber told an operator
+      // to act while the engine was still working, beside a tag drawn neutral
+      // for the same phase.
+      attention: actor === "admin" || actor === "operator" || (!phaseLine && ingress !== undefined),
     };
   }
   if (present.every((p) => p.row.enabled === false)) {
     return { tag: "paused", tone: "neutral", outline: true, attention: false };
   }
-  // No measured claim. The two ways a configured surface is silently not
-  // working are still worth one line each.
-  const unresolved = present.find((p) => p.row.secret_usable === false);
-  if (unresolved) {
-    return {
-      tag: "configured",
-      tone: "neutral",
-      outline: false,
-      status: named(
-        unresolved.surface,
-        "the webhook secret did not resolve, so every delivery is refused",
-      ),
-      attention: true,
-    };
-  }
-  const unrouted = present.find((p) => p.row.routes === false);
-  if (unrouted) {
-    return {
-      tag: "configured",
-      tone: "neutral",
-      outline: false,
-      status: named(
-        unrouted.surface,
-        "deliveries are verified and stored, and nothing routes them to a seat",
-      ),
-      attention: true,
-    };
-  }
-  return { tag: "configured", tone: "neutral", outline: false, attention: false };
+  // No measured claim at all. The config's own word, and the ingress fault if
+  // there is one, which is the only thing that can be said without a pass.
+  return {
+    tag: "configured",
+    tone: "neutral",
+    outline: false,
+    status: ingress,
+    attention: ingress !== undefined,
+  };
 }
 
 function Count({ value, label }: { value: number | null | undefined; label: string }) {
@@ -358,7 +370,7 @@ export function Reconcile({ status }: { status: ReconcileStatus | null | undefin
 
       {rest.length > 0 && (
         <details>
-          <summary className="t-caption faint">
+          <summary className="int-summary">
             {rest.length} more finding{rest.length === 1 ? "" : "s"}
           </summary>
           <ul className="col gap-1 int-findings">
@@ -452,7 +464,7 @@ export function EntryRow({ entry, rows }: { entry: Entry; rows: Map<string, Inte
         )}
         {!absent && (
           <details className="int-details">
-            <summary className="t-caption faint">Details</summary>
+            <summary className="int-summary">Details</summary>
             <div className="col gap-3 int-details-body">
               {present.map((p) => (
                 <SurfaceDetail key={p.surface.key} surface={p.surface} row={p.row} />

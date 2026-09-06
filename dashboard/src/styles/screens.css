@@ -824,6 +824,23 @@
 .int-row-status.attention {
   color: var(--caution-ink);
 }
+/* THE DISCLOSURE IS THE ONLY CONTROL IN A ROW, so it is drawn at the muted
+   step rather than the faint one: tokens.css marks --text-faint decoration
+   only, never a fact, and it falls under the 4.5:1 contrast floor on both
+   themes. An affordance a reader cannot see is an affordance that is not
+   there. */
+.int-summary {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+details > summary.int-summary {
+  cursor: pointer;
+  list-style: none;
+  width: fit-content;
+}
+details > summary.int-summary::-webkit-details-marker {
+  display: none;
+}
 .int-details > summary {
   cursor: pointer;
   list-style: none;

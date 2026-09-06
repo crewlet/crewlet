@@ -213,3 +213,86 @@ test("an absent tool has no disclosure", () => {
   expect(screen.getByText("not configured")).toBeTruthy();
   expect(screen.queryByText("Details")).toBeNull();
 });
+
+// A READY PHASE DOES NOT SILENCE A REFUSED WEBHOOK SECRET.
+//
+// The loop says nothing about ingress at all: the Jira and GitHub passes run
+// with no webhook base, and secret_usable is computed separately from what
+// the process resolved. So the two answer different questions, and a row that
+// stopped at the phase put a green tag over a surface nothing could reach.
+test("a ready tool still reports a refused secret", () => {
+  const state = rollUp(
+    CATALOG.find((e) => e.key === "github")!,
+    rowsOf({
+      key: "github",
+      configured: true,
+      secret_usable: false,
+      reconcile: { phase: "ready" },
+    }),
+  );
+  expect(state.tag).toBe("ready");
+  expect(state.status).toMatch(/^the webhook secret did not resolve/);
+  expect(state.attention).toBe(true);
+});
+
+// And an unrouted surface, the other way a configured tool is silently not
+// working, is reported on a ready phase too.
+test("a ready tool still reports that nothing routes", () => {
+  const state = rollUp(
+    CATALOG.find((e) => e.key === "datadog")!,
+    rowsOf({ key: "datadog", configured: true, routes: false, reconcile: { phase: "ready" } }),
+  );
+  expect(state.status).toMatch(/nothing routes them to a seat$/);
+  expect(state.attention).toBe(true);
+});
+
+// ATTENTION MEANS A PERSON IS NEEDED, which is the actor's question, not the
+// phase's. Amber beside a neutral tag told an operator to act while the
+// engine was still working.
+test("only a phase a person owes draws attention", () => {
+  const owed = ["admin", "operator"];
+  const notOwed = ["engine", "provider"];
+  for (const actor of owed) {
+    const state = rollUp(
+      atlassian,
+      rowsOf({
+        key: "jira",
+        configured: true,
+        reconcile: { phase: "degraded", actor, detail: "x" },
+      }),
+    );
+    expect([actor, state.attention]).toEqual([actor, true]);
+  }
+  for (const actor of notOwed) {
+    const state = rollUp(
+      atlassian,
+      rowsOf({
+        key: "jira",
+        configured: true,
+        reconcile: { phase: "activating", actor, detail: "Atlassian is applying it" },
+      }),
+    );
+    expect([actor, state.attention]).toEqual([actor, false]);
+    // The line is still shown; it is just not dressed as a problem.
+    expect(state.status).toBe("Jira: Atlassian is applying it");
+  }
+});
+
+// THE LEAST READY SURFACE IS THE ENGINE'S OWN ORDER, integration.Phases: a
+// degraded integration is still working and one still coming up is not, so
+// activating outranks degraded rather than the reverse.
+test("the phase order is the engine's", () => {
+  const state = rollUp(
+    atlassian,
+    rowsOf(
+      { key: "jira", configured: true, reconcile: { phase: "degraded", detail: "partly" } },
+      {
+        key: "confluence",
+        configured: true,
+        reconcile: { phase: "activating", detail: "coming up" },
+      },
+    ),
+  );
+  expect(state.tag).toBe("activating");
+  expect(state.status).toBe("Confluence: coming up");
+});
