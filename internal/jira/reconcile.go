@@ -171,9 +171,14 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 	account, err := opts.Client.Me(ctx)
 	if err != nil {
+		// The probe exists to fail here rather than midway, so what it
+		// reports has to say WHICH kind of failure it was: a refused
+		// credential is the operator's to fix and never clears on its
+		// own, where an unreachable vendor clears without anybody.
 		return nil, fmt.Errorf(
 			"jira: the org credential in integrations.jira.token was refused, "+
-				"so nothing else this run reports would be trustworthy: %w", err)
+				"so nothing else this run reports would be trustworthy: %w",
+			rejected(err))
 	}
 
 	res := &Result{Deployment: opts.Client.Deployment(), Account: account}

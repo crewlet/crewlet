@@ -19,6 +19,18 @@ const (
 	// nothing, so the pass could not authenticate at all.
 	FindingCredentialMissing FindingKind = "credential_missing"
 
+	// FindingCredentialRejected is a credential that RESOLVED and that the
+	// vendor refused: a revoked token, a rotated key, an account that lost
+	// the access it was issued with.
+	//
+	// Distinct from [FindingCredentialMissing] because the fix is
+	// different — that one is a ${VAR} pointing at nothing, this one is a
+	// value the vendor will not accept — and distinct from a transport
+	// fault because it NEVER clears on its own. Every pass will be refused
+	// identically until a person changes the credential, so reporting it
+	// as a wait leaves an operator watching a retry that cannot succeed.
+	FindingCredentialRejected FindingKind = "credential_rejected"
+
 	// FindingApprovalRequired is an app or scope a person must install or
 	// approve at the vendor. ActionURL carries where.
 	FindingApprovalRequired FindingKind = "approval_required"
@@ -107,27 +119,32 @@ func (f FindingKind) severity() int {
 	switch f {
 	case FindingCredentialMissing:
 		return 0
-	case FindingApprovalRequired:
+	case FindingCredentialRejected:
+		// Beside missing, and below everything else, for the same reason
+		// missing is first: a pass that cannot authenticate observed
+		// nothing, so every other finding it carries is a guess.
 		return 1
-	case FindingIngressBlocked:
+	case FindingApprovalRequired:
 		return 2
-	case FindingIngressPending:
+	case FindingIngressBlocked:
 		return 3
-	case FindingIdentityMissing:
+	case FindingIngressPending:
 		return 4
-	case FindingIdentityFailed:
+	case FindingIdentityMissing:
 		return 5
-	case FindingGrantPending:
+	case FindingIdentityFailed:
 		return 6
-	case FindingUnknownTier:
+	case FindingGrantPending:
 		return 7
-	case FindingGrantShort:
+	case FindingUnknownTier:
 		return 8
+	case FindingGrantShort:
+		return 9
 	case FindingGrantExcess:
 		// LAST among the kinds this build knows, and the reason is the
 		// whole comment above: this is the one kind whose verdict is
 		// ready, so anything it outranks is a problem it hides.
-		return 10
+		return 11
 	default:
 		// A kind this build does not know, ranked ABOVE the advisory and
 		// below every real problem. A peer on a newer build can write one
@@ -135,7 +152,7 @@ func (f FindingKind) severity() int {
 		// ranking it worst would let an older node report a healthy
 		// company as broken, and ranking it below the advisory would let
 		// one spare permission hide a finding this binary cannot read.
-		return 9
+		return 10
 	}
 }
 
@@ -144,6 +161,12 @@ func (f FindingKind) severity() int {
 func (f FindingKind) Verdict() (Phase, Actor) {
 	switch f {
 	case FindingCredentialMissing:
+		return PhaseUnconfigured, ActorOperator
+	case FindingCredentialRejected:
+		// UNCONFIGURED, which the phase doc defines as "cannot talk to
+		// the surface at all" — true of a refused credential exactly as
+		// it is of an absent one. And the OPERATOR's, not the engine's:
+		// no retry fixes a token the vendor will not accept.
 		return PhaseUnconfigured, ActorOperator
 	case FindingApprovalRequired:
 		return PhaseAwaitingAdmin, ActorAdmin
@@ -190,6 +213,8 @@ func (f FindingKind) sentence(subject string) string {
 	switch f {
 	case FindingCredentialMissing:
 		return "this integration has no usable credential" + about
+	case FindingCredentialRejected:
+		return "the vendor refused this integration's credential" + about
 	case FindingApprovalRequired:
 		return "an administrator must approve this integration at the vendor" + about
 	case FindingIngressBlocked:

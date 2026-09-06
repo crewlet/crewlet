@@ -11,6 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/whsec"
+
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // Reconcile brings a GitLab instance in line with the company config.
@@ -209,7 +211,12 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// created.
 	group, found, err := opts.Client.GroupByPath(ctx, p.Group)
 	if err != nil {
-		return nil, fmt.Errorf("gitlab: resolve group %q: %w", p.Group, err)
+		// GitLab has no separate auth probe, so this first call is where
+		// a bad token shows up. Distinguishing a refusal from an
+		// unreachable instance here is what stops a revoked token
+		// reporting as "the engine is working on it" forever.
+		return nil, fmt.Errorf("gitlab: resolve group %q: %w", p.Group,
+			integration.Reject(err, Status(err)))
 	}
 	if !found {
 		return nil, fmt.Errorf(

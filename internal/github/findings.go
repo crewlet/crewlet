@@ -1,6 +1,7 @@
 package github
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/integration"
@@ -78,4 +79,17 @@ func detailOr(detail, fallback string) string {
 		return detail
 	}
 	return fallback
+}
+
+// rejected marks a refused credential, so [integration.Observe] reports the
+// surface as the operator's to fix rather than as a fault that clears.
+//
+// The extraction is here because github's status lives on its own error type;
+// the rule about which statuses count is [integration.Reject]'s.
+func rejected(err error) error {
+	var api *APIError
+	if errors.As(err, &api) {
+		return integration.Reject(err, api.Status)
+	}
+	return err
 }

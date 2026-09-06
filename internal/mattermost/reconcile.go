@@ -12,6 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
+
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // Result is what one reconcile did, for the report.
@@ -100,7 +102,10 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 
 	team, found, err := opts.Client.TeamByName(ctx, opts.Config.Team)
 	if err != nil {
-		return nil, fmt.Errorf("mattermost: resolve team %q: %w", opts.Config.Team, err)
+		// No separate auth probe here either, so this first call carries
+		// the refusal.
+		return nil, fmt.Errorf("mattermost: resolve team %q: %w", opts.Config.Team,
+			integration.Reject(err, Status(err)))
 	}
 	if !found {
 		return nil, fmt.Errorf(

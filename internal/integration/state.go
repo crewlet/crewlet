@@ -141,6 +141,29 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 	switch {
 	case errors.Is(err, ErrNotConfigured):
 		return state, true
+	case errors.Is(err, ErrCredentialRejected):
+		// NOT A WAIT. The case below treats a fault as one because almost
+		// every fault is a vendor briefly unreachable, and that reasoning
+		// is exactly backwards here: a refused credential is refused
+		// identically on every subsequent pass, so reporting "the engine
+		// is working on it" tells an operator to wait for something that
+		// will never happen while the one action that would fix it is
+		// theirs.
+		//
+		// Synthesised as a finding rather than assembled inline, so the
+		// phase and actor come from the same [FindingKind.Verdict] table
+		// every other kind reads and cannot drift from it.
+		//
+		// NO Detail, deliberately: the kind's own sentence is the
+		// headline, and the vendor's words go in LastError below. Putting
+		// the raw error in both printed the same wrapped chain twice, one
+		// line under the other, and the chain is long enough that the two
+		// copies filled the row.
+		finding := Finding{Kind: FindingCredentialRejected}
+		state.Report = Classify([]Finding{finding})
+		state.Findings = []Finding{finding}
+		state.Attempts++
+		state.LastError = truncateError(err.Error())
 	case err != nil:
 		// A FAULT IS A WAIT. Almost every one is a vendor briefly
 		// unreachable, and none of the rest is fixed by giving up. The

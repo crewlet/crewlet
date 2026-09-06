@@ -156,7 +156,8 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf(
 			"github: the credential this run authenticates with was refused, "+
-				"so nothing else it reported would be trustworthy: %w", err)
+				"so nothing else it reported would be trustworthy: %w",
+			rejected(err))
 	}
 
 	res := &Result{Login: login}

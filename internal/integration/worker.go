@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -90,6 +91,39 @@ type Reconciler interface {
 // pass, and one that finds its own block gone says so. The loop then forgets
 // its status, exactly as it forgets a kind nothing registered.
 var ErrNotConfigured = errors.New("integration: this surface is not configured")
+
+// ErrCredentialRejected reports a pass that failed because the VENDOR refused
+// the credential, rather than because the vendor could not be reached.
+//
+// A vendor wraps this around its own error when it can tell the difference —
+// an auth probe that came back 401 or 403 — and [Observe] then reports the
+// surface as the operator's to fix instead of folding it in with the
+// transport faults that clear on their own. Without it every refusal read as
+// "the engine is working on it", which is the one thing that is certainly not
+// happening: the credential will be refused identically on every pass until a
+// person changes it.
+var ErrCredentialRejected = errors.New("integration: the vendor refused this credential")
+
+// Reject marks err as a credential refusal when the vendor answered with an
+// authentication or authorization status, and returns it untouched otherwise.
+//
+// The POLICY lives here and the extraction stays with each vendor, because
+// they are different problems: which statuses mean "your credential is no
+// good" is one rule for every vendor, while digging the number out of a
+// refusal is a question about that vendor's own error type. Written per
+// vendor, the rule drifts — 401 alone in one place and 401-or-403 in the
+// next — and the surfaces that forgot 403 are exactly the ones that sit in
+// "the engine is working on it" forever.
+//
+// 401 and 403 only. A 429 is rate limiting and clears, a 404 is usually the
+// wrong host or project rather than the wrong key, and a 5xx is the vendor's
+// own problem: every one of those is a genuine wait.
+func Reject(err error, status int) error {
+	if err == nil || (status != http.StatusUnauthorized && status != http.StatusForbidden) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrCredentialRejected, err)
+}
 
 // Registration is one reconciler and what is specific to its cadence.
 type Registration struct {

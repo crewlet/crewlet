@@ -10,6 +10,7 @@ import (
 // it ranks fails a test rather than landing on the unknown-kind default.
 var knownKinds = []FindingKind{
 	FindingCredentialMissing,
+	FindingCredentialRejected,
 	FindingApprovalRequired,
 	FindingIngressBlocked,
 	FindingIngressPending,

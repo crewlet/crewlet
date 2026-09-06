@@ -100,7 +100,8 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf(
 			"confluence: the org credential in integrations.confluence.token was "+
-				"refused, so nothing else this run reports would be trustworthy: %w", err)
+				"refused, so nothing else this run reports would be trustworthy: %w",
+			rejected(err))
 	}
 	res := &Result{Deployment: opts.Client.Deployment(), Account: account}
 
@@ -305,4 +306,17 @@ func (r *Result) Findings() []integration.Finding {
 		})
 	}
 	return out
+}
+
+// rejected marks a refused credential, so [integration.Observe] reports the
+// surface as the operator's to fix rather than as a fault that clears.
+//
+// The extraction is here because confluence's status lives on its own error
+// type; the rule about which statuses count is [integration.Reject]'s.
+func rejected(err error) error {
+	var api *APIError
+	if errors.As(err, &api) {
+		return integration.Reject(err, api.Status)
+	}
+	return err
 }

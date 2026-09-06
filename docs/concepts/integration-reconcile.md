@@ -13,6 +13,7 @@ A pass produces **findings**, and a finding is one observation that is not "fine
 | Finding | Means |
 |---|---|
 | `credential_missing` | The block is enabled and the credential its `${VAR}` names resolved to nothing. |
+| `credential_rejected` | The credential resolved and the vendor refused it: a revoked token, a rotated key, an account that lost its access. |
 | `approval_required` | A person must install or approve something at the vendor. |
 | `ingress_blocked` | Deliveries cannot reach this engine, and it will not fix itself. |
 | `ingress_pending` | The delivery path is not established yet; the next pass tries again. |
@@ -141,6 +142,8 @@ The status line under the name is that surface's `detail`, prefixed with the sur
 Everything else in the object above, the actor, the link, the fault, the findings the phase was not derived from, sits under the row's **Details** disclosure, per surface, beside that surface's inbound counts and path.
 
 `last_error` is a **fault**, not a finding: the engine or the vendor failing to look at the world at all, rather than a statement about it. A pass that fails drops the previous pass's findings rather than leaving them standing under a fresh timestamp, because a pass that failed did not observe anything.
+
+A fault is normally reported as `activating`, owned by the engine, because almost every fault is a vendor briefly unreachable and the next pass clears it. **One fault is not a wait.** When the vendor answers `401` or `403`, it did look, and it refused the credential: every later pass is refused identically until a person changes it. That is reported as `credential_rejected`, which makes the surface `unconfigured` and the operator's to fix, so nobody is left watching a retry that cannot succeed. Rate limits, timeouts, `404`s and `5xx`es stay waits.
 
 ---
 
