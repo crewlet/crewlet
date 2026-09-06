@@ -770,9 +770,14 @@
   padding: var(--space-3);
 }
 .int-row-absent .int-row-name,
-.int-row-absent .int-row-desc,
-.int-row-absent .int-row-icon {
+.int-row-absent .int-row-desc {
   color: var(--text-faint);
+}
+/* A tool this company has not set up keeps its mark, dimmed: the mark is
+   its identity and the dimming is its state, which is the only reading of
+   the colour rule a coloured mark allows. */
+.int-row-absent .int-row-icon {
+  opacity: 0.45;
 }
 .int-row-icon {
   display: inline-flex;
@@ -784,7 +789,12 @@
   border-radius: var(--r-sm);
   background: var(--surface-2);
   border: 1px solid var(--border-subtle);
-  color: var(--text-muted);
+  color: var(--text);
+}
+.vendor-mark {
+  display: block;
+  width: var(--fs-xl);
+  height: var(--fs-xl);
 }
 .int-row-text {
   display: flex;
@@ -801,6 +811,56 @@
 .int-row-desc {
   font-size: var(--fs-xs);
   color: var(--text-muted);
+}
+/* The one line under the description that is worth reading without opening
+   the details. Its colour is state: a note is muted, a problem is caution. */
+.int-row-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.int-row-status.attention {
+  color: var(--caution-ink);
+}
+.int-details > summary {
+  cursor: pointer;
+  list-style: none;
+  width: fit-content;
+}
+.int-details > summary::-webkit-details-marker {
+  display: none;
+}
+.int-details > summary::before {
+  content: "\25B8";
+  display: inline-block;
+  margin-right: var(--space-1);
+}
+.int-details[open] > summary::before {
+  content: "\25BE";
+}
+.int-details-body {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
+.int-surface {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.int-surface-name {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text);
+}
+.int-surface-head {
+  align-items: center;
+}
+.int-findings {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
 }
 .int-row-state {
   flex: none;

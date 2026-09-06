@@ -11,7 +11,8 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { Reconcile, phaseTone } from "./Integrations.tsx";
+import { CATALOG, EntryRow, Reconcile, phaseTone, rollUp } from "./Integrations.tsx";
+import type { IntegrationRow } from "~/protocol/types.ts";
 
 afterEach(cleanup);
 
@@ -93,4 +94,122 @@ test("a failed pass is reported as a failed pass", () => {
     />,
   );
   expect(screen.getByText(/Last pass failed: 502 from the instance/)).toBeTruthy();
+});
+
+// --- one row per tool ----------------------------------------------------- //
+
+const atlassian = CATALOG.find((e) => e.key === "atlassian")!;
+const slack = CATALOG.find((e) => e.key === "slack")!;
+
+function rowsOf(...rows: IntegrationRow[]): Map<string, IntegrationRow> {
+  return new Map(rows.map((r) => [r.key, r]));
+}
+
+// A TOOL IS THE LEAST READY OF ITS SURFACES. Atlassian is one row over three
+// engine surfaces, and a row that reported the first surface it found would
+// call the tool ready while its Jira was refusing every credential.
+test("a tool reports its least ready surface, and names it", () => {
+  const state = rollUp(
+    atlassian,
+    rowsOf(
+      { key: "confluence", configured: true, reconcile: { phase: "ready" } },
+      {
+        key: "jira",
+        configured: true,
+        reconcile: { phase: "degraded", actor: "admin", detail: "swe has no Jira account" },
+      },
+    ),
+  );
+  expect(state.tag).toBe("degraded");
+  expect(state.tone).toBe("caution");
+  expect(state.status).toBe("Jira: swe has no Jira account");
+  expect(state.attention).toBe(true);
+});
+
+// A tool with one surface does not prefix its own name: "Slack: ..." on the
+// Slack row says nothing.
+test("a single-surface tool does not name itself", () => {
+  const state = rollUp(slack, rowsOf({ key: "slack", configured: true, secret_usable: false }));
+  expect(state.tag).toBe("configured");
+  expect(state.status).toMatch(/^the webhook secret did not resolve/);
+  expect(state.attention).toBe(true);
+});
+
+// A ready tool says nothing under its name. The tag is the claim, and a
+// status line repeating "ready" would be the invented reassurance this
+// screen refuses to show.
+test("a ready tool has no status line", () => {
+  const state = rollUp(
+    atlassian,
+    rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready", detail: "3 seats" } }),
+  );
+  expect(state.tag).toBe("ready");
+  expect(state.status).toBeUndefined();
+  expect(state.attention).toBe(false);
+});
+
+// NOT CONFIGURED, PAUSED and CONFIGURED are three different facts. Absent is
+// nobody set it up, paused is somebody switched it off on purpose, and the
+// two used to collapse into the state most likely to be mistaken for a
+// mistake.
+test("absent, paused and configured are told apart", () => {
+  expect(rollUp(slack, rowsOf()).tag).toBe("not configured");
+  expect(rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: false })).tag).toBe(
+    "paused",
+  );
+  expect(rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: true })).tag).toBe(
+    "configured",
+  );
+});
+
+// A phase a newer node wrote outranks ready and is outranked by every phase
+// this build knows is broken, so it never reads as healthy and never hides a
+// real problem behind it.
+test("an unknown phase is never the tool's ready state", () => {
+  const unknown = rollUp(
+    atlassian,
+    rowsOf(
+      { key: "jira", configured: true, reconcile: { phase: "ready" } },
+      { key: "confluence", configured: true, reconcile: { phase: "something_new" } },
+    ),
+  );
+  expect(unknown.tag).toBe("something new");
+  expect(unknown.tone).not.toBe("positive");
+
+  const broken = rollUp(
+    atlassian,
+    rowsOf(
+      { key: "jira", configured: true, reconcile: { phase: "degraded", detail: "x" } },
+      { key: "confluence", configured: true, reconcile: { phase: "something_new" } },
+    ),
+  );
+  expect(broken.tag).toBe("degraded");
+});
+
+// THE DETAILS ARE STILL THERE. The row leads with the tool, and the counts,
+// the inbound path and the findings sit under a disclosure rather than
+// disappearing: an operator who needs to know why can open it.
+test("a configured tool folds its surfaces under a disclosure", () => {
+  render(
+    <EntryRow
+      entry={atlassian}
+      rows={rowsOf(
+        { key: "jira", configured: true, inbound: 4, inbound_path: "/webhooks/jira" },
+        { key: "confluence", configured: true, inbound: 1 },
+      )}
+    />,
+  );
+  expect(screen.getByText("Atlassian")).toBeTruthy();
+  expect(screen.getByText("Details")).toBeTruthy();
+  expect(screen.getByText("Jira")).toBeTruthy();
+  expect(screen.getByText("Confluence")).toBeTruthy();
+  expect(screen.getByText("/webhooks/jira")).toBeTruthy();
+  expect(screen.getByText(/in: 4/)).toBeTruthy();
+});
+
+// A tool nobody set up has no details to open, and says so in its tag.
+test("an absent tool has no disclosure", () => {
+  render(<EntryRow entry={slack} rows={rowsOf()} />);
+  expect(screen.getByText("not configured")).toBeTruthy();
+  expect(screen.queryByText("Details")).toBeNull();
 });
