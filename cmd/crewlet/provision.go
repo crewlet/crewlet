@@ -462,6 +462,7 @@ var vendorCommands = map[string][]vendorCommand{
 		{"provision", "<company.yaml>", runSlackProvision},
 	},
 	"confluence": {
+		{"provision", "<company.yaml>", runConfluenceProvision},
 		{"import", "<company.yaml> <directory>", runConfluenceImport},
 		{"resync", "<company.yaml>", runConfluenceResync},
 	},

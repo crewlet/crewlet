@@ -103,6 +103,10 @@
         "webhook_secret": {
           "description": "HMAC secret for Data Center webhooks.",
           "type": "string"
+        },
+        "webhook_token": {
+          "description": "Shared token for Confluence Cloud webhooks, carried in the registered URL; minted by crewlet confluence provision.",
+          "type": "string"
         }
       },
       "required": [

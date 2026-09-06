@@ -180,9 +180,21 @@ func equalHex(presented string, want []byte) bool {
 // The body is taken and ignored so this fits the same shape as its
 // neighbours; a scheme that cannot read the payload is exactly the fact
 // worth keeping visible at the call site.
-func verifyDatadog(_ []byte, secret, token string) bool {
+// verifyToken compares a shared token constant-time. It is the check for
+// every provider that CANNOT sign a body, and there are two of them now:
+// Datadog attaches only fixed-value headers, and Confluence Cloud attaches
+// nothing at all and delivers only what was written into its URL. One
+// function rather than one per provider, because a constant-time compare
+// written twice is how one of them stops being constant-time.
+func verifyToken(_ []byte, secret, token string) bool {
 	if token == "" {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(token), []byte(secret)) == 1
+}
+
+// verifyDatadog is the token check under Datadog's name, so the route reads
+// as its neighbours do.
+func verifyDatadog(body []byte, secret, token string) bool {
+	return verifyToken(body, secret, token)
 }

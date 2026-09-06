@@ -269,8 +269,17 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 			map[string]any{"url": in.Jira.BaseURL()})
 	}
 	if in.Confluence != nil {
-		add("confluence", true, boolPtr(in.Confluence.WebhookSecret != ""),
-			map[string]any{"url": in.Confluence.BaseURL()})
+		// TWO ROUTES, so the row names both. Data Center signs on
+		// /webhooks/confluence; Cloud carries a token on
+		// /webhooks/confluence/{event}, one hook per event. secret_present
+		// answers for EITHER credential, because the question is whether a
+		// delivery from this surface could be verified at all.
+		add("confluence", true,
+			boolPtr(in.Confluence.WebhookSecret != "" || in.Confluence.WebhookToken != ""),
+			map[string]any{
+				"url":        in.Confluence.BaseURL(),
+				"cloud_path": "/webhooks/confluence/{event}",
+			})
 	}
 	if in.Datadog != nil {
 		// The one row whose secret is not a signing key, and the detail

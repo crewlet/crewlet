@@ -85,6 +85,7 @@ Replace `<ROLE>` with the role name in uppercase (e.g., `SLACK_BOT_TOKEN_ENGINEE
 | `CONFLUENCE_API_TOKEN` | Admin/service API token (`integrations.confluence.token`) | Atlassian account > API tokens |
 | `CONFLUENCE_EMAIL` | Admin email for Cloud Basic Auth (`integrations.confluence.email`) | Your Atlassian account email |
 | `CONFLUENCE_WEBHOOK_SECRET` | HMAC secret for Data Center webhooks (`integrations.confluence.webhook_secret`) | Set when creating the webhook |
+| `CONFLUENCE_WEBHOOK_TOKEN` | Shared token every **Cloud** hook carries in its URL (`integrations.confluence.webhook_token`), compared constant-time by `/webhooks/confluence/{event}`. Confluence Cloud signs nothing, so this is the whole authentication: treat it as a signing key. | Minted by `crewlet confluence provision`; `-recreate-webhooks` rotates it |
 
 Per-agent Confluence credentials go through `role.mcp_env` on the `atlassian`
 MCP server (`CONFLUENCE_USERNAME` / `CONFLUENCE_API_TOKEN`), like Jira.

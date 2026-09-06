@@ -24,6 +24,13 @@ type Secrets struct {
 	Jira       string
 	Confluence string
 
+	// ConfluenceToken is the Cloud route's credential, and like Datadog's
+	// it is a shared TOKEN rather than a signing key: Confluence Cloud
+	// attaches no signature to a delivery, so the token written into the
+	// registered URL is the strongest check available. Compared
+	// constant-time against the query the delivery carries.
+	ConfluenceToken string
+
 	// Datadog is a shared TOKEN, not a signing key, and the difference
 	// is the provider's: a Datadog webhook attaches headers with fixed
 	// values only, so there is nothing varying with the body to sign.
@@ -64,12 +71,18 @@ func (s Secrets) Verifiable() []string {
 	if whsec.Valid(s.GitLab) {
 		out = append(out, "gitlab")
 	}
+	// Confluence has TWO routes with two credentials, and either one makes
+	// the surface verifiable: the signed Data Center route, or the
+	// token-bearing Cloud route. Counted once, because the question is
+	// whether a delivery from this surface could be accepted.
+	if s.Confluence != "" || s.ConfluenceToken != "" {
+		out = append(out, "confluence")
+	}
 	for _, pair := range []struct {
 		kind, secret string
 	}{
 		{"github", s.GitHub},
 		{"jira", s.Jira},
-		{"confluence", s.Confluence},
 		{"datadog", s.Datadog},
 		{"forge", s.ForgeAppID},
 	} {
@@ -140,6 +153,7 @@ func SecretsOf(c *config.Company, o *org.Organization, resolve func(string) stri
 		}
 		if in.Confluence != nil {
 			s.Confluence = resolve(in.Confluence.WebhookSecret)
+			s.ConfluenceToken = resolve(in.Confluence.WebhookToken)
 		}
 		if in.Datadog != nil && in.Datadog.Enabled {
 			s.Datadog = resolve(in.Datadog.WebhookToken)

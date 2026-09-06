@@ -184,6 +184,19 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	}
 	page, _ := w.Body["page"].(map[string]any)
 	comment, _ := w.Body["comment"].(map[string]any)
+	if len(page) == 0 && len(comment) > 0 {
+		// A CLOUD COMMENT carries the page it is on under "parent" rather
+		// than beside itself. Measured against a live site: the top level
+		// has "comment", "userAccountId" and "timestamp" and no "page" at
+		// all, so a parser reading only the sibling key routed every Cloud
+		// comment to nobody. The parent is the page whenever it says so;
+		// a reply's parent is another comment, and that one is left alone
+		// rather than mistaken for the page.
+		if parent, ok := comment["parent"].(map[string]any); ok &&
+			str(parent, "contentType") == "page" {
+			page = parent
+		}
+	}
 	if len(page) == 0 && len(comment) == 0 {
 		return nil, nil
 	}

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -210,7 +211,7 @@ func (j *Jira) validate(path string) error {
 			"required — the org account is what reads an issue's watchers, "+
 				"which is the one routing input a Jira webhook never carries")
 	}
-	if strings.TrimSpace(j.WebhookSecret) == "" && cloud == "" {
+	if strings.TrimSpace(j.WebhookSecret) == "" && cloud == "" && !IsAtlassianCloud(url) {
 		// CLOUD IS EXEMPT, and stays exempt now that it can register an
 		// admin webhook of its own. The reason changed rather than
 		// disappearing: a Cloud company may take EITHER route, and one
@@ -247,6 +248,20 @@ type Confluence struct {
 	Token         string `secret:"true" yaml:"token" json:"token" js:"required" desc:"Admin API token or PAT; ${VAR} supported."`
 	Email         string `yaml:"email,omitempty" json:"email,omitempty" desc:"Set for Cloud Basic auth; omit for bearer-token auth."`
 	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"HMAC secret for Data Center webhooks."`
+
+	// WebhookToken is the shared token a Confluence CLOUD webhook carries in
+	// its delivery URL, compared constant-time by /webhooks/confluence/{event}.
+	//
+	// A second field rather than a second use of WebhookSecret, because the
+	// two are different kinds of thing and a config that conflated them
+	// would let an operator believe a Cloud delivery was signed. Data
+	// Center signs the body with WebhookSecret; Cloud signs nothing, drops
+	// userinfo, and honours no registration field, so the only credential
+	// it can carry is one written into the URL it was registered with.
+	// That is exactly Datadog's ceiling and it gets Datadog's treatment: a
+	// token doing a signing key's job with none of the guarantees, rotated
+	// like one, never logged.
+	WebhookToken string `secret:"true" yaml:"webhook_token,omitempty" json:"webhook_token,omitempty" desc:"Shared token for Confluence Cloud webhooks, carried in the registered URL; minted by crewlet confluence provision."`
 
 	// SkillsSpace holds the tool-skill pages. Excluded from routing and
 	// from knowledge search alike: those pages are machinery, and a
@@ -353,10 +368,13 @@ func (c *Confluence) validate(path string) error {
 				"credential of its own searches under, and the one the "+
 				"tool-skill walk reads with")
 	}
-	if strings.TrimSpace(c.WebhookSecret) == "" && cloud == "" {
-		// CLOUD IS EXEMPT: its events arrive through the Forge app on
-		// /webhooks/forge, verified by the app's invocation token, and
-		// there is no HMAC in that path at all.
+	if strings.TrimSpace(c.WebhookSecret) == "" && cloud == "" && !IsAtlassianCloud(url) {
+		// CLOUD IS EXEMPT, on either of its routes. The Forge relay is
+		// verified by the app's invocation token and the token-bearing
+		// hook by webhook_token, and neither carries an HMAC, so requiring
+		// a signing secret would refuse every correct Cloud config. The
+		// refusal lives where it can be honest instead: the provisioner
+		// will not register a Cloud hook without a token to put in it.
 		probs.add(at(path, "webhook_secret"), ErrMissing,
 			"required for a Data Center instance — the /webhooks/confluence "+
 				"route has nothing to verify a delivery with otherwise, and "+
@@ -553,6 +571,28 @@ func (m *Mattermost) validate(path string) error {
 
 // hasHTTPScheme reports a URL the clients can actually use, treating a
 // value that still carries a ${VAR} as unknown rather than wrong.
+// IsAtlassianCloud reports an address that is an Atlassian-hosted site.
+//
+// The SAME rule the vendor clients apply (jira.DeploymentOf and
+// confluence.DeploymentOf), restated here because config is a leaf they
+// depend on. It exists because the validators used to decide "Cloud" from
+// cloud_id alone, and a Cloud site given by URL, which is how most companies
+// write one, was treated as Data Center and refused for lacking a signing
+// secret it cannot use. The two rules are held equal by a test.
+func IsAtlassianCloud(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	for _, suffix := range []string{".atlassian.net", ".jira.com"} {
+		if strings.HasSuffix(host, suffix) {
+			return true
+		}
+	}
+	return strings.Contains(strings.ToLower(raw), "api.atlassian.com/ex/")
+}
+
 func hasHTTPScheme(url string) bool {
 	return strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") ||
 		envref.Has(url)

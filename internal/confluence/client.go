@@ -40,6 +40,35 @@ var log = logging.Get("confluence")
 const Backend = "confluence"
 
 // APIPath is the REST prefix under a base address.
+// Deployment is which Confluence this client speaks to.
+//
+// The same enum the Jira client has, and needed for the same reason: webhook
+// administration behaves differently on the two. Data Center signs a hook
+// with the secret it was registered with; Cloud signs nothing and delivers
+// only the URL it was given, so the provisioner registers a different shape
+// of hook on each.
+type Deployment string
+
+const (
+	// Cloud is Atlassian-hosted Confluence: a *.atlassian.net site or the
+	// api.atlassian.com gateway, accountId identities.
+	Cloud Deployment = "cloud"
+	// DataCenter is self-hosted Confluence Data Center or Server.
+	DataCenter Deployment = "data-center"
+)
+
+// Valid reports whether the deployment is one this build speaks.
+func (d Deployment) Valid() bool { return d == Cloud || d == DataCenter }
+
+// DeploymentOf reads the deployment off an address.
+func DeploymentOf(base string) Deployment {
+	base = strings.TrimSpace(base)
+	if isCloudSite(base) || strings.Contains(base, "api.atlassian.com/ex/confluence") {
+		return Cloud
+	}
+	return DataCenter
+}
+
 const APIPath = "/rest/api"
 
 // wikiPrefix is what a Cloud SITE address needs and a gateway address does
@@ -62,9 +91,10 @@ const ClientTimeout = 15 * time.Second
 
 // Client is one authenticated Confluence session.
 type Client struct {
-	base string
-	auth string
-	http *http.Client
+	base   string
+	auth   string
+	http   *http.Client
+	deploy Deployment
 }
 
 // ClientOptions configure a [Client].
@@ -78,6 +108,11 @@ type ClientOptions struct {
 	// Center personal access token wants.
 	Email string
 	Token string
+
+	// Deployment overrides what the address implies. Empty reads it off
+	// the host, which is right for every real address and wrong for a
+	// test server on 127.0.0.1 standing in for a Cloud site.
+	Deployment Deployment
 
 	HTTP *http.Client
 }
@@ -96,12 +131,20 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if client == nil {
 		client = httpx.Client(ClientTimeout)
 	}
+	deploy := opts.Deployment
+	if deploy == "" {
+		deploy = DeploymentOf(base)
+	}
 	return &Client{
-		base: RESTBase(base),
-		auth: authHeader(strings.TrimSpace(opts.Email), token),
-		http: client,
+		base:   RESTBase(base),
+		deploy: deploy,
+		auth:   authHeader(strings.TrimSpace(opts.Email), token),
+		http:   client,
 	}, nil
 }
+
+// Deployment is which Confluence this client speaks to.
+func (c *Client) Deployment() Deployment { return c.deploy }
 
 // RESTBase is the address every call is made against, /wiki included where
 // the deployment needs it.
@@ -180,8 +223,19 @@ func (e *APIError) Error() string {
 	return msg
 }
 
+// api runs one request against the versioned /rest/api tree, which is where
+// every content call lives.
+func (c *Client) api(ctx context.Context, method, path string, params url.Values, in, out any) error {
+	return c.do(ctx, method, APIPath+path, params, in, out)
+}
+
+// do runs one request against a path already carrying its own prefix.
+//
+// Split from [Client.api] for the reason the Jira client's is: webhook
+// administration lives at /rest/webhooks/1.0, OUTSIDE the versioned tree,
+// and a client that always prepended /rest/api could not reach it.
 func (c *Client) do(ctx context.Context, method, path string, params url.Values, in, out any) error {
-	target := c.base + APIPath + path
+	target := c.base + path
 	if len(params) > 0 {
 		target += "?" + params.Encode()
 	}
@@ -232,7 +286,7 @@ func (c *Client) Me(ctx context.Context) (string, error) {
 		Username  string `json:"username"`
 		UserKey   string `json:"userKey"`
 	}
-	if err := c.do(ctx, http.MethodGet, "/user/current", nil, nil, &out); err != nil {
+	if err := c.api(ctx, http.MethodGet, "/user/current", nil, nil, &out); err != nil {
 		return "", err
 	}
 	return firstOf(out.AccountID, out.Username, out.UserKey), nil
@@ -350,7 +404,7 @@ func (c *Client) Search(ctx context.Context, cql string, limit int) ([]Page, err
 	var out struct {
 		Results []pageWire `json:"results"`
 	}
-	if err := c.do(ctx, http.MethodGet, "/content/search", params, nil, &out); err != nil {
+	if err := c.api(ctx, http.MethodGet, "/content/search", params, nil, &out); err != nil {
 		return nil, err
 	}
 	pages := make([]Page, 0, len(out.Results))
@@ -364,7 +418,7 @@ func (c *Client) Search(ctx context.Context, cql string, limit int) ([]Page, err
 func (c *Client) PageByID(ctx context.Context, id string) (Page, error) {
 	var out pageWire
 	params := url.Values{"expand": {expandFields}}
-	if err := c.do(ctx, http.MethodGet, "/content/"+url.PathEscape(id), params, nil, &out); err != nil {
+	if err := c.api(ctx, http.MethodGet, "/content/"+url.PathEscape(id), params, nil, &out); err != nil {
 		return Page{}, err
 	}
 	return out.page(), nil
@@ -394,7 +448,7 @@ func (c *Client) PagesIn(ctx context.Context, space string) ([]Page, error) {
 			Results []pageWire `json:"results"`
 			Size    int        `json:"size"`
 		}
-		if err := c.do(ctx, http.MethodGet, "/content", params, nil, &batch); err != nil {
+		if err := c.api(ctx, http.MethodGet, "/content", params, nil, &batch); err != nil {
 			return nil, err
 		}
 		for _, row := range batch.Results {
@@ -442,7 +496,7 @@ func (c *Client) CreatePage(ctx context.Context, space, title, storage, parentID
 		body["ancestors"] = []any{map[string]any{"id": parentID}}
 	}
 	var out pageWire
-	if err := c.do(ctx, http.MethodPost, "/content", nil, body, &out); err != nil {
+	if err := c.api(ctx, http.MethodPost, "/content", nil, body, &out); err != nil {
 		return Page{}, err
 	}
 	return out.page(), nil
@@ -465,7 +519,7 @@ func (c *Client) UpdatePage(ctx context.Context, id, title, storage string, vers
 		},
 	}
 	var out pageWire
-	if err := c.do(ctx, http.MethodPut, "/content/"+url.PathEscape(id), nil, body, &out); err != nil {
+	if err := c.api(ctx, http.MethodPut, "/content/"+url.PathEscape(id), nil, body, &out); err != nil {
 		return Page{}, err
 	}
 	return out.page(), nil
@@ -488,7 +542,7 @@ func (c *Client) MovePage(ctx context.Context, id, title string, version int, pa
 		// no-op — the failure mode this method exists to avoid.
 		body["ancestors"] = []any{}
 	}
-	return c.do(ctx, http.MethodPut, "/content/"+url.PathEscape(id), nil, body, nil)
+	return c.api(ctx, http.MethodPut, "/content/"+url.PathEscape(id), nil, body, nil)
 }
 
 // AddLabel stamps one global label onto a page.
@@ -497,7 +551,7 @@ func (c *Client) MovePage(ctx context.Context, id, title string, version int, pa
 // success, which is what lets every import re-stamp without reading first.
 func (c *Client) AddLabel(ctx context.Context, id, name string) error {
 	body := []map[string]any{{"prefix": "global", "name": name}}
-	return c.do(ctx, http.MethodPost,
+	return c.api(ctx, http.MethodPost,
 		"/content/"+url.PathEscape(id)+"/label", nil, body, nil)
 }
 
@@ -509,7 +563,7 @@ func (c *Client) AddLabel(ctx context.Context, id, name string) error {
 // here relies on that — the run reports every page it deleted by name — but
 // it is why this is a delete and not an archive-and-hope.
 func (c *Client) DeletePage(ctx context.Context, id string) error {
-	return c.do(ctx, http.MethodDelete, "/content/"+url.PathEscape(id), nil, nil, nil)
+	return c.api(ctx, http.MethodDelete, "/content/"+url.PathEscape(id), nil, nil, nil)
 }
 
 // SpaceExists reports whether the instance has a space, and whether this
@@ -524,7 +578,7 @@ func (c *Client) SpaceExists(ctx context.Context, key string) (bool, error) {
 	if key == "" {
 		return false, fmt.Errorf("confluence: no space key")
 	}
-	err := c.do(ctx, http.MethodGet, "/space/"+url.PathEscape(key), nil, nil, nil)
+	err := c.api(ctx, http.MethodGet, "/space/"+url.PathEscape(key), nil, nil, nil)
 	if err == nil {
 		return true, nil
 	}
@@ -546,7 +600,7 @@ func (c *Client) PageByTitle(ctx context.Context, space, title string) (Page, bo
 	var out struct {
 		Results []pageWire `json:"results"`
 	}
-	if err := c.do(ctx, http.MethodGet, "/content", params, nil, &out); err != nil {
+	if err := c.api(ctx, http.MethodGet, "/content", params, nil, &out); err != nil {
 		return Page{}, false, err
 	}
 	if len(out.Results) == 0 {

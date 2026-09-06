@@ -182,6 +182,10 @@ func (r *Receiver) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /webhooks/jira", r.jira)
 	mux.HandleFunc("POST /webhooks/datadog", r.datadog)
 	mux.HandleFunc("POST /webhooks/confluence", r.confluence)
+	// The Cloud form, one path per event. Registered after the bare one
+	// so a reader sees the pair together; the mux matches on the pattern,
+	// not the order.
+	mux.HandleFunc("POST /webhooks/confluence/{event}", r.confluenceCloud)
 	mux.HandleFunc("POST /webhooks/slack/{handle}", r.slack)
 	mux.HandleFunc("POST /webhooks/forge", r.forgeWebhook)
 	mux.HandleFunc("GET /webhooks/slack-oauth", slackOAuthLanding)

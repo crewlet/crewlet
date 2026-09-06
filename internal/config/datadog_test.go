@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/jira"
 )
 
 // THE ROUTING FLOOR. An alert whose monitor names no owner has to go
@@ -172,4 +174,59 @@ roles:
 		return err
 	}
 	return c.Validate()
+}
+
+// A CLOUD SITE GIVEN BY URL IS CLOUD, and is not asked for a signing secret
+// it cannot use. Both validators used to decide "Cloud" from cloud_id alone,
+// so https://acme.atlassian.net, which is how most companies write a Cloud
+// site, was treated as Data Center and refused for lacking webhook_secret.
+// Measured against a live Cloud site: the Jira hook there signs with the
+// secret when given one, and the Confluence hooks carry a token instead, so
+// neither is a field a Cloud config can be forced to hold.
+func TestAnAtlassianCloudSiteByURLIsNotAskedForASigningSecret(t *testing.T) {
+	t.Parallel()
+	for _, block := range []string{"jira", "confluence"} {
+		t.Run(block, func(t *testing.T) {
+			t.Parallel()
+			err := validateIntegrationDoc(t, block,
+				"    url: https://acme.atlassian.net\n    token: t")
+			if err != nil {
+				t.Fatalf("a Cloud site by URL with no webhook_secret was refused: %v", err)
+			}
+		})
+	}
+}
+
+// And a self-hosted address still is, because there the secret is the
+// route's only credential.
+func TestADataCenterURLStillNeedsASigningSecret(t *testing.T) {
+	t.Parallel()
+	for _, block := range []string{"jira", "confluence"} {
+		t.Run(block, func(t *testing.T) {
+			t.Parallel()
+			err := validateIntegrationDoc(t, block,
+				"    url: https://wiki.corp.example.com\n    token: t")
+			if err == nil || !strings.Contains(err.Error(), "webhook_secret") {
+				t.Fatalf("a Data Center site without webhook_secret was accepted: %v", err)
+			}
+		})
+	}
+}
+
+// The host rule here and the vendor clients' own must agree, or a site the
+// validator calls Cloud is one the client registers a Data Center hook on.
+func TestTheCloudHostRuleMatchesTheVendorClients(t *testing.T) {
+	t.Parallel()
+	for _, addr := range []string{
+		"https://acme.atlassian.net", "https://acme.atlassian.net/wiki",
+		"https://acme.jira.com", "https://api.atlassian.com/ex/confluence/abc",
+		"https://wiki.corp.example.com", "http://localhost:8090",
+	} {
+		fromConfig := config.IsAtlassianCloud(addr)
+		fromConfluence := confluence.DeploymentOf(addr) == confluence.Cloud
+		fromJira := jira.DeploymentOf(addr) == jira.Cloud
+		if fromConfig != fromConfluence || fromConfig != fromJira {
+			t.Errorf("%s: config=%v confluence=%v jira=%v", addr, fromConfig, fromConfluence, fromJira)
+		}
+	}
 }

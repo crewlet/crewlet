@@ -2,7 +2,7 @@
 
 Crewlet integrates with Confluence bidirectionally: agents read and write Confluence pages via MCP tools, and Confluence pushes content change events to agents via webhooks.
 
-> **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. Webhooks differ by deployment: **Cloud** events arrive via the [Crewlet Forge app](https://github.com/crewlet/forge); **Data Center** uses direct webhook registration (see [Webhooks](#webhooks-confluence-pushes-to-agents)).
+> **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. `crewlet confluence provision` registers the inbound hooks on either deployment; on Cloud the [Crewlet Forge app](https://github.com/crewlet/forge) is the supported alternative (see [Webhooks](#webhooks-confluence-pushes-to-agents)).
 
 ---
 
@@ -34,7 +34,7 @@ mcp_servers:
 
 > **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/confluence/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/wiki/spaces/…/pages/…` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) — `skill_variables.confluence_base_url: "https://mycompany.atlassian.net/wiki"` — for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` already references this variable.) Note this is *enforced-reading guidance* (the required-skill guard puts the rule + base in context before the agent can post), not a rewrite of tool results — `mcp-atlassian` builds result links from `CONFLUENCE_URL` and does not read a site-URL env. (This is independent of `site_url`, which the notification transport and knowledge search use for their own links.)
 
-For **Cloud** webhooks, install the [Crewlet Forge app](https://github.com/crewlet/forge) which forwards events via Forge Remote to `POST /webhooks/forge`. The `webhook_secret` field is only used for Data Center deployments.
+On **Cloud**, `crewlet confluence provision` registers token-bearing hooks on `/webhooks/confluence/{event}` through an endpoint Atlassian has never documented; the [Forge app](https://github.com/crewlet/forge) is the supported alternative and delivers to `POST /webhooks/forge`. `webhook_secret` signs Data Center deliveries; `webhook_token` authenticates Cloud ones. See [Webhooks](#webhooks-confluence-pushes-to-agents).
 
 Since Jira and Confluence share the Atlassian platform, they use the **same** `mcp-atlassian` server — declare it **once** in `mcp_servers` as `atlassian` and set both `JIRA_URL` and `CONFLUENCE_URL` in its `env`; the engine does not derive them from the `jira:` / `confluence:` sections.
 
@@ -94,9 +94,29 @@ Each role keeps its own `CONFLUENCE_API_TOKEN` (and `CONFLUENCE_USERNAME`) in `m
 
 ## Webhooks (Confluence Pushes to Agents)
 
-Confluence Cloud and Data Center use different webhook models. Cloud uses the **Crewlet Forge app**; Data Center uses direct webhook registration.
+Confluence Cloud and Data Center use different webhook models. Data Center signs one hook with `webhook_secret`; Cloud carries a token in one hook per event, or uses the **Crewlet Forge app**.
 
-### Confluence Cloud — Forge App
+### Confluence Cloud — a token-bearing hook per event (the default)
+
+`crewlet confluence provision -public-url https://your-engine.example.com` registers one hook per event on your Cloud site and mints a shared token into `integrations.confluence.webhook_token`. Every hook's URL is `https://your-engine.example.com/webhooks/confluence/<event>?token=…`, and the route compares the token constant-time.
+
+**Read this before relying on it.** Confluence Cloud has no webhook page in its administration UI and no documented API for registering one; the request for it, CONFCLOUD-36613, has been open since 2015. The endpoint the engine uses, `/wiki/rest/webhooks/1.0/webhook`, answers on Cloud with an ordinary API token and does deliver, but **Atlassian has never stated its support status and can change or remove it without notice.** Every fact below was measured against a live site rather than read from a document, because no document exists.
+
+What was measured, and what it decides:
+
+- **A Cloud delivery carries no signature.** The endpoint accepts a `secret` on registration and silently ignores it. Nothing varying with the body arrives, so there is nothing to verify an HMAC against.
+- **Userinfo in the URL is dropped**, and no registration field becomes a header.
+- **The query string is delivered verbatim.** It is the only channel through which anything secret reaches the engine, which is why the token rides there.
+- **The payload names no event.** Which one fired is known only from which hook was registered for it, so the engine registers one hook per event with the event in the path.
+- **The endpoint validates no event names.** A registration for an event Confluence will never emit answers 201 and never fires.
+
+That makes the Cloud token exactly what [Datadog's](datadog.md) is: **a shared token doing a signing key's job with none of the guarantees.** A replayed delivery is indistinguishable from a fresh one, and anyone holding the token can forge a page event. Treat `webhook_token` as a signing key, rotate it the same way (`-recreate-webhooks` re-registers every hook with a fresh one), and keep it a `${VAR}`. The engine never logs the query string on this route.
+
+If you would rather not carry the risk of an undocumented endpoint, the Forge app below remains the supported route.
+
+The account whose token is in `integrations.confluence.token` needs **Confluence administrator** rights to register hooks.
+
+### Confluence Cloud — the Forge app (supported alternative)
 
 Install the [Crewlet Forge app](https://github.com/crewlet/forge) from the Atlassian Marketplace (or via a private installation link). The Forge app forwards these Confluence events to the Crewlet backend:
 

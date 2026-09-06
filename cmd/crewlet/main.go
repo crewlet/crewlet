@@ -171,7 +171,7 @@ Usage:
   crewlet github <cmd>        Report a GitHub deployment's seat accounts and hook it
   crewlet jira <cmd>          Report a Jira instance's seat accounts and projects
   crewlet slack <cmd>         Create, update and install one Slack app per seat
-  crewlet confluence <cmd>    Publish authored markdown and tool skills into spaces
+  crewlet confluence <cmd>    Register the inbound hooks; publish markdown and tool skills into spaces
   crewlet mattermost <cmd>    Reconcile a Mattermost team, and diagnose one
   crewlet version             Print the version
   crewlet help                Show this message
