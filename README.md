@@ -166,8 +166,8 @@ first turn with no integrations at all, then wiring in the real ones.
 
 > **Want a whole company to run?** `examples/nimbus.company.yaml` is a complete
 > seven-seat reference org — chat on Mattermost, its model a coding CLI you
-> already subscribe to, and a code sandbox on the engine host that reuses that
-> same login. No API key, and no service beyond the chat server in this repo's
+> already subscribe to, and its engineering seats running that same CLI as their
+> own agentic loop in a sandbox on the engine host, on that same login. No API key, and no service beyond the chat server in this repo's
 > compose file. Every setting carries its reasoning in a comment, and a tracker,
 > a wiki or a code host each add on top without undoing any of it.
 

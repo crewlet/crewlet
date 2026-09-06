@@ -439,7 +439,7 @@ The profile ships one service:
 
 There is no MCP-server sidecar: the GitLab tool surface is `glab mcp serve`, which the engine spawns per-role (see [MCP tool server](#mcp-tool-server)).
 
-`examples/nimbus.company.yaml` is the Nimbus example org, and it ships with **no code host** — no `integrations.gitlab` and no `gitlab` MCP server. It does ship a sandbox: its three engineering seats already run code on the engine host (`run_in: direct`), they just have nowhere to push it. The walkthrough below adds the missing blocks to a local-pointed copy, which is also exactly what you would do to put a real company on GitLab. Its seven seats, their handles and the ownership split between them (`nimbuscore`/`nimbusk0s`, `console`/`website`, the Phase-2 framework) are already written for this: the three engineering seats are the ones to wire up.
+`examples/nimbus.company.yaml` is the Nimbus example org, and it ships with **no code host** — no `integrations.gitlab` and no `gitlab` MCP server. It does ship a sandbox: its three engineering seats already run code on the engine host, with their executor running as the coding CLI's own agentic loop in a `direct` box, and they just have nowhere to push it. The walkthrough below adds the missing blocks to a local-pointed copy, which is also exactly what you would do to put a real company on GitLab. Its seven seats, their handles and the ownership split between them (`nimbuscore`/`nimbusk0s`, `console`/`website`, the Phase-2 framework) are already written for this: the three engineering seats are the ones to wire up.
 
 ### Walkthrough (Nimbus against local GitLab)
 

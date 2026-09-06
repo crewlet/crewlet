@@ -139,12 +139,25 @@ providers:
                                     #   providers.sandbox, which this
                                     #   chat-only company does not
                                     #   configure.
-        # state_dir is deliberately UNSET.  It then derives to
-        # ~/.crewlet/llm-cli/default (or $CREWLET_LLM_CLI_HOME/default),
-        # which is what you want here: the login survives deleting
-        # ./nimbus-data, and re-running the example does not cost you
-        # another browser round-trip.  Point it at a persistent volume
+        # ONE LOGIN FOR BOTH ENTRIES.  state_dir defaults to a directory
+        # derived PER PROVIDER KEY, so `default` and `coding` below would
+        # otherwise land on ~/.crewlet/llm-cli/default and .../coding —
+        # two credential directories, two `crewlet llm login` runs, two
+        # sets of per-seat homes.  Naming the same path on both is how
+        # entries say they share, and it is deliberately explicit: two
+        # unrelated providers must never silently collide and prune each
+        # other's state.  Entries that share one must also drive the SAME
+        # CLI, which `crewlet validate` checks.
+        #
+        # A LITERAL PATH — unlike every credential field here it is not
+        # ${VAR}-expanded, because it names where the engine keeps files
+        # rather than a secret (the same reason the store path is a Tier A
+        # field).  So it lives under ./nimbus-data with everything else
+        # this example writes, which does mean `rm -rf nimbus-data` logs
+        # the CLI out; `crewlet llm login default -from-host` puts it back
+        # with no browser round-trip.  Point it at a persistent volume
         # when the engine runs in an ephemeral container.
+        state_dir: "./nimbus-data/llm-cli/claude"
         timeout_seconds: 300        # wall clock for ONE invocation. Not the
                                     #   HTTP timeout above it: this covers a
                                     #   Node runtime starting (seconds before
@@ -174,30 +187,66 @@ providers:
                                     #   the metered account while you
                                     #   believed you were on a flat rate.
 
-    # ── Want a stronger model for part of a turn? ─────────────────────
+    # ── The engineers' executor: the CLI's OWN agentic loop ──────────
     #
-    # One entry is one model, so per-phase models mean one entry per
-    # model — and entries POINTING AT THE SAME state_dir SHARE ONE LOGIN,
-    # which is why the pair below names one explicitly.  Uncomment, then
-    # set `llm_review: sonnet` (or `llm: [sonnet, default]`) on the roles
-    # that need it.  Nothing else changes: phase selection resolves by
-    # providers.llm KEY and never looks at a provider's type.
+    # Same CLI, same login, same model — one field different, and it
+    # changes who drives the turn.  In `mode: text` above, Crewlet runs
+    # the loop and the CLI is a model behind it, with its shell and editor
+    # denied.  In `mode: agent` the CLI runs the seat's EXECUTOR itself:
+    # its own agentic loop, its own shell, its own editor, in a box from
+    # the sandbox catalogue below (`run_in: direct` — this machine).  The
+    # seat's own tools reach it back over the MCP bridge, so a bridged
+    # call is the same frame a native loop would call — the same guards,
+    # the same recording, the same `submit_work` ending the turn.
     #
-    # sonnet:
-    #   type: cli-agent
-    #   model: sonnet
-    #   cli:
-    #     agent: claude-code
-    #     state_dir: /var/lib/crewlet/llm-cli/claude   # and add the SAME
-    #                                                 #   line to `default`
+    # ONLY THE EXECUTOR BRANCHES.  The reviewer, the delegated workers,
+    # the summariser and the round-cap judge are all still text calls on
+    # this same entry, which is what keeps the reviewer a genuinely
+    # separate judgement of what the run did.
     #
-    # `state_dir` is a LITERAL PATH: unlike every credential field here it
-    # is not ${VAR}-expanded, because it names where the engine keeps files
-    # rather than a secret — the same reason the store path is a Tier A
-    # field.  Write the path out, or set $CREWLET_LLM_CLI_HOME and leave
-    # the field unset on both entries (they would then land on
-    # <root>/default and <root>/sonnet, which is two logins, not one).
+    # An agent-mode run is DETACHED: the executor phase suspends, its
+    # state goes on a durable row, and the same turn resumes when the run
+    # finishes — possibly in another process, much later.  That is the
+    # trade for the shell, and it is why only the three engineering seats
+    # below point at this entry: a seat answering a person in chat wants
+    # to answer now, not detach.
     #
+    # TWO THINGS IT NEEDS, both already true here:
+    #   - providers.sandbox, below, configuring the cell `run_in` names.
+    #   - CREWLET_MCP_BRIDGE_URL in the engine's environment, a URL a box
+    #     can dial — `http://127.0.0.1:8000` for a `direct` box on this
+    #     machine, matching api.port in the Tier A file.  Without it agent
+    #     mode is REFUSED at launch rather than started: a coding agent
+    #     with none of the seat's tools cannot answer anybody, cannot
+    #     reach a colleague and cannot submit its work.
+    #     In a fleet that URL must address the NODE, never a load
+    #     balancer — a session is a live tool surface in one process.
+    coding:
+      type: cli-agent
+      model: haiku                  # the same model as `default`. Haiku is
+                                    #   the weakest of the three at a long
+                                    #   agentic coding loop, which is what
+                                    #   default_max_turns below bounds —
+                                    #   swap this one entry to `sonnet` if
+                                    #   your runs thrash, and the login and
+                                    #   every other seat stay as they are.
+      cli:
+        agent: claude-code
+        mode: agent                 # text (default) | agent
+        run_in: direct              # a cell of providers.sandbox below.
+                                    #   On the ENTRY rather than the seat,
+                                    #   because it is a property of this
+                                    #   runtime: the subscription login
+                                    #   lives on the engine host, so a
+                                    #   local cell reaches it directly and
+                                    #   a remote one would need a headless
+                                    #   token instead.
+        state_dir: "./nimbus-data/llm-cli/claude"   # SAME as `default`: one login
+        timeout_seconds: 300
+        max_concurrent: 4
+        auth:
+          mode: subscription
+
     # A METERED KEY AS A BACKSTOP.  A spent plan window arrives as prose on
     # a successful exit ("Usage limit reached. Resets at 4pm."); the engine
     # matches that wording and reports RATE_LIMIT, which the ordinary
@@ -235,19 +284,23 @@ providers:
   # ── The code sandbox: the engine host, `direct` ─────────────────────
   #
   # A sandbox is a place for an agent to RUN CODE, and it is worth having
-  # with or without a code host: the three engineering seats below get a
-  # `run_sandbox` tool during Execute that hands a brief to a coding agent
-  # with a real shell, a real editor and a real working directory.  With
-  # no code host wired up, what comes back is the work itself — a
-  # prototype, a benchmark, an answer that needed running rather than
-  # reasoning — reported into the turn and then into chat.  Add a code
-  # host later and the same runs start opening merge requests, with the
-  # git-auth recipe from docs/integrations/gitlab.md as the only addition.
+  # with or without a code host.  Here it is where the three engineering
+  # seats' EXECUTORS run: `providers.llm.coding` above is agent mode, so
+  # their whole Execute phase is the coding CLI's own agentic loop, with a
+  # real shell, a real editor and a real working directory, in a box from
+  # this catalogue.  With no code host wired up, what comes back is the
+  # work itself — a prototype, a benchmark, an answer that needed running
+  # rather than reasoning — reported into the turn and then into chat.
+  # Add a code host later and the same runs start opening merge requests,
+  # with the git-auth recipe from docs/integrations/gitlab.md as the only
+  # addition.
   #
-  # A coding run is DETACHED: the tool starts it, the executor's loop
-  # suspends, and the engine resumes that same loop when the run
-  # finishes — minutes later, possibly after a restart.  Nothing parks a
-  # goroutine on a running job.
+  # Such a run is DETACHED: the executor phase suspends, its state goes on
+  # a durable row, and the SAME turn resumes when the run finishes —
+  # minutes later, possibly in another process after a restart.  Nothing
+  # parks a goroutine on a running job.  That is the trade for the shell,
+  # and it is why the other four seats stay in text mode: somebody waiting
+  # in a chat channel wants an answer now, not a detached run.
   #
   # NO EXTRA CREDENTIAL.  `default_coding_agent: claude-code` is the same
   # CLI as the LLM above, and on a LOCAL cell the backend seeds that
@@ -297,8 +350,14 @@ providers:
     # is a trade to make deliberately and never one to inherit by
     # accident.
     default_run_in: direct                       # direct | container | e2b
-    default_coding_agent: claude-code            # same CLI as providers.llm.default, so the
-                                                 #   box needs no credential of its own
+    # THERE IS NO `default_coding_agent` HERE, deliberately.  It names the
+    # CLI a `run_sandbox` launch runs, and every sandbox-enabled seat in
+    # this company is an AGENT-MODE seat whose CLI comes from its own
+    # providers.llm entry instead — so a value here would be read by
+    # nothing.  Add one the day a seat runs code the other way (a gate
+    # without `run_in: self`), and `crewlet validate` will not remind you:
+    # it is optional, and its absence is only visible at that seat's
+    # first coding run.
     default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
     default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); on a local cell that costs disk rather than a provider's snapshot bill, but it is still held, so the engine reaps it after this long and re-seeds. 0 = never pause, always re-seed; omit the key entirely for this 1800s default.
     # THE ONLY ENGINE-SIDE BOUND ON A RUNAWAY CODING AGENT.  A coding job
@@ -311,6 +370,13 @@ providers:
     # genuine multi-file task at 20-60 seconds a round, so a run that has
     # stopped making progress is caught inside an hour rather than at the
     # end of the window.  Raise it the day a real task hits it.
+    #
+    # IT BOUNDS THE AGENT-MODE EXECUTOR RUNS TOO — those are the same
+    # detached-run machinery, so this is the cap on a whole executor phase
+    # for the three engineering seats, not just on delegated code work.
+    # It matters more on `haiku` than it would on a stronger model: the
+    # weaker the model, the likelier a long agentic loop is going in
+    # circles rather than converging.
     default_max_turns: 60
     # NO ENGINE-WIDE `setup:` STEPS, and that is a `direct`-specific
     # decision rather than an omission.  Setup commands run in a shell —
@@ -870,7 +936,7 @@ units:
             responsibilities:
               - "Own the control plane: nimbuscore's API surface and nimbusk0s's behaviour"
               - "Take what the CTO hands you, work the design out end to end, and report back with the approach, the trade-offs, and the risks"
-              - "Use `run_sandbox` when running the thing settles it: a spike, a benchmark, a reproduction, a script that proves the interface works. Say what you ran and what it showed"
+              - "You have a real shell, editor and working directory for the whole of your turn — use them when running the thing settles it: a spike, a benchmark, a reproduction, a script that proves the interface works. Say what you ran and what it showed"
               - "Agree endpoint contracts with the AI Systems Engineer before either side builds against them"
               - "Say early and clearly when an ask is under-specified — before doing the work, not after"
               - "Keep the CTO and the channel current on what you are actually working on"
@@ -880,7 +946,7 @@ units:
               - Read the whole ask before responding; if the acceptance criteria are missing, ask the person who gave it to you in that thread before starting.
               - When you take something on, say so in the engineering channel — this company has no board, so an unannounced start is invisible work.
               - When you finish a piece of design or analysis, post what you concluded and how to check it, not just that you are done.
-              - A sandbox run is DETACHED and can take minutes — say in the channel that you are starting one and what you expect from it, then report what actually came back. Do not describe code you have not run as if you had.
+              - Your turn runs detached and can take minutes — if you are about to disappear into a long piece of work, say so in the channel first and what you expect from it, then report what actually came back. Do not describe code you have not run as if you had.
               - The box is a scratch machine, not a repository — nothing survives teardown. Bring back the finding, the numbers, and the code that matters, in your reply.
               - When you hit a bug or an edge case, name it in the channel and say whether you are absorbing it or it needs its own piece of work — never silently expand scope.
               - Persist decisions, patterns and lessons with `reflect_and_persist` after each piece of work; it is the only place they will survive.
@@ -888,26 +954,42 @@ units:
             mcp_env:
               mattermost:
                 MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_SWE}"
-            # Code-runtime sandbox: during Execute this seat can call
-            # `run_sandbox`, which hands a brief to a coding agent with a
-            # real shell and a real working directory on the engine host,
-            # suspends the turn, and resumes it with what came back.
+            # THIS SEAT'S EXECUTOR IS THE CLI'S OWN AGENTIC LOOP, in a box
+            # on this machine — see providers.llm.coding above. Only the
+            # executor: the reviewer, the workers and the auxiliary passes
+            # are still text calls on that same entry, so the reviewer
+            # judges the run rather than being part of it.
+            llm: coding
             # Control-plane work: nimbuscore's Go service and the nimbusk0s worker image.
             sandbox:
               enabled: true
-              # `run_in:` picks this seat's cell from providers.sandbox
-              # above — direct | container | e2b. Omitted here, so it
-              # inherits providers.sandbox.default_run_in (direct). A seat
-              # whose generated code must not touch this host names
-              # `container` here and nothing else changes.
+              # `self` means this seat's code work rides its OWN executor
+              # run rather than starting a second box beside it. That is
+              # the only honest answer for an agent-mode seat: it already
+              # holds a shell, an editor and a working directory, and a
+              # second box would give it two filesystems with the work in
+              # the one the turn cannot see. `run_sandbox` is not offered
+              # to a seat in this shape at all.
               #
-              # `coding_agent:` is inherited too (claude-code), which is
-              # what lets the box reuse this seat's own subscription login.
-              mcp:                                # MCP surface INSIDE the box
-                servers: [mattermost]             # a detached run outlives the turn that started it, so chat is the one surface it can say "still going" on
-                # Scoping is server-level only — the coding agent gets every
-                # tool the listed servers expose (there is no per-tool allowlist:
-                # OpenCode has none, and claude-code runs bypassPermissions).
+              # The gate still earns its place: it is what says this seat
+              # does code work, and it is where this seat's own setup
+              # steps, env, pause TTL and round cap would go.
+              run_in: self
+              # THERE IS NO `mcp:` SCOPE HERE, deliberately. An agent-mode
+              # box gets the seat's own scoped servers PLUS the bridge, and
+              # the bridge already advertises this seat's LIVE tool set —
+              # its mattermost tools included, under the reserved `crewlet`
+              # server. Listing mattermost here as well would put the same
+              # tools in the box twice, once bridged and once direct, and
+              # leave the model to guess which to use. Name a server here
+              # only when the box needs a credential the seat itself does
+              # not hold. (`servers: []` is not the way to say "none" — an
+              # empty scope drops out of the config's store round trip, so
+              # it is the same as omitting the block, only noisier.)
+              #
+              # Scoping is server-level only — a listed server contributes
+              # every tool it exposes (there is no per-tool allowlist:
+              # OpenCode has none, and claude-code runs bypassPermissions).
             integrations:
               mattermost:
                 bot_token: "${MATTERMOST_TOKEN_SWE}"
@@ -932,7 +1014,7 @@ units:
               - "Own the console and the website — take work for both, and turn nobody else's work into your own"
               - "Plan the AI Services pages the console promises: Models, Fine-tuning, Datasets, Jobs, Serving Endpoints — agree the API shape with the SWE first"
               - "Say what the console needs from the control plane, early enough that the SWE can build it"
-              - "Use `run_sandbox` to build a real prototype when a description of a UI is worse than the UI — then report what you learned from it, not just that you built it"
+              - "You have a real shell and editor for the whole of your turn — build the prototype when a description of a UI is worse than the UI, then report what you learned from it, not just that you built it"
               - "Report progress and blockers in the engineering channel where the CTO can see them"
               - "Raise design questions with the PM before designing UX that has no precedent in the console"
               - "Do not take on nimbuscore, nimbusk0s, or the Phase-2 framework — coordinate in the channel instead"
@@ -945,26 +1027,42 @@ units:
             mcp_env:
               mattermost:
                 MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_FE}"
-            # Code-runtime sandbox: during Execute this seat can call
-            # `run_sandbox`, which hands a brief to a coding agent with a
-            # real shell and a real working directory on the engine host,
-            # suspends the turn, and resumes it with what came back.
+            # THIS SEAT'S EXECUTOR IS THE CLI'S OWN AGENTIC LOOP, in a box
+            # on this machine — see providers.llm.coding above. Only the
+            # executor: the reviewer, the workers and the auxiliary passes
+            # are still text calls on that same entry, so the reviewer
+            # judges the run rather than being part of it.
+            llm: coding
             # Console and website work: React + Vite + TypeScript.
             sandbox:
               enabled: true
-              # `run_in:` picks this seat's cell from providers.sandbox
-              # above — direct | container | e2b. Omitted here, so it
-              # inherits providers.sandbox.default_run_in (direct). A seat
-              # whose generated code must not touch this host names
-              # `container` here and nothing else changes.
+              # `self` means this seat's code work rides its OWN executor
+              # run rather than starting a second box beside it. That is
+              # the only honest answer for an agent-mode seat: it already
+              # holds a shell, an editor and a working directory, and a
+              # second box would give it two filesystems with the work in
+              # the one the turn cannot see. `run_sandbox` is not offered
+              # to a seat in this shape at all.
               #
-              # `coding_agent:` is inherited too (claude-code), which is
-              # what lets the box reuse this seat's own subscription login.
-              mcp:                                # MCP surface INSIDE the box
-                servers: [mattermost]             # same reason as the other engineering seats — a long run is invisible until it finishes
-                # Scoping is server-level only — the coding agent gets every
-                # tool the listed servers expose (there is no per-tool allowlist:
-                # OpenCode has none, and claude-code runs bypassPermissions).
+              # The gate still earns its place: it is what says this seat
+              # does code work, and it is where this seat's own setup
+              # steps, env, pause TTL and round cap would go.
+              run_in: self
+              # THERE IS NO `mcp:` SCOPE HERE, deliberately. An agent-mode
+              # box gets the seat's own scoped servers PLUS the bridge, and
+              # the bridge already advertises this seat's LIVE tool set —
+              # its mattermost tools included, under the reserved `crewlet`
+              # server. Listing mattermost here as well would put the same
+              # tools in the box twice, once bridged and once direct, and
+              # leave the model to guess which to use. Name a server here
+              # only when the box needs a credential the seat itself does
+              # not hold. (`servers: []` is not the way to say "none" — an
+              # empty scope drops out of the config's store round trip, so
+              # it is the same as omitting the block, only noisier.)
+              #
+              # Scoping is server-level only — a listed server contributes
+              # every tool it exposes (there is no per-tool allowlist:
+              # OpenCode has none, and claude-code runs bypassPermissions).
             integrations:
               mattermost:
                 bot_token: "${MATTERMOST_TOKEN_FE}"
@@ -992,12 +1090,12 @@ units:
               - "Own the Phase-2 framework: its core surfaces (Python SDK, CLI, runtime scheduler, worker protocol) and the control-plane integration it depends on"
               - "Work out the architecture and post the decisions — the actor model, scheduler design, GPU scheduling strategy, dataloader pipeline, serving stack — with the alternatives you rejected"
               - "Propose new control-plane endpoints to the SWE as a concrete contract, and do not design the framework side until it is agreed"
-              - "Write the end-to-end example (hello-train, hello-serve) you would ship first with `run_sandbox`, run it, and report what it took — so DevRel can build a story on something that actually executed"
+              - "Write the end-to-end example (hello-train, hello-serve) you would ship first, RUN it in your own shell, and report what it took — so DevRel can build a story on something that actually executed"
               - "Escalate to the CTO when an architecture choice has cross-team implications (control-plane API changes, console UX impact, a large dependency)"
               - "Do not take on nimbuscore, nimbusk0s, the console, or the website — raise it with the owning seat instead"
               - "Keep the PM and DevRel current on what is coming, on your own initiative"
             behavioral_guidelines:
-              - Before designing anything, write out the ten lines of Python a user would type — then design backwards into the runtime from there. `run_sandbox` gives you a real interpreter — run them.
+              - Before designing anything, write out the ten lines of Python a user would type — then design backwards into the runtime from there. You have a real interpreter — run them.
               - For any feature needing a new control-plane endpoint, put the endpoint shape to the SWE in the engineering channel and treat your side as blocked until they agree it.
               - Post the reasoning for every non-trivial design choice; a decision nobody can find is a decision the company will relitigate.
               - If you cannot describe a public surface in ten lines, the API is wrong — say so rather than shipping the description you have.
@@ -1006,26 +1104,42 @@ units:
             mcp_env:
               mattermost:
                 MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_AI}"
-            # Code-runtime sandbox: during Execute this seat can call
-            # `run_sandbox`, which hands a brief to a coding agent with a
-            # real shell and a real working directory on the engine host,
-            # suspends the turn, and resumes it with what came back.
+            # THIS SEAT'S EXECUTOR IS THE CLI'S OWN AGENTIC LOOP, in a box
+            # on this machine — see providers.llm.coding above. Only the
+            # executor: the reviewer, the workers and the auxiliary passes
+            # are still text calls on that same entry, so the reviewer
+            # judges the run rather than being part of it.
+            llm: coding
             # Phase-2 framework work: the Python SDK, runtime and CLI.
             sandbox:
               enabled: true
-              # `run_in:` picks this seat's cell from providers.sandbox
-              # above — direct | container | e2b. Omitted here, so it
-              # inherits providers.sandbox.default_run_in (direct). A seat
-              # whose generated code must not touch this host names
-              # `container` here and nothing else changes.
+              # `self` means this seat's code work rides its OWN executor
+              # run rather than starting a second box beside it. That is
+              # the only honest answer for an agent-mode seat: it already
+              # holds a shell, an editor and a working directory, and a
+              # second box would give it two filesystems with the work in
+              # the one the turn cannot see. `run_sandbox` is not offered
+              # to a seat in this shape at all.
               #
-              # `coding_agent:` is inherited too (claude-code), which is
-              # what lets the box reuse this seat's own subscription login.
-              mcp:                                # MCP surface INSIDE the box
-                servers: [mattermost]             # same reason as the other engineering seats — a long run is invisible until it finishes
-                # Scoping is server-level only — the coding agent gets every
-                # tool the listed servers expose (there is no per-tool allowlist:
-                # OpenCode has none, and claude-code runs bypassPermissions).
+              # The gate still earns its place: it is what says this seat
+              # does code work, and it is where this seat's own setup
+              # steps, env, pause TTL and round cap would go.
+              run_in: self
+              # THERE IS NO `mcp:` SCOPE HERE, deliberately. An agent-mode
+              # box gets the seat's own scoped servers PLUS the bridge, and
+              # the bridge already advertises this seat's LIVE tool set —
+              # its mattermost tools included, under the reserved `crewlet`
+              # server. Listing mattermost here as well would put the same
+              # tools in the box twice, once bridged and once direct, and
+              # leave the model to guess which to use. Name a server here
+              # only when the box needs a credential the seat itself does
+              # not hold. (`servers: []` is not the way to say "none" — an
+              # empty scope drops out of the config's store round trip, so
+              # it is the same as omitting the block, only noisier.)
+              #
+              # Scoping is server-level only — a listed server contributes
+              # every tool it exposes (there is no per-tool allowlist:
+              # OpenCode has none, and claude-code runs bypassPermissions).
             integrations:
               mattermost:
                 bot_token: "${MATTERMOST_TOKEN_AI}"

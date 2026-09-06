@@ -769,9 +769,10 @@ The example org in [`examples/nimbus.company.yaml`](https://github.com/crewlet/c
 integration is Mattermost and whose only model is a coding CLI you already
 subscribe to — so there is no Atlassian site to stand up, no code host, no
 metered API key, and nothing that has to reach the engine from outside. Its
-three engineering seats also run code, in a [sandbox](../concepts/code-sandbox.md)
-on the engine host that reuses the same CLI login, so that costs nothing extra
-to set up either. Add a tracker, a wiki or a code host afterwards, once you
+three engineering seats also run code: their executor *is* the coding CLI's
+own agentic loop, in a [sandbox](../concepts/code-sandbox.md) box on the engine
+host that reuses the same CLI login — so that costs nothing extra to set up
+either, beyond one environment variable in step 5. Add a tracker, a wiki or a code host afterwards, once you
 have seen the loop work; each has its own page and nothing here has to be
 undone first.
 
@@ -818,8 +819,11 @@ crewlet llm login default -from-host \
 crewlet llm doctor default \
     -company examples/nimbus.company.yaml -config examples/nimbus.config.yaml
 
-# 5. Boot — one websocket per agent seat
+# 5. Boot — one websocket per agent seat. CREWLET_MCP_BRIDGE_URL is what
+#    the engineering seats' agent-mode runs dial back on for their tools;
+#    it has to match api.port in the Tier A file.
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
+export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"
 crewlet run -config examples/nimbus.config.yaml \
             -company examples/nimbus.company.yaml
 ```

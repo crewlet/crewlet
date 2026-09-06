@@ -335,7 +335,9 @@ makes one pick from each row of this page that costs nothing extra to stand
 up: chat on **Mattermost**, the model a **coding CLI on your own
 subscription**, and the code sandbox on the **engine host** (`run_in: direct`),
 which reuses that same subscription login rather than needing an account of its
-own. The rows that need somebody else's service — a tracker, a knowledge base,
+own — its three engineering seats run that CLI in
+[agent mode](../concepts/subscription-llm-backends.md#agent-mode), so their
+executor *is* the CLI's own agentic loop with a real shell. The rows that need somebody else's service — a tracker, a knowledge base,
 a code host — are deliberately empty, which is what lets the whole thing run
 from one compose profile and one `crewlet llm login`:
 

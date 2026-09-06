@@ -14,8 +14,10 @@
 #     crewlet llm login default -from-host      # or -capture-token
 #     crewlet llm doctor default
 #
-#     # 3. This node's own API token, and go.
+#     # 3. This node's own API token, the tool bridge the engineers'
+#     #    agent-mode runs dial back on, and go.
 #     export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
+#     export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"   # = api.port below
 #     set -a; . ./.env; set +a          # MATTERMOST_URL + the bot tokens
 #                                       #   the bootstrap wrote
 #     crewlet run -config examples/nimbus.config.yaml \
@@ -128,6 +130,17 @@ api:
   # A port > 0 makes `crewlet run` start the EMBEDDED API inside the engine
   # process — one process serves engine + dashboard + webhooks.  Open the
   # dashboard at http://localhost:8000/ once it is up.
+  #
+  # IT ALSO SERVES THE MCP TOOL BRIDGE the three engineering seats need:
+  # their executor runs as the coding CLI's own agentic loop in a box, and
+  # the seat's tools reach that box back over /mcp/{token} here.  Set
+  # CREWLET_MCP_BRIDGE_URL to a URL the box can dial — for a `direct` box
+  # on this machine that is http://127.0.0.1:<this port>.  Change the port
+  # and change that variable with it; without it agent mode is refused at
+  # launch rather than started with no tools.  In a fleet the URL must
+  # address the NODE and never a load balancer: a bridge session is a live
+  # tool surface in one process, and a peer that never held it answers 401
+  # for ever.
   #
   # 8000 rather than 80, deliberately.  The only reason to bind the plain
   # http port is so a webhook URL an external service registers needs no
