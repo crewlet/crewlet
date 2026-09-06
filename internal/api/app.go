@@ -234,7 +234,7 @@ func New(opts Options) *App {
 	// every seat's memory to a path the caller names is not a read,
 	// whatever the anonymous-read posture allows.
 	mux.Handle("POST /backup", http.HandlerFunc(a.serveBackup))
-	mux.Handle("/ws/stream", stream.Handler(a.guard, a.stream, a.answer))
+	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
 	// one, and it ships no data — every byte it renders comes from an

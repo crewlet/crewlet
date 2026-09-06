@@ -34,8 +34,9 @@ A body that does not arrive inside its deadline fails the read like any other tr
 > `Authorization: Bearer <token>`. Reads (`GET` / `HEAD` outside those two)
 > serve without one unless `api.auth.allow_anonymous_read: false` is set, at
 > which point they need the same token — `/ws/stream` included, and it accepts
-> `?token=…` too since browsers cannot set headers on a WebSocket. Never
-> guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, `/mcp/*`, and the
+> `?token=…` too since browsers cannot set headers on a WebSocket. Only there:
+> a token in the query string of any other route authenticates nobody, because
+> a URL lands in proxy logs and browser history. Never guarded either way: `/health`, `/ready`, `/webhooks/*`, `/otlp/*`, `/mcp/*`, and the
 > dashboard shell (`/`, `/dashboard`, `/static/*`). See
 > [Configuration § Auth](../concepts/configuration.md#auth).
 >

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -114,25 +113,19 @@ func Handler(guard *auth.Guard, svc *Service, query Query) http.Handler {
 // The socket is guarded exactly as the equivalent HTTP read is: under anonymous
 // reads it opens without a credential, and under a closed posture it does not.
 // A token that is PRESENT and wrong is refused either way — a client that sent
-// one meant to be somebody.
+// one meant to be somebody. The credential is read by the guard's own rule,
+// the same one the middleware applied a moment earlier, so the two can never
+// disagree about where a socket's token may ride.
 func authenticate(guard *auth.Guard, r *http.Request) (string, bool) {
-	candidate := r.URL.Query().Get("token")
-	if candidate == "" {
-		header := r.Header.Get("Authorization")
-		const scheme = "bearer "
-		if len(header) >= len(scheme) && strings.EqualFold(header[:len(scheme)], scheme) {
-			candidate = strings.TrimSpace(header[len(scheme):])
-		}
-	}
-	operatorID, authenticated := guard.Operator(candidate)
+	operatorID, authenticated := guard.Presented(r)
 	if authenticated {
 		return operatorID, true
 	}
-	if candidate != "" {
+	if guard.Credential(r) != "" {
 		return "", false
 	}
 	// No credential offered. The read posture decides.
-	return "", !guard.Requires("/ws/stream", http.MethodGet)
+	return "", !guard.Requires(auth.SocketPath, http.MethodGet)
 }
 
 // serveSocket runs one connection until it closes.
