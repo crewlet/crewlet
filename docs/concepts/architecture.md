@@ -252,8 +252,9 @@ one, so the engine-only fields are simply absent instead of zero.
 
 **The HTTP surface binds before the engine starts.** A seat is not claimed until
 its per-role MCP children are up — one subprocess per server per seat, each a
-spawn, a handshake and a `tools/list` — and on the example company that is 21
-children. Binding first means the dashboard, the REST API and every webhook
+spawn, a handshake and a `tools/list` — and on the example company, whose one
+`shared: false` server is Mattermost, that is 7 children; a company with a
+tracker, a wiki and a code host wired in runs three times that. Binding first means the dashboard, the REST API and every webhook
 route answer during that window, and `/ready` says honestly that this node holds
 no seats yet. Webhooks arriving in the window are retained rather than dropped,
 because a seat's mailbox is created before any claiming.

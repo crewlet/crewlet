@@ -269,16 +269,17 @@ func wholeRef(value string) (string, bool) {
 	return m[1], true
 }
 
-// THE SHIPPED GIT-AUTH RECIPE KEEPS ITS SECURITY PROPERTIES.
+// THE DOCUMENTED GIT-AUTH RECIPE KEEPS ITS SECURITY PROPERTIES.
 //
-// examples/nimbus.company.yaml hands every sandboxed seat a credential
-// helper carrying that seat's own code-host PAT. The recipe is CONFIG — the
-// engine ships no setup steps of its own — so nothing in the engine
-// constrains it, and the properties that keep the token from leaking are
-// properties of this file and this file alone:
+// A sandboxed seat needs a credential helper carrying that seat's own
+// code-host PAT, and the recipe is CONFIG — the engine ships no setup steps
+// of its own — so nothing in the engine constrains it. It lives in
+// docs/concepts/code-sandbox.md, which is where a reader copies it from, and
+// the properties that keep the token from leaking are properties of that
+// block and that block alone:
 //
 //   - The helper is scoped to the host at BOTH layers. The `credential.
-//     "https://gitlab.com".helper` key is what git consults, and the script
+//     "https://host".helper` key is what git consults, and the script
 //     re-checks `host=` itself. Either alone is a token offered to whatever
 //     host asks — a malicious submodule URL is the cheap version of that
 //     attack, and git will happily consult a helper for it.
@@ -291,20 +292,16 @@ func wholeRef(value string) (string, bool) {
 //   - The commit identity comes from the engine's generic agent facts, so
 //     work attributes to the seat rather than to whoever built the image.
 //
-// A reader editing this recipe sees prose explaining each of those. This is
-// what fails when the edit lands anyway.
-func TestTheShippedGitAuthRecipeStaysScoped(t *testing.T) {
+// The prose around the block explains each of those to a reader editing it.
+// This is what fails when the edit lands anyway.
+func TestTheDocumentedGitAuthRecipeStaysScoped(t *testing.T) {
 	t.Parallel()
-	data, err := os.ReadFile(filepath.Join(repoRoot, "examples", "nimbus.company.yaml"))
+	cfg, err := ParseCompanyDocument([]byte(gitAuthRecipeBlock(t)))
 	if err != nil {
-		t.Skipf("the example tree is not in this checkout: %v", err)
-	}
-	cfg, err := ParseCompany(data)
-	if err != nil {
-		t.Fatalf("examples/nimbus.company.yaml no longer loads:\n%v", err)
+		t.Fatalf("the documented git-auth recipe no longer parses:\n%v", err)
 	}
 	if cfg.Providers.Sandbox == nil {
-		t.Fatal("the example configures no sandbox provider, so this proves nothing")
+		t.Fatal("the documented block configures no sandbox provider, so this proves nothing")
 	}
 
 	var step *SandboxSetupStep
@@ -315,8 +312,8 @@ func TestTheShippedGitAuthRecipeStaysScoped(t *testing.T) {
 		}
 	}
 	if step == nil {
-		t.Fatal("the example ships no git-auth setup step; a sandboxed seat " +
-			"would have no way to authenticate a headless clone")
+		t.Fatal("the documented recipe has no git-auth setup step; a sandboxed " +
+			"seat following it would have no way to authenticate a headless clone")
 	}
 
 	var helper string
@@ -371,4 +368,24 @@ func TestTheShippedGitAuthRecipeStaysScoped(t *testing.T) {
 		t.Error("GIT_TERMINAL_PROMPT is not 0, so an unauthenticated fetch " +
 			"blocks on a username prompt until the run's TTL expires")
 	}
+}
+
+// gitAuthRecipeBlock finds the recipe on the code-sandbox page: the only
+// yaml block that writes a credential helper.
+func gitAuthRecipeBlock(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(repoRoot, "docs", "concepts", "code-sandbox.md"))
+	if err != nil {
+		t.Skipf("the docs tree is not in this checkout: %v", err)
+	}
+	// The page carries a second, abbreviated helper snippet for `direct`
+	// mode, so matching on the helper name alone would find that one. The
+	// recipe proper is the block that declares the whole provider.
+	for _, m := range yamlBlockRE.FindAllStringSubmatch(string(data), -1) {
+		if strings.HasPrefix(m[1], "providers:") && strings.Contains(m[1], "git-credential-") {
+			return m[1]
+		}
+	}
+	t.Fatal("docs/concepts/code-sandbox.md no longer carries the git-auth recipe")
+	return ""
 }

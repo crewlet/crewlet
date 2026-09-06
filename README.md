@@ -164,9 +164,12 @@ The dashboard and webhook API come up with the engine. The full
 [Quickstart](docs/getting-started/quickstart.md) walks through watching an agent's
 first turn with no integrations at all, then wiring in the real ones.
 
-> **Want the full picture first?** `examples/nimbus.company.yaml` is a complete
-> seven-seat reference company — Jira, Confluence, GitLab, Mattermost, and a code
-> sandbox wired end-to-end, with the reasoning for every setting in comments.
+> **Want a whole company to run?** `examples/nimbus.company.yaml` is a complete
+> seven-seat reference org — chat on Mattermost, and its model a coding CLI you
+> already subscribe to, so it needs no API key and no service beyond the chat
+> server in this repo's compose file. Every setting carries its reasoning in a
+> comment, and a tracker, a wiki, a code host or a code sandbox each add on top
+> without undoing any of it.
 
 > **Rather not write it by hand?** An AI assistant can interview you and author
 > both files, checking its own work against the shipped JSON Schema — see

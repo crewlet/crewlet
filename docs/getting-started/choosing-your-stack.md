@@ -154,7 +154,9 @@ their **own identities** — so MRs/PRs come from the agent, not from you.
 ### Option A: GitLab — gitlab.com or self-hosted
 
 Per-agent identities are API-provisionable end to end, so one CLI run sets up
-the whole fleet. This is the path the bundled Nimbus example uses:
+the whole fleet — the same property that makes Mattermost the easiest chat to
+start on. [GitLab Integration](../integrations/gitlab.md#walkthrough-nimbus-against-local-gitlab)
+walks the bundled Nimbus example onto a local GitLab end to end:
 
 1. **Create the top-level group** (you) — e.g. `gitlab.com/your-group` — or run
    a self-hosted GitLab (any modern GitLab; a local instance ships as the
@@ -328,13 +330,24 @@ the same network.
 ## Putting it together
 
 The bundled **Nimbus example** (`examples/nimbus.company.yaml` +
-`examples/nimbus.config.yaml`) is a complete seven-seat reference wired for
-Jira + Confluence + GitLab + Mattermost + E2B sandbox + an OpenAI-compatible
-LLM. Its self-hostable half runs locally:
-`docker compose --profile gitlab --profile mattermost up -d`,
-then `scripts/gitlab-dev-bootstrap.sh` and `scripts/mattermost-dev-bootstrap.sh`,
-then
-`crewlet run -config examples/nimbus.config.yaml -company
-examples/nimbus.company.yaml`. Reading it top to bottom is the fastest way to
-see every choice on this page made concretely — each block carries the
-rationale in comments.
+`examples/nimbus.config.yaml`) is a complete seven-seat reference company that
+makes one pick from each row of this page and nothing more: chat on
+**Mattermost**, and the model a **coding CLI on your own subscription**. Every
+other row is deliberately empty — no tracker, no knowledge base, no code host,
+no sandbox — which is what lets the whole thing run from one compose profile
+and one `crewlet llm login`:
+
+```bash
+docker compose --profile mattermost up -d --wait
+COMPANY=examples/nimbus.company.yaml scripts/mattermost-dev-bootstrap.sh
+crewlet llm login default -from-host \
+    -company examples/nimbus.company.yaml -config examples/nimbus.config.yaml
+crewlet run -config examples/nimbus.config.yaml \
+            -company examples/nimbus.company.yaml
+```
+
+Reading it top to bottom is the fastest way to see the choices on this page
+made concretely — each block carries the rationale in comments, including the
+ones it did *not* make and what adding them would take. Fill in the other rows
+one at a time from the integration pages linked above; nothing in the example
+has to be undone first.

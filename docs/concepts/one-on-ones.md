@@ -190,8 +190,16 @@ A ready-to-publish playbook ships at
 every agent can read, and its `# Manager 1:1` H1 becomes the page title.
 Publish it with
 `crewlet confluence import <company.yaml> examples/nimbus-docs/`
-(it has no `trigger:`, so it imports as a [knowledge doc](knowledge-system.md#publishing-knowledge-docs)).
+(it has no `trigger:`, so it imports as a [knowledge doc](knowledge-system.md#publishing-knowledge-docs)),
+against a company whose config carries a `confluence:` block — the shipped
+`examples/nimbus.company.yaml` is chat-only and does not.
 Edit it in the page editor thereafter — no redeploy.
+
+**A 1:1 does not need the page.** The schedule and `a2a_ask` are the whole
+mechanism; the playbook is guidance both parties read when there is a wiki to
+read it from. `examples/nimbus.company.yaml` runs its `weekly-1on1` schedule
+with no knowledge base at all, and the task text carries the shape of the
+conversation instead.
 
 ---
 

@@ -127,6 +127,13 @@ Knowledge docs follow a **directory-based convention** — the files are pure pr
 - **Container = the file's immediate parent directory name.** A file at `<root>/ENG/onboarding.md` publishes to Confluence space `ENG`.
 - **Title = the file's first `# H1` heading.** That H1 line is stripped from the published body (the backend shows the page title separately, so leaving it would duplicate the title on the page).
 
+`examples/nimbus-docs/` is a worked set of these — the pages the Nimbus
+example company publishes once it has a wiki. (The shipped
+`examples/nimbus.company.yaml` configures chat only, so it has no
+`confluence:` block for the importer to read credentials from yet; add one
+per [Confluence](../integrations/confluence.md) and these pages are what
+goes in it.)
+
 ```
 examples/nimbus-docs/
 ├── ENG/

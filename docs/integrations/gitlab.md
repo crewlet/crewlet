@@ -118,7 +118,52 @@ As with every MCP surface, the engine hardcodes no tool names — a bundled `mcp
 
 Agents that the founder has gated with `role.sandbox.enabled` author code through the **code sandbox**, not through any GitLab tool. The executor has a `run_sandbox` tool: a coding agent (Claude Code / OpenCode) runs inside an isolated E2B sandbox and opens a merge request **as the agent's own GitLab identity** (the PAT the role declares as `GITLAB_TOKEN` in `role.sandbox.env` — by convention the same PAT as its `mcp_env.gitlab` header). The call is detached — the executor's loop suspends and resumes with the result when the run completes, so the agent reports the MR in the same turn. The full design is in [Code Sandbox](../concepts/code-sandbox.md).
 
-The GitLab **git-auth recipe** is example config, not engine code — the engine ships no git-auth, the same stance as GitHub. The Nimbus GitLab example (`examples/nimbus.company.yaml`) carries a scoped credential helper reading `$GITLAB_TOKEN` for the GitLab host only, `insteadOf` rewrites for SSH-style remotes, and a brief telling the coding agent to just clone. Two GitLab-specific wrinkles versus the GitHub recipe: the basic-auth **username is arbitrary** for PAT auth (GitLab ignores it — the token is the password), and the helper must match the host **including a non-standard port** when the instance runs on one (the dev compose serves `gitlab.local:8929`), so the recipe templates the host from `integrations.gitlab.url` rather than hardcoding it.
+The GitLab **git-auth recipe** is config you write, not engine code — the engine ships no git-auth, the same stance as GitHub. Without it a headless `git clone https://gitlab.com/...` dies with `could not read Username`: git has no way to supply the token on its own. The GitLab form of the [recipe on the sandbox page](../concepts/code-sandbox.md#the-git-auth-recipe):
+
+```yaml
+providers:
+  sandbox:
+    setup:
+      - name: git-auth
+        files:
+          /usr/local/bin/git-credential-crewlet: |
+            #!/bin/sh
+            # Supply this seat's GitLab token for gitlab.com credential
+            # requests ONLY. Reads $GITLAB_TOKEN from the environment
+            # (never persisted to disk).
+            [ "$1" = "get" ] || exit 0
+            [ -n "$GITLAB_TOKEN" ] || exit 0
+            ok=""
+            while IFS= read -r line; do
+                [ -z "$line" ] && break
+                [ "$line" = "host=gitlab.com" ] && ok=1
+            done
+            [ -n "$ok" ] || exit 0
+            echo "username=oauth2"
+            echo "password=$GITLAB_TOKEN"
+        commands:
+          - chmod +x /usr/local/bin/git-credential-crewlet
+          - 'git config --global credential."https://gitlab.com".helper /usr/local/bin/git-credential-crewlet'
+          - 'git config --global --add url."https://gitlab.com/".insteadOf "git@gitlab.com:"'
+          - 'git config --global --add url."https://gitlab.com/".insteadOf "ssh://git@gitlab.com/"'
+          - 'git config --global user.name "$CREWLET_AGENT_HANDLE"'
+          - 'git config --global user.email "$CREWLET_AGENT_EMAIL"'
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        brief: >-
+          Use $GITLAB_TOKEN (already in your environment — this seat's own
+          GitLab PAT) for all GitLab work: git authenticates to gitlab.com
+          with it automatically, so just clone, fetch, and push over plain
+          HTTPS. SSH-style remotes (`git@gitlab.com:...`) are rewritten to
+          HTTPS for you. Never embed the token in a URL. To open a merge
+          request, use GitLab push options — no CLI needed:
+          `git push -o merge_request.create -o merge_request.target=main
+          -o merge_request.title="<title>" origin HEAD:<your-branch>`
+          creates the MR under your own identity. Your git commit identity
+          is preconfigured.
+```
+
+Every security property of the GitHub form holds here and for the same reasons — the helper is scoped to the host at **both** layers (the `credential."https://…".helper` key *and* the `host=` check in the script), it stays silent with no token so public clones fall through to anonymous, the `insteadOf` rewrites use `--add` because the key is multi-valued, and the commit identity comes from the engine's generic `$CREWLET_AGENT_*` facts. Two GitLab-specific wrinkles: the basic-auth **username is arbitrary** for PAT auth (GitLab ignores it — the token is the password, so `oauth2` is a conventional placeholder), and the helper must match the host **including a non-standard port** when the instance runs on one (the dev compose serves `gitlab.local:8929`), so template the host from your `integrations.gitlab.url` rather than copying `gitlab.com` blindly.
 
 Once an MR exists, GitLab tools stay in the picture on the **read/review/track** side: agents read its diff, comment, approve, and follow the MR's webhooks to report back to the original requester. As with GitHub, capture context via `reflect_and_persist(ttl_days=30)` whenever you kick off async work (a sandbox coding job) so the original ask + repo + MR number surface in your `## Personal memory` block on the review-notification turn.
 
@@ -394,7 +439,7 @@ The profile ships one service:
 
 There is no MCP-server sidecar: the GitLab tool surface is `glab mcp serve`, which the engine spawns per-role (see [MCP tool server](#mcp-tool-server)).
 
-`examples/nimbus.company.yaml` is the Nimbus example org on GitLab, and it targets **gitlab.com** as shipped (`url: https://gitlab.com`, `GITLAB_HOST: gitlab.com`, the git-auth recipe scoped to `gitlab.com`). To exercise it against the **local compose** instance instead, point those host references at `http://gitlab.local:8929` — everything else is identical.
+`examples/nimbus.company.yaml` is the Nimbus example org, and it ships **chat-only** — no `integrations.gitlab`, no `gitlab` MCP server, no sandbox. The walkthrough below adds those blocks to a local-pointed copy of it, which is also exactly what you would do to put a real company on GitLab. Its seven seats, their handles and the ownership split between them (`nimbuscore`/`nimbusk0s`, `console`/`website`, the Phase-2 framework) are already written for this: the three engineering seats are the ones to wire up.
 
 ### Walkthrough (Nimbus against local GitLab)
 
@@ -410,22 +455,26 @@ There is no MCP-server sidecar: the GitLab tool surface is `glab mcp serve`, whi
    The script prints the root PAT (`glpat-crewlet-dev-bootstrap`) and the UI login (`root` / `$GITLAB_ROOT_PASSWORD`). Local unlicensed `gitlab-ee` runs as **Free tier but with no identity-verification gate**, so the service-accounts API works immediately — none of the gitlab.com [identity-verification](#prerequisites-gitlabcom) friction applies locally.
 
    > **`curl http://localhost:8929/-/readiness` returns `404` from the host — that's expected, not a failure.** GitLab's monitoring endpoints (`/-/readiness`, `/-/liveness`, `/-/health`, `/-/metrics`) are IP-restricted to `127.0.0.0/8`/`::1/128` by default, and a host-side curl to the published port arrives with the Docker gateway's source IP, so GitLab hides them with a 404. `docker ps` showing the container `(healthy)` is the real signal (its healthcheck runs the same curl *inside* the container, where localhost is allowlisted). To check from the host, exec into the container (`docker exec <gitlab> curl -sf http://localhost:8929/-/readiness`) or hit a non-restricted route like `/users/sign_in`. The REST API (`/api/v4/…`) is not restricted, so provisioning works from the host regardless.
-3. **Make a local-pointed copy of the config.** Rewrite the three host references (the default repo `.gitignore` covers `*.local.company.yaml`, so a copy you later personalize with real contact IDs can't be committed by accident):
+3. **Make a GitLab-wired copy of the config.** Start from the example and add the four blocks this page documents, with every host reference pointed at `gitlab.local:8929` (the default repo `.gitignore` covers `*.local.company.yaml`, so a copy you later personalize with real contact IDs can't be committed by accident):
    ```bash
-   sed -e 's#https://gitlab.com#http://gitlab.local:8929#g' \
-       -e 's#GITLAB_HOST: gitlab.com#GITLAB_HOST: http://gitlab.local:8929#g' \
-       -e 's#gitlab.com#gitlab.local:8929#g' \
-       examples/nimbus.company.yaml > nimbus.local.company.yaml
+   cp examples/nimbus.company.yaml nimbus.local.company.yaml
    ```
-4. **Provision the agents.** The root PAT is the operator credential; `-public-url` is the engine's base address — its **embedded API** on **port 80** (`api.port: 80` in the quickstart's Tier A file), reachable from the GitLab container via `host.docker.internal` — and the provisioner appends `/webhooks/gitlab` itself. No `GITLAB_SIGNING_SECRET` needed — the provisioner [generates one](#what-a-run-does) and writes it to the env file:
+   Then edit `nimbus.local.company.yaml` to add:
+   - **`integrations.gitlab`** — the block under [Configuration](#configuration), with `url: http://gitlab.local:8929` and `provisioning.group: nimbus-hq`. `access_level: maintainer`, so an agent can merge its own reviewed MR: GitLab's default protected `main` lets only maintainers merge, and a Developer would stall the review→merge loop on a human.
+   - **the `gitlab` MCP server** — the `shared: false` `glab mcp serve` entry under [Per-role wiring](#per-role-wiring).
+   - **`mcp_env.gitlab`** on each of `Agent SWE`, `Agent Frontend SWE` and `Agent AI Systems Engineer` — a per-seat `${GITLAB_TOKEN_*}` placeholder plus `GITLAB_HOST: http://gitlab.local:8929`. Give `Agent DevRel` one too if you want it filing issues.
+   - **`providers.sandbox` + `role.sandbox`** on those three seats, if you want code authoring — the [git-auth recipe](#how-code-authoring-works) above with its host set to `gitlab.local:8929`, and each seat's own PAT in `role.sandbox.env`. See the caveat at the end of this section: a *cloud* sandbox cannot reach a laptop.
+
+   Every `${VAR}` you write as a placeholder is what the provisioner mints in the next step; do not paste a literal token.
+4. **Provision the agents.** The root PAT is the operator credential; `-public-url` is the engine's base address — its **embedded API**, on whatever `api.port` your Tier A file binds (`8000` in `examples/nimbus.config.yaml`), reachable from the GitLab container via `host.docker.internal` — and the provisioner appends `/webhooks/gitlab` itself. No `GITLAB_SIGNING_SECRET` needed — the provisioner [generates one](#what-a-run-does) and writes it to the env file:
    ```bash
    GITLAB_ADMIN_TOKEN=glpat-crewlet-dev-bootstrap \
      crewlet gitlab provision nimbus.local.company.yaml \
-       -public-url http://host.docker.internal:80 \
+       -public-url http://host.docker.internal:8000 \
        -env-file .env.gitlab
    ```
    Only `nimbus-hq/nimbuscore` is seeded by the bootstrap, so the config's other projects (`nimbusk0s`, `console`, `website`) are checked, **dropped with a note, and everything else still reconciles** — create them in the UI if you want them, then re-run (the reconcile is idempotent). The compose instance serves group hooks, so the webhook lands on the group; see [Where the webhook lands](#where-the-webhook-lands) for the instances where it does not.
-5. **Run the engine** with the minted tokens sourced (add your base runtime `crewlet.yaml` — providers, queue, DB — per the [quickstart](../getting-started/quickstart.md)). With `api.port: 80` in that Tier A file, the engine's **embedded API** receives the GitLab webhooks and serves the dashboard — one process is the whole stack; binding 80 needs privileged-port access on Linux (see the example config's `api` comment). (Do *not* also start a second, ingress-only node here — the two would fight over the port; splitting ingress off is for [fleets](../guides/fleet.md) only):
+5. **Run the engine** with the minted tokens sourced. `examples/nimbus.config.yaml` works as the Tier A file as-is: with a `api.port` above 0 the engine's **embedded API** both receives the GitLab webhooks and serves the dashboard, so one process is the whole stack. The port only has to match the `-public-url` you provisioned with. (Do *not* also start a second, ingress-only node here — the two would fight over the port; splitting ingress off is for [fleets](../guides/fleet.md) only):
    ```bash
    source .env.gitlab
    crewlet run -config crewlet.yaml -company nimbus.local.company.yaml

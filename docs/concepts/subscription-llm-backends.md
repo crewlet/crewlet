@@ -554,7 +554,10 @@ providers:
         # Where credentials and per-seat homes live. Empty uses
         # $CREWLET_LLM_CLI_HOME/<key>, falling back to
         # ~/.crewlet/llm-cli/<key>. Point at a persistent volume when
-        # the engine runs in an ephemeral container.
+        # the engine runs in an ephemeral container. A LITERAL PATH —
+        # unlike the credential fields here it is not ${VAR}-expanded,
+        # because it names where the engine keeps files rather than a
+        # secret (the same reason the store path is a Tier A field).
 
         timeout_seconds: 300           # one CLI invocation, wall clock
         max_concurrent: 4              # CLI processes at once

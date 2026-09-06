@@ -420,7 +420,7 @@ Operators publish locally authored markdown — [Tool Skills](../concepts/tool-s
 crewlet confluence import <company.yaml> ./docs-to-publish
 ```
 
-(The Nimbus example ships a `confluence:` block, so `examples/nimbus.company.yaml` works as the positional argument as-is.)
+(The Nimbus example is chat-only and ships no `confluence:` block, so add one to `examples/nimbus.company.yaml` — the block at the top of this page — before using it as the positional argument. `examples/nimbus-docs/` is the set of pages that company would publish.)
 
 - The **first positional argument is the Tier B company YAML** and the second is the directory — the Confluence credentials come from its `confluence:` block, resolved through the node's secret store and then the environment (pass `-config` to name a different Tier A document).
 - **Every target space is checked before a single page is written.** A typo in a directory name would otherwise be discovered half way through, leaving an operator to work out which pages landed. The importer never *creates* a space: that names a container the whole company then works in, and guessing it is not this command's job.
