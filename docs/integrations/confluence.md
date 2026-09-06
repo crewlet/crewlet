@@ -112,9 +112,41 @@ What was measured, and what it decides:
 
 That makes the Cloud token exactly what [Datadog's](datadog.md) is: **a shared token doing a signing key's job with none of the guarantees.** A replayed delivery is indistinguishable from a fresh one, and anyone holding the token can forge a page event. Treat `webhook_token` as a signing key, rotate it the same way (`-recreate-webhooks` re-registers every hook with a fresh one), and keep it a `${VAR}`. The engine never logs the query string on this route.
 
-If you would rather not carry the risk of an undocumented endpoint, the Forge app below remains the supported route.
+If you would rather not carry the risk of an undocumented endpoint, the Forge app below remains the supported route, and an Automation rule is the documented way to reach this same route without it.
 
 The account whose token is in `integrations.confluence.token` needs **Confluence administrator** rights to register hooks.
+
+### Confluence Cloud, an Automation rule as the sender (documented alternative)
+
+Confluence Automation's **Send web request** action is Atlassian's documented way for a Cloud site to call an outside URL, and it reaches the same per-event route as the hooks above. It can do the one thing the registered hook cannot: carry the token in a **header** rather than the query string. `POST /webhooks/confluence/<event>` reads `X-Crewlet-Token` first and falls back to `?token=` only when the header is absent, so a rule and a registered hook share one route and one credential.
+
+One rule per event, built in **Space settings** (or **Global automation**) with the trigger that matches the path:
+
+| Trigger | Path |
+|---|---|
+| a page is published | `/webhooks/confluence/page_created` |
+| a page is edited | `/webhooks/confluence/page_updated` |
+| a comment is added | `/webhooks/confluence/comment_created` |
+
+The action is **Send web request** with:
+
+- **URL**: `https://your-engine.example.com/webhooks/confluence/<event>` (the path above)
+- **Method**: `POST`
+- **Headers**: `X-Crewlet-Token` set to the value of `integrations.confluence.webhook_token`, with **Hidden** ticked, and `Content-Type: application/json`
+- **Body**: custom data, on one line:
+
+```
+{"page":{"id":"{{page.id}}","title":{{page.title.asJsonString}}},"space":{"key":"{{space.key}}"},"userAccountId":"{{initiator.accountId}}"}
+```
+
+The engine answers `200` and logs `webhook_received source=confluence`; a wrong or missing token answers `401`. Use the rule's own validate step and one real edit to confirm the smart values render on your site before relying on the rule.
+
+What it costs, and what to watch:
+
+- **It is metered.** Every run is an Automation step, pooled per organisation. A site that reaches its allowance stops running rules, silently from the engine's side, so a quiet feed can mean a spent allowance rather than a quiet wiki.
+- **A failed request is not retried.** Automation is fire-and-forget on a non-2xx answer. If the engine is down for a minute, the events of that minute are gone, where a registered hook and the Forge app both retry.
+- **A hidden header does not survive a copy.** Duplicating, exporting or importing a rule drops the hidden value, so re-enter the token on the copy.
+- **It is the same shared token.** Everything said above about `webhook_token` applies: a header is not a signature, so treat it as a signing key and rotate it the same way.
 
 ### Confluence Cloud — the Forge app (supported alternative)
 
@@ -157,7 +189,7 @@ Content-Type: application/json
 
 Inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature` header, at the route, before the delivery is recorded or published — the same point at which the GitHub and GitLab webhooks verify theirs. `POST /webhooks/confluence` is exempt from the API's bearer token precisely *because* it authenticates by provider HMAC, so the check belongs there.
 
-`webhook_secret` is therefore **required** for Data Center webhooks: without one the endpoint answers **503** with a `Retry-After`, exactly as its peers do, rather than accepting deliveries it cannot verify. That is deliberately not a 4xx — the sender's request is fine, what is missing is on this side, and a 4xx would tell it to discard a delivery nobody else has a copy of. The delivery waits at Confluence and flows once the secret is set. Cloud is unaffected — those events arrive through the Forge app on `/webhooks/forge` and carry a JWT instead.
+`webhook_secret` is therefore **required** for Data Center webhooks: without one the endpoint answers **503** with a `Retry-After`, exactly as its peers do, rather than accepting deliveries it cannot verify. That is deliberately not a 4xx — the sender's request is fine, what is missing is on this side, and a 4xx would tell it to discard a delivery nobody else has a copy of. The delivery waits at Confluence and flows once the secret is set. Cloud is unaffected: its deliveries arrive on the per-event token route above or through the Forge app on `/webhooks/forge`, and neither carries this signature.
 
 ### Delivery deduplication
 
