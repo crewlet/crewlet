@@ -248,6 +248,19 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		add("confluence", true, boolPtr(in.Confluence.WebhookSecret != ""),
 			map[string]any{"url": in.Confluence.BaseURL()})
 	}
+	if in.Datadog != nil {
+		// The one row whose secret is not a signing key, and the detail
+		// says so rather than leaving a reader to assume the header is
+		// verified like every other surface's. route_to is reported
+		// because it is where an alert naming no owner goes, which is
+		// the single most consequential thing about this integration
+		// that is invisible from the traffic counts beside it.
+		add("datadog", in.Datadog.Enabled, boolPtr(in.Datadog.WebhookToken != ""),
+			map[string]any{
+				"handle_tag": in.Datadog.HandleTagOrDefault(),
+				"route_to":   in.Datadog.RouteTo,
+			})
+	}
 	if in.ForgeAppID != "" {
 		// The app id is the JWT AUDIENCE rather than a secret — it is in
 		// every manifest the operator installs — so its presence is the

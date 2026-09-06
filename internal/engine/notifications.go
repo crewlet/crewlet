@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -263,6 +264,19 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 			parsers = append(parsers, parser)
 			prompts = append(prompts, githubPrompt())
 		}
+	}
+	if dd := c.Config.Integrations.Datadog; dd != nil && dd.Enabled {
+		// NO error path, and it is the only surface here without one.
+		// Every other parser needs something built first: a tracker reads
+		// an issue's watchers, a code host fans out to a thread's
+		// participants, a chat backend opens a socket. A monitor alert
+		// carries everything its routing needs on the payload itself, so
+		// there is nothing to construct and nothing that can fail to.
+		parsers = append(parsers, datadog.NewParser(datadog.ParserOptions{
+			HandleTag: dd.HandleTagOrDefault(),
+			Fallback:  dd.RouteTo,
+		}))
+		prompts = append(prompts, datadogPrompt())
 	}
 	if j := c.Config.Integrations.Jira; j != nil {
 		parser, err := e.startJira(ctx, c, j)

@@ -176,6 +176,14 @@
           "description": "Turn the integration on.",
           "type": "boolean"
         },
+        "handle_tag": {
+          "description": "Monitor tag key naming the seat an alert wakes (default crewlet).",
+          "type": "string"
+        },
+        "route_to": {
+          "description": "Handle of the seat an alert naming no owner wakes; required when enabled.",
+          "type": "string"
+        },
         "webhook_token": {
           "description": "Shared token compared against X-Crewlet-Token; required when enabled.",
           "type": "string"

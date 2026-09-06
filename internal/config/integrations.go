@@ -840,16 +840,65 @@ type Datadog struct {
 	// here: a route with nothing to check against cannot tell a real
 	// delivery from anyone's POST.
 	WebhookToken string `secret:"true" yaml:"webhook_token,omitempty" json:"webhook_token,omitempty" desc:"Shared token compared against X-Crewlet-Token; required when enabled."`
+
+	// HandleTag is the monitor tag key that names the seat an alert wakes,
+	// so a monitor tagged `crewlet:sre-lead` reaches that seat.
+	//
+	// Configurable rather than fixed because the key becomes a tag on the
+	// operator's own monitors, sitting beside their existing conventions
+	// in every Datadog list and filter, and a company with its own
+	// ownership scheme should be able to name it accordingly.
+	HandleTag string `yaml:"handle_tag,omitempty" json:"handle_tag,omitempty" desc:"Monitor tag key naming the seat an alert wakes (default crewlet)."`
+
+	// RouteTo is the seat an alert whose monitor names nobody wakes.
+	//
+	// REQUIRED when enabled, and it is the only routing floor in this file.
+	// Every other surface routes by identity: an alert is the one delivery
+	// that can legitimately name no party at all, because a monitor is not
+	// addressed to anyone. Without a floor those alerts are accepted,
+	// verified, counted and dropped, which is the worst state an alerting
+	// integration can be in: it looks exactly like coverage.
+	RouteTo string `yaml:"route_to,omitempty" json:"route_to,omitempty" desc:"Handle of the seat an alert naming no owner wakes; required when enabled."`
+}
+
+// HandleTagOrDefault is the monitor tag key naming a seat.
+func (d *Datadog) HandleTagOrDefault() string {
+	if tag := strings.TrimSpace(d.HandleTag); tag != "" {
+		return strings.ToLower(tag)
+	}
+	// Restated rather than imported from internal/datadog: config is a
+	// leaf that the vendor packages depend on, and reaching the other way
+	// for one word would invert that. The vendor package's own constant
+	// carries the reasoning, and a test asserts the two agree.
+	return "crewlet"
 }
 
 func (d *Datadog) validate(path string) error {
 	var p problems
 
-	if d.Enabled && strings.TrimSpace(d.WebhookToken) == "" {
+	if !d.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(d.WebhookToken) == "" {
 		p.add(at(path, "webhook_token"), ErrMissing,
 			"required when datadog is enabled — every delivery is checked "+
 				"against it, and a route with nothing to check against "+
 				"answers 503 rather than accepting one")
+	}
+	if strings.TrimSpace(d.RouteTo) == "" {
+		p.add(at(path, "route_to"), ErrMissing,
+			"required when datadog is enabled — name the handle of the seat "+
+				"an alert should wake when no monitor tag names an owner. "+
+				"Without it those alerts are verified, counted and then "+
+				"delivered to nobody, which looks exactly like working "+
+				"coverage")
+	}
+	if tag := strings.TrimSpace(d.HandleTag); tag != "" && strings.ContainsAny(tag, ":, ") {
+		p.add(at(path, "handle_tag"), ErrUnknownValue,
+			"a Datadog tag key cannot contain a colon, a comma or a space: "+
+				"the colon separates the key from its value and the comma "+
+				"separates one tag from the next, so a key holding either "+
+				"never matches a monitor")
 	}
 
 	return p.err()

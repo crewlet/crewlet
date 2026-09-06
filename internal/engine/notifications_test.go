@@ -321,6 +321,37 @@ integrations:
 	}
 }
 
+// AND SO DOES THE ALERTING SURFACE, which is the case this test was written
+// for and did not cover.
+//
+// Datadog shipped with a config block, a webhook route, a generated schema
+// entry and a docs page saying an alert wakes a seat "exactly as a comment on
+// a merge request" does. It had no parser, so the spine logged
+// inbound_source_unparsed and skipped every delivery: verified, stored,
+// counted on the dashboard, and read by nobody. That is precisely the shape
+// the comment above describes, and the vendor list here is what lets it
+// happen again for the next one.
+func TestAConfiguredAlertingSurfaceActuallyRoutes(t *testing.T) {
+	t.Parallel()
+	doc := companyDoc + `
+integrations:
+  datadog:
+    enabled: true
+    webhook_token: whsec_ZGF0YWRvZy10b2tlbi0zMi1ieXRlcy1sb25nISE=
+    route_to: ceo
+`
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, doc)})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !slices.Contains(e.RoutedSources(), "datadog") {
+		t.Fatalf("a company on Datadog routes %v", e.RoutedSources())
+	}
+	if e.WebhookSecrets().Datadog == "" {
+		t.Error("the datadog route has no token to check a delivery against")
+	}
+}
+
 // THE HOSTED CHAT SURFACE ROUTES TOO, and its per-seat apps are what the
 // inbound edge verifies with — so a company on Slack needs both halves and
 // each is silent without the other.
