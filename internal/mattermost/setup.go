@@ -1,0 +1,85 @@
+package mattermost
+
+import (
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/setup"
+)
+
+// What an operator has to supply before agents can talk on Mattermost.
+//
+// THE SHORTEST LIST HERE, and for a reason worth stating: this vendor holds
+// one outbound websocket per seat and verifies no inbound delivery, so it
+// needs no public address, no webhook secret and no shared token. A
+// self-hosted engine behind a firewall works with it unchanged, which is the
+// whole point of the integration.
+//
+// What it does need is a bot account per agent, and creating one is an
+// administrator's act. That credential is [OperatorCredential]: asked for on
+// every pass and stored nowhere.
+
+// Requirements says what this company still needs for Mattermost.
+func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []setup.Requirement {
+	var url, team string
+	var enabled bool
+	if in != nil {
+		enabled, url, team = in.Enabled, in.URL, in.Team
+	}
+	_ = resolve // nothing here is a credential; every field is a plain setting.
+
+	reqs := []setup.Requirement{
+		{
+			Field:      "enabled",
+			Label:      "Use Mattermost",
+			Kind:       setup.KindToggle,
+			ConfigPath: "integrations.mattermost.enabled",
+			Required:   true,
+			Help: "Off leaves the configuration in place and every seat's socket " +
+				"closed, which is how you pause the integration without losing " +
+				"its setup.",
+		},
+		{
+			Field:      "url",
+			Label:      "Mattermost instance",
+			Kind:       setup.KindURL,
+			ConfigPath: "integrations.mattermost.url",
+			Required:   true,
+			Help: "Your server's address. The engine dials out to it, so it needs " +
+				"no public address of its own for this integration.",
+			Format: "https://chat.example.com",
+			Blocks: integration.FindingCredentialMissing,
+		},
+		{
+			Field:      "team",
+			Label:      "Team",
+			Kind:       setup.KindID,
+			ConfigPath: "integrations.mattermost.team",
+			Required:   true,
+			Help:       "The team slug the agent bots belong to and post in.",
+			Blocks:     integration.FindingCredentialMissing,
+		},
+	}
+
+	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Toggle(enabled)
+	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Plain(url)
+	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Plain(team)
+	return reqs
+}
+
+// OperatorCredential is the transient administrator token a pass runs as.
+//
+// Asked for every time and never stored, for the reason GitLab's is: it
+// creates bot accounts and mints tokens on them, which is a standing power if
+// it is kept.
+func OperatorCredential() setup.Requirement {
+	return setup.Requirement{
+		Field:    "operator_credential",
+		Label:    "Administrator token",
+		Kind:     setup.KindSecret,
+		Required: true,
+		Help: "Used for this run and not kept. It creates each agent's bot " +
+			"account, mints its token and joins it to the team, so it needs " +
+			"system administrator rights.",
+		Where: "A personal access token belonging to a system administrator.",
+	}
+}

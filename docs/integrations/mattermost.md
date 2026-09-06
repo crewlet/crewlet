@@ -23,6 +23,20 @@ own infrastructure.
 
 ---
 
+## Setting it up from the dashboard
+
+The Integrations screen collects the instance address and the team, and then
+**Run setup** creates each agent's bot account: the same pass
+`crewlet mattermost provision` runs. It asks for a system administrator token
+on every run and keeps it nowhere.
+
+This is the one integration that needs **no public address at all**. The
+engine dials out to your server and holds one websocket per seat, so nothing
+has to reach the engine and there is no webhook secret, no shared token and no
+inbound route to expose.
+
+See [Running the provisioning pass](../reference/api-endpoints.md#running-the-provisioning-pass).
+
 ## How this differs from Slack
 
 One structural difference shapes the whole integration: **Mattermost has no

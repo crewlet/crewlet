@@ -40,6 +40,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -309,6 +310,11 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	case integration.KindGitLab:
 		block := company.Integrations.GitLab
 		reqs = gitlab.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindMattermost:
+		block := company.Integrations.Mattermost
+		reqs = mattermost.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	default:

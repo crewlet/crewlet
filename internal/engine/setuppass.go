@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
+	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
 	"strings"
@@ -45,16 +46,23 @@ import (
 // command line, because a company mid-edit looks exactly like one that
 // removed a seat.
 //
-// Mattermost and Slack stay on the command line. Mattermost has the same
-// account-creating shape and no reconcile of the form this contract takes;
-// Slack needs an app-configuration token Slack issues only by hand, and an
-// app ledger that lives in a local file.
+// Mattermost is the same shape as GitLab and joins on the same terms. It is
+// the one vendor here that needs no public address at all: it holds an
+// outbound websocket per seat and verifies no inbound delivery, so its pass
+// creates accounts and registers nothing.
+//
+// Slack stays on the command line. Its apps are created through Slack's
+// app-manifest API, which authenticates with a configuration token Slack
+// issues only by hand and which an organisation may not permit at all, and
+// the record of what was created lives in a local ledger file rather than in
+// the fleet.
 func (e *Engine) setupPasses() []setup.Pass {
 	return []setup.Pass{
 		&githubPass{engine: e},
 		&jiraPass{engine: e},
 		&confluencePass{engine: e},
 		&gitlabPass{engine: e},
+		&mattermostPass{engine: e},
 	}
 }
 
@@ -247,6 +255,56 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: gitlab pass: %w", err)
+	}
+	return res.Findings(), nil
+}
+
+// mattermostPass adapts mattermost.Reconcile to the pass contract.
+type mattermostPass struct{ engine *Engine }
+
+func (*mattermostPass) Kind() integration.Kind { return integration.KindMattermost }
+
+// Needs is the administrator token. Asked on every run and never stored, for
+// the reason GitLab's is: it creates accounts and mints tokens on them.
+func (*mattermostPass) Needs() *setup.Requirement {
+	req := mattermost.OperatorCredential()
+	return &req
+}
+
+func (p *mattermostPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.Mattermost
+	if cfg == nil || !cfg.Enabled {
+		return nil, integration.ErrNotConfigured
+	}
+	if strings.TrimSpace(in.Operator) == "" {
+		return []integration.Finding{{
+			Kind: integration.FindingCredentialMissing,
+			Detail: "no administrator token was supplied, and the bots' own tokens " +
+				"are what this pass mints, so it cannot bootstrap itself from them",
+		}}, nil
+	}
+	env := p.engine.resolver()
+	plan, err := mattermost.PlanFor(company.Org, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
+	}
+	client, err := mattermost.NewClient(mattermost.ClientOptions{
+		URL: env.Value(cfg.URL), Token: in.Operator,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
+	}
+	// NO WEBHOOK BASE IS PASSED because there is nowhere to pass it: this
+	// vendor holds an outbound socket per seat and registers nothing. And
+	// no rotation and no decommissioning, for the reasons GitLab's pass
+	// gives: both take working agents down and both stay deliberate
+	// command-line gestures.
+	res, err := mattermost.Reconcile(ctx, mattermost.Options{
+		Client: client, Config: cfg, Org: company.Org, Plan: plan, Sink: in.Sink,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
 	}
 	return res.Findings(), nil
 }
