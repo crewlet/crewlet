@@ -170,31 +170,27 @@ func equalHex(presented string, want []byte) bool {
 	return hmac.Equal(got, want)
 }
 
-// verifyDatadog compares the shared token a delivery carries.
+// verifyToken compares a shared token constant-time.
 //
-// NOT an HMAC, and not a weaker version of one by choice: a Datadog webhook
-// attaches headers with fixed values only, so there is nothing varying with
-// the body to sign. The token IS the authentication, which is why the compare
-// is constant-time and why the config documents it as a signing key.
+// The check for every provider that CANNOT sign a body, and there are two:
+// Datadog attaches headers with fixed values only, so nothing varies with the
+// payload to sign, and Confluence Cloud attaches nothing at all and delivers
+// only what was written into its URL. For both, the token IS the
+// authentication, which is why the compare is constant-time and why the
+// config documents it as a signing key.
+//
+// ONE FUNCTION rather than one per provider, because a constant-time compare
+// written twice is how one of the two stops being constant-time. It is named
+// for what it does rather than for a vendor, so a third provider in the same
+// position reaches for it instead of copying it.
 //
 // The body is taken and ignored so this fits the same shape as its
-// neighbours; a scheme that cannot read the payload is exactly the fact
-// worth keeping visible at the call site.
-// verifyToken compares a shared token constant-time. It is the check for
-// every provider that CANNOT sign a body, and there are two of them now:
-// Datadog attaches only fixed-value headers, and Confluence Cloud attaches
-// nothing at all and delivers only what was written into its URL. One
-// function rather than one per provider, because a constant-time compare
-// written twice is how one of them stops being constant-time.
+// neighbours; a scheme that cannot read the payload is exactly the fact worth
+// keeping visible at the call site. An empty secret never reaches here:
+// [Receiver.authenticate] answers 503 before calling any scheme.
 func verifyToken(_ []byte, secret, token string) bool {
 	if token == "" {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(token), []byte(secret)) == 1
-}
-
-// verifyDatadog is the token check under Datadog's name, so the route reads
-// as its neighbours do.
-func verifyDatadog(body []byte, secret, token string) bool {
-	return verifyToken(body, secret, token)
 }

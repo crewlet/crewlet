@@ -87,7 +87,7 @@ func (r *Receiver) datadog(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	v, ok := r.authenticate(w, "datadog", r.secrets().Datadog,
-		req.Header.Get("X-Crewlet-Token"), raw, verifyDatadog)
+		req.Header.Get("X-Crewlet-Token"), raw, verifyToken)
 	if !ok {
 		return
 	}
