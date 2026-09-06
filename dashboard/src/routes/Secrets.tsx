@@ -12,31 +12,65 @@
  * `crewlet secrets get` is the deliberate path.
  */
 
+import { useCallback, useEffect, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Empty, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
-import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, relTime, tsKey, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { rest, RestError } from "~/protocol/index.ts";
 import type { SecretRow } from "~/protocol/index.ts";
 
 export function Secrets() {
   const now = useNow();
-  // `config_entities` is the guarded family; secrets ride the same guard. The
-  // socket carries the operator token on every query frame.
-  const { data, loading, error } = useQuery("config_entities", { kind: "secrets" });
+  // GET /secrets, over REST, because no question in the registry answers it.
+  //
+  // This screen asked `config_entities {kind: "secrets"}`, and that kind does
+  // not exist: the entity kinds are roles, units, llm-providers and
+  // mcp-servers, so the answer was always an ErrUnknownEntityKind folded to
+  // a bad-params error and the table could never hold a row. The socket is
+  // still the data channel for everything it answers; this surface is simply
+  // not one of them.
+  const [rows, setRows] = useState<SecretRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const rows = ((data as unknown as { secrets?: SecretRow[] })?.secrets ?? []) as SecretRow[];
-  const fromStore = rows.filter((r) => r.source === "store").length;
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const body = (await rest.get("/secrets")) as { secrets?: SecretRow[] } | null;
+      setRows(body?.secrets ?? []);
+      setError(null);
+    } catch (err) {
+      // The last good list stays on screen. A refusal to refresh is not a
+      // reason to tell an operator the company holds no credentials.
+      setError(
+        err instanceof RestError
+          ? err.unauthorized
+            ? "This surface needs an operator token. Set one from the engine panel."
+            : err.detail || err.code || "the engine refused the read"
+          : String(err),
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const list = rows ?? [];
+  const fromStore = list.filter((r) => r.source === "store").length;
 
   return (
     <>
       <ScreenHead
         title="Secrets"
         sub="The company's sealed credentials. Names, key ids and provenance — this screen never asks for a value."
-        badges={<Badge outline>{plural(rows.length, "credential")} held</Badge>}
+        badges={<Badge outline>{plural(list.length, "credential")} held</Badge>}
       />
 
       <div className="banner neutral">
@@ -56,7 +90,7 @@ export function Secrets() {
 
       <Panel padding="none">
         <StatRow cols={3}>
-          <Stat icon="key" label="Credentials" value={rows.length} sub="names the fleet holds" />
+          <Stat icon="key" label="Credentials" value={list.length} sub="names the fleet holds" />
           <Stat
             icon="database"
             label="In the secret store"
@@ -66,18 +100,18 @@ export function Secrets() {
           <Stat
             icon="shield"
             label="Distinct key ids"
-            value={new Set(rows.map((r) => r.key_id)).size}
+            value={new Set(list.map((r) => r.key_id)).size}
             sub="a rekey moves every value onto a new one"
           />
         </StatRow>
       </Panel>
 
-      {loading && <Skeleton rows={4} />}
+      {loading && rows === null && <Skeleton rows={4} />}
       <QueryState
         error={error}
         loading={loading}
         empty={
-          rows.length
+          list.length
             ? undefined
             : {
                 title: "No secrets are stored",
@@ -87,7 +121,7 @@ export function Secrets() {
       >
         <Panel padding="none">
           <DataTable<SecretRow>
-            rows={rows}
+            rows={list}
             rowKey={(s) => s.name}
             defaultSort={{ key: "name", dir: "asc" }}
             columns={[
