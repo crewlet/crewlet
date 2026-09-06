@@ -688,3 +688,51 @@
     animation: none;
   }
 }
+
+/* ---- Integrations ------------------------------------------------------- */
+
+/* One row per surface, laid out the way the console's own catalogue is: an
+   icon tile, the name and what it is for, and the state on the right. The
+   tile is NEUTRAL on purpose. A vendor's brand mark would spend a hue on
+   "which integration", and colour here means state and nothing else. */
+.int-row {
+  align-items: flex-start;
+  padding: var(--space-3);
+}
+.int-row-absent .int-row-name,
+.int-row-absent .int-row-desc,
+.int-row-absent .int-row-icon {
+  color: var(--text-faint);
+}
+.int-row-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--row-h);
+  height: var(--row-h);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+.int-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+}
+.int-row-name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.int-row-desc {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.int-row-state {
+  flex: none;
+  padding-top: var(--space-1);
+}

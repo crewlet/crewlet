@@ -1,20 +1,157 @@
 /**
- * The surfaces agents work on, and whether traffic is actually arriving.
+ * The surfaces agents work on, and whether each one is actually working.
  *
- * Every count here is THREE-VALUED — a number, zero, or `null` meaning "this
- * process cannot say". They are not the same fact: a webhook route with zero
- * deliveries is configured and quiet; one this node cannot count is a node
- * that has not been serving ingress. Collapsing them is how a broken
- * integration comes to look healthy.
+ * Laid out the way the console's own Integrations page is: grouped by the
+ * CAPABILITY a surface provides (messaging, tasks, code, knowledge,
+ * observability), one bordered list per group, one row per surface with its
+ * name and what it is for on the left and its state on the right. A surface
+ * this build serves but this company has not configured is still listed, as
+ * "not configured", so the reader sees the whole catalogue rather than only
+ * the part they already set up.
+ *
+ * Identity is carried by name, icon and position, never by colour: a
+ * vendor's own brand mark would spend a hue on "which integration", which is
+ * the one thing the design system's rule forbids. Colour here means STATE
+ * only: the reconcile phase, and whether traffic could be verified.
+ *
+ * Every count is THREE-VALUED (a number, zero, or `null` meaning "this
+ * process cannot say"), and so is the reconcile block: `null` is a process
+ * with no loop to ask or a surface the loop has not reached, and neither is a
+ * claim that the surface is fine.
  */
 
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Empty, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
+import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-import type { ReconcileStatus } from "~/protocol/types.ts";
+import type { IntegrationRow, ReconcileStatus } from "~/protocol/types.ts";
+
+/**
+ * What agents need in order to work, in the order the console asks about
+ * them. Each surface answers exactly one capability.
+ */
+const CAPABILITIES: { id: string; title: string; icon: IconName; description: string }[] = [
+  {
+    id: "messaging",
+    title: "Messaging",
+    icon: "message",
+    description: "Where agents talk with you and with each other.",
+  },
+  {
+    id: "tasks",
+    title: "Task management",
+    icon: "target",
+    description: "Where work is planned, assigned and tracked.",
+  },
+  {
+    id: "code",
+    title: "Code",
+    icon: "gitBranch",
+    description: "Where agents commit, review and ship.",
+  },
+  {
+    id: "knowledge",
+    title: "Knowledge",
+    icon: "book",
+    description: "Where documentation and decisions live.",
+  },
+  {
+    id: "observability",
+    title: "Observability",
+    icon: "activity",
+    description: "Where agents watch production and respond.",
+  },
+];
+
+/**
+ * The catalogue: every surface this build serves, with the capability it
+ * answers and one line on what it is for. The key matches the API row's, so
+ * the two join by name.
+ */
+const CATALOG: {
+  key: string;
+  capability: string;
+  name: string;
+  description: string;
+  icon: IconName;
+}[] = [
+  {
+    key: "slack",
+    capability: "messaging",
+    name: "Slack",
+    description: "One app per agent; threads and mentions wake seats",
+    icon: "message",
+  },
+  {
+    key: "mattermost",
+    capability: "messaging",
+    name: "Mattermost",
+    description: "Self-hosted chat over an outbound websocket, no public URL needed",
+    icon: "message",
+  },
+  {
+    key: "jira",
+    capability: "tasks",
+    name: "Jira",
+    description: "Issues routed by assignee, mention, watcher and project lead",
+    icon: "target",
+  },
+  {
+    key: "github",
+    capability: "code",
+    name: "GitHub",
+    description: "Review requests, assignments and mentions",
+    icon: "gitBranch",
+  },
+  {
+    key: "gitlab",
+    capability: "code",
+    name: "GitLab",
+    description: "Per-agent service accounts; merge requests and pipelines",
+    icon: "gitBranch",
+  },
+  {
+    key: "confluence",
+    capability: "knowledge",
+    name: "Confluence",
+    description: "Page and comment events, and the knowledge search seats read",
+    icon: "book",
+  },
+  {
+    key: "forge",
+    capability: "knowledge",
+    name: "Forge relay",
+    description: "Atlassian Cloud events relayed through the Forge app",
+    icon: "link",
+  },
+  {
+    key: "datadog",
+    capability: "observability",
+    name: "Datadog",
+    description: "Monitor alerts routed by owner tag, with a fallback seat",
+    icon: "activity",
+  },
+];
+
+function Count({ value, label }: { value: number | null | undefined; label: string }) {
+  if (value == null) {
+    return (
+      <span
+        className="t-caption faint"
+        title="this process cannot answer; it is not serving ingress"
+      >
+        {label} —
+      </span>
+    );
+  }
+  return (
+    <span className="t-caption t-num">
+      {label} {value.toLocaleString()}
+    </span>
+  );
+}
 
 /**
  * COLOUR CARRIES STATE, NEVER IDENTITY (see reference/dashboard-design.md), so
@@ -81,13 +218,11 @@ export function Reconcile({ status }: { status: ReconcileStatus | null | undefin
   const rest = (status.findings ?? []).slice(1);
 
   return (
-    <div className="col gap-2">
-      <div className="row wrap gap-2" style={{ alignItems: "center" }}>
-        <Badge tone={phaseTone(status.phase)} dot>
-          {status.phase.replace(/_/g, " ")}
-        </Badge>
-        {actor && <span className="t-caption faint">{actor}</span>}
-      </div>
+    <div className="col gap-1">
+      {/* The PHASE is not repeated here: the row's state tag on the right is
+          its one home, and a second badge two lines below it read as two
+          facts. What this block adds is who owes the next step. */}
+      {actor && <span className="t-caption faint">{actor}</span>}
 
       {status.detail && <span className="t-caption">{status.detail}</span>}
 
@@ -126,31 +261,90 @@ export function Reconcile({ status }: { status: ReconcileStatus | null | undefin
   );
 }
 
-function Count({ value, label }: { value: number | null | undefined; label: string }) {
-  if (value == null) {
+/**
+ * The state tag on the right of a row, and the one place a row spends colour.
+ *
+ * The reconcile phase wins when the loop has one, because it is a measured
+ * claim. Without one the tag says only what the config says: configured, or
+ * paused, or absent. "Connected" is deliberately not a word used here; a
+ * configured surface whose deliveries are all refused is not connected, and
+ * the counts beside the tag are what say so.
+ */
+function StateTag({ row }: { row: IntegrationRow | undefined }) {
+  if (!row) {
+    return <Badge outline>not configured</Badge>;
+  }
+  if (row.reconcile) {
     return (
-      <span
-        className="t-caption faint"
-        title="this process cannot answer — it is not serving ingress"
-      >
-        {label}: unknown
-      </span>
+      <Badge tone={phaseTone(row.reconcile.phase)} dot>
+        {row.reconcile.phase.replace(/_/g, " ")}
+      </Badge>
     );
   }
+  if (row.enabled === false) {
+    return <Badge outline>paused</Badge>;
+  }
   return (
-    <span className="t-caption t-num">
-      {label}: {value.toLocaleString()}
-    </span>
+    <Badge tone="neutral" dot>
+      configured
+    </Badge>
+  );
+}
+
+/**
+ * The second line of a configured row: whether a delivery could be verified
+ * and routed, which are the two ways a configured surface is silently not
+ * working, and the counts that say whether anything is arriving.
+ */
+function RowFacts({ row }: { row: IntegrationRow }) {
+  const facts: { label: string; tone: "positive" | "caution" | "neutral"; title: string }[] = [];
+  if (row.secret_usable === false) {
+    facts.push({
+      label: "secret unresolved",
+      tone: "caution",
+      title:
+        "the config names a secret whose ${VAR} resolved to nothing, so every delivery is refused",
+    });
+  }
+  if (row.routes === false) {
+    facts.push({
+      label: "routes nowhere",
+      tone: "caution",
+      title: "deliveries are verified and stored, and no parser turns them into work for a seat",
+    });
+  }
+  return (
+    <div className="row wrap gap-2" style={{ alignItems: "center" }}>
+      {facts.map((f) => (
+        <Badge key={f.label} tone={f.tone} outline title={f.title}>
+          {f.label}
+        </Badge>
+      ))}
+      <Count value={row.inbound} label="in" />
+      <Count value={row.outbound as number | null | undefined} label="out" />
+      <Count value={row.routed as number | null | undefined} label="routed" />
+      {typeof row.inbound_path === "string" && row.inbound_path && (
+        <code className="inline t-caption faint">{String(row.inbound_path)}</code>
+      )}
+    </div>
   );
 }
 
 export function Integrations() {
-  // Traffic counters are not pushed, and they move slowly — a minute is the
+  // Traffic counters are not pushed, and they move slowly; a minute is the
   // right cadence for "is anything arriving at all".
   const { data, loading, error } = useQuery("integrations", undefined, { pollMs: 60_000 });
 
   const rows = data?.integrations ?? [];
+  const byKey = new Map(rows.map((r) => [r.key, r]));
   const configured = rows.filter((r) => r.configured);
+  const attention = rows.filter(
+    (r) =>
+      r.reconcile &&
+      r.reconcile.phase !== "ready" &&
+      r.reconcile.actor &&
+      r.reconcile.actor !== "engine",
+  );
 
   return (
     <>
@@ -159,7 +353,7 @@ export function Integrations() {
         sub="Where the company's work comes from and where its output goes. Each agent acts as itself on these surfaces, with its own credentials."
         badges={
           <Badge outline>
-            {configured.length} of {rows.length} configured
+            {configured.length} of {CATALOG.length} configured
           </Badge>
         }
       />
@@ -168,8 +362,19 @@ export function Integrations() {
         <div className="banner neutral">
           <Icon name="info" size="sm" />
           <span>
-            This node is not counting traffic — it is not serving the ingress role, so the numbers
+            This node is not counting traffic; it is not serving the ingress role, so the numbers
             below are unknown rather than zero.
+          </span>
+        </div>
+      )}
+
+      {attention.length > 0 && (
+        <div className="banner caution">
+          <Icon name="alert" size="sm" />
+          <span>
+            {attention.length === 1 && attention[0]
+              ? `${attention[0].key} needs somebody: ${attention[0].reconcile?.detail ?? ""}`
+              : `${attention.length} integrations need somebody to act. Each one says who and what below.`}
           </span>
         </div>
       )}
@@ -180,7 +385,7 @@ export function Integrations() {
             icon="plug"
             label="Configured"
             value={configured.length}
-            sub={`of ${rows.length} supported`}
+            sub={`of ${CATALOG.length} this build serves`}
           />
           <Stat
             icon="download"
@@ -188,7 +393,7 @@ export function Integrations() {
             value={
               data?.traffic_known
                 ? rows.reduce((n, r) => n + (r.inbound ?? 0), 0).toLocaleString()
-                : "unknown"
+                : "—"
             }
             sub={data?.traffic_since ? `since ${fmtDateTime(data.traffic_since)}` : ""}
           />
@@ -198,61 +403,53 @@ export function Integrations() {
             value={
               data?.traffic_known
                 ? rows.reduce((n, r) => n + (r.outbound ?? 0), 0).toLocaleString()
-                : "unknown"
+                : "—"
             }
             sub="messages the engine sent on a seat's behalf"
           />
         </StatRow>
       </Panel>
 
-      {loading && !data && <Skeleton rows={4} />}
-      <QueryState
-        error={error}
-        loading={loading}
-        empty={
-          rows.length
-            ? undefined
-            : {
-                title: "No integrations are known",
-                hint: "The engine reports the six it serves once a company configuration is active.",
-              }
-        }
-      >
-        <div className="grid grid-auto">
-          {rows.map((row) => (
+      {loading && !data && <Skeleton rows={6} />}
+      <QueryState error={error} loading={loading} empty={undefined}>
+        {CAPABILITIES.map((cap) => {
+          const entries = CATALOG.filter((c) => c.capability === cap.id);
+          return (
             <Panel
-              key={row.key}
-              title={row.label || row.key}
-              icon={row.configured ? "plug" : "power"}
-              actions={
-                row.configured ? (
-                  <Badge tone="positive" dot>
-                    configured
-                  </Badge>
-                ) : (
-                  <Badge outline>not configured</Badge>
-                )
-              }
+              key={cap.id}
+              title={cap.title}
+              subtitle={cap.description}
+              icon={cap.icon}
+              padding="none"
             >
-              <div className="col gap-2">
-                {row.detail && <span className="t-caption">{row.detail}</span>}
-                {!row.configured && (
-                  <span className="t-caption faint">
-                    Nothing routes here. A webhook route with no secret has nothing to verify with
-                    and answers 503 rather than accepting a delivery.
-                  </span>
-                )}
-                <div className="row wrap gap-3">
-                  <Count value={row.inbound} label="in" />
-                  <Count value={row.outbound} label="out" />
-                  <Count value={row.routed} label="routed to a seat" />
-                </div>
-                <Reconcile status={row.reconcile} />
+              <div className="list">
+                {entries.map((entry) => {
+                  const row = byKey.get(entry.key);
+                  return (
+                    <div
+                      key={entry.key}
+                      className={row ? "list-row int-row" : "list-row int-row int-row-absent"}
+                    >
+                      <span className="int-row-icon" aria-hidden>
+                        <Icon name={entry.icon} size="md" />
+                      </span>
+                      <div className="int-row-text">
+                        <span className="int-row-name">{entry.name}</span>
+                        <span className="int-row-desc">{entry.description}</span>
+                        {row && <RowFacts row={row} />}
+                        {row && <Reconcile status={row.reconcile} />}
+                      </div>
+                      <div className="int-row-state">
+                        <StateTag row={row} />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </Panel>
-          ))}
-        </div>
-        {!configured.length && rows.length > 0 && (
+          );
+        })}
+        {data && configured.length === 0 && (
           <Empty
             icon="plug"
             title="No integration is connected yet"
