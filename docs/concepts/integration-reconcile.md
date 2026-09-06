@@ -112,6 +112,7 @@ GET /query/integrations
   "routes": true,
   "reconcile": {
     "phase": "degraded",
+    "phase_label": "needs attention",
     "actor": "admin",
     "detail": "swe has no Jira account, so no issue reaches it: no credential under mcp_env.atlassian",
     "action_url": "",
@@ -134,6 +135,20 @@ GET /query/integrations
 - An object is a real finding.
 
 The **findings list travels as well as the report**, because the two answer different questions. The report says what to do next; the findings say what is actually wrong. A company with a broken webhook and four under-granted seats reports the webhook, and an operator who fixes it should not have to wait a full pass to discover there were four more things behind it.
+
+`phase_label` is the same phase in the words a person reads, and it is derived **once, in the engine**, so a client never has to know what a phase value means. Six phases collapse into five labels:
+
+| Phase | Label |
+|---|---|
+| `ready` | connected |
+| `degraded` | needs attention |
+| `awaiting_admin` | action needed |
+| `provisioning`, `activating` | setting up |
+| `unconfigured` | not connected |
+
+`provisioning` and `activating` share a label because the difference between them is which side is doing the work, and neither side is the reader. `unconfigured` reads as *not connected* because that is what a surface with no usable credential is, whether the credential is absent or the vendor refused it. A phase a newer node wrote is rendered as its own value with the underscores opened up, never guessed at.
+
+Two labels the dashboard adds for situations that are not phases at all: **not checked**, for a block that is configured and that no pass has reported on yet, and **paused**, for one whose surfaces are all disabled. Neither claims the integration works, which is the distinction the whole screen turns on.
 
 **On the dashboard** the Integrations screen shows one row per *tool*, not per surface: Atlassian is one row over the Jira, Confluence and Forge relay surfaces. A row's tag is the least ready phase among its surfaces, ordered by `Phases` above, so an `activating` surface outranks a `degraded` one (a degraded integration is still working; one still coming up is not) and a phase the dashboard build does not know sits between the two, never presented as ready and never masking a phase it does know.
 

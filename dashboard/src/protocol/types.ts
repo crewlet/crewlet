@@ -531,6 +531,13 @@ export interface ReconcileFinding {
 export interface ReconcileStatus {
   /** unconfigured | awaiting_admin | provisioning | activating | degraded | ready */
   phase: string;
+  /**
+   * The phase in a reader's words, from [integration.Phase.Label] in Go.
+   *
+   * Optional because a node older than the field sends none, not because a
+   * screen may skip it: derive nothing from `phase` that this can answer.
+   */
+  phase_label?: string;
   /** "" | engine | provider | admin | operator — who has to act. */
   actor?: string;
   detail?: string;

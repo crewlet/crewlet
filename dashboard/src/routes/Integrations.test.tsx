@@ -130,7 +130,7 @@ test("a tool reports its least ready surface, and names it", () => {
 // Slack row says nothing.
 test("a single-surface tool does not name itself", () => {
   const state = rollUp(slack, rowsOf({ key: "slack", configured: true, secret_usable: false }));
-  expect(state.tag).toBe("configured");
+  expect(state.tag).toBe("not checked");
   expect(state.status).toMatch(/^the webhook secret did not resolve/);
   expect(state.attention).toBe(true);
 });
@@ -152,13 +152,16 @@ test("a ready tool has no status line", () => {
 // nobody set it up, paused is somebody switched it off on purpose, and the
 // two used to collapse into the state most likely to be mistaken for a
 // mistake.
-test("absent, paused and configured are told apart", () => {
-  expect(rollUp(slack, rowsOf()).tag).toBe("not configured");
+test("absent, paused and unchecked are told apart", () => {
+  expect(rollUp(slack, rowsOf()).tag).toBe("not connected");
   expect(rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: false })).tag).toBe(
     "paused",
   );
+  // Configured with no pass behind it is NOT "connected": there is no
+  // measured claim, and inventing one is the whole failure this screen is
+  // built to avoid.
   expect(rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: true })).tag).toBe(
-    "configured",
+    "not checked",
   );
 });
 
@@ -215,7 +218,7 @@ test("a configured tool discloses its surfaces", () => {
 // chevron that opens an empty box is a control that lies.
 test("an absent tool is a plain card with no disclosure", () => {
   render(<EntryRow entry={slack} rows={rowsOf()} />);
-  expect(screen.getByText("not configured")).toBeTruthy();
+  expect(screen.getByText("not connected")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /details/i })).toBeNull();
   // And it still says what the tool is for, because the catalogue is what
   // tells a reader the engine serves it at all.

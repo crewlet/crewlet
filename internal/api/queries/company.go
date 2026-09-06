@@ -648,14 +648,19 @@ func (s Sources) reconcileStates(ctx context.Context) (map[string]integration.St
 // wait a full pass to discover there were four more things behind it.
 func reconcileRow(state integration.State) map[string]any {
 	row := map[string]any{
-		"phase":      string(state.Report.Phase),
-		"actor":      string(state.Report.Actor),
-		"detail":     state.Report.Detail,
-		"action_url": state.Report.ActionURL,
-		"outcome":    string(state.Outcome),
-		"attempts":   state.Attempts,
-		"last_error": state.LastError,
-		"findings":   reconcileFindings(state.Findings),
+		"phase": string(state.Report.Phase),
+		// The phase in a reader's words, decided HERE rather than on the
+		// client. A screen that mapped six phase values to five labels
+		// would be a second place that has to know what they mean, and it
+		// could not label a phase a newer node wrote at all.
+		"phase_label": state.Report.Phase.Label(),
+		"actor":       string(state.Report.Actor),
+		"detail":      state.Report.Detail,
+		"action_url":  state.Report.ActionURL,
+		"outcome":     string(state.Outcome),
+		"attempts":    state.Attempts,
+		"last_error":  state.LastError,
+		"findings":    reconcileFindings(state.Findings),
 	}
 	// Rendered as instants, so an absent one is absent rather than the
 	// zero time, which prints as 1970 and reads as a real answer.

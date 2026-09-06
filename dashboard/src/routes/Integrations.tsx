@@ -224,7 +224,7 @@ function actorLabel(actor: string | undefined): string {
 
 /** A tool's rolled-up state: the tag on the right and the one line under the name. */
 export interface EntryState {
-  /** The word in the tag: a reconcile phase, or configured / paused / not configured. */
+  /** The word in the tag: the engine's phase label, or not checked / paused / not connected. */
   tag: string;
   tone: Tone;
   /** Drawn outlined when the tool is absent or paused, filled when it is live. */
@@ -257,7 +257,7 @@ function presentSurfaces(entry: Entry, rows: Map<string, IntegrationRow>): Prese
 export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntryState {
   const present = presentSurfaces(entry, rows);
   if (present.length === 0) {
-    return { tag: "not configured", tone: "neutral", outline: true, attention: false };
+    return { tag: "not connected", tone: "neutral", outline: true, attention: false };
   }
   // Prefix a surface's line with its name only when the tool has more than
   // one, so "Jira: the org credential was refused" reads on Atlassian and
@@ -291,7 +291,12 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
     const { phase, actor, detail } = worst.row.reconcile;
     const phaseLine = phase !== "ready" && detail ? named(worst.surface, detail) : undefined;
     return {
-      tag: phase.replace(/_/g, " "),
+      // The ENGINE's word for the phase, not this screen's. `phase_label`
+      // is derived once, in Go, from a vocabulary the client does not have
+      // to know; the raw phase is the fallback for a node too old to send
+      // one, and opening its underscores is all this build can honestly do
+      // with a value it may not recognise.
+      tag: worst.row.reconcile.phase_label || phase.replace(/_/g, " "),
       tone: phaseTone(phase),
       outline: false,
       // The phase's own sentence when it has one, and the ingress fault
@@ -312,9 +317,12 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
   // No measured claim at all. The config's own word, and the ingress fault if
   // there is one, which is the only thing that can be said without a pass.
   return {
-    tag: "configured",
+    // NOT "connected". The block exists and no pass has reported on it, so
+    // there is no measured claim to make: saying connected here would be the
+    // invented health this screen refuses to show.
+    tag: "not checked",
     tone: "neutral",
-    outline: false,
+    outline: true,
     status: ingress,
     attention: ingress !== undefined,
   };
@@ -467,7 +475,7 @@ function SurfaceRow({
         )}
         {row.reconcile ? (
           <Badge tone={phaseTone(row.reconcile.phase)}>
-            {row.reconcile.phase.replace(/_/g, " ")}
+            {row.reconcile.phase_label || row.reconcile.phase.replace(/_/g, " ")}
           </Badge>
         ) : row.enabled === false ? (
           <Badge outline>paused</Badge>

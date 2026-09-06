@@ -1,6 +1,9 @@
 package integration
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // Phase is where an integration has got to.
 //
@@ -45,6 +48,48 @@ const (
 	// PhaseReady means observed matches desired.
 	PhaseReady Phase = "ready"
 )
+
+// Label is the phase in the words a person reads, rather than the words the
+// wire carries.
+//
+// TWO VOCABULARIES ON PURPOSE, and this is the seam between them. [Phase] is
+// a stored value: it is written into the fleet's coordination store, read
+// back by a peer that may be a different build, and named in the docs and the
+// API. It says precisely which of six situations a surface is in, and it has
+// to keep saying that. What an operator scanning a list of integrations wants
+// is narrower — is this working, is somebody needed, or is it still coming
+// up — and six words for that is four too many.
+//
+// So the phases collapse. Provisioning and activating are one answer, "still
+// coming up, nobody has to act", because the difference between them is which
+// side is doing the work and neither side is the reader. Unconfigured reads
+// as not connected, because that is what a surface with no usable credential
+// IS, whether the credential is absent or the vendor refused it.
+//
+// Deliberately here rather than in the dashboard. A label derived on the
+// client is a second place that has to know what every phase value means, and
+// a client cannot know what a phase a NEWER node wrote is meant to say, which
+// is exactly the case where guessing is worst.
+func (p Phase) Label() string {
+	switch p {
+	case PhaseReady:
+		return "connected"
+	case PhaseDegraded:
+		return "needs attention"
+	case PhaseAwaitingAdmin:
+		return "action needed"
+	case PhaseProvisioning, PhaseActivating:
+		return "setting up"
+	case PhaseUnconfigured:
+		return "not connected"
+	default:
+		// A phase a newer node wrote. Rendered as its own wire value with
+		// the underscores opened up, which is honest about not knowing it,
+		// where any of the words above would be a claim this build cannot
+		// support.
+		return strings.ReplaceAll(string(p), "_", " ")
+	}
+}
 
 // Phases is every phase, ordered from furthest-from-working to working.
 var Phases = []Phase{
