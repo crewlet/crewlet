@@ -33,7 +33,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { PassDialog } from "./PassDialog.tsx";
-import { rest, RestError } from "~/protocol/index.ts";
+import { requestToken, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, ReconcileStatus } from "~/protocol/types.ts";
 import type { SetupListing, SetupRun, SetupToolState } from "~/protocol/types.ts";
 
@@ -555,6 +555,11 @@ export function EntryRow({
   // hook and its Forge relay registers nothing, so the buttons are per
   // surface and named when there is more than one.
   const passable = tools.filter((t) => t.can_provision && t.satisfied);
+  // The catalogue's name for a surface, not its wire key: `tool.key` is
+  // "confluence", and a button that reads "Set up confluence" has put an
+  // internal identifier in front of the reader.
+  const surfaceName = (key: string) =>
+    entry.surfaces.find((surface) => surface.key === key)?.name ?? entry.name;
   const seats = tools.flatMap((t) => t.seats ?? []);
   const bodyID = `int-body-${entry.key}`;
 
@@ -586,9 +591,13 @@ export function EntryRow({
             size="sm"
             onClick={() => onPass(tool, false)}
             disabled={running}
-            title={`Register what ${tool.key} needs at the vendor`}
+            title={`Register what ${surfaceName(tool.key)} needs at the vendor`}
           >
-            {running ? "Running" : passable.length > 1 ? `Set up ${tool.key}` : "Run setup"}
+            {running
+              ? "Running"
+              : passable.length > 1
+                ? `Set up ${surfaceName(tool.key)}`
+                : "Run setup"}
           </Button>
         ))}
       {onPass && passable.length > 0 && (
@@ -846,6 +855,14 @@ export function Integrations() {
             Setting an integration up needs an operator token. This screen is showing what it can
             read without one.
           </span>
+          <span className="spacer" />
+          {/* The same door QueryState opens, for the same reason: with
+              anonymous reads allowed the socket is never refused, so a banner
+              that only NAMES the missing credential leaves the reader with
+              nothing on the page that can supply it. */}
+          <Button size="sm" icon="key" onClick={requestToken}>
+            Set token
+          </Button>
         </div>
       )}
 
