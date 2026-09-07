@@ -519,7 +519,14 @@ test("a roster is listed once however many sections carry it", () => {
 
 // A company whose Slack block exists and whose seats hold no app is not
 // connected: nothing can post.
-test("a per-seat vendor with no seat set up is unfinished", () => {
+// A PER-SEAT APP'S WORK IS ON THE AGENT'S ROW, not on the card.
+//
+// This asserted a Continue button, which opens the company form: a form that
+// can neither create an agent's app nor install it, because both are clicks
+// at the third-party app on the agent's own row. It was a control leading
+// nowhere on the one card with real work outstanding. The card still SAYS so,
+// through the tag its reconcile phase drives.
+test("a per-seat app leaves the work to the agent's own row", () => {
   const state = rollUp(slack, rowsOf({ key: "slack", configured: true }));
   const action = actionFor(state, [
     toolState({
@@ -531,7 +538,7 @@ test("a per-seat vendor with no seat set up is unfinished", () => {
       seats: [{ handle: "cto", requirements: [], satisfied: false }],
     }),
   ]);
-  expect(action?.label).toBe("Continue");
+  expect(action).toBeNull();
 
   // AND AN INFORMATIONAL ROSTER IS NOT WORK OUTSTANDING. Every app lists its
   // agents now, and most of those credentials are an upgrade on an app that

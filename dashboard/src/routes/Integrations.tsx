@@ -648,12 +648,21 @@ export function actionFor(
   // seats_required. Every card carries a roster now, and most of those seat
   // credentials are an upgrade on an app that already works — so reading any
   // roster this way put Continue on every connected card, next to Connected.
+  // THE ROSTER OWNS ITS OWN WORK. Where a per-seat app is what makes the
+  // integration work, the thing to do is on the agent's row: create its app,
+  // or install the one it has. A Continue button beside those opens the
+  // company form, which cannot do either, so it is a control that leads
+  // nowhere on the one card that has real work outstanding.
+  //
+  // The card still says so: the tag comes from the reconcile phase, which the
+  // seat findings drive, so an agent with a click left reads Action needed
+  // rather than Connected.
   if (
     configured.some(
       (t) => t.seats_required && t.seats && t.seats.length > 0 && !t.seats.some((s) => s.satisfied),
     )
   ) {
-    return { label: "Continue" };
+    return null;
   }
   // A CARD WITH A SURFACE LEFT TO CONNECT SAYS SO, and says "Continue".
   //
@@ -988,8 +997,13 @@ export function EntryRow({
           </span>
           <span className="int-heading">
             <span className="int-name">{entry.name}</span>
-            <span className={state.attention ? "int-desc attention" : "int-desc"}>
-              {state.attention && <Icon name="alert" size="sm" />}
+            {/* THE MARK BELONGS TO THE SENTENCE, not to the row. With no
+                status to show, this line falls back to the catalogue's
+                description, and an alert icon beside "Code and pull
+                requests" warns about nothing: the reader looks for what is
+                wrong and finds a label. */}
+            <span className={state.attention && state.status ? "int-desc attention" : "int-desc"}>
+              {state.attention && state.status && <Icon name="alert" size="sm" />}
               {state.status ?? entry.description}
             </span>
           </span>

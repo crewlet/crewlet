@@ -157,12 +157,18 @@ func (r *SeatAppResult) reconcileSeat(
 
 	installation, adopted, err := r.installationFor(ctx, opts, seat, client)
 	switch {
-	case err != nil:
-		// LEFT ALONE. See the package note: a failed read is not evidence
-		// that anything was undone, and saying otherwise sends an
-		// operator to redo a click nobody reversed.
+	case err != nil && seat.InstallationID != 0:
+		// LEFT ALONE, and only where the document already claims an
+		// installation. See the package note: a failed read is not
+		// evidence that anything was undone, and saying otherwise sends
+		// an operator to redo a click nobody reversed.
 		return
-	case installation == nil:
+	case err != nil, installation == nil:
+		// NOT INSTALLED IS A FACT THE DOCUMENT HOLDS, not one GitHub has
+		// to confirm. A seat with no installation recorded has a click
+		// outstanding whether or not GitHub can be reached, and staying
+		// silent about it because a read failed left the card reporting
+		// Connected over an agent that could do nothing.
 		r.Findings = append(r.Findings, integration.Finding{
 			Kind:      integration.FindingApprovalRequired,
 			Subject:   seat.Handle,
