@@ -43,6 +43,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
 )
@@ -833,10 +834,18 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
 			"hint": "import a company configuration first",
 		})
-	case s.secrets == nil:
+	case s.secrets == nil || errors.Is(err, secrets.ErrNoKeyring):
+		// TWO WAYS TO HAVE NO KEYRING, and only the first was caught. A
+		// node with no secret store WIRED is `s.secrets == nil`; a node
+		// with one whose bootstrap names no key fails at the seal, with
+		// this sentinel, which exists to be recognised. It fell through
+		// to the generic case, so a screen that could have said "set
+		// secrets.keys" said internal_error and left the operator
+		// reading engine logs to find a one-line fix.
 		httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoKeyring, map[string]string{
 			"detail": "this node has no secrets.keys, so a credential cannot be sealed",
-			"hint":   "run `crewlet secrets keygen` and install one",
+			"hint": "run `crewlet secrets keygen`, put the key in secrets.keys in " +
+				"crewlet.yaml, and restart the engine",
 		})
 	default:
 		// THE DETAIL GOES TO THE LOG, never to the caller: a third-party app's own

@@ -3,6 +3,7 @@ package setupapi_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -1182,5 +1183,33 @@ func TestDisconnectNamesOnlyTheSecretsThatExist(t *testing.T) {
 	orphans, _ := decode(t, res)["orphaned_secrets"].([]any)
 	if len(orphans) != 1 || orphans[0] != "DATADOG_WEBHOOK_TOKEN" {
 		t.Fatalf("orphaned = %v, want only the secret that was actually stored", orphans)
+	}
+}
+
+// A MISSING KEYRING SAYS SO, rather than internal_error.
+//
+// There are two ways to have no keyring and only one was caught: a node with
+// no secret store WIRED, and a node with one whose bootstrap names no key.
+// The second fails at the seal with secrets.ErrNoKeyring — a sentinel that
+// exists to be recognised — and fell through to the generic case, so a screen
+// that could have said "set secrets.keys" said internal_error and left an
+// operator reading engine logs to find a one-line fix.
+func TestASealWithNoKeyringSaysWhatToSet(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	s.vault.fail = fmt.Errorf("setup: seal DATADOG_APP_KEY: %w", secrets.ErrNoKeyring)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
+		`{"values": {"route_to": "sre-lead", "enabled": "true"}, "generate": ["webhook_token"]}`, nil)
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503: %s", res.Code, res.Body)
+	}
+	body := decode(t, res)
+	if body["error"] != "no_keyring" {
+		t.Fatalf("error = %v, want no_keyring", body["error"])
+	}
+	if hint, _ := body["hint"].(string); !strings.Contains(hint, "secrets.keys") {
+		t.Errorf("hint = %q, want it to name what to set", hint)
 	}
 }
