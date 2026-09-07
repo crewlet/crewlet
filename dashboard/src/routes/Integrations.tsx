@@ -25,18 +25,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Empty, Panel, Skeleton } from "~/ui/primitives.tsx";
+import { Badge, Button, Empty, Skeleton } from "~/ui/primitives.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
-import { useToast } from "~/ui/Toast.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
-import { PassDialog } from "./PassDialog.tsx";
 import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, ReconcileStatus } from "~/protocol/types.ts";
-import type { SetupListing, SetupRun, SetupToolState } from "~/protocol/types.ts";
+import type { SetupListing, SetupToolState } from "~/protocol/types.ts";
 
 type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
 
@@ -231,7 +229,7 @@ function actorLabel(actor: string | undefined): string {
 /** A tool's rolled-up state: the tag on the right and the one line under the name. */
 export interface EntryState {
   /**
-   * The word in the badge: the engine's phase label, or Not checked / Paused.
+   * The word in the badge: the engine's phase label, or Connecting / Paused.
    *
    * EMPTY MEANS NO BADGE. A tool nobody has connected has no status to
    * report — the Connect button beside it already says everything true about
@@ -343,13 +341,17 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
   if (present.every((p) => p.row.enabled === false)) {
     return { tag: "Paused", tone: "neutral", outline: true, attention: false };
   }
-  // No measured claim at all. The config's own word, and the ingress fault if
-  // there is one, which is the only thing that can be said without a pass.
+  // CONFIGURED, AND THE LOOP HAS NOT REPORTED YET. That is a window of one
+  // reconcile interval after connecting, not a resting state, so the word is
+  // the one the console uses for it.
+  //
+  // It read "Not checked", which was true of an engine that would not run a
+  // pass until somebody pressed Run setup: nothing was going to check it, and
+  // the tag was telling the operator so. The loop provisions now, so the same
+  // tag would be reporting an absence that resolves itself in seconds, next
+  // to a Connect button that had already gone.
   return {
-    // NOT "connected". The block exists and no pass has reported on it, so
-    // there is no measured claim to make: saying connected here would be the
-    // invented health this screen refuses to show.
-    tag: "Not checked",
+    tag: "Connecting",
     tone: "neutral",
     outline: true,
     status: ingress,
@@ -436,18 +438,7 @@ export function Reconcile({
  * One surface inside a tool's details: its own phase, what arrived and what
  * became of it, where it listens, and what the loop found.
  */
-function SurfaceRow({
-  surface,
-  row,
-  onPass,
-  running,
-}: {
-  surface: Surface;
-  row: IntegrationRow;
-  /** Run this surface's provisioning pass, or a read-only check of it. */
-  onPass?: (readOnly: boolean) => void;
-  running?: boolean;
-}) {
+function SurfaceRow({ surface, row }: { surface: Surface; row: IntegrationRow }) {
   return (
     <li className="int-row">
       <div className="int-row-identity">
@@ -499,17 +490,6 @@ function SurfaceRow({
           <Badge outline>paused</Badge>
         ) : null}
       </div>
-
-      {onPass && (
-        <div className="int-row-actions">
-          <Button size="sm" onClick={() => onPass(false)} disabled={running}>
-            {running ? "Running" : "Run setup"}
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => onPass(true)} disabled={running}>
-            Recheck
-          </Button>
-        </div>
-      )}
 
       {typeof row.skipped === "number" && row.skipped > 0 && (
         <div className="int-row-note">
@@ -565,7 +545,13 @@ export function actionFor(
     // Fix opens the inputs that matter rather than the whole form.
     return { label: "Fix", blocks: "credential_missing" };
   }
-  return { label: "Manage" };
+  // NOTHING FOR A WORKING TOOL. It returned "Manage", which is the one label
+  // here that named a place rather than a thing to do: every other value is
+  // the engine saying a person is needed, and Manage was the engine saying
+  // nobody is. Sitting beside Disconnect it read as the primary action of a
+  // card whose primary action was to leave it alone, so changing a setting
+  // is the Settings control in the body and this returns nothing.
+  return null;
 }
 
 /**
@@ -619,20 +605,15 @@ export function EntryRow({
   sections,
   onConnect,
   onDisconnect,
-  onPass,
-  running,
 }: {
   entry: Entry;
   rows: Map<string, IntegrationRow>;
   /** The engine's setup state per surface this tool is made of. */
   sections?: { name: string; tool: SetupToolState }[];
+  /** Open the settings form: the connect form, and the same one afterwards. */
   onConnect?: (blocks?: string) => void;
   /** Take the tool away. Absent for a tool nothing has configured. */
   onDisconnect?: () => void;
-  /** Run a surface's provisioning pass, or a read-only check of it. */
-  onPass?: (tool: SetupToolState, readOnly: boolean) => void;
-  /** A pass this row started and is waiting on. */
-  running?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const state = rollUp(entry, rows);
@@ -647,39 +628,31 @@ export function EntryRow({
   // nesting a second inside it would put a flex container in a flex
   // container for nothing.
   //
-  // THE HEADER CARRIES ONE ACTION, whatever the tool is made of. The
-  // per-surface passes used to sit here too, which made Atlassian the only
-  // card in the list with four controls in its header ("Manage", "Set up
-  // Jira", "Set up Confluence", "Recheck") purely because it is the only tool
-  // with more than one provisionable surface. A reader cannot tell that from
-  // looking, so the row simply read as inconsistent. They belong beside the
-  // surface they act on, in the body, which is where the console puts a
-  // per-item control as well.
+  // ONE BUTTON, which is what the console's own card has.
+  //
+  // It carried four — Manage, Disconnect, and Run setup and Recheck per
+  // surface — and three of them existed only because this loop used to
+  // refuse to provision: somebody had to press something to grant a
+  // permission they had already granted by connecting. The loop does that
+  // work now, so the buttons have nothing left to ask for, and the card is
+  // a state and a way out.
+  //
+  // Settings live under the disclosure, beside the surfaces they configure,
+  // rather than behind a header button competing with Disconnect.
   const actions = (
     <>
-      {/* No tag at all for a tool nobody has connected: the Connect button
-          beside it already says everything true about it, and a grey chip on
-          every unconfigured row turned a catalogue into a list of
-          complaints. */}
       {state.tag !== "" && (
         <Badge tone={state.tone} outline={state.outline}>
           {state.tag}
         </Badge>
       )}
       {action && onConnect && (
-        <Button
-          size="sm"
-          variant={action.label === "Manage" ? "ghost" : "primary"}
-          onClick={() => onConnect(action.blocks)}
-          disabled={running}
-        >
+        <Button size="sm" variant="primary" onClick={() => onConnect(action.blocks)}>
           {action.label}
         </Button>
       )}
-      {/* Only where there is something to take away. A tool nobody has
-          configured has nothing to disconnect from. */}
       {!absent && onDisconnect && (
-        <Button size="sm" variant="ghost" onClick={onDisconnect} disabled={running}>
+        <Button size="sm" variant="ghost" onClick={onDisconnect}>
           Disconnect
         </Button>
       )}
@@ -749,25 +722,9 @@ export function EntryRow({
               works), and two lists put an arbitrary seam down the middle of a
               Slack card whose every row is a seat. */}
           <ul className="int-rows">
-            {present.map((p) => {
-              const tool = tools.find((t) => t.key === p.surface.key);
-              return (
-                <SurfaceRow
-                  key={p.surface.key}
-                  surface={p.surface}
-                  row={p.row}
-                  // Only where this build has a pass behind the button.
-                  // Offering it everywhere would give an operator a control
-                  // that discovers on a press that there is nothing to do.
-                  onPass={
-                    onPass && tool && tool.can_provision && tool.satisfied
-                      ? (readOnly) => onPass(tool, readOnly)
-                      : undefined
-                  }
-                  running={running}
-                />
-              );
-            })}
+            {present.map((p) => (
+              <SurfaceRow key={p.surface.key} surface={p.surface} row={p.row} />
+            ))}
             {seats.map((seat) => (
               <li key={seat.handle} className="int-row">
                 <div className="int-row-identity">
@@ -788,6 +745,22 @@ export function EntryRow({
               </li>
             ))}
           </ul>
+
+          {/* SETTINGS, under the disclosure rather than in the header.
+              A connected tool still has values worth changing — the fallback
+              seat, the owner tag, the membership level — and it is the same
+              form the Connect button opens, so it opens the same dialog. In
+              the header it competed with Disconnect for a reader's eye and
+              said nothing about the tool's state; here it sits under the
+              surfaces it configures, where somebody who opened the card to
+              look at something is already reading. */}
+          {onConnect && !absent && (
+            <div className="int-card-settings">
+              <Button size="sm" variant="ghost" icon="sliders" onClick={() => onConnect()}>
+                Settings
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -856,68 +829,21 @@ function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): st
   return "";
 }
 
-/** Which catalogue row a surface belongs to, so a running pass disables it. */
-function entryOwning(surfaceKey: string): string {
-  return CATALOG.find((e) => e.surfaces.some((s) => s.key === surfaceKey))?.key ?? surfaceKey;
-}
-
 export function Integrations() {
   // Traffic counters are not pushed, and they move slowly; a minute is the
   // right cadence for "is anything arriving at all".
   const { data, loading, error } = useQuery("integrations", undefined, { pollMs: 60_000 });
   const setup = useSetup();
-  const toast = useToast();
   const [dialog, setDialog] = useState<{
     title: string;
     sections: { name: string; tool: SetupToolState }[];
     blocks?: string;
   } | null>(null);
-  const [running, setRunning] = useState("");
-  const [passing, setPassing] = useState<{ tool: SetupToolState; title: string } | null>(null);
   const [dropping, setDropping] = useState<{
     name: string;
     kind: string;
     stuck: string;
   } | null>(null);
-  const [lastRun, setLastRun] = useState<SetupRun | null>(null);
-
-  /**
-   * Run a third-party app's pass, or check it.
-   *
-   * The outcome is a toast plus the run's own findings, and the row's state
-   * tag updates on its own: the engine wrote the same fleet status the
-   * reconcile loop writes, so the next poll of `integrations` carries it.
-   */
-  async function runPass(
-    tool: SetupToolState,
-    readOnly: boolean,
-    operatorCredential = "",
-  ): Promise<void> {
-    setRunning(entryOwning(tool.key));
-    setLastRun(null);
-    try {
-      const run = (await rest.post(
-        `/setup/integrations/${tool.key}/${readOnly ? "check" : "provision"}`,
-        // The credential is sent and never kept: this component drops it
-        // with the dialog, and the engine drops it when the pass returns.
-        readOnly || !operatorCredential ? {} : { operator_credential: operatorCredential },
-      )) as SetupRun;
-      setLastRun(run);
-      toast.ok(readOnly ? "Checked" : "Setup pass finished");
-      setup.reload();
-    } catch (err) {
-      if (err instanceof RestError) {
-        const run = err.body.run as SetupRun | undefined;
-        if (run) setLastRun(run);
-        toast.failed(err.detail || err.hint || err.code || "The pass was refused.");
-      } else {
-        toast.failed(String(err));
-      }
-    } finally {
-      setRunning("");
-    }
-  }
-
   const rows = new Map((data?.integrations ?? []).map((r) => [r.key, r]));
   const configured = CATALOG.filter((e) => e.surfaces.some((s) => rows.has(s.key)));
 
@@ -940,11 +866,11 @@ export function Integrations() {
         <div className="banner caution">
           <Icon name="alert" size="sm" />
           <span className="col" style={{ gap: 4 }}>
-            <span>No public address is set, so no vendor can deliver to this engine.</span>
+            <span>No public address is set, so no third-party app can deliver to this engine.</span>
             <span className="t-caption">
               Set <code className="inline">{setup.base.config_path}</code> to the HTTPS address
-              vendors reach this deployment on. Chat over an outbound socket, Mattermost, is
-              unaffected.
+              third-party apps reach this deployment on. Chat over an outbound socket, Mattermost,
+              is unaffected.
             </span>
           </span>
         </div>
@@ -953,7 +879,7 @@ export function Integrations() {
         <div className="banner neutral">
           <Icon name="link" size="sm" />
           <span>
-            Vendors reach this engine at <code className="inline">{setup.base.value}</code>
+            Third-party apps reach this engine at <code className="inline">{setup.base.value}</code>
           </span>
         </div>
       )}
@@ -988,19 +914,6 @@ export function Integrations() {
         />
       )}
 
-      {passing && (
-        <PassDialog
-          tool={passing.tool}
-          title={passing.title}
-          onClose={() => setPassing(null)}
-          onRun={(credential) => {
-            const tool = passing.tool;
-            setPassing(null);
-            void runPass(tool, false, credential);
-          }}
-        />
-      )}
-
       {dialog && (
         <SetupDialog
           sections={dialog.sections}
@@ -1009,36 +922,6 @@ export function Integrations() {
           onClose={() => setDialog(null)}
           onDone={setup.reload}
         />
-      )}
-
-      {/* WHAT THE LAST PASS ACTUALLY DID. The row's tag says what the
-          integration is now; this says what the run reported, which is the
-          half an operator needs while fixing something. */}
-      {lastRun && (
-        <Panel
-          title={lastRun.state === "failed" ? "The last pass failed" : "The last pass"}
-          icon="activity"
-          actions={
-            <Button size="sm" variant="ghost" onClick={() => setLastRun(null)}>
-              Dismiss
-            </Button>
-          }
-        >
-          <div className="col gap-2">
-            {lastRun.error && <span className="t-caption">{lastRun.error}</span>}
-            {lastRun.report?.detail && <span className="t-caption">{lastRun.report.detail}</span>}
-            {(lastRun.findings ?? []).map((f, i) => (
-              <span key={`${f.kind}:${f.subject ?? ""}:${i}`} className="t-caption">
-                {f.detail || `${f.kind.replace(/_/g, " ")}${f.subject ? `: ${f.subject}` : ""}`}
-              </span>
-            ))}
-            {!lastRun.error && (lastRun.findings ?? []).length === 0 && (
-              <span className="t-caption faint">
-                The pass found nothing to report, which is what a working integration looks like.
-              </span>
-            )}
-          </div>
-        </Panel>
       )}
 
       {loading && !data && <Skeleton rows={6} />}
@@ -1070,17 +953,6 @@ export function Integrations() {
                     blocks,
                   })
                 }
-                onPass={(tool, readOnly) => {
-                  // A pass that writes at the third-party app is confirmed first, and
-                  // a pass that needs an administrator credential collects
-                  // it there. A check writes nothing, so it runs on the
-                  // press.
-                  if (readOnly) {
-                    void runPass(tool, true);
-                    return;
-                  }
-                  setPassing({ tool, title: entry.name });
-                }}
                 onDisconnect={() =>
                   setDropping({
                     name: entry.name,
@@ -1088,7 +960,6 @@ export function Integrations() {
                     stuck: stuckDisconnecting(entry, rows),
                   })
                 }
-                running={running === entry.key}
               />
             ))}
         </div>

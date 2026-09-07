@@ -2,14 +2,13 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/jira"
+
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // integrationDutyName is the fleet singleton the reconcile loop claims.
@@ -34,25 +33,32 @@ const integrationDutyTTL = 3 * integration.Interval
 // pass instead. One whose block has gone answers
 // [integration.ErrNotConfigured] and the loop forgets its status.
 //
-// # Which surfaces are registered, and why not all seven
+// # CONNECTING IS THE PERMISSION
 //
-// Only the ones whose existing pass is READ-ONLY. This loop runs unattended
-// for the life of the deployment, so a pass that creates accounts or mints
-// credentials on its own is a different and much larger decision than
-// reporting what a third-party app already has, and one an operator has to opt into
-// rather than inherit from an upgrade.
+// This loop used to run every pass with no sink and no webhook base, on the
+// reasoning that a base is permission to register a hook and a sink is
+// permission to mint a credential, and neither is a decision a timer gets to
+// make. That reasoning had a hole in it: the operator HAS made the decision.
+// They opened the connect form, pasted an organization credential and pressed
+// Connect, which is a person asking for exactly this. What the withheld
+// permissions actually bought was a screen full of buttons — Run setup,
+// Recheck — asking them to say yes a second time, and an integration that sat
+// unprovisioned until they found the right one.
 //
-// Jira and GitHub report rather than mint: neither third-party app issues a credential
-// on a provisioner's behalf, so their reconcile resolves each seat's identity
-// and reads the instance. Run with no sink and no webhook base, which is
-// exactly the posture `-dry-run` already uses on both subcommands, they write
-// nothing at all.
+// So a pass here runs with both. What still cannot happen unattended is
+// anything a person has NOT asked for: a company with no block is not
+// reconciled, a block with no credential reports a finding rather than
+// acting, and nothing is ever DELETED by the loop except through a disconnect
+// somebody pressed.
 //
-// GitLab, Mattermost and Slack are deliberately absent. Each of their passes
-// creates service accounts and mints tokens, and each refuses to run without
-// a sink to record them in, so there is no read-only posture to put them in
-// today. Wiring them here would mean the engine provisioning a third-party app on its
-// own schedule, which is a behaviour an operator must ask for.
+// # One implementation per surface
+//
+// The reconciler is the SAME [setup.Pass] the dashboard's own button used to
+// run, wrapped by [passConverger]. There were two spellings of this before —
+// a converger for the loop and a pass for the button — which is two chances
+// to disagree about what an integration's state is depending on which of them
+// last touched it.
+
 func (e *Engine) startIntegrations(ctx context.Context) {
 	// NO COORDINATION STORE, NO LOOP. A node without one has nowhere to
 	// record what a pass finds, and a loop that ran anyway would spend a
@@ -70,35 +76,29 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 	}
 
 	// EVERY SURFACE THIS BUILD CAN REMOVE, paired with the seam that
-	// removes it. A registration with no disconnector still converges;
-	// one with no reconciler only removes.
+	// removes it, and every surface it can converge, from the one
+	// implementation the dashboard's button also used to run.
 	drop := e.disconnectors()
-	regs := []integration.Registration{
-		{Reconciler: &jiraConverger{engine: e}, Disconnector: drop[integration.KindJira]},
-		// The wiki, whose pass had a Findings() and no reader: it could
-		// say what it saw and nothing asked, so a company's Confluence
-		// status was null forever while the surface could be broken.
-		{Reconciler: &confluenceConverger{engine: e}, Disconnector: drop[integration.KindConfluence]},
-		{Reconciler: &githubConverger{engine: e}, Disconnector: drop[integration.KindGitHub]},
-
-		// TEARDOWN ONLY. These passes CREATE accounts and mint tokens on
-		// them, which a timer must never do: a loop that converged them
-		// would provision a company's third-party app on a schedule nobody asked
-		// for, and gitlab.Reconcile refuses outright without a sink for
-		// exactly that reason. They can still be REMOVED on a schedule,
-		// because removal is only ever the answer to somebody pressing
-		// Disconnect.
-		//
-		// Slack and Datadog are here for the opposite reason: they have
-		// no pass at all and register nothing at the third-party app, so there is
-		// nothing to converge and nothing to withdraw. They still need a
-		// registration, because without one a disconnect asked for on
-		// either would sit on the fleet row for ever with the screen
-		// reporting Disconnecting and no node ever dropping the block.
-		{Only: integration.KindGitLab, Disconnector: drop[integration.KindGitLab]},
-		{Only: integration.KindMattermost, Disconnector: drop[integration.KindMattermost]},
-		{Only: integration.KindSlack, Disconnector: drop[integration.KindSlack]},
-		{Only: integration.KindDatadog, Disconnector: drop[integration.KindDatadog]},
+	regs := make([]integration.Registration, 0, len(integration.Kinds))
+	converged := map[integration.Kind]bool{}
+	for _, pass := range e.setupPasses() {
+		converged[pass.Kind()] = true
+		regs = append(regs, integration.Registration{
+			Reconciler:   &passConverger{pass: pass, engine: e},
+			Disconnector: drop[pass.Kind()],
+		})
+	}
+	// TEARDOWN ONLY for a surface with no pass. Slack's apps are created
+	// from the command line, so there is nothing here to converge — but a
+	// disconnect for it still has a block to drop, and without a
+	// registration that intent would sit on the fleet row for ever.
+	for _, kind := range integration.Kinds {
+		if converged[kind] {
+			continue
+		}
+		regs = append(regs, integration.Registration{
+			Only: kind, Disconnector: drop[kind],
+		})
 	}
 
 	worker, err := integration.New(integration.Options{
@@ -169,165 +169,9 @@ func (e *Engine) stopIntegrations() {
 	}
 }
 
-// jiraConverger reports what the tracker looks like now.
-type jiraConverger struct{ engine *Engine }
-
-func (jiraConverger) Kind() integration.Kind { return integration.KindJira }
-
-func (c *jiraConverger) Reconcile(ctx context.Context) ([]integration.Finding, error) {
-	company := c.engine.Company()
-	cfg := company.Config.Integrations.Jira
-	if cfg == nil {
-		return nil, integration.ErrNotConfigured
-	}
-	env := c.engine.resolver()
-
-	base := jiraBaseURL(cfg, env)
-	if base == "" {
-		// A ${VAR} that resolved to nothing. Reported as a finding rather
-		// than raised, because it is a statement about the operator's
-		// configuration rather than a failure to read the world, and the
-		// two get different cadences: this one is re-checked hourly
-		// because nothing at Jira will ever change it.
-		return []integration.Finding{{
-			Kind: integration.FindingCredentialMissing,
-			Detail: "neither integrations.jira.url nor integrations.jira.cloud_id " +
-				"resolved to anything, so there is nowhere to read the instance",
-		}}, nil
-	}
-	token := strings.TrimSpace(env.Value(cfg.Token))
-	if token == "" {
-		// THE PATH, NOT THE VALUE. This slot normally holds a ${VAR} and
-		// quoting it would be helpful, but the one time this branch is
-		// reached on a company that wrote a literal, the thing it would
-		// print is the credential. A finding is stored on the fleet and
-		// rendered on a screen.
-		return []integration.Finding{{
-			Kind: integration.FindingCredentialMissing,
-			Detail: "integrations.jira.token resolved to nothing, so the org " +
-				"account cannot read the instance",
-		}}, nil
-	}
-
-	client, err := jira.NewClient(jira.ClientOptions{
-		URL: base, Email: env.Value(cfg.Email), Token: token,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("engine: jira reconcile: %w", err)
-	}
-	// NO SINK AND NO WEBHOOK BASE, which is what makes this read-only:
-	// the pass resolves each seat's identity and reads the instance, and
-	// registers nothing. It is the same posture `crewlet jira provision
-	// -dry-run` runs in.
-	//
-	// THE BASE IS WITHHELD DELIBERATELY, even though the company now
-	// carries one. ensureWebhook takes a non-empty base as permission to
-	// act: it mints when the secret does not resolve, and creates or
-	// updates the hook when it does, neither of which a loop running
-	// unattended every few minutes may do. Judging ingress here needs a
-	// read-only inspection path that does not exist yet, so this reports
-	// what a read of the instance can establish and says nothing about
-	// ingress at all.
-	res, err := jira.Reconcile(ctx, jira.Options{
-		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("engine: jira reconcile: %w", err)
-	}
-	return res.Findings(), nil
-}
-
-// confluenceConverger reports what the wiki looks like now.
-//
-// It has a Findings() and had no reader: the pass could say what it saw and
-// nothing asked it, so every company's Confluence status was null forever
-// while the surface it describes could be entirely broken.
-type confluenceConverger struct{ engine *Engine }
-
-func (confluenceConverger) Kind() integration.Kind { return integration.KindConfluence }
-
-func (c *confluenceConverger) Reconcile(ctx context.Context) ([]integration.Finding, error) {
-	company := c.engine.Company()
-	cfg := company.Config.Integrations.Confluence
-	if cfg == nil {
-		return nil, integration.ErrNotConfigured
-	}
-	env := c.engine.resolver()
-
-	base := confluenceBaseURL(cfg, env)
-	if base == "" {
-		return []integration.Finding{{
-			Kind: integration.FindingCredentialMissing,
-			Detail: "neither integrations.confluence.url nor " +
-				"integrations.confluence.cloud_id resolved to anything, so there " +
-				"is nowhere to read the instance",
-		}}, nil
-	}
-	token := strings.TrimSpace(env.Value(cfg.Token))
-	if token == "" {
-		// THE PATH, NOT THE VALUE, for the reason the tracker's own
-		// branch above states.
-		return []integration.Finding{{
-			Kind: integration.FindingCredentialMissing,
-			Detail: "integrations.confluence.token resolved to nothing, so the " +
-				"org account cannot read the instance",
-		}}, nil
-	}
-	client, err := confluence.NewClient(confluence.ClientOptions{
-		URL: base, Email: env.Value(cfg.Email), Token: token,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("engine: confluence reconcile: %w", err)
-	}
-	// NO SINK AND NO WEBHOOK BASE, for the reason every converger here
-	// states: a base is permission to register a hook and mint the token
-	// that goes in its URL, and neither is a decision a timer makes.
-	res, err := confluence.Reconcile(ctx, confluence.Options{
-		Client: client, Config: cfg, Value: env.Value,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("engine: confluence reconcile: %w", err)
-	}
-	return res.Findings(), nil
-}
-
-// confluenceBaseURL is the REST base this node reads the wiki on.
-func confluenceBaseURL(cfg *config.Confluence, env *config.Resolver) string {
-	resolved := config.Confluence{
-		URL:     strings.TrimSpace(env.Value(cfg.URL)),
-		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
-	}
-	return resolved.BaseURL()
-}
-
-// githubConverger reports what the code host looks like now.
-type githubConverger struct{ engine *Engine }
-
-func (githubConverger) Kind() integration.Kind { return integration.KindGitHub }
-
-func (c *githubConverger) Reconcile(ctx context.Context) ([]integration.Finding, error) {
-	company := c.engine.Company()
-	cfg := company.Config.Integrations.GitHub
-	if cfg == nil || !cfg.Enabled {
-		return nil, integration.ErrNotConfigured
-	}
-	env := c.engine.resolver()
-
-	client, err := githubReconcileClient(cfg, env)
-	if err != nil {
-		return nil, fmt.Errorf("engine: github reconcile: %w", err)
-	}
-	// No sink and no webhook base, for the reason the tracker's pass
-	// states above: a base is permission to register, and this runs
-	// unattended.
-	res, err := github.Reconcile(ctx, github.Options{
-		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("engine: github reconcile: %w", err)
-	}
-	return res.Findings(), nil
-}
+// The helpers below outlived the convergers that used to sit here: the
+// passes need them for exactly the same reason, which is what made the two
+// implementations duplicates rather than neighbours.
 
 // githubReconcileClient builds the org client the read-only pass uses.
 //
@@ -350,3 +194,54 @@ func githubReconcileClient(cfg *config.GitHub, env *config.Resolver) (*github.Cl
 		APIBase: resolved.APIBase(), WebBase: resolved.WebURL(), Token: token,
 	})
 }
+
+// confluenceBaseURL is the REST base this node reads the wiki on.
+func confluenceBaseURL(cfg *config.Confluence, env *config.Resolver) string {
+	resolved := config.Confluence{
+		URL:     strings.TrimSpace(env.Value(cfg.URL)),
+		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
+	}
+	return resolved.BaseURL()
+}
+
+// passConverger runs a [setup.Pass] as the loop's reconciler.
+//
+// ONE IMPLEMENTATION PER SURFACE, reached two ways. The pass is what the
+// dashboard's own button used to run, and the loop ran a second thing beside
+// it; two spellings of the same work are two chances to disagree about what
+// an integration's state is depending on which of them touched it last.
+//
+// It supplies the sink and the webhook base the loop used to withhold. See
+// this file's own doc for why: connecting is the operator asking for exactly
+// this, and withholding them bought nothing but a screen of buttons asking
+// them to say so twice.
+type passConverger struct {
+	pass   setup.Pass
+	engine *Engine
+}
+
+func (c *passConverger) Kind() integration.Kind { return c.pass.Kind() }
+
+func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, error) {
+	company := c.engine.Company()
+	// A SINK IS BEST EFFORT HERE. A node with no keyring cannot seal a
+	// minted credential, but it can still read a surface and report what
+	// it finds — and reporting is most of what this loop is for. The pass
+	// treats a nil sink as a dry run, which is the honest posture for a
+	// node that could not have recorded what it created.
+	sink, err := c.engine.SetupSink(reconcileOperator)
+	if err != nil {
+		log.WarnContext(ctx, "integration_sink_unavailable",
+			"integration", c.pass.Kind().String(), "error", err,
+			"detail", "this pass reads and reports; it will mint nothing")
+		sink = nil
+	}
+	return c.pass.Run(ctx, setup.PassInput{
+		Sink:        sink,
+		WebhookBase: company.Config.Integrations.WebhookBase(),
+	})
+}
+
+// reconcileOperator is who the loop's writes are attributed to, so an audit
+// row says a timer did this rather than naming a person who did not.
+const reconcileOperator = "reconcile loop"

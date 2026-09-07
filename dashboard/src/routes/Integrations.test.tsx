@@ -130,7 +130,7 @@ test("a tool reports its least ready surface, and names it", () => {
 // Slack row says nothing.
 test("a single-surface tool does not name itself", () => {
   const state = rollUp(slack, rowsOf({ key: "slack", configured: true, secret_usable: false }));
-  expect(state.tag).toBe("Not checked");
+  expect(state.tag).toBe("Connecting");
   expect(state.status).toMatch(/^the webhook secret did not resolve/);
   expect(state.attention).toBe(true);
 });
@@ -152,7 +152,7 @@ test("a ready tool has no status line", () => {
 // nobody set it up, paused is somebody switched it off on purpose, and the
 // two used to collapse into the state most likely to be mistaken for a
 // mistake.
-test("absent, paused and unchecked are told apart", () => {
+test("absent, paused and connecting are told apart", () => {
   // NO TAG at all: the Connect button beside it is the whole message, and a
   // chip saying "not connected" on every unconfigured row reads as a fault
   // list rather than a catalogue.
@@ -160,11 +160,12 @@ test("absent, paused and unchecked are told apart", () => {
   expect(rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: false })).tag).toBe(
     "Paused",
   );
-  // Configured with no pass behind it is NOT "connected": there is no
+  // Configured with no report behind it is NOT "connected": there is no
   // measured claim, and inventing one is the whole failure this screen is
-  // built to avoid.
+  // built to avoid. It is the window between connecting and the loop's first
+  // pass, and it says so.
   expect(rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: true })).tag).toBe(
-    "Not checked",
+    "Connecting",
   );
 });
 
@@ -340,7 +341,10 @@ test("the action follows the state", () => {
   const ready = rollUp(atlassian, rowsOf({ key: "jira", configured: true }));
   expect(actionFor(ready, [toolState({ configured: false })])?.label).toBe("Connect");
   expect(actionFor(ready, [toolState({ satisfied: false })])?.label).toBe("Continue");
-  expect(actionFor(ready, [toolState({})])?.label).toBe("Manage");
+  // A WORKING TOOL OFFERS NOTHING. Nothing a person does moves it, and the
+  // Manage button that used to sit here read as a card's primary action
+  // while saying only "nobody is needed".
+  expect(actionFor(ready, [toolState({})])).toBeNull();
 
   // A row a person owes something on offers Fix, narrowed to the fields
   // that clear what the loop found.
@@ -358,9 +362,9 @@ test("the action follows the state", () => {
 });
 
 // A TOOL IS COMPLETE ONLY WHEN EVERY CONFIGURED SURFACE IS. Atlassian with
-// Jira set up and Confluence half done is neither Connect nor Manage: it is a
-// tool with something left to do, and reading only the first surface would
-// have called it finished.
+// Jira set up and Confluence half done is neither Connect nor finished: it is
+// a tool with something left to do, and reading only the first surface would
+// have called it done.
 test("one unfinished surface makes the whole tool unfinished", () => {
   const ready = rollUp(atlassian, rowsOf({ key: "jira", configured: true }));
   const mixed = actionFor(ready, [
@@ -375,7 +379,7 @@ test("one unfinished surface makes the whole tool unfinished", () => {
     toolState({ key: "jira", configured: true, satisfied: true }),
     toolState({ key: "confluence", configured: false, satisfied: false }),
   ]);
-  expect(partial?.label).toBe("Manage");
+  expect(partial).toBeNull();
 });
 
 // A tool this build knows nothing about offers nothing: a button that
@@ -420,15 +424,14 @@ test("a per-seat app with no seat set up is unfinished", () => {
   expect(action?.label).toBe("Continue");
 });
 
-// --- where a per-surface control lives -------------------------------------- //
+// --- what a card offers, and what it no longer does ------------------------ //
 
-// A PASS BELONGS TO A SURFACE, so its button sits in that surface's row
-// rather than in the card's header. Putting them in the header made Atlassian
-// the only card in the list with four controls in it, purely because it is
-// the only tool with more than one provisionable surface, and nothing on
-// screen explained why.
-test("a per-surface pass sits in that surface's row, not the header", () => {
-  const passes: string[] = [];
+// CONNECTING IS THE PERMISSION, so nothing on a connected card asks for one
+// again. The reconcile loop registers the hooks and creates the accounts on
+// its own timer now, which took the meaning out of every button that used to
+// stand for a permission a person had to grant a second time: Run setup and
+// Recheck per surface, and Manage in the header beside Disconnect.
+test("a connected card offers no pass controls", () => {
   render(
     <EntryRow
       entry={atlassian}
@@ -437,38 +440,41 @@ test("a per-surface pass sits in that surface's row, not the header", () => {
         { name: "Jira", tool: toolState({ key: "jira", can_provision: true }) },
         { name: "Confluence", tool: toolState({ key: "confluence", can_provision: true }) },
       ]}
-      onPass={(tool) => passes.push(tool.key)}
+      onConnect={() => {}}
+      onDisconnect={() => {}}
     />,
   );
 
-  // Closed, the header offers no pass at all.
-  expect(screen.queryByRole("button", { name: "Run setup" })).toBeNull();
-
   fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
-  const runs = screen.getAllByRole("button", { name: "Run setup" });
-  expect(runs.length).toBe(2);
-  expect(screen.getAllByRole("button", { name: "Recheck" }).length).toBe(2);
-
-  // And each one runs ITS OWN surface. A single handler for the card would
-  // have provisioned Jira from the Confluence row.
-  fireEvent.click(runs[1]!);
-  expect(passes).toEqual(["confluence"]);
+  for (const gone of ["Run setup", "Recheck", "Manage"]) {
+    expect(screen.queryByRole("button", { name: gone })).toBeNull();
+  }
+  expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
 });
 
-// A surface this build cannot provision offers nothing: a button that
-// discovers on a press that there is nothing behind it is worse than none.
-test("a surface with no pass behind it gets no button", () => {
+// SETTINGS ARE UNDER THE DISCLOSURE. A connected tool still has values worth
+// changing, and the control for them belongs where somebody reading the card
+// already is rather than in the header competing with Disconnect.
+test("settings open from the body, not the header", () => {
+  let opened = 0;
   render(
     <EntryRow
       entry={CATALOG.find((e) => e.key === "datadog")!}
       rows={rowsOf({ key: "datadog", configured: true })}
-      sections={[{ name: "Datadog", tool: toolState({ key: "datadog", can_provision: false }) }]}
-      onPass={() => {}}
+      sections={[{ name: "Datadog", tool: toolState({ key: "datadog" }) }]}
+      onConnect={() => {
+        opened += 1;
+      }}
+      onDisconnect={() => {}}
     />,
   );
+
+  // Closed, the header carries a state and a way out and nothing else.
+  expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+
   fireEvent.click(screen.getByRole("button", { name: /Show Datadog details/ }));
-  expect(screen.queryByRole("button", { name: "Run setup" })).toBeNull();
-  expect(screen.queryByRole("button", { name: "Recheck" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  expect(opened).toBe(1);
 });
 
 // A DROP IS A PROBLEM, so it survives the counters being removed.

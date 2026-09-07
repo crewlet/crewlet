@@ -471,11 +471,13 @@ registered, a signing secret minted and pushed. That is the third-party app's
 provisioning pass, and `POST /setup/integrations/{kind}/provision` is what
 runs it.
 
-**The reconcile loop deliberately cannot do this.** It runs the same third-party app
-function every few minutes with no sink and no public base, and those two
-absences are what make it safe unattended: a base is permission to register a
-webhook, and a sink is permission to mint a credential. This route supplies
-both, because a person asked for it.
+**The reconcile loop does this on its own.** It runs the same third-party app
+function every few minutes with the sink and the public base supplied, because
+connecting an integration is the permission: a person named that one app and
+handed over an administrator credential for exactly this. This route is the
+same work on demand, for an operator who wants a pass to run now rather than at
+the next tick, and it holds a fleet lease under its own name so the two never
+overlap. Nothing in the dashboard calls it.
 
 `can_provision` on a tool's state says whether this build has a pass for it.
 `needs_operator` is present only for a third-party app whose pass still asks for a

@@ -25,10 +25,12 @@ own infrastructure.
 
 ## Setting it up from the dashboard
 
-The Integrations screen collects the instance address and the team, and then
-**Run setup** creates each agent's bot account: the same pass
-`crewlet mattermost provision` runs. It asks for a system administrator token
-on every run and keeps it nowhere.
+Connect Mattermost on the Integrations screen with the instance address, the
+team and a system administrator token. The reconcile loop creates each agent's
+bot account on its next tick, running the same pass
+`crewlet mattermost provision` runs. The administrator token is sealed in the
+fleet's secret store and kept, because disabling those bots again on
+disconnect needs the same authority that created them.
 
 This is the one integration that needs **no public address at all**. The
 engine dials out to your server and holds one websocket per seat, so nothing

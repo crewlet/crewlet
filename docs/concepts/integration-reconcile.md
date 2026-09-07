@@ -82,17 +82,19 @@ flowchart LR
 
 ---
 
-## What the loop will not do
+## What the loop does, and what it leaves alone
 
 **It does not tear anything down.** Removing an integration block from the company document says what the engine should stop talking to. It does not say that fifteen service accounts, and everything attributable to them, should be destroyed. A removed block makes the loop forget the surface's status and nothing else; decommissioning stays an explicit flag on the third-party app's own subcommand, where you type it and read what it is about to delete.
 
 **It does not rotate a credential that works.** A third-party app serves a token once, so the tempting reading of "reconcile" is to mint every pass, and that is an outage on a timer: the engine is authenticating with the old value, and rotating revokes what every running agent is using. Rotation is a flag on the subcommand.
 
-**It does not register webhooks.** `integrations.public_base_url` tells the engine where a third-party app reaches it, and the loop deliberately does not pass that address into a third-party app pass. Every third-party app reads a non-empty webhook base as *permission to act*: it mints a signing secret when the config's `${VAR}` resolves to nothing, and creates or updates the hook when it does. Neither is something a loop running unattended every few minutes may do. Judging ingress read-only needs an inspection path that does not exist yet, so the loop reports what a read of the third-party app establishes and says nothing about ingress at all.
+**It registers webhooks, and it creates the accounts.** The loop runs each third-party app's pass with the sink and the public base URL supplied, so a pass mints a signing secret when the config's `${VAR}` resolves to nothing, creates or updates the hook, and creates the service account each seat acts as.
 
-**A person can ask for one.** `POST /setup/integrations/{kind}/provision` runs the same third-party app function this loop runs, with the sink and the public base supplied, because a button press is an explicit request where a timer is not. It holds the same kind of fleet lease this loop does, under its own name, so a pass and a tick never overlap, and it folds its outcome into this same status through the same code. See [Setting an integration up](../reference/api-endpoints.md#running-the-provisioning-pass).
+That is a reversal, and the reason is what connecting an integration means. The loop used to withhold both, on the reasoning that a webhook base is permission to register a hook and a sink is permission to mint a credential, and neither is a decision a timer gets to make. What that produced was an integration nobody could finish from the dashboard: a person connected an app, the loop reported it incomplete forever, and finishing it meant pressing a second button whose whole content was "yes, I meant it". Connecting **is** the permission. It is an explicit act, by a person, naming one third-party app, and the credential it hands over is an administrator's, given for exactly this.
 
-**It does not provision unattended.** Only surfaces whose pass is read-only run on the loop. Today that is **Jira** and **GitHub**: neither third-party app issues a credential on a provisioner's behalf, so their pass resolves each seat's identity and reads the instance, and with no sink and no public base URL it writes nothing at all. GitLab, Mattermost and Slack each create service accounts and mint tokens and refuse to run without a sink to record them in, so there is no read-only posture to put them in, and running them on a timer would be the engine provisioning a third-party app on its own schedule. Those stay on `crewlet <third-party app> provision`.
+**It still does not tear anything down on its own, and it still does not rotate a credential that works** (above). Provisioning converges towards the company's seats: an account that should exist is created, and one that should not is left alone until somebody disconnects the integration, which is the explicit act on the other end.
+
+**A person can still ask for a pass.** `POST /setup/integrations/{kind}/provision` runs the same function on demand, holding the same kind of fleet lease under its own name so a pass and a tick never overlap, and folding its outcome into this same status. Nothing in the dashboard calls it any more, because there is nothing left for it to grant: it is there for an operator who wants a pass to run now rather than at the next tick. See [Setting an integration up](../reference/api-endpoints.md#running-the-provisioning-pass).
 
 ---
 
@@ -152,9 +154,9 @@ The **findings list travels as well as the report**, because the two answer diff
 Two of backlet's phases have no counterpart here, and neither is an omission:
 
 - `disconnected` is a tenant who has not connected an integration yet. Here that is a company document with no block, so there is no row and no phase — and the screen shows **no status badge at all**, only a Connect button. A tool nobody has configured has nothing to report.
-- `disconnecting` is a teardown pass. This engine's disconnect is one config write that removes the block, after which the loop reports the surface not configured and forgets it, so there is no interval during which a teardown could be shown.
+- `disconnecting` is a teardown pass, and this engine has one: disconnect asks the third-party app to remove what the engine registered there before the block leaves the document, so a surface sits in `disconnecting` for as long as that takes and reports it if it fails.
 
-Two labels the dashboard adds for situations that are not phases: **Not checked**, for a block that is configured and that no pass has reported on yet, and **Paused**, for one whose surfaces are all disabled. Neither claims the integration works, which is the distinction the whole screen turns on.
+Two labels the dashboard adds for situations that are not phases: **Connecting**, for a block that is configured and that the loop has not reported on yet, which is the window of one reconcile interval after somebody connects, and **Paused**, for one whose surfaces are all disabled. Neither claims the integration works, which is the distinction the whole screen turns on.
 
 **On the dashboard** the Integrations screen shows one row per *tool*, not per surface: Atlassian is one row over the Jira, Confluence and Forge relay surfaces. A row's tag is the least ready phase among its surfaces, ordered by `Phases` above, so an `activating` surface outranks a `degraded` one (a degraded integration is still working; one still coming up is not) and a phase the dashboard build does not know sits between the two, never presented as ready and never masking a phase it does know.
 

@@ -10,14 +10,16 @@ What GitLab adds over GitHub is **automated, per-agent identity provisioning**. 
 
 ## Setting it up from the dashboard
 
-The Integrations screen collects the instance address and the group, generates
-the signing secret, and then **Run setup** creates the service accounts: the
-same pass `crewlet gitlab provision` runs.
+Connect GitLab on the Integrations screen with the instance address, the group
+and a group Owner token. The engine generates the signing secret and the
+reconcile loop creates the service accounts on its next tick, running the same
+pass `crewlet gitlab provision` runs.
 
-It asks for a **group Owner token on every run**, and never keeps it. That
-token creates accounts and mints tokens on them, which is a standing power if
-it is stored and a grant with an end if it is not, so the engine drops it the
-moment the pass returns and writes it nowhere.
+The **group Owner token is sealed in the fleet's secret store and kept**. That
+token creates accounts and mints tokens on them, which is a standing power, and
+it is held anyway for one reason: removing an account needs the authority that
+created it, so with nothing kept there was no way to disconnect the integration
+and take the accounts away with it.
 
 Two things the dashboard deliberately does not do, both of which stay on the
 command line: **rotating** every seat's token, which revokes the credential

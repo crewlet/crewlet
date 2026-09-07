@@ -24,14 +24,14 @@ the agent's own identity.
 
 ## Setting it up from the dashboard
 
-The Integrations screen collects what GitHub needs, generates the webhook
-secret, and then **Run setup** registers the hook: the same pass
-`crewlet github provision` runs, with the same secret store behind it. What it
-still cannot do for you is issue the organization read token, because GitHub
-issues no credential on a provisioner's behalf.
+Connect GitHub on the Integrations screen. The engine generates the webhook
+secret and the reconcile loop registers the hook on its next tick, running the
+same pass `crewlet github provision` runs with the same secret store behind
+it. What it cannot do for you is issue the organization read token, because
+GitHub issues no credential on a provisioner's behalf.
 
-**Recheck** runs that pass read-only, which is how you confirm a grant you
-just changed at GitHub without the engine writing anything.
+The loop keeps checking after that, so a grant you change at GitHub is
+reflected on the screen within a tick without anything to press.
 
 See [Running the provisioning pass](../reference/api-endpoints.md#running-the-provisioning-pass).
 
