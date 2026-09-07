@@ -206,7 +206,9 @@ A run that changed nothing still says so: the report names the seats it **kept**
 
 ### Permission matrix — the operator credential
 
-The provisioner's own credential is an **operator credential**, passed by `-admin-token` or `$GITLAB_ADMIN_TOKEN`, and is **never stored in company config**.
+The provisioner's own credential is an **admin credential**. On the command line it is passed by `-admin-token` or `$GITLAB_ADMIN_TOKEN` and read from the environment only. From the dashboard it is `integrations.gitlab.provisioning.admin_token`: a `${VAR}` in the document whose value is sealed in the fleet secret store, like every other credential.
+
+It is **held** rather than asked for each time, and the reason is the disconnect. Removing a service account needs the authority that created it, so a credential dropped after every pass left no way to take an account away: every one this engine created outlived the integration. Disconnecting names the secret in `orphaned_secrets`, so revoking it afterwards is one command.
 
 | Target | Required credential |
 |--------|---------------------|

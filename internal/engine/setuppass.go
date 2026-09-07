@@ -16,6 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // Running a vendor's provisioning from the API rather than from a shell.
@@ -132,18 +134,19 @@ func (p *mattermostPass) Teardown(ctx context.Context, in setup.TeardownInput) e
 	if cfg == nil {
 		return nil
 	}
-	if strings.TrimSpace(in.Operator) == "" {
+	env := p.engine.resolver()
+	admin := mattermostAdminToken(cfg, env, in.Operator)
+	if admin == "" {
 		return fmt.Errorf(
-			"engine: mattermost teardown: no admin token was supplied, and the " +
+			"engine: mattermost teardown: no admin token resolved, and the " +
 				"bots' own tokens cannot disable them")
 	}
-	env := p.engine.resolver()
 	plan, err := mattermost.PlanFor(company.Org, cfg)
 	if err != nil {
 		return fmt.Errorf("engine: mattermost teardown: %w", err)
 	}
 	client, err := mattermost.NewClient(mattermost.ClientOptions{
-		URL: env.Value(cfg.URL), Token: in.Operator,
+		URL: env.Value(cfg.URL), Token: admin,
 	})
 	if err != nil {
 		return fmt.Errorf("engine: mattermost teardown: %w", err)
@@ -318,10 +321,10 @@ func (*gitlabPass) Kind() integration.Kind { return integration.KindGitLab }
 // Needs is the group Owner token. Asked on every run and never stored: it
 // creates accounts and mints tokens on them, which is a standing power if it
 // is kept and a grant with an end if it is not.
-func (*gitlabPass) Needs() *setup.Requirement {
-	req := gitlab.OperatorCredential()
-	return &req
-}
+// Needs is nil: the Owner token is held in the company document like every
+// other credential now, so there is nothing transient left to ask for. See
+// [gitlab.AdminCredential] for why it is kept.
+func (*gitlabPass) Needs() *setup.Requirement { return nil }
 
 func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
@@ -329,23 +332,27 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	if cfg == nil || !cfg.Enabled {
 		return nil, integration.ErrNotConfigured
 	}
-	if strings.TrimSpace(in.Operator) == "" {
+	env := p.engine.resolver()
+	// The HELD credential, with a per-run override still honoured: an
+	// operator rotating the token can run a pass with the new one before
+	// the document carries it.
+	admin := gitlabAdminToken(cfg, env, in.Operator)
+	if admin == "" {
 		// A FINDING, NOT A FAULT: the operator has not supplied the one
 		// credential this pass cannot mint for itself, which is a fact
 		// about what is missing rather than a failure to look.
 		return []integration.Finding{{
 			Kind: integration.FindingCredentialMissing,
-			Detail: "no group Owner token was supplied, and the seats' own tokens " +
+			Detail: "no group Owner token resolved, and the seats' own tokens " +
 				"are what this pass mints, so it cannot bootstrap itself from them",
 		}}, nil
 	}
-	env := p.engine.resolver()
 	plan, err := gitlab.PlanFor(company.Org, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("engine: gitlab pass: %w", err)
 	}
 	client, err := gitlab.NewClient(gitlab.ClientOptions{
-		URL: env.Value(cfg.URL), Token: in.Operator,
+		URL: env.Value(cfg.URL), Token: admin,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: gitlab pass: %w", err)
@@ -383,18 +390,19 @@ func (p *gitlabPass) Teardown(ctx context.Context, in setup.TeardownInput) error
 	if cfg == nil {
 		return nil
 	}
-	if strings.TrimSpace(in.Operator) == "" {
+	env := p.engine.resolver()
+	admin := gitlabAdminToken(cfg, env, in.Operator)
+	if admin == "" {
 		return fmt.Errorf(
-			"engine: gitlab teardown: no group Owner token was supplied, and the " +
+			"engine: gitlab teardown: no group Owner token resolved, and the " +
 				"seats' own tokens cannot remove what created them")
 	}
-	env := p.engine.resolver()
 	plan, err := gitlab.PlanFor(company.Org, cfg)
 	if err != nil {
 		return fmt.Errorf("engine: gitlab teardown: %w", err)
 	}
 	client, err := gitlab.NewClient(gitlab.ClientOptions{
-		URL: env.Value(cfg.URL), Token: in.Operator,
+		URL: env.Value(cfg.URL), Token: admin,
 	})
 	if err != nil {
 		return fmt.Errorf("engine: gitlab teardown: %w", err)
@@ -413,10 +421,8 @@ func (*mattermostPass) Kind() integration.Kind { return integration.KindMattermo
 
 // Needs is the administrator token. Asked on every run and never stored, for
 // the reason GitLab's is: it creates accounts and mints tokens on them.
-func (*mattermostPass) Needs() *setup.Requirement {
-	req := mattermost.OperatorCredential()
-	return &req
-}
+// Needs is nil, for the reason GitLab's is: the administrator token is held.
+func (*mattermostPass) Needs() *setup.Requirement { return nil }
 
 func (p *mattermostPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
@@ -424,20 +430,21 @@ func (p *mattermostPass) Run(ctx context.Context, in setup.PassInput) ([]integra
 	if cfg == nil || !cfg.Enabled {
 		return nil, integration.ErrNotConfigured
 	}
-	if strings.TrimSpace(in.Operator) == "" {
+	env := p.engine.resolver()
+	admin := mattermostAdminToken(cfg, env, in.Operator)
+	if admin == "" {
 		return []integration.Finding{{
 			Kind: integration.FindingCredentialMissing,
-			Detail: "no administrator token was supplied, and the bots' own tokens " +
+			Detail: "no administrator token resolved, and the bots' own tokens " +
 				"are what this pass mints, so it cannot bootstrap itself from them",
 		}}, nil
 	}
-	env := p.engine.resolver()
 	plan, err := mattermost.PlanFor(company.Org, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
 	}
 	client, err := mattermost.NewClient(mattermost.ClientOptions{
-		URL: env.Value(cfg.URL), Token: in.Operator,
+		URL: env.Value(cfg.URL), Token: admin,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
@@ -507,3 +514,31 @@ var (
 	_ setup.Teardowner = (*gitlabPass)(nil)
 	_ setup.Teardowner = (*mattermostPass)(nil)
 )
+
+// gitlabAdminToken resolves the group Owner credential.
+//
+// The DOCUMENT first and the per-run override second, which is the order that
+// makes a rotation possible: an operator holding a new token can run a pass
+// with it before the document carries it, and every other run needs no
+// credential in hand at all.
+func gitlabAdminToken(cfg *config.GitLab, env *config.Resolver, override string) string {
+	if v := strings.TrimSpace(override); v != "" {
+		return v
+	}
+	if cfg == nil || cfg.Provisioning == nil {
+		return ""
+	}
+	return strings.TrimSpace(env.Value(cfg.Provisioning.AdminToken))
+}
+
+// mattermostAdminToken resolves the system-administrator credential, in the
+// same order and for the same reason.
+func mattermostAdminToken(cfg *config.Mattermost, env *config.Resolver, override string) string {
+	if v := strings.TrimSpace(override); v != "" {
+		return v
+	}
+	if cfg == nil || cfg.Provisioning == nil {
+		return ""
+	}
+	return strings.TrimSpace(env.Value(cfg.Provisioning.AdminToken))
+}

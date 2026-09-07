@@ -15,8 +15,8 @@ import (
 // whole point of the integration.
 //
 // What it does need is a bot account per agent, and creating one is an
-// administrator's act. That credential is [OperatorCredential]: asked for on
-// every pass and stored nowhere.
+// administrator's act. That credential is [AdminCredential], and it is held:
+// disabling a bot again needs the same authority that created it.
 
 // Requirements says what this company still needs for Mattermost.
 func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []setup.Requirement {
@@ -63,23 +63,37 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Toggle(enabled)
 	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Plain(url)
 	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Plain(team)
+	// The administrator credential, appended rather than declared inline
+	// with the rest because it is the one whose value this function has to
+	// resolve through the same seam every other secret uses.
+	admin := AdminCredential("")
+	if in != nil && in.Provisioning != nil {
+		admin = AdminCredential(in.Provisioning.AdminToken)
+		admin.Present, admin.Resolved, admin.Stored = setup.Held(in.Provisioning.AdminToken, resolve)
+	}
+	reqs = append(reqs, admin)
 	return reqs
 }
 
-// OperatorCredential is the transient administrator token a pass runs as.
+// AdminCredential is the system-administrator token this vendor's
+// provisioning and its teardown both authenticate with.
 //
-// Asked for every time and never stored, for the reason GitLab's is: it
-// creates bot accounts and mints tokens on them, which is a standing power if
-// it is kept.
-func OperatorCredential() setup.Requirement {
+// Held rather than transient, for the reason [gitlab.AdminCredential] states
+// at length: disabling a bot needs the authority that created it, so nothing
+// held meant nothing could be taken away from here.
+func AdminCredential(stored string) setup.Requirement {
 	return setup.Requirement{
-		Field:    "operator_credential",
-		Label:    "Administrator token",
-		Kind:     setup.KindSecret,
-		Required: true,
-		Help: "Used for this run and not kept. It creates each agent's bot " +
-			"account, mints its token and joins it to the team, so it needs " +
-			"system administrator rights.",
+		Field:      "admin_token",
+		Label:      "Administrator token",
+		Kind:       setup.KindSecret,
+		ConfigPath: "integrations.mattermost.provisioning.admin_token",
+		Required:   true,
+		Present:    stored != "",
+		Stored:     stored,
+		Help: "Creates each agent's bot account, mints its token and joins it " +
+			"to the team, so it needs system administrator rights. It is " +
+			"kept, sealed, because disabling those bots again needs the " +
+			"same authority.",
 		Where: "A personal access token belonging to a system administrator.",
 	}
 }

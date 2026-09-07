@@ -478,10 +478,20 @@ webhook, and a sink is permission to mint a credential. This route supplies
 both, because a person asked for it.
 
 `can_provision` on a tool's state says whether this build has a pass for it.
-`needs_operator`, when present, is a transient vendor administrator credential
-the pass asks for on every run: it is never stored, never logged, and dropped
-the moment the pass returns, because a one-time grant held permanently is a
-standing power.
+`needs_operator` is present only for a vendor whose pass still asks for a
+credential per run; no vendor in this build does. GitLab's group Owner token
+and Mattermost's system-admin token are ordinary **stored** requirements now,
+sealed in the fleet secret store with a `${VAR}` in the document like every
+other credential.
+
+They used to be transient, asked for on every pass and dropped the moment it
+returned, on the reasoning that a one-time grant held permanently is a
+standing power. What that reasoning did not price is the **disconnect**:
+removing a service account needs the authority that created it, so with
+nothing held there was no way to take one away from here, and every account
+the engine created outlived the integration that created it. The credential
+is held so that it can be undone, and it is named in `orphaned_secrets` when
+an integration is disconnected, so an operator knows exactly what to revoke.
 
 Refusals worth knowing: `409 requirements_outstanding` names the fields still
 missing (a pass writes at the vendor and must not run against a

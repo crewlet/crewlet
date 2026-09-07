@@ -14,13 +14,8 @@ import (
 // A GitHub pass registers a hook. A GitLab pass creates a service account per
 // agent, mints a token on each, adds them to a group and registers a webhook.
 // Everything it creates is visible to the whole group and outlives the run,
-// so the credential that authorises it is asked for on EVERY pass and never
-// stored: a group Owner token held permanently is a standing power to create
-// accounts, where the same token asked for once is a grant with an end.
-//
-// That credential is therefore not in this list. It is [OperatorCredential],
-// which the pass declares through Needs, and which the setup surface collects
-// as a transient field.
+// and so does the credential that authorises it: see [AdminCredential] for
+// why it is held rather than asked for each time, and what holding it buys.
 
 // Requirements says what this company still needs for GitLab.
 func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setup.Requirement {
@@ -128,24 +123,45 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Plain(group)
 	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Plain(string(accessLevel))
 	reqs[6].Present, reqs[6].Resolved, reqs[6].Stored = setup.Plain(prefix)
+	// The administrator credential, appended rather than declared inline
+	// with the rest because it is the one whose value this function has to
+	// resolve through the same seam every other secret uses.
+	admin := AdminCredential("")
+	if in != nil && in.Provisioning != nil {
+		admin = AdminCredential(in.Provisioning.AdminToken)
+		admin.Present, admin.Resolved, admin.Stored = setup.Held(in.Provisioning.AdminToken, resolve)
+	}
+	reqs = append(reqs, admin)
 	return reqs
 }
 
-// OperatorCredential is the transient administrator token a pass runs as.
+// AdminCredential is the group Owner token this vendor's provisioning and its
+// teardown both authenticate with.
 //
-// ASKED FOR EVERY TIME AND NEVER STORED. It can create accounts and mint
-// tokens on them, which is a standing power if it is kept and a grant with an
-// end if it is not. The command line refuses to persist it for the same
-// reason, reading it from the environment only.
-func OperatorCredential() setup.Requirement {
+// HELD, not transient, and that is a deliberate reversal. It used to be asked
+// for on every run and dropped straight after, because a token that can
+// create service accounts is a standing power once it is kept. What that cost
+// is a DISCONNECT: removing an account needs the authority that created it,
+// so with nothing held there was no way to take one away from here, and every
+// service account this engine made outlived the integration that made it.
+//
+// Sealed like every other credential — the value goes to the fleet's secret
+// store and the document gets a ${VAR} — and named in the orphaned list when
+// the integration is disconnected, so an operator knows exactly what to
+// revoke afterwards.
+func AdminCredential(stored string) setup.Requirement {
 	return setup.Requirement{
-		Field:    "operator_credential",
-		Label:    "Group Owner token",
-		Kind:     setup.KindSecret,
-		Required: true,
-		Help: "Used for this run and not kept. It creates the service accounts, " +
-			"mints their tokens and registers the webhook, so it needs to " +
-			"belong to somebody who owns the group.",
+		Field:      "admin_token",
+		Label:      "Group Owner token",
+		Kind:       setup.KindSecret,
+		ConfigPath: "integrations.gitlab.provisioning.admin_token",
+		Required:   true,
+		Present:    stored != "",
+		Stored:     stored,
+		Help: "Creates the service accounts, mints their tokens and registers " +
+			"the webhook, so it needs to belong to somebody who owns the " +
+			"group. It is kept, sealed, because removing those accounts " +
+			"again needs the same authority.",
 		Where:     "Create a legacy personal access token with the full api scope.",
 		VendorURL: "https://gitlab.com/-/user_settings/personal_access_tokens",
 	}

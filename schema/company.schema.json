@@ -483,6 +483,10 @@
           "description": "Per-handle membership overrides.",
           "type": "object"
         },
+        "admin_token": {
+          "description": "Group Owner token used to create and to remove the service accounts.",
+          "type": "string"
+        },
         "group": {
           "description": "Top-level group the service accounts join.",
           "type": "string"
@@ -925,6 +929,10 @@
     "MattermostProvisioning": {
       "additionalProperties": false,
       "properties": {
+        "admin_token": {
+          "description": "System-admin token used to create and to disable the bots.",
+          "type": "string"
+        },
         "channels": {
           "description": "Channels every bot joins.",
           "items": {

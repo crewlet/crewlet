@@ -533,6 +533,12 @@ type MattermostProvisioning struct {
 	// could collide with a person's.
 	UsernamePrefix string `yaml:"username_prefix,omitempty" json:"username_prefix,omitempty" desc:"Prefix on each bot username, e.g. agent-."`
 
+	// AdminToken is the system-administrator credential the provisioning
+	// and the teardown both authenticate with. Held for the same reason
+	// GitLab's is, and with the same consequence: see
+	// [GitLabProvisioning.AdminToken].
+	AdminToken string `secret:"true" yaml:"admin_token,omitempty" json:"admin_token,omitempty" desc:"System-admin token used to create and to disable the bots."`
+
 	// Channels are channel NAMES (the URL slug) every bot joins, on top of
 	// whatever each seat names. A bot only receives messages from channels
 	// it is a member of.
@@ -784,6 +790,23 @@ func validSigningSecret(secret string) bool { return whsec.Valid(secret) }
 type GitLabProvisioning struct {
 	// Group is the top-level group the service accounts join.
 	Group string `yaml:"group,omitempty" json:"group,omitempty" desc:"Top-level group the service accounts join."`
+
+	// AdminToken is the group Owner credential the provisioning and the
+	// teardown both authenticate with.
+	//
+	// HELD, which is a deliberate reversal. It used to be asked for on
+	// every run and dropped, because a token that can create service
+	// accounts is a standing power once it is kept. What that cost is a
+	// disconnect: removing an account needs the authority that created
+	// it, so with nothing held there was no way to take one away except
+	// by hand at the vendor, and every account this engine ever made
+	// outlived the integration.
+	//
+	// It is a ${VAR} like every other credential here: the value is
+	// sealed in the fleet's secret store and never in this document, and
+	// a disconnect names it in the orphaned list so an operator knows
+	// exactly what to revoke.
+	AdminToken string `secret:"true" yaml:"admin_token,omitempty" json:"admin_token,omitempty" desc:"Group Owner token used to create and to remove the service accounts."`
 
 	AccessLevel  GitLabAccessLevel            `yaml:"access_level,omitempty" json:"access_level,omitempty" js:"enum=developer|maintainer" desc:"Default membership level."`
 	AccessLevels map[string]GitLabAccessLevel `yaml:"access_levels,omitempty" json:"access_levels,omitempty" desc:"Per-handle membership overrides."`
