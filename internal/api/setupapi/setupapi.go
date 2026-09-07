@@ -475,7 +475,8 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		summary = datadog.Summary()
 		reqs = datadog.Requirements(block, s.resolve)
 		seats = credentialSeats(company, s.resolve,
-			[]string{datadog.SeatEnv}, datadog.CredentialKeys, "Datadog", s.passes.Serves(kind))
+			[]string{datadog.SeatEnv}, datadog.CredentialKeys, "Datadog",
+			s.passes.Serves(kind), datadogAccess(block))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindGitHub:
@@ -652,7 +653,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 // operator the half that cannot be acted on: the question is which of their
 // people can work in this app, and only a per-seat answer has it.
 func credentialSeats(company *config.Company, resolve func(string) (string, bool),
-	envs, keys []string, app string, provisions bool,
+	envs, keys []string, app string, provisions bool, access ...seatAccess,
 ) []SeatState {
 	out := []SeatState{}
 	for role := range company.EachRole() {
@@ -664,6 +665,13 @@ func credentialSeats(company *config.Company, resolve func(string) (string, bool
 			continue
 		}
 		state := SeatState{Handle: seat.Handle(), Name: role.Name, Requirements: []setup.Requirement{}}
+		// HOW MUCH THIS AGENT MAY DO, where the app grades it. Passed in
+		// rather than switched on here, because what grades an agent is
+		// the app's own question: GitHub reads a tier off the seat, and
+		// Datadog reads the role its accounts are created holding.
+		for _, a := range access {
+			state.Tier, state.TierLabel, state.TierHint = a(role)
+		}
 		stored, where := seatCredential(role.MCPEnv, envs, keys)
 		state.Present = stored != ""
 		switch {
@@ -693,6 +701,27 @@ func credentialSeats(company *config.Company, resolve func(string) (string, bool
 		out = append(out, state)
 	}
 	return out
+}
+
+// seatAccess says how much one seat may do at an app, in the three values a
+// roster renders: the tier this engine speaks, its name, and the line saying
+// what it grants. Empty where the app grades nobody.
+type seatAccess func(role *config.Role) (tier, label, hint string)
+
+// datadogAccess is the role a company's Datadog accounts are created holding.
+//
+// THE SAME FOR EVERY SEAT, which is Datadog's shape here rather than an
+// omission: accounts are created into one role named on the provisioning
+// block. It is still worth saying per seat, because it is the answer to what
+// this agent may do in Datadog and it differs between companies.
+func datadogAccess(cfg *config.Datadog) seatAccess {
+	role := datadog.RoleName(nil)
+	if cfg != nil {
+		role = datadog.RoleName(cfg.Provisioning)
+	}
+	return func(*config.Role) (string, string, string) {
+		return datadog.TierOf(role), datadog.RoleLabel(role), datadog.RoleHint(role)
+	}
 }
 
 // seatCredential finds a seat's credential for one app, and says where it is.

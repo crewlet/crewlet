@@ -37,7 +37,7 @@ const DefaultEmailDomain = "agents.crewlet.invalid"
 // needs no write at all. A company whose agents act in Datadog names a wider
 // role explicitly, which is a decision somebody makes rather than one this
 // engine makes for them.
-const DefaultRole = "Datadog Read Only Role"
+const DefaultRole = RoleReadOnly
 
 // PlanFor is the seats this company wants a Datadog identity for.
 //

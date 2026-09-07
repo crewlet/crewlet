@@ -61,6 +61,23 @@ The role is **refused rather than defaulted** if the organization does not have
 it: creating accounts under whatever role happened to match would grant an
 agent access nobody asked for.
 
+It is shown on each agent's row on the Integrations screen, as the tag a code
+host's tier gets, because it is the same question: how much this agent may do
+there. Datadog's own three are shortened, since "Datadog Standard Role" on a
+row that has already said which app it is about is noise, and mapped onto the
+access words the rest of the engine uses so an agent's Datadog access reads
+beside its GitHub access rather than in a second grammar:
+
+| Role | Shown as | Read as |
+|---|---|---|
+| `Datadog Read Only Role` (the default) | Read-only | `read_only` |
+| `Datadog Standard Role` | Standard | `review` |
+| `Datadog Admin Role` | Admin | `full_access` |
+
+A role your organization defined keeps its own name and is graded as nothing:
+shortening somebody's own name is how a reader stops recognising it, and this
+engine has no basis for claiming how much a role it has never seen grants.
+
 Disconnecting **disables** these accounts when you tick "also remove the
 accounts Crewlet created". Disabled rather than deleted, because deleting a
 Datadog user detaches it from everything it authored.

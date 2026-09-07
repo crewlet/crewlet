@@ -1152,6 +1152,22 @@ test("a seat on a tierless app carries no tier tag", () => {
   expect(container.querySelector(".int-seat-tier")).toBeNull();
 });
 
+// AN APP CAN GRADE AN AGENT IN A VOCABULARY THIS ENGINE HAS NO SCALE FOR.
+//
+// A Datadog role an organization made is its own name and nothing else: the
+// tag says it, and the weight stays neutral, because drawing it in the accent
+// reserved for full access would be this screen claiming how much a role it
+// has never seen grants.
+test("a graded seat with no known tier is drawn neutral", () => {
+  const { container } = roster(
+    seatOf({ satisfied: true, tier_label: "Acme On-Call", detail: "its own account" }),
+  );
+  const tag = container.querySelector(".int-seat-tier");
+  if (!tag) throw new Error("the seat carries no tag for the role it holds");
+  expect(tag.textContent).toBe("Acme On-Call");
+  expect(tag.className).toBe("int-seat-tier");
+});
+
 // THE MANIFEST GOES AS A FORM POST, NEVER AS A FETCH.
 //
 // The request carries the operator's OWN session at the code host, which is

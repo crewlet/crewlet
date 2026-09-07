@@ -1050,7 +1050,16 @@ export function EntryRow({
                         only" every time. */}
                     {seat.tier_label && (
                       <span
-                        className={`int-seat-tier int-seat-tier--${seat.tier}`}
+                        // THE WEIGHT CLASS ONLY WHERE THERE IS A TIER. An
+                        // app can grade an agent in a vocabulary this engine
+                        // does not have a scale for — a Datadog role an
+                        // organization made is its own name and nothing else
+                        // — and drawing it in the accent reserved for full
+                        // access would be this screen claiming how much a
+                        // role it has never seen grants.
+                        className={
+                          seat.tier ? `int-seat-tier int-seat-tier--${seat.tier}` : "int-seat-tier"
+                        }
                         // WHAT THE TIER GRANTS, on hover. Three words on a
                         // pill cannot say what full access does and does not
                         // include, and the sentence that can is the engine's

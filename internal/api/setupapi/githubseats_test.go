@@ -466,3 +466,81 @@ func TestAGitHubCardMissingACompanyAnswerStillHasABoxToFill(t *testing.T) {
 			state["form_complete"])
 	}
 }
+
+// DATADOG'S SEATS SAY HOW MUCH THEY MAY DO, in the same words as everyone
+// else's.
+//
+// Datadog grades an account by putting it in a ROLE, and every account this
+// engine creates goes into the one named on the provisioning block. That is
+// still the answer to what an agent may do there, and it differs between
+// companies, so the roster carries it exactly as a code host's tier is
+// carried: a tag on the name rather than a second status beside it.
+func TestADatadogSeatCarriesTheRoleItsAccountHolds(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	res := s.do(t, http.MethodPut, "/config", `{
+	  "name": "Acme",
+	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
+	    "webhook_token": "t",
+	    "provisioning": {"site": "datadoghq.com", "role": "Datadog Standard Role"}}},
+	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
+	}`, map[string]string{"X-Summary": "datadog on a standard role"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/datadog", "", nil))
+	rows, _ := state["seats"].([]any)
+	if len(rows) == 0 {
+		t.Fatal("datadog lists no seats")
+	}
+	seat, _ := rows[0].(map[string]any)
+	// THE ENGINE'S OWN VOCABULARY, so an agent's Datadog access reads
+	// beside its GitHub access rather than in a second grammar.
+	if seat["tier"] != "review" {
+		t.Errorf("the standard role reads as tier %v", seat["tier"])
+	}
+	// AND DATADOG'S PREFIX AND SUFFIX DROPPED. "Datadog Standard Role" on a
+	// row that has already said which app it is about is noise.
+	if seat["tier_label"] != "Standard" {
+		t.Errorf("the role renders as %v", seat["tier_label"])
+	}
+	if hint, _ := seat["tier_hint"].(string); !strings.Contains(hint, "monitors") {
+		t.Errorf("the role's hint is %q, and it does not say what it grants", hint)
+	}
+}
+
+// A ROLE AN ORGANIZATION MADE IS PASSED THROUGH WHOLE.
+//
+// Datadog's roles are whatever its admins have made, so there is no closed
+// set: shortening somebody's own name is how a reader stops recognising it,
+// and claiming a tier for it would be this engine inventing how much a role
+// it has never seen grants.
+func TestACustomDatadogRoleKeepsItsOwnName(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	res := s.do(t, http.MethodPut, "/config", `{
+	  "name": "Acme",
+	  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
+	    "webhook_token": "t",
+	    "provisioning": {"site": "datadoghq.com", "role": "Acme On-Call"}}},
+	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
+	}`, map[string]string{"X-Summary": "datadog on a role of our own"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/datadog", "", nil))
+	rows, _ := state["seats"].([]any)
+	seat, _ := rows[0].(map[string]any)
+	if seat["tier_label"] != "Acme On-Call" {
+		t.Errorf("the custom role renders as %v", seat["tier_label"])
+	}
+	// NO TIER, because this engine has never seen the role and has no
+	// basis for saying how much it grants. The screen draws it neutral.
+	if tier, listed := seat["tier"]; listed && tier != "" {
+		t.Errorf("a role this engine does not know was graded as %v", tier)
+	}
+}
