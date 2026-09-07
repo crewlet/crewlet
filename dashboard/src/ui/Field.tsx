@@ -14,6 +14,12 @@
  * `defaultValue` for a secret, because a value the engine has is a value this
  * page must never have received.
  *
+ * A REFERENCE IS NOT A CREDENTIAL, so it is not masked. A secret field whose
+ * value is wholly a `${NAME}` holds the NAME of a sealed entry, and masking
+ * it defeats the point of sending it: an operator has to be able to read
+ * which entry this field points at. Typing over it masks again the moment the
+ * value stops being a whole reference, so a credential is never on screen.
+ *
  * A URL FIELD WEARS ITS SCHEME. Every config field of this kind is refused
  * without one, so a person typing their site the way they say it out loud
  * ("acme.atlassian.net") had a form that took the value, a Save that failed
@@ -70,6 +76,8 @@ export function Field({
   // that carries its own: a Data Center instance reachable only over http is
   // a thing the config accepts, and an affix that silently rewrote it to
   // https would point the engine at a port nothing answers on.
+  // MASKED UNLESS IT IS A REFERENCE. See the note above.
+  const masked = kind === "secret" && !isReference(value);
   const own = kind === "url" ? schemeOf(value) : "";
   const affix = kind === "url" && own !== "http://" ? "https://" : "";
   const shown = affix ? value.slice(own.length) : value;
@@ -132,9 +140,10 @@ export function Field({
         <input
           id={id}
           className="input"
-          // A secret is a password field, always. See the note above: the
-          // type is what keeps it out of autofill and out of a screenshot.
-          type={kind === "secret" ? "password" : "text"}
+          // A secret is a password field unless it holds a reference. See
+          // the note above: the type is what keeps a CREDENTIAL out of
+          // autofill and out of a screenshot, and a name is neither.
+          type={masked ? "password" : "text"}
           inputMode={kind === "url" ? "url" : undefined}
           value={value}
           placeholder={placeholder}
@@ -183,4 +192,18 @@ function schemeOf(value: string): string {
   if (lower.startsWith("https://")) return "https://";
   if (lower.startsWith("http://")) return "http://";
   return "";
+}
+
+/**
+ * Whether a value is wholly a `${NAME}` reference.
+ *
+ * The same grammar as the engine's `internal/envref`, and PRESENTATION ONLY:
+ * the engine decides what a reference is, refuses what is not one, and only
+ * ever sends a secret's value when it is a whole reference already. This
+ * decides one thing, whether to mask, and it fails in the safe direction. Too
+ * strict masks a reference, which is what this field did before; too loose
+ * would need a credential that is literally spelled `${WORD}`.
+ */
+function isReference(value: string): boolean {
+  return /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim());
 }

@@ -71,3 +71,24 @@ test("no other kind of field wears a scheme", () => {
   fireEvent.change(screen.getByLabelText("API token"), { target: { value: "abc" } });
   expect(onChange).toHaveBeenCalledWith("abc");
 });
+
+// A REFERENCE IS NOT A CREDENTIAL, so masking it defeats the point of showing
+// it. The field held `${JIRA_TOKEN}` and rendered sixteen dots, which is the
+// same thing an operator saw before the engine sent the reference at all.
+test("a secret holding a reference is readable", () => {
+  render(<Field label="API token" kind="secret" value="${JIRA_TOKEN}" onChange={() => {}} />);
+  const input = screen.getByLabelText("API token") as HTMLInputElement;
+  expect(input.type).toBe("text");
+  expect(input.value).toBe("${JIRA_TOKEN}");
+});
+
+// AND EVERYTHING ELSE IN THAT FIELD IS STILL A CREDENTIAL. The type is what
+// keeps it out of an autofill store and out of a screenshot.
+test("a secret holding anything else stays masked", () => {
+  const cases = ["ATATT-real-credential", "", "${HOST}/x", "${}", "prefix ${NAME}"];
+  for (const value of cases) {
+    cleanup();
+    render(<Field label="API token" kind="secret" value={value} onChange={() => {}} />);
+    expect((screen.getByLabelText("API token") as HTMLInputElement).type).toBe("password");
+  }
+});

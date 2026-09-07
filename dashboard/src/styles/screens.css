@@ -1068,12 +1068,31 @@
    than sitting among the fields. It carries no rule of its own: where the
    fold is present that rule already ends the form, and a second one would
    box the note in. */
+/* SMALL, because it is an aside. The sentence that says what to do is one
+   line and the reasoning is behind the icon, so it sits under the form
+   without competing with the fields for the same attention. */
 .int-form-note {
   margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-3xs);
   line-height: var(--lh-normal);
+  color: var(--text-faint);
 }
-.int-form-note code {
-  font-family: var(--font-mono);
+.int-form-note a {
+  color: inherit;
+  text-decoration: underline;
+}
+.int-form-note a:hover {
+  color: var(--text);
+}
+/* The icon is the handle for the tooltip, so it takes a cursor that says
+   there is something to hover and does not shrink out of reach. */
+.int-form-why {
+  display: inline-flex;
+  flex: 0 0 auto;
+  cursor: help;
 }
 
 .int-form-more {

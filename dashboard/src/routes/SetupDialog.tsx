@@ -182,6 +182,12 @@ export function splitFields(reqs: SetupRequirement[]): {
  */
 export const HELD = "••••••••••••••••";
 
+/** Why a reference is worth preferring, for the note's hover. */
+const WHY_SECRETS =
+  "Recommendation: keep a credential in Secrets and put its reference here, written " +
+  "${NAME}. The config then names the entry instead of carrying the value, so one " +
+  "credential can serve several fields and rotating it is one edit in one place.";
+
 /**
  * How a field's value is addressed in this form.
  *
@@ -621,13 +627,25 @@ export function SetupDialog({
         {/* LAST, because it is an alternative to what the form just asked
             for rather than an instruction for filling it in. It is shown
             only where there is a credential to keep somewhere: a form with
-            no secret on it has nothing this offers. */}
+            no secret on it has nothing this offers.
+
+            ONE LINE, with the reasoning behind an icon. A paragraph at the
+            foot of a form is read once and then never again, and it competes
+            with the fields for the same attention; the sentence that says
+            what to do is short enough to skim past, and why it is worth
+            doing is there for whoever wants it. */}
         {shown.some((r) => r.kind === "secret") && (
-          <p className="hint int-form-note">
-            Recommendation: keep a credential in <a href={href(["secrets"])}>Secrets</a> and put its
-            reference here, written {"${NAME}"}. The config then names the entry instead of carrying
-            the value, so one credential can serve several fields and rotating it is one edit in one
-            place.
+          <p className="int-form-note">
+            Tip: keep credentials in <a href={href(["secrets"])}>Secrets</a> and reference them here
+            as {"${NAME}"}.
+            {/* A SPAN CARRIES THE TOOLTIP, not the icon: the svg is
+                aria-hidden, and a `title` ATTRIBUTE on an svg is not the
+                `<title>` CHILD that draws one, so the hover would be silently
+                absent. The same words reach a screen reader as text. */}
+            <span className="int-form-why" title={WHY_SECRETS}>
+              <Icon name="info" size="sm" />
+              <span className="sr-only">{WHY_SECRETS}</span>
+            </span>
           </p>
         )}
       </div>
