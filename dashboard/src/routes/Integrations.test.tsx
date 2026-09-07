@@ -543,10 +543,13 @@ test("a connected card offers no pass controls", () => {
   expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
 });
 
-// SETTINGS ARE UNDER THE DISCLOSURE. A connected tool still has values worth
-// changing, and the control for them belongs where somebody reading the card
-// already is rather than in the header competing with Disconnect.
-test("settings open from the body, not the header", () => {
+// SETTINGS SIT BESIDE THE DISCLOSURE, as a square the size of the chevron.
+//
+// At the foot of the open card it was an always-available control behind a
+// disclosure and one scroll away; as a labelled button in the header it
+// competed with Disconnect for the reader's eye. An icon square does
+// neither, and it is available without opening the card.
+test("settings open from the header, beside the chevron", () => {
   let opened = 0;
   render(
     <EntryRow
@@ -560,12 +563,24 @@ test("settings open from the body, not the header", () => {
     />,
   );
 
-  // Closed, the header carries a state and a way out and nothing else.
-  expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
-
-  fireEvent.click(screen.getByRole("button", { name: /Show Datadog details/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  // Closed, without opening the card at all.
+  fireEvent.click(screen.getByRole("button", { name: "Datadog settings" }));
   expect(opened).toBe(1);
+});
+
+// AND A TOOL NOBODY HAS CONNECTED HAS NO SETTINGS TO OPEN: its Connect
+// button is the whole of what it offers.
+test("an unconnected tool offers no settings square", () => {
+  render(
+    <EntryRow
+      entry={CATALOG.find((e) => e.key === "gitlab")!}
+      rows={rowsOf()}
+      sections={[{ name: "GitLab", tool: toolState({ key: "gitlab", configured: false }) }]}
+      onConnect={() => {}}
+    />,
+  );
+  expect(screen.queryByRole("button", { name: "GitLab settings" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
 });
 
 // THE AGENTS ARE THE POINT, so the card lists them.

@@ -1076,15 +1076,6 @@
   padding-top: var(--space-4);
 }
 
-/* Settings, at the foot of the open card and aligned with its header button
-   so the two controls of a connected tool sit on one edge. */
-.int-card-settings {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: var(--space-3);
-  margin-top: var(--space-3);
-  border-top: 1px solid var(--border-subtle);
-}
 .int-row-badges {
   display: flex;
   align-items: center;

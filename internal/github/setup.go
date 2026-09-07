@@ -44,8 +44,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindToggle,
 			ConfigPath: "integrations.github.enabled",
 			Required:   true,
-			Help: "Off leaves the configuration in place and the route closed, " +
-				"which is how you pause the integration without losing its setup.",
+			Help:       "Off keeps the configuration and closes the route.",
 		},
 		{
 			Field:      "webhook_secret",
@@ -59,10 +58,8 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			// engine. Running the setup pass registers the hook with the
 			// value minted here, and nobody has to copy anything.
 			Mintable: true,
-			Help: "Every delivery is signed with this and checked at the edge. A " +
-				"route with nothing to check against answers 503 rather than " +
-				"accepting a delivery it cannot verify.",
-			Blocks: integration.FindingCredentialMissing,
+			Help:     "Signs every delivery. Without it the route refuses all of them.",
+			Blocks:   integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "token",
@@ -76,12 +73,9 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			// not. Marking it required would put every company that
 			// deliberately runs without one on a permanent list of
 			// things to fix.
-			Required: false,
-			Help: "Read-only. Without it a review request still reaches its " +
-				"reviewer, and nobody else participating in the thread hears " +
-				"anything, because the engine cannot look them up.",
-			Where: "A fine-grained token with read access to the repositories " +
-				"these agents work in, or a classic token with repo:read.",
+			Required:  false,
+			Help:      "Optional and read-only: without it only the reviewer hears about a pull request.",
+			Where:     "A token with read access to the repositories these agents work in.",
 			VendorURL: "https://github.com/settings/tokens",
 			Blocks:    integration.FindingCredentialMissing,
 		},
@@ -92,9 +86,8 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.github.url",
 			Required:   false,
-			Help: "Leave this empty unless you run GitHub Enterprise Server. " +
-				"The API and web addresses are both derived from it.",
-			Format: "https://github.example.com",
+			Help:       "Leave this empty unless you run GitHub Enterprise Server.",
+			Format:     "https://github.example.com",
 		},
 		{
 			Field:      "provisioning.org",
@@ -103,10 +96,8 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.github.provisioning.org",
 			Required:   false,
-			Help: "The organization whose repositories these agents work in. " +
-				"Needed to register a webhook; without it the setup pass reads " +
-				"and registers nothing.",
-			Blocks: integration.FindingIngressBlocked,
+			Help:       "The organization whose repositories these agents work in.",
+			Blocks:     integration.FindingIngressBlocked,
 		},
 		{
 			Field:      "provisioning.org_webhook",
@@ -117,9 +108,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			// THE VENDOR'S OWN CLOSED SET, so a form cannot offer a
 			// value the config validator refuses.
 			Choices: choices(),
-			Help: "An organization hook is one registration for every repository. " +
-				"Falling back to per-repository hooks is what a token without " +
-				"organization admin can still do.",
+			Help:    "One hook for the organization, or one per repository.",
 		},
 	}
 

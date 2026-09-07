@@ -141,6 +141,92 @@ test("a stored secret is never rendered as a value", () => {
   expect(screen.queryByText(/DATADOG_WEBHOOK_TOKEN/)).toBeNull();
 });
 
+// A SHARED VALUE IS ASKED ONCE AND WRITTEN TO EVERY SURFACE.
+//
+// Atlassian is two config blocks and one product family: the account email
+// and the API token are the same Atlassian account, and asking for each of
+// them twice under two headings in one dialog is one question with two
+// inputs, which eventually holds two answers.
+test("a shared field appears once and is submitted to both surfaces", async () => {
+  const spy = stubFetch(
+    () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
+  );
+  const atlassian = (key: string, own: string) => ({
+    ...tool,
+    key,
+    configured: true,
+    requirements: [
+      req({ field: "url", label: own, kind: "url", connect: true }),
+      req({ field: "email", label: "Account email", kind: "text", connect: true, shared: true }),
+    ],
+  });
+  render(
+    <SetupDialog
+      sections={[
+        { name: "Jira", tool: atlassian("jira", "Jira site") },
+        { name: "Confluence", tool: atlassian("confluence", "Confluence site") },
+      ]}
+      title="Atlassian"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+
+  // ONCE on screen, though both surfaces declare it.
+  expect(screen.getAllByText("Account email").length).toBe(1);
+  // And each surface still asks for its own address, which is not shared.
+  expect(screen.getByText("Jira site")).toBeTruthy();
+  expect(screen.getByText("Confluence site")).toBeTruthy();
+
+  fireEvent.change(screen.getByLabelText(/Account email/), {
+    target: { value: "ops@example.com" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  await vi.waitFor(() => expect(spy.mock.calls.length).toBe(2));
+
+  // WRITTEN TO BOTH. Submitting only what was on screen would leave the
+  // second block without the value the first one collected.
+  for (const call of spy.mock.calls) {
+    const body = JSON.parse(String(call[1]?.body)) as { values: Record<string, string> };
+    expect(body.values.email).toBe("ops@example.com");
+  }
+});
+
+// TWO SURFACES, ONE FIELD NAME, TWO DIFFERENT VALUES.
+//
+// Jira and Confluence both declare `url` and they are different addresses.
+// Keyed on the name alone the second section's value overwrote the first's,
+// so the Jira site input showed the Confluence address — and saving would
+// have written it into Jira's block.
+test("a field name shared by two surfaces holds two values", () => {
+  const surface = (key: string, label: string, value: string) => ({
+    ...tool,
+    key,
+    configured: true,
+    requirements: [req({ field: "url", label, kind: "url", connect: true, present: true, value })],
+  });
+  render(
+    <SetupDialog
+      sections={[
+        { name: "Jira", tool: surface("jira", "Jira site", "https://acme.atlassian.net") },
+        {
+          name: "Confluence",
+          tool: surface("confluence", "Confluence site", "https://acme.atlassian.net/wiki"),
+        },
+      ]}
+      title="Atlassian"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect((screen.getByLabelText("Jira site") as HTMLInputElement).value).toBe(
+    "https://acme.atlassian.net",
+  );
+  expect((screen.getByLabelText("Confluence site") as HTMLInputElement).value).toBe(
+    "https://acme.atlassian.net/wiki",
+  );
+});
+
 // A FIX NARROWS TO THE FIELDS THAT CLEAR THE FINDING, which is what the
 // blocks field on a requirement is for.
 test("a finding narrows the form to what clears it", () => {

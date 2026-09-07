@@ -34,9 +34,7 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 			Kind:       setup.KindToggle,
 			ConfigPath: "integrations.mattermost.enabled",
 			Required:   true,
-			Help: "Off leaves the configuration in place and every seat's socket " +
-				"closed, which is how you pause the integration without losing " +
-				"its setup.",
+			Help:       "Off keeps the configuration and closes every seat's socket.",
 		},
 		{
 			Field:      "url",
@@ -45,10 +43,9 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.mattermost.url",
 			Required:   true,
-			Help: "Your server's address. The engine dials out to it, so it needs " +
-				"no public address of its own for this integration.",
-			Format: "https://chat.example.com",
-			Blocks: integration.FindingCredentialMissing,
+			Help:       "Your server's address. The engine dials out, so it needs no public address.",
+			Format:     "https://chat.example.com",
+			Blocks:     integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "team",
@@ -93,11 +90,8 @@ func AdminCredential(stored string) setup.Requirement {
 		Required:   true,
 		Present:    stored != "",
 		Stored:     stored,
-		Help: "Creates each agent's bot account, mints its token and joins it " +
-			"to the team, so it needs system administrator rights. It is " +
-			"kept, sealed, because disabling those bots again needs the " +
-			"same authority.",
-		Where: "A personal access token belonging to a system administrator.",
+		Help:       "Creates each agent's bot and joins it to the team, so it needs admin rights.",
+		Where:      "A personal access token belonging to a system administrator.",
 	}
 }
 

@@ -55,11 +55,10 @@ func Requirements(handle string, seat *config.Role, resolve func(string) (string
 			ConfigPath: "integrations.slack.bot_token",
 			Seat:       handle,
 			Required:   true,
-			Help: "What this agent posts as. Slack shows it on the app's OAuth " +
-				"page once the app is installed to the workspace.",
-			Where:     "Install the app to your workspace, then copy the Bot User OAuth Token.",
-			VendorURL: "https://api.slack.com/apps",
-			Blocks:    integration.FindingIdentityMissing,
+			Help:       "What this agent posts as. Slack shows it on the app's OAuth page.",
+			Where:      "Install the app to your workspace, then copy the Bot User OAuth Token.",
+			VendorURL:  "https://api.slack.com/apps",
+			Blocks:     integration.FindingIdentityMissing,
 		},
 		{
 			Field:      "signing_secret",
@@ -69,12 +68,10 @@ func Requirements(handle string, seat *config.Role, resolve func(string) (string
 			ConfigPath: "integrations.slack.signing_secret",
 			Seat:       handle,
 			Required:   true,
-			Help: "Every delivery addressed to this agent is verified against it. " +
-				"A route with nothing to check against answers 503 rather than " +
-				"accepting a delivery it cannot verify.",
-			Where:     "On the app's Basic Information page, under App Credentials.",
-			VendorURL: "https://api.slack.com/apps",
-			Blocks:    integration.FindingCredentialMissing,
+			Help:       "Verifies every delivery addressed to this agent.",
+			Where:      "On the app's Basic Information page, under App Credentials.",
+			VendorURL:  "https://api.slack.com/apps",
+			Blocks:     integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "channel",
@@ -83,8 +80,7 @@ func Requirements(handle string, seat *config.Role, resolve func(string) (string
 			ConfigPath: "integrations.slack.channel",
 			Seat:       handle,
 			Required:   false,
-			Help: "Where this agent posts when nothing else says. Its unit's own " +
-				"channel is used when this is empty.",
+			Help:       "Where this agent posts when nothing else says.",
 		},
 	}
 
@@ -110,8 +106,7 @@ func CompanyRequirements(in *config.Slack) []setup.Requirement {
 		ConfigPath: "integrations.slack.typing_status",
 		Required:   false,
 		Choices:    statusChoices(),
-		Help: "Whether an agent shows that it is working on a message before it " +
-			"answers. Addressed shows it only where somebody is waiting.",
+		Help:       "Whether an agent shows that it is working before it answers.",
 	}
 	req.Present, req.Resolved, req.Stored = setup.Plain(status)
 	return []setup.Requirement{req}

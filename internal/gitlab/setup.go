@@ -37,8 +37,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindToggle,
 			ConfigPath: "integrations.gitlab.enabled",
 			Required:   true,
-			Help: "Off leaves the configuration in place and the route closed, " +
-				"which is how you pause the integration without losing its setup.",
+			Help:       "Off keeps the configuration and closes the route.",
 		},
 		{
 			Field:      "url",
@@ -64,11 +63,9 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			// delivery, however non-empty. A person typing one would get
 			// it wrong.
 			Mintable: true,
-			Help: "Every delivery is signed with this and checked at the edge. " +
-				"GitLab signs with the decoded bytes, so it has a shape rather " +
-				"than being any string, which is why the engine generates it.",
-			Format: "whsec_ then standard base64 of a 32-byte key",
-			Blocks: integration.FindingCredentialMissing,
+			Help:     "Signs every delivery, and has a shape, so the engine generates it.",
+			Format:   "whsec_ then standard base64 of a 32-byte key",
+			Blocks:   integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "token",
@@ -77,11 +74,9 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			ConfigPath: "integrations.gitlab.token",
 			SecretName: "GITLAB_TOKEN",
 			Required:   false,
-			Help: "Read-only, and optional: without it a merge request still " +
-				"reaches its reviewer, and nobody else participating in the " +
-				"thread hears anything, because the engine cannot look them up.",
-			Where:     "A personal access token with read_api.",
-			VendorURL: "https://gitlab.com/-/user_settings/personal_access_tokens",
+			Help:       "Optional and read-only: without it only the reviewer hears about a merge request.",
+			Where:      "A personal access token with read_api.",
+			VendorURL:  "https://gitlab.com/-/user_settings/personal_access_tokens",
 		},
 		{
 			Field:      "provisioning.group",
@@ -90,10 +85,8 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.gitlab.provisioning.group",
 			Required:   false,
-			Help: "The top-level group the service accounts join and whose " +
-				"projects they work in. Without it there is nothing to " +
-				"provision, and the setup pass has nothing to do.",
-			Blocks: integration.FindingIngressBlocked,
+			Help:       "The top-level group the service accounts join and work in.",
+			Blocks:     integration.FindingIngressBlocked,
 		},
 		{
 			Field:      "provisioning.access_level",
@@ -102,9 +95,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			ConfigPath: "integrations.gitlab.provisioning.access_level",
 			Required:   false,
 			Choices:    accessChoices(),
-			Help: "What each agent's account may do in the group. Developer can " +
-				"push and open merge requests; maintainer can also merge and " +
-				"administer projects.",
+			Help:       "Developer pushes and opens merge requests; maintainer also merges.",
 		},
 		{
 			Field:      "provisioning.username_prefix",
@@ -112,9 +103,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindText,
 			ConfigPath: "integrations.gitlab.provisioning.username_prefix",
 			Required:   false,
-			Help: "Put in front of every service account's username, so the " +
-				"accounts this engine created are recognisable in a group that " +
-				"has others.",
+			Help:       "Put in front of every service account's username.",
 		},
 	}
 
@@ -161,12 +150,9 @@ func AdminCredential(stored string) setup.Requirement {
 		Required:   true,
 		Present:    stored != "",
 		Stored:     stored,
-		Help: "Creates the service accounts, mints their tokens and registers " +
-			"the webhook, so it needs to belong to somebody who owns the " +
-			"group. It is kept, sealed, because removing those accounts " +
-			"again needs the same authority.",
-		Where:     "Create a legacy personal access token with the full api scope.",
-		VendorURL: "https://gitlab.com/-/user_settings/personal_access_tokens",
+		Help:       "Creates the accounts and registers the webhook, so it must own the group.",
+		Where:      "Create a legacy personal access token with the full api scope.",
+		VendorURL:  "https://gitlab.com/-/user_settings/personal_access_tokens",
 	}
 }
 

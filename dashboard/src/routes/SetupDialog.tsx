@@ -97,6 +97,22 @@ export function splitFields(reqs: SetupRequirement[]): {
   return { connect, more: reqs.filter((r) => !r.connect) };
 }
 
+/**
+ * How a field's value is addressed in this form.
+ *
+ * SCOPED TO ITS SECTION, because a field NAME is not unique across a tool:
+ * Jira and Confluence both declare `url`, and they are different addresses.
+ * Keyed on the name alone, the second section's value overwrote the first's,
+ * so the Jira site input showed the Confluence address and saving would have
+ * written it into Jira's block.
+ *
+ * A shared value is the exception and keeps the bare name, which is exactly
+ * what makes one input feed every section that declares it.
+ */
+function valueKey(section: SetupSection, r: SetupRequirement): string {
+  return r.shared ? r.field : `${sectionKey(section)}:${r.field}`;
+}
+
 /** A section's identity: the vendor, plus the seat when there is one. */
 function sectionKey(section: SetupSection): string {
   return section.seat ? `${section.tool.key}/${section.seat}` : section.tool.key;
@@ -152,7 +168,9 @@ export function SetupDialog({
   // over a connected integration.
   const connecting = sections.length > 0 && sections.every((section) => !section.tool.configured);
 
-  const shownBy = useMemo(() => {
+  // What each section OWNS, before a shared value is folded into the first
+  // section that asks for it.
+  const ownBy = useMemo(() => {
     const out = new Map<string, SetupRequirement[]>();
     for (const section of sections) {
       const reqs =
@@ -163,27 +181,59 @@ export function SetupDialog({
     }
     return out;
   }, [sections, blocks]);
+
+  // ASKED ONCE. A shared value belongs to the tool rather than to one of its
+  // surfaces, so it is rendered by the first section that declares it and
+  // dropped from the rest — and it is SUBMITTED to all of them, which is what
+  // payloadFor reads ownBy for.
+  //
+  // Atlassian asked for the account email, the API token, the cloud id and
+  // the link address twice, under two headings, in one dialog. That is one
+  // question with two inputs, and two inputs eventually hold two answers.
+  const shownBy = useMemo(() => {
+    const out = new Map<string, SetupRequirement[]>();
+    const claimed = new Set<string>();
+    for (const section of sections) {
+      const key = sectionKey(section);
+      out.set(
+        key,
+        (ownBy.get(key) ?? []).filter((r) => {
+          if (!r.shared) return true;
+          if (claimed.has(r.field)) return false;
+          claimed.add(r.field);
+          return true;
+        }),
+      );
+    }
+    return out;
+  }, [sections, ownBy]);
   const shown = useMemo(() => [...shownBy.values()].flat(), [shownBy]);
 
   const [values, setValues] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
     for (const section of sections) {
-      for (const r of shownBy.get(sectionKey(section)) ?? []) {
-        seed(initial, r, section.tool.configured);
+      for (const r of ownBy.get(sectionKey(section)) ?? []) {
+        seed(initial, section, r, section.tool.configured);
       }
     }
     return initial;
   });
 
-  function seed(initial: Record<string, string>, r: SetupRequirement, configured: boolean): void {
+  function seed(
+    initial: Record<string, string>,
+    section: SetupSection,
+    r: SetupRequirement,
+    configured: boolean,
+  ): void {
     {
+      const key = valueKey(section, r);
       if (r.kind === "toggle") {
         // ON FOR AN APP NOBODY HAS CONFIGURED, because connecting something
         // and leaving it switched off is not what anybody means by
         // connecting it. A configured one opens on ITS OWN STATE, so a
         // paused integration no longer opens showing On and re-enables
         // itself on the next Save.
-        initial[r.field] = configured && r.value === "false" ? "false" : "true";
+        initial[key] = configured && r.value === "false" ? "false" : "true";
         return;
       }
       // WHAT THIS COMPANY ALREADY ANSWERED, so the form is an edit of a
@@ -195,7 +245,7 @@ export function SetupDialog({
       // `value` is absent on every secret and those open empty, which is
       // what "leave it blank to keep it" means below.
       if (r.value) {
-        initial[r.field] = r.value;
+        initial[key] = r.value;
         return;
       }
       // A DEFAULT ONLY WHERE THERE IS NOTHING. A field this company has
@@ -204,7 +254,7 @@ export function SetupDialog({
       // one. And it is seeded into the form rather than assumed on the
       // far side, so what is submitted is what was on screen.
       if (r.default && !r.present) {
-        initial[r.field] = r.default;
+        initial[key] = r.default;
       }
     }
   }
@@ -231,7 +281,10 @@ export function SetupDialog({
   }
 
   /** What one section would send: only what was touched, plus its mints. */
-  function payloadFor(reqs: SetupRequirement[]): {
+  function payloadFor(
+    section: SetupSection,
+    reqs: SetupRequirement[],
+  ): {
     values: Record<string, string>;
     generate: string[];
   } {
@@ -247,7 +300,7 @@ export function SetupDialog({
         if (!r.present) generate.push(r.field);
         continue;
       }
-      const value = values[r.field];
+      const value = values[valueKey(section, r)];
       if (value === undefined) continue;
       // AN EMPTY CREDENTIAL FIELD MEANS KEEP THE ONE YOU HAVE. The input
       // opens empty because the engine never sends a credential back, so
@@ -271,7 +324,14 @@ export function SetupDialog({
     // refusal on the second leaves the first landed rather than half
     // applied to one document.
     const work = sections
-      .map((section) => ({ section, body: payloadFor(shownBy.get(sectionKey(section)) ?? []) }))
+      // FROM WHAT THE SECTION OWNS, not from what it shows: a shared value is
+      // rendered by one section and belongs to every section that declares
+      // it, so writing only what is on screen would leave the second block
+      // without the token the first one collected.
+      .map((section) => ({
+        section,
+        body: payloadFor(section, ownBy.get(sectionKey(section)) ?? []),
+      }))
       .filter(({ body }) => Object.keys(body.values).length > 0 || body.generate.length > 0);
     if (work.length === 0) {
       setError("Nothing to submit: fill in a field, or choose to replace a stored one.");
@@ -300,10 +360,13 @@ export function SetupDialog({
       // input.
       if (err.code === "literal_in_config") {
         const path = String(err.body.path ?? "");
-        const target = shown.find((r) => r.config_path === path);
-        if (target) {
+        const found = sections
+          .flatMap((section) => (ownBy.get(sectionKey(section)) ?? []).map((r) => ({ section, r })))
+          .find(({ r }) => r.config_path === path);
+        const target = found?.r;
+        if (found && target) {
           setFieldErrors({
-            [target.field]:
+            [valueKey(found.section, target)]:
               "The company configuration holds a value here rather than a ${VAR} " +
               "reference, so there is no variable to store the credential in. " +
               "Clear it in Configuration, then try again.",
@@ -377,7 +440,7 @@ export function SetupDialog({
             )}
             {connect.map((r) => (
               <Fragment key={`${sectionKey(section)}:${r.field}`}>
-                {renderField(r, section.name)}
+                {renderField(section, r)}
               </Fragment>
             ))}
             {/* CLOSED, and closed in both directions: a disclosure that
@@ -395,7 +458,7 @@ export function SetupDialog({
                 <div className="int-form-more-fields">
                   {more.map((r) => (
                     <Fragment key={`${sectionKey(section)}:${r.field}`}>
-                      {renderField(r, section.name)}
+                      {renderField(section, r)}
                     </Fragment>
                   ))}
                 </div>
@@ -423,9 +486,11 @@ export function SetupDialog({
   // The app's NAME is passed in rather than read from a closure: this is
   // one function over every section's fields, and the link it draws has to
   // say which app it opens.
-  function renderField(r: SetupRequirement, appName: string) {
+  function renderField(section: SetupSection, r: SetupRequirement) {
+    const appName = section.name;
+    const key = valueKey(section, r);
     return (
-      <div key={r.field} className="col gap-1">
+      <div key={key} className="col gap-1">
         {r.kind === "secret" && r.mintable ? (
           <div className="field">
             <label>{r.label}</label>
@@ -434,9 +499,9 @@ export function SetupDialog({
                     NO INPUT. A mintable secret is exactly the case where the
                     engine can answer literal_in_config, because the operator
                     never sees the slot it refuses to overwrite. */}
-            {fieldErrors[r.field] && (
+            {fieldErrors[key] && (
               <span className="hint field-error" role="alert">
-                {fieldErrors[r.field]}
+                {fieldErrors[key]}
               </span>
             )}
           </div>
@@ -444,8 +509,8 @@ export function SetupDialog({
           <Field
             label={r.label}
             kind={r.kind === "toggle" ? "choice" : (r.kind as FieldKind)}
-            value={values[r.field] ?? ""}
-            onChange={(v) => setValues((c) => ({ ...c, [r.field]: v }))}
+            value={values[key] ?? ""}
+            onChange={(v) => setValues((c) => ({ ...c, [key]: v }))}
             // WHAT THE APP SAYS, and nothing about which button opened the
             // form. Marking a connect field required while connecting and
             // optional afterwards made one field wear two labels in two
@@ -461,7 +526,7 @@ export function SetupDialog({
             // required attribute, and an empty credential field means keep
             // the stored one (see payloadFor).
             required={r.required}
-            error={fieldErrors[r.field]}
+            error={fieldErrors[key]}
             choices={
               r.kind === "toggle"
                 ? [

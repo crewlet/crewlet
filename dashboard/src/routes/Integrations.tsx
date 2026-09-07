@@ -759,6 +759,24 @@ export function EntryRow({
           >
             <Icon name="chevronDown" size="sm" />
           </button>
+          {/* SETTINGS BESIDE THE DISCLOSURE, as a square the size of the
+              chevron. It sat at the foot of the open card, which put an
+              always-available control behind a disclosure and one scroll
+              away; as a labelled button in the header it had competed with
+              Disconnect for the reader's eye. An icon square does neither:
+              it reads as chrome belonging to the row, next to the other
+              control that does. */}
+          {onConnect && !absent && (
+            <button
+              type="button"
+              className="int-chevron"
+              aria-label={`${entry.name} settings`}
+              title={`${entry.name} settings`}
+              onClick={() => onConnect()}
+            >
+              <Icon name="gear" size="sm" />
+            </button>
+          )}
           {actions}
         </div>
       </div>
@@ -817,22 +835,6 @@ export function EntryRow({
               </li>
             ))}
           </ul>
-
-          {/* SETTINGS, under the disclosure rather than in the header.
-              A connected tool still has values worth changing — the fallback
-              seat, the owner tag, the membership level — and it is the same
-              form the Connect button opens, so it opens the same dialog. In
-              the header it competed with Disconnect for a reader's eye and
-              said nothing about the tool's state; here it sits under the
-              surfaces it configures, where somebody who opened the card to
-              look at something is already reading. */}
-          {onConnect && !absent && (
-            <div className="int-card-settings">
-              <Button size="sm" variant="ghost" icon="sliders" onClick={() => onConnect()}>
-                Settings
-              </Button>
-            </div>
-          )}
         </div>
       )}
     </section>

@@ -814,6 +814,15 @@ export interface SetupRequirement {
    * already saw when they connected it.
    */
   connect?: boolean;
+  /**
+   * One value across every surface of this tool, asked once and written to
+   * all of them.
+   *
+   * Atlassian's account email, API token, cloud id and link address: two
+   * config blocks, one Atlassian account. Not "same field name" — Jira's url
+   * and Confluence's url are both `url` and are different addresses.
+   */
+  shared?: boolean;
   /** The words in `help` that become the link to `vendor_url`. */
   link_text?: string;
   /**

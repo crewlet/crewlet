@@ -36,46 +36,42 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.jira.url",
 			Required:   cloudID == "",
-			Help: "Your Cloud site or Data Center instance, for example " +
-				"https://acme.atlassian.net. Give this or a cloud id, not both.",
-			Blocks: integration.FindingCredentialMissing,
+			Help:       "Your Cloud site or Data Center instance. Give this or a cloud id.",
+			Blocks:     integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "cloud_id",
+			Shared:     true,
 			Connect:    true,
 			Label:      "Cloud id",
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.jira.cloud_id",
 			Required:   false,
-			Help: "The alternative to the site address, for a deployment reaching " +
-				"Atlassian through the API gateway. Give one or the other.",
+			Help:       "The alternative to the site address, through the API gateway.",
 		},
 		{
 			Field:      "email",
+			Shared:     true,
 			Connect:    true,
 			Label:      "Account email",
 			Kind:       setup.KindText,
 			ConfigPath: "integrations.jira.email",
 			Required:   false,
-			Help: "Set this for an Atlassian Cloud site, which authenticates as " +
-				"email and token together. Leave it empty for a Data Center " +
-				"personal access token, which is a bearer credential.",
+			Help:       "Cloud authenticates as email and token together. Leave empty for Data Center.",
 		},
 		{
 			Field:      "token",
+			Shared:     true,
 			Connect:    true,
 			Label:      "API token",
 			Kind:       setup.KindSecret,
 			ConfigPath: "integrations.jira.token",
 			SecretName: "JIRA_TOKEN",
 			Required:   true,
-			Help: "The engine reads Jira as this account: it resolves which seat " +
-				"an issue belongs to, and who is watching a thread. Read access " +
-				"is enough for routing; registering a webhook needs an " +
-				"administrator.",
-			Where:     "Create an API token on your Atlassian account, or a personal access token on Data Center.",
-			VendorURL: "https://id.atlassian.com/manage-profile/security/api-tokens",
-			Blocks:    integration.FindingCredentialMissing,
+			Help:       "The engine reads Jira as this account, to resolve seats and watchers.",
+			Where:      "Create an API token on your Atlassian account, or a personal access token on Data Center.",
+			VendorURL:  "https://id.atlassian.com/manage-profile/security/api-tokens",
+			Blocks:     integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "webhook_secret",
@@ -88,21 +84,17 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 			// registered with, so both ends belong to the engine, and
 			// running the setup pass registers the hook with this value.
 			Mintable: true,
-			Help: "Every delivery is signed with this and checked at the edge. " +
-				"Cloud sites signing with X-Hub-Signature use it too; a route " +
-				"with nothing to check against answers 503 rather than " +
-				"accepting a delivery it cannot verify.",
-			Blocks: integration.FindingIngressBlocked,
+			Help:     "Signs every delivery. Data Center needs it; Cloud relays through Forge.",
+			Blocks:   integration.FindingIngressBlocked,
 		},
 		{
 			Field:      "site_url",
+			Shared:     true,
 			Label:      "Link address",
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.jira.site_url",
 			Required:   false,
-			Help: "Only needed alongside a cloud id: the gateway address is not " +
-				"something to hand a person, and a link built from it looks " +
-				"right and opens nothing.",
+			Help:       "Only alongside a cloud id: the address a person's links open.",
 		},
 	}
 

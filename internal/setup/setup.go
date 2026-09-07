@@ -153,6 +153,21 @@ type Requirement struct {
 	// Connect.
 	Connect bool `json:"connect,omitempty"`
 
+	// Shared marks a value that is ONE value across every surface of its
+	// tool, so the form asks for it once and writes it to all of them.
+	//
+	// Atlassian is why: Jira and Confluence are two blocks in the config and
+	// one product family in the world. The account email, the API token, the
+	// cloud id and the link address are the same Atlassian account and the
+	// same Atlassian site, so asking for each of them twice — under two
+	// headings, in one dialog — invited an operator to enter two different
+	// answers to one question.
+	//
+	// NOT the same as "has the same field name". Jira's url and Confluence's
+	// url are both `url` and are different addresses, which is exactly why
+	// this is declared rather than inferred.
+	Shared bool `json:"shared,omitempty"`
+
 	// Default is the value a form offers when this company has none.
 	//
 	// A SUGGESTION, never a stored value: nothing is written until

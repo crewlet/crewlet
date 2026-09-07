@@ -93,8 +93,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Kind:       setup.KindToggle,
 			ConfigPath: "integrations.datadog.enabled",
 			Required:   true,
-			Help: "Off leaves the configuration in place and the route closed, " +
-				"which is how you pause the integration without losing its setup.",
+			Help:       "Off keeps the configuration and closes the route.",
 		},
 		{
 			Field:      "webhook_token",
@@ -109,12 +108,9 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			// against whatever the config names. There is nothing to
 			// agree with, so asking a person to invent one is asking
 			// them to invent a password.
-			Mintable: true,
-			Help: "Every delivery carries this in an X-Crewlet-Token header and " +
-				"the engine compares it constant-time. Datadog signs nothing, " +
-				"so this token is the whole check: treat it as a signing key.",
-			Where: "Paste the generated value into the Datadog webhook's custom " +
-				"headers as X-Crewlet-Token.",
+			Mintable:  true,
+			Help:      "Datadog signs nothing, so this token is the whole check on a delivery.",
+			Where:     "Paste it into the Datadog webhook's X-Crewlet-Token header.",
 			VendorURL: "https://app.datadoghq.com/integrations/webhooks",
 			Blocks:    integration.FindingCredentialMissing,
 		},
@@ -124,12 +120,8 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Kind:       setup.KindHandle,
 			ConfigPath: "integrations.datadog.route_to",
 			Required:   true,
-			Help: "The seat an alert wakes when no monitor tag names an owner. " +
-				"Required, and it is the only routing floor in the whole config: " +
-				"an alert is the one delivery that can legitimately name nobody, " +
-				"and without a floor those alerts are accepted, verified, counted " +
-				"and dropped, which looks exactly like coverage.",
-			Blocks: integration.FindingCredentialMissing,
+			Help:       "The seat an alert wakes when no monitor tag names an owner.",
+			Blocks:     integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "handle_tag",
@@ -137,11 +129,8 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Kind:       setup.KindText,
 			ConfigPath: "integrations.datadog.handle_tag",
 			Required:   false,
-			Help: "The monitor tag key that names the seat an alert wakes, so a " +
-				"monitor tagged crewlet:sre-lead reaches that seat. Defaults to " +
-				"crewlet; change it to match the ownership scheme your monitors " +
-				"already use.",
-			Format: "a Datadog tag key",
+			Help:       "The monitor tag key that names an alert's owner. Defaults to crewlet.",
+			Format:     "a Datadog tag key",
 		},
 	}
 

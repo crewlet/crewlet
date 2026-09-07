@@ -36,12 +36,12 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.confluence.url",
 			Required:   cloudID == "",
-			Help: "Your Cloud site or Data Center instance, for example " +
-				"https://acme.atlassian.net/wiki. Give this or a cloud id, not both.",
-			Blocks: integration.FindingCredentialMissing,
+			Help:       "Your Cloud site or Data Center instance. Give this or a cloud id.",
+			Blocks:     integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "cloud_id",
+			Shared:     true,
 			Connect:    true,
 			Label:      "Cloud id",
 			Kind:       setup.KindID,
@@ -51,29 +51,27 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 		},
 		{
 			Field:      "email",
+			Shared:     true,
 			Connect:    true,
 			Label:      "Account email",
 			Kind:       setup.KindText,
 			ConfigPath: "integrations.confluence.email",
 			Required:   false,
-			Help: "Set this for an Atlassian Cloud site, which authenticates as " +
-				"email and token together. Leave it empty for a Data Center " +
-				"personal access token.",
+			Help:       "Cloud authenticates as email and token together. Leave empty for Data Center.",
 		},
 		{
 			Field:      "token",
+			Shared:     true,
 			Connect:    true,
 			Label:      "API token",
 			Kind:       setup.KindSecret,
 			ConfigPath: "integrations.confluence.token",
 			SecretName: "CONFLUENCE_TOKEN",
 			Required:   true,
-			Help: "The engine reads Confluence as this account: it is what backs " +
-				"knowledge search and what registers a webhook. Registering one " +
-				"on Cloud needs Confluence administrator rights.",
-			Where:     "Create an API token on your Atlassian account, or a personal access token on Data Center.",
-			VendorURL: "https://id.atlassian.com/manage-profile/security/api-tokens",
-			Blocks:    integration.FindingCredentialMissing,
+			Help:       "The engine reads Confluence as this account: knowledge search, and the webhook.",
+			Where:      "Create an API token on your Atlassian account, or a personal access token on Data Center.",
+			VendorURL:  "https://id.atlassian.com/manage-profile/security/api-tokens",
+			Blocks:     integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "webhook_token",
@@ -83,11 +81,8 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 			SecretName: "CONFLUENCE_WEBHOOK_TOKEN",
 			Required:   false,
 			Mintable:   true,
-			Help: "For a Cloud site, which signs nothing: this token rides in the " +
-				"registered URL and is the whole check on a delivery. Treat it " +
-				"as a signing key, and note that changing the public address " +
-				"republishes it, so a base change is a rotation.",
-			Blocks: integration.FindingIngressBlocked,
+			Help:       "Cloud signs nothing, so this token in the URL is the whole check.",
+			Blocks:     integration.FindingIngressBlocked,
 		},
 		{
 			Field:      "webhook_secret",
@@ -97,19 +92,17 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 			SecretName: "CONFLUENCE_WEBHOOK_SECRET",
 			Required:   false,
 			Mintable:   true,
-			Help: "For a Data Center instance, which signs every delivery. The " +
-				"engine verifies an HMAC against this, and a route with nothing " +
-				"to check against answers 503 rather than accepting one.",
-			Blocks: integration.FindingIngressBlocked,
+			Help:       "Data Center signs every delivery, and the engine checks it against this.",
+			Blocks:     integration.FindingIngressBlocked,
 		},
 		{
 			Field:      "site_url",
+			Shared:     true,
 			Label:      "Link address",
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.confluence.site_url",
 			Required:   false,
-			Help: "Only needed alongside a cloud id, so a link handed to a person " +
-				"opens the page rather than the gateway.",
+			Help:       "Only alongside a cloud id: the address a person's links open.",
 		},
 	}
 
