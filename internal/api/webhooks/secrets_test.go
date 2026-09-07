@@ -468,7 +468,7 @@ roles:
 //
 // GitHub generates a signing secret per app, at conversion time, and returns
 // it once. So a delivery from an agent's app carries a signature over that
-// app's secret — not the organization's, which belongs to a different app or
+// app's secret, not the organization's, which belongs to a different app or
 // to no app at all in a company like this one. Verified against the
 // organization's, every delivery from every agent was refused with a 503
 // while GitHub's own hook page reported the app healthy.
@@ -505,7 +505,7 @@ func TestAnAgentsAppContributesItsOwnWebhookSecret(t *testing.T) {
 //
 // Two deployments address the same path. An agent's own app signs with the
 // secret above. A single organization app pointed at one seat has only the
-// organization's, and it is the only credential its deliveries can carry — so
+// organization's, and it is the only credential its deliveries can carry, so
 // a seat holding none must fall through rather than refuse.
 func TestTheGitHubRouteVerifiesAgainstTheAppThatSigned(t *testing.T) {
 	t.Parallel()

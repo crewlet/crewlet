@@ -346,9 +346,9 @@ type RoleGitHub struct {
 	// returns it in the same response as the key, once.
 	//
 	// So an agent's deliveries cannot be verified against the
-	// organization's `integrations.github.webhook_secret` — that secret
-	// belongs to a different app, or to no app at all in a company that
-	// only ever created per-agent ones. Verifying against it refused every
+	// organization's `integrations.github.webhook_secret`, which belongs to
+	// a different app, or to no app at all in a company that only ever
+	// created per-agent ones. Verifying against it refused every
 	// delivery from every agent with a 503, while GitHub's own hook page
 	// showed the app healthy and the config showed a secret set.
 	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"Reference to this seat's sealed GitHub App webhook secret. Returned by GitHub once."`

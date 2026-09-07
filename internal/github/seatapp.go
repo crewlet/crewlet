@@ -269,8 +269,8 @@ func (r *SeatAppResult) reconcileSeat(
 // THE FINDING IS THE SAME ONE A SEAT WITH NO APP GETS, because that is the
 // state this seat is now in: it names an app that does not exist, so nothing
 // it does on GitHub is its own. The action URL is empty for the same reason
-// it is empty there — an app is created by a form POST from a page carrying
-// the operator's own session, not by following a link — and the actor is the
+// it is empty there (an app is created by a form POST from a page carrying
+// the operator's own session, not by following a link), and the actor is the
 // person at GitHub, because the engine cannot create an app for anybody.
 func (r *SeatAppResult) forget(ctx context.Context, opts SeatAppOptions, seat SeatApp) {
 	detail := seat.Handle + "'s GitHub App no longer exists at GitHub, so nothing " +

@@ -86,7 +86,7 @@ func (r *Receiver) github(w http.ResponseWriter, req *http.Request) {
 // credential its deliveries can carry.
 //
 // Empty when neither is set, which [Receiver.authenticate] reads as "cannot
-// verify" and answers 503 to — never as "nothing to verify".
+// verify" and answers 503 to, never as "nothing to verify".
 func githubSecret(s Secrets, handle string) string {
 	if handle != "" {
 		if secret := s.GitHubSeat[handle]; secret != "" {

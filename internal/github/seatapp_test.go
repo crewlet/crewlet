@@ -26,7 +26,7 @@ func kinds(findings []integration.Finding) []string {
 // and there is no address to send anybody to.
 //
 // IT WAITS ON A PERSON, never on the engine. This was identity_missing for
-// one commit, which reads as the engine provisioning an account — true on
+// one commit, which reads as the engine provisioning an account: true on
 // Slack, false here, because no engine can create a GitHub App for anybody.
 // The card said "Setting up agents" over a seat where nothing was happening
 // and nothing would until somebody clicked.

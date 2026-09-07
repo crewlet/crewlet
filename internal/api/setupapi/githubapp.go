@@ -224,7 +224,7 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 
 	// THE POINTER ONLY WHERE THERE IS SOMETHING TO POINT AT. A `${VAR}`
 	// naming a secret nothing sealed resolves to nothing, and the webhook
-	// route reads an empty secret as "cannot verify" and answers 503 — so
+	// route reads an empty secret as "cannot verify" and answers 503, so
 	// writing it unconditionally would turn an app GitHub gave no secret
 	// into a seat whose deliveries are refused rather than one that falls
 	// back to the organization's.

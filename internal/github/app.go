@@ -467,7 +467,7 @@ func (c *AppClient) Installations(ctx context.Context) ([]Installation, error) {
 //
 // The JWT is signed with the app's own key and GitHub validates it by looking
 // the app up, so `Integration not found` here is that lookup failing rather
-// than a permission this credential lacks — the conflation [APIError.NotFound]
+// than a permission this credential lacks. The conflation [APIError.NotFound]
 // warns about does not arise, because an app is never invisible to itself.
 //
 // Three answers, and the middle one is why this is not a bool: true, false

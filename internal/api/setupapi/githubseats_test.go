@@ -223,7 +223,7 @@ func TestAGitHubSeatWithWorkOutstandingHoldsTheCardOpen(t *testing.T) {
 
 // fakeGitHub answers the one call the app flow makes: the manifest
 // conversion. It records what it was asked to convert so a test can assert
-// the code reached it, and answers with what GitHub answers with — a private
+// the code reached it, and answers with what GitHub answers with: a private
 // key and a webhook secret, both returned exactly once.
 func fakeGitHub(t *testing.T, app map[string]any) *httptest.Server {
 	t.Helper()
