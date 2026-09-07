@@ -296,6 +296,69 @@ func (f *AppFlow) InstallURL(handle string) string {
 	return github.InstallURL(webBaseOf(company), slug)
 }
 
+// RecordInstall adopts an installation GitHub named on its redirect.
+//
+// THE SAME WRITE THE LOOP MAKES, through the same entity route, so the two
+// paths cannot disagree about where an installation is recorded. What it buys
+// is timing: the loop would find this id by listing the app's installations
+// on its next pass, and doing it here means the Integrations screen is right
+// when the operator gets back to it.
+//
+// It refuses an id for a seat with no app, because that pairing cannot be
+// true: an installation belongs to an app, so a seat without one has nothing
+// to install.
+func (f *AppFlow) RecordInstall(ctx context.Context, handle string, installationID int64) error {
+	if installationID <= 0 {
+		return fmt.Errorf("setupapi: %q is not an installation id", handle)
+	}
+	s := f.service
+	company := s.company()
+	if company == nil {
+		return errors.New("setupapi: no company configuration is active")
+	}
+	seat := seatByHandle(company, handle)
+	if seat == nil {
+		return fmt.Errorf("setupapi: this company has no agent seat %q", handle)
+	}
+	if seat.Integrations.GitHub == nil || seat.Integrations.GitHub.AppID == 0 {
+		return fmt.Errorf(
+			"setupapi: %s has no GitHub App, so there is nothing for an "+
+				"installation to belong to", handle)
+	}
+	return s.recordSeatInstallation(ctx, handle, installationID)
+}
+
+// recordSeatInstallation writes the installation onto the seat.
+func (s *Service) recordSeatInstallation(ctx context.Context, handle string, id int64) error {
+	body, err := s.writer.Config.Seat(ctx, handle)
+	if err != nil {
+		return fmt.Errorf("setupapi: read the seat %s: %w", handle, err)
+	}
+	var role map[string]any
+	if decodeErr := json.Unmarshal(body, &role); decodeErr != nil {
+		return fmt.Errorf("setupapi: decode the seat %s: %w", handle, decodeErr)
+	}
+	integrations, _ := role["integrations"].(map[string]any)
+	block, _ := integrations["github"].(map[string]any)
+	if block == nil {
+		return fmt.Errorf("setupapi: the seat %s has no github block", handle)
+	}
+	block["installation_id"] = id
+	integrations["github"] = block
+	role["integrations"] = integrations
+
+	updated, err := json.Marshal(role)
+	if err != nil {
+		return fmt.Errorf("setupapi: encode the seat %s: %w", handle, err)
+	}
+	_, _, err = s.writer.Config.SetSeat(ctx, handle, updated,
+		"record "+handle+"'s GitHub installation", "setup", "")
+	if err != nil {
+		return fmt.Errorf("setupapi: record the installation for %s: %w", handle, err)
+	}
+	return nil
+}
+
 // secretNameFor is the sealed-store name one seat's value lives under.
 //
 // PER SEAT, because these are per-seat credentials: one shared name would
