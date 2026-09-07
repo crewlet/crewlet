@@ -303,7 +303,15 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		allowSuspend: true,
 	})
 	if err != nil {
-		return turn.Work{}, turn.Surface{}, err
+		// THE RECORD SURVIVES THE FAILURE. A phase that broke halfway
+		// through its tool loop has already run every call up to the
+		// break, and [tools.Surface] recorded each one — so returning an
+		// empty Work here threw away the engine's own account of what this
+		// turn did to the world, on the one path where a caller most needs
+		// it. The error is unchanged and every existing caller still reads
+		// this as a broken phase; what it can now also read is what broke
+		// AFTER.
+		return turn.Work{Calls: calls(surface)}, describe(surface), err
 	}
 
 	if res.Suspended {
@@ -471,6 +479,11 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		toolChoice: llm.ToolChoiceRequired,
 	})
 	if err != nil {
+		// Nothing to salvage here, and nothing lost: a reviewer's surface
+		// carries its submission tool and no catalogue at all, so its
+		// record can never prove an outward write. What the EXECUTOR did
+		// before it is already in the caller's hands — [turn.Run] reads it
+		// off the Work this Review was handed.
 		return turn.Review{}, err
 	}
 
@@ -1235,7 +1248,10 @@ func calls(s *tools.Surface) []ledger.Call {
 // describe renders the surface the delivery gate judges against.
 func describe(s *tools.Surface) turn.Surface {
 	u := s.Universe()
-	return turn.Surface{Catalogue: u.Names(), MCPTools: u.MCPNames(), KnownReads: u.KnownReads()}
+	return turn.Surface{
+		Catalogue: u.Names(), MCPTools: u.MCPNames(),
+		KnownReads: u.KnownReads(), KnownOpenWorld: u.KnownOpenWorld(),
+	}
 }
 
 // missingTools are names the phase called that the surface did not have.

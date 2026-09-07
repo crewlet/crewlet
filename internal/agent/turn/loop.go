@@ -95,6 +95,15 @@ type Surface struct {
 	MCPTools []string
 	// KnownReads is every tool POSITIVELY annotated read-only.
 	KnownReads []string
+	// KnownOpenWorld is every tool POSITIVELY annotated open-world — one
+	// whose own annotations say it reaches outside this process.
+	//
+	// Separate from MCPTools because the two answer different halves of the
+	// same question and neither contains the other: a company's MCP servers
+	// are where nearly every outward write goes, and `a2a_ask` and
+	// `run_sandbox` are FIRST-PARTY tools that leave the process just as
+	// surely — one wakes a colleague, the other starts a billed box.
+	KnownOpenWorld []string
 }
 
 // Phases is the model-facing work the loop drives. Everything that needs a
@@ -223,6 +232,22 @@ type Result struct {
 
 	// Suspended marks a turn parked on a detached sandbox run.
 	Suspended bool
+
+	// Acted reports that this turn's own record PROVES it already reached
+	// outside the engine — see [Acted].
+	//
+	// It exists for the ONE caller that has to tell a turn which broke
+	// having done nothing from one which broke having already posted,
+	// asked a colleague or started a box. Those are two different facts
+	// and a redelivery is right for exactly one of them; the dispatcher
+	// used to have only `err != nil`, which is neither.
+	//
+	// The zero value is the safe answer and the honest one: a turn that
+	// proved nothing gets today's behaviour, which is to come back. Set
+	// wherever the loop holds a round's record — never in a defer, because
+	// [Run]'s results are unnamed and a deferred write to `res` would be
+	// discarded at every `return res, …` in this file.
+	Acted bool
 }
 
 // Run drives the turn.
@@ -275,20 +300,29 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 			surface Surface
 			err     error
 		)
+		// Named before the call, because `resuming` is cleared by it and
+		// the error below has to say which phase actually broke.
+		entered := "execute"
 		if resuming {
 			// The first round of a resumed turn re-enters the suspended
 			// conversation, and only this round: if the resumed executor
 			// loops back, round two is an ordinary round.
-			resuming = false
+			resuming, entered = false, "resume"
 			work, surface, err = ph.Resume(ctx, res.Iterations)
-			if err != nil {
-				return res, fmt.Errorf("turn: resume round %d: %w", round, err)
-			}
 		} else {
 			work, surface, err = ph.Execute(ctx, round, notes, res.Iterations)
-			if err != nil {
-				return res, fmt.Errorf("turn: execute round %d: %w", round, err)
-			}
+		}
+		// BEFORE THE ERROR CHECK, and that ordering is the point. A phase
+		// that broke halfway through its tool loop hands back the calls it
+		// made before it broke, and this is the only frame that sees them:
+		// the error returns below carry `res`, and everything downstream
+		// reads the turn through it.
+		//
+		// Accumulated with ||, never assigned: a round that read nothing
+		// must not un-say what round one posted.
+		res.Acted = res.Acted || Acted(work.Calls, surface)
+		if err != nil {
+			return res, fmt.Errorf("turn: %s round %d: %w", entered, round, err)
 		}
 
 		if work.Suspended {
