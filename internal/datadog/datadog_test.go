@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/config"
+
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 )
@@ -370,5 +372,31 @@ func TestSourceMatchesTheBackendName(t *testing.T) {
 	}
 	if Backend != "datadog" {
 		t.Fatalf("the backend name is %q, which is not the webhook route's", Backend)
+	}
+}
+
+// DISMISSING AN UNOWNED ALERT IS AN ANSWER, not a blank.
+//
+// A company may want only the monitors it has labelled to wake anybody, and
+// every other alert to stay with whatever Datadog already does about it.
+// That is a decision, and it is a different thing from leaving the field
+// empty: empty is a question nobody answered, and an alert reaching nobody
+// through it is a silent hole in the coverage this integration exists to
+// provide. Two values, because they are two states.
+func TestNoneDismissesAnAlertNobodyOwns(t *testing.T) {
+	p := NewParser(ParserOptions{Fallback: config.DatadogIgnore})
+	routed := parse(t, p, alert(map[string]any{"tags": "service:checkout"}))
+	if len(routed) != 0 {
+		t.Fatalf("woke %v, want the alert dismissed", handlesOf(routed))
+	}
+}
+
+// AND A TAGGED MONITOR STILL WAKES ITS SEAT. Dismissing the unowned ones is
+// not switching the integration off: it is what the tags are for.
+func TestNoneStillWakesATaggedSeat(t *testing.T) {
+	p := NewParser(ParserOptions{Fallback: config.DatadogIgnore})
+	routed := parse(t, p, alert(map[string]any{"tags": "crewlet:backend-lead"}))
+	if got := handlesOf(routed); !slices.Equal(got, []string{"backend-lead"}) {
+		t.Fatalf("woke %v, want the tagged seat", got)
 	}
 }

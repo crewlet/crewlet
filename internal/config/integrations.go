@@ -973,6 +973,19 @@ func (g *GitLab) validate(path string) error {
 // through a provisioning run that has already created half the fleet.
 var mattermostUsername = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
+// DatadogIgnore is the route_to value that means "wake nobody".
+//
+// A VALUE, not an empty string, and the difference is the whole point. Empty
+// is a company that has not answered the question, and an alert reaching
+// nobody through it is a silent hole in the coverage this integration exists
+// to provide. This is the same outcome ASKED FOR: only the monitors somebody
+// has labelled wake an agent, and the rest stay with whatever Datadog already
+// does about them.
+//
+// It lives here rather than in internal/datadog because config validation
+// needs it and this package imports nothing from the engine.
+const DatadogIgnore = "none"
+
 // Atlassian is the organization one service account per agent is created in.
 //
 // A DIFFERENT THING FROM THE TWO PRODUCT BLOCKS. Jira and Confluence are
@@ -1075,10 +1088,11 @@ func (d *Datadog) validate(path string) error {
 	if strings.TrimSpace(d.RouteTo) == "" {
 		p.add(at(path, "route_to"), ErrMissing,
 			"required when datadog is enabled — name the handle of the seat "+
-				"an alert should wake when no monitor tag names an owner. "+
-				"Without it those alerts are verified, counted and then "+
-				"delivered to nobody, which looks exactly like working "+
-				"coverage")
+				"an alert should wake when no monitor tag names an owner, "+
+				"or %q to dismiss those alerts on purpose. Without an answer "+
+				"they are verified, counted and then delivered to nobody, "+
+				"which looks exactly like working coverage",
+			DatadogIgnore)
 	}
 	if tag := strings.TrimSpace(d.HandleTag); tag != "" && strings.ContainsAny(tag, ":, ") {
 		p.add(at(path, "handle_tag"), ErrUnknownValue,

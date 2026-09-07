@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/config"
+
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -35,6 +37,10 @@ const (
 	RoutedViaTag      = "tag"
 	RoutedViaFallback = "fallback"
 )
+
+// Ignore is the fallback value that means "wake nobody". See
+// [config.DatadogIgnore], which is where it is defined and validated.
+const Ignore = config.DatadogIgnore
 
 // DefaultHandleTag is the monitor tag key that names a seat.
 //
@@ -104,6 +110,18 @@ func (p *Parser) Parse(_ context.Context, w types.RawWebhook, _ *notify.Registry
 	handles := TagValues(alert.Tags, p.handleTag)
 	via := RoutedViaTag
 	if len(handles) == 0 {
+		if p.fallback == Ignore {
+			// ASKED FOR. A company may want only the monitors it has
+			// labelled to wake anybody, and every other alert to pass
+			// through Datadog's own on-call instead of an agent's inbox.
+			//
+			// Logged at debug rather than warn: the drop is the
+			// configuration doing what it says, and warning about it every
+			// time would make a working setup look faulty.
+			log.Debug("datadog_alert_ignored", "title", alert.Title,
+				"detail", "no monitor tag named a seat and this company ignores those")
+			return nil, nil
+		}
 		if p.fallback == "" {
 			// Reachable only through a config that skipped validation,
 			// which today means a test. Logged rather than silent

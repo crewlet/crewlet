@@ -121,8 +121,21 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Kind:       setup.KindHandle,
 			ConfigPath: "integrations.datadog.route_to",
 			Required:   true,
-			Help:       "The seat an alert wakes when no monitor tag names an owner.",
-			Blocks:     integration.FindingCredentialMissing,
+			// NONE IS AN ANSWER, and the roster is appended to it.
+			//
+			// A company may want only the monitors it has labelled to wake
+			// anybody, and every other alert to stay with whatever Datadog
+			// already does about it. That is a decision, and a decision is
+			// not the same as leaving the field blank: blank is a question
+			// nobody answered, and an alert reaching nobody through it is a
+			// silent hole in the coverage.
+			Choices: []setup.Choice{{
+				Value: config.DatadogIgnore,
+				Label: "None: dismiss alerts nobody owns",
+				Hint:  "Only monitors tagged with a seat wake an agent.",
+			}},
+			Help:   "The seat an alert wakes when no monitor tag names an owner.",
+			Blocks: integration.FindingCredentialMissing,
 		},
 	}
 

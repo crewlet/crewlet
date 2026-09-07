@@ -197,6 +197,23 @@ func (c *Company) Validate() error {
 		p.add("name", ErrMissing, "the company needs a name — it is half of every seat's derived id")
 	}
 
+	// A SEAT MAY NOT BE CALLED WHAT "NOBODY" IS CALLED.
+	//
+	// Datadog's fallback takes a seat handle or DatadogIgnore, and a company
+	// with a seat of that name would have it silenced by its own name: every
+	// alert meant for it dismissed, on a screen reporting the configuration
+	// exactly as written. Refusing the name is the only place this can be
+	// caught, because by the time the parser reads a fallback the two are
+	// the same string.
+	for role := range c.EachRole() {
+		if role.Seat().Handle() == DatadogIgnore {
+			p.add("roles", ErrUnknownValue,
+				"a seat cannot be called %q — it is what integrations.datadog.route_to "+
+					"means by nobody, so a seat of that name would be silenced by "+
+					"its own handle", DatadogIgnore)
+		}
+	}
+
 	for key := range c.SkillVariables {
 		if !skillVariableKey.MatchString(key) {
 			p.add(at("skill_variables", key), ErrUnknownValue,

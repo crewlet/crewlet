@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -691,9 +692,13 @@ func seatChoices(company *config.Company, reqs []setup.Requirement) {
 	if len(choices) == 0 {
 		return
 	}
+	// APPENDED, not filled only when empty. A handle field may declare a
+	// choice of its own that is not a seat — Datadog's fallback offers
+	// "None", which is an answer rather than a person — and the roster
+	// belongs after it rather than instead of it.
 	for i := range reqs {
-		if reqs[i].Kind == setup.KindHandle && len(reqs[i].Choices) == 0 {
-			reqs[i].Choices = choices
+		if reqs[i].Kind == setup.KindHandle {
+			reqs[i].Choices = append(slices.Clone(reqs[i].Choices), choices...)
 		}
 	}
 }
