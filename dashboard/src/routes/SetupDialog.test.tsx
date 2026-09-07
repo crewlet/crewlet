@@ -1240,3 +1240,86 @@ test("the secrets recommendation appears only on a form with a credential", () =
     "secrets",
   );
 });
+
+// A LINK IS BUILT OUT OF VALUES, and a reference is a name. Once the
+// organization id lived in the sealed store, the API keys link was built out
+// of the literal text `${ATLASSIAN_ORG_ID}` and opened a console page for an
+// organization of that name.
+test("a link built from a referenced field uses what the reference reads", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Organization",
+          tool: {
+            ...tool,
+            key: "atlassian",
+            requirements: [
+              req({
+                field: "org_id",
+                label: "Organization id",
+                kind: "id",
+                shared: true,
+                present: true,
+                value: "${ATLASSIAN_ORG_ID}",
+                resolved_value: "org-42",
+              }),
+              req({
+                field: "api_key",
+                label: "API key",
+                kind: "secret",
+                link_text: "API keys",
+                vendor_url: "https://admin.atlassian.com/o/{org_id}/api-keys",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Atlassian"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect((screen.getByText("API keys") as HTMLAnchorElement).href).toBe(
+    "https://admin.atlassian.com/o/org-42/api-keys",
+  );
+});
+
+// AND A REFERENCE NAMING NOTHING DRAWS NO LINK, rather than an address with
+// the name of a missing entry in its path.
+test("a link built from an unresolved reference is not drawn", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Organization",
+          tool: {
+            ...tool,
+            key: "atlassian",
+            requirements: [
+              req({
+                field: "org_id",
+                label: "Organization id",
+                kind: "id",
+                shared: true,
+                present: true,
+                value: "${GONE}",
+              }),
+              req({
+                field: "api_key",
+                label: "API key",
+                kind: "secret",
+                link_text: "API keys",
+                vendor_url: "https://admin.atlassian.com/o/{org_id}/api-keys",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Atlassian"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.queryByRole("link", { name: "API keys" })).toBeNull();
+});

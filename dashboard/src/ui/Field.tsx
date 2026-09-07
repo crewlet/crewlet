@@ -77,7 +77,8 @@ export function Field({
   // a thing the config accepts, and an affix that silently rewrote it to
   // https would point the engine at a port nothing answers on.
   // MASKED UNLESS IT IS A REFERENCE. See the note above.
-  const masked = kind === "secret" && !isReference(value);
+  const reference = isReference(value);
+  const masked = kind === "secret" && !reference;
   const own = kind === "url" ? schemeOf(value) : "";
   const affix = kind === "url" && own !== "http://" ? "https://" : "";
   const shown = affix ? value.slice(own.length) : value;
@@ -123,7 +124,7 @@ export function Field({
           </span>
           <input
             id={id}
-            className="input"
+            className={reference ? "input is-reference" : "input"}
             inputMode="url"
             value={shown}
             placeholder={placeholder}
@@ -139,7 +140,11 @@ export function Field({
       ) : (
         <input
           id={id}
-          className="input"
+          // A REFERENCE READS AS A NAME, not as the value it stands in for,
+          // and the Secrets screen already sets what a stored entry's name
+          // looks like. The same face here is what says the two are the same
+          // kind of thing.
+          className={reference ? "input is-reference" : "input"}
           // A secret is a password field unless it holds a reference. See
           // the note above: the type is what keeps a CREDENTIAL out of
           // autofill and out of a screenshot, and a name is neither.

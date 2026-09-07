@@ -481,6 +481,14 @@ the sealed store and name them here. `present` and `resolved` then say the two
 things separately, and a reference naming an entry that is not there reports
 `resolved: false` rather than passing for a working setting.
 
+A field holding a reference also carries `resolved_value`: what that `${VAR}`
+currently reads as. It exists because the links this surface describes are
+built out of values, and a reference is a name: the Atlassian API keys page is
+per-organization, so an organization id kept in the store would otherwise put
+the literal text `${ATLASSIAN_ORG_ID}` in the path. **Never present on a
+`secret`**, on a literal (which is already the value), or on a reference
+naming nothing.
+
 **A `secret` field's value may be a `${VAR}` instead of a credential.** Sent
 one, the route writes that reference into the config path and seals nothing,
 so a credential already in the store can serve several fields and rotating it

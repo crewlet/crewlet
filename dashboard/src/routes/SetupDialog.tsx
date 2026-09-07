@@ -88,16 +88,27 @@ export function vendorLink(
   url: string,
   values: Record<string, string>,
   key: (f: string) => string,
+  read?: (f: string) => string,
 ): string {
   if (!url) return "";
   let resolved = url;
   for (const match of url.matchAll(/\{([a-z_]+)\}/g)) {
     const field = match[1] ?? "";
-    const value = (values[key(field)] ?? "").trim();
+    const typed = (values[key(field)] ?? "").trim();
+    // A REFERENCE IS NOT AN ADDRESS. A box holding `${ATLASSIAN_ORG_ID}`
+    // names the organization rather than being it, so the path takes what
+    // the engine currently reads for it. WHAT IS TYPED WINS otherwise, so
+    // the link follows the box as somebody fills it in.
+    const value = isReference(typed) ? (read?.(field) ?? "").trim() : typed;
     if (value === "") return "";
     resolved = resolved.replace(`{${field}}`, encodeURIComponent(value));
   }
   return resolved;
+}
+
+/** Whether a value is wholly a `${NAME}` reference. See ui/Field.tsx. */
+function isReference(value: string): boolean {
+  return /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim());
 }
 
 /**
@@ -680,6 +691,16 @@ export function SetupDialog({
    * across a tool: Jira and Confluence both declare `url` and they are
    * different addresses.
    */
+  function siblingOf(section: SetupSection, field: string): SetupRequirement | undefined {
+    const here = (ownBy.get(sectionKey(section)) ?? []).find((r) => r.field === field);
+    if (here) return here;
+    for (const [, reqs] of ownBy) {
+      const shared = reqs.find((r) => r.field === field && r.shared);
+      if (shared) return shared;
+    }
+    return undefined;
+  }
+
   function refKey(section: SetupSection, field: string): string {
     const here = (ownBy.get(sectionKey(section)) ?? []).find((r) => r.field === field);
     if (here) return valueKey(section, here);
@@ -708,7 +729,17 @@ export function SetupDialog({
     const appName = section.name;
     const key = valueKey(section, r);
     // A LINK ONLY WHERE IT GOES SOMEWHERE. See [vendorLink].
-    const link = vendorLink(r.vendor_url ?? "", values, (field) => refKey(section, field));
+    // A LINK IS BUILT OUT OF VALUES, so a box holding a reference hands over
+    // what the reference READS AS rather than its name: `${ATLASSIAN_ORG_ID}`
+    // in the path opened a console page for an organization of that name.
+    // What is being TYPED still wins, so a link follows the box as somebody
+    // fills it in.
+    const link = vendorLink(
+      r.vendor_url ?? "",
+      values,
+      (field) => refKey(section, field),
+      (field) => siblingOf(section, field)?.resolved_value ?? "",
+    );
     // WHAT THIS FORM CURRENTLY HOLDS, falling back to the field's own
     // default, which is what the engine reads when it is left blank. See
     // [fillTemplate].

@@ -473,6 +473,9 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	// roster is the engine's own — deriving it in each app would be the same
 	// list written six times.
 	seatChoices(company, reqs)
+	// WHAT A REFERENCE CURRENTLY READS AS, for the links a form draws out of
+	// these values. Credentials are skipped inside. See [setup.FillEffective].
+	setup.FillEffective(reqs, s.resolve)
 
 	satisfied := len(setup.Outstanding(reqs)) == 0
 	// A TOOL IS SATISFIED WHEN EVERY SEAT THAT HAS STARTED IS. A seat nobody
@@ -714,6 +717,7 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool)) []
 		}
 		handle := seat.Handle()
 		reqs := slack.Requirements(handle, role, resolve)
+		setup.FillEffective(reqs, resolve)
 		state := SeatState{
 			Handle: handle, Name: role.Name,
 			Requirements: reqs,

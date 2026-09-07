@@ -271,6 +271,37 @@ type Requirement struct {
 	// switch over every config path in the API layer, which is the same
 	// list written twice and eventually two lists that disagree.
 	Stored string `json:"-"`
+
+	// Effective is what a `${VAR}` in Stored resolves to, for a field that
+	// is NOT a credential.
+	//
+	// A REFERENCE IS NOT AN ADDRESS, and a form draws links out of these
+	// values: the Atlassian API keys page is per-organization, so its link
+	// is built from the organization id, and once that id lived in the
+	// sealed store the link was built out of the literal text
+	// "${ATLASSIAN_ORG_ID}" and opened a console page for an organization
+	// of that name.
+	//
+	// NEVER SET FOR A CREDENTIAL. See [FillEffective], which is the only
+	// thing that writes it: a secret's resolved value has no path onto this
+	// wire, and no link in this tree is built out of one.
+	Effective string `json:"resolved_value,omitempty"`
+}
+
+// FillEffective records what each non-credential reference resolves to.
+//
+// ONE PLACE, in the API layer rather than in each vendor's own Requirements,
+// because it is a property of answering a request rather than of what an app
+// needs: the vendor lists say what a field IS, and this says what this
+// process can currently read for it.
+func FillEffective(reqs []Requirement, resolve func(string) (string, bool)) {
+	for i := range reqs {
+		// A CREDENTIAL NEVER. The one rule this function exists to keep.
+		if reqs[i].Kind == KindSecret || !IsReference(reqs[i].Stored) {
+			continue
+		}
+		reqs[i].Effective = Deref(reqs[i].Stored, resolve)
+	}
 }
 
 // MarshalJSON adds the CURRENT VALUE for everything that is not a credential.

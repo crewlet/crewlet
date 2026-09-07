@@ -637,3 +637,48 @@ func TestOnlyAReferenceLeavesOnTheWire(t *testing.T) {
 		})
 	}
 }
+
+// A CREDENTIAL'S RESOLVED VALUE HAS NO PATH ONTO THIS WIRE, and the one
+// function that resolves anything for the form is where that has to hold.
+//
+// The links a form draws are built out of these values, so a field naming an
+// entry of the store has to say what it currently reads. A credential is the
+// exception, and it is not a narrow one: no link in this tree is built out of
+// a secret, and the day one is, it must not be this that supplies it.
+func TestOnlyANonCredentialSaysWhatItsReferenceReads(t *testing.T) {
+	t.Parallel()
+	resolve := func(name string) (string, bool) {
+		return map[string]string{"ORG": "org-42", "KEY": "the-credential"}[name], true
+	}
+	reqs := []setup.Requirement{
+		{Field: "org_id", Kind: setup.KindID, Stored: "${ORG}"},
+		{Field: "api_key", Kind: setup.KindSecret, Stored: "${KEY}"},
+		{Field: "url", Kind: setup.KindURL, Stored: "https://acme.example.com"},
+		{Field: "cloud_id", Kind: setup.KindID, Stored: "${GONE}"},
+	}
+	setup.FillEffective(reqs, resolve)
+
+	if reqs[0].Effective != "org-42" {
+		t.Errorf("org_id effective = %q, want the resolved organization", reqs[0].Effective)
+	}
+	if reqs[1].Effective != "" {
+		t.Errorf("a credential's resolved value reached the wire: %q", reqs[1].Effective)
+	}
+	// A LITERAL IS ALREADY THE VALUE, so there is nothing to say about it and
+	// saying it anyway would put the same string on the wire twice.
+	if reqs[2].Effective != "" {
+		t.Errorf("a literal was given an effective value: %q", reqs[2].Effective)
+	}
+	// A reference naming nothing reads as nothing, which is what stops a
+	// link being drawn to an address with a hole in it.
+	if reqs[3].Effective != "" {
+		t.Errorf("an unresolved reference = %q, want empty", reqs[3].Effective)
+	}
+	body, err := json.Marshal(reqs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "the-credential") {
+		t.Fatalf("the credential is on the wire: %s", body)
+	}
+}

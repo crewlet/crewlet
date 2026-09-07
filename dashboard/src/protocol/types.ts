@@ -833,6 +833,17 @@ export interface SetupRequirement {
    * to discover.
    */
   default?: string;
+  /**
+   * What a `${VAR}` in this field currently reads as, for a field that is
+   * NOT a credential.
+   *
+   * A reference is a name, and the links a form draws are built out of
+   * VALUES: the Atlassian API keys page is per-organization, so once that id
+   * lived in the sealed store the link was built out of the literal text
+   * `${ATLASSIAN_ORG_ID}`. Absent on a credential, on a literal (which is
+   * already the value) and on a reference naming nothing.
+   */
+  resolved_value?: string;
   mintable?: boolean;
   /**
    * Written without being asked for.
