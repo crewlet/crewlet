@@ -409,6 +409,15 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	default:
 		return ToolState{}, false
 	}
+	// A HANDLE FIELD IS A PICKER, so it needs the roster to pick from.
+	//
+	// It rendered as a select with one option, "Choose one": the seat a
+	// Datadog alert falls back to could not be displayed when it was set and
+	// could not be chosen when it was not, and the field is required. The
+	// roster is the engine's own — deriving it in each app would be the same
+	// list written six times.
+	seatChoices(company, reqs)
+
 	satisfied := len(setup.Outstanding(reqs)) == 0
 	for _, seat := range seats {
 		// A TOOL IS SATISFIED WHEN EVERY SEAT THAT HAS STARTED IS. A seat
@@ -470,6 +479,41 @@ func (s *Service) forgeRequirement(company *config.Company) setup.Requirement {
 // would leave an operator no way to give one to them. Human seats are
 // excluded, because a person's Slack account is not something this engine
 // provisions or holds a token for.
+// seatChoices fills every handle requirement with the company's agent seats.
+//
+// In place, on the app's own list, because a requirement is what the form
+// renders and the choices belong to the field rather than beside it. Human
+// seats are left out for the reason the provisioners leave them out: an alert
+// routed to a person is a person's own notification, not an agent's work.
+//
+// An app that already named its own choices keeps them; nothing does today,
+// and one that does knows something this does not.
+func seatChoices(company *config.Company, reqs []setup.Requirement) {
+	var choices []setup.Choice
+	for role := range company.EachRole() {
+		// THROUGH THE SEAT, the same derivation slackSeats uses: a handle
+		// defaults from the name, and "is this a person" is the org model's
+		// question. A second implementation here would eventually disagree.
+		seat := role.Seat()
+		if !seat.IsAgent() {
+			continue
+		}
+		label := seat.Handle()
+		if name := strings.TrimSpace(role.Name); name != "" && name != label {
+			label = name + " (" + seat.Handle() + ")"
+		}
+		choices = append(choices, setup.Choice{Value: seat.Handle(), Label: label})
+	}
+	if len(choices) == 0 {
+		return
+	}
+	for i := range reqs {
+		if reqs[i].Kind == setup.KindHandle && len(reqs[i].Choices) == 0 {
+			reqs[i].Choices = choices
+		}
+	}
+}
+
 func slackSeats(company *config.Company, resolve func(string) (string, bool)) []SeatState {
 	base := company.Integrations.WebhookBase()
 	out := []SeatState{}

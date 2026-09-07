@@ -194,11 +194,21 @@ func TestAnUnconfiguredVendorSaysWhatItNeeds(t *testing.T) {
 	if reqs["handle_tag"]["required"] != false {
 		t.Error("the owner tag key is reported as required")
 	}
-	// NOTHING CARRIES A VALUE. Not present, not resolved, not a default.
+	// NO CREDENTIAL CARRIES A VALUE, ever. Requirement.Stored can hold a
+	// literal key on a company that wrote one instead of a ${VAR}, so the
+	// value field a form opens on must never appear on a secret.
 	for field, r := range reqs {
-		if _, leaked := r["value"]; leaked {
-			t.Errorf("%s carries a value field", field)
+		if r["kind"] != "secret" {
+			continue
 		}
+		if _, leaked := r["value"]; leaked {
+			t.Errorf("%s is a credential and carries a value field", field)
+		}
+	}
+	// And a plain setting does, because a form has to open on what this
+	// company already answered rather than blank over it.
+	if reqs["enabled"]["value"] != "false" {
+		t.Errorf("enabled value = %v, want the toggle's own state", reqs["enabled"]["value"])
 	}
 }
 

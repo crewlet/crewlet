@@ -298,25 +298,179 @@ test("the connect form leads with the fields that establish the connection", () 
 // its operator has never seen: same fields, same order, same labels, with
 // only the title and the button naming which of the two things is happening.
 test("connecting and managing render one identical form", () => {
-  const requirements = [
-    req({ field: "site", label: "Datadog region", kind: "choice", connect: true }),
-    req({ field: "api_key", label: "API key", kind: "secret", connect: true }),
-    req({ field: "route_to", label: "Fallback seat", kind: "handle" }),
+  // PRESENT ON THE CONFIGURED SIDE, which is the whole test: a stored
+  // credential and a stored setting are exactly what used to turn this form
+  // into a different one — three inputs became three lines of text and a
+  // Replace button.
+  const requirements = (present: boolean) => [
+    req({
+      field: "site",
+      label: "Datadog region",
+      kind: "choice",
+      connect: true,
+      present,
+      value: present ? "datadoghq.com" : undefined,
+      choices: [{ value: "datadoghq.com", label: "datadoghq.com" }],
+    }),
+    req({ field: "api_key", label: "API key", kind: "secret", connect: true, present }),
+    req({
+      field: "route_to",
+      label: "Fallback seat",
+      kind: "handle",
+      present,
+      value: present ? "sre-lead" : undefined,
+      choices: [{ value: "sre-lead", label: "SRE Lead (sre-lead)" }],
+    }),
   ];
-  const labelsFor = (configured: boolean): (string | null)[] => {
+  // THE CONTROLS, not just the labels. Comparing label text is what let the
+  // two forms drift: every label was identical while one form had inputs and
+  // the other had static text beside a button.
+  const shapeOf = (configured: boolean): string[] => {
     const view = render(
       <SetupDialog
-        sections={[{ name: "Datadog", tool: { ...tool, configured, requirements } }]}
+        sections={[
+          {
+            name: "Datadog",
+            tool: { ...tool, configured, requirements: requirements(configured) },
+          },
+        ]}
         title="Datadog"
         onClose={() => {}}
         onDone={() => {}}
       />,
     );
-    const labels = [...view.baseElement.querySelectorAll("label")].map((l) => l.textContent);
+    // THE FORM, not the footer. The title and the submit button are meant
+    // to say which of the two things is happening; everything above them is
+    // meant to be the same screen.
+    const form = view.baseElement.querySelector(".int-form");
+    const shape = [...(form?.querySelectorAll("label, input, select, button") ?? [])].map((el) =>
+      el.tagName === "LABEL" || el.tagName === "BUTTON"
+        ? `${el.tagName}:${el.textContent}`
+        : `${el.tagName}:${(el as HTMLInputElement).type ?? ""}`,
+    );
     view.unmount();
-    return labels;
+    return shape;
   };
-  expect(labelsFor(false)).toEqual(labelsFor(true));
+  const connecting = shapeOf(false);
+  expect(connecting.length).toBeGreaterThan(0);
+  expect(connecting).toEqual(shapeOf(true));
+});
+
+// A SETTINGS FORM OPENS ON WHAT IS ALREADY SET.
+//
+// It opened on nothing: a region and a fallback seat the document held both
+// read "Choose one", so saving the form blanked whatever the operator had not
+// retyped. A blank form over a live configuration is a data loss waiting for
+// somebody to change one field.
+test("a stored setting is what the form opens on", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            configured: true,
+            requirements: [
+              req({
+                field: "route_to",
+                label: "Fallback seat",
+                kind: "handle",
+                present: true,
+                value: "sre-lead",
+                // A handle field is a picker, and the engine fills it with
+                // the company's roster.
+                choices: [{ value: "sre-lead", label: "SRE Lead (sre-lead)" }],
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect((screen.getByLabelText(/Fallback seat/) as HTMLInputElement).value).toBe("sre-lead");
+});
+
+// AND A CREDENTIAL LEFT ALONE IS NOT SENT.
+//
+// The input opens empty because the engine never sends a credential back, so
+// an empty one has to mean "keep it" rather than "set it to nothing". This is
+// what the Replace button used to buy, and it has to survive the button.
+test("an untouched credential is not written", async () => {
+  const spy = stubFetch(
+    () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
+  );
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            configured: true,
+            requirements: [
+              req({ field: "api_key", label: "API key", kind: "secret", present: true }),
+              req({
+                field: "handle_tag",
+                label: "Owner tag key",
+                kind: "text",
+                present: true,
+                value: "crewlet",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText(/Owner tag key/), { target: { value: "owner" } });
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+
+  const body = JSON.parse(String(spy.mock.calls[0]?.[1]?.body)) as {
+    values: Record<string, string>;
+  };
+  expect(body.values.handle_tag).toBe("owner");
+  expect("api_key" in body.values).toBe(false);
+});
+
+// A PAUSED APP OPENS PAUSED, and an unconfigured one opens on.
+//
+// The toggle was seeded "true" unconditionally, so opening the settings of a
+// deliberately paused integration and saving anything else switched it back
+// on. The two cases are different questions: nothing configured is a default,
+// and something configured is a state to show.
+test("the toggle opens on what the app is set to", () => {
+  const enabled = req({ field: "enabled", label: "Accept deliveries", kind: "toggle" });
+  const open = (configured: boolean, value: string) => {
+    const view = render(
+      <SetupDialog
+        sections={[
+          {
+            name: "Datadog",
+            tool: { ...tool, configured, requirements: [{ ...enabled, value, present: false }] },
+          },
+        ]}
+        title="Datadog"
+        onClose={() => {}}
+        onDone={() => {}}
+      />,
+    );
+    const got = (screen.getByLabelText(/Accept deliveries/) as HTMLSelectElement).value;
+    view.unmount();
+    return got;
+  };
+  // Nothing configured: on, whatever an unset block reports.
+  expect(open(false, "false")).toBe("true");
+  // Configured and paused: paused.
+  expect(open(true, "false")).toBe("false");
+  expect(open(true, "true")).toBe("true");
 });
 
 // AND A CONFIGURED APP SHOWS EVERY FIELD, which it now shares with an

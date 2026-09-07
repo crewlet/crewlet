@@ -34,6 +34,7 @@
 package setup
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -232,6 +233,37 @@ type Requirement struct {
 	// switch over every config path in the API layer, which is the same
 	// list written twice and eventually two lists that disagree.
 	Stored string `json:"-"`
+}
+
+// MarshalJSON adds the CURRENT VALUE for everything that is not a credential.
+//
+// A form has to open showing what this company already answered, or it is not
+// an edit of a configuration: it is a blank form over one, and saving it
+// blanks the settings the operator did not retype. That is what happened —
+// the Datadog dialog offered "Choose one" over a region and a fallback seat
+// the document already held.
+//
+// [Requirement.Stored] cannot do this: it is `json:"-"` precisely because it
+// can hold a literal credential on a company that wrote one, so it is the
+// wrong thing to put on a wire. This emits it only for the kinds that are
+// plain settings — a region, a URL, a handle, a group — every one of which is
+// already readable through GET /config by anybody this route answers.
+//
+// A METHOD ON THE TYPE rather than a step in the API layer, so nothing can
+// forget it and no future caller can serialise a Requirement any other way. A
+// credential's value has no path onto the wire at all.
+func (r Requirement) MarshalJSON() ([]byte, error) {
+	// An alias, because marshalling the named type here would call this
+	// method again, forever.
+	type wire Requirement
+	out := struct {
+		wire
+		Value string `json:"value,omitempty"`
+	}{wire: wire(r)}
+	if r.Kind != KindSecret {
+		out.Value = r.Stored
+	}
+	return json.Marshal(out)
 }
 
 // Satisfied reports whether this requirement needs nothing further.

@@ -808,10 +808,10 @@ export interface SetupRequirement {
   /**
    * One of the few fields that ESTABLISH the connection.
    *
-   * The connect form shows these alone. Everything else configures what
-   * happens OVER the connection and appears once there is one, because
-   * asking which seat a Datadog alert wakes while somebody is pasting an API
-   * key is asking the second question before the first is answered.
+   * An ORDER, not a filter: these lead the form, with a rule under them and
+   * everything that configures what happens OVER the connection below. Both
+   * halves are one form, so an app's settings are the screen its operator
+   * already saw when they connected it.
    */
   connect?: boolean;
   /** The words in `help` that become the link to `vendor_url`. */
@@ -832,6 +832,16 @@ export interface SetupRequirement {
   format?: string;
   /** The reconcile finding this input being absent produces. */
   blocks?: string;
+  /**
+   * What the document holds here right now, for everything that is NOT a
+   * credential: the region, the URL, the handle, the group.
+   *
+   * It is what the form opens on, so a settings dialog is an edit of a
+   * configuration rather than a blank form over one. Absent on a secret, and
+   * deliberately: a credential's value has no path onto this wire at all
+   * (internal/setup: Requirement.MarshalJSON).
+   */
+  value?: string;
   /** The document names something here: a literal or a ${VAR}. */
   present: boolean;
   /** Three-valued, as everywhere: null is "this process cannot say". */

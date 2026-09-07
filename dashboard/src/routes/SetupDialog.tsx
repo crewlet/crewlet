@@ -150,16 +150,42 @@ export function SetupDialog({
   }, [sections, blocks]);
   const shown = useMemo(() => [...shownBy.values()].flat(), [shownBy]);
 
-  // A field the engine already holds is left alone unless the operator asks
-  // to replace it: sending it back would rewrite a working credential with
-  // whatever a form rendered.
+  // Which mintable secrets the operator asked to regenerate. A credential
+  // the engine generates has no input to type into, so rotating one is a
+  // deliberate press rather than an edit.
   const [replacing, setReplacing] = useState<Record<string, boolean>>({});
   const [values, setValues] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
-    for (const r of shown) {
+    for (const section of sections) {
+      for (const r of shownBy.get(sectionKey(section)) ?? []) {
+        seed(initial, r, section.tool.configured);
+      }
+    }
+    return initial;
+  });
+
+  function seed(initial: Record<string, string>, r: SetupRequirement, configured: boolean): void {
+    {
       if (r.kind === "toggle") {
-        initial[r.field] = r.present ? "true" : "true";
-        continue;
+        // ON FOR AN APP NOBODY HAS CONFIGURED, because connecting something
+        // and leaving it switched off is not what anybody means by
+        // connecting it. A configured one opens on ITS OWN STATE, so a
+        // paused integration no longer opens showing On and re-enables
+        // itself on the next Save.
+        initial[r.field] = configured && r.value === "false" ? "false" : "true";
+        return;
+      }
+      // WHAT THIS COMPANY ALREADY ANSWERED, so the form is an edit of a
+      // configuration rather than a blank one over it. Without this the
+      // dialog offered "Choose one" over a region and a fallback seat the
+      // document held, and saving it blanked both.
+      //
+      // Never a credential: the engine does not put one on this wire, so
+      // `value` is absent on every secret and those open empty, which is
+      // what "leave it blank to keep it" means below.
+      if (r.value) {
+        initial[r.field] = r.value;
+        return;
       }
       // A DEFAULT ONLY WHERE THERE IS NOTHING. A field this company has
       // already answered keeps its answer; offering the default over it
@@ -170,16 +196,21 @@ export function SetupDialog({
         initial[r.field] = r.default;
       }
     }
-    return initial;
-  });
+  }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
+  // A MINTABLE SECRET IS THE ONLY FIELD WITHOUT AN INPUT, because there is
+  // nothing for a person to type: the engine generates the value and it has
+  // a shape a person would get wrong.
+  //
+  // A stored ordinary credential used to be hidden behind a Replace button
+  // too, which is what made the settings dialog a different form from the
+  // connect one: three inputs became three lines of text. It renders as its
+  // own input either way now, empty, and an empty one is left alone.
   function editable(r: SetupRequirement): boolean {
-    if (r.kind === "secret" && r.mintable) return false;
-    if (r.kind === "secret" && r.present && !replacing[r.field]) return false;
-    return true;
+    return !(r.kind === "secret" && r.mintable);
   }
 
   /** What one section would send: only what was touched, plus its mints. */
@@ -196,10 +227,13 @@ export function SetupDialog({
       }
       const value = values[r.field];
       if (value === undefined) continue;
-      // A field the engine already holds is left alone unless the operator
-      // asked to replace it: sending it back would rewrite a working
-      // credential with whatever a form rendered.
-      if (r.kind === "secret" && r.present && !replacing[r.field]) continue;
+      // AN EMPTY CREDENTIAL FIELD MEANS KEEP THE ONE YOU HAVE. The input
+      // opens empty because the engine never sends a credential back, so
+      // submitting an empty one would rewrite a working key with nothing.
+      // That is also what lets the connect form and the settings form be
+      // the same form: no Replace step, and no way to blank a secret by
+      // not retyping it.
+      if (r.kind === "secret" && value.trim() === "") continue;
       send[r.field] = value;
     }
     return { values: send, generate };
@@ -391,6 +425,14 @@ export function SetupDialog({
             // renderings of one form, and the app's own answer is the true
             // one: Datadog routes alerts with no keys at all, so its keys
             // are optional whoever is looking.
+            // WHAT THE APP SAYS, and nothing about the state of this
+            // company. A stored required secret read "(optional)" here and
+            // required on the connect form, which is one field wearing two
+            // labels in two renderings of what is meant to be one form.
+            //
+            // It does not force a re-entry: nothing here is an HTML
+            // required attribute, and an empty credential field means keep
+            // the stored one (see payloadFor).
             required={r.required}
             error={fieldErrors[r.field]}
             choices={
@@ -407,6 +449,11 @@ export function SetupDialog({
             }
             help={
               <>
+                {/* WHAT IS ALREADY HELD, said in the field rather than in
+                    place of it. The stored state is a fact about this
+                    field, not a different control: putting it here is what
+                    lets one form serve connecting and configuring. */}
+                {note && <>{note}. Leave this blank to keep it. </>}
                 {r.help}
                 {r.where && <> {r.where}</>}
                 {r.vendor_url && (
@@ -426,24 +473,7 @@ export function SetupDialog({
               </>
             }
           />
-        ) : (
-          <div className="field">
-            <label>{r.label}</label>
-            <span className="hint">{note}</span>
-            {fieldErrors[r.field] && (
-              <span className="hint field-error" role="alert">
-                {fieldErrors[r.field]}
-              </span>
-            )}
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setReplacing((c) => ({ ...c, [r.field]: true }))}
-            >
-              Replace
-            </Button>
-          </div>
-        )}
+        ) : null}
       </div>
     );
   }
