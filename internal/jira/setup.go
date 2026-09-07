@@ -42,8 +42,14 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 			Blocks:     integration.FindingCredentialMissing,
 		},
 		{
-			Field:      "cloud_id",
-			Shared:     true,
+			Field:  "cloud_id",
+			Shared: true,
+			// DISCOVERED, NOT ASKED. The Atlassian pass reads the site and
+			// its cloud id from the organization key and records them, so a
+			// form that asked would be asking an operator to copy a value
+			// out of a console this engine is already reading. It still
+			// round-trips whatever the document holds.
+			Hidden:     true,
 			Connect:    true,
 			Label:      "Cloud id",
 			Kind:       setup.KindID,
@@ -95,8 +101,14 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 			Blocks:   integration.FindingIngressBlocked,
 		},
 		{
-			Field:      "site_url",
-			Shared:     true,
+			Field:  "site_url",
+			Shared: true,
+			// DISCOVERED, NOT ASKED. The Atlassian pass reads the site and
+			// its cloud id from the organization key and records them, so a
+			// form that asked would be asking an operator to copy a value
+			// out of a console this engine is already reading. It still
+			// round-trips whatever the document holds.
+			Hidden:     true,
 			Label:      "Link address",
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.jira.site_url",
@@ -128,8 +140,12 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 // setting a company has written down would make the form disagree with the
 // configuration, and Save would then clear it.
 func forDeployment(reqs []setup.Requirement, deploy Deployment, cloudID string) []setup.Requirement {
-	// The gateway fields only mean anything with a cloud id, which is itself
-	// a Cloud-only way of naming the site.
+	// THE ORGANIZATION KNOWS ITS OWN SITE. The Atlassian pass discovers the
+	// cloud id and the host from the organization key and records them, so
+	// these are not questions for a person: a form that asked would be
+	// asking an operator to copy three values out of a console this engine
+	// is already reading. They appear only where nothing has discovered
+	// them, which is a company that has not connected Atlassian.
 	gateway := map[string]bool{"cloud_id": true, "site_url": true}
 
 	out := make([]setup.Requirement, 0, len(reqs))

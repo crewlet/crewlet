@@ -42,8 +42,14 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 			Blocks:     integration.FindingCredentialMissing,
 		},
 		{
-			Field:      "cloud_id",
-			Shared:     true,
+			Field:  "cloud_id",
+			Shared: true,
+			// DISCOVERED, NOT ASKED. The Atlassian pass reads the site and
+			// its cloud id from the organization key and records them, so a
+			// form that asked would be asking an operator to copy a value
+			// out of a console this engine is already reading. It still
+			// round-trips whatever the document holds.
+			Hidden:     true,
 			Connect:    true,
 			Label:      "Cloud id",
 			Kind:       setup.KindID,
@@ -103,8 +109,14 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 			Blocks:     integration.FindingIngressBlocked,
 		},
 		{
-			Field:      "site_url",
-			Shared:     true,
+			Field:  "site_url",
+			Shared: true,
+			// DISCOVERED, NOT ASKED. The Atlassian pass reads the site and
+			// its cloud id from the organization key and records them, so a
+			// form that asked would be asking an operator to copy a value
+			// out of a console this engine is already reading. It still
+			// round-trips whatever the document holds.
+			Hidden:     true,
 			Label:      "Link address",
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.confluence.site_url",
@@ -134,6 +146,12 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 // A field with a value SURVIVES, because the derivation is a guess from an
 // address and the document is a fact.
 func forDeployment(reqs []setup.Requirement, deploy Deployment, cloudID string) []setup.Requirement {
+	// THE ORGANIZATION KNOWS ITS OWN SITE. The Atlassian pass discovers the
+	// cloud id and the host from the organization key and records them, so
+	// these are not questions for a person: a form that asked would be
+	// asking an operator to copy three values out of a console this engine
+	// is already reading. They appear only where nothing has discovered
+	// them, which is a company that has not connected Atlassian.
 	gateway := map[string]bool{"cloud_id": true, "site_url": true}
 	cloudOnly := map[string]bool{"webhook_token": true}
 	dataCenter := map[string]bool{"webhook_secret": true}

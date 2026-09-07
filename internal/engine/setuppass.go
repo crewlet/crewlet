@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -115,7 +116,60 @@ func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 	if err != nil {
 		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
 	}
-	return res.Findings(), nil
+	findings := res.Findings()
+	if note := p.recordSite(ctx, company, res.Site, in.Sink != nil); note != "" {
+		findings = append(findings, integration.Finding{
+			Kind: integration.FindingGrantShort, Detail: note,
+		})
+	}
+	return findings, nil
+}
+
+// recordSite writes the site this pass discovered into the two product
+// blocks, and says why it could not when it could not.
+//
+// NOBODY TYPES AN ADDRESS THE ORGANIZATION ALREADY KNOWS. The org key lists
+// the products and their host, so asking an operator for a site address, a
+// cloud id and a link address is asking them to copy three values out of a
+// console this engine is already reading.
+//
+// The CLOUD ID is the load-bearing one: a provisioned service account's token
+// is refused by the site host and accepted only at the API gateway, so a
+// company whose agents hold provisioned accounts must reach Atlassian through
+// it. A company that set these itself is left alone — the document is a
+// decision, and this only fills a blank.
+func (p *atlassianPass) recordSite(
+	ctx context.Context, company *Company, site atlassian.Site, writing bool,
+) string {
+	if !writing || site.CloudID == "" {
+		return ""
+	}
+	patch := map[string]map[string]string{}
+	if j := company.Config.Integrations.Jira; j != nil && j.CloudID == "" {
+		patch["jira"] = map[string]string{"cloud_id": site.CloudID, "site_url": site.HostURL}
+	}
+	if c := company.Config.Integrations.Confluence; c != nil && c.CloudID == "" {
+		patch["confluence"] = map[string]string{
+			"cloud_id": site.CloudID, "site_url": site.HostURL + "/wiki",
+		}
+	}
+	if len(patch) == 0 {
+		return ""
+	}
+	writer := p.engine.configWriterOrNil()
+	if writer == nil {
+		return "this node cannot write the company configuration, so the Atlassian " +
+			"site it discovered was not recorded: set integrations.jira.cloud_id " +
+			"and integrations.confluence.cloud_id to " + site.CloudID
+	}
+	body, err := json.Marshal(map[string]any{"integrations": patch})
+	if err != nil {
+		return "the discovered Atlassian site could not be encoded: " + err.Error()
+	}
+	if err := writer.Apply(ctx, body, "record the Atlassian site", reconcileOperator); err != nil {
+		return "the Atlassian site could not be recorded: " + err.Error()
+	}
+	return ""
 }
 
 // Teardown deletes the accounts this pass created, when asked.

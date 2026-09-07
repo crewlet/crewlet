@@ -395,14 +395,20 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		block := company.Integrations.Jira
 		summary = jira.Summary()
 		reqs = jira.Requirements(block, s.resolve)
-		// THE FORGE APP ID RIDES WITH JIRA, and it belongs to neither
-		// surface on its own: one app relays both Jira and Confluence
-		// events, so the id is one value with two consumers. Listing it
-		// on both would be two forms writing one field, and giving it a
-		// third-party app of its own would put a card on the screen for something
-		// that is a delivery path rather than a tool. Jira is where an
-		// operator opens Atlassian first, so it is asked there.
-		reqs = append(reqs, s.forgeRequirement(company))
+		// THE FORGE APP ID IS NOT ASKED FOR ANY MORE.
+		//
+		// It was the only way a Cloud site's events could reach this engine,
+		// on the understanding that Atlassian serves the webhook API to
+		// Connect and OAuth apps alone. It serves the DYNAMIC one that way;
+		// webhook administration is /rest/webhooks/1.0/webhook on both
+		// deployments and takes an API token, which is what this engine
+		// registers through and what a live Cloud site was measured
+		// delivering over.
+		//
+		// The route and the config field stay: a company already relaying
+		// through Forge keeps working, and it is the fallback if Atlassian
+		// ever retires the admin API. What goes is asking every operator to
+		// install an app they do not need.
 		seats = credentialSeats(company, s.resolve,
 			jira.SeatEnvs, jira.CredentialKeys, "Jira", false)
 		// THE ATLASSIAN BLOCKS HAVE NO `enabled` FIELD. Their presence IS
@@ -499,35 +505,6 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		state.PublicURL = base + state.InboundPath
 	}
 	return state, true
-}
-
-// forgeRequirement is the app id an Atlassian Cloud relay is verified
-// against.
-//
-// Not a secret: it is the audience claim on a token whose SIGNATURE is
-// checked against Atlassian's published keys, so it is an identifier and safe
-// to display. But it plays the same role as one here, because with no app id
-// there is nothing to check the token against and the route refuses every
-// relayed delivery.
-func (s *Service) forgeRequirement(company *config.Company) setup.Requirement {
-	r := setup.Requirement{
-		Field:      "forge_app_id",
-		Label:      "Forge app id",
-		Kind:       setup.KindID,
-		ConfigPath: "integrations.forge_app_id",
-		Required:   false,
-		Help: "Only for an Atlassian Cloud site relaying through the Crewlet " +
-			"Forge app. It is the audience a relayed token must carry: with " +
-			"none, every delivery on the Forge route is refused. One app " +
-			"covers both Jira and Confluence.",
-		Blocks: integration.FindingCredentialMissing,
-	}
-	// Resolved through THIS NODE's chain like everything else: an app id
-	// is normally a literal, and a literal is present and resolved by
-	// definition, but a company that wrote it as a ${VAR} deserves the
-	// same honest answer about it as about a credential.
-	r.Present, r.Resolved = setup.Resolution(company.Integrations.ForgeAppID, s.resolve)
-	return r
 }
 
 // slackSeats is every agent seat's own Slack setup.
