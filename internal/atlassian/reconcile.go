@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/provision"
 )
+
+var log = logging.Get("atlassian")
 
 // Options is what one provisioning pass needs.
 type Options struct {
@@ -199,7 +202,7 @@ func reconcileSeat(
 		out.Err = fmt.Errorf("atlassian: read %s: %w", seat.TokenVar, err)
 		return out
 	}
-	if held {
+	if held && !orphaned(ctx, opts, out.AccountID, seat.Handle) {
 		return out
 	}
 	token, err := opts.Client.MintToken(ctx, opts.Key, out.AccountID, seat.Handle, opts.now())
@@ -213,6 +216,53 @@ func reconcileSeat(
 	}
 	out.TokenMinted = true
 	return out
+}
+
+// orphaned reports a held credential that cannot belong to this seat's
+// account, so the pass mints over it.
+//
+// # Why a held credential is not necessarily a working one
+//
+// Disconnecting with "remove accounts" deletes them at Atlassian and leaves
+// the minted tokens in the sealed store: the store is the company's, and a
+// teardown that emptied it would take values an operator may have put there
+// by hand. A later reconnect then creates a NEW account and finds a
+// credential already held for the seat, so it mints nothing, and every call
+// the seat makes is refused with a 401 naming nothing. The dashboard reports
+// "has no Jira account" while the account plainly exists, and the only cure
+// was deleting the secret by hand.
+//
+// # It asks the vendor, not the credential
+//
+// Atlassian shows a token's value once, so nothing can check that the stored
+// string is one of the account's. What it can check is that the account has
+// NO tokens at all, which is true of an account this engine has just created
+// and false of every one it has finished with. That is the whole test.
+//
+// # "Cannot tell" leaves it alone
+//
+// A failed list is not evidence of anything, and minting on it would rotate a
+// working credential every time Atlassian was briefly unreachable, on a
+// timer. The three-valued rule this engine applies to ownership applies here
+// for the same reason: only a definite answer acts.
+func orphaned(ctx context.Context, opts Options, accountID, handle string) bool {
+	if accountID == "" {
+		return false
+	}
+	count, err := opts.Client.CountTokens(ctx, opts.Key, accountID)
+	if err != nil {
+		log.Debug("atlassian_token_check_failed", "seat", handle, "error", err.Error(),
+			"detail", "the held credential is left alone; a failed read is not "+
+				"evidence that it is dead")
+		return false
+	}
+	if count > 0 {
+		return false
+	}
+	log.Info("atlassian_token_orphaned", "seat", handle,
+		"detail", "the account holds no API token, so the credential in the "+
+			"store belongs to an account that no longer exists; minting a new one")
+	return true
 }
 
 // Findings is what this pass has to report to the reconcile status.

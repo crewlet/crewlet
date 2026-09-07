@@ -347,6 +347,32 @@ func (c *Client) MintToken(
 	return token, nil
 }
 
+// CountTokens is how many API tokens an account currently holds.
+//
+// It answers the one question a held credential cannot answer about itself:
+// whether it still belongs to the account this seat now has. A disconnect
+// that removes accounts deletes them at Atlassian and leaves the minted token
+// in the sealed store, so a later reconnect creates a NEW account and finds a
+// credential already held for the seat. The value is a token for an account
+// that no longer exists, and every call with it is refused with a 401 that
+// names nothing.
+//
+// A COUNT rather than a comparison, because Atlassian shows a token's value
+// once: nothing can check that the stored string is one of these. What it can
+// check is that the account has none at all, which no account this engine has
+// provisioned ever legitimately has, and which is exactly the state a
+// recreated account is in.
+func (c *Client) CountTokens(ctx context.Context, key, accountID string) (int, error) {
+	var out []struct {
+		ID string `json:"id"`
+	}
+	if err := c.call(ctx, key, http.MethodGet,
+		fmt.Sprintf(apiTokensPath, accountID), nil, &out); err != nil {
+		return 0, err
+	}
+	return len(out), nil
+}
+
 // DeleteServiceAccount removes an agent's identity.
 func (c *Client) DeleteServiceAccount(ctx context.Context, key, accountID string) error {
 	return c.call(ctx, key, http.MethodPost, fmt.Sprintf(lifecycleDeletePath, accountID),

@@ -531,3 +531,58 @@ integrations:
 		t.Errorf("a disabled third-party app still routes: %v", e.RoutedSources())
 	}
 }
+
+// A RECONCILER THAT ONLY RETIRES IS NOT A RECONCILER.
+//
+// Confluence's converged in one direction: it returned early unless a parser
+// was ALREADY running, on the reasoning that boot owns the first build. Boot
+// owns the first one and nothing owned the second — the parser set is
+// assembled once, in New — so a revision that ADDED Confluence after boot
+// registered nothing.
+//
+// Disconnecting and reconnecting is exactly that sequence, and it is the one
+// an operator makes most: the route went on verifying and storing every
+// delivery while nothing turned one into work for a seat, and the only cure
+// was restarting the process. The dashboard reported it honestly and looked
+// like it was lying, because the card said Connected and the line under it
+// said nothing routes.
+func TestConfluenceRoutesAgainAfterBeingRemovedAndAddedBack(t *testing.T) {
+	t.Parallel()
+	with := companyDoc + `
+integrations:
+  confluence:
+    url: https://wiki.example.com
+    token: t
+    webhook_secret: cf
+`
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, with)})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !slices.Contains(e.RoutedSources(), "confluence") {
+		t.Fatalf("a company on Confluence routes %v", e.RoutedSources())
+	}
+
+	// Disconnected: the parser goes, which has always worked.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+		t.Fatalf("Apply without confluence: %v", err)
+	}
+	if slices.Contains(e.RoutedSources(), "confluence") {
+		t.Fatalf("a removed knowledge base still routes %v", e.RoutedSources())
+	}
+
+	// Connected again: the parser has to come back, and this is the half
+	// that did not.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with)); err != nil {
+		t.Fatalf("Apply with confluence: %v", err)
+	}
+	if !slices.Contains(e.RoutedSources(), "confluence") {
+		t.Fatalf("a reconnected knowledge base does not route: %v", e.RoutedSources())
+	}
+	// AND ITS SEARCHER COMES BACK WITH IT. A revived parser beside a dead
+	// searcher would route page activity while every Plan phase went on
+	// getting an empty knowledge block.
+	if searcher := e.Knowledge(); searcher == nil || searcher.Backend() != "confluence" {
+		t.Error("the knowledge searcher did not come back with the parser")
+	}
+}

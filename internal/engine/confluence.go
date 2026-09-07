@@ -125,13 +125,28 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 func (e *Engine) reconcileConfluence(c *Company) {
 	cfg := c.Config.Integrations.Confluence
 	e.notify.mu.Lock()
-	svc, running := e.notify.service, e.notify.confluence.parser != nil
+	svc := e.notify.service
 	e.notify.mu.Unlock()
-	if svc == nil || !running {
-		// Not started, or started without a knowledge base. Boot owns
-		// that case; re-running it here would race the boot path.
+	if svc == nil {
+		// Nothing to register a parser with. `crewlet validate` applies to
+		// an engine with no inbound edge at all.
 		return
 	}
+	// IT REVIVES AS WELL AS RETIRES, and it did not.
+	//
+	// This returned early unless a parser was ALREADY running, on the
+	// reasoning that boot owns the first build. Boot owns the first one and
+	// nothing owned the second: the parser set is assembled once, in New,
+	// so a revision that ADDS Confluence after boot found no parser
+	// running, took this branch, and registered nothing. Disconnecting and
+	// reconnecting is exactly that sequence, and it left the route
+	// verifying and storing every delivery while nothing turned one into
+	// work for a seat, until the process was restarted.
+	//
+	// A reconciler that converges in one direction is not a reconciler.
+	// The other three here have always had this shape; this one is the odd
+	// case because it also owns a searcher, which is what the guard was
+	// really protecting and which [startConfluence] rebuilds anyway.
 	// RETIRED when the revision no longer declares it, like the other
 	// three reconcilers — each converged only toward "configured", so
 	// removing the block applied cleanly and left the boot-time parser
