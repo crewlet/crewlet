@@ -56,7 +56,7 @@ The body is whatever the node sealed. With a keyring configured the coordination
 
 The pointer's bucket has **no retention at all**. Everything else the fleet shares ages out; a pointer that expired would restart the epoch, and a fencing sequence that restarts is not a fence.
 
-> **On an embedded broker the coordination store lives inside the running engine**, so an *offline* `crewlet config import --activate` can mark a revision active locally but cannot move the pointer — it says so, and tells you to use `PUT /config` against a running node instead. A node that starts holding an active revision the fleet has no pointer for publishes it, unless the pointer it finds is newer; a restarted single-node deployment therefore comes back pointing at what it was already serving, and a node rejoining a live fleet converges on the fleet rather than rolling it back.
+> **On an embedded broker the coordination store lives inside the running engine**, so an *offline* `crewlet config import` can mark a revision active locally but cannot move the pointer — it says so, and tells you to use `PUT /config` against a running node instead. A node that starts holding an active revision the fleet has no pointer for publishes it, unless the pointer it finds is newer; a restarted single-node deployment therefore comes back pointing at what it was already serving, and a node rejoining a live fleet converges on the fleet rather than rolling it back.
 
 **Every node polls it** every ~15 s (±20 % jitter). A poll cannot miss anything, because it asks. The jitter exists only to break lock-step after a synchronized fleet restart — a rolling deploy boots every pod within the same second — and is deliberately applied to the *interval*, never to the apply.
 
