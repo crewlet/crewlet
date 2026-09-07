@@ -73,6 +73,22 @@ function stubFetch(handler: (path: string, init?: RequestInit) => Response) {
   return spy;
 }
 
+/**
+ * The dialog's WRITE, which is not always its first request.
+ *
+ * It reads the company's sealed entry NAMES when it opens, so typing `$` in
+ * a box can offer them, and a test indexing calls[0] was asserting against
+ * that read. What every one of these is about is what the form SENDS, so
+ * they ask for it by method rather than by position.
+ */
+function sent(spy: ReturnType<typeof stubFetch>): RequestInit | undefined {
+  for (const [, init] of spy.mock.calls) {
+    const method = String(init?.method ?? "GET").toUpperCase();
+    if (method !== "GET") return init;
+  }
+  return undefined;
+}
+
 beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
 afterEach(() => {
   cleanup();
@@ -195,7 +211,7 @@ test("untouched dots are not submitted", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
   await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
-  const body = JSON.parse(String(spy.mock.calls[0]?.[1]?.body)) as {
+  const body = JSON.parse(String(sent(spy)?.body)) as {
     values: Record<string, string>;
   };
   expect(body.values.url).toBe("https://gitlab.com");
@@ -243,12 +259,18 @@ test("a shared field appears once and is submitted to both surfaces", async () =
     target: { value: "ops@example.com" },
   });
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
-  await vi.waitFor(() => expect(spy.mock.calls.length).toBe(2));
 
   // WRITTEN TO BOTH. Submitting only what was on screen would leave the
   // second block without the value the first one collected.
-  for (const call of spy.mock.calls) {
-    const body = JSON.parse(String(call[1]?.body)) as { values: Record<string, string> };
+  //
+  // COUNTED AS WRITES rather than as requests: the dialog also READS the
+  // company's sealed entry names when it opens, so waiting for two requests
+  // stopped waiting before the second block was written. See [sent].
+  const writes = () =>
+    spy.mock.calls.filter(([, init]) => String(init?.method ?? "GET").toUpperCase() !== "GET");
+  await vi.waitFor(() => expect(writes().length).toBe(2));
+  for (const [, init] of writes()) {
+    const body = JSON.parse(String(init?.body)) as { values: Record<string, string> };
     expect(body.values.email).toBe("ops@example.com");
   }
 });
@@ -330,7 +352,7 @@ test("a hidden field is submitted from its default and never rendered", async ()
 
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
   await vi.waitFor(() => expect(spy).toHaveBeenCalled());
-  const body = JSON.parse(String(spy.mock.calls[0]?.[1]?.body)) as {
+  const body = JSON.parse(String(sent(spy)?.body)) as {
     values: Record<string, string>;
   };
   expect(body.values.enabled).toBe("true");
@@ -385,7 +407,7 @@ test("submitting asks for the mint and sends only what was filled in", async () 
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
   await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
-  const init = spy.mock.calls[0]?.[1];
+  const init = sent(spy);
   const body = JSON.parse(String(init?.body)) as {
     values: Record<string, string>;
     generate: string[];
@@ -761,7 +783,7 @@ test("an untouched credential is not written", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
   await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
-  const body = JSON.parse(String(spy.mock.calls[0]?.[1]?.body)) as {
+  const body = JSON.parse(String(sent(spy)?.body)) as {
     values: Record<string, string>;
   };
   expect(body.values.handle_tag).toBe("owner");

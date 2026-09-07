@@ -23,7 +23,7 @@
  * closed tab to leave the write half done.
  */
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Badge, Button } from "~/ui/primitives.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
@@ -255,6 +255,28 @@ export function SetupDialog({
   onDone: () => void;
 }) {
   const toast = useToast();
+  // THE NAMES THIS COMPANY HOLDS, so typing `$` in any box offers them.
+  //
+  // NAMES ONLY, read once when the dialog opens. A refused read leaves the
+  // list empty and the fields exactly as they were: the completion is a
+  // convenience, and a form that could not be filled in because a second
+  // request failed would be worse than one with no completion at all.
+  const [secretNames, setSecretNames] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const body = (await rest.get("/secrets")) as { secrets?: { name?: string }[] } | null;
+        if (!live) return;
+        setSecretNames((body?.secrets ?? []).map((s) => s.name ?? "").filter(Boolean));
+      } catch {
+        // Nothing to say and nothing to do: see the note above.
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, []);
   // Keyed by SECTION rather than by vendor, because a per-seat vendor has
   // one section per seat and they all carry the same vendor key.
   // CONNECTING is "no section here is configured yet". It no longer decides
@@ -753,6 +775,7 @@ export function SetupDialog({
             kind={r.kind === "toggle" ? "choice" : (r.kind as FieldKind)}
             value={values[key] ?? ""}
             onChange={(v) => setValues((c) => ({ ...c, [key]: v }))}
+            secrets={secretNames}
             // WHAT THE APP SAYS, and nothing about which button opened the
             // form. Marking a connect field required while connecting and
             // optional afterwards made one field wear two labels in two

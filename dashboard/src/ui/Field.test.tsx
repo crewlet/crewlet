@@ -8,6 +8,7 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import { useState } from "react";
 import { Field } from "./Field.tsx";
 
 afterEach(cleanup);
@@ -139,4 +140,107 @@ test("an email field never asserts a shape the browser enforces", () => {
   const input = screen.getByLabelText("Account email") as HTMLInputElement;
   expect(input.type).toBe("text");
   expect(input.checkValidity()).toBe(true);
+});
+
+/**
+ * Completing a `${NAME}` from the company's sealed entries.
+ *
+ * A field takes either a value or a reference to one, and the reference has
+ * to be exact: a name off by a character resolves to nothing, which reads as
+ * configured on every surface while the route it feeds refuses every
+ * delivery. Nothing on the form knew the names, so getting one right meant
+ * opening the Secrets screen in another tab and copying it across.
+ */
+const held = ["GITHUB_TOKEN", "GH_WEBHOOK_SECRET", "DATADOG_APP_KEY"];
+
+/** A controlled field, because the completion writes through onChange. */
+function Editable({ secrets = held }: { secrets?: string[] }) {
+  const [value, setValue] = useState("");
+  return (
+    <Field label="Webhook secret" kind="id" value={value} onChange={setValue} secrets={secrets} />
+  );
+}
+
+// TYPING `$` OPENS THE LIST, and typing more narrows it.
+test("typing a dollar offers the company's sealed entries", () => {
+  render(<Editable />);
+  const input = screen.getByLabelText("Webhook secret") as HTMLInputElement;
+
+  // NOTHING BEFORE THE `$`. A list over an empty box would be a popup
+  // nobody asked for on every field of every form.
+  expect(screen.queryByRole("listbox")).toBeNull();
+
+  fireEvent.change(input, { target: { value: "$" } });
+  fireEvent.keyUp(input, { key: "$" });
+  expect(screen.getAllByRole("option").length).toBe(held.length);
+
+  // NARROWED, and ordered closest first: GH_WEBHOOK_SECRET starts with the
+  // query and GITHUB_TOKEN merely contains its letters.
+  fireEvent.change(input, { target: { value: "$GH" } });
+  fireEvent.keyUp(input, { key: "H" });
+  const shown = screen.getAllByRole("option").map((o) => o.textContent);
+  expect(shown).toEqual(["GH_WEBHOOK_SECRET", "GITHUB_TOKEN"]);
+});
+
+// ARROWS MOVE, ENTER TAKES, and the value becomes a whole reference.
+test("a name is chosen with the arrows and Enter", () => {
+  render(<Editable />);
+  const input = screen.getByLabelText("Webhook secret") as HTMLInputElement;
+  fireEvent.change(input, { target: { value: "$GH" } });
+  fireEvent.keyUp(input, { key: "H" });
+
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  fireEvent.keyDown(input, { key: "Enter" });
+
+  // THE SECOND NAME, because the first was highlighted and the arrow moved
+  // past it, and written whole: the engine resolves a reference only when it
+  // is complete.
+  expect(input.value).toBe("${GITHUB_TOKEN}");
+  expect(screen.queryByRole("listbox")).toBeNull();
+});
+
+// TAB TAKES THE HIGHLIGHTED NAME, which is what it means in every other
+// completion list, rather than leaving the field with the list open.
+test("Tab takes the highlighted name", () => {
+  render(<Editable />);
+  const input = screen.getByLabelText("Webhook secret") as HTMLInputElement;
+  fireEvent.change(input, { target: { value: "$DATA" } });
+  fireEvent.keyUp(input, { key: "A" });
+
+  fireEvent.keyDown(input, { key: "Tab" });
+  expect(input.value).toBe("${DATADOG_APP_KEY}");
+});
+
+// ESCAPE CLOSES THE LIST AND KEEPS WHAT WAS TYPED.
+//
+// The field lives in a dialog that also closes on Escape, so the key is
+// stopped here: one press means "not this name", and losing a half-filled
+// form to it would be the worse of the two readings.
+test("Escape closes the list without clearing the field", () => {
+  render(<Editable />);
+  const input = screen.getByLabelText("Webhook secret") as HTMLInputElement;
+  fireEvent.change(input, { target: { value: "$GH" } });
+  fireEvent.keyUp(input, { key: "H" });
+  expect(screen.getByRole("listbox")).toBeTruthy();
+
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(screen.queryByRole("listbox")).toBeNull();
+  expect(input.value).toBe("$GH");
+});
+
+// A COMPANY THAT HOLDS NOTHING GETS NO LIST, and neither does a query that
+// matches nothing: an empty popup is a control that says a company has
+// entries when it has none.
+test("no list where there is nothing to offer", () => {
+  const { rerender } = render(<Editable secrets={[]} />);
+  const input = screen.getByLabelText("Webhook secret") as HTMLInputElement;
+  fireEvent.change(input, { target: { value: "$" } });
+  fireEvent.keyUp(input, { key: "$" });
+  expect(screen.queryByRole("listbox")).toBeNull();
+
+  rerender(<Editable />);
+  const live = screen.getByLabelText("Webhook secret") as HTMLInputElement;
+  fireEvent.change(live, { target: { value: "$ZZZ" } });
+  fireEvent.keyUp(live, { key: "Z" });
+  expect(screen.queryByRole("listbox")).toBeNull();
 });

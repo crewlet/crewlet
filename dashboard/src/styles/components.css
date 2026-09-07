@@ -556,6 +556,56 @@ a.brand:hover {
 /* A `${VAR}` is a NAME, and it wears the face a name wears everywhere else
    in this product: the Secrets screen renders a stored entry's name as inline
    code, and a field pointing at one is naming exactly that. */
+/* THE SECRET COMPLETION LIST, over the field that opened it.
+ *
+ * ABSOLUTE, so a list of eight names does not push the rest of a form down
+ * the moment somebody types `$` and pull it back up when they finish the
+ * word: a field that moves under a caret is a field people stop typing in.
+ */
+.input-suggests {
+  position: relative;
+}
+.input-suggest-list {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  /* BOUNDED AND SCROLLED. A company with forty sealed entries would
+     otherwise draw a list past the bottom of the dialog. */
+  max-height: 12rem;
+  overflow-y: auto;
+  /* OPAQUE, and --surface-1 is the token that is: this floats over a dialog
+     that is already a surface, and a translucent one let the help line and
+     the fields beneath show through the names. */
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-2);
+}
+.input-suggest {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  /* THE SAME FACE A REFERENCE WEARS in the box above and on the Secrets
+     screen: these are the names that go in one, and a list drawn in the
+     page's prose font reads as prose rather than as values. */
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-size: var(--fs-2xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.input-suggest.is-active {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
 .input.is-reference {
   font-family: var(--font-mono);
   font-variant-ligatures: none;
