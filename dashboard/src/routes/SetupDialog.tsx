@@ -74,12 +74,27 @@ export function fieldsFor(reqs: SetupRequirement[], blocks?: string): SetupRequi
   return [...reqs.filter((r) => r.connect), ...reqs.filter((r) => !r.connect)];
 }
 
-/** Where the connect group ends, so the form can rule a line under it. */
-export function connectCount(reqs: SetupRequirement[]): number {
-  const n = reqs.filter((r) => r.connect).length;
-  // All or nothing is not a group: a rule above the first field, or below
-  // the last, separates the form from nothing.
-  return n === reqs.length ? 0 : n;
+/**
+ * The two halves of a form: what connects the app, and what configures what
+ * happens over the connection.
+ *
+ * THE SECOND HALF IS FOLDED AWAY, and that is the difference between this
+ * dialog and the console's. The console asks three things to connect
+ * Datadog. This engine also receives Datadog's deliveries and routes its
+ * alerts, so it has four more fields the console has no equivalent for — and
+ * putting all seven in one column made connecting an app look like filling
+ * in a configuration file, whichever button opened it.
+ *
+ * An app that declares no connect fields has one group and no disclosure:
+ * every field is part of connecting, so there is nothing to fold.
+ */
+export function splitFields(reqs: SetupRequirement[]): {
+  connect: SetupRequirement[];
+  more: SetupRequirement[];
+} {
+  const connect = reqs.filter((r) => r.connect);
+  if (connect.length === 0) return { connect: reqs, more: [] };
+  return { connect, more: reqs.filter((r) => !r.connect) };
 }
 
 /** A section's identity: the vendor, plus the seat when there is one. */
@@ -194,6 +209,12 @@ export function SetupDialog({
     }
   }
   const [busy, setBusy] = useState(false);
+  // The disclosure is closed until somebody opens it, or until a submission
+  // is refused for a field inside it.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const onMoreToggle = (e: React.SyntheticEvent<HTMLDetailsElement>) => {
+    setMoreOpen(e.currentTarget.open);
+  };
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
@@ -287,6 +308,8 @@ export function SetupDialog({
               "reference, so there is no variable to store the credential in. " +
               "Clear it in Configuration, then try again.",
           });
+          // An error inside the disclosure is an error nobody can see.
+          if (!target.connect) setMoreOpen(true);
           return;
         }
       }
@@ -326,10 +349,7 @@ export function SetupDialog({
       {sections.map((section) => {
         const reqs = shownBy.get(sectionKey(section)) ?? [];
         if (reqs.length === 0) return null;
-        // WHERE CONNECTING ENDS. The fields above the rule establish the
-        // connection and the ones below configure what happens over it, and
-        // a reader who came here to paste an API key can stop at the line.
-        const rule = connectCount(reqs);
+        const { connect, more } = splitFields(reqs);
         return (
           <div key={sectionKey(section)} className="int-form">
             {/* A HEADING ONLY WHERE THERE IS MORE THAN ONE. On Slack the
@@ -355,12 +375,32 @@ export function SetupDialog({
                 </span>
               </div>
             )}
-            {reqs.map((r, i) => (
+            {connect.map((r) => (
               <Fragment key={`${sectionKey(section)}:${r.field}`}>
-                {rule > 0 && i === rule && <hr className="int-form-rule" />}
                 {renderField(r, section.name)}
               </Fragment>
             ))}
+            {/* CLOSED, and closed in both directions: a disclosure that
+                sprang open when a field inside it was unset would be the
+                settings form differing from the connect form again, which
+                is the one thing this dialog may not do. It opens when a
+                submission is refused for something inside it, so an error
+                is never hidden behind it. */}
+            {more.length > 0 && (
+              <details className="int-form-more" open={moreOpen} onToggle={onMoreToggle}>
+                <summary className="int-summary">
+                  More settings
+                  <span className="faint"> ({more.length})</span>
+                </summary>
+                <div className="int-form-more-fields">
+                  {more.map((r) => (
+                    <Fragment key={`${sectionKey(section)}:${r.field}`}>
+                      {renderField(r, section.name)}
+                    </Fragment>
+                  ))}
+                </div>
+              </details>
+            )}
           </div>
         );
       })}

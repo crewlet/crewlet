@@ -390,6 +390,76 @@ test("connecting and managing render one identical form", () => {
   }
 });
 
+// THE FORM ASKS WHAT CONNECTS THE APP, AND FOLDS THE REST AWAY.
+//
+// The console asks three things to connect Datadog. This engine also receives
+// Datadog's deliveries and routes its alerts, so it has four more fields the
+// console has no equivalent for, and all seven in one column made connecting
+// an app read as filling in a configuration file.
+test("only the connect fields are open, the rest are folded away", () => {
+  const { baseElement } = render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            requirements: [
+              req({ field: "site", label: "Datadog region", kind: "choice", connect: true }),
+              req({ field: "api_key", label: "API key", kind: "secret", connect: true }),
+              req({ field: "enabled", label: "Accept deliveries", kind: "toggle" }),
+              req({ field: "route_to", label: "Fallback seat", kind: "handle" }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+
+  const more = baseElement.querySelector("details.int-form-more") as HTMLDetailsElement;
+  expect(more).toBeTruthy();
+  expect(more.open).toBe(false);
+
+  // The connect fields are in the form itself, not behind the disclosure.
+  for (const label of ["Datadog region", "API key"]) {
+    const field = screen.getByText(label).closest(".field");
+    expect(more.contains(field)).toBe(false);
+  }
+  // And everything that configures what happens over the connection is.
+  for (const label of ["Accept deliveries", "Fallback seat"]) {
+    const field = screen.getByText(label).closest(".field");
+    expect(more.contains(field)).toBe(true);
+  }
+});
+
+// AN APP WITH NOTHING BUT CONNECT FIELDS HAS NO DISCLOSURE. A fold over
+// nothing is a control that opens an empty box.
+test("a form with one group folds nothing away", () => {
+  const { baseElement } = render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            requirements: [
+              req({ field: "site", label: "Datadog region", kind: "choice", connect: true }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(baseElement.querySelector("details.int-form-more")).toBeNull();
+  expect(screen.getByText("Datadog region")).toBeTruthy();
+});
+
 // A SETTINGS FORM OPENS ON WHAT IS ALREADY SET.
 //
 // It opened on nothing: a region and a fallback seat the document held both

@@ -1058,14 +1058,22 @@
   flex: 1;
 }
 
-/* The line between what connects an app and what configures it. Both halves
-   are one form, and the rule is what keeps that from reading as one long
-   list of unrelated questions. */
-.int-form-rule {
-  border: 0;
+/* What configures the connection, folded away from what makes it.
+ *
+ * The console asks three things to connect an app. This engine also receives
+ * that app's deliveries and routes them, so it has fields the console has no
+ * equivalent for, and seven inputs in one column made connecting an app read
+ * as filling in a configuration file. */
+.int-form-more {
   border-top: 1px solid var(--border-subtle);
-  margin: var(--space-2) 0 0;
-  width: 100%;
+  padding-top: var(--space-3);
+  margin-top: var(--space-1);
+}
+.int-form-more-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-top: var(--space-4);
 }
 
 /* Settings, at the foot of the open card and aligned with its header button
