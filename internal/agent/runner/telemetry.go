@@ -322,11 +322,47 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int, sys
 		},
 		RoundNum: openingRound,
 	}, e.traceFor(ctx)))
+
+	e.promptSize(ctx, ph, iteration, system, user)
 }
 
 // openingRound is the RoundNum of the update published before a phase's first
 // provider call. See [emitter.started].
 const openingRound = -1
+
+// promptSize measures the prompt a phase is about to send.
+//
+// Published from [emitter.started] because that is the one frame holding the
+// FINAL system and user text — after every section builder, every prefetch and
+// every ledger have had their say. Anywhere earlier measures a draft.
+//
+// The token figure is approximate by construction and says so in its field
+// name: a real count needs the vendor's own tokenizer, which differs per model
+// and would make this event a provider call. Four characters per token is the
+// long-standing rule of thumb for English prose plus JSON, and the character
+// counts ride along so anyone comparing builds can apply their own ratio
+// rather than inheriting this one.
+func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int, system, user string) {
+	if !e.on() {
+		return
+	}
+	e.publish(ctx, events.New(types.PromptSize{
+		Agent:             e.turn.AgentID,
+		RoleName:          e.role,
+		TurnID:            e.turn.ID,
+		Iteration:         iteration,
+		Phase:             types.Phase(ph),
+		ApproximateTokens: (len(system) + len(user)) / charsPerToken,
+		SystemChars:       len(system),
+		UserChars:         len(user),
+	}, e.traceFor(ctx)))
+}
+
+// charsPerToken is the ratio the approximate count uses. Four is the figure
+// both built-in providers' own documentation gives for English text, and this
+// number exists to make prompt growth comparable across builds rather than to
+// bill anybody — the real count is on the completed phase, from the provider.
+const charsPerToken = 4
 
 // fallback records one hand-off inside a phase's provider chain.
 //

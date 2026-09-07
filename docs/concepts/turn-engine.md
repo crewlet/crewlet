@@ -604,7 +604,7 @@ Each phase row in that view is keyed to its **phase colour** (execute / review /
 | `agent_turn_completed` | Extended with top-level fields `turn_id`, `execute_model`, `review_model`, `subagent_count`, `subagent_tokens`, `iterations`, `decision`, `trigger` (the turn's source descriptor) (inherits `delegation_depth` / `parent_turn_id` / `delegation_chain` from the `Event` base) |
 | `turn.guard_breach` | A runtime invariant stopped the turn; `kind` names which one (`depth_cap`, `stall`, `max_iter`) and `detail` carries its message |
 | `a2a_channel_opened` / `a2a_message_sent` / `a2a_message_delivered` / `a2a_channel_closed` | The channel an `a2a_ask` opened and its traffic — the only *recorded* delegation edge (see [What a delegation records](#what-a-delegation-records)). The target's `a2a_request` wake carries `delegation_depth + 1` and the requester appended to `delegation_chain` |
-| `phase.tool_activated` | The executor promoted a catalogue tool into its active surface via `activate_tool`. Routine: nothing names its tools in advance, so discovery is how every MCP tool reaches a turn |
+| `prompt.size` | The final size of one phase's prompt — system and user characters, plus a ~4-chars-per-token approximation — so prompt growth is measurable across builds without reading every phase payload back |
 | `phase.tool_skill_blocked` | The required-skill guard rejected a tool call: the session tried a tool covered by a required [tool skill](tool-skills.md) (the default; `required: false` opts out) before loading it via `load_tool_skill`. Carries the tool name and the missing skill keys; the LLM recovers by loading and retrying |
 | `budget_exhausted` | Unchanged; emitted by the shared tool-loop's budget check |
 

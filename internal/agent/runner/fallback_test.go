@@ -149,3 +149,68 @@ func TestAChainThatDoesNotFallThroughPublishesNothing(t *testing.T) {
 			"fell through, want 0", len(got))
 	}
 }
+
+// sizes returns every prompt measurement the phase published.
+func (c *capture) sizes() []*types.PromptSize {
+	c.mu <- struct{}{}
+	defer func() { <-c.mu }()
+	var out []*types.PromptSize
+	for _, ev := range c.events {
+		if got, ok := events.DataAs[*types.PromptSize](ev); ok {
+			out = append(out, got)
+		}
+	}
+	return out
+}
+
+// A phase measures the prompt it is ABOUT TO SEND, addressed to its turn.
+//
+// The type was registered and documented with no producer, so "is the prompt
+// getting smaller" was a question with a schema and no data. It is a separate
+// row rather than a derivation because the prompts themselves live on
+// AgentPhaseCompleted, and counting their characters means hauling every
+// phase's whole payload back across the driver.
+func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	prov := &scriptedProvider{execute: deliver(t, "posted the weekly summary")}
+	r, _ := buildWith(t, []phase.Entry{{Key: "executor", Provider: prov}},
+		buildOpts{pub: pub})
+
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	got := pub.sizes()
+	// ONE PER PHASE, not one per round: the prompt is measured where the
+	// phase opens, which is the one frame holding the final system and user
+	// text after every builder, prefetch and ledger has had its say.
+	if len(got) != 1 {
+		t.Fatalf("published %d prompt.size events for one phase, want 1", len(got))
+	}
+	m := got[0]
+	if m.TurnID != "t-1" || m.Iteration != 1 || string(m.Phase) != "execute" {
+		t.Errorf("addressed to turn=%q iter=%d phase=%q, want t-1/1/execute",
+			m.TurnID, m.Iteration, m.Phase)
+	}
+	// The measurement is of the REAL prompt, so it has to match what the
+	// provider actually received. A builder that measured a draft would
+	// report a number that shrinks every time a section moves.
+	sent := prov.requestsFor("execute")[0]
+	var system, user int
+	for _, msg := range sent.Messages {
+		switch msg.Role {
+		case llm.RoleSystem:
+			system += len(msg.Content)
+		case llm.RoleUser:
+			user += len(msg.Content)
+		}
+	}
+	if m.SystemChars != system || m.UserChars != user {
+		t.Errorf("measured %d/%d chars, provider received %d/%d",
+			m.SystemChars, m.UserChars, system, user)
+	}
+	if m.ApproximateTokens == 0 {
+		t.Error("approximate_tokens = 0 for a prompt with a system message in it")
+	}
+}

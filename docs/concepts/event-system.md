@@ -249,8 +249,11 @@ ProviderFallback           # the chain moved to its next provider. One per
                            # the turn, phase and iteration it happened in.
                            # `to_provider_key` is empty on the last member,
                            # where the next event is LLMUnavailable
-SubagentBatched, PromptSize, ExecuteMissingTool
-PhaseToolActivated, PhaseToolSkillBlocked, SkillTelemetryWriteFailed
+SubagentBatched, PhaseToolSkillBlocked, SkillTelemetryWriteFailed
+PromptSize                 # one phase's final prompt, measured. A separate row
+                           # rather than a derivation: the prompts themselves
+                           # are on AgentPhaseCompleted, and counting their
+                           # characters means hauling every phase payload back
 
 # webhook — no event type: the receiver writes the delivery's row itself,
 #           with the provider's exact bytes as the payload
