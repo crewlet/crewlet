@@ -603,6 +603,39 @@ func hasHTTPScheme(url string) bool {
 		envref.Has(url)
 }
 
+// DatadogProvisioning is what the engine creates at Datadog: one service
+// account per agent seat, each holding a role and its own application key.
+//
+// SEPARATE FROM THE INBOUND HALF above, and optional, because the two are
+// genuinely different integrations sharing a name. A company can accept
+// alerts with nothing here at all — paste the engine's address into
+// Datadog's webhook form and the routing works — and that was the whole of
+// this integration before the engine could call Datadog back.
+type DatadogProvisioning struct {
+	// Site is the Datadog region, e.g. datadoghq.eu. A key issued in one
+	// region is refused by every other and the hostname is the only thing
+	// that tells them apart, so this is checked against Datadog's own list
+	// rather than accepted.
+	Site string `yaml:"site,omitempty" json:"site,omitempty" desc:"Datadog region hostname, e.g. datadoghq.com."`
+
+	// APIKey and AppKey are the pair every Datadog call carries. They are
+	// not interchangeable: the API key says which organization, and the
+	// application key says which user acts.
+	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"Datadog API key; says which organization."`
+	AppKey string `secret:"true" yaml:"app_key,omitempty" json:"app_key,omitempty" desc:"Datadog application key; says which user acts."`
+
+	// Role is the Datadog role every agent account is created holding.
+	// Empty takes the read-only role, which is the honest default for
+	// accounts nothing yet authenticates with.
+	Role string `yaml:"role,omitempty" json:"role,omitempty" desc:"Role each agent's service account holds (default Datadog Read Only Role)."`
+
+	// EmailDomain is the domain each agent's service-account address is
+	// built under. Service accounts need an address Datadog will accept
+	// and never deliver to, so it is a domain the company controls rather
+	// than a real mailbox.
+	EmailDomain string `yaml:"email_domain,omitempty" json:"email_domain,omitempty" desc:"Domain agent service-account addresses are built under."`
+}
+
 // GitHub is the org-level GitHub block.
 //
 // Symmetric with [GitLab] with two differences, and both come from what
@@ -969,6 +1002,12 @@ type Datadog struct {
 	// in every Datadog list and filter, and a company with its own
 	// ownership scheme should be able to name it accordingly.
 	HandleTag string `yaml:"handle_tag,omitempty" json:"handle_tag,omitempty" desc:"Monitor tag key naming the seat an alert wakes (default crewlet)."`
+
+	// Provisioning is what the engine creates AT Datadog, and it is
+	// optional: an inbound-only company that pastes a webhook into
+	// Datadog's own UI needs none of it, which is how this integration
+	// worked before there was a client at all.
+	Provisioning *DatadogProvisioning `yaml:"provisioning,omitempty" json:"provisioning,omitempty" desc:"Inputs for provisioning agent identities at Datadog."`
 
 	// RouteTo is the seat an alert whose monitor names nobody wakes.
 	//

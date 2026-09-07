@@ -752,9 +752,14 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 				"integration", kind, "error", err)
 		}
 	}
+	// WHAT IS ACTUALLY ORPHANED, which is only what was actually stored.
+	// This walked every secret REQUIREMENT, so an integration with
+	// optional credentials named ones nobody had ever set and told an
+	// operator to unset something that does not exist. A list to act on
+	// has to be a list of things that are there.
 	orphaned := []string{}
 	for _, req := range state.Requirements {
-		if req.Kind != setup.KindSecret {
+		if req.Kind != setup.KindSecret || !req.Present {
 			continue
 		}
 		if name, _, err := setup.PointerFor(kind, req, req.Stored); err == nil {

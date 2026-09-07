@@ -201,12 +201,42 @@
           "description": "Monitor tag key naming the seat an alert wakes (default crewlet).",
           "type": "string"
         },
+        "provisioning": {
+          "$ref": "#/$defs/DatadogProvisioning",
+          "description": "Inputs for provisioning agent identities at Datadog."
+        },
         "route_to": {
           "description": "Handle of the seat an alert naming no owner wakes; required when enabled.",
           "type": "string"
         },
         "webhook_token": {
           "description": "Shared token compared against X-Crewlet-Token; required when enabled.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "DatadogProvisioning": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key": {
+          "description": "Datadog API key; says which organization.",
+          "type": "string"
+        },
+        "app_key": {
+          "description": "Datadog application key; says which user acts.",
+          "type": "string"
+        },
+        "email_domain": {
+          "description": "Domain agent service-account addresses are built under.",
+          "type": "string"
+        },
+        "role": {
+          "description": "Role each agent's service account holds (default Datadog Read Only Role).",
+          "type": "string"
+        },
+        "site": {
+          "description": "Datadog region hostname, e.g. datadoghq.com.",
           "type": "string"
         }
       },

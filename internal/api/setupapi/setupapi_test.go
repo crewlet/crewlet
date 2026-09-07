@@ -1156,3 +1156,31 @@ func TestDisconnectDoesNotRemoveSeatsUnlessAsked(t *testing.T) {
 		t.Error("a disconnect with no body asked for the accounts to be deleted")
 	}
 }
+
+// A DISCONNECT NAMES WHAT IS ORPHANED, NOT WHAT COULD HAVE BEEN.
+//
+// This walked every secret REQUIREMENT rather than every secret STORED, so
+// an integration with optional credentials named ones nobody had ever set.
+// The list exists for an operator to act on — `crewlet secrets unset` — and
+// half of it pointed at nothing.
+func TestDisconnectNamesOnlyTheSecretsThatExist(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	// Connect with the webhook token only, leaving Datadog's optional
+	// provisioning keys unset.
+	connect := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
+		`{"values": {"route_to": "sre-lead", "enabled": "true"}, "generate": ["webhook_token"]}`, nil)
+	if connect.Code != http.StatusCreated {
+		t.Fatalf("connect = %d: %s", connect.Code, connect.Body)
+	}
+
+	res := s.do(t, http.MethodDelete, "/setup/integrations/datadog", `{"force": true}`, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
+	orphans, _ := decode(t, res)["orphaned_secrets"].([]any)
+	if len(orphans) != 1 || orphans[0] != "DATADOG_WEBHOOK_TOKEN" {
+		t.Fatalf("orphaned = %v, want only the secret that was actually stored", orphans)
+	}
+}

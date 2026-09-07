@@ -100,7 +100,63 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 				"already use.",
 			Format: "a Datadog tag key",
 		},
+		{
+			// THE PROVISIONING HALF, and every field in it is optional
+			// on purpose. A company that pastes the engine's address
+			// into Datadog's own webhook form needs none of it: alerts
+			// arrive and route with the three fields above alone, which
+			// is the whole of what this integration was before the
+			// engine could call Datadog back. Filling these in is
+			// asking for something more — an identity per agent — and
+			// leaving them empty must not report a company incomplete.
+			Field:      "site",
+			Label:      "Datadog region",
+			Kind:       setup.KindChoice,
+			ConfigPath: "integrations.datadog.provisioning.site",
+			Required:   false,
+			Choices:    siteChoices(),
+			Help: "The region your organization is in. A key issued in one is " +
+				"refused by every other, and the hostname is the only thing " +
+				"that tells them apart.",
+		},
+		{
+			Field:      "api_key",
+			Label:      "API key",
+			Kind:       setup.KindSecret,
+			ConfigPath: "integrations.datadog.provisioning.api_key",
+			SecretName: "DATADOG_API_KEY",
+			Required:   false,
+			Help: "Says which organization the engine is acting in. Needed only " +
+				"to give each agent its own Datadog identity; alerts arrive " +
+				"without it.",
+			Where:     "Organization Settings > API Keys.",
+			VendorURL: "https://app.datadoghq.com/organization-settings/api-keys",
+		},
+		{
+			Field:      "app_key",
+			Label:      "Application key",
+			Kind:       setup.KindSecret,
+			ConfigPath: "integrations.datadog.provisioning.app_key",
+			SecretName: "DATADOG_APP_KEY",
+			Required:   false,
+			Help: "Says which user acts. Datadog refuses a write carrying only " +
+				"the API key, with a message that names neither, so both are " +
+				"needed together or not at all.",
+			Where:     "Organization Settings > Application Keys.",
+			VendorURL: "https://app.datadoghq.com/organization-settings/application-keys",
+		},
 	}
+
+	// The provisioning trio, resolved the same way every other field is.
+	// Absent is not incomplete here: they are optional, so `Present` says
+	// whether this company asked for identities at all.
+	var site, apiKey, appKey string
+	if in != nil && in.Provisioning != nil {
+		site, apiKey, appKey = in.Provisioning.Site, in.Provisioning.APIKey, in.Provisioning.AppKey
+	}
+	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Plain(site)
+	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Held(apiKey, resolve)
+	reqs[6].Present, reqs[6].Resolved, reqs[6].Stored = setup.Held(appKey, resolve)
 
 	// The toggle is present when it is ON. Reporting `false` as written
 	// down would make a paused integration look complete, and the whole
@@ -126,4 +182,15 @@ func Summary() string {
 	return "Datadog sends firing monitors to this engine. Alerts are routed by " +
 		"the owner tag on the monitor, so no account is created and no " +
 		"Datadog API key is held here."
+}
+
+// siteChoices offers Datadog's regions, from the client's own list so a
+// region this build can reach and a region the form offers cannot diverge.
+func siteChoices() []setup.Choice {
+	regions := Sites()
+	out := make([]setup.Choice, 0, len(regions))
+	for _, site := range regions {
+		out = append(out, setup.Choice{Value: site, Label: site})
+	}
+	return out
 }
