@@ -73,3 +73,67 @@ func TestOnlyAuthStatusesAreRefusals(t *testing.T) {
 		t.Error("Reject invented an error out of nil")
 	}
 }
+
+// A TEARDOWN THAT FAILS HOLDS THE SURFACE, rather than letting it drift back
+// to looking connected.
+//
+// The block is still in the company document for the whole of a teardown —
+// it is the credential the teardown authenticates with — so a normal pass
+// over the same surface would find it configured and report it healthy. If a
+// failed teardown did not pin the phase, a vendor refusing the delete would
+// show a connected integration somebody had already asked to remove.
+func TestATeardownThatFailsKeepsTheSurfaceDisconnecting(t *testing.T) {
+	now := time.Now().UTC()
+	start := State{Disconnecting: true, RemoveSeats: true}
+
+	got, forget := ObserveTeardown(start, KindJira, errors.New("jira: 403 on delete"), now)
+	if forget {
+		t.Fatal("a failed teardown forgot the row; the vendor still holds what it registered")
+	}
+	if got.Report.Phase != PhaseDisconnecting {
+		t.Errorf("phase = %q, want %q", got.Report.Phase, PhaseDisconnecting)
+	}
+	if !got.Disconnecting {
+		t.Error("the intent was dropped, so the next pass would reconcile it as if connected")
+	}
+	if !got.RemoveSeats {
+		t.Error("the operator's answer to the checkbox was lost between attempts")
+	}
+	if got.LastError == "" {
+		t.Error("the vendor's own words were dropped; they are what says why it is stuck")
+	}
+	if got.Attempts != 1 {
+		t.Errorf("attempts = %d, want 1: the backoff is derived from it", got.Attempts)
+	}
+}
+
+// AND A TEARDOWN THAT SUCCEEDS IS THE END OF THE ROW. Nothing is left to
+// reconcile, and the caller removes the block in the same step.
+func TestATeardownThatSucceedsForgetsTheSurface(t *testing.T) {
+	now := time.Now().UTC()
+	got, forget := ObserveTeardown(State{Disconnecting: true}, KindJira, nil, now)
+	if !forget {
+		t.Fatal("a finished teardown kept the row, so the screen would still show it")
+	}
+	if got.LastError != "" {
+		t.Error("a fault from an earlier attempt survived a pass that succeeded")
+	}
+}
+
+// TearingDown reads the INTENT, not the phase. They differ for exactly as
+// long as it takes the first pass to run, which is the window in which a
+// reader would otherwise see a connected integration and press Disconnect
+// again.
+func TestTheDisconnectIntentIsVisibleBeforeAPassHasRun(t *testing.T) {
+	asked := State{Disconnecting: true}
+	if !asked.TearingDown() {
+		t.Error("a surface asked to disconnect does not report itself tearing down")
+	}
+	running := State{Report: Report{Phase: PhaseDisconnecting}}
+	if !running.TearingDown() {
+		t.Error("a surface mid-teardown does not report itself tearing down")
+	}
+	if (State{Report: Report{Phase: PhaseReady}}).TearingDown() {
+		t.Error("a connected surface reports itself tearing down")
+	}
+}

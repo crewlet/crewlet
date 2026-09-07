@@ -61,6 +61,35 @@ type State struct {
 
 	// NextAttemptAt is when this integration becomes due again.
 	NextAttemptAt time.Time `json:"next_attempt_at,omitzero"`
+
+	// Disconnecting is set the moment somebody asks for the integration
+	// to be taken away, which is BEFORE any teardown pass has run and
+	// set a phase. Without it the screen shows a connected integration
+	// for as long as it takes the first pass to start, and a reader
+	// presses Disconnect again.
+	//
+	// It is also what makes the teardown survive its own failures: the
+	// intent lives on the fleet row rather than in the request that
+	// asked, so a vendor refusing the delete leaves the surface
+	// disconnecting and retrying rather than quietly connected again.
+	Disconnecting bool `json:"disconnecting,omitempty"`
+
+	// RemoveSeats carries the operator's answer to "also remove the
+	// accounts Crewlet created". The engine's own webhooks come out
+	// either way — it registered them and nothing else uses them — but
+	// an account may be a person's colleague in that vendor, so deleting
+	// one is never inferred.
+	RemoveSeats bool `json:"remove_seats,omitempty"`
+}
+
+// TearingDown reports whether this surface is being taken away.
+//
+// Reads the INTENT rather than the phase, because the two are not the same
+// for the first pass: the flag is set when somebody presses Disconnect and
+// the phase only follows once a pass has run. A caller that watched the phase
+// would treat the gap as a still-connected integration.
+func (s State) TearingDown() bool {
+	return s.Disconnecting || s.Report.Phase == PhaseDisconnecting
 }
 
 // Due reports whether this integration wants a pass at now.
@@ -190,5 +219,43 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 		}
 	}
 	state.Outcome = state.Report.Outcome()
+	return state, false
+}
+
+// ObserveTeardown records what a TEARDOWN pass concluded, and reports whether
+// the surface is finished with.
+//
+// Separate from [Observe] because the two read the same inputs to opposite
+// conclusions. A normal pass that fails is a wait: the integration is still
+// meant to exist and the next pass carries it forward. A teardown that
+// SUCCEEDS is the end of the row — nothing is left to reconcile — and one
+// that fails must hold the surface in [PhaseDisconnecting] rather than let it
+// drift back to looking connected, because the block is still in the company
+// document and a normal pass would report it healthy.
+//
+// forget is true only on success. The caller removes the block in the same
+// step, and the order matters: the block is the credential the teardown
+// authenticates with, so removing it first would strand whatever the vendor
+// still holds.
+func ObserveTeardown(state State, kind Kind, err error, now time.Time) (next State, forget bool) {
+	state.Kind = kind
+	state.LastAttemptAt = now
+	state.Disconnecting = true
+	state.Findings = nil
+
+	if err == nil {
+		state.LastError = ""
+		state.SettledAt = now
+		state.Attempts = 0
+		return state, true
+	}
+
+	state.Report = Report{
+		Phase: PhaseDisconnecting, Actor: ActorEngine,
+		Detail: "the last teardown pass could not finish",
+	}
+	state.Outcome = state.Report.Outcome()
+	state.Attempts++
+	state.LastError = truncateError(err.Error())
 	return state, false
 }

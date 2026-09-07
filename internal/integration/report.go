@@ -45,6 +45,16 @@ const (
 	// have, a webhook that cannot be registered.
 	PhaseDegraded Phase = "degraded"
 
+	// PhaseDisconnecting means the integration is being taken away and
+	// what the engine registered at the vendor is being removed. The
+	// engine's own work, and the last thing it does for this surface.
+	//
+	// The block stays in the company document for the whole of it. A
+	// disconnect that removed the block first would leave the loop with
+	// no credential to authenticate the teardown with, and the webhooks
+	// it was meant to withdraw registered forever.
+	PhaseDisconnecting Phase = "disconnecting"
+
 	// PhaseReady means observed matches desired.
 	PhaseReady Phase = "ready"
 )
@@ -84,6 +94,8 @@ func (p Phase) Label() string {
 		return "Setting up agents"
 	case PhaseActivating:
 		return "Waiting for the provider"
+	case PhaseDisconnecting:
+		return "Disconnecting"
 	case PhaseUnconfigured:
 		// FAILED, not "not connected". This phase is only ever reached
 		// with a block present: an absent one is [ErrNotConfigured] and
@@ -103,6 +115,13 @@ func (p Phase) Label() string {
 
 // Phases is every phase, ordered from furthest-from-working to working.
 var Phases = []Phase{
+	// DISCONNECTING IS FIRST, which is not a claim that it is the worst
+	// thing that can happen to an integration: this slice is what the
+	// dashboard reports the least ready surface from, and a teardown has
+	// to win. Showing a tool as connected while one of its surfaces is
+	// being removed invites a reader to act on something that is going
+	// away, which is the same precedence the console gives it.
+	PhaseDisconnecting,
 	PhaseUnconfigured, PhaseAwaitingAdmin, PhaseProvisioning,
 	PhaseActivating, PhaseDegraded, PhaseReady,
 }
@@ -217,6 +236,12 @@ func (r Report) Outcome() Outcome {
 	switch {
 	case r.Phase == PhaseReady:
 		return OutcomeSettled
+	case r.Phase == PhaseDisconnecting:
+		// WAITING even when the teardown is stuck on a vendor refusing
+		// the delete. Blocked is for something a person can go and do,
+		// and there is nothing to do here but let the retries run or
+		// force the disconnect, which is a different gesture.
+		return OutcomeWaiting
 	case r.Actor.WaitsOnAPerson():
 		return OutcomeBlocked
 	default:

@@ -58,8 +58,11 @@ test("the reader finds the phases it is meant to be comparing", () => {
   // Without this both tests pass on two empty lists, which is how a scanner
   // that stops matching reports everything as fine.
   const phases = enginePhases();
-  expect(phases.length).toBeGreaterThanOrEqual(6);
-  expect(phases[0]).toBe("unconfigured");
+  expect(phases.length).toBeGreaterThanOrEqual(7);
+  // A teardown outranks everything and `ready` is the finish line, so those
+  // two ends are named rather than left to the comparison alone: a scanner
+  // that matched nothing would agree with an empty list on both sides.
+  expect(phases[0]).toBe("disconnecting");
   expect(phases.at(-1)).toBe("ready");
   expect(screenPhases()).toEqual(phases);
 });

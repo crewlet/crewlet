@@ -166,6 +166,7 @@ export function phaseTone(phase: string): Tone {
       return "info";
     case "provisioning":
     case "activating":
+    case "disconnecting":
       return "neutral";
     default:
       // A phase a newer node wrote. Rendered as-is in a neutral tone
@@ -185,6 +186,10 @@ export function phaseTone(phase: string): Tone {
  * still working, and one still coming up is not.
  */
 const PHASE_ORDER = [
+  // A teardown wins, the same precedence the console gives it: showing a
+  // tool as connected while one of its surfaces is being removed invites a
+  // reader to act on something that is going away.
+  "disconnecting",
   "unconfigured",
   "awaiting_admin",
   "provisioning",

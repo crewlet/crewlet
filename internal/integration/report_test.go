@@ -14,6 +14,7 @@ func TestEveryPhaseHasAConciseLabel(t *testing.T) {
 	// The control plane's own words (backlet's ReconcilePhase, rendered by
 	// the console), so one company reads the same status in either product.
 	want := map[Phase]string{
+		PhaseDisconnecting: "Disconnecting",
 		PhaseUnconfigured:  "Failed",
 		PhaseAwaitingAdmin: "Action needed",
 		PhaseProvisioning:  "Setting up agents",
