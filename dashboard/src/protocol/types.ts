@@ -971,6 +971,17 @@ export interface SetupSeatState {
    * where it has none, which is every app but the two code hosts.
    */
   tier?: string;
+  /**
+   * That tier written for a person: its name, and the one line saying what
+   * it grants.
+   *
+   * SENT RATHER THAN DERIVED HERE. The vocabulary belongs to the package
+   * that builds the manifest and mints the tokens, and a screen prettifying
+   * the raw id would be a second, silent statement of what `read_only`
+   * means, free to drift from the permissions actually asked for.
+   */
+  tier_label?: string;
+  tier_hint?: string;
   /** What is outstanding for this seat. Empty means nothing is. */
   step?: SetupSeatStep;
   /**

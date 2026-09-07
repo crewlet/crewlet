@@ -1059,6 +1059,47 @@
   flex: 1;
 }
 
+/* HOW MUCH THIS AGENT MAY DO, stated the way the console states it: the
+ * word, the tier, and the line saying what it grants.
+ *
+ * It was a chip beside "ready", and two chips on one row read as two
+ * verdicts. "Read only" is not a verdict on anything: it is a setting, and
+ * a reader scanning a roster for what is wrong stopped on it every time.
+ *
+ * Full width so it wraps onto its own line under the name, which is where a
+ * labelled field belongs, and indented past the mark so it lines up with the
+ * agent it describes rather than with the avatar column. */
+.int-seat-permission {
+  flex-basis: 100%;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  /* 20px is .avatar.sm, plus the row's own gap. */
+  margin-left: calc(20px + var(--space-3));
+}
+.int-seat-permission-label {
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.int-seat-permission-value {
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  color: var(--text);
+}
+/* The hint takes the rest of the line, and the whole of the next one when
+   there is no room: it is the sentence that makes a tier legible without
+   opening a form, so truncating it would leave the label alone saying a
+   phrase the reader came here to have explained. */
+.int-seat-permission-hint {
+  flex: 1 1 16rem;
+  min-width: 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+
 /* What configures the connection, folded away from what makes it.
  *
  * The console asks three things to connect an app. This engine also receives

@@ -328,6 +328,17 @@ type SeatState struct {
 	// first requirement; it was this.
 	Present bool `json:"present"`
 
+	// TierLabel and TierHint are the tier written for a person: its name,
+	// and the one line saying what it grants.
+	//
+	// SENT RATHER THAN DERIVED, because the vocabulary belongs to the
+	// package that builds the manifest and mints the tokens. A screen that
+	// prettified the raw id would be a second, silent statement of what
+	// read_only means, free to drift from the permissions actually asked
+	// for. Empty where the app has no tiers.
+	TierLabel string `json:"tier_label,omitempty"`
+	TierHint  string `json:"tier_hint,omitempty"`
+
 	// Enrolled is a seat this integration is MEANT to cover, whether or not
 	// it holds anything yet.
 	//
@@ -884,7 +895,9 @@ func githubSeats(company *config.Company, resolve func(string) (string, bool)) [
 		app := role.Integrations.GitHub
 		state := SeatState{
 			Handle: seat.Handle(), Name: role.Name,
-			Tier: string(tier),
+			Tier:      string(tier),
+			TierLabel: tier.Label(),
+			TierHint:  tier.Hint(),
 			// A BLOCK IS THE OPT-IN, and it is what the reconcile reads
 			// too: it reports the seats that have one and stays silent
 			// about the rest, so a company running GitHub for three of

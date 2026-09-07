@@ -1083,10 +1083,48 @@ test("a seat that needs an app of its own gets the button that creates one", () 
   // AND NOT THE OTHER STEP. They are two acts, and an operator shown both at
   // once has no way to know which one they are on.
   expect(screen.queryByRole("link", { name: "Install on GitHub" })).toBeNull();
-  // THE TIER, in the engine's own value with its underscores opened: two
-  // agents on one card can hold apps with different permissions, and "not set
-  // up" says the same word over both.
+  // THE TIER, in the engine's own value with its underscores opened when it
+  // sends no label: two agents on one card can hold apps with different
+  // permissions, and "not set up" says the same word over both.
   expect(screen.getByText("read only")).toBeTruthy();
+});
+
+// A TIER IS A SETTING, NOT A VERDICT, and it is stated the way the console
+// states it: the word Permission, the tier, and the line saying what it
+// grants.
+//
+// It was a chip beside "ready", and two chips on one row read as two
+// verdicts, so a reader scanning a roster for what is wrong stopped on
+// "read only" every time. The words are the engine's: the tiers are a closed
+// set whose permissions live in Go, so a screen prettifying the raw id would
+// be free to drift from what the token actually carries.
+test("a seat's tier is a named permission, not a second status chip", () => {
+  roster(
+    seatOf({
+      satisfied: true,
+      tier: "full_access",
+      tier_label: "Full access",
+      tier_hint: "Branches, commits, pull requests, issues and checks. No administration.",
+      detail: "installed, and its key resolves",
+    }),
+  );
+
+  expect(screen.getByText("Permission")).toBeTruthy();
+  expect(screen.getByText("Full access")).toBeTruthy();
+  expect(screen.getByText(/Branches, commits, pull requests/)).toBeTruthy();
+  // AND NOT THE RAW VALUE, which is what a screen restating the vocabulary
+  // would show.
+  expect(screen.queryByText("full access")).toBeNull();
+  // The status is still its own answer, and the only one drawn as a chip.
+  expect(screen.getByText("ready")).toBeTruthy();
+});
+
+// A TOOL WITH NO TIERS SHOWS NO PERMISSION. Slack gives an agent an app and
+// no notion of how much of one, so a labelled field there would be an empty
+// row asking a question the app does not have.
+test("a seat on a tierless app shows no permission field", () => {
+  roster(seatOf({ satisfied: true, detail: "its own app" }));
+  expect(screen.queryByText("Permission")).toBeNull();
 });
 
 // THE MANIFEST GOES AS A FORM POST, NEVER AS A FETCH.

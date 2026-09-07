@@ -1055,22 +1055,32 @@ export function EntryRow({
                   </span>
                 </div>
                 <div className="int-row-badges">
-                  {/* HOW MUCH THIS AGENT MAY DO, where the app has tiers. It
-                      is the one thing about a per-agent app that a roster
-                      cannot be read without: two agents on the same card can
-                      hold apps with different permissions, and "ready" says
-                      the same word over both. Rendered in the engine's own
-                      value with its underscores opened, since the tiers are a
-                      closed set this build must not be caught renaming. */}
-                  {seat.tier && (
-                    <Badge outline title="The access tier this agent's app is created with">
-                      {seat.tier.replace(/_/g, " ")}
-                    </Badge>
-                  )}
                   <Badge tone={seat.satisfied ? "positive" : "neutral"} outline={!seat.satisfied}>
                     {seat.satisfied ? "ready" : "not set up"}
                   </Badge>
                 </div>
+                {/* HOW MUCH THIS AGENT MAY DO, where the app has tiers.
+                    A NAMED FIELD, the shape the console states it in: the
+                    word Permission, the tier, and the line saying what it
+                    grants. As a chip beside "ready" it was a second status
+                    over the first — the reader's eye reads two chips as two
+                    verdicts, and "read only" is not a verdict on anything.
+                    It is a setting, and the hint is what makes it legible
+                    without opening a form.
+                    THE ENGINE'S OWN WORDS. The tiers are a closed set whose
+                    permissions live in Go, so a screen prettifying the raw
+                    id would be free to drift from what the token carries. */}
+                {seat.tier && (
+                  <div className="int-seat-permission">
+                    <span className="int-seat-permission-label">Permission</span>
+                    <span className="int-seat-permission-value">
+                      {seat.tier_label ?? seat.tier.replace(/_/g, " ")}
+                    </span>
+                    {seat.tier_hint && (
+                      <span className="int-seat-permission-hint">{seat.tier_hint}</span>
+                    )}
+                  </div>
+                )}
                 {/* THE STEP'S OWN CONTROL, outside the badges so a refusal can
                     take the full width of the row the way a finding does. */}
                 {roster && <SeatStep app={entry.name} toolKey={roster.key} seat={seat} />}
