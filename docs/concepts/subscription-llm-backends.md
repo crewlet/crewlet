@@ -379,6 +379,50 @@ malformed reply costs a round; it never crashes a turn.
 (summarisation, the relevance filter) sends a plain prompt and reads a
 plain answer, with no envelope to get wrong.
 
+### Finding the answer in the CLI's output
+
+Before any of that, something has to decide *which part of what the CLI
+printed is the model's reply*. That is `output` plus `text_paths` on the
+profile: `text` takes the whole of stdout, `json` reads one document and
+`jsonl` concatenates every event that carries a text path, in stream
+order. `text_paths` is a **list** so a vendor that moved the field
+between releases needs no override — the first path that resolves to a
+non-empty string wins, and an empty one falls through to the next.
+
+Four outcomes, kept apart on purpose, because three of them used to be
+one:
+
+| What happened | What the engine does |
+|---|---|
+| A text path resolved to text | That text is the reply. |
+| A text path resolved and every one was **empty** | The CLI answered with nothing. A retryable `SERVER` failure naming every `text_paths` entry the profile declares — the [fallback chain](#falling-back-to-a-metered-key) walks to the next entry, and no credential is benched. |
+| **No** text path resolved at all | The profile no longer matches the installed CLI. A retryable `SERVER` failure that names `text_paths`, points at `crewlet llm doctor`, and prints the **tail** of what the CLI output so you can write the override. |
+| The CLI printed **nothing at all** on a zero exit | Its own message, because neither of the two above can say anything true about output that does not exist. A retryable `SERVER` failure carrying whatever it wrote on stderr, which is the only clue there is. |
+
+Output that is not JSON at all is still an answer: a CLI that printed a
+banner, a warning, or the vendor's own sentence about a spent plan is
+read as prose rather than refused, which is what lets the
+[limit sentinels](#falling-back-to-a-metered-key) be recognised on a
+zero exit. Those sentinels are matched against the CLI's whole stdout
+and stderr, so a drifted profile still yields a real `RATE_LIMIT` with
+the vendor's own reset instant rather than a server fault.
+
+**Why the last two are failures rather than answers.** They used to be
+one case, and the answer handed back was the CLI's raw stdout — on the
+reasoning that an operator would then see the shape and write an
+override. They would, but only after it had been *spoken as an agent*
+first: an empty `result` on a Claude Code envelope meant the seat's reply
+became `{"duration_api_ms":11377,…,"result":"","type":"result"}`, the
+tool loop appended that to the conversation and re-sent it every round,
+the reviewer judged the turn on it, and the dashboard printed it as the
+sentence the agent had said. The shape belongs in the error message,
+where the only person who can act on it is the only one reading.
+
+An empty answer is a real outcome, not only a parsing problem — a model
+that spends its whole turn on hidden reasoning produces exactly this — so
+if you see it repeatedly, the entry's `model` is the field to change.
+`crewlet llm doctor` runs a real completion and reports it.
+
 ### Token accounting
 
 `Completion.InputTokens` / `output_tokens` come from the CLI's own
@@ -586,6 +630,12 @@ validated against the profile model, so a typo fails `crewlet validate`
 rather than an agent's first turn. `crewlet llm doctor` prints the CLI
 version the built-in profile was written against next to the version you
 actually have.
+
+A drift that only shows up at *runtime* — the flags still work, the JSON
+still parses, and the answer field moved — names itself: the completion
+fails with the `text_paths` this profile looked in and the output the CLI
+actually produced. See
+[Finding the answer in the CLI's output](#finding-the-answer-in-the-clis-output).
 
 ---
 

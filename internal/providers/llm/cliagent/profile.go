@@ -47,6 +47,29 @@ func (m OutputMode) Valid() bool {
 // object keys, or a decimal index into an array.
 type Path []string
 
+// String renders a path the way profiles.yaml would be read aloud —
+// `usage.input_tokens` for [][]string{{"usage", "input_tokens"}}.
+//
+// It exists for the message an operator reads when a profile stops matching
+// its CLI: naming the field to change is the whole point of that message, and
+// `[]cliagent.Path{{"result"}}` printed with %v names nothing.
+func (p Path) String() string { return strings.Join(p, ".") }
+
+// PathList renders a set of paths for the same message, in declaration order.
+//
+// Declaration order because that is the order they are TRIED, so an operator
+// comparing this against their CLI's real output reads the two in step.
+func PathList(paths []Path) string {
+	if len(paths) == 0 {
+		return "(none declared)"
+	}
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, p.String())
+	}
+	return strings.Join(out, ", ")
+}
+
 // UsagePaths locates the four token counts in a CLI's own usage report.
 //
 // Each is a LIST of paths rather than one, because a vendor moves these
@@ -479,4 +502,25 @@ func (p *Profile) output() OutputMode {
 		return OutputJSON
 	}
 	return p.Output
+}
+
+// ReadsUsage reports whether this profile can take token counts from the CLI
+// rather than estimating them.
+//
+// BOTH HALVES, because either alone is a lie. A profile with no usage paths
+// obviously cannot; less obviously, a TEXT profile cannot either — [extract]
+// never decodes a document in that mode, so declared paths are walked by
+// nothing. That combination is not an operator error to refuse: `output: text`
+// is a one-line override, and the JSON paths it inherits from the built-in
+// profile are simply inert afterwards.
+//
+// It exists so `crewlet llm doctor` and the extractor answer the same
+// question. Doctor asked a narrower one — "are usage paths declared" — and so
+// reported "reported by CLI" for a provider whose every call estimates, which
+// is precisely the question that report exists to settle.
+func (p *Profile) ReadsUsage() bool {
+	if p.output() == OutputText {
+		return false
+	}
+	return len(p.Usage.Input) > 0 || len(p.Usage.Output) > 0
 }

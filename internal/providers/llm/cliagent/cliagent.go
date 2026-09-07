@@ -261,7 +261,13 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			if !ok {
 				return
 			}
-			req.Send(llm.Delta{Content: firstString(doc, p.profile.TextPaths)})
+			// The bool is deliberately dropped HERE and only here:
+			// a stream is many events and most of them carry no
+			// text path at all, so "did this one event match" is
+			// not the question. Whether the PROFILE matches is
+			// decided once, over the whole stream, by extract.
+			chunk, _ := firstString(doc, p.profile.TextPaths)
+			req.Send(llm.Delta{Content: chunk})
 		}
 	}
 	if system != "" {
@@ -336,20 +342,86 @@ func (p *Provider) completion(prompt string, res *rawResult) (*llm.Completion, e
 	// A spent subscription is checked BEFORE the exit code, because it
 	// arrives on a successful one: the process exits 0 and the answer is
 	// the vendor's own sentence about the plan.
-	if kind, retry, ok := p.classifyMarkers(out.text, res.stderr); ok {
-		return nil, p.fail(kind, retry, fmt.Errorf("%s", firstLine(out.text, res.stderr)))
+	//
+	// THE ANSWER IF THERE IS ONE, EVERYTHING PRINTED IF THERE IS NOT.
+	// A marker is something the VENDOR said, so losing it because this
+	// profile's text paths no longer resolve would classify a spent plan
+	// as a server fault and burn the chain's next member on it — and a
+	// spent plan is exactly when a drifted-looking run is most likely,
+	// since the CLI answers with prose where the envelope should be.
+	//
+	// Not stdout unconditionally, though, which was the first shape of
+	// this: some shipped markers are short generic phrases rather than
+	// vendor sentences, and scanning a healthy run's whole telemetry for
+	// them adds false-positive surface for nothing. When the answer WAS
+	// located it is the only thing the vendor said that matters.
+	said := nonEmpty(out.text, res.stdout)
+	if kind, retry, ok := p.classifyMarkers(said, res.stderr); ok {
+		return nil, p.fail(kind, retry,
+			fmt.Errorf("%s", firstLine(said, res.stderr)))
 	}
 
 	if res.exitCode != 0 || out.failed {
 		return nil, p.fail(llm.KindFatal, 0, fmt.Errorf(
-			"the CLI exited %d:\n%s", res.exitCode, tail(nonEmpty(res.stderr, out.text))))
+			"the CLI exited %d:\n%s", res.exitCode,
+			tail(nonEmpty(res.stderr, out.text, res.stdout))))
+	}
+	if strings.TrimSpace(res.stdout) == "" {
+		// Exit zero and nothing on stdout AT ALL — no envelope, no
+		// banner, no prose. Checked before the two cases below because
+		// neither can say anything true about output that does not
+		// exist: there is no shape for a path to miss and no field to
+		// find empty. Not a fatal request problem — nothing about the
+		// prompt was refused — so the chain is free to try another
+		// member, and the credential is not cooled.
+		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
+			"the %s CLI exited 0 but printed nothing at all%s",
+			p.agent, stderrDetail(res.stderr)))
+	}
+	if !out.located {
+		// THE PROFILE HAS DRIFTED FROM THE CLI. Its output parsed, and
+		// none of the paths that say where the answer lives resolved to
+		// a string — so this build cannot tell which part of what the
+		// CLI printed is the model's reply, and the honest answer is
+		// that it has none.
+		//
+		// It used to hand the whole of stdout back as the reply instead,
+		// on the reasoning that an operator could then see the shape and
+		// write an override. They could — but only after it had already
+		// been spoken as an agent: the tool loop appends it to the
+		// conversation, the reviewer judges the turn on it, and the
+		// dashboard prints it as the sentence the seat said. The shape
+		// belongs in THIS message, where the person who can fix it is
+		// the only reader.
+		//
+		// KindServer, so the chain may try another member and the
+		// credential is not benched: nothing about the prompt was
+		// refused.
+		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
+			"the %s CLI's output parsed, but none of the text_paths this profile "+
+				"looks in resolved (%s) — the profile no longer matches the "+
+				"installed CLI, so nothing it printed can be read as the model's "+
+				"reply. Run `crewlet llm doctor %s` and set "+
+				"providers.llm.%s.cli.overrides.text_paths. It printed:\n%s",
+			p.agent, PathList(p.profile.TextPaths), p.key, p.key, tail(res.stdout)))
 	}
 	if strings.TrimSpace(out.text) == "" {
-		// Exit zero and nothing on stdout. Not a fatal request problem —
-		// nothing about the prompt was refused — so the chain is free to
-		// try another member, and the credential is not cooled.
+		// Located and EMPTY: the CLI exited 0, reported no error, and
+		// said nothing. A real outcome rather than a parse problem — a
+		// model that spent its whole answer on hidden reasoning does
+		// exactly this — and one this backend must not paper over,
+		// because there is no reply for the tool loop to correct and
+		// re-prompting on the caller's behalf is the retry the provider
+		// contract forbids.
+		//
+		// Names BOTH facts, because a reader who only sees "no output"
+		// goes looking for a crash that did not happen.
 		return nil, p.fail(llm.KindServer, 0, fmt.Errorf(
-			"the CLI exited 0 but produced no output:\n%s", tail(res.stderr)))
+			"the %s CLI exited 0 and answered with nothing: %s is present in its "+
+				"output and empty. Raise the model's effort, or point this entry "+
+				"at a stronger model — `crewlet llm doctor %s` runs a real "+
+				"completion and reports whether it answers at all.%s",
+			p.agent, PathList(p.profile.TextPaths), p.key, stderrDetail(res.stderr)))
 	}
 
 	env := ParseEnvelope(out.text)
@@ -477,6 +549,19 @@ func firstLine(texts ...string) string {
 		}
 	}
 	return "no output"
+}
+
+// stderrDetail appends a CLI's stderr to a message, or nothing when it wrote
+// none.
+//
+// A trailing empty ":" after a sentence that already said what went wrong is
+// how a message stops reading like one — and stderr is genuinely absent on the
+// paths that use this, because a CLI that exits 0 usually says nothing there.
+func stderrDetail(stderr string) string {
+	if strings.TrimSpace(stderr) == "" {
+		return ""
+	}
+	return " It wrote on stderr:\n" + tail(stderr)
 }
 
 // nonEmpty is the first of the given strings with content.

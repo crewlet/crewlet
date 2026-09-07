@@ -291,8 +291,12 @@ providers:
                                         #   blob; empty falls back to
                                         #   CREWLET_LLM_CLI_<KEY>_CREDENTIALS
         overrides: {}                   # optional — replace any profile field when a
-                                        #   vendor renames a flag (validated here, so a
-                                        #   typo fails `crewlet validate`)
+                                        #   vendor renames a flag OR moves the field the
+                                        #   answer lives in (`text_paths`); validated
+                                        #   here, so a typo fails `crewlet validate`.
+                                        #   A moved answer field is the drift that
+                                        #   passes validation and fails at a seat's
+                                        #   first turn — `crewlet llm doctor` names it
 
   embeddings:                           # optional — similarity search for the
                                         #   agent-learning subsystem (agent_diary
