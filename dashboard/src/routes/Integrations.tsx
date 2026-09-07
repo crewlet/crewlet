@@ -27,6 +27,7 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Avatar, Badge, Button, Empty, Skeleton } from "~/ui/primitives.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
+import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
@@ -1240,6 +1241,19 @@ export function Integrations() {
   // failure. The quick cadence is bounded by its own condition, since a
   // surface that has settled leaves the set.
   const [settling, setSettling] = useState(false);
+  // SOMETHING WAS JUST ASKED FOR, whether or not anything reflects it yet.
+  //
+  // The quick cadence below is derived from the ROWS, and a connect has no
+  // row to derive it from: the write returns as soon as the revision is
+  // activated, and the read that follows can land before the engine has
+  // applied it. The screen then holds the pre-connect answer, sees nothing
+  // in flight to watch, and waits out the slow poll: an operator pressed
+  // Connect, the card said Connect, and only a manual refresh moved it.
+  //
+  // So a write starts its own window. It is what this screen knows and the
+  // rows do not, and it is bounded, because a connect that never shows up is
+  // a fault to read about rather than a reason to poll for ever.
+
   const {
     data,
     loading,
@@ -1247,6 +1261,9 @@ export function Integrations() {
     refetch: reread,
   } = useQuery("integrations", undefined, { pollMs: settling ? 4_000 : 60_000 });
   const setup = useSetup();
+  // READ AGAIN AFTER A WRITE, because the first read can land before the
+  // engine has applied the revision it just stored. See [useRecheck].
+  const { watching, watch } = useRecheck(reread);
   const [dialog, setDialog] = useState<{
     title: string;
     sections: { name: string; tool: SetupToolState }[];
@@ -1264,7 +1281,7 @@ export function Integrations() {
   // looking. Derived from what arrived rather than from what was clicked, so
   // a pass somebody else started is watched too.
   const moving = [...rows.values()].some((r) => IN_FLIGHT.has(r.reconcile?.phase ?? ""));
-  useEffect(() => setSettling(moving), [moving]);
+  useEffect(() => setSettling(moving || watching), [moving, watching]);
   const configured = CATALOG.filter((e) => e.surfaces.some((s) => rows.has(s.key)));
 
   return (
@@ -1333,7 +1350,7 @@ export function Integrations() {
           // is the surface moving to Disconnecting.
           onDone={() => {
             setup.reload();
-            reread();
+            watch();
           }}
         />
       )}
@@ -1350,7 +1367,9 @@ export function Integrations() {
           // closes.
           onDone={() => {
             setup.reload();
-            reread();
+            // READ, AND KEEP LOOKING: the first read can land before the
+            // engine has applied the revision it just stored. See [watch].
+            watch();
           }}
         />
       )}
