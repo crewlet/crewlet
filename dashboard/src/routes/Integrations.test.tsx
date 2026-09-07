@@ -886,3 +886,37 @@ test("every in-flight phase is amber, and the only amber phase that settles is d
   expect(phaseTone("ready")).toBe("positive");
   expect(IN_FLIGHT.has("ready")).toBe(false);
 });
+
+// THE SURFACE THAT DELETES THE ACCOUNTS RECEIVES NO DELIVERIES.
+//
+// Atlassian's organization has no inbound route: it is where accounts are
+// made, not somewhere Atlassian posts to. This filtered on the TRAFFIC rows,
+// so the organization was dropped from every disconnect, its teardown never
+// ran, and "remove the accounts Crewlet created" removed nothing while
+// reporting success. The service accounts stayed in the admin console.
+test("disconnect includes a configured surface that has no traffic row", () => {
+  // Only the products have rows, which is what the engine reports.
+  const rows = rowsOf({ key: "jira", configured: true }, { key: "confluence", configured: true });
+  const sections = [
+    { name: "Organization", tool: toolState({ key: "atlassian", can_provision: true }) },
+    { name: "Confluence", tool: toolState({ key: "confluence", can_provision: false }) },
+    { name: "Jira", tool: toolState({ key: "jira", can_provision: false }) },
+  ];
+  const order = disconnectOrder(atlassian, rows, sections);
+  expect(order).toContain("atlassian");
+  // AND STILL LAST: the organization's credential is what removes the
+  // accounts, so taking it first would strand them.
+  expect(order[order.length - 1]).toBe("atlassian");
+});
+
+// AND A SURFACE NOBODY CONFIGURED IS STILL LEFT ALONE. A delete against one
+// is a request with nothing behind it.
+test("disconnect skips a surface this company never configured", () => {
+  const rows = rowsOf({ key: "jira", configured: true });
+  const sections = [
+    { name: "Jira", tool: toolState({ key: "jira", can_provision: false }) },
+    // Declared by the catalogue, never configured by this company.
+    { name: "Forge relay", tool: toolState({ key: "forge", configured: false }) },
+  ];
+  expect(disconnectOrder(atlassian, rows, sections)).toEqual(["jira"]);
+});

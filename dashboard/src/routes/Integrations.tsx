@@ -483,18 +483,26 @@ export function byConfiguredThenName(
 }
 
 /**
- * The surfaces a card's Disconnect takes away, in the order it takes them./**
  * The surfaces a card's Disconnect takes away, in the order it takes them.
  *
  * THE PROVISIONING SURFACE LAST. On Atlassian the two products are reached
  * with their own credentials and the ORGANIZATION's is what removes the
  * accounts, so taking the organization first would strand every account the
- * products' teardown still has to account for — and leave nothing able to
+ * products' teardown still has to account for, and leave nothing able to
  * remove them.
  *
  * Only surfaces this company actually has: a card lists what a tool can be
- * made of, and a delete against a surface nobody configured is a request
- * with nothing behind it.
+ * made of, and a delete against a surface nobody configured is a request with
+ * nothing behind it.
+ *
+ * CONFIGURED, NOT TRAFFICKED, and that distinction is the whole of this
+ * function's history. It asked the traffic rows, which answer "does this
+ * surface have an inbound route" — and Atlassian's organization has none: it
+ * receives no deliveries, it is where accounts are made. So the one surface
+ * whose teardown deletes the service accounts was filtered out of every
+ * disconnect, and "remove the accounts Crewlet created" removed nothing while
+ * reporting success. The sections know what is configured; the rows only know
+ * what has been delivered to.
  */
 export function disconnectOrder(
   entry: Entry,
@@ -502,7 +510,10 @@ export function disconnectOrder(
   sections: { name: string; tool: SetupToolState }[],
 ): string[] {
   const provisions = new Set(sections.filter((s) => s.tool.can_provision).map((s) => s.tool.key));
-  const present = entry.surfaces.map((s) => s.key).filter((key) => rows.has(key));
+  const configured = new Set(sections.filter((s) => s.tool.configured).map((s) => s.tool.key));
+  const present = entry.surfaces
+    .map((s) => s.key)
+    .filter((key) => configured.has(key) || rows.has(key));
   return [
     ...present.filter((key) => !provisions.has(key)),
     ...present.filter((key) => provisions.has(key)),
