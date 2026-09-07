@@ -164,3 +164,61 @@ func TestTheRequiredContractDemandsAToolCall(t *testing.T) {
 		t.Error("the required contract does not demand a tool call")
 	}
 }
+
+// A call list nothing could be read from is NOT an envelope.
+//
+// The distinction is what happens next. A document that is not an envelope
+// becomes assistant prose and the tool loop's forced-tool corrective asks
+// again — one round, and the model reliably fixes it. Accepted as an envelope
+// instead, the same reply reported that the model asked for NO tools when it
+// had asked for several, so the turn ended on a confident message with nothing
+// delivered.
+func TestACallListNothingCouldBeReadFromIsNotAnEnvelope(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, reply string }{
+		{"entries are strings, not objects",
+			`{"message":"posting it now","tool_calls":["mattermost_post_message"]}`},
+		{"every entry is nameless",
+			`{"message":"posting it now","tool_calls":[{"arguments":{"channel":"c"}}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := ParseEnvelope(tc.reply)
+			if env.Parsed {
+				t.Errorf("parsed as an envelope with %d calls — the request was dropped "+
+					"and the message reported as a final answer", len(env.ToolCalls))
+			}
+			if env.Message != tc.reply {
+				t.Errorf("the reply did not fall through as prose: %q", env.Message)
+			}
+		})
+	}
+}
+
+// An EMPTY list is an ordinary final answer — the model saying "no calls, here
+// is my note" — and must keep parsing.
+func TestAnEmptyCallListIsStillAnEnvelope(t *testing.T) {
+	t.Parallel()
+	env := ParseEnvelope(`{"message":"nothing to do here","tool_calls":[]}`)
+	if !env.Parsed {
+		t.Fatal("an explicit no-calls answer was refused")
+	}
+	if env.Message != "nothing to do here" || len(env.ToolCalls) != 0 {
+		t.Errorf("message = %q calls = %d", env.Message, len(env.ToolCalls))
+	}
+}
+
+// One unreadable entry beside a readable one keeps the readable one: the
+// forced-tool corrective is for a reply that requested nothing this build
+// could run, not for a reply with a stray element in its list.
+func TestAPartiallyReadableCallListKeepsWhatItCanRun(t *testing.T) {
+	t.Parallel()
+	env := ParseEnvelope(
+		`{"tool_calls":[{"nope":1},{"name":"submit_work","arguments":{"outcome":"delivered"}}]}`)
+	if !env.Parsed {
+		t.Fatal("a list with one good call was refused")
+	}
+	if len(env.ToolCalls) != 1 || env.ToolCalls[0].Name != "submit_work" {
+		t.Errorf("calls = %+v", env.ToolCalls)
+	}
+}
