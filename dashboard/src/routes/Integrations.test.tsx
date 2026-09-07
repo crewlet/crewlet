@@ -1014,8 +1014,8 @@ import type { SetupSeatState } from "~/protocol/types.ts";
 const github = CATALOG.find((e) => e.key === "github")!;
 
 /** One GitHub card with this roster, opened. */
-function roster(...seats: SetupSeatState[]): void {
-  render(
+function roster(...seats: SetupSeatState[]): { container: HTMLElement } {
+  const rendered = render(
     <EntryRow
       entry={github}
       rows={rowsOf({ key: "github", configured: true })}
@@ -1023,6 +1023,7 @@ function roster(...seats: SetupSeatState[]): void {
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: /Show GitHub details/ }));
+  return rendered;
 }
 
 function seatOf(over: Partial<SetupSeatState>): SetupSeatState {
@@ -1077,54 +1078,78 @@ afterEach(() => {
 // Connected over a seat with nothing is reporting the half that cannot be
 // acted on. The button is what the engine's own step asks for.
 test("a seat that needs an app of its own gets the button that creates one", () => {
-  roster(seatOf({ step: "create_app", tier: "read_only", detail: "no app of its own yet" }));
+  roster(
+    seatOf({
+      step: "create_app",
+      tier: "read_only",
+      // THE LABEL COMES WITH THE TIER, always: the dashboard is embedded in
+      // the binary that serves it, so the two are never a version apart and
+      // the screen never has to restate a vocabulary Go owns.
+      tier_label: "Read-only",
+      detail: "no app of its own yet",
+    }),
+  );
 
   expect(screen.getByRole("button", { name: "Create app on GitHub" })).toBeTruthy();
   // AND NOT THE OTHER STEP. They are two acts, and an operator shown both at
   // once has no way to know which one they are on.
   expect(screen.queryByRole("link", { name: "Install on GitHub" })).toBeNull();
-  // THE TIER, in the engine's own value with its underscores opened when it
-  // sends no label: two agents on one card can hold apps with different
-  // permissions, and "not set up" says the same word over both.
-  expect(screen.getByText("read only")).toBeTruthy();
+  // THE TIER, in the engine's own words: two agents on one card can hold
+  // apps with different permissions, and "not set up" says the same word
+  // over both.
+  expect(screen.getByText("Read-only")).toBeTruthy();
 });
 
-// A TIER IS A SETTING, NOT A VERDICT, and it is stated the way the console
-// states it: the word Permission, the tier, and the line saying what it
-// grants.
+// A TIER SITS BESIDE THE NAME, NOT OUT WITH THE STATUS.
 //
-// It was a chip beside "ready", and two chips on one row read as two
-// verdicts, so a reader scanning a roster for what is wrong stopped on
-// "read only" every time. The words are the engine's: the tiers are a closed
-// set whose permissions live in Go, so a screen prettifying the raw id would
-// be free to drift from what the token actually carries.
-test("a seat's tier is a named permission, not a second status chip", () => {
-  roster(
+// It is a standing fact about the agent rather than something needing
+// attention, which is where the console puts it and why. As a chip out on
+// the right beside "ready", two chips on one row read as two verdicts and a
+// reader scanning a roster for what is wrong stopped on "read-only" every
+// time.
+//
+// The words are the engine's: the tiers are a closed set whose permissions
+// live in Go beside the code that mints the tokens, so a screen prettifying
+// the raw id would be free to drift from what a token actually carries.
+test("a seat's tier is a tag on its name, not a second status chip", () => {
+  const { container } = roster(
     seatOf({
       satisfied: true,
       tier: "full_access",
       tier_label: "Full access",
       tier_hint: "Branches, commits, pull requests, issues and checks. No administration.",
-      detail: "installed, and its key resolves",
+      detail: "acme/api, acme/web",
     }),
   );
 
-  expect(screen.getByText("Permission")).toBeTruthy();
-  expect(screen.getByText("Full access")).toBeTruthy();
-  expect(screen.getByText(/Branches, commits, pull requests/)).toBeTruthy();
-  // AND NOT THE RAW VALUE, which is what a screen restating the vocabulary
-  // would show.
-  expect(screen.queryByText("full access")).toBeNull();
-  // The status is still its own answer, and the only one drawn as a chip.
+  const tier = container.querySelector(".int-seat-tier");
+  if (!tier) throw new Error("the seat carries no tier tag");
+  expect(tier.textContent).toBe("Full access");
+  // THE TIER'S OWN CLASS carries the weight: full access takes the accent,
+  // review a lighter share, read-only stays neutral.
+  expect(tier.className).toContain("int-seat-tier--full_access");
+  // BESIDE THE NAME, which is what makes it read as an attribute of the
+  // agent rather than a verdict on it.
+  expect(tier.closest(".int-row-name")).not.toBeNull();
+  // AND NOT AMONG THE BADGES, where the status is the only answer.
+  expect(tier.closest(".int-row-badges")).toBeNull();
+  // AND WHAT IT GRANTS IS REACHABLE. Three words on a pill cannot say what
+  // full access does and does not include; the sentence that can is the
+  // engine's own.
+  expect(tier.getAttribute("title")).toContain("No administration");
+
+  // WHAT IT REACHES is the line underneath, which is the one thing two
+  // finished seats on one card differ by.
+  expect(screen.getByText("acme/api, acme/web")).toBeTruthy();
   expect(screen.getByText("ready")).toBeTruthy();
 });
 
-// A TOOL WITH NO TIERS SHOWS NO PERMISSION. Slack gives an agent an app and
-// no notion of how much of one, so a labelled field there would be an empty
-// row asking a question the app does not have.
-test("a seat on a tierless app shows no permission field", () => {
-  roster(seatOf({ satisfied: true, detail: "its own app" }));
-  expect(screen.queryByText("Permission")).toBeNull();
+// A TOOL WITH NO TIERS SHOWS NO TAG. Slack gives an agent an app and no
+// notion of how much of one, so a tag there would name a scope the app does
+// not have.
+test("a seat on a tierless app carries no tier tag", () => {
+  const { container } = roster(seatOf({ satisfied: true, detail: "its own app" }));
+  expect(container.querySelector(".int-seat-tier")).toBeNull();
 });
 
 // THE MANIFEST GOES AS A FORM POST, NEVER AS A FETCH.

@@ -1059,45 +1059,40 @@
   flex: 1;
 }
 
-/* HOW MUCH THIS AGENT MAY DO, stated the way the console states it: the
- * word, the tier, and the line saying what it grants.
+/* HOW MUCH THIS AGENT MAY DO, beside its name.
  *
- * It was a chip beside "ready", and two chips on one row read as two
- * verdicts. "Read only" is not a verdict on anything: it is a setting, and
- * a reader scanning a roster for what is wrong stopped on it every time.
- *
- * Full width so it wraps onto its own line under the name, which is where a
- * labelled field belongs, and indented past the mark so it lines up with the
- * agent it describes rather than with the avatar column. */
-.int-seat-permission {
-  flex-basis: 100%;
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  /* 20px is .avatar.sm, plus the row's own gap. */
-  margin-left: calc(20px + var(--space-3));
-}
-.int-seat-permission-label {
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.int-seat-permission-value {
-  font-size: var(--fs-2xs);
+ * QUIETER THAN A STATUS TAG, which is the console's own reasoning and the
+ * whole of why it sits here: a tier is a standing fact about the agent, not
+ * something that needs attention. It was a chip out on the right next to
+ * "ready", where two chips on one row read as two verdicts and a reader
+ * scanning a roster for what is wrong stopped on "read-only" every time.
+ */
+.int-seat-tier {
+  margin-left: 7px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 9px;
   font-weight: 600;
-  color: var(--text);
-}
-/* The hint takes the rest of the line, and the whole of the next one when
-   there is no room: it is the sentence that makes a tier legible without
-   opening a form, so truncating it would leave the label alone saying a
-   phrase the reader came here to have explained. */
-.int-seat-permission-hint {
-  flex: 1 1 16rem;
-  min-width: 0;
-  font-size: var(--fs-2xs);
+  line-height: 15px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  vertical-align: 2px;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  /* MUTED, NEVER FAINT. --text-faint is decoration only, and the tier is a
+     fact about what this agent may do to a repository. */
   color: var(--text-muted);
+}
+
+/* Weight follows trust: full access carries the accent, review a lighter
+   share of it, read-only stays neutral. */
+.int-seat-tier--full_access {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: color-mix(in srgb, var(--accent) 65%, var(--text));
+}
+.int-seat-tier--review {
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: color-mix(in srgb, var(--accent) 35%, var(--text-secondary));
 }
 
 /* What configures the connection, folded away from what makes it.

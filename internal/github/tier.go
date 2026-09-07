@@ -64,7 +64,12 @@ func ParseTier(raw string) (Tier, bool) {
 func (t Tier) Label() string {
 	switch t {
 	case TierReadOnly:
-		return "Read only"
+		// HYPHENATED, which is the control plane's spelling and so the
+		// one on the roster this screen is the counterpart of. The
+		// tier-picker in the console writes "Read only"; the pill beside
+		// an agent's name writes "Read-only", and two engines labelling
+		// one agent differently is what a reader notices first.
+		return "Read-only"
 	case TierReview:
 		return "Review"
 	case TierFullAccess:

@@ -1037,7 +1037,31 @@ export function EntryRow({
                     as the person it stands for. */}
                 <Avatar name={seat.name || seat.handle} size="sm" />
                 <div className="int-row-identity">
-                  <span className="int-row-name">{seat.name || seat.handle}</span>
+                  <span className="int-row-name">
+                    {seat.name || seat.handle}
+                    {/* HOW MUCH THIS AGENT MAY DO, beside its name and drawn
+                        quieter than a status tag: it is a standing fact about
+                        the agent rather than something needing attention.
+                        The console states it here for that reason, and this
+                        roster is its counterpart.
+                        It was a chip out on the right beside "ready", where
+                        two chips on one row read as two verdicts and a
+                        reader scanning for what is wrong stopped on "read
+                        only" every time. */}
+                    {seat.tier_label && (
+                      <span
+                        className={`int-seat-tier int-seat-tier--${seat.tier}`}
+                        // WHAT THE TIER GRANTS, on hover. Three words on a
+                        // pill cannot say what full access does and does not
+                        // include, and the sentence that can is the engine's
+                        // own, from the package that puts those permissions
+                        // on the token.
+                        title={seat.tier_hint}
+                      >
+                        {seat.tier_label}
+                      </span>
+                    )}
+                  </span>
                   {/* WHERE THIS AGENT'S OWN CREDENTIAL IS, or what is
                       missing. It read "no inbound path yet" against every
                       agent of every app but Slack, because Slack is the only
@@ -1059,28 +1083,6 @@ export function EntryRow({
                     {seat.satisfied ? "ready" : "not set up"}
                   </Badge>
                 </div>
-                {/* HOW MUCH THIS AGENT MAY DO, where the app has tiers.
-                    A NAMED FIELD, the shape the console states it in: the
-                    word Permission, the tier, and the line saying what it
-                    grants. As a chip beside "ready" it was a second status
-                    over the first — the reader's eye reads two chips as two
-                    verdicts, and "read only" is not a verdict on anything.
-                    It is a setting, and the hint is what makes it legible
-                    without opening a form.
-                    THE ENGINE'S OWN WORDS. The tiers are a closed set whose
-                    permissions live in Go, so a screen prettifying the raw
-                    id would be free to drift from what the token carries. */}
-                {seat.tier && (
-                  <div className="int-seat-permission">
-                    <span className="int-seat-permission-label">Permission</span>
-                    <span className="int-seat-permission-value">
-                      {seat.tier_label ?? seat.tier.replace(/_/g, " ")}
-                    </span>
-                    {seat.tier_hint && (
-                      <span className="int-seat-permission-hint">{seat.tier_hint}</span>
-                    )}
-                  </div>
-                )}
                 {/* THE STEP'S OWN CONTROL, outside the badges so a refusal can
                     take the full width of the row the way a finding does. */}
                 {roster && <SeatStep app={entry.name} toolKey={roster.key} seat={seat} />}

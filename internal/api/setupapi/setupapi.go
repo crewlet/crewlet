@@ -860,6 +860,19 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool)) []
 	return out
 }
 
+// repoScope is the repositories a finished seat works in.
+//
+// EMPTY MEANS EVERY ONE THE INSTALLATION COVERS, which is what the operator
+// chose when they installed the app, and saying so beats an empty line: a
+// blank there reads as a seat that reaches nothing, which is the opposite of
+// what an unset list means.
+func repoScope(repos []string) string {
+	if len(repos) == 0 {
+		return "Every repository the installation covers"
+	}
+	return strings.Join(repos, ", ")
+}
+
 // githubSeats is every agent seat's own GitHub App, and which of the two acts
 // that produce one is still outstanding.
 //
@@ -955,7 +968,13 @@ func githubSeats(company *config.Company, resolve func(string) (string, bool)) [
 					"be minted for this seat and it reaches GitHub as nobody"
 			default:
 				state.Satisfied = true
-				state.Detail = "installed, and its key resolves: this seat acts as its own app"
+				// WHAT IT REACHES, once it reaches anything. A finished
+				// seat's line said it was finished, which the tag beside
+				// it already said; the question left is which
+				// repositories this agent works in, and it is the one
+				// thing two finished seats on one card differ by. The
+				// control plane's roster answers it the same way.
+				state.Detail = repoScope(app.Repos)
 			}
 		}
 		out = append(out, state)
