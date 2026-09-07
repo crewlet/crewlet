@@ -74,6 +74,11 @@ const (
 	codeUnknownKind      = httpjson.Code("unknown_kind")
 	codeNoControlPlane   = httpjson.Code("no_control_plane")
 	codeNoActiveRevision = httpjson.Code("no_active_revision")
+	codeNoAppFlow        = httpjson.Code("no_app_flow")
+	codeBadBody          = httpjson.Code("bad_body")
+	codeSeatRequired     = httpjson.Code("seat_required")
+	codeNoSuchSeat       = httpjson.Code("no_such_seat")
+	codeNoPublicURL      = httpjson.Code("no_public_url")
 	codeRevisionAdvanced = httpjson.Code("revision_advanced")
 	codeLiteralInConfig  = httpjson.Code("literal_in_config")
 	codeValidationError  = httpjson.Code("validation_error")
@@ -131,6 +136,7 @@ type Service struct {
 	sink    sinkFactory
 	status  Status
 	clock   func() time.Time
+	appFlow *AppFlow
 }
 
 // New builds the service, or nil when this process has no company to set up.
@@ -170,6 +176,9 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	// one. See pass.go for why check and provision are one function.
 	mux.HandleFunc("POST /setup/integrations/{kind}/provision", s.provision)
 	mux.HandleFunc("POST /setup/integrations/{kind}/check", s.check)
+	// ONE AGENT'S OWN APP. Not a company-wide connect: a GitHub App is one
+	// bot identity, so an app per agent is the only way each acts as itself.
+	mux.HandleFunc("POST /setup/integrations/github/app", s.beginApp)
 	mux.HandleFunc("GET /setup/integrations/{kind}/runs/{id}", s.runByID)
 }
 

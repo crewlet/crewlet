@@ -932,6 +932,19 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Sink:   e.SetupSink,
 		Status: integrationStatus,
 	})
+	// ONE AGENT'S OWN GITHUB APP, which is the one thing here a reconcile
+	// loop cannot do alone: an app is created by POSTing a manifest from a
+	// page carrying the operator's own GitHub session. The signer ties the
+	// browser that comes back to the seat that started, and it is keyed
+	// from the SAME Tier A material every node reads, so a fleet where the
+	// two halves land on different nodes still agrees.
+	appFlow := setupapi.NewAppFlow(setupSurface, appStateKeyMaterial(boot))
+	setupSurface.AttachAppFlow(appFlow)
+	if appFlow != nil && len(appStateKeyMaterial(boot)) == 0 {
+		log.Warn("github_app_state_key_is_per_process",
+			"detail", "no secrets.keys are configured, so a GitHub App creation "+
+				"begun on one node cannot be finished on another")
+	}
 
 	// The contextcheck exemption is for the two PUSH TICKS this constructor
 	// registers — the roster re-send and the health frame. Both manufacture
@@ -1047,6 +1060,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Secrets:   func() webhooks.Secrets { return companySecrets(e) },
 			Publisher: e.Backends().Queue,
 			Claims:    e.Backends().Fleet,
+			AppFlow:   appFlow,
 		},
 	})
 	// CONFIGURED by construction. The engine only exists because a company
@@ -1508,4 +1522,22 @@ func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary, op
 		Patch: patch, Summary: summary, Operator: operator,
 	})
 	return err
+}
+
+// appStateKeyMaterial is the Tier A keyring, as the GitHub App state signer
+// is keyed from.
+//
+// THE SAME MATERIAL EVERY NODE READS, and deliberately not resolved: this
+// derives a key, not a credential, and two processes reading one document
+// have to agree rather than hold plaintext. A deployment with no keys gets a
+// per-process key, which is correct for one node and cannot work across two.
+func appStateKeyMaterial(boot *config.Bootstrap) []string {
+	if boot == nil {
+		return nil
+	}
+	out := make([]string, 0, len(boot.Secrets.Keys))
+	for _, key := range boot.Secrets.Keys {
+		out = append(out, key.ID+":"+key.Material)
+	}
+	return out
 }

@@ -105,6 +105,14 @@ type Options struct {
 	// nothing, which is a standalone posture rather than a failure.
 	Events *store.EventLog
 
+	// AppFlow finishes a GitHub App creation begun on the setup surface.
+	//
+	// Nil serves the landing page with an honest refusal rather than 404:
+	// the redirect URL is baked into every app this engine creates, so a
+	// process that cannot finish one still has to say so to the browser
+	// that arrives.
+	AppFlow AppCompleter
+
 	// Claims is the FLEET-WIDE dedupe. Nil handles every delivery, which
 	// is what a single node without coordination already does.
 	//
@@ -141,6 +149,7 @@ type Receiver struct {
 	configured func() bool
 	now        func() time.Time
 	forge      *forgeVerifier
+	appFlow    AppCompleter
 }
 
 // New assembles the receiver.
@@ -148,6 +157,7 @@ func New(opts Options) *Receiver {
 	r := &Receiver{
 		secrets:    opts.Secrets,
 		publisher:  opts.Publisher,
+		appFlow:    opts.AppFlow,
 		events:     opts.Events,
 		claims:     opts.Claims,
 		stream:     opts.Stream,
@@ -189,6 +199,7 @@ func (r *Receiver) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /webhooks/slack/{handle}", r.slack)
 	mux.HandleFunc("POST /webhooks/forge", r.forgeWebhook)
 	mux.HandleFunc("GET /webhooks/slack-oauth", slackOAuthLanding)
+	mux.HandleFunc("GET /webhooks/github-app", r.githubAppLanding)
 }
 
 // --- the shared pipeline ---------------------------------------------------

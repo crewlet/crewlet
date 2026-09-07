@@ -296,6 +296,14 @@ type Inbound struct {
 	Publisher queue.Publisher
 	Claims    coord.Claims
 
+	// AppFlow finishes a GitHub App creation begun on the setup surface.
+	//
+	// Threaded from the caller rather than built here because it holds the
+	// setup service, and the redirect URL baked into every app this engine
+	// creates points at the webhook mux. Nil serves the landing page with
+	// an honest refusal rather than a 404.
+	AppFlow webhooks.AppCompleter
+
 	// Keys verifies Forge invocation tokens. Nil uses Atlassian's
 	// published JWKS.
 	Keys webhooks.KeySource
@@ -319,6 +327,7 @@ func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sour
 		Publisher:  in.Publisher,
 		Claims:     in.Claims,
 		Keys:       in.Keys,
+		AppFlow:    in.AppFlow,
 		Events:     sources.Events,
 		Stream:     a.stream,
 		Configured: a.Configured,
