@@ -944,10 +944,25 @@ function useSetup(): {
   byKey: Map<string, SetupToolState>;
   base: SetupListing["public_base_url"] | null;
   guarded: boolean;
+  /**
+   * True until this read has answered ONCE, however it answered.
+   *
+   * The two halves of this screen arrive separately, and the socket's is
+   * quicker: a card rendered from it alone has no tools, and a card with no
+   * tools offers no buttons. So the row appeared with no status and no
+   * Connect or Disconnect beside it, and stayed that way until something
+   * else made the page re-render, which is why it looked like a refresh
+   * fixed it. Nothing was wrong; the answer had not arrived.
+   *
+   * NOT reset by a later reload: an integration being reconnected must not
+   * blank the buttons of every other card on the screen.
+   */
+  loading: boolean;
   reload: () => void;
 } {
   const [listing, setListing] = useState<SetupListing | null>(null);
   const [guarded, setGuarded] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const reload = useCallback(() => {
     void (async () => {
@@ -959,6 +974,10 @@ function useSetup(): {
         // already has and simply offers no writes.
         setListing(null);
         setGuarded(err instanceof RestError && err.unauthorized);
+      } finally {
+        // ANSWERED, not answered WELL. A refusal is a state the screen can
+        // render honestly, with the banner and no buttons; waiting is not.
+        setLoading(false);
       }
     })();
   }, []);
@@ -972,6 +991,7 @@ function useSetup(): {
     byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
     base: listing?.public_base_url ?? null,
     guarded,
+    loading,
     reload,
   };
 }
@@ -1118,7 +1138,9 @@ export function Integrations() {
         />
       )}
 
-      {loading && !data && <Skeleton rows={6} />}
+      {/* BOTH HALVES, because a card drawn from one of them is a card with
+          no buttons. See [useSetup]'s `loading`. */}
+      {((loading && !data) || setup.loading) && <Skeleton rows={6} />}
       <QueryState error={error} loading={loading} empty={undefined}>
         {/* WHAT THIS COMPANY HAS, THEN WHAT IT COULD HAVE, each half
             alphabetical. One flat list rather than panels: a capability
@@ -1129,38 +1151,47 @@ export function Integrations() {
             broken integration is one this company has and is the row most
             worth reaching first. Sorting on health instead would move a row
             out from under the cursor every time an app recovered. */}
-        <div className="int-list">
-          {[...CATALOG].sort(byConfiguredThenName(rows)).map((entry) => (
-            <EntryRow
-              key={entry.key}
-              entry={entry}
-              rows={rows}
-              sections={sectionsFor(entry, setup.byKey)}
-              onConnect={(blocks) =>
-                setDialog({
-                  title: entry.name,
-                  sections: sectionsFor(entry, setup.byKey),
-                  blocks,
-                })
-              }
-              onDisconnect={() =>
-                setDropping({
-                  name: entry.name,
-                  // EVERY SURFACE THE CARD COVERS, not the first one.
-                  //
-                  // Atlassian is an organization and two products, and
-                  // disconnecting took only the surface that happened to
-                  // be listed first: the account was deleted, its block
-                  // removed, and the card still read Connected because
-                  // Jira and Confluence were untouched. A person pressing
-                  // Disconnect on a card means the card.
-                  kinds: disconnectOrder(entry, rows, sectionsFor(entry, setup.byKey)),
-                  stuck: stuckDisconnecting(entry, rows),
-                })
-              }
-            />
-          ))}
-        </div>
+        {/* NOT UNTIL BOTH HALVES HAVE ANSWERED. A card drawn from the socket
+            alone has no tools, and a card with no tools offers no buttons and
+            no state: the row appeared bare and stayed that way until
+            something made the page re-render, which is why it looked like a
+            refresh fixed it. The skeleton above says the same thing honestly.
+            A REFUSED setup read is not waiting: it answers, the banner says
+            so, and the cards render without their writes. */}
+        {!setup.loading && (
+          <div className="int-list">
+            {[...CATALOG].sort(byConfiguredThenName(rows)).map((entry) => (
+              <EntryRow
+                key={entry.key}
+                entry={entry}
+                rows={rows}
+                sections={sectionsFor(entry, setup.byKey)}
+                onConnect={(blocks) =>
+                  setDialog({
+                    title: entry.name,
+                    sections: sectionsFor(entry, setup.byKey),
+                    blocks,
+                  })
+                }
+                onDisconnect={() =>
+                  setDropping({
+                    name: entry.name,
+                    // EVERY SURFACE THE CARD COVERS, not the first one.
+                    //
+                    // Atlassian is an organization and two products, and
+                    // disconnecting took only the surface that happened to
+                    // be listed first: the account was deleted, its block
+                    // removed, and the card still read Connected because
+                    // Jira and Confluence were untouched. A person pressing
+                    // Disconnect on a card means the card.
+                    kinds: disconnectOrder(entry, rows, sectionsFor(entry, setup.byKey)),
+                    stuck: stuckDisconnecting(entry, rows),
+                  })
+                }
+              />
+            ))}
+          </div>
+        )}
         {data && configured.length === 0 && (
           <Empty
             icon="plug"

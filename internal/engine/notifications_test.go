@@ -586,3 +586,124 @@ integrations:
 		t.Error("the knowledge searcher did not come back with the parser")
 	}
 }
+
+// EVERY INTEGRATION HAS TO SURVIVE BEING ADDED AFTER BOOT.
+//
+// The parser set is assembled once, in New, so anything that is not rebuilt
+// on a config apply is registered only if it happened to be configured when
+// the process started. Connecting it afterwards leaves its route verifying
+// and storing every delivery while nothing turns one into work for a seat,
+// and the dashboard says so in a line that reads like a lie next to a card
+// tagged Connected.
+//
+// Confluence had exactly this and was fixed by making its reconciler revive
+// as well as retire. This is the same question asked of the rest, because a
+// reconciler nobody calls is indistinguishable from one that converges in one
+// direction.
+func TestEveryIntegrationRoutesWhenAddedAfterBoot(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		source string
+		block  string
+	}{
+		{source: "jira", block: `
+integrations:
+  jira:
+    url: https://jira.example.com
+    token: t
+    webhook_secret: s
+`},
+		{source: "confluence", block: `
+integrations:
+  confluence:
+    url: https://wiki.example.com
+    token: t
+    webhook_secret: s
+`},
+		{source: "gitlab", block: `
+integrations:
+  gitlab:
+    enabled: true
+    url: https://gitlab.example.com
+    token: t
+    signing_secret: whsec_Y3Jld2xldC10ZXN0LXNpZ25pbmcta2V5LTMyYnl0ZXM=
+`},
+		{source: "github", block: `
+integrations:
+  github:
+    enabled: true
+    token: t
+    webhook_secret: s
+`},
+		{source: "datadog", block: `
+integrations:
+  datadog:
+    enabled: true
+    webhook_token: t
+    route_to: founder
+`},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			t.Parallel()
+			// BOOTED WITHOUT IT, which is the case that matters: a company
+			// that has never configured this integration.
+			e := newEngine(t, engine.Options{Company: parsedCompany(t, companyDoc)})
+			if err := e.Start(t.Context()); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			if slices.Contains(e.RoutedSources(), tc.source) {
+				t.Fatalf("%s routes before it is configured: %v", tc.source, e.RoutedSources())
+			}
+
+			if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc+tc.block)); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if !slices.Contains(e.RoutedSources(), tc.source) {
+				t.Errorf("%s was connected and does not route: %v", tc.source, e.RoutedSources())
+			}
+		})
+	}
+}
+
+// AND A ROUTING SETTING CHANGES WITHOUT A RESTART.
+//
+// Datadog's parser carries the two settings that decide where an alert goes:
+// the monitor tag key and the fallback seat. With the parser built once at
+// boot, a company that moved its fallback from one seat to another went on
+// waking the old one until the process was restarted, and nothing on any
+// surface said so.
+func TestDatadogRoutingFollowsTheAppliedRevision(t *testing.T) {
+	t.Parallel()
+	with := func(route string) string {
+		return companyDoc + `
+integrations:
+  datadog:
+    enabled: true
+    webhook_token: t
+    route_to: ` + route + `
+`
+	}
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, with("founder"))})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !slices.Contains(e.RoutedSources(), "datadog") {
+		t.Fatalf("a company on Datadog routes %v", e.RoutedSources())
+	}
+
+	// Turned off, which is the gesture after a leaked webhook token.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
+		t.Fatalf("Apply without datadog: %v", err)
+	}
+	if slices.Contains(e.RoutedSources(), "datadog") {
+		t.Fatalf("a removed alert source still routes %v", e.RoutedSources())
+	}
+
+	// And back, which is what a reconnect is.
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, with("founder"))); err != nil {
+		t.Fatalf("Apply with datadog: %v", err)
+	}
+	if !slices.Contains(e.RoutedSources(), "datadog") {
+		t.Errorf("a reconnected alert source does not route: %v", e.RoutedSources())
+	}
+}

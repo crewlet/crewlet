@@ -589,3 +589,53 @@ func errorText(err error) string {
 	}
 	return err.Error()
 }
+
+// reconcileDatadog brings the alert parser in line with the applied revision.
+//
+// IT HAD NONE, and it is the surface that needed one most cheaply. The parser
+// set is assembled once in [Engine.startNotifications], so a company that
+// connected Datadog after boot had its route verify and store every alert
+// while nothing turned one into work for a seat, until the process was
+// restarted. Disconnecting and reconnecting is the same sequence.
+//
+// It also carries the two ROUTING settings, which no other parser here does:
+// the monitor tag key and the fallback seat. Both are ordinary config a
+// person changes, and without this a company that moved its fallback from one
+// seat to another went on waking the old one until a restart.
+//
+// Nothing here can fail, which is why this is the shortest reconciler in the
+// package: a monitor alert carries everything its routing needs on the
+// payload, so there is nothing to construct and nothing to keep running when
+// a build fails.
+func (e *Engine) reconcileDatadog(ctx context.Context, c *Company) {
+	cfg := c.Config.Integrations.Datadog
+	e.notify.mu.Lock()
+	svc := e.notify.service
+	e.notify.mu.Unlock()
+	if svc == nil {
+		return
+	}
+	// RETIRED when the revision no longer enables it, which is the gesture
+	// an operator makes after a leaked webhook token: the route then
+	// refuses every delivery, and a parser left behind would go on waking
+	// seats from whatever had already been accepted.
+	if cfg == nil || !cfg.Enabled {
+		if svc.Unregister(datadog.Backend) {
+			log.InfoContext(ctx, "datadog_retired",
+				"detail", "the revision no longer enables datadog; its alerts "+
+					"are refused at the webhook route and wake no seat")
+		}
+		return
+	}
+	parser := datadog.NewParser(datadog.ParserOptions{
+		HandleTag: cfg.HandleTagOrDefault(),
+		Fallback:  cfg.RouteTo,
+	})
+	if err := svc.Replace(parser, datadogPrompt()); err != nil {
+		log.ErrorContext(ctx, "datadog_reconcile_failed", "error", err.Error(),
+			"detail", "the previous alert routing is still current")
+		return
+	}
+	log.InfoContext(ctx, "datadog_reconciled", "company", c.Config.Name,
+		"handle_tag", cfg.HandleTagOrDefault(), "route_to", cfg.RouteTo)
+}
