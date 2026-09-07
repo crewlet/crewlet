@@ -623,6 +623,42 @@ row — what actually woke the turn — was pushed to second place. The subject
 comes first and the source follows it, with the flex sizing deciding who gives
 way on a narrow card: the message truncates, the source stays whole.
 
+### `KeyValue` is a metadata list, not a panel layout
+
+Its grid is `minmax(120px, max-content) 1fr`, sized for compact pairs — an id,
+a timestamp, a key. Used for a panel's actual content it puts everything in a
+narrow left band with the panel empty beside it: one line of prose sat in a
+column sized to the longest label, and a byte count sat stranded mid-panel
+with the whole right half unused.
+
+Two shapes replace it, both already in the product. **Prose takes a
+micro-label above it and the full width below** (the seat's Profile panel has
+always done this) — these are sentences, not fields. **A figure goes at the
+far end of a full-width row**, behind a `.spacer`, with the heading naming the
+unit once rather than every row repeating it — a bare "134 B" beside a label
+says nothing about what was measured.
+
+`KeyValue` keeps the one thing it is for on this screen: the conversation key,
+which really is a label and a value.
+
+And **a chip must not repeat the sentence beside it.** The trigger's summary
+is built by the vendor's own summariser and already opens with who wrote it
+("Message from founder: …"), so a `founder` chip next to that line was the
+same fact twice — and two chips plus a link after one line of prose is a
+hedge, not a header. Only the integration stays: it is the one thing the
+sentence does not reliably carry.
+
+### A row is not an inline link
+
+`a:hover` underlines, which is right for a link inside a sentence and wrong
+for a whole ROW that happens to be an anchor: hovering one struck a line under
+its timestamp, its summary and its type at once — three unrelated fragments,
+none of them a link in the sense the underline means. A row-shaped link
+already says it is hoverable with its ground, so the decoration is suppressed
+on every one of them (`.feed-row`, `.turn-row`, `.seat-card`,
+`.attention-row`, `.brand`, `.hit-title`). `.nav-item` had always done this;
+the rest had not, and nothing connected them.
+
 ### A row is not a row
 
 `EventRow` is the activity feed's row, on a four-track grid: time, actor,

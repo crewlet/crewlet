@@ -310,19 +310,7 @@
   padding-left: var(--space-3);
   margin-left: 2px;
 }
-.disclosure.tone-reasoning /* The toggle and the section's own controls are SIBLINGS. A copy button
-   nested inside the toggle would be a button inside a button — invalid, and
-   worse, clicking it would collapse the very thing it just copied. */
-.disclosure-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.disclosure-bar > .disclosure-head {
-  flex: 1;
-}
-.disclosure-head {
+.disclosure.tone-reasoning .disclosure-head {
   color: var(--text-muted);
 }
 
@@ -336,6 +324,23 @@
 }
 
 .disclosure {
+  min-width: 0;
+}
+/* The toggle and the section's own controls are SIBLINGS. A copy button
+   nested inside the toggle would be a button inside a button — invalid, and
+   worse, clicking it would collapse the very thing it just copied.
+   `width: auto` on the head is load-bearing: it carries `width: 100%` for the
+   standalone case, which inside this row makes it claim the whole line and
+   push the controls onto one of their own. */
+.disclosure-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.disclosure-bar > .disclosure-head {
+  flex: 1;
+  width: auto;
   min-width: 0;
 }
 .disclosure-head {
@@ -554,6 +559,19 @@
 }
 .feed-row:hover {
   background: var(--surface-hover);
+}
+/* A ROW IS NOT AN INLINE LINK. `a:hover` underlines, which is right for a
+   link inside a sentence and wrong for a whole row that happens to be an
+   anchor: hovering one struck a line under its timestamp, its summary AND
+   its type, three unrelated fragments at once. A row-shaped link is already
+   telling you it is hoverable with its ground. */
+.feed-row:hover,
+.turn-row:hover,
+.seat-card:hover,
+.attention-row.clickable:hover,
+.brand:hover,
+.hit-title:hover {
+  text-decoration: none;
 }
 .feed-row.failed {
   box-shadow: inset 2px 0 0 var(--critical);

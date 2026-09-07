@@ -162,39 +162,47 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
   const said = str(rec.learning, "plan_summary");
   const triggerId = typeof trigger?.id === "string" ? trigger.id : "";
   if (!woke && !said) return null;
-
-  // KeyValue, not two hand-rolled rows with inline `minWidth`. The label
-  // column is a grid track, so both labels agree on where the prose starts
-  // whatever either of them says — which two independently-nudged widths
-  // never quite do — and a long summary wraps under itself instead of pushing
-  // its own label around.
-  const items: [ReactNode, ReactNode][] = [];
-  if (woke) {
-    items.push([
-      "Woken by",
-      <span className="row gap-2" style={{ alignItems: "baseline", flexWrap: "wrap" }}>
-        <span style={{ minWidth: 0 }}>{woke}</span>
-        {trigger?.sender && <Badge outline>{trigger.sender}</Badge>}
-        {trigger?.integration && (
-          <Badge outline mono>
-            {trigger.integration}
-          </Badge>
-        )}
-        {/* The trigger's own event id has always been on the descriptor and
-            nothing linked it. "What asked for this" is the first question a
-            reader brings to a turn they did not expect. */}
-        {triggerId && (
-          <a className="t-link" href={href(["events", triggerId])}>
-            the trigger →
-          </a>
-        )}
-      </span>,
-    ]);
-  }
-  if (said) items.push(["It set out to", said]);
   return (
-    <Panel padding="tight">
-      <KeyValue items={items} />
+    <Panel padding="normal">
+      <div className="col gap-3">
+        {woke && (
+          <div className="col gap-1">
+            <div className="row gap-2">
+              <span className="t-label">Woken by</span>
+              {/* The SOURCE, and not the sender. The trigger's summary is
+                  built by the vendor's own summariser and already opens with
+                  who wrote it — "Message from founder: …" — so a `founder`
+                  chip beside that sentence was the same fact twice, and two
+                  chips plus a link after one line of prose is a hedge, not a
+                  header. The integration is the one thing the sentence does
+                  not reliably carry. */}
+              {trigger?.integration && (
+                <Badge outline mono title="where this turn's trigger came from">
+                  {trigger.integration}
+                </Badge>
+              )}
+              <span className="spacer" />
+              {triggerId && (
+                <a className="t-link" href={href(["events", triggerId])}>
+                  the trigger →
+                </a>
+              )}
+            </div>
+            {/* LABEL ABOVE, PROSE BELOW, full width. As a KeyValue this was a
+                two-track grid sized to the longest label, so one short line of
+                prose sat in a narrow band with the rest of the panel empty
+                beside it — the shape for a metadata list, and these are
+                sentences. */}
+            <p className="t-body measure">{woke}</p>
+          </div>
+        )}
+        {said && (
+          <div className="col gap-1">
+            <div className="t-label">It set out to</div>
+            <p className="t-body measure">{said}</p>
+          </div>
+        )}
+      </div>
     </Panel>
   );
 }
@@ -232,15 +240,26 @@ function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
     >
       <div className="col gap-2">
         {got.length > 0 ? (
-          <KeyValue
-            items={got.map((b) => [
-              b.label,
-              <span className="row gap-2" style={{ alignItems: "baseline" }}>
-                <span className="mono t-num">{fmtBytes(b.bytes)}</span>
-                {b.note && <span className="t-caption">{b.note}</span>}
-              </span>,
-            ])}
-          />
+          <div className="col gap-1">
+            {/* FULL-WIDTH ROWS with the figure at the far end, not a KeyValue.
+                The grid's second track starts at 120px, so a byte count sat
+                stranded mid-panel with the whole right half empty — and a
+                bare "134 B" beside a label says nothing about what was
+                measured. The heading says it once, and the rows carry the
+                numbers where numbers go. */}
+            <div className="row gap-2">
+              <span className="t-label spacer">Reached the prompt</span>
+              <span className="t-label">Rendered size</span>
+            </div>
+            {got.map((b) => (
+              <div key={b.label} className="row gap-2">
+                <span className="t-cell truncate">{b.label}</span>
+                {b.note && <span className="t-caption truncate">{b.note}</span>}
+                <span className="spacer" />
+                <span className="mono t-num t-caption">{fmtBytes(b.bytes)}</span>
+              </div>
+            ))}
+          </div>
         ) : (
           <span className="t-caption">
             The prompt was built from the seat&rsquo;s own identity and this turn&rsquo;s trigger
