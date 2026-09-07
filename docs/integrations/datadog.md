@@ -13,6 +13,55 @@ hand if you would rather.
 See [Setting an integration up](../reference/api-endpoints.md#setting-an-integration-up)
 for the routes behind it.
 
+## Giving each agent its own Datadog identity
+
+Optional, and separate from everything above. Alerts arrive and route with no
+Datadog credential at all — that is the whole of this integration for a company
+that pastes the engine's address into Datadog's webhook form.
+
+Filling in `integrations.datadog.provisioning` asks for something more: one
+**service account per agent seat**, each holding a role and its own application
+key.
+
+```yaml
+integrations:
+  datadog:
+    enabled: true
+    webhook_token: ${DATADOG_WEBHOOK_TOKEN}
+    route_to: sre-lead
+    provisioning:
+      site: datadoghq.eu          # checked against Datadog's own regions
+      api_key: ${DATADOG_API_KEY} # says which organization
+      app_key: ${DATADOG_APP_KEY} # says which user acts
+      role: Datadog Read Only Role
+      email_domain: agents.example.invalid
+```
+
+Both keys are needed together. Datadog refuses a write carrying only the API
+key, with a message that names neither, so the engine asks for the pair or
+neither.
+
+A seat opts in by naming a `${VAR}` in its `mcp_env.datadog` block; a seat with
+nowhere to write a key is left alone rather than reported broken. The account
+is created **already holding** its role, because one that exists for a moment
+without one inherits the organization's default.
+
+**A key is minted once.** Datadog returns an application key's value exactly
+once, so the pass mints only for a seat holding none. A seat whose account
+already has a key that the engine cannot read is **reported, not replaced** —
+replacing it would silently revoke whatever is using it. A sink the engine
+cannot read stops that seat rather than minting, because unknown is not "no
+key".
+
+The role is **refused rather than defaulted** if the organization does not have
+it: creating accounts under whatever role happened to match would grant an
+agent access nobody asked for.
+
+Disconnecting **disables** these accounts when you tick "also remove the
+accounts Crewlet created". Disabled rather than deleted, because deleting a
+Datadog user detaches it from everything it authored.
+
+
 ## Configuration
 
 ```yaml

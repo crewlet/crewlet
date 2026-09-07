@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/datadog"
 )
 
 // Running a third-party app's provisioning from the API rather than from a shell.
@@ -66,6 +67,7 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&confluencePass{engine: e},
 		&gitlabPass{engine: e},
 		&mattermostPass{engine: e},
+		&datadogPass{engine: e},
 	}
 }
 
@@ -153,6 +155,104 @@ func (p *mattermostPass) Teardown(ctx context.Context, in setup.TeardownInput) e
 	}
 	return mattermost.Teardown(ctx, mattermost.TeardownOptions{
 		Client: client, Config: cfg, Plan: plan, RemoveSeats: in.RemoveSeats,
+	})
+}
+
+// datadogPass adapts datadog.Reconcile to the pass contract.
+//
+// The one app here whose provisioning is OPTIONAL to its integration. Alerts
+// arrive and route with no credentials at all, so a company that has not
+// filled in the region and the keys is not half-configured: it is running the
+// integration the way it has always run. The pass says so rather than
+// failing.
+type datadogPass struct{ engine *Engine }
+
+func (*datadogPass) Kind() integration.Kind { return integration.KindDatadog }
+
+// Needs is nil: the organization keys are held in the company document like
+// every other credential.
+func (*datadogPass) Needs() *setup.Requirement { return nil }
+
+func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.Datadog
+	if cfg == nil {
+		return nil, integration.ErrNotConfigured
+	}
+	if cfg.Provisioning == nil {
+		// A FINDING, NOT A FAULT, and not an error either: this company
+		// accepts alerts and asked for no identities, which is a complete
+		// configuration rather than a missing one.
+		return nil, nil
+	}
+	env := p.engine.resolver()
+	// ASKED BEFORE BUILDING, so an unset or misspelled region is a
+	// FINDING rather than a fault: it is a fact about what this company
+	// has written down, and a pass that could not build a client has
+	// observed nothing rather than failed to look.
+	if !datadog.KnownSite(cfg.Provisioning.Site) {
+		return []integration.Finding{{
+			Kind: integration.FindingCredentialMissing,
+			Detail: "integrations.datadog.provisioning.site is not a region " +
+				"Datadog serves, so no call can be built from it",
+		}}, nil
+	}
+	client, err := datadog.NewClient(datadog.ClientOptions{Site: cfg.Provisioning.Site})
+	if err != nil {
+		return nil, fmt.Errorf("engine: datadog pass: %w", err)
+	}
+	creds := datadog.Credentials{
+		APIKey: strings.TrimSpace(env.Value(cfg.Provisioning.APIKey)),
+		AppKey: strings.TrimSpace(env.Value(cfg.Provisioning.AppKey)),
+	}
+	if creds.APIKey == "" || creds.AppKey == "" {
+		return []integration.Finding{{
+			Kind: integration.FindingCredentialMissing,
+			Detail: "the Datadog API key and application key did not both " +
+				"resolve, and Datadog refuses a write carrying only one",
+		}}, nil
+	}
+	plan, err := datadog.PlanFor(company.Org, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("engine: datadog pass: %w", err)
+	}
+	res, err := datadog.Reconcile(ctx, datadog.Options{
+		Client: client, Config: cfg, Plan: plan, Creds: creds, Sink: in.Sink,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: datadog pass: %w", err)
+	}
+	return res.Findings(), nil
+}
+
+// Teardown disables the accounts this pass created, when asked.
+func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.Datadog
+	if cfg == nil || cfg.Provisioning == nil {
+		return nil
+	}
+	if !in.RemoveSeats {
+		// Datadog holds no webhook this engine registered, so with the
+		// accounts staying there is nothing to do at all.
+		return nil
+	}
+	env := p.engine.resolver()
+	client, err := datadog.NewClient(datadog.ClientOptions{Site: cfg.Provisioning.Site})
+	if err != nil {
+		return fmt.Errorf("engine: datadog teardown: %w", err)
+	}
+	plan, err := datadog.PlanFor(company.Org, cfg)
+	if err != nil {
+		return fmt.Errorf("engine: datadog teardown: %w", err)
+	}
+	return datadog.Teardown(ctx, datadog.TeardownOptions{
+		Client: client, Config: cfg, Plan: plan,
+		Creds: datadog.Credentials{
+			APIKey: strings.TrimSpace(env.Value(cfg.Provisioning.APIKey)),
+			AppKey: strings.TrimSpace(env.Value(cfg.Provisioning.AppKey)),
+		},
+		RemoveSeats: in.RemoveSeats,
 	})
 }
 
@@ -513,6 +613,7 @@ var (
 	_ setup.Teardowner = (*githubPass)(nil)
 	_ setup.Teardowner = (*gitlabPass)(nil)
 	_ setup.Teardowner = (*mattermostPass)(nil)
+	_ setup.Teardowner = (*datadogPass)(nil)
 )
 
 // gitlabAdminToken resolves the group Owner credential.
