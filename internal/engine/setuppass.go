@@ -102,6 +102,57 @@ func (e *Engine) setupDuty(kind integration.Kind) setup.Duty {
 // out after a crash for no benefit.
 const setupLeaseTTL = 5 * time.Minute
 
+// Teardown removes the webhooks this pass registered, at both the
+// organization and the repository level.
+func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.GitHub
+	if cfg == nil {
+		return nil
+	}
+	env := p.engine.resolver()
+	client, err := githubReconcileClient(cfg, env)
+	if err != nil {
+		return fmt.Errorf("engine: github teardown: %w", err)
+	}
+	return github.Teardown(ctx, github.Options{
+		Client: client, Config: cfg, Org: company.Org, Value: env.Value,
+		WebhookBase: company.Config.Integrations.WebhookBase(),
+	})
+}
+
+// Teardown disables the bots this pass created, when asked. Mattermost has no
+// inbound registration to withdraw, so there is nothing to do otherwise.
+func (p *mattermostPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+	if !in.RemoveSeats {
+		return nil
+	}
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.Mattermost
+	if cfg == nil {
+		return nil
+	}
+	if strings.TrimSpace(in.Operator) == "" {
+		return fmt.Errorf(
+			"engine: mattermost teardown: no admin token was supplied, and the " +
+				"bots' own tokens cannot disable them")
+	}
+	env := p.engine.resolver()
+	plan, err := mattermost.PlanFor(company.Org, cfg)
+	if err != nil {
+		return fmt.Errorf("engine: mattermost teardown: %w", err)
+	}
+	client, err := mattermost.NewClient(mattermost.ClientOptions{
+		URL: env.Value(cfg.URL), Token: in.Operator,
+	})
+	if err != nil {
+		return fmt.Errorf("engine: mattermost teardown: %w", err)
+	}
+	return mattermost.Teardown(ctx, mattermost.TeardownOptions{
+		Client: client, Config: cfg, Plan: plan, RemoveSeats: in.RemoveSeats,
+	})
+}
+
 // SetupSink is the recorder a pass writes minted credentials through.
 //
 // The SAME type `crewlet <vendor> provision -secret-store` builds, so a
@@ -161,6 +212,40 @@ func (p *jiraPass) Run(ctx context.Context, in setup.PassInput) ([]integration.F
 	return res.Findings(), nil
 }
 
+// Teardown removes the webhook this pass registered.
+//
+// The vendor function is the same one a decommission from the command line
+// would call, exactly as [jiraPass.Run] uses the same Reconcile the loop
+// does. Nothing about removal is reimplemented for the API.
+func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.Jira
+	if cfg == nil {
+		// The block already left the document, so there is nothing to
+		// authenticate with and nothing this engine still holds.
+		return nil
+	}
+	env := p.engine.resolver()
+	base := jiraBaseURL(cfg, env)
+	token := strings.TrimSpace(env.Value(cfg.Token))
+	if base == "" || token == "" {
+		return fmt.Errorf(
+			"engine: jira teardown: the site address or the org token did not " +
+				"resolve, so the webhook cannot be removed — fix the credential " +
+				"or force the disconnect and remove the hook by hand")
+	}
+	client, err := jira.NewClient(jira.ClientOptions{
+		URL: base, Email: env.Value(cfg.Email), Token: token,
+	})
+	if err != nil {
+		return fmt.Errorf("engine: jira teardown: %w", err)
+	}
+	return jira.Teardown(ctx, jira.Options{
+		Client: client, Config: cfg,
+		WebhookBase: company.Config.Integrations.WebhookBase(),
+	})
+}
+
 // confluencePass adapts confluence.Reconcile to the pass contract.
 type confluencePass struct{ engine *Engine }
 
@@ -198,6 +283,31 @@ func (p *confluencePass) Run(ctx context.Context, in setup.PassInput) ([]integra
 		return nil, fmt.Errorf("engine: confluence pass: %w", err)
 	}
 	return res.Findings(), nil
+}
+
+// Teardown removes the hooks this pass registered.
+func (p *confluencePass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.Confluence
+	if cfg == nil {
+		return nil
+	}
+	env := p.engine.resolver()
+	base := confluenceBaseURL(cfg, env)
+	token := strings.TrimSpace(env.Value(cfg.Token))
+	if base == "" || token == "" {
+		return fmt.Errorf(
+			"engine: confluence teardown: the site address or the org token did " +
+				"not resolve, so the hooks cannot be removed — fix the credential " +
+				"or force the disconnect and remove them by hand")
+	}
+	client, err := confluence.NewClient(confluence.ClientOptions{
+		URL: base, Email: env.Value(cfg.Email), Token: token,
+	})
+	if err != nil {
+		return fmt.Errorf("engine: confluence teardown: %w", err)
+	}
+	return confluence.Teardown(ctx, confluence.Options{Client: client, Config: cfg})
 }
 
 // gitlabPass adapts gitlab.Reconcile to the pass contract.
@@ -258,6 +368,42 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 		return nil, fmt.Errorf("engine: gitlab pass: %w", err)
 	}
 	return res.Findings(), nil
+}
+
+// Teardown withdraws the hooks, and the service accounts when asked.
+//
+// The Owner token is the same transient credential the pass asks for, and it
+// is needed for the same reason: removing an account takes the authority
+// creating it did. A teardown with none can still be attempted — the hooks
+// may come out under a weaker credential — so this refuses only when there is
+// nothing at all to authenticate with.
+func (p *gitlabPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.GitLab
+	if cfg == nil {
+		return nil
+	}
+	if strings.TrimSpace(in.Operator) == "" {
+		return fmt.Errorf(
+			"engine: gitlab teardown: no group Owner token was supplied, and the " +
+				"seats' own tokens cannot remove what created them")
+	}
+	env := p.engine.resolver()
+	plan, err := gitlab.PlanFor(company.Org, cfg)
+	if err != nil {
+		return fmt.Errorf("engine: gitlab teardown: %w", err)
+	}
+	client, err := gitlab.NewClient(gitlab.ClientOptions{
+		URL: env.Value(cfg.URL), Token: in.Operator,
+	})
+	if err != nil {
+		return fmt.Errorf("engine: gitlab teardown: %w", err)
+	}
+	return gitlab.Teardown(ctx, gitlab.TeardownOptions{
+		Client: client, Config: cfg, Plan: plan,
+		WebhookBase: company.Config.Integrations.WebhookBase(),
+		RemoveSeats: in.RemoveSeats,
+	})
 }
 
 // mattermostPass adapts mattermost.Reconcile to the pass contract.
@@ -344,3 +490,20 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	}
 	return res.Findings(), nil
 }
+
+// EVERY PASS THIS BUILD SERVES CAN ALSO BE TORN DOWN, asserted at compile
+// time rather than discovered when somebody presses Disconnect.
+//
+// [setup.Teardowner] is an OPTIONAL interface, which is what lets a vendor
+// that registers nothing decline it. That flexibility is also how a vendor
+// silently loses its teardown: rename the method, change its signature, and
+// the type simply stops satisfying the interface, with nothing to say so
+// until a disconnect reports there is nothing to remove and leaves a live
+// webhook behind. These assertions are the thing that says so.
+var (
+	_ setup.Teardowner = (*jiraPass)(nil)
+	_ setup.Teardowner = (*confluencePass)(nil)
+	_ setup.Teardowner = (*githubPass)(nil)
+	_ setup.Teardowner = (*gitlabPass)(nil)
+	_ setup.Teardowner = (*mattermostPass)(nil)
+)

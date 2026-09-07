@@ -506,6 +506,13 @@ func (c *Client) UpdateGroupHook(ctx context.Context, groupID, hookID int, targe
 		hookBody(target, secret), nil)
 }
 
+// DeleteGroupHook removes a group hook, which is what a disconnect does with
+// the one this engine registered.
+func (c *Client) DeleteGroupHook(ctx context.Context, groupID, hookID int) error {
+	return c.send(ctx, http.MethodDelete,
+		"/groups/"+strconv.Itoa(groupID)+"/hooks/"+strconv.Itoa(hookID), nil, nil)
+}
+
 // ProjectHooks lists a project's webhooks.
 func (c *Client) ProjectHooks(ctx context.Context, project string) ([]Hook, error) {
 	var out []Hook
@@ -523,6 +530,12 @@ func (c *Client) CreateProjectHook(ctx context.Context, project, target, secret 
 	err := c.send(ctx, http.MethodPost, "/projects/"+url.PathEscape(project)+"/hooks",
 		hookBody(target, secret), &out)
 	return out, err
+}
+
+// DeleteProjectHook removes a project hook.
+func (c *Client) DeleteProjectHook(ctx context.Context, project string, hookID int) error {
+	return c.send(ctx, http.MethodDelete,
+		"/projects/"+url.PathEscape(project)+"/hooks/"+strconv.Itoa(hookID), nil, nil)
 }
 
 // UpdateProjectHook re-points an existing project hook.

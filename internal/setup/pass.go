@@ -58,6 +58,46 @@ type Pass interface {
 	Needs() *Requirement
 }
 
+// Teardowner is a [Pass] that can also remove what it registered.
+//
+// OPTIONAL, and the vendors that do not satisfy it are not oversights: Slack,
+// Mattermost and Datadog register no webhook from this engine, so a teardown
+// for them would have nothing to withdraw. A type assertion is what asks,
+// which keeps a vendor's answer in one place — the vendor — rather than in a
+// list here that has to be kept in step with it.
+type Teardowner interface {
+	Pass
+
+	// Teardown removes what this vendor's passes created. It is the only
+	// operation in this package that DESTROYS at a vendor, so it takes
+	// the operator's own answer about how far to go rather than
+	// inferring it.
+	//
+	// An error holds the surface in [integration.PhaseDisconnecting] and
+	// the loop tries again, so a partial teardown must be safe to repeat:
+	// every step is "remove this if it is there".
+	Teardown(ctx context.Context, in TeardownInput) error
+}
+
+// TeardownInput is what a teardown pass is told.
+type TeardownInput struct {
+	// RemoveSeats is the operator's answer to "also remove the accounts
+	// Crewlet created".
+	//
+	// FALSE BY DEFAULT and never inferred. The webhooks come out either
+	// way — this engine registered them, nothing else uses them, and one
+	// left behind delivers to a company that no longer has a block to
+	// route it. An ACCOUNT is different: it may be a colleague in that
+	// vendor with history attached, and deleting one because somebody
+	// pressed Disconnect is not a decision a button gets to make.
+	RemoveSeats bool
+
+	// Operator is the transient vendor credential, for a vendor whose
+	// [Pass.Needs] asks for one. Removing an account usually needs the
+	// same authority creating it did.
+	Operator string
+}
+
 // PassInput is what a pass is given.
 type PassInput struct {
 	// Sink records a minted credential. Always present here, which is the
@@ -90,6 +130,11 @@ var ErrPassInFlight = errors.New("setup: a pass for this integration is already 
 
 // ErrNoPass reports a vendor this build cannot provision from the API.
 var ErrNoPass = errors.New("setup: no provisioning pass for this integration")
+
+// ErrNoTeardown reports a vendor that registers nothing to remove. Slack,
+// Mattermost and Datadog register no webhook from this engine, so a
+// disconnect has only the company document to change.
+var ErrNoTeardown = errors.New("setup: nothing to remove at this integration")
 
 // RunState is where one pass got to.
 type RunState string
@@ -235,6 +280,75 @@ func (r *Runner) Start(ctx context.Context, kind integration.Kind, in PassInput,
 	report := integration.Classify(findings)
 	run.Report = &report
 	return run, nil
+}
+
+// StartTeardown removes what a vendor holds, under the same guard a pass runs
+// beneath.
+//
+// THE SAME LEASE, deliberately. A teardown and a provisioning pass are the
+// two operations that write at the vendor, and letting them overlap is how a
+// disconnect deletes a webhook the pass beside it is registering. Sharing the
+// claim means one of them waits, whichever arrives second.
+//
+// Returns [ErrNoTeardown] for a vendor that registers nothing to remove,
+// which the caller reads as "there was nothing to do" rather than as a
+// failure: the disconnect still finishes.
+func (r *Runner) StartTeardown(
+	ctx context.Context, kind integration.Kind, in TeardownInput, id string,
+) (*Run, error) {
+	pass, ok := r.passes[kind]
+	if !ok {
+		return nil, ErrNoPass
+	}
+	tearer, ok := pass.(Teardowner)
+	if !ok {
+		return nil, ErrNoTeardown
+	}
+	if err := r.claim(kind, id); err != nil {
+		return nil, err
+	}
+	defer r.release(kind)
+
+	if r.duty != nil {
+		if duty := r.duty(kind); duty != nil {
+			held, err := duty(ctx)
+			if err != nil {
+				// Three-valued, as everywhere: a store that could not
+				// answer is not evidence somebody else is minting.
+				return nil, fmt.Errorf("setup: could not claim the teardown lease: %w", err)
+			}
+			if !held {
+				return nil, ErrPassInFlight
+			}
+		}
+	}
+
+	run := &Run{ID: id, Kind: kind, State: RunRunning, StartedAt: r.now()}
+	r.remember(run)
+
+	err := tearer.Teardown(ctx, in)
+	ended := r.now()
+	run.EndedAt = &ended
+	if err != nil {
+		run.State = RunFailed
+		run.Error = err.Error()
+		return run, err
+	}
+	run.State = RunDone
+	return run, nil
+}
+
+// Tears reports whether this build can remove what a vendor holds.
+func (r *Runner) Tears(kind integration.Kind) bool {
+	if r == nil {
+		return false
+	}
+	pass, ok := r.passes[kind]
+	if !ok {
+		return false
+	}
+	_, ok = pass.(Teardowner)
+	return ok
 }
 
 // Get is one run by id.
