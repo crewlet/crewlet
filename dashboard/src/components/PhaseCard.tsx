@@ -42,7 +42,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Badge, Button, PhaseTag, cx } from "~/ui/primitives.tsx";
+import { Badge, Button, Code, PhaseTag, cx } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { fmtCount, fmtDateTime, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import { decisionLabel, ledgerOf, type PhaseRecord, type Round } from "~/lib/phases.ts";
@@ -107,9 +107,9 @@ function ToolRow({
       >
         <div className="col gap-1">
           <div className="t-label">Arguments</div>
-          <pre className="code plain">{args || "{}"}</pre>
+          <Code plain>{args || "{}"}</Code>
           <div className="t-label">{failed ? "Error" : "Result"}</div>
-          <pre className="code">{result || "(empty)"}</pre>
+          <Code>{result || "(empty)"}</Code>
         </div>
       </Disclosure>
     </div>
@@ -444,13 +444,13 @@ export function PhaseCard({
                 {record.systemPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">System</div>
-                    <pre className="code">{record.systemPrompt}</pre>
+                    <Code>{record.systemPrompt}</Code>
                   </div>
                 )}
                 {record.userPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">User</div>
-                    <pre className="code">{record.userPrompt}</pre>
+                    <Code>{record.userPrompt}</Code>
                   </div>
                 )}
               </div>
@@ -528,7 +528,11 @@ export function PhaseCard({
               </span>
             )}
             {record.eventId && (
-              <a className="t-caption" href={href(["events", record.eventId])}>
+              <a
+                className="t-link"
+                href={href(["events", record.eventId])}
+                title="this phase's own event, in the log"
+              >
                 event →
               </a>
             )}

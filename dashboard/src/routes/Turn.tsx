@@ -9,12 +9,21 @@
  * render as anonymous rows in the log otherwise.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { EventRow, QueryState, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
-import { Badge, Button, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
+import {
+  Badge,
+  Button,
+  Code,
+  CopyButton,
+  Panel,
+  Skeleton,
+  Stat,
+  StatRow,
+} from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDateTime, fmtDuration, oldestFirst, tsKey } from "~/lib/format.ts";
 import {
@@ -87,6 +96,41 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   const traceId =
     events[0]?.trace_id || phaseEvents.find((e) => e.payload?.turn_id === turnId)?.trace_id || "";
 
+  // THE WHOLE SCREEN AS DATA, which is what somebody pasting a turn into a
+  // bug report actually needs — and the only copyable thing a RUNNING turn
+  // has, since the record below does not exist until the turn ends. The
+  // record is nested rather than flattened so a reader can tell what the
+  // engine published from what this page assembled.
+  //
+  // A THUNK, not a memo. `phases` takes a new identity on every streamed
+  // frame — `agents` is pushed twice per tool round — so any memo over it
+  // would re-serialize every prompt, narration, tool argument and result of a
+  // running turn, twice a round, for a button nobody has clicked.
+  const turnJSON = useCallback(
+    () =>
+      JSON.stringify(
+        {
+          turn_id: turnId,
+          role,
+          trace_id: traceId || null,
+          running,
+          duration_ms: durationMs,
+          record: completed?.payload ?? null,
+          phases,
+          events,
+        },
+        null,
+        2,
+      ),
+    [turnId, role, traceId, running, durationMs, completed, phases, events],
+  );
+  // A memo here rather than a thunk: this one IS rendered, so it is computed
+  // either way, and `completed` only changes when the turn ends.
+  const recordJSON = useMemo(
+    () => (completed ? JSON.stringify(completed.payload, null, 2) : ""),
+    [completed],
+  );
+
   return (
     <>
       <ScreenHead
@@ -111,6 +155,11 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 Trace
               </Button>
             )}
+            <CopyButton
+              text={turnJSON}
+              label="Copy turn"
+              title="the whole turn as JSON — its record, its phases and everything else it published"
+            />
           </>
         }
       />
@@ -228,8 +277,20 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         </Panel>
 
         {completed && (
-          <Panel title="Turn record" icon="file" subtitle={fmtDateTime(completed.timestamp)}>
-            <pre className="code">{JSON.stringify(completed.payload, null, 2)}</pre>
+          <Panel
+            title="Turn record"
+            icon="file"
+            subtitle={fmtDateTime(completed.timestamp)}
+            actions={<CopyButton text={recordJSON} title="the turn's own record, as published" />}
+          >
+            <div className="col gap-1">
+              <Code selectable label="The turn record, as JSON">
+                {recordJSON}
+              </Code>
+              <span className="t-caption">
+                Click into the record, and ⌘A / Ctrl+A selects it alone rather than the page.
+              </span>
+            </div>
           </Panel>
         )}
       </QueryState>
