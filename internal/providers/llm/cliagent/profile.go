@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // PromptMode is how a CLI receives the prompt.
@@ -442,11 +443,19 @@ func (p *Profile) validate(name string) error {
 		}
 	}
 	for i, m := range p.LimitMarkers {
-		if m.Sentinel == "" {
-			add("limit_markers[%d].sentinel is empty", i)
+		if problem := sentinelProblem(m.Sentinel); problem != "" {
+			add("limit_markers[%d].sentinel %s", i, problem)
 		}
 		if m.ResetSeparator != "" && m.ResetUnit != "epoch" && m.ResetUnit != "seconds" {
 			add("limit_markers[%d].reset_unit %q (want epoch or seconds)", i, m.ResetUnit)
+		}
+	}
+	// Checked at all, which it was not: an auth marker fires KindAuth, and
+	// KindAuth exhausts the credential exactly as a spent plan does — so an
+	// unusable sentinel costs the same here as it does above.
+	for i, m := range p.AuthMarkers {
+		if problem := sentinelProblem(m.Sentinel); problem != "" {
+			add("auth_markers[%d].sentinel %s", i, problem)
 		}
 	}
 	if p.StdinLogin != nil && len(p.StdinLogin.Args) == 0 {
@@ -502,6 +511,39 @@ func (p *Profile) output() OutputMode {
 		return OutputJSON
 	}
 	return p.Output
+}
+
+// sentinelProblem reports why a marker sentinel cannot be matched safely, or
+// "" when it can.
+//
+// A SENTINEL IS THE VENDOR'S WORDS. It is matched as a plain substring against
+// whatever the CLI printed — which on a healthy run is the model's own answer
+// — so a sentinel that can occur inside ordinary text does not recognise a
+// spent plan, it misclassifies arbitrary replies as one. And the cost is not
+// a wrong log line: both kinds a marker produces, KindRateLimit and KindAuth,
+// BENCH THE CREDENTIAL for a cooldown and hand the seat to the fallback chain
+// (see [llm.ErrorKind.ExhaustsCredential]). A company degrades quietly.
+//
+// The shipped profiles carried `sentinel: "429"`, which is the failure in its
+// purest form: three digits matched inside free text, so a model quoting an
+// HTTP status, a stack trace's line number, a token count, or any of the ten-
+// digit epochs this very package handles would bench a working subscription.
+//
+// The rule is "it has to contain a letter", and deliberately not also a
+// minimum length. A number is not a sentence, which is derivable from what a
+// sentinel IS; a length floor would be a constant nobody can defend, and it
+// would refuse a legitimate short vendor string on a guess. See [LimitMarker].
+func sentinelProblem(sentinel string) string {
+	if sentinel == "" {
+		return "is empty"
+	}
+	if !strings.ContainsFunc(sentinel, unicode.IsLetter) {
+		return fmt.Sprintf("%q has no letters — a sentinel is the vendor's own wording, "+
+			"matched as a substring against whatever the CLI printed, so one made only of "+
+			"digits or punctuation matches ordinary replies and benches a working "+
+			"credential. Use the sentence the CLI actually prints", sentinel)
+	}
+	return ""
 }
 
 // ReadsUsage reports whether this profile can take token counts from the CLI

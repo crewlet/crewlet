@@ -840,6 +840,30 @@ roles:
 An expired login classifies as `AUTH`, which is also retryable — so the
 chain keeps the seat working while you re-run `crewlet llm login`.
 
+### What a sentinel may be
+
+Both recognitions are `limit_markers` / `auth_markers` on the profile: a
+literal substring the vendor emits, plus (where it carries one) the field
+holding the reset instant, so the retry-after is a datum rather than a
+guess. They are matched against whatever the CLI printed — which on a
+healthy call is **the model's own answer** — and a match benches the
+credential for a cooldown and hands the seat to the next entry in the
+chain.
+
+So a sentinel has to be the vendor's *wording*, and a profile is refused
+at `crewlet validate` if one contains no letters. The rule exists because
+a shipped profile carried `sentinel: "429"`, and three digits matched as
+a substring is not a rate limit — it is a model quoting an HTTP status, a
+stack trace's line number, a token count, or any ten-digit epoch. Every
+one of those took a working subscription out of service.
+
+The other way a sentinel stops working is quieter — the vendor reworded
+it, so it simply never fires. Both are fixed the same way, with
+`cli.overrides.limit_markers`; see
+[CLI flags drift](#cli-flags-drift--and-thats-a-config-edit-not-a-release)
+for the shape, and take the wording from the sentence your CLI actually
+printed, which a `FATAL` failure carries verbatim so that you can.
+
 ---
 
 ## The other shape: an OAuth proxy in front of an HTTP entry

@@ -316,9 +316,21 @@ opencode:
   stdin_login:
     args: ["auth", "login", "--username", "{username}"]
     stdin_template: "{password}\n"
+  # `429` was here as a third sentinel and is GONE rather than reworded.
+  # A sentinel is matched as a plain substring against whatever the CLI
+  # printed — on a healthy call, the model's own answer — so three digits
+  # match a quoted HTTP status, a stack trace's line number, a token count
+  # or any ten-digit epoch, and a match benches the subscription and hands
+  # the seat to the fallback chain. That is a working company degrading
+  # quietly, and it fires far more often than the spent plan it was for.
+  #
+  # Not replaced with a guess: nothing here can be verified without the CLI
+  # in front of it, and an unverified sentinel is the same mistake in a
+  # respectable font. `usage limit` remains, and an operator who sees a
+  # spent OpenCode plan classified FATAL has the CLI's own sentence in that
+  # error — which is what `cli.overrides.limit_markers` is for.
   limit_markers:
     - sentinel: "usage limit"
-    - sentinel: "429"
   auth_markers:
     - sentinel: "not authenticated"
     - sentinel: "no credentials"
