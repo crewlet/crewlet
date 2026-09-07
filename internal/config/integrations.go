@@ -886,7 +886,7 @@ type GitLabProvisioning struct {
 	// sealed in the fleet's secret store and never in this document, and
 	// a disconnect names it in the orphaned list so an operator knows
 	// exactly what to revoke.
-	AdminToken string `secret:"true" yaml:"admin_token,omitempty" json:"admin_token,omitempty" desc:"Group Owner token used to create and to remove the service accounts."`
+	AdminToken string `secret:"true" yaml:"admin_token,omitempty" json:"admin_token,omitempty" desc:"Personal access token with the full api scope, belonging to a group owner. Creates and removes the service accounts."`
 
 	AccessLevel  GitLabAccessLevel            `yaml:"access_level,omitempty" json:"access_level,omitempty" js:"enum=developer|maintainer" desc:"Default membership level."`
 	AccessLevels map[string]GitLabAccessLevel `yaml:"access_levels,omitempty" json:"access_levels,omitempty" desc:"Per-handle membership overrides."`

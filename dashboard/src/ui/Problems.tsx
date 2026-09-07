@@ -48,13 +48,29 @@ export function split(detail: string): Problem[] {
     });
 }
 
-// What gets its own face inside a sentence, in the order they are tried: a
-// link first, because a URL contains characters every other pattern would
-// claim a piece of.
+// What gets its own face inside a sentence, in the order they are tried.
+//
+// A NAMED LINK AND A BACKTICK COME FIRST, because they are what an author
+// wrote deliberately and every other pattern would claim a piece of what is
+// inside them. Then a bare URL, which contains characters the rest would
+// split. The last three are recognised rather than marked up: a config path,
+// a route and a quoted value are what the engine's own sentences are full of,
+// and asking every message to annotate them would be asking every author to
+// remember.
 const token =
-  /(https?:\/\/[^\s,)]+[^\s,.)])|(\$\{[A-Za-z0-9_]+\})|(\/[a-z0-9-]+(?:\/[a-z0-9{}_-]+)+)|("[^"]*")|\b([a-z][a-z0-9_]*(?:\.[a-z0-9_]+){2,})\b/g;
+  /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|`([^`]+)`|(https?:\/\/[^\s,)]+[^\s,.)])|(\$\{[A-Za-z0-9_]+\})|(\/[a-z0-9-]+(?:\/[a-z0-9{}_-]+)+)|("[^"]*")|\b([a-z][a-z0-9_]*(?:\.[a-z0-9_]+){2,})\b/g;
 
-/** marked renders a sentence with its values, paths and links picked out. */
+/**
+ * marked renders a sentence with its values, paths and links picked out.
+ *
+ * TWO THINGS AN AUTHOR MARKS and five the renderer recognises. A link the
+ * words carry, `[Create a token](https://…)`, and a literal in backticks are
+ * written deliberately, because only the person writing the sentence knows
+ * where the link belongs in it and which word is a value. Everything else is
+ * found: a config path, a route, a `${VAR}` and a quoted value are what these
+ * sentences are full of, and asking every one of them to annotate those would
+ * be asking every author to remember.
+ */
 export function marked(text: string): ReactNode[] {
   const out: ReactNode[] = [];
   let last = 0;
@@ -62,12 +78,24 @@ export function marked(text: string): ReactNode[] {
   for (const m of text.matchAll(token)) {
     const at = m.index ?? 0;
     if (at > last) out.push(text.slice(last, at));
-    const [whole, url, ref, route, quoted, path] = m;
-    if (url) {
+    const [whole, linked, href, ticked, url, ref, route, quoted, path] = m;
+    // A NEW TAB, on every anchor here: this sits in a dialog holding a
+    // half-filled form, and following a link in place would throw the form
+    // away to read a page about how to fill it in.
+    if (linked && href) {
       out.push(
-        // A NEW TAB, because this sits in a dialog holding a half-filled
-        // form: following a link in place would throw the form away to read
-        // a page about how to fill it in.
+        <a key={key++} href={href} target="_blank" rel="noreferrer">
+          {linked}
+        </a>,
+      );
+    } else if (ticked) {
+      out.push(
+        <code key={key++} className="inline">
+          {ticked}
+        </code>,
+      );
+    } else if (url) {
+      out.push(
         <a key={key++} href={url} target="_blank" rel="noreferrer">
           {url}
         </a>,

@@ -28,7 +28,7 @@ import { Badge, Button } from "~/ui/primitives.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
 import { Icon } from "~/ui/Icon.tsx";
-import { Problems } from "~/ui/Problems.tsx";
+import { marked, Problems } from "~/ui/Problems.tsx";
 import { useToast } from "~/ui/Toast.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { SetupRequirement, SetupToolState } from "~/protocol/index.ts";
@@ -814,9 +814,15 @@ export function SetupDialog({
                 {/* THE APP'S OWN SENTENCE FIRST, always, so a field's
                     description opens the same way whether or not this
                     company has answered it. */}
-                {fill(r.help ?? "")}
-                {r.where && <> {fill(r.where)}</>}
-                {/* THE LINK IS PART OF THE SENTENCE when the app says what
+                {marked(fill(r.help ?? ""))}
+                {r.where && <> {marked(fill(r.where))}</>}
+                {/* A TRAILING LINK, for a field whose sentence does not
+                    carry one of its own. A vendor that knows where the link
+                    belongs writes it into the words, `[Create a
+                    token](https://…)`, and gets it mid-sentence; this is for
+                    the rest.
+
+                    THE LINK IS PART OF THE SENTENCE when the app says what
                     to call it: "Create one on your API keys page" sends
                     somebody to the page it names, where a trailing "Open
                     Datadog" makes them work out which of three pages the

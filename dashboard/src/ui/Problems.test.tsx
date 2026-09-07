@@ -74,6 +74,33 @@ test("values, routes, references and links are picked out of a sentence", () => 
   expect(link.getAttribute("target")).toBe("_blank");
 });
 
+// A LINK GOES WHERE THE SENTENCE PUTS IT.
+//
+// Only the person writing the sentence knows which words the link is about.
+// Appended, it became "Open GitLab" after a full stop, and a reader had to
+// work out which of several pages the form meant.
+test("a sentence carries its own link and its own literals", () => {
+  render(
+    <span>
+      {marked(
+        "[Create a legacy personal token](https://gitlab.com/-/user_settings/personal_access_tokens) " +
+          "with the full `api` scope, belonging to somebody who owns the group.",
+      )}
+    </span>,
+  );
+
+  const link = screen.getByRole("link", { name: "Create a legacy personal token" });
+  expect(link.getAttribute("href")).toBe(
+    "https://gitlab.com/-/user_settings/personal_access_tokens",
+  );
+  expect(link.getAttribute("target")).toBe("_blank");
+  // THE SCOPE IS A LITERAL, so it wears the face a value wears rather than
+  // reading as the English word "api".
+  expect(screen.getByText("api").tagName).toBe("CODE");
+  // And the rest is prose, with the address nowhere in it.
+  expect(screen.queryByText(/personal_access_tokens/)).toBeNull();
+});
+
 // ONE PROBLEM IS A SENTENCE, not a list of one: a bullet on its own reads as
 // the first of several and sets a reader looking for the rest.
 test("a single problem is not drawn as a list", () => {

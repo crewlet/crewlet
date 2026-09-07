@@ -319,7 +319,7 @@
           "type": "string"
         },
         "template": {
-          "description": "Box template. This is where vCPU/RAM/disk are set — at template build time.",
+          "description": "Box template. This is where vCPU/RAM/disk are set: at template build time.",
           "type": "string"
         }
       },
@@ -532,7 +532,7 @@
           "type": "object"
         },
         "admin_token": {
-          "description": "Group Owner token used to create and to remove the service accounts.",
+          "description": "Personal access token with the full api scope, belonging to a group owner. Creates and removes the service accounts.",
           "type": "string"
         },
         "group": {
@@ -1120,7 +1120,7 @@
           "type": "string"
         },
         "handle": {
-          "description": "Canonical slug. Effectively permanent — it derives the seat's durable id.",
+          "description": "Canonical slug. Effectively permanent: it derives the seat's durable id.",
           "pattern": "^[a-z0-9][a-z0-9-]*$",
           "type": "string"
         },
@@ -1590,7 +1590,7 @@
           "type": "string"
         },
         "default_timeout_seconds": {
-          "description": "Box TTL/keepalive. Not a run cap — the orphan-reclaim grace.",
+          "description": "Box TTL/keepalive. Not a run cap: the orphan-reclaim grace.",
           "minimum": 0,
           "type": "number"
         },
@@ -2175,7 +2175,7 @@
       "type": "string"
     },
     "name": {
-      "description": "Company name. Half of every seat's derived id — effectively permanent.",
+      "description": "Company name. Half of every seat's derived id: effectively permanent.",
       "type": "string"
     },
     "notification_coalesce_max_batch": {

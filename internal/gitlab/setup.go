@@ -70,12 +70,16 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 		{
 			Field:      "provisioning.group",
 			Connect:    true,
-			Label:      "Group",
+			Label:      "Top-level group",
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.gitlab.provisioning.group",
 			Required:   true,
-			Help:       "The top-level group the service accounts join and work in.",
-			Blocks:     integration.FindingIngressBlocked,
+			// THE LINK IS IN THE WORDS, on the phrase it is about. A
+			// trailing "Open GitLab" makes a reader work out which of
+			// several pages the form meant.
+			Help: "Find your [top-level group](https://gitlab.com/dashboard/groups). " +
+				"Each Crewlet agent becomes a service account inside it.",
+			Blocks: integration.FindingIngressBlocked,
 		},
 	}
 
@@ -113,15 +117,18 @@ func AdminCredential(stored string) setup.Requirement {
 	return setup.Requirement{
 		Field:      "admin_token",
 		Connect:    true,
-		Label:      "Group Owner token",
+		Label:      "Access token",
 		Kind:       setup.KindSecret,
 		ConfigPath: "integrations.gitlab.provisioning.admin_token",
 		Required:   true,
 		Present:    stored != "",
 		Stored:     stored,
-		Help:       "Creates the accounts and registers the webhook, so it must own the group.",
-		Where:      "Create a legacy personal access token with the full api scope.",
-		VendorURL:  "https://gitlab.com/-/user_settings/personal_access_tokens",
+		// ONE SENTENCE carrying its own link and naming the scope as the
+		// literal it is. It was three clauses and a trailing "Open
+		// GitLab": what to do, why, and where, in that order, when what
+		// a reader needs first is the page that issues the thing.
+		Help: "[Create a legacy personal token](https://gitlab.com/-/user_settings/personal_access_tokens) " +
+			"with the full `api` scope, belonging to somebody who owns the group.",
 	}
 }
 
