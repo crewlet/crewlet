@@ -70,7 +70,7 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 
 // Summary is the sentence the connect form opens with.
 func Summary() string {
-	return "Each agent gets its own Atlassian account, so it owns what it " +
-		"does in Jira and Confluence. Connecting takes an unscoped " +
-		"organization API key."
+	return "This engine uses these details to give each agent its own " +
+		"Atlassian account and to register webhooks on your Jira and " +
+		"Confluence sites."
 }
