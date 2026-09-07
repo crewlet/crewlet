@@ -49,10 +49,9 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Kind:       setup.KindChoice,
 			ConfigPath: "integrations.datadog.provisioning.site",
 			Required:   false,
+			Connect:    true,
 			Choices:    siteChoices(),
-			Help: "The region your organization is in. A key issued in one is " +
-				"refused by every other, and the hostname is the only thing " +
-				"that tells them apart.",
+			Help:       "The region your organization is in.",
 		},
 		{
 			Field:      "api_key",
@@ -61,11 +60,10 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			ConfigPath: "integrations.datadog.provisioning.api_key",
 			SecretName: "DATADOG_API_KEY",
 			Required:   false,
-			Help: "Says which organization the engine is acting in. Needed only " +
-				"to give each agent its own Datadog identity; alerts arrive " +
-				"without it.",
-			Where:     "Organization Settings > API Keys.",
-			VendorURL: "https://app.datadoghq.com/organization-settings/api-keys",
+			Connect:    true,
+			Help:       "Create one on your",
+			LinkText:   "API keys page",
+			VendorURL:  "https://app.datadoghq.com/organization-settings/api-keys",
 		},
 		{
 			Field:      "app_key",
@@ -74,11 +72,10 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			ConfigPath: "integrations.datadog.provisioning.app_key",
 			SecretName: "DATADOG_APP_KEY",
 			Required:   false,
-			Help: "Says which user acts. Datadog refuses a write carrying only " +
-				"the API key, with a message that names neither, so both are " +
-				"needed together or not at all.",
-			Where:     "Organization Settings > Application Keys.",
-			VendorURL: "https://app.datadoghq.com/organization-settings/application-keys",
+			Connect:    true,
+			Help:       "Create one on your",
+			LinkText:   "application keys page",
+			VendorURL:  "https://app.datadoghq.com/organization-settings/application-keys",
 		},
 		{
 			// WITHOUT THIS, CONNECTING DOES NOTHING. Every check the
@@ -199,9 +196,8 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 // A company can have the second without the first, which is what the
 // sentence has to leave room for.
 func Summary() string {
-	return "Connect an organization to give each agent its own Datadog identity. " +
-		"Alerts reach the engine as webhooks and are routed by the owner tag " +
-		"on the monitor, which works with or without the keys below."
+	return "Each agent gets its own Datadog account, so it owns what it builds. " +
+		"Connecting takes keys from someone who can manage users and roles."
 }
 
 // siteChoices offers Datadog's regions, from the client's own list so a

@@ -44,17 +44,40 @@ interface Submitted {
 /**
  * Which requirements a dialog shows.
  *
- * `all` is the Connect and Manage case. A finding kind narrows it to the
- * fields that clear that finding, which is what makes the Fix button on a
- * degraded row open the two inputs that matter rather than the whole form.
+ * THREE CASES, and the first is the one this exists for.
+ *
+ * CONNECTING shows only the fields that establish the connection. An app
+ * declares which those are; the rest configure what happens OVER the
+ * connection, and asking which seat a Datadog alert wakes while somebody is
+ * pasting an API key asks the second question before the first is answered.
+ *
+ * MANAGING shows everything, because by then there is a connection and the
+ * rest of it is what there is to manage.
+ *
+ * A FINDING narrows to the fields that clear it, which is what makes Fix on
+ * a failing row open the two inputs that matter rather than the whole form.
+ * It wins over both: somebody who pressed Fix asked about one thing.
  */
-export function fieldsFor(reqs: SetupRequirement[], blocks?: string): SetupRequirement[] {
-  if (!blocks) return reqs;
-  const matching = reqs.filter((r) => r.blocks === blocks);
-  // A finding no requirement clears is not a reason to show an empty
-  // dialog: fall back to the whole list, where the answer is at least
-  // somewhere.
-  return matching.length ? matching : reqs;
+export function fieldsFor(
+  reqs: SetupRequirement[],
+  blocks?: string,
+  connecting?: boolean,
+): SetupRequirement[] {
+  if (blocks) {
+    const matching = reqs.filter((r) => r.blocks === blocks);
+    // A finding no requirement clears is not a reason to show an empty
+    // dialog: fall back to the whole list, where the answer is at least
+    // somewhere.
+    return matching.length ? matching : reqs;
+  }
+  if (!connecting) {
+    return reqs;
+  }
+  const connect = reqs.filter((r) => r.connect);
+  // An app that declares none is one whose every field is part of
+  // connecting — which is true of most of them — so the whole list is the
+  // right answer rather than an empty form.
+  return connect.length ? connect : reqs;
 }
 
 /** A section's identity: the vendor, plus the seat when there is one. */
@@ -105,6 +128,11 @@ export function SetupDialog({
   const toast = useToast();
   // Keyed by SECTION rather than by vendor, because a per-seat vendor has
   // one section per seat and they all carry the same third-party app key.
+  // CONNECTING is "no section here is configured yet". It decides which
+  // fields the form shows and what its button says, and both have to agree:
+  // a button reading Connect over a form of settings is the wrong promise.
+  const connecting = sections.every((section) => !section.tool.configured);
+
   const shownBy = useMemo(() => {
     const out = new Map<string, SetupRequirement[]>();
     for (const section of sections) {
@@ -112,10 +140,12 @@ export function SetupDialog({
         section.seat === undefined
           ? section.tool.requirements
           : ((section.tool.seats ?? []).find((s) => s.handle === section.seat)?.requirements ?? []);
-      out.set(sectionKey(section), fieldsFor(reqs, blocks));
+      // CONNECTING is "this app is not configured yet". Once it is, the
+      // same dialog is the Manage one and shows everything.
+      out.set(sectionKey(section), fieldsFor(reqs, blocks, connecting));
     }
     return out;
-  }, [sections, blocks]);
+  }, [sections, blocks, connecting]);
   const shown = useMemo(() => [...shownBy.values()].flat(), [shownBy]);
 
   // A field the engine already holds is left alone unless the operator asks
@@ -240,7 +270,7 @@ export function SetupDialog({
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabled={busy}>
-            {busy ? "Saving" : "Save"}
+            {busy ? (connecting ? "Connecting" : "Saving") : connecting ? "Connect" : "Save"}
           </Button>
         </>
       }
@@ -336,7 +366,12 @@ export function SetupDialog({
             kind={r.kind === "toggle" ? "choice" : (r.kind as FieldKind)}
             value={values[r.field] ?? ""}
             onChange={(v) => setValues((c) => ({ ...c, [r.field]: v }))}
-            required={r.required}
+            // A CONNECT FIELD IS NOT "(optional)". It may be optional to
+            // the integration as a whole — Datadog routes alerts with no
+            // keys — but it is the thing being asked for on a form whose
+            // button says Connect, and marking it optional there reads as
+            // "you can skip this and still connect".
+            required={r.required || (connecting && r.connect === true)}
             error={fieldErrors[r.field]}
             choices={
               r.kind === "toggle"
@@ -358,8 +393,14 @@ export function SetupDialog({
                   <>
                     {" "}
                     <a href={r.vendor_url} target="_blank" rel="noreferrer">
-                      Open {appName}
+                      {/* THE LINK IS PART OF THE SENTENCE when the app says
+                          what to call it: "Create one on your API keys page"
+                          sends somebody to the page it names, where a
+                          trailing "Open Datadog" makes them work out which
+                          of three pages the form meant. */}
+                      {r.link_text || `Open ${appName}`}
                     </a>
+                    {r.link_text ? "." : null}
                   </>
                 )}
               </>

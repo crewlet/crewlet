@@ -132,6 +132,30 @@ type Requirement struct {
 	// between working and working well.
 	Required bool `json:"required"`
 
+	// Connect marks a requirement as one of the few that ESTABLISH the
+	// connection, rather than one that configures what happens over it.
+	//
+	// The two are different questions asked at different moments, and
+	// putting them on one form asks somebody connecting an app to answer
+	// the second before they have done the first: which seat a Datadog
+	// alert wakes is not a thing to decide while pasting an API key. The
+	// connect form shows these; everything else appears once the app is
+	// connected and there is something to configure.
+	//
+	// It is NOT the same as Required. A connect field can be optional to
+	// the integration as a whole — Datadog routes alerts with no keys at
+	// all — and still be the thing you are being asked for when you press
+	// Connect.
+	Connect bool `json:"connect,omitempty"`
+
+	// LinkText is the words in Help that become the link to VendorURL.
+	//
+	// A link reads as part of the sentence rather than after it: "Create
+	// one on your API keys page" sends somebody to the page it names,
+	// where a trailing "Open Datadog" makes them work out which of three
+	// pages the form meant. Empty falls back to naming the app.
+	LinkText string `json:"link_text,omitempty"`
+
 	// Mintable reports that the ENGINE can produce this value, so a
 	// person should not be asked for it. A shared webhook token and a
 	// signing secret are both mintable; a third-party app's own API token is not.

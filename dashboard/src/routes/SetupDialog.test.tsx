@@ -158,7 +158,7 @@ test("submitting asks for the mint and sends only what was filled in", async () 
       onDone={() => {}}
     />,
   );
-  fireEvent.click(screen.getByText("Save"));
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
   await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
   const init = spy.mock.calls[0]?.[1];
@@ -197,7 +197,7 @@ test("a literal_in_config refusal is shown against its field", async () => {
       onDone={() => {}}
     />,
   );
-  fireEvent.click(screen.getByText("Save"));
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
   expect(await screen.findByRole("alert")).toBeDefined();
   expect(screen.getByText(/holds a value here rather than a/)).toBeDefined();
 });
@@ -247,4 +247,115 @@ test("an external link names the app it opens", () => {
     />,
   );
   expect(screen.getByRole("link", { name: "Open Datadog" })).toBeTruthy();
+});
+
+// CONNECTING ASKS ONLY WHAT CONNECTS.
+//
+// Datadog's form carried seven fields where the console's carries three: the
+// four extra configure what happens OVER the connection — which seat an alert
+// wakes, whether deliveries are accepted — and asking those while somebody is
+// pasting an API key asks the second question before the first is answered.
+test("the connect form shows only the fields that establish the connection", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            configured: false,
+            requirements: [
+              req({ field: "site", label: "Datadog region", kind: "choice", connect: true }),
+              req({ field: "api_key", label: "API key", kind: "secret", connect: true }),
+              req({ field: "route_to", label: "Fallback seat", kind: "handle" }),
+              req({ field: "handle_tag", label: "Owner tag key", kind: "text" }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.getByText("Datadog region")).toBeTruthy();
+  expect(screen.getByText("API key")).toBeTruthy();
+  expect(screen.queryByText("Fallback seat")).toBeNull();
+  expect(screen.queryByText("Owner tag key")).toBeNull();
+});
+
+// AND MANAGING SHOWS EVERYTHING, because by then there is a connection and
+// the rest of it is what there is to manage.
+test("a configured app shows every field", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            configured: true,
+            requirements: [
+              req({ field: "site", label: "Datadog region", kind: "choice", connect: true }),
+              req({ field: "route_to", label: "Fallback seat", kind: "handle" }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.getByText("Datadog region")).toBeTruthy();
+  expect(screen.getByText("Fallback seat")).toBeTruthy();
+});
+
+// AN APP THAT DECLARES NONE shows all of them. Most apps' every field is part
+// of connecting, and an empty form is worse than a long one.
+test("an app with no connect fields declared shows the whole form", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Jira",
+          tool: {
+            ...tool,
+            configured: false,
+            requirements: [req({ field: "url", label: "Jira site", kind: "url" })],
+          },
+        },
+      ]}
+      title="Jira"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.getByText("Jira site")).toBeTruthy();
+});
+
+// THE BUTTON SAYS WHAT PRESSING IT DOES. A form of connection fields under a
+// button reading "Save" is the wrong promise; so is "Connect" over a form of
+// settings for an app that is already connected.
+test("the button reads Connect before there is a connection and Save after", () => {
+  const { unmount } = render(
+    <SetupDialog
+      sections={[{ name: "Datadog", tool: { ...tool, configured: false } }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
+  unmount();
+
+  render(
+    <SetupDialog
+      sections={[{ name: "Datadog", tool: { ...tool, configured: true } }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
 });

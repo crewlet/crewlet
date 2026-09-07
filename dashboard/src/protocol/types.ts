@@ -805,6 +805,17 @@ export interface SetupRequirement {
   config_path: string;
   secret_name?: string;
   required: boolean;
+  /**
+   * One of the few fields that ESTABLISH the connection.
+   *
+   * The connect form shows these alone. Everything else configures what
+   * happens OVER the connection and appears once there is one, because
+   * asking which seat a Datadog alert wakes while somebody is pasting an API
+   * key is asking the second question before the first is answered.
+   */
+  connect?: boolean;
+  /** The words in `help` that become the link to `vendor_url`. */
+  link_text?: string;
   mintable?: boolean;
   help?: string;
   where?: string;
