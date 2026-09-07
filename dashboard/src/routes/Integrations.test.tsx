@@ -413,18 +413,23 @@ test("one unfinished surface makes the whole tool unfinished", () => {
   ]);
   expect(mixed?.label).toBe("Continue");
 
-  // AND A SURFACE NOBODY HAS CONFIGURED STILL OFFERS CONNECT.
+  // AND A SURFACE NOBODY HAS CONFIGURED IS SOMETHING TO CONTINUE, not to
+  // connect.
   //
   // It does not make the tool UNFINISHED — a company using Jira and not
   // Confluence is not half broken, and the tag says what the connected
   // surfaces are doing — but it is something a person can act on, and
   // connecting the organization alone left the Atlassian card with no
   // button at all: nothing on screen would add the products.
+  //
+  // The WORD matters: this said Connect, beside a tag reading Connected, so
+  // the card claimed both at once. Continue is what this screen already says
+  // about a tool with something left to do.
   const partial = actionFor(ready, [
     toolState({ key: "jira", configured: true, satisfied: true }),
     toolState({ key: "confluence", configured: false, satisfied: false }),
   ]);
-  expect(partial?.label).toBe("Connect");
+  expect(partial?.label).toBe("Continue");
 
   // A tool whose every surface is connected and working offers nothing.
   const done = actionFor(ready, [
@@ -919,4 +924,25 @@ test("disconnect skips a surface this company never configured", () => {
     { name: "Forge relay", tool: toolState({ key: "forge", configured: false }) },
   ];
   expect(disconnectOrder(atlassian, rows, sections)).toEqual(["jira"]);
+});
+
+// A CARD CANNOT BE CONNECTED AND OFFER TO CONNECT.
+//
+// The two halves of this screen arrive separately and the socket's rows are
+// quicker. Straight after a connect the rows already say the block exists
+// while the setup listing is still the pre-connect one, so the card drew
+// "Connect" beside a tag reading Connected: two controls describing the same
+// tool, disagreeing, with the button the wrong one.
+test("a stale setup listing offers nothing rather than contradicting the tag", () => {
+  const connected = rollUp(atlassian, rowsOf({ key: "jira", configured: true }));
+  const behind = [
+    toolState({ key: "atlassian", configured: false }),
+    toolState({ key: "jira", configured: false }),
+  ];
+  // present: the rows say this company has the tool.
+  expect(actionFor(connected, behind, true)).toBeNull();
+  // AND A TOOL NOBODY HAS CONNECTED STILL OFFERS CONNECT. With no rows there
+  // is no tag to contradict, and the button is the only thing on the card
+  // that says anything.
+  expect(actionFor(connected, behind, false)?.label).toBe("Connect");
 });

@@ -619,8 +619,21 @@ function SurfaceRow({
 export function actionFor(
   state: EntryState,
   tools: SetupToolState[],
+  present = false,
 ): { label: string; blocks?: string } | null {
   if (tools.length === 0) return null;
+  // THE TWO HALVES OF THIS SCREEN ARRIVE SEPARATELY, and the socket's rows
+  // are the quicker one. Straight after a connect the rows already say the
+  // block exists while this listing is still the pre-connect one, and a
+  // card then drew "Connect" beside a tag reading Connected: two controls
+  // describing the same tool, disagreeing.
+  //
+  // The rows are the fresher answer to "does this company have this", so
+  // where they say a surface is there, this half is behind rather than
+  // reporting an unconnected tool. Nothing is offered until it catches up,
+  // which is a moment, and the tag carries the truth throughout.
+  const stale = present && tools.every((t) => !t.configured);
+  if (stale) return null;
   // A TOOL IS CONFIGURED WHEN ANY OF ITS SURFACES IS, and complete only when
   // every configured one is. Atlassian with Jira set up and Confluence not is
   // neither "connect" nor "done": it is a tool with something left to do.
@@ -642,19 +655,21 @@ export function actionFor(
   ) {
     return { label: "Continue" };
   }
-  // A CARD WITH A SURFACE LEFT TO CONNECT STILL OFFERS CONNECT.
+  // A CARD WITH A SURFACE LEFT TO CONNECT SAYS SO, and says "Continue".
   //
   // Atlassian is an organization and two products, and connecting the
   // organization alone left the card with no button at all: the one
   // configured surface was satisfied, the unconfigured ones did not make the
   // tool unfinished, and there was nothing on screen that would add them.
   // Being partly connected is a state to act on, and the action is the same
-  // one that started it.
+  // dialog that started it.
   //
-  // It is not a fault and does not read as one. The tag still says what the
-  // connected surfaces are doing; this only says there is more here.
+  // NOT "Connect", which is what it said and which contradicts the tag
+  // beside it: a card cannot be Connected and offer to connect. Continue is
+  // the word this screen already uses for a tool with something left to do,
+  // and it is true of a half-connected card whichever half is missing.
   if (tools.some((t) => !t.configured)) {
-    return { label: "Connect" };
+    return { label: "Continue" };
   }
   // A FAULT IS NOT AN ACTION. A card that needs attention says so in its tag
   // and its status line, and what to do about it is the settings the gear
@@ -748,7 +763,7 @@ export function EntryRow({
   // they all carry the same tool. Counting it once per section made a
   // roster of one agent render four rows on the Atlassian card.
   const tools = [...new Map((sections ?? []).map((s) => [s.tool.key, s.tool])).values()];
-  const action = actionFor(state, tools);
+  const action = actionFor(state, tools, !absent);
   // ONE ROW PER AGENT, whatever the card is made of.
   //
   // A company with one agent saw THREE rows on Atlassian — Organization,
@@ -954,8 +969,14 @@ function useSetup(): {
    * else made the page re-render, which is why it looked like a refresh
    * fixed it. Nothing was wrong; the answer had not arrived.
    *
-   * NOT reset by a later reload: an integration being reconnected must not
-   * blank the buttons of every other card on the screen.
+   * TRUE AGAIN WHILE A RE-READ IS IN FLIGHT, because the same disagreement
+   * happens in both directions. After a connect the rows say the block
+   * exists while this half still says it does not, and the card offered
+   * Connect beside Connected. After a disconnect the rows are gone while
+   * this half still says configured and satisfied, and the card had no tag
+   * and no button at all. A card rendered from one half is wrong either way,
+   * and a moment of the skeleton already on this screen is honest about
+   * which of the two it is: nothing is known yet.
    */
   loading: boolean;
   reload: () => void;
@@ -965,6 +986,7 @@ function useSetup(): {
   const [loading, setLoading] = useState(true);
 
   const reload = useCallback(() => {
+    setLoading(true);
     void (async () => {
       try {
         setListing((await rest.get("/setup/integrations")) as SetupListing);
