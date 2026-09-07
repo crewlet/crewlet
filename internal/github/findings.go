@@ -24,10 +24,20 @@ func (r *Result) Findings() []integration.Finding {
 		// The run had no org credential to probe. Everything else it
 		// reports was read without one, so this is said first and the
 		// classifier ranks it above the rest.
+		// OPTIONAL, NOT MISSING, and the difference is the whole card.
+		//
+		// Each agent acts through its OWN app now, so this token is not
+		// what gives an agent an identity: it reads who else is taking
+		// part in a thread. Reported as credential_missing it put the
+		// integration in Failed, which is the phase for one that cannot
+		// be talked to at all, and sent an operator looking for an outage
+		// rather than at a line saying what they would gain by adding it.
 		out = append(out, integration.Finding{
-			Kind: integration.FindingCredentialMissing,
-			Detail: "integrations.github.token resolved to nothing, so participant " +
-				"fan-out is off and a thread's watchers hear nothing",
+			Kind: integration.FindingOptionalMissing,
+			Detail: "no organization read token is set, so a thread's other " +
+				"participants are not looked up: an agent hears about work it " +
+				"is assigned or mentioned in, and not about work it is merely " +
+				"watching",
 		})
 	}
 

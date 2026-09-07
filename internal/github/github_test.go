@@ -1574,15 +1574,18 @@ func TestOnlyAnAskAddressesTheSeat(t *testing.T) {
 	}
 }
 
-// A MISSING ORG CREDENTIAL IS A FINDING, NOT A FAULT.
+// A MISSING ORG TOKEN IS AN OPTIONAL INPUT, NOT A BROKEN INTEGRATION.
 //
-// The token is optional on this host and its absence is a documented
-// degradation: fan-out is off and a thread's watchers hear nothing. Refusing
-// the run instead made the loop record "the last pass could not read this
-// integration", which sends an operator looking for an outage rather than for
-// an unset variable, and left the credential_missing branch of Findings
-// unreachable from the loop that needs it most.
-func TestAPassWithNoOrgCredentialReportsItRatherThanFailing(t *testing.T) {
+// Two things this got wrong in turn. Refusing the run made the loop record
+// "the last pass could not read this integration", which sends an operator
+// looking for an outage rather than an unset variable. Reporting it as
+// credential_missing then put the card in Failed, which is the phase for an
+// integration that cannot be talked to at all.
+//
+// Neither is true. Each agent acts through its OWN app, so this token gives
+// nobody an identity: it reads who else is taking part in a thread. Its
+// absence is a working integration with one thing left on the table.
+func TestAPassWithNoOrgTokenIsWorkingRatherThanFailed(t *testing.T) {
 	t.Parallel()
 	res, err := github.Reconcile(t.Context(), github.Options{
 		Config: &config.GitHub{Enabled: true},
@@ -1594,8 +1597,14 @@ func TestAPassWithNoOrgCredentialReportsItRatherThanFailing(t *testing.T) {
 		t.Fatal("no result")
 	}
 	findings := res.Findings()
-	if len(findings) != 1 || findings[0].Kind != integration.FindingCredentialMissing {
-		t.Fatalf("findings = %+v, want one credential_missing", findings)
+	if len(findings) != 1 || findings[0].Kind != integration.FindingOptionalMissing {
+		t.Fatalf("findings = %+v, want one optional_missing", findings)
+	}
+	// AND THE CARD STAYS READY. This is the assertion that matters: the
+	// verdict is what decides whether an operator sees Failed over an
+	// integration that works.
+	if phase, _ := findings[0].Kind.Verdict(); phase != integration.PhaseReady {
+		t.Errorf("an unset optional token puts the integration in %q", phase)
 	}
 	// And it says nothing about ingress or identity, because it read
 	// neither: a run with no credential that claimed a webhook was missing

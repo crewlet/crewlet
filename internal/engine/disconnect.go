@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/integration"
@@ -18,6 +19,20 @@ type ConfigWriter interface {
 	// Apply merges patch into the active revision and activates the
 	// result.
 	Apply(ctx context.Context, patch []byte, summary, operator string) error
+
+	// Seat reads one seat's whole entity as JSON, and SetSeat writes it
+	// back under the same handle.
+	//
+	// A SEPARATE PATH FROM Apply, and it has to be: a merge patch replaces
+	// an array wholesale, so patching `roles` to change one seat would
+	// delete every other one. The entity route addresses a seat by its
+	// handle, which is its identity rather than its position.
+	//
+	// The GitHub pass writes here: an operator installs an agent's app in
+	// a browser, which tells the engine nothing, so the loop discovers the
+	// installation and records it against that one seat.
+	Seat(ctx context.Context, handle string) ([]byte, error)
+	SetSeat(ctx context.Context, handle string, body []byte, summary, operator string) error
 }
 
 // UseConfigWriter installs the surface a disconnect removes a block through.
@@ -116,4 +131,51 @@ func (e *Engine) disconnectors() map[integration.Kind]integration.Disconnector {
 		out[kind] = vendorDisconnect{engine: e, kind: kind, pass: tearers[kind]}
 	}
 	return out
+}
+
+// RecordGitHubInstallation writes an installation the loop discovered onto
+// one seat, or clears one it found gone.
+//
+// THROUGH THE ENTITY ROUTE, for the reason [ConfigWriter] gives: a merge
+// patch on `roles` would replace the whole list. Refused rather than skipped
+// when no writer is installed, because a pass that silently failed to record
+// an adoption would rediscover the same installation on every tick and never
+// say why the seat stays unready.
+func (e *Engine) RecordGitHubInstallation(ctx context.Context, handle string, id int64) error {
+	writer := e.configWriter.Load()
+	if writer == nil {
+		return integration.ErrDisconnectUnavailable
+	}
+	body, err := (*writer).Seat(ctx, handle)
+	if err != nil {
+		return fmt.Errorf("engine: read the seat %s: %w", handle, err)
+	}
+	var role map[string]any
+	if decodeErr := json.Unmarshal(body, &role); decodeErr != nil {
+		return fmt.Errorf("engine: decode the seat %s: %w", handle, decodeErr)
+	}
+	integrations, _ := role["integrations"].(map[string]any)
+	if integrations == nil {
+		return fmt.Errorf("engine: the seat %s has no integrations block", handle)
+	}
+	block, _ := integrations["github"].(map[string]any)
+	if block == nil {
+		return fmt.Errorf("engine: the seat %s has no github app to record against", handle)
+	}
+	block["installation_id"] = id
+	integrations["github"] = block
+	role["integrations"] = integrations
+
+	updated, err := json.Marshal(role)
+	if err != nil {
+		return fmt.Errorf("engine: encode the seat %s: %w", handle, err)
+	}
+	summary := "record " + handle + "'s GitHub installation"
+	if id == 0 {
+		// A CLEARED ID IS AN UNINSTALL SOMEBODY PERFORMED AT GITHUB, and
+		// the summary says so: an operator reading the revision list
+		// should not have to work out why the engine removed something.
+		summary = "clear " + handle + "'s GitHub installation, which is gone at GitHub"
+	}
+	return (*writer).SetSeat(ctx, handle, updated, summary, "reconcile loop")
 }

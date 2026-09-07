@@ -1524,6 +1524,26 @@ func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary, op
 	return err
 }
 
+// Seat and SetSeat are the per-seat write, through the entity route: a seat
+// is addressed by its handle, because a merge patch cannot reach one element
+// of a list without replacing the list.
+func (w engineConfigWriter) Seat(ctx context.Context, handle string) ([]byte, error) {
+	entity, err := w.surface.Entity(ctx, "roles", handle)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(entity)
+}
+
+func (w engineConfigWriter) SetSeat(
+	ctx context.Context, handle string, body []byte, summary, operator string,
+) error {
+	_, err := w.surface.ApplyEntity(ctx, configapi.ApplyEntityRequest{
+		Kind: "roles", ID: handle, Body: body, Summary: summary, Operator: operator,
+	})
+	return err
+}
+
 // appStateKeyMaterial is the Tier A keyring, as the GitHub App state signer
 // is keyed from.
 //

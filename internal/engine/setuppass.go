@@ -729,7 +729,80 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	if err != nil {
 		return nil, fmt.Errorf("engine: github pass: %w", err)
 	}
-	return res.Findings(), nil
+	findings := res.Findings()
+
+	// EACH AGENT'S OWN APP, which is where identity on GitHub actually
+	// lives. The pass above reads the ORGANIZATION and registers hooks; it
+	// knows nothing about the app a person created for one seat. This half
+	// adopts the installation that person made, and it has to run on the
+	// loop rather than at connect time because installing an app is a click
+	// in a browser that tells the engine nothing.
+	seats := p.seatApps(env)
+	if len(seats) > 0 {
+		apps, appsErr := github.ReconcileSeatApps(ctx, github.SeatAppOptions{
+			APIBase: strings.TrimSpace(cfg.URL),
+			WebBase: strings.TrimSpace(cfg.URL),
+			Org:     githubOrg(cfg),
+			Seats:   seats,
+			// A DRY RUN RECORDS NOTHING, which is what a check is: the
+			// sink is the loop's permission to write, and without it the
+			// pass reads and reports.
+			Record: p.recordInstallation(in),
+		})
+		if appsErr != nil {
+			return nil, fmt.Errorf("engine: github pass: %w", appsErr)
+		}
+		findings = append(findings, apps.Findings...)
+	}
+	return findings, nil
+}
+
+// seatApps reads every agent's own app out of the company document, with its
+// key resolved. A seat with no block at all is skipped: it is a company that
+// has not started, not a seat with a fault.
+func (p *githubPass) seatApps(env *config.Resolver) []github.SeatApp {
+	company := p.engine.Company()
+	out := []github.SeatApp{}
+	for role := range company.Config.EachRole() {
+		seat := role.Seat()
+		if !seat.IsAgent() {
+			continue
+		}
+		app := role.Integrations.GitHub
+		if app == nil {
+			continue
+		}
+		tier, _ := github.ParseTier(app.TierOrDefault())
+		out = append(out, github.SeatApp{
+			Handle: seat.Handle(), Name: role.Name, Tier: tier, Repos: app.Repos,
+			AppID: app.AppID, Slug: app.AppSlug,
+			InstallationID: app.InstallationID,
+			Key:            strings.TrimSpace(env.Value(app.PrivateKey)),
+		})
+	}
+	return github.SeatsFrom(out)
+}
+
+// recordInstallation writes what the pass discovered back onto the seat.
+//
+// NIL ON A DRY RUN, which is what makes a check read-only: the sink is the
+// loop's permission to write, and a check that adopted an installation would
+// change the company from a button labelled as a read.
+func (p *githubPass) recordInstallation(in setup.PassInput) func(context.Context, string, int64) error {
+	if in.Sink == nil {
+		return nil
+	}
+	return func(ctx context.Context, handle string, installationID int64) error {
+		return p.engine.RecordGitHubInstallation(ctx, handle, installationID)
+	}
+}
+
+// githubOrg is the organization these apps are installed on.
+func githubOrg(cfg *config.GitHub) string {
+	if cfg == nil || cfg.Provisioning == nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.Provisioning.Org)
 }
 
 // EVERY PASS THIS BUILD SERVES CAN ALSO BE TORN DOWN, asserted at compile
