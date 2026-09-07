@@ -262,6 +262,16 @@ type ToolState struct {
 	// delivery for a reason no input fixes.
 	Satisfied bool `json:"satisfied"`
 
+	// FormComplete is whether every box this tool's dialog draws has been
+	// answered: the company block's requirements, and every seat's.
+	//
+	// SEPARATE FROM Satisfied, and the gap is the whole of what a button can
+	// usefully offer. A GitHub company whose agent has no app yet is not
+	// satisfied and has nothing left to type: both acts that produce an app
+	// happen at GitHub, from the agent's own row, so a Continue button beside
+	// that opened a form which could not create an app or install one.
+	FormComplete bool `json:"form_complete"`
+
 	// InboundPath is where this third-party app's deliveries arrive, and PublicURL
 	// is that path on the address third-party apps reach this deployment at. Empty
 	// when the surface has no inbound route, or when no base is set.
@@ -553,6 +563,24 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	setup.FillEffective(reqs, s.resolve)
 
 	satisfied := len(setup.Outstanding(reqs)) == 0
+	// WHETHER THIS DIALOG HAS A BOX LEFT TO FILL, which is a different
+	// question from whether the tool works, and the only one the Continue
+	// button can answer: the form edits the company block and the seat
+	// credentials, so a gap anywhere in it is something pressing Continue
+	// fixes.
+	//
+	// A GitHub seat's requirements are deliberately empty (the app id, the
+	// slug and the key are all written by the engine from what GitHub
+	// returned), so a company whose only outstanding work is an agent's two
+	// clicks reports every box answered, and the card offers no button for a
+	// form that could not have helped.
+	formComplete := satisfied
+	for _, seat := range seats {
+		if len(setup.Outstanding(seat.Requirements)) > 0 {
+			formComplete = false
+			break
+		}
+	}
 	// A TOOL IS SATISFIED WHEN EVERY SEAT THAT HAS STARTED IS. A seat nobody
 	// has set up does not make the tool unfinished, because a company
 	// running Slack for three of its ten agents chose that.
@@ -587,6 +615,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		Requirements:  reqs,
 		Seats:         seats,
 		Satisfied:     satisfied,
+		FormComplete:  formComplete,
 		InboundPath:   inboundPath(kind),
 		CanProvision:  s.passes.Serves(kind),
 		SeatsRequired: seatsRequired,

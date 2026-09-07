@@ -137,30 +137,26 @@ test("a tool reports its least ready surface, and names it", () => {
   );
   expect(state.tag).toBe("degraded");
   expect(state.tone).toBe("caution");
-  expect(state.status).toBe("Jira: swe has no Jira account");
-  expect(state.attention).toBe(true);
 });
 
-// A tool with one surface does not prefix its own name: "Slack: ..." on the
-// Slack row says nothing.
-test("a single-surface tool does not name itself", () => {
+// A SURFACE NOTHING CAN REACH IS NOT DRAWN AS HEALTHY, and the tag's colour
+// is what says so on a collapsed card. Which surface, and why, is the note in
+// the body: the header line is the tool's name, not its latest complaint.
+test("a surface whose secret did not resolve colours the tag", () => {
   const state = rollUp(slack, rowsOf({ key: "slack", configured: true, secret_usable: false }));
   expect(state.tag).toBe("Connecting");
-  expect(state.status).toMatch(/^the webhook secret did not resolve/);
-  expect(state.attention).toBe(true);
+  expect(state.tone).toBe("caution");
 });
 
-// A ready tool says nothing under its name. The tag is the claim, and a
-// status line repeating "ready" would be the invented reassurance this
-// screen refuses to show.
-test("a ready tool has no status line", () => {
+// A ready tool is drawn ready. The tag is the whole claim, and its tone must
+// not be the caution reserved for something a reader has to act on.
+test("a ready tool is drawn ready", () => {
   const state = rollUp(
     atlassian,
     rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready", detail: "3 seats" } }),
   );
   expect(state.tag).toBe("ready");
-  expect(state.status).toBeUndefined();
-  expect(state.attention).toBe(false);
+  expect(state.tone).not.toBe("caution");
 });
 
 // NOT CONFIGURED, PAUSED and CONFIGURED are three different facts. Absent is
@@ -261,6 +257,37 @@ test("a faulted surface says what is wrong and which surface it is", () => {
   expect(screen.queryByText("Jira")).toBeNull();
 });
 
+// THE LINE UNDER A TOOL'S NAME IS WHAT THE TOOL IS, never how it is doing.
+//
+// It carried the roll-up's status sentence in amber, so a card's identity was
+// replaced by its latest complaint: a reader scanning the list for GitHub
+// found a warning where the name's own line belongs, on every card that had
+// anything to report. What is wrong belongs in the body, with the badge that
+// names the surface, the loop's own sentence, and the link that fixes it.
+test("a card's header says what the tool is, not what is wrong with it", () => {
+  const rows = rowsOf({
+    key: "github",
+    configured: true,
+    secret_usable: false,
+    reconcile: {
+      phase: "awaiting_admin",
+      actor: "admin",
+      detail: "sre-lead has no GitHub App of its own",
+    },
+  });
+  render(<EntryRow entry={CATALOG.find((e) => e.key === "github")!} rows={rows} />);
+
+  // THE CATALOGUE'S OWN LINE, and only it.
+  expect(screen.getByText("Code and pull requests")).toBeTruthy();
+  expect(screen.queryByText(/sre-lead has no GitHub App/)).toBeNull();
+
+  // AND IT IS THERE ONCE THE CARD IS OPEN, which is where the question it
+  // answers is actually asked.
+  fireEvent.click(screen.getByRole("button", { name: /Show GitHub details/ }));
+  expect(screen.getByText(/sre-lead has no GitHub App/)).toBeTruthy();
+  expect(screen.getByText("secret unresolved")).toBeTruthy();
+});
+
 // A TOOL NOBODY SET UP HAS NOTHING TO DISCLOSE, so it gets no disclosure: a
 // chevron that opens an empty box is a control that lies.
 test("an absent tool is a plain card with no disclosure and no badge", () => {
@@ -280,7 +307,7 @@ test("an absent tool is a plain card with no disclosure and no badge", () => {
 // with no webhook base, and secret_usable is computed separately from what
 // the process resolved. So the two answer different questions, and a row that
 // stopped at the phase put a green tag over a surface nothing could reach.
-test("a ready tool still reports a refused secret", () => {
+test("a ready tool with a refused secret is not drawn ready", () => {
   const state = rollUp(
     CATALOG.find((e) => e.key === "github")!,
     rowsOf({
@@ -290,52 +317,35 @@ test("a ready tool still reports a refused secret", () => {
       reconcile: { phase: "ready" },
     }),
   );
+  // THE ENGINE'S WORD FOR THE PHASE, drawn in the colour the ingress fault
+  // earns. The tag is what a collapsed card owes a reader; which surface and
+  // why are the badge and the note in its body.
   expect(state.tag).toBe("ready");
-  expect(state.status).toMatch(/^the webhook secret did not resolve/);
-  expect(state.attention).toBe(true);
+  expect(state.tone).toBe("caution");
 });
 
 // And an unrouted surface, the other way a configured tool is silently not
-// working, is reported on a ready phase too.
-test("a ready tool still reports that nothing routes", () => {
+// working, is read on a ready phase too.
+test("a ready tool that routes nothing is not drawn ready", () => {
   const state = rollUp(
     CATALOG.find((e) => e.key === "datadog")!,
     rowsOf({ key: "datadog", configured: true, routes: false, reconcile: { phase: "ready" } }),
   );
-  expect(state.status).toMatch(/nothing routes them to a seat$/);
-  expect(state.attention).toBe(true);
+  expect(state.tone).toBe("caution");
 });
 
-// ATTENTION MEANS A PERSON IS NEEDED, which is the actor's question, not the
-// phase's. Amber beside a neutral tag told an operator to act while the
-// engine was still working.
-test("only a phase a person owes draws attention", () => {
-  const owed = ["admin", "operator"];
-  const notOwed = ["engine", "provider"];
-  for (const actor of owed) {
-    const state = rollUp(
-      atlassian,
-      rowsOf({
-        key: "jira",
-        configured: true,
-        reconcile: { phase: "degraded", actor, detail: "x" },
-      }),
-    );
-    expect([actor, state.attention]).toEqual([actor, true]);
-  }
-  for (const actor of notOwed) {
-    const state = rollUp(
-      atlassian,
-      rowsOf({
-        key: "jira",
-        configured: true,
-        reconcile: { phase: "activating", actor, detail: "Atlassian is applying it" },
-      }),
-    );
-    expect([actor, state.attention]).toEqual([actor, false]);
-    // The line is still shown; it is just not dressed as a problem.
-    expect(state.status).toBe("Jira: Atlassian is applying it");
-  }
+// A PHASE THE ENGINE OWNS IS NOT A PROBLEM, and its tone says so: marking
+// `activating` amber told an operator to act while the engine was working.
+test("a phase the engine is working through is not drawn as a fault", () => {
+  const state = rollUp(
+    atlassian,
+    rowsOf({
+      key: "jira",
+      configured: true,
+      reconcile: { phase: "activating", actor: "engine", detail: "Atlassian is applying it" },
+    }),
+  );
+  expect(state.tone).not.toBe("critical");
 });
 
 // THE LEAST READY SURFACE IS THE ENGINE'S OWN ORDER, integration.Phases: a
@@ -354,7 +364,6 @@ test("the phase order is the engine's", () => {
     ),
   );
   expect(state.tag).toBe("activating");
-  expect(state.status).toBe("Confluence: coming up");
 });
 
 // --- the action slot -------------------------------------------------------- //
@@ -528,17 +537,36 @@ test("a roster is listed once however many sections carry it", () => {
 // through the tag its reconcile phase drives.
 test("a per-seat app leaves the work to the agent's own row", () => {
   const state = rollUp(slack, rowsOf({ key: "slack", configured: true }));
+  // GITHUB'S SHAPE: unfinished, and with nothing left to type. Both acts that
+  // produce an agent's app happen at GitHub, from that agent's own row, so a
+  // GitHub seat carries no requirements and the dialog has no box a Continue
+  // button could take anybody to.
   const action = actionFor(state, [
+    toolState({
+      key: "github",
+      configured: true,
+      satisfied: false,
+      form_complete: true,
+      seats_required: true,
+      seats: [{ handle: "cto", requirements: [], satisfied: false, enrolled: true }],
+    }),
+  ]);
+  expect(action).toBeNull();
+
+  // AND SLACK'S: unfinished because a seat's own credential is unanswered,
+  // which is a box in this very dialog. Suppressing the button there would
+  // leave the agent's app with no way to be filled in at all.
+  const typeable = actionFor(state, [
     toolState({
       key: "slack",
       configured: true,
-      satisfied: true,
-      // LOAD-BEARING, which is Slack's whole shape and nobody else's.
+      satisfied: false,
+      form_complete: false,
       seats_required: true,
       seats: [{ handle: "cto", requirements: [], satisfied: false }],
     }),
   ]);
-  expect(action).toBeNull();
+  expect(typeable?.label).toBe("Continue");
 
   // AND AN INFORMATIONAL ROSTER IS NOT WORK OUTSTANDING. Every app lists its
   // agents now, and most of those credentials are an upgrade on an app that
@@ -845,8 +873,9 @@ test("a disconnect that has been asked for reads as Disconnecting", () => {
     }),
   );
   expect(state.tag).toBe("Disconnecting");
-  // NOT attention: the engine is doing it and nobody is owed anything.
-  expect(state.attention).toBe(false);
+  // NEUTRAL: the engine is doing it and nobody is owed anything, so a card
+  // being taken away must not be dressed as one that has broken.
+  expect(state.tone).toBe("neutral");
 });
 
 // And it outranks a surface that is broken, because a tool being removed is

@@ -262,10 +262,6 @@ export interface EntryState {
   tone: Tone;
   /** Drawn outlined when the tool is absent or paused, filled when it is live. */
   outline: boolean;
-  /** The one sentence worth reading without opening the details, if any. */
-  status?: string;
-  /** Whether that sentence is a problem rather than a note. */
-  attention: boolean;
 }
 
 type Present = { surface: Surface; row: IntegrationRow };
@@ -291,13 +287,8 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
   const present = presentSurfaces(entry, rows);
   if (present.length === 0) {
     // NO BADGE. The Connect button is the whole message.
-    return { tag: "", tone: "neutral", outline: true, attention: false };
+    return { tag: "", tone: "neutral", outline: true };
   }
-  // Prefix a surface's line with its name only when the tool has more than
-  // one, so "Jira: the org credential was refused" reads on Atlassian and
-  // "Slack: ..." does not on Slack.
-  const named = (surface: Surface, text: string) =>
-    entry.surfaces.length > 1 ? `${surface.name}: ${text}` : text;
 
   // THE TWO INGRESS FAULTS ARE READ WHATEVER THE PHASE SAYS, because the
   // reconcile loop does not look at ingress at all: the Jira and GitHub
@@ -305,18 +296,15 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
   // (internal/engine/integrations.go), while `secret_usable` is computed
   // separately from what this process actually resolved. So `ready` and "every
   // delivery is refused" are not contradictory answers, they are answers to
-  // different questions, and a row that stopped at the phase showed a green
-  // tag over a surface nothing could reach.
-  const unresolved = present.find((p) => p.row.secret_usable === false);
-  const unrouted = present.find((p) => p.row.routes === false);
-  const ingress = unresolved
-    ? named(unresolved.surface, "the webhook secret did not resolve, so every delivery is refused")
-    : unrouted
-      ? named(
-          unrouted.surface,
-          "deliveries are verified and stored, and nothing routes them to a seat",
-        )
-      : undefined;
+  // different questions, and a card that stopped at the phase was drawn green
+  // over a surface nothing could reach.
+  //
+  // IT COLOURS THE TAG RATHER THAN WRITING A SENTENCE. The sentence used to
+  // replace the tool's name in the header, which put a complaint where an
+  // identity belongs; what is wrong is a note in the body, where the surface
+  // that has the fault says which one it is and names it. What the collapsed
+  // card owes a reader is that something is off, and the tone is that.
+  const ingress = present.some((p) => p.row.secret_usable === false || p.row.routes === false);
 
   // A TEARDOWN OUTRANKS EVERY OTHER ANSWER. The engine reports the phase as
   // disconnecting the moment one is asked for, but a build that does not know
@@ -328,8 +316,6 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
       tag: going.row.reconcile?.phase_label || "Disconnecting",
       tone: "neutral",
       outline: false,
-      status: named(going.surface, "this integration is being removed"),
-      attention: false,
     };
   }
 
@@ -337,8 +323,7 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
     .filter((p) => p.row.reconcile)
     .sort((a, b) => distance(a.row.reconcile!.phase) - distance(b.row.reconcile!.phase))[0];
   if (worst?.row.reconcile) {
-    const { phase, actor, detail } = worst.row.reconcile;
-    const phaseLine = phase !== "ready" && detail ? named(worst.surface, detail) : undefined;
+    const { phase } = worst.row.reconcile;
     return {
       // The ENGINE's word for the phase, not this screen's. `phase_label`
       // is derived once, in Go, from a vocabulary the client does not have
@@ -346,22 +331,15 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
       // one, and opening its underscores is all this build can honestly do
       // with a value it may not recognise.
       tag: worst.row.reconcile.phase_label || phase.replace(/_/g, " "),
-      tone: phaseTone(phase),
+      // THE PHASE'S OWN TONE, unless nothing can reach the surface: a ready
+      // phase drawn green over a route refusing every delivery is the one
+      // combination this screen must never show.
+      tone: ingress ? "caution" : phaseTone(phase),
       outline: false,
-      // The phase's own sentence when it has one, and the ingress fault
-      // otherwise: a ready phase has nothing to say and must not silence it.
-      status: phaseLine ?? ingress,
-      // ATTENTION MEANS A PERSON IS NEEDED, which is the actor's own
-      // question and not "is the phase ready" (internal/integration/report.go:
-      // "Nothing the engine or a third-party app is doing needs a person told
-      // about it"). Marking `provisioning` and `activating` amber told an
-      // operator to act while the engine was still working, beside a tag drawn
-      // neutral for the same phase.
-      attention: actor === "admin" || actor === "operator" || (!phaseLine && ingress !== undefined),
     };
   }
   if (present.every((p) => p.row.enabled === false)) {
-    return { tag: "Paused", tone: "neutral", outline: true, attention: false };
+    return { tag: "Paused", tone: "neutral", outline: true };
   }
   // CONFIGURED, AND THE LOOP HAS NOT REPORTED YET. That is a window of one
   // reconcile interval after connecting, not a resting state, so the word is
@@ -378,8 +356,6 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
     // window before the loop's first report, and it is not yet working.
     tone: "caution",
     outline: true,
-    status: ingress,
-    attention: ingress !== undefined,
   };
 }
 
@@ -639,30 +615,20 @@ export function actionFor(
   // neither "connect" nor "done": it is a tool with something left to do.
   const configured = tools.filter((t) => t.configured);
   if (configured.length === 0) return { label: "Connect" };
-  if (configured.some((t) => !t.satisfied)) return { label: "Continue" };
-  // A per-seat third-party app with no seat set up yet is not connected,
-  // whatever its company block says: a Slack company with no agent holding
-  // an app is a company where nothing can post.
+  // A BOX LEFT TO FILL IS WHAT THIS BUTTON FIXES, and `satisfied` is not
+  // that question: it folds in the seats, and a GitHub seat's requirements
+  // are empty because both acts that produce an agent's app happen at GitHub,
+  // from that agent's own row. Read as "unsatisfied means offer the form", a
+  // card whose only outstanding work was two clicks in a browser drew a
+  // Continue button beside "Action needed" that opened a dialog with nothing
+  // in it to answer.
   //
-  // ONLY WHERE THE SEATS ARE LOAD-BEARING, which the engine says with
-  // seats_required. Every card carries a roster now, and most of those seat
-  // credentials are an upgrade on an app that already works — so reading any
-  // roster this way put Continue on every connected card, next to Connected.
-  // THE ROSTER OWNS ITS OWN WORK. Where a per-seat app is what makes the
-  // integration work, the thing to do is on the agent's row: create its app,
-  // or install the one it has. A Continue button beside those opens the
-  // company form, which cannot do either, so it is a control that leads
-  // nowhere on the one card that has real work outstanding.
-  //
-  // The card still says so: the tag comes from the reconcile phase, which the
-  // seat findings drive, so an agent with a click left reads Action needed
-  // rather than Connected.
-  if (
-    configured.some(
-      (t) => t.seats_required && t.seats && t.seats.length > 0 && !t.seats.some((s) => s.satisfied),
-    )
-  ) {
-    return null;
+  // `form_complete` is the engine's own count of unanswered requirements,
+  // company block and seats together. Absent from a node too old to send it,
+  // which falls back to the folded answer rather than to silence: a button
+  // that should not be there is a smaller fault than a form nobody can reach.
+  if (configured.some((t) => (t.form_complete ?? t.satisfied) === false)) {
+    return { label: "Continue" };
   }
   // A CARD WITH A SURFACE LEFT TO CONNECT SAYS SO, and says "Continue".
   //
@@ -680,9 +646,9 @@ export function actionFor(
   if (tools.some((t) => !t.configured)) {
     return { label: "Continue" };
   }
-  // A FAULT IS NOT AN ACTION. A card that needs attention says so in its tag
-  // and its status line, and what to do about it is the settings the gear
-  // opens — the same settings, not a narrowed copy of them. A second button
+  // A FAULT IS NOT AN ACTION. A card that needs attention says so in its tag,
+  // and what is wrong and where to fix it are the note in its body and the
+  // settings the gear opens: the same settings, not a narrowed copy. A second button
   // beside Disconnect, appearing and disappearing as an integration breaks
   // and recovers, was a control whose whole content the line above it
   // already carried.
@@ -997,15 +963,15 @@ export function EntryRow({
           </span>
           <span className="int-heading">
             <span className="int-name">{entry.name}</span>
-            {/* THE MARK BELONGS TO THE SENTENCE, not to the row. With no
-                status to show, this line falls back to the catalogue's
-                description, and an alert icon beside "Code and pull
-                requests" warns about nothing: the reader looks for what is
-                wrong and finds a label. */}
-            <span className={state.attention && state.status ? "int-desc attention" : "int-desc"}>
-              {state.attention && state.status && <Icon name="alert" size="sm" />}
-              {state.status ?? entry.description}
-            </span>
+            {/* WHAT THE TOOL IS, never how it is doing. This line carried the
+                roll-up's status sentence in amber, so a card's identity was
+                replaced by its latest complaint and every reader scanning the
+                list read six warnings where six names belong.
+                The state is the tag; what is wrong is a note in the body,
+                which is where the surface's badges, the loop's own sentence,
+                the link that fixes it and the rest of its findings already
+                are. Opening the card is what asks the question this answers. */}
+            <span className="int-desc">{entry.description}</span>
           </span>
         </button>
         <div className="int-card-actions">

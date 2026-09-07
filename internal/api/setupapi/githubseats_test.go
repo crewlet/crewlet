@@ -414,3 +414,55 @@ func TestASeatEnrolledInGitHubWithNoAppHoldsTheCardOpen(t *testing.T) {
 			"makes every company with one unfinished for ever")
 	}
 }
+
+// A CARD WITH NOTHING LEFT TO TYPE OFFERS NO FORM.
+//
+// Both acts that produce an agent's app happen at GitHub, from that agent's
+// own row: a manifest POSTed from a page carrying the operator's session, and
+// an install. A GitHub seat's requirements are empty for exactly that reason,
+// so a company whose only outstanding work is those two clicks has every box
+// answered, and a Continue button beside it opened a form that could not
+// create an app or install one.
+func TestAGitHubCardWithOnlySeatWorkHasNoBoxLeftToFill(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	s.seedGitHub(t)
+
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
+	if state["satisfied"] != false {
+		t.Fatalf("satisfied = %v, and agents still have apps to create", state["satisfied"])
+	}
+	if state["form_complete"] != true {
+		t.Errorf("form_complete = %v: every box this dialog draws is answered, "+
+			"and what is left is two clicks at GitHub", state["form_complete"])
+	}
+}
+
+// AND A COMPANY MISSING A CREDENTIAL STILL OFFERS THE FORM.
+//
+// The two are independent: an unanswered box is what Continue fixes, whether
+// or not an agent also has an app to create.
+func TestAGitHubCardMissingACompanyAnswerStillHasABoxToFill(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	// Enabled, with the webhook secret left as a reference nothing resolves.
+	res := s.do(t, http.MethodPatch, "/config", `{"integrations":{
+		"public_base_url":"https://engine.example.com",
+		"github":{"enabled":true,"webhook_secret":"${GH_NOT_SET}",
+		"provisioning":{"org":"acme"}}}}`,
+		map[string]string{
+			"Content-Type": "application/merge-patch+json",
+			"X-Summary":    "github with an unresolved secret",
+		})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("seed = %d: %s", res.Code, res.Body)
+	}
+
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
+	if state["form_complete"] != false {
+		t.Errorf("form_complete = %v, and the webhook secret resolves to nothing",
+			state["form_complete"])
+	}
+}

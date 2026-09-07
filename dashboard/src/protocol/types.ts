@@ -894,6 +894,16 @@ export interface SetupToolState {
   summary?: string;
   /** Nothing REQUIRED is outstanding. Not a health claim. */
   satisfied: boolean;
+  /**
+   * Whether every box this app's dialog draws has been answered: the company
+   * block's requirements, and every seat's.
+   *
+   * SEPARATE FROM `satisfied`, and the gap is the whole of what a button can
+   * usefully offer. A GitHub company whose agent has no app yet is not
+   * satisfied and has nothing left to type: both acts that produce an app
+   * happen at GitHub, from that agent's own row.
+   */
+  form_complete?: boolean;
   inbound_path?: string;
   public_url?: string;
   /** This build runs a provisioning pass for this vendor. */
@@ -901,9 +911,10 @@ export interface SetupToolState {
   /**
    * Whether a seat without its own credential makes this app unfinished.
    *
-   * Slack alone: an agent with no Slack app cannot post, so the roster IS
-   * the integration there. Everywhere else the roster is informational, and
-   * reading it as work outstanding puts a Continue button on a working card.
+   * Slack and GitHub: an agent with no Slack app cannot post and an agent
+   * with no GitHub App acts as nobody, so the roster IS the integration on
+   * both. Everywhere else the roster is informational, and reading it as work
+   * outstanding puts a Continue button on a working card.
    */
   seats_required?: boolean;
   /** The transient third-party app credential its pass asks for, never stored. */
