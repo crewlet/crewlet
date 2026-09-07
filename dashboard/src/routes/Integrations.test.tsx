@@ -509,3 +509,28 @@ test("a surface dropping nothing carries no note about it", () => {
   fireEvent.click(screen.getByRole("button", { name: /Show GitHub details/ }));
   expect(screen.queryByText(/verified and dropped/)).toBeNull();
 });
+
+// --- disconnecting ---------------------------------------------------------- //
+
+// A TOOL NOBODY CONFIGURED HAS NOTHING TO DISCONNECT FROM, so it offers no
+// control for it. Otherwise a catalogue of six unconfigured vendors would
+// carry six buttons that undo nothing.
+test("an unconfigured tool offers no disconnect", () => {
+  render(<EntryRow entry={slack} rows={rowsOf()} onDisconnect={() => {}} />);
+  expect(screen.queryByRole("button", { name: "Disconnect" })).toBeNull();
+});
+
+// And a connected one does, beside its own action rather than hidden in the
+// body: taking an integration away is a decision about the whole tool.
+test("a connected tool offers a disconnect", () => {
+  const asked: string[] = [];
+  render(
+    <EntryRow
+      entry={CATALOG.find((e) => e.key === "github")!}
+      rows={rowsOf({ key: "github", configured: true })}
+      onDisconnect={() => asked.push("github")}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+  expect(asked).toEqual(["github"]);
+});

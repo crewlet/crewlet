@@ -780,7 +780,7 @@ var rest = {
 	post: (path, body, headers) => send("POST", path, body ?? {}, headers),
 	put: (path, body, headers) => send("PUT", path, body ?? {}, headers),
 	patch: (path, body, headers) => send("PATCH", path, body ?? {}, headers),
-	del: (path, headers) => send("DELETE", path, void 0, headers)
+	del: (path, body, headers) => send("DELETE", path, body, headers)
 };
 //#endregion
 export { LiveSocket, MAX_EVENTS, RestError, Store, api, apiToken, clearToken, onTokenChanged, onTokenRequested, requestToken, rest, storeToken };

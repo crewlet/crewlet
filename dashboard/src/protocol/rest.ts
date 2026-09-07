@@ -127,5 +127,12 @@ export const rest = {
     send("PUT", path, body ?? {}, headers),
   patch: (path: string, body?: unknown, headers?: Record<string, string>) =>
     send("PATCH", path, body ?? {}, headers),
-  del: (path: string, headers?: Record<string, string>) => send("DELETE", path, undefined, headers),
+  // DELETE CARRIES A BODY HERE, which is unusual and deliberate: a
+  // disconnect is not one act but a family of them, and which one it is —
+  // whether the accounts go too, whether to stop waiting for a vendor that
+  // will never answer — are inputs to the deletion rather than separate
+  // routes. Passing them as query parameters would put a destructive choice
+  // in a proxy log.
+  del: (path: string, body?: unknown, headers?: Record<string, string>) =>
+    send("DELETE", path, body, headers),
 };

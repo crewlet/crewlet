@@ -989,6 +989,28 @@
   flex-wrap: wrap;
   gap: var(--space-3);
 }
+/* A choice inside a dialog: the box, and the sentence that says what ticking
+   it actually destroys. The description is part of the label so the whole
+   thing is one click target and one thing a screen reader reads. */
+.int-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+.int-choice:hover {
+  border-color: var(--border);
+}
+.int-choice input {
+  margin: 2px 0 0;
+  flex: none;
+  accent-color: var(--critical);
+  cursor: pointer;
+}
+
 /* The surface's own controls, after its state and before the note. */
 .int-row-actions {
   display: flex;

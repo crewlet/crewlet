@@ -32,6 +32,7 @@ import { useToast } from "~/ui/Toast.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
+import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { PassDialog } from "./PassDialog.tsx";
 import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, ReconcileStatus } from "~/protocol/types.ts";
@@ -602,6 +603,7 @@ export function EntryRow({
   rows,
   sections,
   onConnect,
+  onDisconnect,
   onPass,
   running,
 }: {
@@ -610,6 +612,8 @@ export function EntryRow({
   /** The engine's setup state per surface this tool is made of. */
   sections?: { name: string; tool: SetupToolState }[];
   onConnect?: (blocks?: string) => void;
+  /** Take the tool away. Absent for a tool nothing has configured. */
+  onDisconnect?: () => void;
   /** Run a surface's provisioning pass, or a read-only check of it. */
   onPass?: (tool: SetupToolState, readOnly: boolean) => void;
   /** A pass this row started and is waiting on. */
@@ -655,6 +659,13 @@ export function EntryRow({
           disabled={running}
         >
           {action.label}
+        </Button>
+      )}
+      {/* Only where there is something to take away. A tool nobody has
+          configured has nothing to disconnect from. */}
+      {!absent && onDisconnect && (
+        <Button size="sm" variant="ghost" onClick={onDisconnect} disabled={running}>
+          Disconnect
         </Button>
       )}
     </>
@@ -842,6 +853,7 @@ export function Integrations() {
   } | null>(null);
   const [running, setRunning] = useState("");
   const [passing, setPassing] = useState<{ tool: SetupToolState; title: string } | null>(null);
+  const [dropping, setDropping] = useState<{ name: string; kind: string } | null>(null);
   const [lastRun, setLastRun] = useState<SetupRun | null>(null);
 
   /**
@@ -938,6 +950,18 @@ export function Integrations() {
         </div>
       )}
 
+      {dropping && (
+        <DisconnectDialog
+          name={dropping.name}
+          kind={dropping.kind}
+          onClose={() => setDropping(null)}
+          // The row does not vanish here: the engine keeps the block until
+          // the vendor teardown succeeds, so what a re-read shows is the
+          // surface moving to Disconnecting.
+          onDone={setup.reload}
+        />
+      )}
+
       {passing && (
         <PassDialog
           tool={passing.tool}
@@ -1029,6 +1053,7 @@ export function Integrations() {
                   }
                   setPassing({ tool, title: entry.name });
                 }}
+                onDisconnect={() => setDropping({ name: entry.name, kind: entry.surfaces[0]!.key })}
                 running={running === entry.key}
               />
             ))}
