@@ -412,13 +412,25 @@ test("one unfinished surface makes the whole tool unfinished", () => {
   ]);
   expect(mixed?.label).toBe("Continue");
 
-  // And a surface nobody has configured does not make the tool unfinished:
-  // a company using Jira and not Confluence is not half broken.
+  // AND A SURFACE NOBODY HAS CONFIGURED STILL OFFERS CONNECT.
+  //
+  // It does not make the tool UNFINISHED — a company using Jira and not
+  // Confluence is not half broken, and the tag says what the connected
+  // surfaces are doing — but it is something a person can act on, and
+  // connecting the organization alone left the Atlassian card with no
+  // button at all: nothing on screen would add the products.
   const partial = actionFor(ready, [
     toolState({ key: "jira", configured: true, satisfied: true }),
     toolState({ key: "confluence", configured: false, satisfied: false }),
   ]);
-  expect(partial).toBeNull();
+  expect(partial?.label).toBe("Connect");
+
+  // A tool whose every surface is connected and working offers nothing.
+  const done = actionFor(ready, [
+    toolState({ key: "jira", configured: true, satisfied: true }),
+    toolState({ key: "confluence", configured: true, satisfied: true }),
+  ]);
+  expect(done).toBeNull();
 });
 
 // A tool this build knows nothing about offers nothing: a button that

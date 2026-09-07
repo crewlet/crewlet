@@ -619,6 +619,20 @@ export function actionFor(
   ) {
     return { label: "Continue" };
   }
+  // A CARD WITH A SURFACE LEFT TO CONNECT STILL OFFERS CONNECT.
+  //
+  // Atlassian is an organization and two products, and connecting the
+  // organization alone left the card with no button at all: the one
+  // configured surface was satisfied, the unconfigured ones did not make the
+  // tool unfinished, and there was nothing on screen that would add them.
+  // Being partly connected is a state to act on, and the action is the same
+  // one that started it.
+  //
+  // It is not a fault and does not read as one. The tag still says what the
+  // connected surfaces are doing; this only says there is more here.
+  if (tools.some((t) => !t.configured)) {
+    return { label: "Connect" };
+  }
   // A FAULT IS NOT AN ACTION. A card that needs attention says so in its tag
   // and its status line, and what to do about it is the settings the gear
   // opens — the same settings, not a narrowed copy of them. A second button
