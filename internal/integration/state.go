@@ -82,7 +82,30 @@ type State struct {
 	RemoveSeats bool `json:"remove_seats,omitempty"`
 }
 
-// TearingDown reports whether this surface is being taken away.
+// Reported is the report a reader should be shown.
+//
+// The stored one, except in the window this method exists for: between
+// somebody pressing Disconnect and the first teardown pass running, the
+// intent is set and no pass has written a phase yet. The stored report is
+// then whatever the last RECONCILE concluded — usually ready — so a screen
+// reading it directly shows a connected integration somebody has already
+// asked to remove, and they press the button again.
+//
+// Derived rather than written at request time because the two facts have
+// different owners: the intent is the operator's and the phase is the loop's,
+// and writing a phase on the operator's behalf would make a status row claim
+// a pass had run when none had.
+func (s State) Reported() Report {
+	if s.Disconnecting && s.Report.Phase != PhaseDisconnecting {
+		return Report{
+			Phase: PhaseDisconnecting, Actor: ActorEngine,
+			Detail: "this integration is being removed",
+		}
+	}
+	return s.Report
+}
+
+// TearingDown reports whether this surface is being taken away.// TearingDown reports whether this surface is being taken away.
 //
 // Reads the INTENT rather than the phase, because the two are not the same
 // for the first pass: the flag is set when somebody presses Disconnect and

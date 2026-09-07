@@ -298,6 +298,21 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
         )
       : undefined;
 
+  // A TEARDOWN OUTRANKS EVERY OTHER ANSWER. The engine reports the phase as
+  // disconnecting the moment one is asked for, but a build that does not know
+  // the word would fall through to whatever the last reconcile concluded and
+  // show the tool connected — so the intent is read directly too.
+  const going = present.find((p) => p.row.reconcile?.disconnecting);
+  if (going) {
+    return {
+      tag: going.row.reconcile?.phase_label || "Disconnecting",
+      tone: "neutral",
+      outline: false,
+      status: named(going.surface, "this integration is being removed"),
+      attention: false,
+    };
+  }
+
   const worst = present
     .filter((p) => p.row.reconcile)
     .sort((a, b) => distance(a.row.reconcile!.phase) - distance(b.row.reconcile!.phase))[0];

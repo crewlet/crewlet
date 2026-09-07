@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -568,5 +569,39 @@ func TestANodeWithNoDisconnectorLeavesTheRowAlone(t *testing.T) {
 	}
 	if r.count() != 0 {
 		t.Error("the reconciler ran over a surface being removed")
+	}
+}
+
+// A NODE THAT CANNOT DISCONNECT *YET* WRITES NOTHING EITHER.
+//
+// The loop is armed when the engine is constructed and the surface a
+// disconnect removes a block through is installed when the API is wired,
+// several hundred milliseconds later. A tick in that window is early, not
+// broken: recording an attempt would back off the retry that was about to
+// work, and recording a fault would put an error on the screen for a
+// disconnect nobody has failed to do.
+func TestATeardownThatIsMerelyEarlyIsNotRecordedAsAFailure(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindJira}
+	d := &fakeDisconnector{err: fmt.Errorf("%w: no config surface yet", ErrDisconnectUnavailable)}
+	store := newStore(State{Kind: KindJira, Disconnecting: true})
+
+	w := at(t, now, store, nil, Registration{Reconciler: r, Disconnector: d})
+	w.Tick(context.Background())
+
+	row := store.get(t, KindJira)
+	if row.Attempts != 0 {
+		t.Errorf("attempts = %d: a tick that was early backed off the retry", row.Attempts)
+	}
+	if row.LastError != "" {
+		t.Errorf("last_error = %q: an early tick put a fault on the screen", row.LastError)
+	}
+	if !row.Disconnecting {
+		t.Error("the intent was lost")
+	}
+	// And it WAS attempted, so the moment the surface is wired the next
+	// tick completes it.
+	if d.count() != 1 {
+		t.Errorf("the disconnector was called %d times", d.count())
 	}
 }

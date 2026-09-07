@@ -538,6 +538,12 @@ export interface ReconcileStatus {
    * screen may skip it: derive nothing from `phase` that this can answer.
    */
   phase_label?: string;
+  /**
+   * Whether a disconnect has been ASKED FOR, which is a fact the phase
+   * cannot carry on its own: between the request and the first teardown pass
+   * the stored phase is still whatever the last reconcile concluded.
+   */
+  disconnecting?: boolean;
   /** "" | engine | provider | admin | operator — who has to act. */
   actor?: string;
   detail?: string;

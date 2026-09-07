@@ -534,3 +534,40 @@ test("a connected tool offers a disconnect", () => {
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
   expect(asked).toEqual(["github"]);
 });
+
+// A DISCONNECT SHOWS THE MOMENT IT IS ASKED FOR, not when the first teardown
+// pass happens to run.
+//
+// Between the request and that pass the stored phase is still whatever the
+// last reconcile concluded — usually ready — so a screen reading the phase
+// alone showed a connected integration somebody had already asked to remove,
+// and they pressed the button again. Datadog showed nothing at all, because
+// it has no pass to write a phase and the row carried none.
+test("a disconnect that has been asked for reads as Disconnecting", () => {
+  const state = rollUp(
+    CATALOG.find((e) => e.key === "datadog")!,
+    rowsOf({
+      key: "datadog",
+      configured: true,
+      // What the engine sends between the ask and the first pass: the
+      // intent set, and the phase still the last reconcile's.
+      reconcile: { phase: "ready", disconnecting: true },
+    }),
+  );
+  expect(state.tag).toBe("Disconnecting");
+  // NOT attention: the engine is doing it and nobody is owed anything.
+  expect(state.attention).toBe(false);
+});
+
+// And it outranks a surface that is broken, because a tool being removed is
+// not a tool anybody should be sent to fix.
+test("a teardown outranks a failing surface", () => {
+  const state = rollUp(
+    atlassian,
+    rowsOf(
+      { key: "jira", configured: true, reconcile: { phase: "unconfigured" } },
+      { key: "confluence", configured: true, reconcile: { phase: "ready", disconnecting: true } },
+    ),
+  );
+  expect(state.tag).toBe("Disconnecting");
+});

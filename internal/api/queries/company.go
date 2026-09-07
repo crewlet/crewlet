@@ -647,20 +647,30 @@ func (s Sources) reconcileStates(ctx context.Context) (map[string]integration.St
 // seats reports the webhook, and an operator who fixes it should not have to
 // wait a full pass to discover there were four more things behind it.
 func reconcileRow(state integration.State) map[string]any {
+	// THE REPORT A READER SHOULD SEE, which is the stored one except in the
+	// window between somebody pressing Disconnect and the first teardown
+	// pass: the stored phase is then still whatever the last reconcile
+	// concluded, and showing it reports a connected integration somebody
+	// has already asked to remove.
+	report := state.Reported()
 	row := map[string]any{
-		"phase": string(state.Report.Phase),
+		"phase": string(report.Phase),
 		// The phase in a reader's words, decided HERE rather than on the
 		// client. A screen that mapped six phase values to five labels
 		// would be a second place that has to know what they mean, and it
 		// could not label a phase a newer node wrote at all.
-		"phase_label": state.Report.Phase.Label(),
-		"actor":       string(state.Report.Actor),
-		"detail":      state.Report.Detail,
-		"action_url":  state.Report.ActionURL,
-		"outcome":     string(state.Outcome),
-		"attempts":    state.Attempts,
-		"last_error":  state.LastError,
-		"findings":    reconcileFindings(state.Findings),
+		"phase_label": report.Phase.Label(),
+		"actor":       string(report.Actor),
+		"detail":      report.Detail,
+		"action_url":  report.ActionURL,
+		// The INTENT, separately from the phase it produces. A reader
+		// needs to know a disconnect was asked for even on a build whose
+		// phase vocabulary it does not share.
+		"disconnecting": state.TearingDown(),
+		"outcome":       string(state.Outcome),
+		"attempts":      state.Attempts,
+		"last_error":    state.LastError,
+		"findings":      reconcileFindings(state.Findings),
 	}
 	// Rendered as instants, so an absent one is absent rather than the
 	// zero time, which prints as 1970 and reads as a real answer.

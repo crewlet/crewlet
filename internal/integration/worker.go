@@ -104,6 +104,17 @@ var ErrNotConfigured = errors.New("integration: this surface is not configured")
 // person changes it.
 var ErrCredentialRejected = errors.New("integration: the vendor refused this credential")
 
+// ErrDisconnectUnavailable reports a node that cannot complete a disconnect
+// RIGHT NOW, as distinct from one that failed to.
+//
+// The loop is armed when the engine is constructed, and the surface a
+// disconnect removes a block through is installed later, when the API is
+// wired. A tick in that window must leave the row exactly as it found it: a
+// recorded attempt would back the retry off for the node that is about to be
+// able to do it, and a recorded fault would put an error on the screen for a
+// disconnect that is simply early.
+var ErrDisconnectUnavailable = errors.New("integration: this node cannot complete a disconnect yet")
+
 // Reject marks err as a credential refusal when the vendor answered with an
 // authentication or authorization status, and returns it untouched otherwise.
 //
@@ -456,6 +467,14 @@ func (w *Worker) tearDown(ctx context.Context, kind Kind, state State, now time.
 	}
 
 	err := reg.Disconnector.Disconnect(ctx, state.RemoveSeats)
+	if errors.Is(err, ErrDisconnectUnavailable) {
+		// NOT YET, which is not the same as failed. Nothing is written,
+		// for the reason the nil-disconnector case above states: an
+		// attempt counted here backs off a retry that was about to work.
+		log.InfoContext(ctx, "integration_teardown_deferred",
+			"integration", kind.String(), "detail", err.Error())
+		return
+	}
 	state, forget := ObserveTeardown(state, kind, err, now)
 	if forget {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml

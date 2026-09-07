@@ -81,15 +81,24 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 		{Reconciler: &confluenceConverger{engine: e}, Disconnector: drop[integration.KindConfluence]},
 		{Reconciler: &githubConverger{engine: e}, Disconnector: drop[integration.KindGitHub]},
 
-		// TEARDOWN ONLY. Both passes CREATE accounts and mint tokens on
-		// them, which a timer must never do: a loop that converged these
+		// TEARDOWN ONLY. These passes CREATE accounts and mint tokens on
+		// them, which a timer must never do: a loop that converged them
 		// would provision a company's vendor on a schedule nobody asked
 		// for, and gitlab.Reconcile refuses outright without a sink for
 		// exactly that reason. They can still be REMOVED on a schedule,
 		// because removal is only ever the answer to somebody pressing
 		// Disconnect.
+		//
+		// Slack and Datadog are here for the opposite reason: they have
+		// no pass at all and register nothing at the vendor, so there is
+		// nothing to converge and nothing to withdraw. They still need a
+		// registration, because without one a disconnect asked for on
+		// either would sit on the fleet row for ever with the screen
+		// reporting Disconnecting and no node ever dropping the block.
 		{Only: integration.KindGitLab, Disconnector: drop[integration.KindGitLab]},
 		{Only: integration.KindMattermost, Disconnector: drop[integration.KindMattermost]},
+		{Only: integration.KindSlack, Disconnector: drop[integration.KindSlack]},
+		{Only: integration.KindDatadog, Disconnector: drop[integration.KindDatadog]},
 	}
 
 	worker, err := integration.New(integration.Options{
