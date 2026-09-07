@@ -11,13 +11,15 @@ import "testing"
 // formatting rule: a later edit that made `activating` read "connected", or
 // that split "setting up" back into two, would change what the screen claims.
 func TestEveryPhaseHasAConciseLabel(t *testing.T) {
+	// The control plane's own words (backlet's ReconcilePhase, rendered by
+	// the console), so one company reads the same status in either product.
 	want := map[Phase]string{
-		PhaseUnconfigured:  "not connected",
-		PhaseAwaitingAdmin: "action needed",
-		PhaseProvisioning:  "setting up",
-		PhaseActivating:    "setting up",
-		PhaseDegraded:      "needs attention",
-		PhaseReady:         "connected",
+		PhaseUnconfigured:  "Failed",
+		PhaseAwaitingAdmin: "Action needed",
+		PhaseProvisioning:  "Setting up agents",
+		PhaseActivating:    "Waiting for the provider",
+		PhaseDegraded:      "Action required",
+		PhaseReady:         "Connected",
 	}
 	for _, phase := range Phases {
 		got := phase.Label()
@@ -36,7 +38,7 @@ func TestEveryPhaseHasAConciseLabel(t *testing.T) {
 	// while the engine was still bringing it up or a person was still owed
 	// something.
 	for _, phase := range Phases {
-		if phase != PhaseReady && phase.Label() == "connected" {
+		if phase != PhaseReady && phase.Label() == "Connected" {
 			t.Errorf("%s reads as connected, but only ready means observed matches desired", phase)
 		}
 	}

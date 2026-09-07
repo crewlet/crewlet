@@ -224,7 +224,14 @@ function actorLabel(actor: string | undefined): string {
 
 /** A tool's rolled-up state: the tag on the right and the one line under the name. */
 export interface EntryState {
-  /** The word in the tag: the engine's phase label, or not checked / paused / not connected. */
+  /**
+   * The word in the badge: the engine's phase label, or Not checked / Paused.
+   *
+   * EMPTY MEANS NO BADGE. A tool nobody has connected has no status to
+   * report — the Connect button beside it already says everything true about
+   * it — and a grey "not connected" chip on six of them turned a catalogue
+   * into a list of complaints.
+   */
   tag: string;
   tone: Tone;
   /** Drawn outlined when the tool is absent or paused, filled when it is live. */
@@ -257,7 +264,8 @@ function presentSurfaces(entry: Entry, rows: Map<string, IntegrationRow>): Prese
 export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntryState {
   const present = presentSurfaces(entry, rows);
   if (present.length === 0) {
-    return { tag: "not connected", tone: "neutral", outline: true, attention: false };
+    // NO BADGE. The Connect button is the whole message.
+    return { tag: "", tone: "neutral", outline: true, attention: false };
   }
   // Prefix a surface's line with its name only when the tool has more than
   // one, so "Jira: the org credential was refused" reads on Atlassian and
@@ -312,7 +320,7 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
     };
   }
   if (present.every((p) => p.row.enabled === false)) {
-    return { tag: "paused", tone: "neutral", outline: true, attention: false };
+    return { tag: "Paused", tone: "neutral", outline: true, attention: false };
   }
   // No measured claim at all. The config's own word, and the ingress fault if
   // there is one, which is the only thing that can be said without a pass.
@@ -320,7 +328,7 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
     // NOT "connected". The block exists and no pass has reported on it, so
     // there is no measured claim to make: saying connected here would be the
     // invented health this screen refuses to show.
-    tag: "not checked",
+    tag: "Not checked",
     tone: "neutral",
     outline: true,
     status: ingress,
@@ -617,9 +625,15 @@ export function EntryRow({
   // per-item control as well.
   const actions = (
     <>
-      <Badge tone={state.tone} outline={state.outline}>
-        {state.tag}
-      </Badge>
+      {/* No tag at all for a tool nobody has connected: the Connect button
+          beside it already says everything true about it, and a grey chip on
+          every unconfigured row turned a catalogue into a list of
+          complaints. */}
+      {state.tag !== "" && (
+        <Badge tone={state.tone} outline={state.outline}>
+          {state.tag}
+        </Badge>
+      )}
       {action && onConnect && (
         <Button
           size="sm"

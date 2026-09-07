@@ -136,19 +136,25 @@ GET /query/integrations
 
 The **findings list travels as well as the report**, because the two answer different questions. The report says what to do next; the findings say what is actually wrong. A company with a broken webhook and four under-granted seats reports the webhook, and an operator who fixes it should not have to wait a full pass to discover there were four more things behind it.
 
-`phase_label` is the same phase in the words a person reads, and it is derived **once, in the engine**, so a client never has to know what a phase value means. Six phases collapse into five labels:
+`phase_label` is the same phase in the words a person reads, derived **once, in the engine**, so a client never has to know what a phase value means. **The words are the control plane's**, so one company reads the same status whichever console it is looking at: backlet's `ReconcilePhase` is this vocabulary under another name, and these are the labels its console renders.
 
 | Phase | Label |
 |---|---|
-| `ready` | connected |
-| `degraded` | needs attention |
-| `awaiting_admin` | action needed |
-| `provisioning`, `activating` | setting up |
-| `unconfigured` | not connected |
+| `ready` | Connected |
+| `degraded` | Action required |
+| `awaiting_admin` | Action needed |
+| `provisioning` | Setting up agents |
+| `activating` | Waiting for the provider |
+| `unconfigured` | Failed |
 
-`provisioning` and `activating` share a label because the difference between them is which side is doing the work, and neither side is the reader. `unconfigured` reads as *not connected* because that is what a surface with no usable credential is, whether the credential is absent or the vendor refused it. A phase a newer node wrote is rendered as its own value with the underscores opened up, never guessed at.
+`unconfigured` reads as **Failed** rather than "not connected" because this phase is only ever reached with a block present: an absent one is `ErrNotConfigured`, and the row is forgotten rather than reported. So what it names is an integration somebody configured whose credential is missing or the vendor refused, and "not connected" would read as nobody having tried. A phase a newer node wrote is rendered as its own value with the underscores opened up, never guessed at.
 
-Two labels the dashboard adds for situations that are not phases at all: **not checked**, for a block that is configured and that no pass has reported on yet, and **paused**, for one whose surfaces are all disabled. Neither claims the integration works, which is the distinction the whole screen turns on.
+Two of backlet's phases have no counterpart here, and neither is an omission:
+
+- `disconnected` is a tenant who has not connected an integration yet. Here that is a company document with no block, so there is no row and no phase — and the screen shows **no status badge at all**, only a Connect button. A tool nobody has configured has nothing to report.
+- `disconnecting` is a teardown pass. This engine's disconnect is one config write that removes the block, after which the loop reports the surface not configured and forgets it, so there is no interval during which a teardown could be shown.
+
+Two labels the dashboard adds for situations that are not phases: **Not checked**, for a block that is configured and that no pass has reported on yet, and **Paused**, for one whose surfaces are all disabled. Neither claims the integration works, which is the distinction the whole screen turns on.
 
 **On the dashboard** the Integrations screen shows one row per *tool*, not per surface: Atlassian is one row over the Jira, Confluence and Forge relay surfaces. A row's tag is the least ready phase among its surfaces, ordered by `Phases` above, so an `activating` surface outranks a `degraded` one (a degraded integration is still working; one still coming up is not) and a phase the dashboard build does not know sits between the two, never presented as ready and never masking a phase it does know.
 

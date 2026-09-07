@@ -130,7 +130,7 @@ test("a tool reports its least ready surface, and names it", () => {
 // Slack row says nothing.
 test("a single-surface tool does not name itself", () => {
   const state = rollUp(slack, rowsOf({ key: "slack", configured: true, secret_usable: false }));
-  expect(state.tag).toBe("not checked");
+  expect(state.tag).toBe("Not checked");
   expect(state.status).toMatch(/^the webhook secret did not resolve/);
   expect(state.attention).toBe(true);
 });
@@ -153,15 +153,18 @@ test("a ready tool has no status line", () => {
 // two used to collapse into the state most likely to be mistaken for a
 // mistake.
 test("absent, paused and unchecked are told apart", () => {
-  expect(rollUp(slack, rowsOf()).tag).toBe("not connected");
+  // NO TAG at all: the Connect button beside it is the whole message, and a
+  // chip saying "not connected" on every unconfigured row reads as a fault
+  // list rather than a catalogue.
+  expect(rollUp(slack, rowsOf()).tag).toBe("");
   expect(rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: false })).tag).toBe(
-    "paused",
+    "Paused",
   );
   // Configured with no pass behind it is NOT "connected": there is no
   // measured claim, and inventing one is the whole failure this screen is
   // built to avoid.
   expect(rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: true })).tag).toBe(
-    "not checked",
+    "Not checked",
   );
 });
 
@@ -216,9 +219,11 @@ test("a configured tool discloses its surfaces", () => {
 
 // A TOOL NOBODY SET UP HAS NOTHING TO DISCLOSE, so it gets no disclosure: a
 // chevron that opens an empty box is a control that lies.
-test("an absent tool is a plain card with no disclosure", () => {
-  render(<EntryRow entry={slack} rows={rowsOf()} />);
-  expect(screen.getByText("not connected")).toBeTruthy();
+test("an absent tool is a plain card with no disclosure and no badge", () => {
+  const { container } = render(<EntryRow entry={slack} rows={rowsOf()} />);
+  // NO STATUS BADGE. Nothing has been configured, so there is nothing to
+  // report; the Connect button is the whole message.
+  expect(container.querySelector(".badge")).toBeNull();
   expect(screen.queryByRole("button", { name: /details/i })).toBeNull();
   // And it still says what the tool is for, because the catalogue is what
   // tells a reader the engine serves it at all.

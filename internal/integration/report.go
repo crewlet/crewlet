@@ -55,38 +55,48 @@ const (
 // TWO VOCABULARIES ON PURPOSE, and this is the seam between them. [Phase] is
 // a stored value: it is written into the fleet's coordination store, read
 // back by a peer that may be a different build, and named in the docs and the
-// API. It says precisely which of six situations a surface is in, and it has
-// to keep saying that. What an operator scanning a list of integrations wants
-// is narrower — is this working, is somebody needed, or is it still coming
-// up — and six words for that is four too many.
+// API. What an operator scanning a list of integrations wants is not that.
 //
-// So the phases collapse. Provisioning and activating are one answer, "still
-// coming up, nobody has to act", because the difference between them is which
-// side is doing the work and neither side is the reader. Unconfigured reads
-// as not connected, because that is what a surface with no usable credential
-// IS, whether the credential is absent or the vendor refused it.
+// THE WORDS ARE THE CONTROL PLANE'S, so one company reads the same status
+// whichever console it is looking at. backlet's ReconcilePhase and this one
+// are the same vocabulary with two names, and its console renders them as
+// below; anything else here would mean an integration that says "activating"
+// in one product and something else in the other.
 //
-// Deliberately here rather than in the dashboard. A label derived on the
-// client is a second place that has to know what every phase value means, and
-// a client cannot know what a phase a NEWER node wrote is meant to say, which
-// is exactly the case where guessing is worst.
+// Two of backlet's phases have no counterpart here, and neither is an
+// omission. `disconnected` is a tenant who has not connected an integration
+// yet, which in this engine is a company document with no block at all, so
+// there is no row and no phase to report. `disconnecting` is a teardown pass;
+// this engine's disconnect is ONE CONFIG WRITE that removes the block, after
+// which the loop reports the surface not configured and forgets it, so there
+// is no interval during which a teardown could be shown.
 func (p Phase) Label() string {
 	switch p {
 	case PhaseReady:
-		return "connected"
+		return "Connected"
 	case PhaseDegraded:
-		return "needs attention"
+		// Agents are working and somebody has to act, which is the one
+		// case where the count of what is broken is not the point.
+		return "Action required"
 	case PhaseAwaitingAdmin:
-		return "action needed"
-	case PhaseProvisioning, PhaseActivating:
-		return "setting up"
+		return "Action needed"
+	case PhaseProvisioning:
+		return "Setting up agents"
+	case PhaseActivating:
+		return "Waiting for the provider"
 	case PhaseUnconfigured:
-		return "not connected"
+		// FAILED, not "not connected". This phase is only ever reached
+		// with a block present: an absent one is [ErrNotConfigured] and
+		// the row is forgotten rather than reported. So what it names is
+		// an integration somebody configured whose credential is missing
+		// or refused, and calling that "not connected" would read as
+		// nobody having tried.
+		return "Failed"
 	default:
 		// A phase a newer node wrote. Rendered as its own wire value with
-		// the underscores opened up, which is honest about not knowing it,
-		// where any of the words above would be a claim this build cannot
-		// support.
+		// the underscores opened up, which is honest about not knowing
+		// it, where any of the words above would be a claim this build
+		// cannot support.
 		return strings.ReplaceAll(string(p), "_", " ")
 	}
 }
