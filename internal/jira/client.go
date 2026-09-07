@@ -115,9 +115,29 @@ type ClientOptions struct {
 	HTTP *http.Client
 }
 
+// RESTBase is the address every call is made against.
+//
+// A CLOUD SITE SERVES JIRA AT THE ROOT, and Atlassian's own admin console
+// lists the product as `https://site.atlassian.net/jira`. An operator reading
+// their site address off that page pastes exactly that, and every call then
+// lands on `/jira/rest/api/3/...`, which is an HTML 404 page: the failure
+// reads as `invalid character '<' looking for beginning of value`, which
+// names neither the field nor the extra path segment.
+//
+// Trimmed only on a Cloud SITE. A Data Center instance can genuinely be
+// served under a /jira context path, and there the segment is part of the
+// address rather than the console's way of naming a product.
+func RESTBase(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if DeploymentOf(base) == Cloud {
+		base = strings.TrimRight(strings.TrimSuffix(base, "/jira"), "/")
+	}
+	return base
+}
+
 // NewClient builds a client.
 func NewClient(opts ClientOptions) (*Client, error) {
-	base := strings.TrimRight(strings.TrimSpace(opts.URL), "/")
+	base := RESTBase(opts.URL)
 	if base == "" {
 		return nil, fmt.Errorf("jira: no instance url")
 	}

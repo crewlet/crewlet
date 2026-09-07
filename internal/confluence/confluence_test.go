@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -1072,5 +1073,45 @@ func TestOnlyAMentionAddressesTheSeat(t *testing.T) {
 		if addressed(via) {
 			t.Errorf("%q addresses the seat and is a subscription, not an ask", via)
 		}
+	}
+}
+
+// A FRESH CLOUD CONNECT STILL GETS ITS WEBHOOK TOKEN.
+//
+// The form is built from the config as it WAS, and DeploymentOf answers
+// DataCenter for a blank address, so with nothing written down the Cloud-only
+// token was dropped from the requirement list before the address that proves
+// the site Cloud had been submitted. A mintable field that is not on the list
+// is never minted, and every pass then refused: the token is "", which is
+// neither a value nor a reference to mint one into.
+func TestAnUnknownDeploymentOffersBothWebhookCredentials(t *testing.T) {
+	nothing := func(string) (string, bool) { return "", false }
+	got := map[string]bool{}
+	for _, r := range confluence.Requirements(&config.Confluence{}, nothing) {
+		got[r.Field] = true
+	}
+	for _, field := range []string{"webhook_token", "webhook_secret"} {
+		if !got[field] {
+			t.Errorf("a company that has said nothing is not offered %q", field)
+		}
+	}
+}
+
+// AND A KNOWN DEPLOYMENT STILL DROPS THE OTHER ONE'S, which is the whole
+// point of the rule: a Cloud operator has no use for a signing secret their
+// site will never send.
+func TestAKnownCloudSiteDropsTheDataCenterSecret(t *testing.T) {
+	nothing := func(string) (string, bool) { return "", false }
+	got := map[string]bool{}
+	for _, r := range confluence.Requirements(
+		&config.Confluence{URL: "https://acme.atlassian.net/wiki"}, nothing,
+	) {
+		got[r.Field] = true
+	}
+	if !got["webhook_token"] {
+		t.Error("a Cloud site is not offered the token its deliveries carry")
+	}
+	if got["webhook_secret"] {
+		t.Error("a Cloud site is offered a signing secret it will never receive")
 	}
 }

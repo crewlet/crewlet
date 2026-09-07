@@ -220,9 +220,20 @@ func forDeployment(
 			continue
 		case r.Field == "site_url" && cloudID == "" && known:
 			continue
-		case cloudOnly[r.Field] && deploy != Cloud:
+		// AN UNKNOWN DEPLOYMENT KEEPS BOTH, for the same reason it keeps
+		// the gateway fields: DeploymentOf answers DataCenter for a blank
+		// address, and a company mid-connect has not said which it is yet.
+		//
+		// This is what left a fresh Cloud connect with no webhook token at
+		// all. The form is built from the config as it WAS, so with nothing
+		// written down the Cloud-only field was dropped before the address
+		// that would have proved it Cloud was even submitted, and a
+		// mintable field that is not on the list is never minted. The pass
+		// then refused every run: the token is "", which is neither a value
+		// nor a reference to mint one into.
+		case cloudOnly[r.Field] && known && deploy != Cloud:
 			continue
-		case dataCenter[r.Field] && deploy == Cloud:
+		case dataCenter[r.Field] && known && deploy == Cloud:
 			continue
 		}
 		out = append(out, r)

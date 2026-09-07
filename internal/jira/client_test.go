@@ -303,3 +303,40 @@ func clientFor(t *testing.T, opts jira.ClientOptions) *recorder {
 	}
 	return srv
 }
+
+// THE ADMIN CONSOLE NAMES THE PRODUCT IN THE PATH, and a Cloud site does not
+// serve Jira there.
+//
+// Atlassian's App URLs page lists the product as
+// https://site.atlassian.net/jira, so an operator reading their site address
+// off the page the setup form points at pastes exactly that. Every call then
+// lands on /jira/rest/api/3/..., which is an HTML 404: the failure surfaces
+// as `invalid character '<' looking for beginning of value`, naming neither
+// the field nor the extra segment.
+func TestACloudSiteDropsTheConsolesProductPath(t *testing.T) {
+	for base, want := range map[string]string{
+		"https://acme.atlassian.net/jira":  "https://acme.atlassian.net",
+		"https://acme.atlassian.net/jira/": "https://acme.atlassian.net",
+		"https://acme.atlassian.net":       "https://acme.atlassian.net",
+		"https://acme.atlassian.net/":      "https://acme.atlassian.net",
+		// A DATA CENTER INSTANCE CAN GENUINELY LIVE THERE. A context path is
+		// part of the address rather than a console's way of naming a
+		// product, and trimming it would break a working instance.
+		"https://jira.example.com/jira": "https://jira.example.com/jira",
+		"https://jira.example.com":      "https://jira.example.com",
+	} {
+		if got := jira.RESTBase(base); got != want {
+			t.Errorf("RESTBase(%q) = %q, want %q", base, got, want)
+		}
+		// THROUGH THE CONSTRUCTOR TOO, because that is the only path a
+		// caller takes and the trim is worth nothing if the client keeps
+		// the address it was handed.
+		client, err := jira.NewClient(jira.ClientOptions{URL: base, Token: "t"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := client.URL(); got != want {
+			t.Errorf("NewClient(%q).URL() = %q, want %q", base, got, want)
+		}
+	}
+}
