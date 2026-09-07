@@ -516,6 +516,12 @@ profile's token variable — `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code.
 no refresh-token rotation, and it survives an ephemeral container with
 no persistent volume.
 
+Minting is *interactive* — the CLI opens the same browser sign-in as
+option 1 — so its prompts and its sign-in URL are shown on your terminal
+while the token itself is captured. The token never touches stdout, which
+is what leaves `-print-token` free to pipe cleanly into your own secret
+manager.
+
 Already have a token from elsewhere?
 
 ```bash

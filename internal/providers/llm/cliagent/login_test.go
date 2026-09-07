@@ -374,3 +374,47 @@ func TestTheClaudeProfileCanBrokerInspectAndRevokeItsLogin(t *testing.T) {
 		}
 	}
 }
+
+// A minting command is INTERACTIVE, and the operator has to see it.
+//
+// Claude Code renders its whole sign-in UI — the OAuth URL and the "paste code
+// here" prompt — on STDOUT whenever stdin is a terminal, and writes nothing at
+// all to stderr. Capturing stdout into a buffer and showing the operator only
+// stderr therefore left them at a blank terminal, waiting to paste a code from
+// a URL they had never been shown, on the route the docs call preferred.
+func TestCapturingATokenStillShowsTheOperatorTheVendorsPrompts(t *testing.T) {
+	ui := "Browser didn't open? Use the url below to sign in\nhttps://example.com/oauth?code=true\n"
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": ui + "sk-ant-oat01-EXAMPLE\n"},
+		map[string]any{"capture_token_args": []any{"-test.run=TestCLIAgentFakeCLI"},
+			"token_env": "FAKE_TOKEN"})
+	var seen bytes.Buffer
+	token, err := p.CaptureToken(t.Context(), nil, &seen)
+	if err != nil {
+		t.Fatalf("CaptureToken: %v", err)
+	}
+	if token != "sk-ant-oat01-EXAMPLE" {
+		t.Errorf("token = %q", token)
+	}
+	if !strings.Contains(seen.String(), "https://example.com/oauth?code=true") {
+		t.Errorf("the operator never saw the sign-in URL; they saw: %q", seen.String())
+	}
+}
+
+// The captured stream is a rendered UI, not a report: it carries colour,
+// cursor moves, OSC-8 hyperlinks and \r redraws. A frame of decoration must
+// read as empty rather than be stored as the company's credential.
+func TestATerminalFrameIsNotMistakenForAToken(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct{ raw, want string }{
+		"trailing colour reset":  {"instructions\n\x1b[32msk-ant-oat01-A\x1b[0m\n", "sk-ant-oat01-A"},
+		"osc-8 hyperlink after":  {"sk-ant-oat01-B\n\x1b]8;;https://example.com\x07\x1b]8;;\x07\n", "sk-ant-oat01-B"},
+		"redraw with \\r":        {"waiting...\rsk-ant-oat01-C", "sk-ant-oat01-C"},
+		"decoration only at end": {"sk-ant-oat01-D\n\x1b[?25h\x1b[2K\n", "sk-ant-oat01-D"},
+		"nothing but decoration": {"\x1b[2K\x1b[?25h\n", ""},
+	}
+	for name, c := range cases {
+		if got := lastPrintedLine(c.raw); got != c.want {
+			t.Errorf("%s: lastPrintedLine(%q) = %q, want %q", name, c.raw, got, c.want)
+		}
+	}
+}
