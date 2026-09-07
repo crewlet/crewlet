@@ -97,6 +97,7 @@ var githubAppPage = template.Must(template.New("github-app").Parse(`<!doctype ht
         text-decoration: none;
       }
       .btn:hover { background: var(--accent-hover); }
+      .count { margin-top: .75rem; font-size: 13px; color: var(--muted); }
       .foot { margin-top: 1rem; font-size: 13px; color: var(--muted); text-align: center; }
     </style>
   </head>
@@ -116,15 +117,81 @@ var githubAppPage = template.Must(template.New("github-app").Parse(`<!doctype ht
         <div class="row">
           <div class="state"><span class="dot"></span>One step left</div>
           <p>Install the app so it can see the repositories this agent works in.</p>
-          <a class="btn" href="{{.InstallURL}}">Install on GitHub</a>
+          <a class="btn" id="install" href="{{.InstallURL}}">Install on GitHub</a>
+          <!-- EMPTY AND HIDDEN UNTIL THE SCRIPT OWNS IT. A page with
+               scripting off would otherwise promise a redirect that never
+               comes, and the button beside it is the whole flow either way.
+               The sentence is written by the script as ONE string rather
+               than a number beside its own noun, so the last second reads
+               "1 second" and not "1 seconds". -->
+          <p class="count" id="countdown" data-seconds="{{.InstallDelay}}" hidden></p>
         </div>
         {{end}}
       </div>
-      <p class="foot">You can close this tab and go back to Crewlet.</p>
+      <p class="foot">
+        {{if .InstallURL}}After the install, GitHub brings you back here.
+        {{else}}You can close this tab and go back to Crewlet.{{end}}
+      </p>
     </div>
+    {{if .InstallURL}}
+    <script>
+      // THE SECOND ACT FOLLOWS THE FIRST WITHOUT BEING ASKED. Creating an
+      // app and installing it are two clicks at GitHub, and an operator who
+      // has just done the first is already going to do the second: leaving
+      // them on a page with a button is a stop in the middle of one errand.
+      //
+      // The address is read back off the link rather than written into this
+      // script, so the URL never enters a JavaScript context and there is no
+      // escaping question to get wrong. The delay is read off the element for
+      // the same reason: one value, rendered once.
+      (function () {
+        var link = document.getElementById("install");
+        var note = document.getElementById("countdown");
+        if (!link || !note) {
+          return;
+        }
+        var left = parseInt(note.getAttribute("data-seconds"), 10);
+        if (!(left > 0)) {
+          return;
+        }
+        var say = function (seconds) {
+          note.textContent =
+            "Taking you there in " + seconds + (seconds === 1 ? " second." : " seconds.");
+        };
+        say(left);
+        note.hidden = false;
+        var tick = setInterval(function () {
+          left -= 1;
+          if (left > 0) {
+            say(left);
+            return;
+          }
+          clearInterval(tick);
+          note.textContent = "Taking you to GitHub.";
+          window.location.href = link.href;
+        }, 1000);
+        // A PERSON WHO CLICKS FIRST IS NOT SENT TWICE: the timer would fire
+        // mid-navigation and reload GitHub's install page under them.
+        link.addEventListener("click", function () {
+          clearInterval(tick);
+          note.hidden = true;
+        });
+      })();
+    </script>
+    {{end}}
   </body>
 </html>
 `))
+
+// installCountdownSeconds is how long the created-app page waits before it
+// sends the operator on to the install.
+//
+// FIVE, and the two failure directions are not symmetrical. Shorter and the
+// page is gone before a person has read which agent's app was just made,
+// which is the one fact the page exists to report and the one they need if
+// anything later goes wrong. Longer and it reads as a page that has finished
+// and stopped, so they click the button anyway and the timer was decoration.
+const installCountdownSeconds = 5
 
 type githubAppView struct {
 	Heading    string
@@ -133,6 +200,10 @@ type githubAppView struct {
 	Seat       string
 	InstallURL string
 	Done       bool
+
+	// InstallDelay is the countdown, in seconds, before the page follows
+	// the install link itself. Zero leaves the button and no timer.
+	InstallDelay int
 }
 
 // AppCompleter finishes an app creation begun elsewhere in this engine.
@@ -222,6 +293,9 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 			view.Seat = seat
 			view.InstallURL = r.appFlow.InstallURL(seat)
 			view.Done = view.InstallURL == ""
+			if view.InstallURL != "" {
+				view.InstallDelay = installCountdownSeconds
+			}
 			log.Info("github_app_created", "seat", seat,
 				"detail", "the app's key is sealed; the operator installs it next")
 		}

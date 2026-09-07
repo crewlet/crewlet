@@ -196,7 +196,7 @@ sequenceDiagram
     CL->>GH: POST /app-manifests/{code}/conversions
     GH-->>CL: app id, slug, private key, webhook secret (once only)
     CL->>CL: seal the key and the webhook secret, record the app on the seat
-    CL-->>Op: "App created", with the install link
+    CL-->>Op: "App created", then follows the install link after 5 seconds
     Op->>GH: install the app on the organization
     GH->>CL: GET /webhooks/github-app?installed=senior-engineer
 ```
@@ -352,6 +352,13 @@ verify against, and it answers `503` rather than accepting the delivery.
 |---|---|---|
 | `POST /setup/integrations/github/app` | The dashboard, authenticated | Answers with one seat's manifest, the address to POST it to, and a signed state |
 | `GET /webhooks/github-app` | GitHub's redirect, unauthenticated | Converts the one-time code, seals the key, records the app; also the page an install returns to |
+
+Creating an app and installing it are two clicks at GitHub, and an operator who
+has just done the first is already going to do the second, so the created-app
+page counts down five seconds and follows the install link itself. The button
+stays for anyone who would rather not wait, and it is the whole flow with
+scripting off: the countdown is hidden until the script owns it, so the page
+never promises a redirect it cannot make.
 
 The callback carries no engine credential, because a browser redirect from
 GitHub has none to carry. What stands in its place is the **state**: a signed
