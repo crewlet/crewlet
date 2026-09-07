@@ -1083,6 +1083,21 @@ a.brand:hover {
   white-space: pre;
   overflow-wrap: normal;
 }
+/* A block that owns ⌘A / Ctrl+A.
+   Select-all is a DOCUMENT verb, so on a screen that is mostly one JSON
+   record it selected the nav, the stat row and every phase card along with
+   it. This block takes focus, and while it has focus select-all means "this
+   record" — which is the only thing anybody was reaching for. The ring is
+   what says so: without a visible focus state a keyboard verb that changes
+   meaning on click is a secret. */
+.code.selectable {
+  cursor: text;
+}
+.code.selectable:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: -1px;
+  border-color: var(--accent-line);
+}
 code.inline {
   font-size: 0.92em;
   background: var(--surface-inset);

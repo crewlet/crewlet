@@ -46,12 +46,23 @@
  * own record. Both records are read now, and named for what each one is.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { EventRow, QueryState, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
-import { Badge, Banner, Button, Panel, Skeleton, Stat, StatRow, cx } from "~/ui/primitives.tsx";
+import {
+  Badge,
+  Banner,
+  Button,
+  Code,
+  CopyButton,
+  Panel,
+  Skeleton,
+  Stat,
+  StatRow,
+  cx,
+} from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtBytes, fmtCount, fmtDateTime, fmtDuration, oldestFirst, tsKey } from "~/lib/format.ts";
@@ -371,6 +382,49 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 
   const conversation = str(rec.summary, "conversation_key") || phases[0]?.conversationKey || "";
 
+  // THE WHOLE SCREEN AS DATA, which is what somebody pasting a turn into a
+  // bug report actually needs — and the only copyable thing a RUNNING turn
+  // has, since the records below do not exist until the turn ends. Both
+  // records are nested rather than flattened, under the event type each one
+  // arrived as, so a reader can tell what the engine published from what this
+  // page assembled — and which of the two halves a field came from.
+  //
+  // A THUNK, not a memo. `phases` takes a new identity on every streamed
+  // frame — `agents` is pushed twice per tool round — so any memo over it
+  // would re-serialize every prompt, narration, tool argument and result of a
+  // running turn, twice a round, for a button nobody has clicked.
+  const turnJSON = useCallback(
+    () =>
+      JSON.stringify(
+        {
+          turn_id: turnId,
+          role,
+          trace_id: traceId || null,
+          running,
+          duration_ms: durationMs,
+          record: {
+            agent_turn_completed: rec.summary?.payload ?? null,
+            turn_completed: rec.learning?.payload ?? null,
+          },
+          phases,
+          events,
+        },
+        null,
+        2,
+      ),
+    [turnId, role, traceId, running, durationMs, rec, phases, events],
+  );
+  // Memos here rather than thunks: both ARE rendered, so they are computed
+  // either way, and `rec` only changes when the turn ends.
+  const summaryJSON = useMemo(
+    () => JSON.stringify(rec.summary?.payload ?? {}, null, 2),
+    [rec.summary],
+  );
+  const learningJSON = useMemo(
+    () => JSON.stringify(rec.learning?.payload ?? {}, null, 2),
+    [rec.learning],
+  );
+
   return (
     <>
       <ScreenHead
@@ -404,6 +458,11 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 Trace
               </Button>
             )}
+            <CopyButton
+              text={turnJSON}
+              label="Copy turn"
+              title="the whole turn as JSON — its record, its phases and everything else it published"
+            />
           </>
         }
       />
@@ -595,17 +654,42 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                   </code>
                 </div>
               )}
+              {/* Each record owns select-all and carries its own copy, because
+                  the two are separate records rather than two views of one:
+                  a bug report wants the half it is about, not the page. The
+                  whole turn — both halves, its phases and everything else it
+                  published — is the header's own Copy turn. */}
               <details>
                 <summary className="t-caption">
                   agent_turn_completed — the dashboard's summary
                 </summary>
-                <pre className="code">{JSON.stringify(rec.summary?.payload ?? {}, null, 2)}</pre>
+                <div className="col gap-1">
+                  <Code plain selectable label="The dashboard's turn summary, as JSON">
+                    {summaryJSON}
+                  </Code>
+                  <div className="row gap-2" style={{ alignItems: "center" }}>
+                    <CopyButton text={summaryJSON} title="agent_turn_completed, as published" />
+                    <span className="t-caption">
+                      Click into the record, and ⌘A / Ctrl+A selects it alone rather than the page.
+                    </span>
+                  </div>
+                </div>
               </details>
               <details>
                 <summary className="t-caption">
                   turn_completed — the learning subsystem's record
                 </summary>
-                <pre className="code">{JSON.stringify(rec.learning?.payload ?? {}, null, 2)}</pre>
+                <div className="col gap-1">
+                  <Code plain selectable label="The learning subsystem's turn record, as JSON">
+                    {learningJSON}
+                  </Code>
+                  <div className="row gap-2" style={{ alignItems: "center" }}>
+                    <CopyButton text={learningJSON} title="turn_completed, as published" />
+                    <span className="t-caption">
+                      Click into the record, and ⌘A / Ctrl+A selects it alone rather than the page.
+                    </span>
+                  </div>
+                </div>
               </details>
             </div>
           </Panel>

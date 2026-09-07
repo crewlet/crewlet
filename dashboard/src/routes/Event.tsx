@@ -8,7 +8,7 @@
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Code, KeyValue, Panel, Skeleton } from "~/ui/primitives.tsx";
+import { Badge, Button, Code, CopyButton, KeyValue, Panel, Skeleton } from "~/ui/primitives.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, humanize, relTime } from "~/lib/format.ts";
@@ -137,9 +137,31 @@ export function EventScreen({ eventId }: { eventId: string }) {
               </Panel>
             )}
 
-            <Panel title="Payload" icon="database" subtitle="verbatim, as the engine stored it">
+            <Panel
+              title="Payload"
+              icon="database"
+              subtitle="verbatim, as the engine stored it"
+              actions={
+                data.payload ? (
+                  <CopyButton
+                    text={() => JSON.stringify(data.payload, null, 2)}
+                    title="this event's payload, as JSON"
+                  />
+                ) : undefined
+              }
+            >
               {data.payload ? (
-                <Code plain>{JSON.stringify(data.payload, null, 2)}</Code>
+                // Same treatment as the Turn record: this screen's whole
+                // point is one JSON record, so the record owns select-all
+                // rather than the page taking it.
+                <div className="col gap-1">
+                  <Code plain selectable label="The event payload, as JSON">
+                    {JSON.stringify(data.payload, null, 2)}
+                  </Code>
+                  <span className="t-caption">
+                    Click into the payload, and ⌘A / Ctrl+A selects it alone rather than the page.
+                  </span>
+                </div>
               ) : (
                 <span className="t-caption faint">
                   This event carries no payload — its type and summary are the whole record.

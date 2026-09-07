@@ -189,7 +189,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		d.TokenEnv = "unset"
 	}
 
-	if len(p.profile.Usage.Input) > 0 || len(p.profile.Usage.Output) > 0 {
+	if p.profile.ReadsUsage() {
 		d.TokenUsage = "reported by CLI"
 	} else {
 		d.TokenUsage = "estimated (4 characters per token)"

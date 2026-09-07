@@ -198,7 +198,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
           </span>
           {agent.last_error.event_id && (
-            <a className="t-caption" href={href(["events", agent.last_error.event_id])}>
+            <a className="t-link" href={href(["events", agent.last_error.event_id])}>
               event →
             </a>
           )}

@@ -493,7 +493,8 @@ package directory under `internal/` — `agent`, `api`, `coord`, `engine`,
 `sandbox`, `schedule`, `seat`, `secrets`, `store`, `tools`, and so on — so a
 reader can go from a subject line to a directory without guessing. Two scopes
 name a component by the name people use rather than by its import path:
-`dashboard` for `static/dashboard/`, and `cli` for `cmd/crewlet/`. Outside
+`dashboard` for the dashboard — its source in `dashboard/` and the built
+bundle in `static/dashboard/` — and `cli` for `cmd/crewlet/`. Outside
 `internal/`, scope by area: `docs`, `deps`, `examples`, `schema`, `scripts` —
 and for CI, the workflow's own name (`ci(release)`, `ci(docs-publish)`).
 

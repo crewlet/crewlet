@@ -176,7 +176,7 @@ meets their company first and the engine last.
 | | Configuration | `#/config?lens=&revision=` | `config` / `config_audit` / `config_diff` *(operator-gated)* |
 | | Secrets | `#/secrets` | `/secrets` and `/config/references` over REST: the names the fleet holds, what reads each, and the writes that store, rotate and remove one — **never a value** *(operator-gated)* |
 | — | Trace | `#/traces/{id}` | `trace` — reached from a row or from search |
-| — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published |
+| — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published; `Copy turn` in the header assembles the record, the phases and the rest as one JSON object, and the Turn record panel copies itself and owns ⌘A |
 | — | Event | `#/events/{id}` | `event` |
 | — | Engine | the pill in the sidebar footer | the `health` push plus the `stream` query |
 
@@ -427,7 +427,7 @@ The seat screen makes the same split, where it answers a second question:
 which of these turns is happening right now, readable at a glance from the
 accent ring rather than only by finding a badge.
 
-## One filter bar, and a control that means what it looks like
+## Controls that mean what they look like
 
 The Model screen collected eighteen controls in one sticky row — a segmented
 control, a free-text box, a chip per seat, a chip per phase and a failures
@@ -458,6 +458,30 @@ What replaced it:
   Spend's window; the screens are split by question, and duplicating one
   screen's answer at the bottom of another is how the two come to disagree.
 
+Three more controls that looked like something they were not:
+
+- **A copy button says whether it copied.** The clipboard is invisible, so a
+  control that writes to it and reports nothing is indistinguishable from a
+  dead one — and this one *was* sometimes dead: the Clipboard API is gated on
+  a secure context, so `navigator.clipboard` is simply undefined at the
+  `http://<node-ip>:8000` anyone reads the dashboard of a machine that is not
+  their laptop at. `navigator.clipboard?.writeText(x)` swallowed that. The
+  `CopyButton` primitive falls back to the deprecated `execCommand` path,
+  which is the only one that works there, and then says `Copied` or
+  `Copy failed` — announced as well as drawn.
+- **A caption-sized link is still a link.** `.t-caption` on an `<a>` sets the
+  muted colour, which wins over the anchor rule, so four real navigations —
+  a phase's own event, a turn card's id, a seat's last error, the spend
+  screen — rendered as dim static micro-text a reader could only find by
+  hovering. `.t-link` is the caption register that keeps `--accent-ink`,
+  which the palette suite already measures.
+- **Select-all is a local verb on a record.** ⌘A / Ctrl+A is a *document*
+  gesture, so on a screen whose point is one JSON record — a turn's record,
+  the active configuration — it took the nav, the stat row and every phase
+  card along with it. A `Code selectable` block is focusable and owns the
+  chord while it holds focus; everywhere else the browser keeps it. The
+  focus ring is not decoration: a keyboard verb that changes meaning on
+  click is a secret without one.
 
 The header carries the same facts in the same order whether a phase is live or
 finished — phase, decision, model, rounds, tokens, age — so the row does not
@@ -681,5 +705,11 @@ rendered idle from the first phase to the last.
 11. **A screen subscribes to the slices it reads and no others.**
 12. **Numbers are tabular**, and an absent number is an em dash rather than a
     zero — zero is a measurement.
-13. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
+13. **A control reports its own outcome**, especially an invisible one. A copy,
+    a write, a revoke — if the reader cannot see the result, the control says
+    it, in text a screen reader reaches as well as an icon.
+14. **A link reads as a link at every size.** A text-register class on an `<a>`
+    that overrides its colour makes a navigation into decoration; `.t-link` is
+    the caption-sized register that keeps the accent.
+15. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
     diffs it; a bundle that has drifted from its source is a red build.

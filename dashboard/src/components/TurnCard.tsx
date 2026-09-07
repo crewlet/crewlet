@@ -104,7 +104,7 @@ export function TurnCard({
             />
           ))}
           <footer className="phase-foot">
-            <a className="t-caption mono" href={href(["turns", group.turnId])}>
+            <a className="t-link mono" href={href(["turns", group.turnId])}>
               turn {group.turnId.slice(0, 8)} →
             </a>
             <span className="spacer" />

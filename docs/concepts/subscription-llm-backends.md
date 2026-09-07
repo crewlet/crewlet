@@ -261,6 +261,58 @@ a message saying to use the shell it already has, and no second box is
 provisioned. `self` is refused on any other runtime, and is not offerable
 as a company-wide default.
 
+## The system prompt in text mode
+
+A coding CLI takes a prompt, not a conversation, so the transcript is
+flattened into one text: `## system`, `## user`, `## assistant`,
+`## tool result: name (call id)`. Everything below is about the one
+section that does **not** belong there.
+
+Folded into that text, a system prompt arrives as **user content** — the
+model is asked to treat an ordinary message as its standing instructions,
+underneath a vendor default that keeps saying what it is. So where a CLI
+has a channel of its own for it, the profile names it in
+`system_prompt_args` and the text travels there instead. Claude Code's is
+declared as:
+
+```yaml
+system_prompt_args: ["--system-prompt-file", "{file}"]
+```
+
+Two decisions in that one line, both measured against Claude Code 2.1.263
+rather than assumed:
+
+- **Replace, not append.** Asked "who are you?" as a PM seat, the same
+  model answers *"I'm Agent PM at Nimbus, an AI assistant helping with
+  software engineering tasks and project work through Claude Code"* with
+  the default prompt in force, and *"I'm Agent PM at Nimbus, your AI
+  assistant for project management and technical collaboration"* with it
+  replaced. A coding-agent identity over the top of whatever seat is
+  actually being served is not a cosmetic problem: it is the seat's
+  standing instructions arguing with themselves. The default prose also
+  costs ~3.5k input tokens on every round of every phase, describing
+  tools this backend denies. Replacing it leaves the web tools working —
+  a `WebFetch` probe still fetches, which is what `crewlet llm doctor`
+  measures on every run.
+- **The file variant, not the inline one.** A seat's system prompt
+  carries the org chart, the company's policies, that seat's backstory
+  and roster, and its `## Personal memory` and `## Relevant knowledge`
+  prefetches. On argv all of that is readable by every account on the
+  machine through `/proc/<pid>/cmdline`, and bounded by `ARG_MAX`
+  (256 KB on macOS — the limit the `copilot` profile's argv prompt
+  already lives under). The text is written `0600` into the per-call
+  working directory, which is created empty for one call and removed on
+  release, so it cannot outlive the call or reach the next one.
+
+`{file}` substitutes that path; `{system}` substitutes the text straight
+into argv, for a CLI that offers no file variant. A profile that declares
+neither leaves the system prompt in the transcript, which is what a CLI
+with no such flag can take — that is where the other seven built-in
+profiles stand today, and `cli.overrides.system_prompt_args` is how you
+move one the day you check its vendor's flags.
+
+---
+
 ## Tool calls in text mode
 
 Every one of these CLIs has its own tools — file edits, shell, web
@@ -326,6 +378,50 @@ malformed reply costs a round; it never crashes a turn.
 **A call with no tools gets no contract.** Auxiliary work
 (summarisation, the relevance filter) sends a plain prompt and reads a
 plain answer, with no envelope to get wrong.
+
+### Finding the answer in the CLI's output
+
+Before any of that, something has to decide *which part of what the CLI
+printed is the model's reply*. That is `output` plus `text_paths` on the
+profile: `text` takes the whole of stdout, `json` reads one document and
+`jsonl` concatenates every event that carries a text path, in stream
+order. `text_paths` is a **list** so a vendor that moved the field
+between releases needs no override — the first path that resolves to a
+non-empty string wins, and an empty one falls through to the next.
+
+Four outcomes, kept apart on purpose, because three of them used to be
+one:
+
+| What happened | What the engine does |
+|---|---|
+| A text path resolved to text | That text is the reply. |
+| A text path resolved and every one was **empty** | The CLI answered with nothing. A retryable `SERVER` failure naming every `text_paths` entry the profile declares — the [fallback chain](#falling-back-to-a-metered-key) walks to the next entry, and no credential is benched. |
+| **No** text path resolved at all | The profile no longer matches the installed CLI. A retryable `SERVER` failure that names `text_paths`, points at `crewlet llm doctor`, and prints the **tail** of what the CLI output so you can write the override. |
+| The CLI printed **nothing at all** on a zero exit | Its own message, because neither of the two above can say anything true about output that does not exist. A retryable `SERVER` failure carrying whatever it wrote on stderr, which is the only clue there is. |
+
+Output that is not JSON at all is still an answer: a CLI that printed a
+banner, a warning, or the vendor's own sentence about a spent plan is
+read as prose rather than refused, which is what lets the
+[limit sentinels](#falling-back-to-a-metered-key) be recognised on a
+zero exit. Those sentinels are matched against the CLI's whole stdout
+and stderr, so a drifted profile still yields a real `RATE_LIMIT` with
+the vendor's own reset instant rather than a server fault.
+
+**Why the last two are failures rather than answers.** They used to be
+one case, and the answer handed back was the CLI's raw stdout — on the
+reasoning that an operator would then see the shape and write an
+override. They would, but only after it had been *spoken as an agent*
+first: an empty `result` on a Claude Code envelope meant the seat's reply
+became `{"duration_api_ms":11377,…,"result":"","type":"result"}`, the
+tool loop appended that to the conversation and re-sent it every round,
+the reviewer judged the turn on it, and the dashboard printed it as the
+sentence the agent had said. The shape belongs in the error message,
+where the only person who can act on it is the only one reading.
+
+An empty answer is a real outcome, not only a parsing problem — a model
+that spends its whole turn on hidden reasoning produces exactly this — so
+if you see it repeatedly, the entry's `model` is the field to change.
+`crewlet llm doctor` runs a real completion and reports it.
 
 ### Token accounting
 
@@ -534,6 +630,12 @@ validated against the profile model, so a typo fails `crewlet validate`
 rather than an agent's first turn. `crewlet llm doctor` prints the CLI
 version the built-in profile was written against next to the version you
 actually have.
+
+A drift that only shows up at *runtime* — the flags still work, the JSON
+still parses, and the answer field moved — names itself: the completion
+fails with the `text_paths` this profile looked in and the output the CLI
+actually produced. See
+[Finding the answer in the CLI's output](#finding-the-answer-in-the-clis-output).
 
 ---
 

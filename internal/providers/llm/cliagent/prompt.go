@@ -3,6 +3,8 @@ package cliagent
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -55,6 +57,34 @@ func RenderPrompt(req llm.Request) (string, error) {
 	}
 
 	return strings.TrimSpace(b.String()) + "\n", nil
+}
+
+// SplitSystem lifts the system messages out of a request, for a profile whose
+// CLI takes them on their own channel ([Profile.SystemPromptArgs]).
+//
+// Returned as PLAIN TEXT with no `## system` heading: the heading exists to
+// tell one section of a flattened transcript from the next, and a real system
+// prompt has nothing to be told apart from. Several system messages join with
+// a blank line, in order, because that is what a provider does with them.
+//
+// The request comes back with those messages removed, so the caller renders
+// the rest exactly as before. An empty first result means there was nothing to
+// lift and the caller passes no flag at all — a CLI handed an empty system
+// prompt would replace its default with nothing.
+func SplitSystem(req llm.Request) (string, llm.Request) {
+	var system []string
+	rest := make([]llm.Message, 0, len(req.Messages))
+	for _, msg := range req.Messages {
+		if msg.Role == llm.RoleSystem {
+			if text := strings.TrimSpace(msg.Content); text != "" {
+				system = append(system, text)
+			}
+			continue
+		}
+		rest = append(rest, msg)
+	}
+	req.Messages = rest
+	return strings.Join(system, "\n\n"), req
 }
 
 // renderMessage renders one message under its heading.
@@ -148,4 +178,39 @@ func EstimateTokens(text string) int {
 		return 0
 	}
 	return (len(text) + 3) / 4
+}
+
+// systemPromptFile is what a {file} substitution writes, in the per-call
+// working directory.
+//
+// That directory and not the seat home: it is created empty for one call and
+// removed on release, so the text cannot outlive the call that needed it or
+// reach the next one. The name is deliberately not one a coding CLI reads on
+// its own (CLAUDE.md, AGENTS.md), because this is an argument to the CLI, not
+// context for it to discover.
+const systemPromptFile = "crewlet-system-prompt.txt"
+
+// systemArgs renders a profile's system-prompt argv, writing the text to a
+// private file where the profile asked for a path.
+//
+// 0600, and the reason is the same one that keeps it off argv: a seat's system
+// prompt carries the company's org chart, its policies and that seat's own
+// memory, and the box it runs in is a directory on a machine other accounts
+// share.
+func systemArgs(template []string, system, dir string) ([]string, error) {
+	var path string
+	out := make([]string, 0, len(template))
+	for _, arg := range template {
+		if strings.Contains(arg, "{file}") {
+			if path == "" {
+				path = filepath.Join(dir, systemPromptFile)
+				if err := os.WriteFile(path, []byte(system), 0o600); err != nil {
+					return nil, fmt.Errorf("cli-agent: writing the system prompt: %w", err)
+				}
+			}
+			arg = strings.ReplaceAll(arg, "{file}", path)
+		}
+		out = append(out, strings.ReplaceAll(arg, "{system}", system))
+	}
+	return out, nil
 }
