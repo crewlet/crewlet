@@ -118,16 +118,35 @@ claude-code:
   status_args: ["auth", "status", "--text"]
   logout_args: ["auth", "logout"]
   capture_token_args: ["setup-token"]
-  # A spent plan exits 0 with prose. The sentinel is emitted verbatim and
-  # carries the reset instant after a pipe, so the classification yields a
-  # real Retry-After rather than a guess.
+  # A spent plan exits 0 with prose, so it is recognised by the vendor's own
+  # words rather than by a status code.
+  #
+  # MEASURED AGAINST THE INSTALLED CLI, NOT REMEMBERED. The sentinel this
+  # profile shipped — "Claude AI usage limit reached", with the reset instant
+  # after a pipe — appears NOWHERE in 2.1.263: it was 1.x's wording, and the
+  # pipe-and-epoch field went with it. A sentinel that cannot match is worse
+  # than none, because a spent plan then classifies FATAL instead of
+  # RATE_LIMIT and the fallback chain never carries the seat onto a metered
+  # key — the exact failure this mechanism exists to prevent, silent for as
+  # long as nobody hits their cap.
+  #
+  # Two sentinels, because a spent window reaches the operator either way:
+  # the CLI's own line (every live variant begins with this exact prefix —
+  # "… · continuing automatically", "… · finishing up", "… · resets") and the
+  # API error it relays. Neither carries a reset instant any more, so there is
+  # no reset_separator: resetAfter then returns 0 and the credential pool uses
+  # its configured cooldown, which is the honest answer rather than an
+  # invented window.
   limit_markers:
-    - sentinel: "Claude AI usage limit reached"
-      reset_separator: "|"
-      reset_unit: epoch
+    - sentinel: "Usage limit reached"
+    - sentinel: '"type":"rate_limit_error"'
+  # "OAuth token has expired" was dead the same way. The live wording is
+  # "OAuth token has been revoked", and every other auth failure this CLI
+  # reports — "Not logged in", "Login expired", "OAuth token revoked" — ends
+  # in the same clause, so "Please run /login" covers all three at once.
   auth_markers:
     - sentinel: "Invalid API key"
-    - sentinel: "OAuth token has expired"
+    - sentinel: "OAuth token has been revoked"
     - sentinel: "Please run /login"
 
 codex:

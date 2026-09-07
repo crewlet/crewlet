@@ -652,6 +652,28 @@ fails with the `text_paths` this profile looked in and the output the CLI
 actually produced. See
 [Finding the answer in the CLI's output](#finding-the-answer-in-the-clis-output).
 
+**`limit_markers` and `auth_markers` drift the most quietly.** Every other
+field fails visibly when it goes stale — a renamed flag is a non-zero exit
+`doctor` reports on the spot. A sentinel is matched *verbatim* against the
+CLI's own prose, so one the vendor has reworded simply never fires: a spent
+plan then classifies as a fatal error instead of `RATE_LIMIT`, the
+[fallback chain](#falling-back-to-a-metered-key) never carries the seat onto
+a metered key, and nothing says so until somebody hits their cap. If your
+CLI's wording differs from the built-in profile's, override it:
+
+```yaml
+cli:
+  agent: claude-code
+  overrides:
+    limit_markers:
+      - sentinel: "Usage limit reached"
+    auth_markers:
+      - sentinel: "Please run /login"
+```
+
+Take the sentinel from what your CLI actually prints, not from what it used
+to print.
+
 ---
 
 ## Configuration reference
@@ -790,7 +812,9 @@ to be.)
 ## Falling back to a metered key
 
 A spent subscription window arrives as prose on a *successful* exit
-("Usage limit reached. Resets at 4pm."). Crewlet matches that wording and
+("Usage limit reached · continuing automatically"). Crewlet matches that
+wording — and, where the CLI relays the API's own error instead, the
+`"type":"rate_limit_error"` in it — and
 reports it as `RATE_LIMIT`, which is retryable — so the ordinary
 [provider chain](turn-engine.md#per-phase-llm-models) carries the role
 onto a metered key for the rest of the window and back again afterwards,

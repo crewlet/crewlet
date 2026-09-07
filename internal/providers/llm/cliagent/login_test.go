@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -415,6 +416,53 @@ func TestATerminalFrameIsNotMistakenForAToken(t *testing.T) {
 	for name, c := range cases {
 		if got := lastPrintedLine(c.raw); got != c.want {
 			t.Errorf("%s: lastPrintedLine(%q) = %q, want %q", name, c.raw, got, c.want)
+		}
+	}
+}
+
+// Markers are matched VERBATIM against the CLI's own words, so a sentinel the
+// installed binary never emits can never fire — and the failure is silent
+// until somebody hits their cap.
+//
+// Both of the claude profile's original sentinels were in that state: neither
+// "Claude AI usage limit reached" (with its pipe-and-epoch reset field) nor
+// "OAuth token has expired" occurs anywhere in Claude Code 2.x. A spent
+// subscription therefore classified FATAL instead of RATE_LIMIT, so the
+// fallback chain never carried the seat onto another model.
+func TestTheClaudeProfilesMarkersAreStringsTheCLIStillEmits(t *testing.T) {
+	t.Parallel()
+	p, err := Load("claude-code", nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Retired with the 1.x wording that carried them; the live lines put the
+	// reset in prose, and inventing a window is worse than the pool's own
+	// configured cooldown.
+	for _, m := range p.LimitMarkers {
+		if m.ResetSeparator != "" || m.ResetUnit != "" {
+			t.Errorf("limit marker %q still claims a reset field: %+v", m.Sentinel, m)
+		}
+	}
+	for _, dead := range []string{"Claude AI usage limit reached", "OAuth token has expired"} {
+		for _, m := range p.LimitMarkers {
+			if strings.Contains(m.Sentinel, dead) {
+				t.Errorf("limit_markers still carries the retired sentinel %q", dead)
+			}
+		}
+		for _, m := range p.AuthMarkers {
+			if strings.Contains(m.Sentinel, dead) {
+				t.Errorf("auth_markers still carries the retired sentinel %q", dead)
+			}
+		}
+	}
+	for _, want := range []string{"Usage limit reached", `"type":"rate_limit_error"`} {
+		if !slices.ContainsFunc(p.LimitMarkers, func(m LimitMarker) bool { return m.Sentinel == want }) {
+			t.Errorf("limit_markers lacks %q: %+v", want, p.LimitMarkers)
+		}
+	}
+	for _, want := range []string{"Invalid API key", "OAuth token has been revoked", "Please run /login"} {
+		if !slices.ContainsFunc(p.AuthMarkers, func(m AuthMarker) bool { return m.Sentinel == want }) {
+			t.Errorf("auth_markers lacks %q: %+v", want, p.AuthMarkers)
 		}
 	}
 }
