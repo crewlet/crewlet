@@ -31,7 +31,7 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 			// address contains it.
 			Shared:     true,
 			Connect:    true,
-			Label:      "Organization id",
+			Label:      "Atlassian organization ID",
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.atlassian.org_id",
 			Required:   true,
@@ -43,7 +43,7 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 		{
 			Field:      "api_key",
 			Connect:    true,
-			Label:      "Organization API key",
+			Label:      "Atlassian organization API Key",
 			Kind:       setup.KindSecret,
 			ConfigPath: "integrations.atlassian.api_key",
 			SecretName: "ATLASSIAN_ORG_API_KEY",

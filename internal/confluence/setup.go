@@ -74,7 +74,7 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 			Field:      "email",
 			Shared:     true,
 			Connect:    true,
-			Label:      "Account email",
+			Label:      "Atlassian user account email",
 			Kind:       setup.KindText,
 			ConfigPath: "integrations.confluence.email",
 			// REQUIRED ON CLOUD, which authenticates an API token as
@@ -109,7 +109,7 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 			Field:      "token",
 			Shared:     true,
 			Connect:    true,
-			Label:      "API token",
+			Label:      "Atlassian user API token",
 			Kind:       setup.KindSecret,
 			ConfigPath: "integrations.confluence.token",
 			SecretName: "CONFLUENCE_TOKEN",
