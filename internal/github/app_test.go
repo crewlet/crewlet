@@ -258,3 +258,32 @@ func TestATokenIsRenewedBeforeItExpires(t *testing.T) {
 		t.Error("a token with no value reports fresh")
 	}
 }
+
+// A PRIVATE APP CANNOT BE INSTALLED FROM github.com/apps/{slug}.
+//
+// That public route exists only for PUBLIC apps, and every app this engine
+// creates is private: the manifest sets `public: false`, because an agent's
+// identity is that company's business and a public app is listed for anyone
+// to install. Sending an operator there gave them a 404 on the one click the
+// whole flow depends on.
+func TestTheInstallLinkGoesToTheAppsOwnSettings(t *testing.T) {
+	t.Parallel()
+	got := github.InstallURL("", "crewbed", "infrado-live-test-sre-lead")
+	want := "https://github.com/organizations/crewbed/settings/apps/" +
+		"infrado-live-test-sre-lead/installations"
+	if got != want {
+		t.Errorf("InstallURL = %q, want %q", got, want)
+	}
+	// THE PUBLIC ROUTE IS THE BUG, so it must not come back.
+	if strings.Contains(got, "github.com/apps/") {
+		t.Errorf("the install link uses the public route, which 404s for a private app: %q", got)
+	}
+	// A personal account manages its apps under its own settings.
+	if got := github.InstallURL("", "", "some-app"); got != "https://github.com/settings/apps/some-app/installations" {
+		t.Errorf("a user-owned app installs at %q", got)
+	}
+	// No slug means no link, because a broken one costs the trip to find out.
+	if got := github.InstallURL("", "crewbed", ""); got != "" {
+		t.Errorf("an app with no slug was given a link: %q", got)
+	}
+}

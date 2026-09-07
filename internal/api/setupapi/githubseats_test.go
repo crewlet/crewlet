@@ -111,8 +111,18 @@ func TestTheGitHubRosterNamesTheStepEachAgentIsWaitingOn(t *testing.T) {
 		t.Fatalf("a seat whose app is installed nowhere is on step %v", half["step"])
 	}
 	action, _ := half["action_url"].(string)
-	if !strings.HasSuffix(action, "/apps/acme-builder/installations/new") {
+	// THE APP'S OWN SETTINGS, not github.com/apps/{slug}: that public
+	// route exists only for PUBLIC apps, and every app this engine creates
+	// is private, so it answered 404 on the one click the flow depends on.
+	//
+	// This company has named no organization yet, so the link is the
+	// personal-account form. The organization form is asserted in
+	// TestAGitHubSeatWithWorkOutstandingHoldsTheCardOpen, which seeds one.
+	if action != "https://github.com/settings/apps/acme-builder/installations" {
 		t.Errorf("install_app points at %q, which is not this app's install page", action)
+	}
+	if strings.Contains(action, "github.com/apps/") {
+		t.Errorf("the install link uses the public route, which 404s for a private app: %q", action)
 	}
 	// STARTED, and not finished: the app exists, so the roster must not
 	// offer to create a second one, and it mints nothing until it is
@@ -167,23 +177,42 @@ func TestASeatWhoseAppKeyDoesNotResolveIsNotSatisfied(t *testing.T) {
 
 // AN UNFINISHED ROSTER DOES NOT MAKE THE CARD UNFINISHED.
 //
-// The seats are informational here: a company running GitHub with apps for
-// three of its ten agents chose that, and the company block is what decides
-// whether deliveries arrive. Reading the roster as work outstanding would put
-// a Continue button on every connected GitHub card for ever, which is the
-// defect SeatsRequired exists to prevent.
-func TestGitHubSeatsDoNotHoldTheCardOpen(t *testing.T) {
+// AN AGENT WITHOUT ITS OWN APP ACTS AS NOBODY, so the card must not read
+// Connected over it.
+//
+// This asserted the opposite for one commit, on the reasoning that seats are
+// informational everywhere but Slack. That is true where a seat credential is
+// an upgrade on a working app, and false here: one GitHub App is one bot
+// identity, so an agent with no app of its own has no way to act at all. An
+// operator saw Connected on a card whose only agent could do nothing, and had
+// to open the roster to find out.
+func TestAGitHubSeatWithWorkOutstandingHoldsTheCardOpen(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	s.seedGitHubApps(t)
 	s.seedGitHub(t)
 
 	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
-	if state["satisfied"] != true {
-		t.Fatalf("a fully connected GitHub reports satisfied=%v while its agents "+
-			"still have apps to create: %v", state["satisfied"], state)
+	if state["satisfied"] != false {
+		t.Fatalf("a GitHub whose agents still have apps to create reports "+
+			"satisfied=%v", state["satisfied"])
 	}
-	if required, ok := state["seats_required"]; ok && required != false {
-		t.Errorf("seats_required = %v: only Slack is unusable without a per-seat app", required)
+	if state["seats_required"] != true {
+		t.Errorf("seats_required = %v: an agent without its own app acts as nobody",
+			state["seats_required"])
+	}
+	// AND THE INSTALL LINK NAMES THE ORGANIZATION once the company has one:
+	// an organization's app is installed from the organization's settings,
+	// and a personal link opens somebody else's list.
+	seats, _ := state["seats"].([]any)
+	for _, entry := range seats {
+		seat, _ := entry.(map[string]any)
+		if seat["handle"] != "builder" {
+			continue
+		}
+		want := "https://github.com/organizations/acme/settings/apps/acme-builder/installations"
+		if got, _ := seat["action_url"].(string); got != want {
+			t.Errorf("install_app points at %q, want %q", got, want)
+		}
 	}
 }

@@ -549,7 +549,13 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	// An informational roster must not be able to report an app unfinished,
 	// or listing a company's agents would turn every connected card into one
 	// with work outstanding.
-	seatsRequired := kind == integration.KindSlack
+	// TWO APPS WHERE THE ROSTER IS THE INTEGRATION. Slack gives each agent
+	// its own app because each posts as itself, and GitHub now does the
+	// same: one GitHub App is one bot identity, so an agent without its own
+	// app acts as nobody there. A seat left unfinished on either is work
+	// outstanding rather than a company's choice, which is what stopped the
+	// GitHub card reading Connected over an agent that could do nothing.
+	seatsRequired := kind == integration.KindSlack || kind == integration.KindGitHub
 	if seatsRequired {
 		for _, seat := range seats {
 			if seat.Present && !seat.Satisfied {
@@ -863,7 +869,7 @@ func githubSeats(company *config.Company, resolve func(string) (string, bool)) [
 			// may not exist. A record with no slug gets no link at all,
 			// because a broken one costs an operator the trip to find out.
 			if slug := strings.TrimSpace(app.AppSlug); slug != "" {
-				state.ActionURL = github.InstallURL(webBase, slug)
+				state.ActionURL = github.InstallURL(webBase, githubOrgOf(company), slug)
 			}
 			state.Detail = "the app exists and nothing has installed it, so it " +
 				"sees no repository and mints no usable token"

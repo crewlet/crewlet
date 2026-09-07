@@ -293,7 +293,7 @@ func (f *AppFlow) InstallURL(handle string) string {
 	if slug == "" {
 		return ""
 	}
-	return github.InstallURL(webBaseOf(company), slug)
+	return github.InstallURL(webBaseOf(company), orgOf(company), slug)
 }
 
 // RecordInstall adopts an installation GitHub named on its redirect.

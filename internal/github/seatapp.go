@@ -166,7 +166,7 @@ func (r *SeatAppResult) reconcileSeat(
 		r.Findings = append(r.Findings, integration.Finding{
 			Kind:      integration.FindingApprovalRequired,
 			Subject:   seat.Handle,
-			ActionURL: InstallURL(opts.WebBase, seat.Slug),
+			ActionURL: InstallURL(opts.WebBase, opts.Org, seat.Slug),
 			Detail: seat.Handle + "'s app exists and nothing has installed it, so it " +
 				"sees no repository: install it on " + orgLabel(opts.Org),
 		})
@@ -180,7 +180,7 @@ func (r *SeatAppResult) reconcileSeat(
 		r.Findings = append(r.Findings, integration.Finding{
 			Kind:      integration.FindingApprovalRequired,
 			Subject:   seat.Handle,
-			ActionURL: InstallURL(opts.WebBase, seat.Slug),
+			ActionURL: InstallURL(opts.WebBase, opts.Org, seat.Slug),
 			Detail: seat.Handle + "'s installation is suspended, so every token it " +
 				"mints is refused: unsuspend it at GitHub",
 		})
@@ -204,7 +204,7 @@ func (r *SeatAppResult) reconcileSeat(
 		r.Findings = append(r.Findings, integration.Finding{
 			Kind:      integration.FindingGrantShort,
 			Subject:   seat.Handle,
-			ActionURL: InstallURL(opts.WebBase, seat.Slug),
+			ActionURL: InstallURL(opts.WebBase, opts.Org, seat.Slug),
 			Detail: seat.Handle + " is set to " + seat.Tier.Label() + " and its app " +
 				"lacks " + strings.Join(short, ", ") + ", so those calls are refused " +
 				"at the call site with nothing naming the tier",

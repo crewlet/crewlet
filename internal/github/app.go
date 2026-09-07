@@ -311,15 +311,21 @@ func ExchangeManifest(ctx context.Context, apiBase, code string) (*CreatedApp, e
 
 // InstallURL is where the operator installs a seat's app.
 //
+// THROUGH THE APP'S OWN SETTINGS, not through github.com/apps/{slug}. That
+// public route exists only for PUBLIC apps, and every app this engine creates
+// is private: the manifest sets `public: false`, because an agent's identity
+// is that company's business and a public app is listed for anyone to
+// install. Sending an operator to the public route gave them a 404 on the one
+// click the whole flow depends on.
+//
 // BUILT FROM THE SLUG THE CONVERSION RETURNED, never from the name that was
 // requested: GitHub slugifies a name and will disambiguate a collision, so
 // the app that exists may not be the one whose name was asked for.
-func InstallURL(webBase, slug string) string {
-	base := strings.TrimRight(strings.TrimSpace(webBase), "/")
-	if base == "" {
-		base = defaultWebBase
+func InstallURL(webBase, org, slug string) string {
+	if manage := ManageURL(webBase, org, slug); manage != "" {
+		return manage + "/installations"
 	}
-	return base + "/apps/" + url.PathEscape(strings.TrimSpace(slug)) + "/installations/new"
+	return ""
 }
 
 // ManageURL is the app's own settings page, where a person deletes it.
