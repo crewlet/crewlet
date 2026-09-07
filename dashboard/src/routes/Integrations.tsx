@@ -453,11 +453,6 @@ export function Reconcile({
   );
 }
 
-/** A surface's display name inside its tool, for labelling that tool's roster. */
-function surfaceName(entry: Entry, key: string): string {
-  return entry.surfaces.find((s) => s.key === key)?.name ?? key;
-}
-
 /**
  * What one surface has to report, or nothing.
  *
@@ -671,18 +666,21 @@ export function EntryRow({
   // roster of one agent render four rows on the Atlassian card.
   const tools = [...new Map((sections ?? []).map((s) => [s.tool.key, s.tool])).values()];
   const action = actionFor(state, tools);
-  // NAMED BY SURFACE where the card has more than one that has agents.
-  // Atlassian is one card over Jira and Confluence, so an agent appears once
-  // per surface: two rows reading "SRE Lead" with nothing saying which is
-  // which. The status line above already prefixes a surface's name for the
-  // same reason, so the roster uses the same convention.
+  // ONE ROW PER AGENT, whatever the card is made of.
+  //
+  // A company with one agent saw THREE rows on Atlassian — Organization,
+  // Jira, Confluence — because every surface reports its own roster and the
+  // card listed them all. They are one person's one account: Atlassian is
+  // where it is created, and the two products are what it then works in.
+  //
+  // The surface that PROVISIONS wins, because it is the one whose answer is
+  // about the account rather than about a credential slot. Where no surface
+  // provisions, the first roster with anything in it is as good as any: they
+  // are reading the same seat's mcp_env.
   const rosters = tools.filter((t) => (t.seats ?? []).length > 0);
-  const seats = rosters.flatMap((t) =>
-    (t.seats ?? []).map((seat) => ({
-      seat,
-      surface: rosters.length > 1 ? surfaceName(entry, t.key) : "",
-    })),
-  );
+  const roster =
+    rosters.find((t) => t.seats_required) ?? rosters.find((t) => t.can_provision) ?? rosters[0];
+  const seats = (roster?.seats ?? []).map((seat) => ({ seat, surface: "" }));
   const bodyID = `int-body-${entry.key}`;
 
   // A FRAGMENT, not a wrapper: the header already has one actions row, and
@@ -820,10 +818,7 @@ export function EntryRow({
                     as the person it stands for. */}
                 <Avatar name={seat.name || seat.handle} size="sm" />
                 <div className="int-row-identity">
-                  <span className="int-row-name">
-                    {surface ? `${surface}: ` : ""}
-                    {seat.name || seat.handle}
-                  </span>
+                  <span className="int-row-name">{seat.name || seat.handle}</span>
                   {/* WHERE THIS AGENT'S OWN CREDENTIAL IS, or what is
                       missing. It read "no inbound path yet" against every
                       agent of every app but Slack, because Slack is the only

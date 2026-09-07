@@ -115,14 +115,15 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	for _, seat := range opts.Plan.Seats {
-		res.Seats = append(res.Seats, reconcileSeat(ctx, opts, seat, byHandle))
+		res.Seats = append(res.Seats, reconcileSeat(ctx, opts, seat, site.CloudID, byHandle))
 	}
 	return res, nil
 }
 
 // reconcileSeat brings one seat's identity into line.
 func reconcileSeat(
-	ctx context.Context, opts Options, seat provision.Seat, byHandle map[string]ServiceAccount,
+	ctx context.Context, opts Options, seat provision.Seat, site string,
+	byHandle map[string]ServiceAccount,
 ) SeatResult {
 	out := SeatResult{Handle: seat.Handle}
 	account, found := byHandle[seat.Handle]
@@ -142,6 +143,30 @@ func reconcileSeat(
 			return out
 		}
 		out.AccountID, out.Created = created.ID, true
+	}
+
+	// GRANTED EVERY PASS, not only on the one that created the account.
+	//
+	// An account with no product access is refused by the product REST API
+	// with a 401 that reads exactly like a bad credential: the token is fine
+	// and there is nothing it may open. Granting is idempotent, and a grant
+	// that failed on the pass that created the account would otherwise never
+	// be retried — Atlassian refuses to grant one it has only just made.
+	if opts.Sink != nil {
+		switch err := opts.Client.Grant(
+			ctx, opts.Key, opts.OrgID, out.AccountID, GrantsFor(site),
+		); {
+		case err == nil:
+		case errors.Is(err, ErrAccountNotReady):
+			// The next pass grants it. Reported as a seat still coming up
+			// rather than a failure, because that is what it is.
+			out.Err = fmt.Errorf(
+				"%s is waiting for Atlassian to make its new account grantable", seat.Handle)
+			return out
+		default:
+			out.Err = fmt.Errorf("atlassian: grant %s product access: %w", seat.Handle, err)
+			return out
+		}
 	}
 
 	// THE TOKEN IS MINTED ONLY WHERE THERE IS NOWHERE TO READ ONE FROM. A

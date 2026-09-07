@@ -73,6 +73,19 @@ const serviceAccountsPath = "/admin/account-management/v1/orgs/%s/service-accoun
 //nolint:gosec // a URL template, not a credential
 const apiTokensPath = "/users/%s/manage/api-tokens"
 
+// invitePath grants a service account product access.
+//
+// It is the only route that works, and it is undocumented: the contract comes
+// from what the admin console itself calls. Service accounts are not
+// directory users, so adding one to a group answers USER_NOT_FOUND, and role
+// assignments are read-only.
+//
+// WITHOUT IT AN ACCOUNT EXISTS AND CAN REACH NOTHING. Created and given a
+// token but never granted, it is refused by the product REST API with a 401
+// that reads exactly like a bad credential — the token is fine and there is
+// nothing it may open.
+const invitePath = "/admin/account-management/v1/orgs/%s/service-accounts/invite"
+
 // lifecycleDeletePath removes an account outright.
 //
 // A third service: account-management creates and lists service accounts but
@@ -160,6 +173,60 @@ func NewClient(opts ClientOptions) *Client {
 		base: base,
 		http: &http.Client{Transport: httpx.Transport(), Timeout: ClientTimeout},
 	}
+}
+
+// Products are what an agent's account is granted access to.
+//
+// Both, because one Atlassian account is one agent's identity across the
+// site: an agent that reads a page and comments on the issue it came from is
+// doing one job with one identity.
+//
+// The ARIs name `jira-software` rather than `jira`. The plain jira ARI is
+// ACCEPTED when granting and silently grants nothing, which is the worst
+// shape a mistake can take: a 200, an account, and no access.
+//
+//nolint:gochecknoglobals // an immutable contract, not state
+var Products = []string{"jira-software", "confluence"}
+
+// PermissionRule grants one product's member role on one site.
+type PermissionRule struct {
+	Resource string `json:"resource"`
+	Role     string `json:"role"`
+}
+
+// GrantsFor is the product access one agent's account needs on a site.
+func GrantsFor(cloudID string) []PermissionRule {
+	out := make([]PermissionRule, 0, len(Products))
+	for _, product := range Products {
+		out = append(out, PermissionRule{
+			Resource: "ari:cloud:" + product + "::site/" + cloudID,
+			Role:     "ari:cloud:" + product + "::role/product/member",
+		})
+	}
+	return out
+}
+
+// ErrAccountNotReady is a just-created account Atlassian will not grant yet.
+//
+// It answers a 404 whose message says the account is not in the directory,
+// which reads like the account does not exist. Naming it lets the caller
+// report a seat as still coming up rather than as failed.
+var ErrAccountNotReady = errors.New("atlassian: the account is not grantable yet")
+
+// Grant gives one service account access to the site's products.
+func (c *Client) Grant(ctx context.Context, key, orgID, accountID string, rules []PermissionRule) error {
+	if len(rules) == 0 {
+		return nil
+	}
+	err := c.call(ctx, key, http.MethodPost, fmt.Sprintf(invitePath, orgID),
+		map[string]any{"userIds": []string{accountID}, "permissionRules": rules}, nil)
+
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound &&
+		strings.Contains(apiErr.Detail, "not found in the directory") {
+		return ErrAccountNotReady
+	}
+	return err
 }
 
 // ServiceAccount is one agent's identity as Atlassian holds it.

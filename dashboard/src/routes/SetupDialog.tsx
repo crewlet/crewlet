@@ -75,6 +75,19 @@ export function fieldsFor(reqs: SetupRequirement[], blocks?: string): SetupRequi
 }
 
 /**
+ * Whether a requirement is a row on the form at all.
+ *
+ * A HIDDEN field is written without being asked for, and a MINTABLE
+ * credential has nothing for a person to type. Neither is rendered, and
+ * neither may be COUNTED: the fold said "More settings (5)" over two inputs,
+ * because the count came from the requirement list and the rendering from
+ * this rule. Both read it now.
+ */
+export function shownField(r: SetupRequirement): boolean {
+  return !r.hidden && !(r.kind === "secret" && r.mintable);
+}
+
+/**
  * The two halves of a form: what connects the app, and what configures what
  * happens over the connection.
  *
@@ -92,9 +105,11 @@ export function splitFields(reqs: SetupRequirement[]): {
   connect: SetupRequirement[];
   more: SetupRequirement[];
 } {
-  const connect = reqs.filter((r) => r.connect);
-  if (connect.length === 0) return { connect: reqs, more: [] };
-  return { connect, more: reqs.filter((r) => !r.connect) };
+  // WHAT IS RENDERED, on both sides of the fold. See [shownField].
+  const shown = reqs.filter(shownField);
+  const connect = shown.filter((r) => r.connect);
+  if (connect.length === 0) return { connect: shown, more: [] };
+  return { connect, more: shown.filter((r) => !r.connect) };
 }
 
 /**
@@ -332,13 +347,9 @@ export function SetupDialog({
   // narrating its own plumbing in the middle of a form somebody is filling
   // in. It is still generated on submit; payloadFor reads the requirement,
   // not the rendering.
-  function editable(r: SetupRequirement): boolean {
-    // A HIDDEN FIELD IS WRITTEN, NOT ASKED, and a generated credential has
-    // nothing for a person to type. Neither is rendered; both are still
-    // submitted, because payloadFor reads the requirement rather than the
-    // rendering.
-    return !r.hidden && !(r.kind === "secret" && r.mintable);
-  }
+  // Both are still SUBMITTED, because payloadFor reads the requirement list
+  // rather than the rendering.
+  const editable = shownField;
 
   /** What one section would send: only what was touched, plus its mints. */
   function payloadFor(

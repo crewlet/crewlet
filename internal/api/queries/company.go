@@ -10,7 +10,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
@@ -266,19 +265,8 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 			map[string]any{"url": in.GitLab.URL})
 	}
 	if in.Jira != nil {
-		// NIL ON CLOUD, which is "this surface uses no secret" rather than
-		// "its secret is missing". A Cloud site has no inbound secret of its
-		// own: Atlassian restricts the webhook API to Connect and OAuth
-		// apps, so its events arrive through the Forge relay and are
-		// verified by the app id. Reported as false, a correctly configured
-		// Cloud site read "the webhook secret did not resolve, so every
-		// delivery is refused" — a fault, on the screen, permanently, for a
-		// field that surface will never have.
-		var secret *bool
-		if jira.DeploymentOf(in.Jira.BaseURL()) == jira.DataCenter {
-			secret = boolPtr(in.Jira.WebhookSecret != "")
-		}
-		add("jira", true, secret, map[string]any{"url": in.Jira.BaseURL()})
+		add("jira", true, boolPtr(in.Jira.WebhookSecret != ""),
+			map[string]any{"url": in.Jira.BaseURL()})
 	}
 	if in.Confluence != nil {
 		// TWO ROUTES, so the row names both. Data Center signs on

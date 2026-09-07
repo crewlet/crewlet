@@ -158,10 +158,6 @@ func forDeployment(reqs []setup.Requirement, deploy Deployment, cloudID string) 
 
 // Summary is the sentence the connect form opens with.
 func Summary() string {
-	// Same correction Jira's summary carries: a Cloud site has no webhook
-	// REST API for an API token to call, so its changes arrive through the
-	// Forge relay.
-	return "Agents read the company's pages and answer comments on them. " +
-		"Cloud delivers through the Crewlet Forge app; Data Center " +
-		"registers a webhook."
+	return "Agents read the company's pages and answer comments on them. This " +
+		"engine registers a webhook per event so Confluence's changes reach it."
 }

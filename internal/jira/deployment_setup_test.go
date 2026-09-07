@@ -16,20 +16,18 @@ func fields(t *testing.T, in *config.Jira) map[string]bool {
 	return out
 }
 
-// A FIELD THAT CANNOT APPLY IS NOT AN OPTIONAL FIELD.
+// A CLOUD SITE SIGNS ITS DELIVERIES TOO.
 //
-// A Cloud site and a Data Center instance need genuinely different things,
-// and the form offered both sets at once: a Cloud operator was asked for a
-// webhook signing secret their site will never send, because Atlassian
-// restricts the webhook API to Connect and OAuth apps and Cloud events reach
-// this engine through the Forge relay instead.
-func TestACloudSiteIsNotAskedForDataCenterFields(t *testing.T) {
+// This asserted the opposite for one commit, on the reasoning that Atlassian
+// serves the webhook API to Connect and OAuth apps only. It does — on
+// /rest/api/3/webhook, the DYNAMIC API. Webhook administration lives at
+// /rest/webhooks/1.0/webhook on both deployments and takes an API token,
+// which is the path this engine has always used and hooks.go has always
+// documented. The signing secret is a real requirement on Cloud.
+func TestACloudSiteIsAskedForItsSigningSecret(t *testing.T) {
 	t.Parallel()
 	got := fields(t, &config.Jira{URL: "https://acme.atlassian.net"})
-	if got["webhook_secret"] {
-		t.Error("a Cloud site was asked for a Data Center signing secret")
-	}
-	for _, want := range []string{"url", "email", "token"} {
+	for _, want := range []string{"url", "email", "token", "webhook_secret"} {
 		if !got[want] {
 			t.Errorf("a Cloud site was not asked for %s", want)
 		}
@@ -59,10 +57,10 @@ func TestADataCenterInstanceIsNotAskedForCloudFields(t *testing.T) {
 func TestAWrittenFieldIsNeverHidden(t *testing.T) {
 	t.Parallel()
 	got := fields(t, &config.Jira{
-		URL:           "https://acme.atlassian.net",
-		WebhookSecret: "${JIRA_WEBHOOK_SECRET}",
+		URL:     "https://jira.acme.example",
+		CloudID: "abc-123",
 	})
-	if !got["webhook_secret"] {
-		t.Error("a signing secret the document holds was hidden from the form")
+	if !got["cloud_id"] {
+		t.Error("a cloud id the document holds was hidden from the form")
 	}
 }

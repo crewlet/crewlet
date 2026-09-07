@@ -1065,15 +1065,45 @@
  * equivalent for, and seven inputs in one column made connecting an app read
  * as filling in a configuration file. */
 .int-form-more {
+  /* IT CLOSES THE FORM, so it takes the rule and the space above it rather
+     than sitting in the field flow with a hairline through the middle. The
+     parent's own gap already separates it from the last field; a margin on
+     top of that put the rule closer to the fold than to the form it ends. */
   border-top: 1px solid var(--border-subtle);
-  padding-top: var(--space-3);
-  margin-top: var(--space-1);
+  padding-top: var(--space-5);
 }
+/* The disclosure is a control, so it reads as one: the same weight as a
+   field's label, with a marker that says which way it opens. */
+.int-form-more > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-secondary);
+}
+.int-form-more > summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 120ms ease;
+}
+.int-form-more[open] > summary::before {
+  transform: rotate(90deg);
+}
+.int-form-more > summary:hover {
+  color: var(--text);
+}
+/* The fields inside carry the form's own rhythm, so opening the fold does
+   not change the spacing of the questions below it. */
 .int-form-more-fields {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding-top: var(--space-4);
+  gap: var(--space-5);
+  padding-top: var(--space-5);
 }
 
 .int-row-badges {

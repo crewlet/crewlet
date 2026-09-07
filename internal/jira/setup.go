@@ -91,7 +91,7 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 			// registered with, so both ends belong to the engine, and
 			// running the setup pass registers the hook with this value.
 			Mintable: true,
-			Help:     "Signs every delivery. Data Center needs it; Cloud relays through Forge.",
+			Help:     "Signs every delivery, on both deployments.",
 			Blocks:   integration.FindingIngressBlocked,
 		},
 		{
@@ -131,10 +131,6 @@ func forDeployment(reqs []setup.Requirement, deploy Deployment, cloudID string) 
 	// The gateway fields only mean anything with a cloud id, which is itself
 	// a Cloud-only way of naming the site.
 	gateway := map[string]bool{"cloud_id": true, "site_url": true}
-	// Cloud sites do not sign a webhook: their events reach this engine
-	// through the Forge relay, because Atlassian restricts the webhook API
-	// to Connect and OAuth apps.
-	dataCenter := map[string]bool{"webhook_secret": true}
 
 	out := make([]setup.Requirement, 0, len(reqs))
 	for _, r := range reqs {
@@ -144,8 +140,6 @@ func forDeployment(reqs []setup.Requirement, deploy Deployment, cloudID string) 
 			continue
 		case r.Field == "site_url" && cloudID == "":
 			continue
-		case dataCenter[r.Field] && deploy == Cloud:
-			continue
 		}
 		out = append(out, r)
 	}
@@ -154,14 +148,7 @@ func forDeployment(reqs []setup.Requirement, deploy Deployment, cloudID string) 
 
 // Summary is the sentence the connect form opens with.
 func Summary() string {
-	// IT DOES NOT REGISTER A CLOUD WEBHOOK, and said it did. Atlassian
-	// restricts the webhook API to Connect and OAuth apps — an API token is
-	// answered "Only Connect and OAuth 2.0 apps can use this operation" —
-	// so a Cloud site's events reach this engine through the Forge relay and
-	// only Data Center registers a hook. Nor does it create accounts:
-	// Atlassian has no user-creation API outside SCIM, which needs a
-	// verified domain and an identity provider.
-	return "Agents are assigned issues and mentioned by name, as accounts you " +
-		"create yourself. Cloud delivers through the Crewlet Forge app; " +
-		"Data Center registers a webhook."
+	return "Agents are assigned issues and mentioned by name. This engine " +
+		"registers a webhook so Jira's events reach it, and creates each " +
+		"agent's account through the Atlassian organization."
 }

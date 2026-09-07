@@ -637,99 +637,49 @@ test("the card lists each agent and what it holds", () => {
   expect(screen.getByText("not in Datadog yet, created on the next sync")).toBeTruthy();
 });
 
-// AND A MULTI-SURFACE CARD SAYS WHICH SURFACE EACH ROW IS FOR.
+// ONE ROW PER AGENT, whatever the card is made of.
 //
-// Atlassian is one card over Jira and Confluence, so an agent appears once
-// per surface: without the prefix that is two rows reading "SRE Lead" with
-// nothing distinguishing them, one ready and one not.
-test("a roster on a two-surface card names the surface", () => {
+// A company with one agent saw three rows on Atlassian — Organization, Jira,
+// Confluence — because every surface reports its own roster and the card
+// listed them all. They are one person's one account: Atlassian is where it
+// is created, and the two products are what it then works in.
+test("an agent is listed once however many surfaces report it", () => {
+  const seat = (detail: string, satisfied: boolean) => [
+    { handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied, detail },
+  ];
   render(
     <EntryRow
       entry={atlassian}
       rows={rowsOf({ key: "jira", configured: true }, { key: "confluence", configured: true })}
       sections={[
         {
-          name: "Jira",
+          name: "Organization",
           tool: toolState({
-            key: "jira",
-            seats: [
-              {
-                handle: "sre-lead",
-                name: "SRE Lead",
-                requirements: [],
-                satisfied: true,
-                detail: "mcp_env.atlassian.JIRA_API_TOKEN",
-              },
-            ],
+            key: "atlassian",
+            can_provision: true,
+            seats: seat("mcp_env.atlassian.JIRA_API_TOKEN", true),
           }),
+        },
+        {
+          name: "Jira",
+          tool: toolState({ key: "jira", seats: seat("no Jira credential yet", false) }),
         },
         {
           name: "Confluence",
           tool: toolState({
             key: "confluence",
-            seats: [
-              {
-                handle: "sre-lead",
-                name: "SRE Lead",
-                requirements: [],
-                satisfied: false,
-                detail: "no Confluence account yet",
-              },
-            ],
+            seats: seat("no Confluence credential yet", false),
           }),
         },
       ]}
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
-  expect(screen.getByText(/Jira: SRE Lead/)).toBeTruthy();
-  expect(screen.getByText(/Confluence: SRE Lead/)).toBeTruthy();
-});
-
-// A WORKING SURFACE SAYS NOTHING UNDER ITS NAME.
-//
-// The note band carried the loop's own clock — last settled, next check —
-// under every surface, and on a healthy one that was the only thing in it: a
-// grey stripe per surface reporting that nothing had happened. The tag says
-// the state; the band is for what a person has to act on.
-test("a ready surface carries no note", () => {
-  render(
-    <EntryRow
-      entry={CATALOG.find((e) => e.key === "datadog")!}
-      rows={rowsOf({
-        key: "datadog",
-        configured: true,
-        reconcile: { phase: "ready", settled_at: "2026-09-06T23:06:47Z" },
-      })}
-    />,
-  );
-  fireEvent.click(screen.getByRole("button", { name: /Show Datadog details/ }));
-  expect(screen.queryByText(/settled/)).toBeNull();
-  expect(screen.queryByText(/next check/)).toBeNull();
-});
-
-// AND A SURFACE WITH SOMETHING TO SAY STILL SAYS IT. Dropping the band
-// wholesale would take the findings with it, which are the half a person
-// acts on.
-test("a degraded surface still carries its finding", () => {
-  render(
-    <EntryRow
-      entry={CATALOG.find((e) => e.key === "datadog")!}
-      rows={rowsOf({
-        key: "datadog",
-        configured: true,
-        reconcile: {
-          phase: "degraded",
-          detail: "sre-lead has no Datadog account",
-          settled_at: "2026-09-06T23:06:47Z",
-        },
-      })}
-    />,
-  );
-  fireEvent.click(screen.getByRole("button", { name: /Show Datadog details/ }));
-  // Twice on purpose: the card's own status line, and the surface's note.
-  expect(screen.getAllByText("sre-lead has no Datadog account").length).toBe(2);
-  expect(screen.queryByText(/next check/)).toBeNull();
+  expect(screen.getAllByText("SRE Lead").length).toBe(1);
+  // THE SURFACE THAT PROVISIONS WINS, because its answer is about the
+  // account rather than about one product's credential slot.
+  expect(screen.getByText("mcp_env.atlassian.JIRA_API_TOKEN")).toBeTruthy();
+  expect(screen.queryByText(/no Confluence credential/)).toBeNull();
 });
 
 // A DROP IS A PROBLEM, so it survives the counters being removed.
