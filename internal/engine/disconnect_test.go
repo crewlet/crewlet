@@ -12,7 +12,7 @@ import (
 // A third-party app with no provisioning pass still has a BLOCK in the company
 // document. Datadog's webhook is created by a person in Datadog's own UI and
 // Slack's apps are made from the command line, so neither has anything this
-// engine registered — but a disconnect for either still has to drop the
+// engine registered, but a disconnect for either still has to drop the
 // block. Without a disconnector the intent sat on the fleet row for ever,
 // with the screen reporting Disconnecting and no node ever finishing it,
 // which is exactly what happened to Datadog.

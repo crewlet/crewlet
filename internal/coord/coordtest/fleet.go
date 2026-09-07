@@ -1685,7 +1685,7 @@ var secretCases = []fleetCase{{
 	// THE REASON THIS MOVED. A rotation reached the one node whose Tier A
 	// file the CLI was pointed at; every other node kept what it booted
 	// with, and nothing failed until a seat landed on one of them and the
-	// third-party app rejected a credential the operator believed they had replaced.
+	// vendor rejected a credential the operator believed they had replaced.
 	name: "a credential one node stored is readable by every other",
 	fn: func(h *fleetHarness) {
 		h.putSecret("SLACK_BOT_TOKEN", "v1:sealed-envelope", "key-1")
@@ -1706,7 +1706,7 @@ var secretCases = []fleetCase{{
 }, {
 	// The store holds an ENVELOPE and has no key. Anything that mangled
 	// the bytes would produce a value that decrypts to nothing on the far
-	// side — an auth failure attributed to the third-party app rather than to the
+	// side — an auth failure attributed to the vendor rather than to the
 	// store that corrupted it.
 	name: "the sealed bytes come back byte-identical",
 	fn: func(h *fleetHarness) {

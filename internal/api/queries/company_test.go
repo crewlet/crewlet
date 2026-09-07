@@ -889,9 +889,9 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 		t.Skipf("the dashboard tree is not in this checkout: %v", err)
 	}
 
-	// EVERY third-party app, because the per-third-party app detail fields (url, seats) only
-	// appear on the rows that have them — a fixture missing one reports its
-	// field as a mismatch that is really a gap in the fixture.
+	// EVERY third-party app, because the per-integration detail fields (url,
+	// seats) only appear on the rows that have them: a fixture missing one
+	// reports its field as a mismatch that is really a gap in the fixture.
 	cfg := company(t)
 	cfg.Integrations.Jira = &config.Jira{
 		URL: "https://jira.example.com", Token: "t", WebhookSecret: "jr",
@@ -906,7 +906,7 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 		t.Fatal("the answer carried no integrations, so this proves nothing")
 	}
 	// Across every row, not just the first: `url` and `seats` are
-	// per-third-party app detail, so a field carried by ANY row is a field the
+	// per-integration detail, so a field carried by ANY row is a field the
 	// answer knows how to send.
 	sent := map[string]bool{}
 	for _, r := range rows {

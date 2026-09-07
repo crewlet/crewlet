@@ -353,10 +353,10 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
       status: phaseLine ?? ingress,
       // ATTENTION MEANS A PERSON IS NEEDED, which is the actor's own
       // question and not "is the phase ready" (internal/integration/report.go:
-      // "Nothing the engine or a third-party app is doing needs a person told about
-      // it"). Marking `provisioning` and `activating` amber told an operator
-      // to act while the engine was still working, beside a tag drawn neutral
-      // for the same phase.
+      // "Nothing the engine or a third-party app is doing needs a person told
+      // about it"). Marking `provisioning` and `activating` amber told an
+      // operator to act while the engine was still working, beside a tag drawn
+      // neutral for the same phase.
       attention: actor === "admin" || actor === "operator" || (!phaseLine && ingress !== undefined),
     };
   }
@@ -613,8 +613,8 @@ function SurfaceRow({
  *
  * A PURE FUNCTION of (satisfied, phase, actor), so the action and the state
  * tag beside it can never tell an operator two different things. Empty means
- * no action: nothing a person does moves a surface the engine or the third-party app
- * is still working on.
+ * no action: nothing a person does moves a surface the engine or the
+ * third-party app is still working on.
  */
 export function actionFor(
   state: EntryState,
@@ -640,9 +640,9 @@ export function actionFor(
   const configured = tools.filter((t) => t.configured);
   if (configured.length === 0) return { label: "Connect" };
   if (configured.some((t) => !t.satisfied)) return { label: "Continue" };
-  // A per-seat third-party app with no seat set up yet is not connected, whatever its
-  // company block says: a Slack company with no agent holding an app is a
-  // company where nothing can post.
+  // A per-seat third-party app with no seat set up yet is not connected,
+  // whatever its company block says: a Slack company with no agent holding
+  // an app is a company where nothing can post.
   //
   // ONLY WHERE THE SEATS ARE LOAD-BEARING, which the engine says with
   // seats_required. Every card carries a roster now, and most of those seat
@@ -735,9 +735,9 @@ export function sectionsFor(
  *
  * The body is where the engine's own plumbing lives: a row per surface with
  * its counts, its path and what the reconcile loop last found, and for a
- * per-seat third-party app a row per agent. None of that belongs in the header, which
- * is what the previous layout got wrong: an operator scanning six
- * integrations wants six names and six states, not six paragraphs.
+ * per-seat third-party app a row per agent. None of that belongs in the
+ * header, which is what the previous layout got wrong: an operator scanning
+ * six integrations wants six names and six states, not six paragraphs.
  */
 export function EntryRow({
   entry,
@@ -1085,9 +1085,9 @@ export function Integrations() {
         }
       />
 
-      {/* THE ADDRESS EVERY INBOUND VENDOR IS BUILT ON, rendered once. It is
-          one setting, and a screen that asked for it per app would ask the
-          operator to keep seven copies consistent. */}
+      {/* THE ADDRESS EVERY INBOUND INTEGRATION IS BUILT ON, rendered once. It
+          is one setting, and a screen that asked for it per integration would
+          ask the operator to keep seven copies consistent. */}
       {setup.base && !setup.base.present && (
         <div className="banner caution">
           <Icon name="alert" size="sm" />
@@ -1134,8 +1134,8 @@ export function Integrations() {
           stuck={dropping.stuck || undefined}
           onClose={() => setDropping(null)}
           // The row does not vanish here: the engine keeps the block until
-          // the third-party app teardown succeeds, so what a re-read shows is the
-          // surface moving to Disconnecting.
+          // the third-party app teardown succeeds, so what a re-read shows
+          // is the surface moving to Disconnecting.
           onDone={() => {
             setup.reload();
             reread();

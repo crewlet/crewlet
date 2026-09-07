@@ -168,7 +168,8 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 	in.Values = normalised
 
 	// The patch is built BEFORE anything is written, so a submission naming
-	// a field this third-party app does not have is refused having changed nothing.
+	// a field this third-party app does not have is refused having changed
+	// nothing.
 	patch := map[string]any{}
 	type pending struct {
 		name  string
@@ -402,7 +403,8 @@ func fields(reqs []Requirement) []string {
 //
 // Merge-patch shaped: `integrations.datadog.route_to` becomes
 // {"integrations":{"datadog":{"route_to":"..."}}}, so two fields of one
-// third-party app merge into one object rather than the second replacing the first.
+// third-party app merge into one object rather than the second replacing the
+// first.
 //
 // A list position is REFUSED rather than guessed at. The grammar has one
 // (`roles[2].llm`), and a merge patch cannot address a list element at all:
@@ -422,7 +424,7 @@ func fields(reqs []Requirement) []string {
 // operator back to a form to delete a character they cannot see. An INTERIOR
 // space is different: nothing sensible produces one, so it is a wrong value
 // rather than an untidy one, and accepting it would store an address no
-// vendor answers to.
+// third-party app answers to.
 func normalise(reqs []Requirement, values map[string]string) (map[string]string, error) {
 	byField := map[string]Requirement{}
 	for _, r := range reqs {
@@ -435,7 +437,7 @@ func normalise(reqs []Requirement, values map[string]string) (map[string]string,
 			return nil, fmt.Errorf(
 				"setup: %s cannot contain a space, and %q has one inside it: "+
 					"an address, an identifier and an email are each a single "+
-					"token, so a space in the middle is a value no vendor "+
+					"token, so a space in the middle is a value nothing "+
 					"answers to rather than an untidy one",
 				r.ConfigPath, field)
 		}

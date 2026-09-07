@@ -392,11 +392,11 @@ func TestAPromotionTheModelDeclinesDraftsNothing(t *testing.T) {
 // THE WRITER IS RESOLVED PER PASS, not once when the promoter is built.
 //
 // The engine arms the background passes BEFORE the inbound service builds
-// its third-party app clients, so a promoter that resolved its writer at construction
-// held a nil for every company that ever ran. A resolver that answers late
-// must be picked up by the pass that runs after it does — and the failure
-// this guards is silent: a captured nil promotes nothing for the life of the
-// process while the pass reports itself idle.
+// its integration clients, so a promoter that resolved its writer at
+// construction held a nil for every company that ever ran. A resolver that
+// answers late must be picked up by the pass that runs after it does, and
+// the failure this guards is silent: a captured nil promotes nothing for
+// the life of the process while the pass reports itself idle.
 func TestThePassResolvesItsWriterEachTime(t *testing.T) {
 	t.Parallel()
 	db := newStore(t)

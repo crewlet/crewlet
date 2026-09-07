@@ -323,7 +323,7 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 
 // inboundPath is where a third-party app's deliveries arrive, so an operator can check
 // what they pasted into the third-party app's settings page against what this engine
-// actually serves. Static per third-party app — these are the routes webhooks.go
+// actually serves. Static per integration: these are the routes webhooks.go
 // registers, and a disagreement between the two is a route nothing reaches.
 func inboundPath(kind string) string {
 	switch kind {

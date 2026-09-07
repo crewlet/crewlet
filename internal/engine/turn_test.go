@@ -46,7 +46,7 @@ func ev(kind string) *events.Event {
 			Sender: "ana", Subject: "a message", Body: "hello",
 		}, events.TraceContext{})
 		// AS internal/notify STAMPS IT: the envelope names the PRODUCER
-		// of the wake, not the third-party app — "notify.slack", never "slack".
+		// of the wake, not the third-party app: "notify.slack", never "slack".
 		// A test that wrote the bare third-party app name here asserted against a
 		// shape nothing publishes, and passed for a coalescing record that
 		// filed every merge under a source no dashboard filter matches.
@@ -892,7 +892,7 @@ func TestOnlyTheSandboxParkOffersItsDeliveryAsAnAnswer(t *testing.T) {
 //
 // Batching landed on its own: a partition of five already became one turn.
 // What that turn was HANDED was the five enriched bodies concatenated, because
-// notify.Coalesce was called by nothing — so the seat read the third-party app's triage
+// notify.Coalesce was called by nothing, so the seat read the third-party app's triage
 // scaffolding five times, each copy pointing at staler state, and five separate
 // asks, which a model answers separately. The assertion that catches it is the
 // scaffolding count: a merged digest renders it ONCE.

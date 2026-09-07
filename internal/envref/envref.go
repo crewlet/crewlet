@@ -131,7 +131,7 @@ func Expand(value string, lookup func(name string) (string, bool)) (expanded str
 // the variable's value, or EMPTY when the variable is unset — never as its
 // own literal text. That last rule is the reason this is one function rather
 // than a call to [Whole] at each site: a raw "${SLACK_BOT_TOKEN_CEO}" matches
-// nothing any third-party app will accept, so passing it through turns a missing
+// nothing any vendor will accept, so passing it through turns a missing
 // variable into a seat that mysteriously authenticates as nobody, at a layer
 // far away from the config that named it.
 //

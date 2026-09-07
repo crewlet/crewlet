@@ -342,8 +342,8 @@ func TestAFieldCannotBeBothSuppliedAndGenerated(t *testing.T) {
 }
 
 // Only a MINTABLE field can be generated. Asking the engine to invent a
-// third-party app's own API token would seal a value the third-party app has never heard of and
-// report the integration connected.
+// third-party app's own API token would seal a value it has never heard of
+// and report the integration connected.
 func TestOnlyAMintableFieldCanBeGenerated(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)

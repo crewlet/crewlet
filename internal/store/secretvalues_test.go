@@ -128,7 +128,7 @@ func TestAMissingSecretIsItsOwnError(t *testing.T) {
 
 // READS FAIL CLOSED. Everything else in this package answers safely and
 // carries on; an unreadable secret must raise, because "" becomes an empty
-// Bearer token hours later on a request whose 401 names the third-party app.
+// Bearer token hours later on a request whose 401 names the vendor.
 func TestAWrongKeyringRaisesRatherThanReturningNothing(t *testing.T) {
 	t.Parallel()
 	written := ring(t, "k1")
@@ -355,7 +355,7 @@ func TestARekeyAbortsOnARowItCannotOpen(t *testing.T) {
 // environment-variable name, because that is what a ${VAR} in the company
 // document resolves through. This path is what `crewlet secrets set` writes
 // against a STOPPED node, and whatever lands here is migrated onto the fleet
-// unchanged at the next start — so a name refused there has to be refused
+// unchanged at the next start, so a name refused there has to be refused
 // here too, or the migration is where the operator finds out. Its twin is
 // TestASecretNameOutsideTheReferenceGrammarIsRefused in internal/fleetsecrets.
 func TestASecretNameOutsideTheReferenceGrammarIsRefused(t *testing.T) {

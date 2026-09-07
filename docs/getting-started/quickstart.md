@@ -210,7 +210,7 @@ verified:
 
 ```bash
 crewlet llm login subscription --capture-token   # or plain `login` for the
-                                                 # third-party app's browser flow
+                                                 # vendor's browser flow
 crewlet llm doctor subscription
 ```
 

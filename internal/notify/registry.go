@@ -26,9 +26,9 @@ import (
 //
 // The EXTERNAL-IDENTITY MAP is written at runtime and does need a lock.
 // Transports register their agents' bot ids once they have resolved them
-// against the third-party app, and human contact ids are reconciled at boot and on
-// every org swap. It is small, written rarely and read on the inbound hot
-// path, so a RWMutex is the right trade.
+// against the third-party app, and human contact ids are reconciled at boot
+// and on every org swap. It is small, written rarely and read on the inbound
+// hot path, so a RWMutex is the right trade.
 //
 // # Resolution is ORG-derived, never node-derived
 //
@@ -186,7 +186,8 @@ func (r *Registry) ByAgentID(id uuid.UUID) (Party, bool) {
 // engineer, whatever that seat's own configured address happens to be — so
 // it is tried first. A seat's declared address is the fallback, matched
 // case-insensitively because no mail system treats the local part's case as
-// significant in practice and a third-party app hands back whatever the sender typed.
+// significant in practice and a third-party app hands back whatever the
+// sender typed.
 func (r *Registry) ByEmail(email string) (Party, bool) {
 	if handle := PlusAddress(email); handle != "" {
 		if p, ok := r.ByHandle(handle); ok {

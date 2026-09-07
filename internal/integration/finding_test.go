@@ -234,7 +234,7 @@ func TestOutcomeTurnsOnTheActorNotThePhase(t *testing.T) {
 		{"degraded on an admin", Report{Phase: PhaseDegraded, Actor: ActorAdmin}, OutcomeBlocked},
 		{"degraded on the operator", Report{Phase: PhaseDegraded, Actor: ActorOperator}, OutcomeBlocked},
 		{"degraded on the engine", Report{Phase: PhaseDegraded, Actor: ActorEngine}, OutcomeWaiting},
-		{"activating on the third-party app", Report{Phase: PhaseActivating, Actor: ActorProvider}, OutcomeWaiting},
+		{"activating on the vendor", Report{Phase: PhaseActivating, Actor: ActorProvider}, OutcomeWaiting},
 		{"provisioning", Report{Phase: PhaseProvisioning, Actor: ActorEngine}, OutcomeWaiting},
 		{"awaiting an admin", Report{Phase: PhaseAwaitingAdmin, Actor: ActorAdmin}, OutcomeBlocked},
 	}

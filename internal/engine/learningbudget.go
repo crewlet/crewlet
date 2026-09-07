@@ -82,7 +82,7 @@ func (p meteredProvider) Complete(ctx context.Context, req llm.Request) (*llm.Co
 	}
 	if tokens := completion.TotalTokens(); tokens > 0 {
 		// context.WithoutCancel: the tokens are already spent at the
-		// third-party app. A charge skipped because the caller's deadline expired
+		// vendor. A charge skipped because the caller's deadline expired
 		// between the answer and the write is money the counter never
 		// hears about — exactly the leak this file exists to close.
 		if _, spendErr := p.meter.Spend(context.WithoutCancel(ctx), tokens); spendErr != nil {

@@ -3,9 +3,10 @@
 //
 // It exists because leaving http.Client.Transport nil is not "the default
 // settings" — it is http.DefaultTransport, whose MaxIdleConnsPerHost is 2,
-// process-wide, across every client that shares it. Seven third-party app clients did
-// exactly that, so a company with more than two concurrent turns against one
-// endpoint paid a fresh TCP and TLS handshake on every call past the second.
+// process-wide, across every client that shares it. Seven third-party app
+// clients did exactly that, so a company with more than two concurrent turns
+// against one endpoint paid a fresh TCP and TLS handshake on every call past
+// the second.
 // Self-hosted Mattermost and GitLab are precisely the HTTP/1.1 endpoints where
 // that costs a full round trip rather than a stream on an existing connection.
 //

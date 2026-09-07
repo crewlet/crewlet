@@ -390,9 +390,9 @@ func TestTheMattermostCommandSharesTheProvisioningRules(t *testing.T) {
 // COMMANDS IS ROUTED.
 //
 // run()'s case list and [vendorCommands] are two hand-written lists naming
-// the same thing, and a third-party app in one and not the other fails in a way
+// the same thing, and a vendor in one and not the other fails in a way
 // nobody sees: added to run() alone, `crewlet <vendor>` answers "no commands
-// for" instead of a usage line; added to the table alone, the whole third-party app
+// for" instead of a usage line; added to the table alone, the whole vendor
 // is unreachable and the table reads as though it works.
 func TestEveryRoutedVendorHasCommands(t *testing.T) {
 	t.Parallel()
@@ -410,8 +410,8 @@ func TestEveryRoutedVendorHasCommands(t *testing.T) {
 				vendor)
 		}
 	}
-	// The other direction: a third-party app run() routes with nothing behind it.
-	// Read off the same case clause, so a third-party app added there is caught
+	// The other direction: a vendor run() routes with nothing behind it.
+	// Read off the same case clause, so a vendor added there is caught
 	// whether or not anyone remembered this test.
 	for _, cmd := range dispatchedCommands(t) {
 		if !isVendorCase(t, cmd) {
@@ -514,7 +514,7 @@ func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
 		}
 		// Every subcommand spelled in the usage must be dispatchable.
 		for line := range strings.SplitSeq(strings.TrimSpace(usage), "\n") {
-			// "usage: crewlet <third-party app> <sub> …", and the continuation
+			// "usage: crewlet <vendor> <sub> …", and the continuation
 			// lines are the same without the lead — so the subcommand is
 			// found relative to "crewlet", not from the start of the line.
 			fields := strings.Fields(line)

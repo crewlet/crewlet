@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// Findings reads this run as the third-party app-neutral vocabulary.
+// Findings reads this run as the integration-neutral vocabulary.
 //
 // See jira.Result.Findings for why the mapping is here and the ordering is
 // not. What differs on this host is the SHAPE OF INGRESS: GitHub hooks a set
@@ -38,7 +38,7 @@ func (r *Result) Findings() []integration.Finding {
 	// the run registers nothing and reports nothing, and reading that as
 	// "no webhook target is registered" would park every company on a
 	// block nobody can clear. That URL is not on the integrations block
-	// today (every third-party app subcommand takes it as -public-url), so ingress
+	// today (every integration subcommand takes it as -public-url), so ingress
 	// convergence stays with the subcommand that has it.
 	//
 	// A target that WAS attempted and refused is a different fact, and it
@@ -86,7 +86,7 @@ func detailOr(detail, fallback string) string {
 //
 // The same accessor GitLab and Mattermost export, for the same reason: a
 // caller deciding what a refusal MEANS needs the number, and the meaning is
-// decided once, in [integration.Reject], rather than per third-party app.
+// decided once, in [integration.Reject], rather than per integration.
 func Status(err error) int {
 	var api *APIError
 	if errors.As(err, &api) {

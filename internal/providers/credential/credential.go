@@ -210,9 +210,9 @@ const refreshTolerance = time.Second
 // fleetKey is one credential's name in the shared ledger.
 //
 // SCOPED BY THE POOL, not bare, because a pool is what benches: a 429 is
-// scoped to a third-party app's rate-limit bucket, and one config entry is exactly the
+// scoped to a vendor's rate-limit bucket, and one config entry is exactly the
 // (model, endpoint, key bag) triple that shares one. An operator who lists the
-// same key under a fast entry and a smart entry has two buckets at the third-party app,
+// same key under a fast entry and a smart entry has two buckets at the vendor,
 // and a bare hint would bench both the moment either was limited — turning one
 // model's burst into a company-wide outage.
 //
@@ -318,7 +318,7 @@ func (p *Pool) Stats() []Stat {
 // A nil ledger DETACHES, which is what an epoch built on a node with no
 // coordination store gets. It leaves whatever cooldowns are already on the
 // bench alone: forgetting a live bench because sharing went away would hand
-// out a key the third-party app is still refusing.
+// out a key the vendor is still refusing.
 func (p *Pool) Share(scope string, s Shared) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

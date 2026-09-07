@@ -48,10 +48,10 @@ flowchart TB
 **The engine never calls a third-party app's API on its own account.** It calls MCP
 servers, and each seat's server carries *that seat's* credentials
 (`role.mcp_env`), so a comment on an issue is written by the agent, not by a
-service account fronting for it. The engine's own third-party app packages exist for the
+service account fronting for it. The engine's own integration packages exist for the
 *inbound* half — verifying a delivery, parsing it, deciding whose it is — plus
 provisioning and the chat working-indicator. See [Tool
-capabilities](tool-capabilities.md) for why no engine prompt names a third-party app tool.
+capabilities](tool-capabilities.md) for why no engine prompt names a vendor tool.
 
 The second picture is the supply — what a node reaches out to while a turn runs.
 Its MCP servers are the ones above; the two dashed edges are the process-level
@@ -226,7 +226,7 @@ least-in-flight. The fallback chain decides whether the **model** is worth
 abandoning and moves to the next one in the role's chain. That is why the same
 429 produces three different behaviours at three different altitudes, and why
 cooldowns are fleet state rather than per-process: a limit belongs to the key at
-the third-party app, so four nodes should not each pay their own 429 to learn it.
+the vendor, so four nodes should not each pay their own 429 to learn it.
 
 **The observability edge is two routes, not one, and the split is deliberate.**
 A published event forks. It is written to this node's `crewlet_events` **inline,

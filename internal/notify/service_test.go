@@ -310,9 +310,9 @@ func TestTwoDeliveriesInOneConversationShareAPartition(t *testing.T) {
 
 // Most webhooks concern nobody here. Recording a skip for each would bury
 // the ones that matter.
-// And a self-contained trigger does NOT ask for recon: the third-party app decides
-// per event type, and a service that answered for it would send every seat
-// looking behind a message that is already the whole context.
+// And a self-contained trigger does NOT ask for recon: the third-party app
+// decides per event type, and a service that answered for it would send
+// every seat looking behind a message that is already the whole context.
 func TestASelfContainedTriggerDoesNotAskForRecon(t *testing.T) {
 	h := newService(t, nil)
 	r := to(notify.Recipient{Handle: "engineering-lead"}, "the whole thing")
@@ -372,8 +372,9 @@ func TestARecipientNobodyMatchesIsRecorded(t *testing.T) {
 	}
 }
 
-// Handle, role, email, then the third-party app's own ids — most specific first,
-// because each later form is a guess the earlier one did not need to make.
+// Handle, role, email, then the third-party app's own ids, most specific
+// first, because each later form is a guess the earlier one did not need to
+// make.
 func TestTheRecipientCascadeTriesEveryForm(t *testing.T) {
 	h := newService(t, nil)
 	if err := h.reg.Register("tracker", "acct-cto", "backend-engineer"); err != nil {

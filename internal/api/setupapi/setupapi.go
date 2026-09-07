@@ -951,8 +951,8 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// to authenticate a second attempt.
 	//
 	// FORCE is the exception, and it is the operator saying they will
-	// clean up at the third-party app themselves. A third-party app that will never accept
-	// the delete — a revoked token, an instance that is gone — would
+	// clean up at the third-party app themselves. One that will never accept
+	// the delete (a revoked token, an instance that is gone) would
 	// otherwise hold the integration in Disconnecting for ever.
 	if !req.Force {
 		if s.status == nil {

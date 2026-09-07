@@ -41,8 +41,8 @@ const integrationDutyTTL = 3 * integration.Interval
 // make. That reasoning had a hole in it: the operator HAS made the decision.
 // They opened the connect form, pasted an organization credential and pressed
 // Connect, which is a person asking for exactly this. What the withheld
-// permissions actually bought was a screen full of buttons — Run setup,
-// Recheck — asking them to say yes a second time, and an integration that sat
+// permissions actually bought was a screen full of buttons (Run setup,
+// Recheck) asking them to say yes a second time, and an integration that sat
 // unprovisioned until they found the right one.
 //
 // So a pass here runs with both. What still cannot happen unattended is
@@ -54,8 +54,8 @@ const integrationDutyTTL = 3 * integration.Interval
 // # One implementation per surface
 //
 // The reconciler is the SAME [setup.Pass] the dashboard's own button used to
-// run, wrapped by [passConverger]. There were two spellings of this before —
-// a converger for the loop and a pass for the button — which is two chances
+// run, wrapped by [passConverger]. There were two spellings of this before,
+// a converger for the loop and a pass for the button, which is two chances
 // to disagree about what an integration's state is depending on which of them
 // last touched it.
 
@@ -89,7 +89,7 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 		})
 	}
 	// TEARDOWN ONLY for a surface with no pass. Slack's apps are created
-	// from the command line, so there is nothing here to converge — but a
+	// from the command line, so there is nothing here to converge, but a
 	// disconnect for it still has a block to drop, and without a
 	// registration that intent would sit on the fleet row for ever.
 	for _, kind := range integration.Kinds {
@@ -113,7 +113,7 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 		// surface would trade a working company for a dashboard field.
 		log.ErrorContext(ctx, "integration_reconciler_unavailable", "error", err,
 			"detail", "the company is running without integration status; "+
-				"the third-party app subcommands still report the same findings")
+				"the integration subcommands still report the same findings")
 		return
 	}
 	e.integrations = worker
@@ -226,7 +226,7 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	company := c.engine.Company()
 	// A SINK IS BEST EFFORT HERE. A node with no keyring cannot seal a
 	// minted credential, but it can still read a surface and report what
-	// it finds — and reporting is most of what this loop is for. The pass
+	// it finds, and reporting is most of what this loop is for. The pass
 	// treats a nil sink as a dry run, which is the honest posture for a
 	// node that could not have recorded what it created.
 	sink, err := c.engine.SetupSink(reconcileOperator)

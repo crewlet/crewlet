@@ -6,7 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// Findings reads this run as the third-party app-neutral vocabulary.
+// Findings reads this run as the integration-neutral vocabulary.
 //
 // See jira.Result.Findings for why the mapping lives here and the ordering
 // does not. What differs on this host is that a run CREATES things: a service

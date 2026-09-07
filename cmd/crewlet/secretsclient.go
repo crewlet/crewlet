@@ -213,7 +213,7 @@ func (c *secretsClient) call(ctx context.Context, method, path string, body []by
 	if body != nil {
 		// OCTET-STREAM, because the body IS the credential: bytes, not a
 		// document. Labelling it text/plain would invite a proxy to
-		// re-encode a value the third-party app will compare byte for byte.
+		// re-encode a value the vendor will compare byte for byte.
 		req.Header.Set("Content-Type", "application/octet-stream")
 	}
 	resp, err := c.http.Do(req)

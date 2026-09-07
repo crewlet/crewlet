@@ -142,7 +142,7 @@ func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 // The CLOUD ID is the load-bearing one: a provisioned service account's token
 // is refused by the site host and accepted only at the API gateway, so a
 // company whose agents hold provisioned accounts must reach Atlassian through
-// it. A company that set these itself is left alone — the document is a
+// it. A company that set these itself is left alone: the document is a
 // decision, and this only fills a blank.
 func (p *atlassianPass) recordSite(
 	ctx context.Context, company *Company, site atlassian.Site, writing bool,
@@ -183,8 +183,8 @@ func (p *atlassianPass) Teardown(ctx context.Context, in setup.TeardownInput) er
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Atlassian
 	if cfg == nil || !in.RemoveSeats {
-		// Atlassian holds no webhook this engine registered — Cloud events
-		// arrive through the Forge relay — so with the accounts staying
+		// Atlassian holds no webhook this engine registered (Cloud events
+		// arrive through the Forge relay), so with the accounts staying
 		// there is nothing to do at all.
 		return nil
 	}
@@ -218,10 +218,10 @@ func (e *Engine) SetupRunner(now func() time.Time) *setup.Runner {
 	return setup.NewRunner(e.setupPasses(), e.setupDuty, now)
 }
 
-// setupDuty is the fleet lease one third-party app's pass holds while it runs.
+// setupDuty is the fleet lease one integration's pass holds while it runs.
 //
 // The SAME mechanism the reconcile loop's singleton uses, under its own name,
-// so a pass and a loop tick for one third-party app never overlap either. The TTL is
+// so a pass and a loop tick for one integration never overlap either. The TTL is
 // generous relative to a pass: a lease that expired mid-run would let a
 // second node start minting while the first was still writing.
 func (e *Engine) setupDuty(kind integration.Kind) setup.Duty {
@@ -392,7 +392,7 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) erro
 
 // SetupSink is the recorder a pass writes minted credentials through.
 //
-// The SAME type `crewlet <vendor> provision -secret-store` builds, so a
+// The SAME type `crewlet <integration> provision -secret-store` builds, so a
 // credential minted from the dashboard and one minted from a shell land in
 // the same place under the same envelope. Write-through, so a value is
 // durable before the next one is minted.
@@ -468,7 +468,7 @@ func (p *jiraPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
 	if base == "" || token == "" {
 		return fmt.Errorf(
 			"engine: jira teardown: the site address or the org token did not " +
-				"resolve, so the webhook cannot be removed — fix the credential " +
+				"resolve, so the webhook cannot be removed: fix the credential " +
 				"or force the disconnect and remove the hook by hand")
 	}
 	client, err := jira.NewClient(jira.ClientOptions{
@@ -535,7 +535,7 @@ func (p *confluencePass) Teardown(ctx context.Context, in setup.TeardownInput) e
 	if base == "" || token == "" {
 		return fmt.Errorf(
 			"engine: confluence teardown: the site address or the org token did " +
-				"not resolve, so the hooks cannot be removed — fix the credential " +
+				"not resolve, so the hooks cannot be removed: fix the credential " +
 				"or force the disconnect and remove them by hand")
 	}
 	client, err := confluence.NewClient(confluence.ClientOptions{
@@ -615,8 +615,8 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 //
 // The Owner token is the same transient credential the pass asks for, and it
 // is needed for the same reason: removing an account takes the authority
-// creating it did. A teardown with none can still be attempted — the hooks
-// may come out under a weaker credential — so this refuses only when there is
+// creating it did. A teardown with none can still be attempted (the hooks
+// may come out under a weaker credential), so this refuses only when there is
 // nothing at all to authenticate with.
 func (p *gitlabPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
 	company := p.engine.Company()

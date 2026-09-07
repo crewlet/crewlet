@@ -70,7 +70,7 @@ type node struct {
 //
 // Everything real: a real embedded stream on a real temp directory, a real
 // store, the real API in front of them, and the real observability pipeline
-// wired the way cmd/crewlet wires it. The one stub is the third-party app endpoint.
+// wired the way cmd/crewlet wires it. The one stub is the vendor endpoint.
 func start(t *testing.T) *node { return startWith(t, nil) }
 
 // startWith stands a node up over a company document the caller may amend, for

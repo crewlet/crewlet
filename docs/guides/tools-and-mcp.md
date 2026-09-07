@@ -223,7 +223,7 @@ keeps its builtins, the other servers keep working, and the operator sees that
 server's **group missing** from the Tools room — which points at the right
 subsystem, where builtins quietly shrinking would not. It is logged as
 `mcp_server_failed` with the reason. Failing the apply instead would take a
-working company offline because one third-party app's binary was absent from an image.
+working company offline because one vendor's binary was absent from an image.
 
 ---
 

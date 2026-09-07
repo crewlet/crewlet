@@ -31,7 +31,7 @@ units:
         goal: "Keep the team unblocked and own final calls"
         backstory: "20 years in infrastructure"
         responsibilities:
-          - "Approvals and third-party app decisions"
+          - "Approvals and vendor decisions"
         contact:                  # how agents mention & reach her
           slack_user_id: U0123456789
           mattermost_user_id: sarah.chen       # Mattermost username, not an ID

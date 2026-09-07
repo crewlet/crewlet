@@ -62,7 +62,7 @@ import (
 // that server's tools and nothing else: the seat still has its builtins, the
 // other servers still work, and the operator surface shows the group missing
 // rather than the builtins mysteriously shrinking. Refusing the seat instead
-// would take a company offline because one third-party app's CLI was slow to install.
+// would take a company offline because one vendor's CLI was slow to install.
 
 // startSharedServers brings up the company-wide children for an epoch.
 //
@@ -265,16 +265,16 @@ func (e *Engine) refileSeatTools(ctx context.Context, c *Company) {
 // contribute into reg in SPEC ORDER.
 //
 // Concurrent because each one is a subprocess spawn, a protocol handshake and
-// a tools/list — hundreds of milliseconds at best and seconds against a third-party app
-// that is slow or absent — and they have nothing to do with each other. Done
+// a tools/list (hundreds of milliseconds at best and seconds against a vendor
+// that is slow or absent), and they have nothing to do with each other. Done
 // one at a time, a seat with three servers took three times as long to attach
 // as its slowest one, and a seat is not consuming its mailbox until it does.
 //
 // Filed in SPEC ORDER regardless of which finished first, because the registry
 // is keyed by tool name and a collision is resolved by who registered last.
 // Filing in completion order would hand a seat a different surface depending
-// on which third-party app happened to answer first — a company whose behaviour changes
-// between restarts for no reason anybody can see.
+// on which vendor happened to answer first (a company whose behaviour changes
+// between restarts for no reason anybody can see).
 func startAll(ctx context.Context, reg *tools.Registry, specs []mcp.Spec,
 	start func(context.Context, mcp.Spec) (mcp.Change, error),
 ) {
@@ -379,7 +379,7 @@ func (e *Engine) stopSeatServers(ctx context.Context, handle string) {
 // file applies one bridge change to one registry.
 func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Change, err error) {
 	if err != nil {
-		// Logged, not returned. One third-party app's server failing to start
+		// Logged, not returned. One vendor's server failing to start
 		// costs that server's tools; failing the apply over it would
 		// take the whole company down with it.
 		log.ErrorContext(ctx, "mcp_server_failed", "server", server, "error", err,

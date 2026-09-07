@@ -135,7 +135,7 @@ operator about to delete or rename a secret: the config keeps `${VAR}`
 empty string and the surfaces holding one start refusing deliveries with
 nothing naming the row that went away. Deriving it from `GET /config` in the
 client would mean a second copy of the `${VAR}` grammar, and the engine has
-already paid for that twice — a looser pattern once displayed a literal secret
+already paid for that twice: a looser pattern once displayed a literal secret
 unmasked, and another once minted a live credential into a variable nothing
 reads. The path is the operator's own spelling
 (`roles[0].integrations.slack.bot_token`), the same one a validation failure
@@ -274,7 +274,7 @@ by a process that can reach the [coordination store](../concepts/coordination.md
 **The name is an environment-variable name, and a write that is not one is
 refused.** The store is keyed by the name a `${VAR}` resolves through, so
 `gitlab-token` or `my token` would be sealed, listed and read by nothing at
-all — a success the operator only discovers when a provider fails to
+all, a success the operator only discovers when a provider fails to
 authenticate hours later. Letters, digits and underscores, starting with a
 letter or an underscore. The refusal comes before the body is read, so the
 name is what the answer points at. Reading and removing take the name as
@@ -282,7 +282,7 @@ given, so a row written before the check can still be inspected and deleted.
 
 **The body is the value, not a JSON wrapper.** A credential is arbitrary bytes
 — a PEM key has newlines, a token can hold anything — and an encoding step
-between the operator and the sequence the third-party app compares is a `401` nobody
+between the operator and the sequence the vendor compares is a `401` nobody
 can explain.
 
 **Reveal is opt-in on the wire**, not merely in the CLI. Without `?reveal=true`
@@ -394,14 +394,14 @@ across two requests.
 
 **Guarded in full, reads included**, on the same terms as `/config` and
 `/secrets`: this surface answers with the *names* of the credentials a company
-holds, which of them are unset, and the third-party app pages an administrator would
-visit. That is a map of what to attack, and it is not something the
-anonymous-read posture opens.
+holds, which of them are unset, and the pages at each third-party app an
+administrator would visit. That is a map of what to attack, and it is not
+something the anonymous-read posture opens.
 
 ### The requirement list
 
-`GET /setup/integrations/{kind}` answers what that third-party app needs, whether or
-not the company has configured it:
+`GET /setup/integrations/{kind}` answers what that third-party app needs,
+whether or not the company has configured it:
 
 ```json
 {
@@ -432,10 +432,10 @@ not the company has configured it:
 ```
 
 `kind` is one of `secret`, `url`, `id`, `choice`, `text`, `handle`, `toggle`.
-Each third-party app's own package declares its list, so the surface serves a third-party app it
-has no screen for and the dashboard renders a third-party app it has no code for.
-A `toggle` is a JSON boolean in the document; a `handle` must name a seat this
-company has.
+Each third-party app's own package declares its list, so the surface serves a
+third-party app it has no screen for and the dashboard renders a third-party
+app it has no code for. A `toggle` is a JSON boolean in the document; a
+`handle` must name a seat this company has.
 
 A `secret`'s **credential** is never echoed. Its `value` carries the field's
 `${VAR}` reference when the document holds one, because that is a *name*
@@ -502,8 +502,8 @@ What the route does, in this order:
    list was read against. A submission built on an older one is refused
    *before anything is sealed*, so a caller working from a stale page does not
    end up with a credential in the store that nothing points at.
-2. **Seals every credential**, under the name the third-party app declared or one
-   derived as `VENDOR_FIELD[_HANDLE]`. The row records `source: "setup"`.
+2. **Seals every credential**, under the name the third-party app declared or
+   one derived as `VENDOR_FIELD[_HANDLE]`. The row records `source: "setup"`.
 3. **Patches the document** with the non-secret values and, for a credential
    whose slot was empty, a whole `${VAR}` pointing at the name from step 2.
    A slot that already holds a `${VAR}` is written *through*, which is what
@@ -525,12 +525,12 @@ Refusals: `400 invalid_input`, `400 validation_error`, `404 unknown_kind`,
 
 ### Running the provisioning pass
 
-Some third-party apps need something done *at* them, not just written down: a webhook
-registered, a signing secret minted and pushed. That is the third-party app's
-provisioning pass, and `POST /setup/integrations/{kind}/provision` is what
-runs it.
+Some third-party apps need something done *at* them, not just written down: a
+webhook registered, a signing secret minted and pushed. That is the third-party
+app's provisioning pass, and `POST /setup/integrations/{kind}/provision` is
+what runs it.
 
-**The reconcile loop does this on its own.** It runs the same third-party app
+**The reconcile loop does this on its own.** It runs the same provisioning
 function every few minutes with the sink and the public base supplied, because
 connecting an integration is the permission: a person named that one app and
 handed over an administrator credential for exactly this. This route is the
@@ -539,11 +539,11 @@ the next tick, and it holds a fleet lease under its own name so the two never
 overlap. Nothing in the dashboard calls it.
 
 `can_provision` on a tool's state says whether this build has a pass for it.
-`needs_operator` is present only for a third-party app whose pass still asks for a
-credential per run; no third-party app in this build does. GitLab's group Owner token
-and Mattermost's system-admin token are ordinary **stored** requirements now,
-sealed in the fleet secret store with a `${VAR}` in the document like every
-other credential.
+`needs_operator` is present only for a third-party app whose pass still asks
+for a credential per run; no third-party app in this build does. GitLab's group
+Owner token and Mattermost's system-admin token are ordinary **stored**
+requirements now, sealed in the fleet secret store with a `${VAR}` in the
+document like every other credential.
 
 They used to be transient, asked for on every pass and dropped the moment it
 returned, on the reasoning that a one-time grant held permanently is a
@@ -558,8 +558,9 @@ an integration is disconnected, so an operator knows exactly what to revoke.
 
 `DELETE /setup/integrations/{kind}` **asks**; it does not remove. It answers
 `202` and records the intent on the fleet row, and the reconcile loop removes
-what the integration holds at the third-party app — the webhooks it registered, and the
-accounts it created when asked — before the block leaves the company document.
+what the integration holds at the third-party app (the webhooks it registered,
+and the accounts it created when asked) before the block leaves the company
+document.
 
 That order is the whole design. The block carries the credential the teardown
 authenticates with, so dropping it first would strand every webhook and
@@ -575,13 +576,14 @@ looking connected.
 `remove_seats` is the console's *"also remove the accounts Crewlet created"*.
 It defaults to **false** and is never inferred: the engine's own webhooks come
 out either way, because nothing else uses them, but an account is a colleague
-at that third-party app with history attached. Mattermost bots are **disabled** rather
-than deleted, because deleting a Mattermost user takes its posts with it.
+at that third-party app with history attached. Mattermost bots are **disabled**
+rather than deleted, because deleting a Mattermost user takes its posts with
+it.
 
-`force` drops the block immediately without waiting for the third-party app, answers
-`200`, and is the way out of a teardown that can never succeed — a revoked
-credential, an instance that is gone. It is the operator saying they will
-remove what the third-party app holds themselves.
+`force` drops the block immediately without waiting for the third-party app,
+answers `200`, and is the way out of a teardown that can never succeed: a
+revoked credential, an instance that is gone. It is the operator saying they
+will remove what the third-party app holds themselves.
 
 Either way the sealed credentials are **named, not deleted**, in
 `orphaned_secrets`: one an operator may be sharing with another deployment is
@@ -589,15 +591,15 @@ not something a disconnect decides about on its own. `crewlet secrets unset`
 is the deliberate path.
 
 Refusals: `503 no_status_store` on a node with no coordination, which has
-nowhere to record the intent — retry against a node that has one, or force it.
+nowhere to record the intent. Retry against a node that has one, or force it.
 
 Refusals worth knowing: `409 requirements_outstanding` names the fields still
 missing (a pass writes at the third-party app and must not run against a
 half-configured integration), `409 no_public_base_url` when nothing has told
-the engine what address third-party apps reach it on, and `409 pass_in_flight` when
-another pass for the same third-party app is already running. That last one is a
-refusal rather than a queue on purpose: minting twice is not something a retry
-should paper over.
+the engine what address third-party apps reach it on, and `409 pass_in_flight`
+when another pass for the same third-party app is already running. That last
+one is a refusal rather than a queue on purpose: minting twice is not something
+a retry should paper over.
 
 `POST /setup/integrations/{kind}/check` runs the **same pass with neither**,
 which makes it read-only. It is what answers "did what I just fixed at the
@@ -621,11 +623,11 @@ because a company mid-edit looks exactly like one that removed a seat.
 
 ### Per-seat setup
 
-Slack is the one third-party app whose credentials live on the **seat** rather than on
-the company: each agent has its own Slack app, so each has its own bot token
-and signing secret. Its tool state carries a `seats` array, one entry per agent
-seat, each with its own requirement list, its own `inbound_path`, and its own
-`satisfied`.
+Slack is the one third-party app whose credentials live on the **seat** rather
+than on the company: each agent has its own Slack app, so each has its own bot
+token and signing secret. Its tool state carries a `seats` array, one entry per
+agent seat, each with its own requirement list, its own `inbound_path`, and its
+own `satisfied`.
 
 A submission for one of them names it:
 
@@ -1515,20 +1517,21 @@ webhook route answers `503` to every delivery.
 `secret_usable` is a claim about what this process **resolved**. A secret lives
 in the config as a `${VAR}`, so `secret_present: true, secret_usable: false` is
 a route refusing every delivery while the config shows a secret and the
-third-party app's settings page shows a healthy hook — with nothing anywhere naming the
-variable. For GitLab the bar is higher than non-empty: the value must be
-`whsec_` over standard base64 of a 32-byte key, the only shape the third-party app
-signs with. For Slack, whose material is one signing secret per seat, it is
-lower: **one** seat whose secret resolved makes the surface usable, because a
-delivery addressed to that seat's path would be accepted, and a seat whose own
-secret is unresolved is reported by that seat's identity finding rather than by
-the whole surface. `null` means this process cannot say — a standalone API has
-no engine whose resolution to read — or the surface has no secret to resolve.
+third-party app's settings page shows a healthy hook, with nothing anywhere
+naming the variable. For GitLab the bar is higher than non-empty: the value
+must be `whsec_` over standard base64 of a 32-byte key, the only shape the
+third-party app signs with. For Slack, whose material is one signing secret per
+seat, it is lower: **one** seat whose secret resolved makes the surface usable,
+because a delivery addressed to that seat's path would be accepted, and a seat
+whose own secret is unresolved is reported by that seat's identity finding
+rather than by the whole surface. `null` means this process cannot say (a
+standalone API has no engine whose resolution to read), or the surface has no
+secret to resolve.
 
 Only the booleans are ever returned; no secret value leaves the process.
 
-`seats` lists the agents carrying their **own** identity on that surface — a
-Slack app, a Mattermost bot, a per-seat project or space — wherever they sit in
+`seats` lists the agents carrying their **own** identity on that surface: a
+Slack app, a Mattermost bot, a per-seat project or space, wherever they sit in
 the hierarchy. A seat in a unit is a seat: the list walks the whole tree, not
 just the top-level `roles:` block, which is by definition the seats belonging to
 no unit.

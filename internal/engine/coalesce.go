@@ -11,7 +11,7 @@ import (
 // Turning one conversation's partition into one ask.
 //
 // [notify.Coalesce] renders the digest — the chronological list of what was
-// said, the latest message in full, the per-third-party app supersede rules and the
+// said, the latest message in full, the per-integration supersede rules and the
 // same-sender duplicate collapse. This file is the frame that decides WHEN it
 // runs, what the merged event has to carry, and what happens when a partition
 // cannot be merged at all.

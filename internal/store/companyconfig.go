@@ -227,7 +227,7 @@ func (c *Configs) Active(ctx context.Context) (Revision, bool, error) {
 // It exists to answer one question the active revision cannot: has the
 // operator edited the file since this node last read it? Seeding used to
 // compare the file against whatever was ACTIVE, which conflates two
-// different events — an edited file, and a config the API moved ahead — and
+// different events (an edited file, and a config the API moved ahead) and
 // treats both as "the file is newer". A company set up through the dashboard
 // was therefore reverted to the file on the next restart, silently, keeping
 // the credentials it had sealed and losing every pointer to them.

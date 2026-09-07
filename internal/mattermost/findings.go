@@ -6,7 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// Findings reads this run as the third-party app-neutral vocabulary.
+// Findings reads this run as the integration-neutral vocabulary.
 //
 // SHORT, and that is the third-party app rather than an omission. Mattermost holds one
 // outbound websocket per seat and verifies no inbound delivery, so there is no

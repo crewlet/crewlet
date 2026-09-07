@@ -40,10 +40,10 @@ The one exception is a **third-party app's own mark** on the Integrations screen
 (`ui/VendorMark.tsx`): Slack's four colours, Atlassian's blue, GitLab's orange,
 Datadog's violet, drawn as the third-party app draws them. A mark is identity by
 definition, and a recoloured Slack mark is not Slack's. The exception is held
-to exactly that: a mark is drawn only beside the third-party app's name, nothing reads
-state from it, none of its hues is reused as a token, and the integration's
-STATE beside it is carried by the status tone like everything else. A tool the
-company has not set up keeps its mark, dimmed.
+to exactly that: a mark is drawn only beside the third-party app's name,
+nothing reads state from it, none of its hues is reused as a token, and the
+integration's STATE beside it is carried by the status tone like everything
+else. A tool the company has not set up keeps its mark, dimmed.
 
 A seat's chrome takes one of four **tones**, from what it is DOING:
 

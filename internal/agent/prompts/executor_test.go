@@ -123,7 +123,7 @@ func TestExecutorPromptCallsOutTheFullArcRule(t *testing.T) {
 	p := BuildExecutor(engineer(), ExecutorInput{})
 	contains(t, p,
 		"Finish the arc in this pass",
-		// By capability, not by third-party app tool name.
+		// By capability, not by vendor tool name.
 		"the reply, the comment, the status change, the create",
 		"gathers data and stops has delivered nothing",
 		// A second pass exists but is not free, which is what stops the
@@ -307,7 +307,7 @@ func TestTheReviewPromptIsSmallerThanTheExecutors(t *testing.T) {
 	}
 }
 
-// The contracts steer by capability, never by a third-party app tool name — the engine
+// The contracts steer by capability, never by a vendor tool name. The engine
 // must not re-couple itself to one tool stack.
 var forbiddenToolNames = []string{
 	"slack_conversations_add_message",

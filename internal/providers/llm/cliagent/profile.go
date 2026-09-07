@@ -49,7 +49,7 @@ type Path []string
 
 // UsagePaths locates the four token counts in a CLI's own usage report.
 //
-// Each is a LIST of paths rather than one, because a third-party app moves these
+// Each is a LIST of paths rather than one, because a vendor moves these
 // between releases and an operator overriding a single field should not have
 // to know which release the engine was written against. The first path that
 // resolves to a number wins; when none does, the count is estimated and
@@ -63,7 +63,7 @@ type UsagePaths struct {
 
 // StdinLogin is a credential login a CLI genuinely accepts.
 //
-// A pointer field on Profile, and unset on every third-party app whose login is
+// A pointer field on Profile, and unset on every vendor whose login is
 // browser OAuth: the distinction between "this CLI has no password login" and
 // "this CLI has one that takes no arguments" is the difference between an
 // error a person can act on and a command that hangs on a prompt.
@@ -84,14 +84,14 @@ type StdinLogin struct {
 //
 // A spent plan is not an HTTP status here: the process exits 0 and the answer
 // is prose. Matching that prose by keyword gets it wrong twice over: "usage
-// limit" appears in a model's own answer about rate limits, and a third-party app's
+// limit" appears in a model's own answer about rate limits, and a vendor's
 // wording changes under it. So a marker matches by
-// STRUCTURE: a literal sentinel the third-party app emits verbatim, plus the field
+// STRUCTURE: a literal sentinel the vendor emits verbatim, plus the field
 // that carries the reset instant. A marker that finds its sentinel but no
 // reset value still classifies; one that finds neither does not fire.
 type LimitMarker struct {
-	// Sentinel is the exact substring the third-party app emits. It is compared
-	// case-sensitively against the extracted text: the third-party apps write these
+	// Sentinel is the exact substring the vendor emits. It is compared
+	// case-sensitively against the extracted text: the vendors write these
 	// as fixed strings, and folding case is what turns a sentinel back
 	// into a keyword.
 	Sentinel string `yaml:"sentinel,omitempty"`
@@ -115,7 +115,7 @@ type LimitMarker struct {
 // shell is the one that matters: hostbox isolates a seat's HOME and
 // environment, not the filesystem, so a CLI with a shell on the engine host
 // reads whatever the engine user can read. A profile therefore DENIES local
-// tools wherever the third-party app offers a way to, and says so here, so that
+// tools wherever the vendor offers a way to, and says so here, so that
 // `crewlet llm doctor` can print the claim next to what its probe measured.
 //
 // Web is the deliberate exception and is never denied: a seat on a
@@ -159,7 +159,7 @@ func (s SeedScope) Valid() bool { return s == SeedHome || s == SeedWork }
 
 // SeedFile is a settings file the engine writes for the CLI before a call.
 //
-// Some third-party apps take their tool policy from a file rather than a flag —
+// Some vendors take their tool policy from a file rather than a flag —
 // Gemini's settings.json, OpenCode's opencode.json, Cursor's cli.json — and
 // the seat HOME and the per-call working directory are both places the engine
 // controls, so the file is simply put where the CLI will look. Content is
@@ -201,14 +201,14 @@ type AuthMarker struct {
 //
 // It is DATA, not code, and every field is replaceable from YAML
 // (`cli.overrides`), because these flags and JSON shapes belong to vendors
-// who rename them between releases. A third-party app renaming --output-format must be
+// who rename them between releases. A vendor renaming --output-format must be
 // an operator's config edit, not a Crewlet release; a profile hard-coded in a
 // switch statement makes it the latter.
 type Profile struct {
 	// Binary is the executable, resolved on PATH unless it is a path.
 	Binary string `yaml:"binary,omitempty"`
 
-	// Third-party app is the model FAMILY this CLI addresses — anthropic, openai or
+	// Vendor is the model FAMILY this CLI addresses — anthropic, openai or
 	// google.
 	//
 	// Needed because every cli-agent entry shares one providers.llm type,
@@ -256,7 +256,7 @@ type Profile struct {
 	// Usage locates the token counts.
 	Usage UsagePaths `yaml:"usage,omitempty"`
 
-	// ConfigEnv maps a third-party app's own relocation variable to a directory
+	// ConfigEnv maps a vendor's own relocation variable to a directory
 	// under the seat's home. Without it a CLI reads the engine user's real
 	// dotfiles and every seat shares one set of sessions.
 	ConfigEnv map[string]string `yaml:"config_env,omitempty"`
@@ -292,7 +292,7 @@ type Profile struct {
 	// non-reproducible and carry one task's context into the next.
 	VolatilePaths []string `yaml:"volatile_paths,omitempty"`
 
-	// LoginArgs brokers the third-party app's own interactive login.
+	// LoginArgs brokers the vendor's own interactive login.
 	LoginArgs []string `yaml:"login_args,omitempty"`
 
 	// CaptureTokenArgs mints a headless token on stdout.
@@ -323,13 +323,13 @@ type Profile struct {
 	// reports as such rather than assuming either way.
 	LocalTools LocalTools `yaml:"local_tools,omitempty"`
 
-	// LocalToolsNote explains a `vendor-default` stance: which flag is
+	// LocalToolsNote explains a vendor-default stance: which flag is
 	// missing, or which flag would also cut the web. Printed by the
 	// doctor beside the probe result.
 	LocalToolsNote string `yaml:"local_tools_note,omitempty"`
 
 	// SeedFiles are the settings files written for the CLI before a call
-	// — the third-party apps that take their tool policy from a file rather than a
+	// — the vendors that take their tool policy from a file rather than a
 	// flag. See [SeedFile].
 	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
 }
@@ -337,7 +337,7 @@ type Profile struct {
 // credentialish matches an environment variable name that carries a secret.
 //
 // Substrings rather than an exact list because passthrough_env is
-// operator-supplied and the set of third-party app key names is open: GOOGLE_API_KEY,
+// operator-supplied and the set of vendor key names is open: GOOGLE_API_KEY,
 // GH_TOKEN and OPENAI_API_KEY have nothing in common but the shape of the
 // name. A false positive costs an operator one explicit override; a false
 // negative bills them for a plan they thought was flat-rate.
@@ -411,7 +411,7 @@ func (p *Profile) validate(name string) error {
 		// A stance that admits the CLI's tools without saying why is
 		// exactly the silent hole the field exists to make visible.
 		add("local_tools is vendor-default but local_tools_note is empty — say which " +
-			"denial the third-party app lacks")
+			"denial the vendor lacks")
 	}
 	for i, f := range p.SeedFiles {
 		if strings.TrimSpace(f.Path) == "" {

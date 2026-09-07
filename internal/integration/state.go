@@ -105,7 +105,7 @@ func (s State) Reported() Report {
 	return s.Report
 }
 
-// TearingDown reports whether this surface is being taken away.// TearingDown reports whether this surface is being taken away.
+// TearingDown reports whether this surface is being taken away.
 //
 // Reads the INTENT rather than the phase, because the two are not the same
 // for the first pass: the flag is set when somebody presses Disconnect and
@@ -165,7 +165,7 @@ type Store interface {
 	// Removing the block is the operator saying what the engine should
 	// stop talking to. It is NOT a request to destroy the accounts,
 	// memberships and webhooks a previous pass created: those stay until
-	// somebody types the third-party app subcommand's decommission flag and reads
+	// somebody types the integration subcommand's decommission flag and reads
 	// what it is about to delete. See this package's doc.
 	ForgetIntegration(ctx context.Context, kind Kind) error
 }

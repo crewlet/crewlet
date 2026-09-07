@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// Findings reads this run as the third-party app-neutral vocabulary.
+// Findings reads this run as the integration-neutral vocabulary.
 //
 // # Why the mapping lives here and the ordering does not
 //
@@ -38,7 +38,7 @@ func (r *Result) Findings() []integration.Finding {
 	// integration on a block nobody can clear. Answering honestly needs
 	// the instance's own hook list compared against this deployment's
 	// public base URL, and that URL is not on the integrations block at
-	// all today: every third-party app subcommand takes it as -public-url. So this
+	// all today: every integration subcommand takes it as -public-url. So this
 	// reports what a read of the instance can actually establish, and
 	// ingress stays with the subcommand that has the URL.
 
@@ -99,7 +99,7 @@ func reasonOr(reason, fallback string) string {
 //
 // The same accessor GitLab and Mattermost export, for the same reason: a
 // caller deciding what a refusal MEANS needs the number, and the meaning is
-// decided once, in [integration.Reject], rather than per third-party app.
+// decided once, in [integration.Reject], rather than per integration.
 func Status(err error) int {
 	var api *APIError
 	if errors.As(err, &api) {

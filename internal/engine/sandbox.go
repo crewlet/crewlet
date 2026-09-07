@@ -146,7 +146,7 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 		// stores its references verbatim — that is what keeps an exported
 		// revision free of resolved secrets — so a backend handed
 		// e2b.APIKey directly would authenticate with the literal
-		// "${E2B_API_KEY}" and get a 401 naming the third-party app rather than
+		// "${E2B_API_KEY}" and get a 401 naming the vendor rather than
 		// the misconfiguration.
 		//
 		// The DOMAIN is resolved on the same terms and for a reason of its
@@ -1127,7 +1127,7 @@ func (e *Engine) AwaitingSandbox(handle string) bool {
 // THREE things travel, and they travel differently on purpose:
 //
 //   - The MODEL and its endpoint, so an agent that resolves
-//     "<family>/<model>" against a catalogue addresses the right third-party app at
+//     "<family>/<model>" against a catalogue addresses the right vendor at
 //     the right host rather than the catalogue's default.
 //   - A TOKEN, in the run environment, which reaches any box including a
 //     remote one: it is one scoped, revocable variable.
@@ -1178,12 +1178,12 @@ func runLLM(c *Company, seat *org.Role, ph phase.Phase) (*sandbox.AgentLLM, map[
 		return out, nil, nil
 	}
 	// Every subscription entry shares one providers.llm type, so the type
-	// does not name the family. The profile's third-party app does.
+	// does not name the family. The profile's vendor does.
 	if vendor := agent.Vendor(); vendor != "" {
 		out.ProviderType = vendor
 	}
 	// A cli-agent entry has no base URL of its own: the CLI talks to its
-	// third-party app, and declaring a custom provider for it would point a coding
+	// vendor, and declaring a custom provider for it would point a coding
 	// agent at an endpoint nothing is serving.
 	out.BaseURL = ""
 	return out, agent.SandboxCredentials(), agent.SandboxEnv()
@@ -1195,7 +1195,7 @@ func runLLM(c *Company, seat *org.Role, ph phase.Phase) (*sandbox.AgentLLM, map[
 // A distinct type because the two remedies are different config edits and an
 // operator has to be told which one is theirs — and because this is the one
 // launch failure that is a CONFIGURATION mistake rather than a provider
-// outage, so it must not be retried as if the third-party app were down.
+// outage, so it must not be retried as if the vendor were down.
 type SandboxCredentialError struct{ msg string }
 
 func (e *SandboxCredentialError) Error() string { return e.msg }
@@ -1209,7 +1209,7 @@ func (e *SandboxCredentialError) Error() string { return e.msg }
 // refresh token whose rotation is shared fleet state. So a seat on such a
 // provider running in a remote cell provisions a box, installs the agent,
 // applies every setup step, starts the job — and the agent fails at its first
-// model call with the third-party app's own "not authenticated", minutes in, naming
+// model call with the vendor's own "not authenticated", minutes in, naming
 // nothing an operator could act on. The documented error existed in the docs
 // and in no code at all.
 //

@@ -22,10 +22,11 @@ import (
 //   - ConversationKey identifies the conversation, for inbox partitioning.
 //   - DigestBody is the supersede rule when several of them merge.
 //
-// A third-party app implements it; nothing in the spine does. The generic fallback
-// below is the answer for a source nobody has written one for — an extension's
-// own events, or a third-party app added to config before its prompt exists — and it is
-// deliberately the most conservative reading of each question.
+// A third-party app implements it; nothing in the spine does. The generic
+// fallback below is the answer for a source nobody has written one for (an
+// extension's own events, or a third-party app added to config before its
+// prompt exists), and it is deliberately the most conservative reading of
+// each question.
 type Prompt interface {
 	// Source is the integration name this prompt answers for.
 	Source() string
@@ -89,26 +90,26 @@ type Prompt interface {
 	// DigestBody is the per-source supersede rule for one constituent of a
 	// merged trigger.
 	//
-	// Some third-party apps re-emit their whole current state on every event — a
-	// tracker sending the full issue description each time a field changes
-	// — so rendering N copies of it buries the one line that actually
-	// changed. Such a source returns "" for those event types and the
-	// digest line collapses to its lead; only the latest state, rendered
-	// in full below the digest, matters. A source whose every event IS a
-	// message keeps them all.
+	// Some third-party apps re-emit their whole current state on every
+	// event (a tracker sending the full issue description each time a
+	// field changes), so rendering N copies of it buries the one line
+	// that actually changed. Such a source returns "" for those event
+	// types and the digest line collapses to its lead; only the latest
+	// state, rendered in full below the digest, matters. A source whose
+	// every event IS a message keeps them all.
 	DigestBody(eventType, body string) string
 }
 
 // Inbound is one notification as the spine sees it.
 //
-// The third-party app's parser produces this; everything downstream reads it. It is
-// deliberately flat and stringly-typed in Metadata: what a third-party app puts there is
-// its own business, and the spine's only interest is the handful of keys the
-// prompt itself reads back.
+// The third-party app's parser produces this; everything downstream reads
+// it. It is deliberately flat and stringly-typed in Metadata: what a
+// third-party app puts there is its own business, and the spine's only
+// interest is the handful of keys the prompt itself reads back.
 type Inbound struct {
 	Source string
 
-	// EventType is the third-party app's own name for what happened —
+	// EventType is the third-party app's own name for what happened:
 	// "issue_comment", "message", "pipeline.failed".
 	EventType string
 
@@ -193,9 +194,9 @@ func cmpFirst(a, b string) string {
 // Prompts is the per-source registry.
 //
 // A VALUE built and passed, not a package-level map. A mutable global would
-// make registration order matter, leak one test's third-party app into the next, and
-// give a process no way to run two companies with different integration sets —
-// which is exactly what an epoch swap is.
+// make registration order matter, leak one test's third-party app into the
+// next, and give a process no way to run two companies with different
+// integration sets, which is exactly what an epoch swap is.
 type Prompts struct {
 	bySource map[string]Prompt
 	fallback Prompt

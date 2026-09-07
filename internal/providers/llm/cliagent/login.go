@@ -27,17 +27,17 @@ const maxBundle = 1 << 20
 
 // ErrNoLoginCommand is returned when a profile declares no way to do what
 // was asked. Its own error so `crewlet llm login` can print the paragraph
-// that explains the third-party app's actual login route instead of a bare failure.
+// that explains the vendor's actual login route instead of a bare failure.
 var ErrNoLoginCommand = errors.New("cliagent: this CLI has no such login command")
 
-// BrokerLogin runs the third-party app's OWN interactive login, attached to the
+// BrokerLogin runs the vendor's OWN interactive login, attached to the
 // operator's terminal.
 //
 // Crewlet controls only WHERE the credential lands: in this provider's
 // isolated credentials directory, separate from the operator's personal login
 // on the same machine. It never sees the password, and never drives a
-// headless browser through a third-party app's login page — that breaks on the
-// third-party app's next redesign, and it is exactly the kind of re-implementation
+// headless browser through a vendor's login page — that breaks on the
+// vendor's next redesign, and it is exactly the kind of re-implementation
 // this whole backend exists to avoid.
 func (p *Provider) BrokerLogin(ctx context.Context, in io.Reader, out, errOut io.Writer) error {
 	if len(p.profile.LoginArgs) == 0 {
@@ -48,10 +48,10 @@ func (p *Provider) BrokerLogin(ctx context.Context, in io.Reader, out, errOut io
 	return p.runInCredentialHome(ctx, p.profile.LoginArgs, in, out, errOut)
 }
 
-// CaptureToken runs the third-party app's token-minting command and returns what it
+// CaptureToken runs the vendor's token-minting command and returns what it
 // printed.
 //
-// Preferred wherever a third-party app offers it: a headless token has no credential
+// Preferred wherever a vendor offers it: a headless token has no credential
 // files to sync, no refresh-token rotation to race, and it survives an
 // ephemeral container with no persistent volume.
 func (p *Provider) CaptureToken(ctx context.Context, in io.Reader, errOut io.Writer) (string, error) {
@@ -83,10 +83,10 @@ func (p *Provider) CaptureToken(ctx context.Context, in io.Reader, errOut io.Wri
 func (p *Provider) CredentialLogin(ctx context.Context, username, password string, out, errOut io.Writer) error {
 	login := p.profile.StdinLogin
 	if login == nil {
-		return fmt.Errorf("%w: the %q CLI authenticates through the third-party app's browser "+
+		return fmt.Errorf("%w: the %q CLI authenticates through the vendor's browser "+
 			"OAuth flow — there is no username/password login to drive. Run "+
 			"`crewlet llm login` (which brokers that flow), or "+
-			"`crewlet llm login --capture-token` where the third-party app mints a headless "+
+			"`crewlet llm login --capture-token` where the vendor mints a headless "+
 			"token. If your build of this CLI does accept a credential, declare it "+
 			"under providers.llm.%s.cli.overrides.stdin_login",
 			ErrNoLoginCommand, p.agent, p.key)
@@ -109,7 +109,7 @@ func (p *Provider) CredentialLogin(ctx context.Context, username, password strin
 // Logout revokes the login where the CLI can, and removes the credential
 // files either way.
 //
-// Both halves, and the local half unconditionally: a third-party app command that
+// Both halves, and the local half unconditionally: a vendor command that
 // failed must not leave a working login on disk that an operator believes
 // they removed.
 func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
@@ -145,9 +145,9 @@ func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 // A COPY, not a redirect: agents never write into the operator's personal
 // credential file, so a fleet refreshing a token mid-session is not a
 // surprise the operator gets handed. The cost is that both copies then
-// descend from one refresh token, and a third-party app that rotates refresh tokens
+// descend from one refresh token, and a vendor that rotates refresh tokens
 // can log out whichever side refreshes second — which is why the caller says
-// so, and recommends a headless token where the third-party app mints one.
+// so, and recommends a headless token where the vendor mints one.
 func (p *Provider) AdoptHostLogin(home string) ([]string, error) {
 	if home == "" {
 		var err error
@@ -188,7 +188,7 @@ func (p *Provider) AdoptHostLogin(home string) ([]string, error) {
 	}
 	if len(taken) == 0 {
 		return nil, fmt.Errorf("cliagent: no %q login found under %q — log in with the "+
-			"third-party app's CLI first, or name a different home with --home", p.agent, home)
+			"vendor's CLI first, or name a different home with --home", p.agent, home)
 	}
 	return taken, nil
 }

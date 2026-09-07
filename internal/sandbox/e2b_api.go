@@ -17,11 +17,11 @@ import (
 
 // The E2B control plane: minting, reclaiming and keeping a box alive.
 //
-// # A thin typed client rather than a third-party app SDK
+// # A thin typed client rather than a vendor SDK
 //
 // E2B publishes no Go SDK. The control plane is a handful of documented JSON
 // endpoints, so this is a typed client over them — which is what this engine
-// does wherever a third-party app ships no Go SDK, and is why the whole backend stays
+// does wherever a vendor ships no Go SDK, and is why the whole backend stays
 // pure Go and cross-compiles with everything else.
 //
 // # Two planes, and they are different hosts
@@ -39,7 +39,7 @@ import (
 // API and the per-box hostnames are both derived from it, so a cluster is one
 // field rather than two that can disagree.
 const (
-	// DefaultE2BDomain is the third-party app cloud.
+	// DefaultE2BDomain is the vendor cloud.
 	DefaultE2BDomain = "e2b.dev"
 
 	// e2bEnvdPort is the port envd listens on inside every box. It is part
@@ -89,7 +89,7 @@ func newE2BAPI(apiKey, domain string, client *http.Client) *e2bAPI {
 //
 // TYPED, so a caller deciding what a refusal MEANS — 404 is "this box is
 // gone", which for a kill is success — does not substring-match a message the
-// third-party app changes freely.
+// vendor changes freely.
 type E2BError struct {
 	Method string
 	Path   string
@@ -283,17 +283,17 @@ func (a *e2bAPI) pauseBox(ctx context.Context, sandboxID string) error {
 	return a.do(ctx, http.MethodPost, "/sandboxes/"+sandboxID+"/pause", nil, nil)
 }
 
-// detailLimit bounds a third-party app's own explanation of a refusal.
+// detailLimit bounds a vendor's own explanation of a refusal.
 //
 // The whole account of what went wrong — a quota message, a permission
 // name, a validation list — and it reaches an operator and a model as the
-// error's text. Two kilobytes holds any of those; past that it is a third-party app
+// error's text. Two kilobytes holds any of those; past that it is a vendor
 // serving an HTML page where an API response belongs.
 const detailLimit = 2048
 
 // readDetail reads a refusal's body, SAYING when it cut.
 //
-// An unmarked cut leaves "the explanation is off-screen" and "the third-party app
+// An unmarked cut leaves "the explanation is off-screen" and "the vendor
 // explained itself badly" as the same string, which is the distinction the
 // reader most needs — and the read error is reported rather than dropped,
 // because a body that died mid-read is a different fact from a short one.

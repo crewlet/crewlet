@@ -12,7 +12,7 @@ import (
 // re-deriving and four of them had never learned: a plain s[:n] splits
 // whatever multi-byte character straddles the boundary, and what that
 // produces depends on where it goes — a JSON encoder substitutes U+FFFD, a
-// model reads a replacement character, a third-party app rejects the field.
+// model reads a replacement character, a vendor rejects the field.
 func TestACutNeverLandsMidRune(t *testing.T) {
 	t.Parallel()
 	// Every cut position across a string whose runes are 1, 2, 3 and 4

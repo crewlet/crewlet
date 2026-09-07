@@ -508,11 +508,11 @@ type Unit struct {
 	// Channel is where this unit talks; inherited by children that
 	// set none.
 	//
-	// Third-party app-neutral, and it was not always: it was `slack_channel`, which
-	// made the ONE way to give a unit a channel name a third-party app this build
-	// refuses — and put "Team Slack channel" into the prompt of every agent
-	// in a company that talks on Mattermost. A unit's channel is a fact
-	// about the unit, not about who hosts it.
+	// Integration-neutral, and it was not always: it was `slack_channel`,
+	// which made the ONE way to give a unit a channel name a third-party
+	// app this build refuses, and put "Team Slack channel" into the prompt
+	// of every agent in a company that talks on Mattermost. A unit's
+	// channel is a fact about the unit, not about who hosts it.
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Unit channel on the company's chat surface; inherited by child units."`
 
 	// Knowledge is free-text knowledge references for this unit. NOT a
@@ -540,7 +540,7 @@ type Unit struct {
 func (u Unit) IdentityKey() string { return u.Name }
 
 // UnitIntegrations is a unit's integration identity. Chat at the unit level
-// is the third-party app-neutral channel field, so it is deliberately not here.
+// is the integration-neutral channel field, so it is deliberately not here.
 type UnitIntegrations struct {
 	Jira       *ProjectRef `yaml:"jira,omitempty" json:"jira,omitempty" desc:"The Jira project this unit owns."`
 	Confluence *SpaceRef   `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"The Confluence space this unit owns."`

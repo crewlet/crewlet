@@ -64,7 +64,7 @@ func call(t *testing.T, h http.Handler, method, path, body string) (int, string)
 //
 // A credential is arbitrary text — a PEM key has newlines, a token can hold
 // anything — so the body IS the value. Any encoding step between the operator
-// and the bytes the third-party app compares is a 401 nobody can explain.
+// and the bytes the vendor compares is a 401 nobody can explain.
 func TestAValueRoundTripsVerbatim(t *testing.T) {
 	t.Parallel()
 	h, _ := surface(t, cipherFor(t, "k1"), "k1")
@@ -208,7 +208,7 @@ func TestWithoutAKeyringEveryWriteIsRefusedWithTheRemedy(t *testing.T) {
 }
 
 // A VALUE OVER THE LIMIT IS REFUSED, not truncated. A silently shortened
-// credential fails at the third-party app with a 401 that names neither.
+// credential fails at the vendor with a 401 that names neither.
 func TestAnOversizedValueIsRefused(t *testing.T) {
 	t.Parallel()
 	h, _ := surface(t, cipherFor(t, "k1"), "k1")

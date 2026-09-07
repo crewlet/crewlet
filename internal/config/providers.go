@@ -326,7 +326,7 @@ type LLMProvider struct {
 	// BaseURL redirects any HTTP backend, not just openai-compatible: an
 	// Anthropic-API gateway is an `anthropic` entry with one of these, and
 	// the code sandbox forwards it to Claude Code as ANTHROPIC_BASE_URL.
-	// It is only REQUIRED for openai-compatible, which has no third-party app
+	// It is only REQUIRED for openai-compatible, which has no vendor
 	// default to fall back to.
 	BaseURL string `yaml:"base_url,omitempty" json:"base_url,omitempty" desc:"Endpoint override, ${VAR} supported. Required for openai-compatible; optional for openai and anthropic (a gateway or proxy)."`
 
@@ -566,7 +566,7 @@ var CLIAgentNames = []CLIAgentName{
 // The mode is NOT inferred, and the reason is that both are defensible for the
 // same CLI on the same seat. Text mode is predictable, its tool log is the
 // engine's own, and it works with no reachable API. Agent mode is faster on
-// real code work and gets the third-party app's own harness — at the cost of a run that
+// real code work and gets the vendor's own harness, at the cost of a run that
 // outlives its turn and a tool surface reached over the network.
 type CLIAgentMode string
 
@@ -694,7 +694,7 @@ type CLIAgent struct {
 
 	// Overrides replaces fields of the built-in profile.
 	//
-	// CLI flags drift between releases, and a third-party app renaming
+	// CLI flags drift between releases, and a vendor renaming
 	// --output-format must be a config edit rather than a Crewlet release,
 	// so every profile field is replaceable. Lists replace wholesale —
 	// position matters in an argv.

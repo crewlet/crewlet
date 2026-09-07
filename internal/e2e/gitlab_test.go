@@ -186,7 +186,7 @@ func TestACodeHostWithNoUsableSigningSecretDoesNotStart(t *testing.T) {
 	const ref = "${CREWLET_TEST_GITLAB_SECRET}"
 	for _, tc := range []struct{ name, resolvesTo string }{
 		{"a reference nothing answers", ""},
-		{"a value the third-party app could not have produced", "not-a-whsec-value"},
+		{"a value the vendor could not have produced", "not-a-whsec-value"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.resolvesTo != "" {

@@ -41,8 +41,8 @@ func mintInto(values map[string]string, reqs []setup.Requirement, generate []str
 			return fmt.Errorf("no field %q to generate", field)
 		}
 		if !r.Mintable {
-			return fmt.Errorf(
-				"%s is not something this engine can generate; it comes from the third-party app", field)
+			return fmt.Errorf("%s is not something this engine can generate; "+
+				"it comes from the third-party app", field)
 		}
 		if _, supplied := values[field]; supplied {
 			return fmt.Errorf(

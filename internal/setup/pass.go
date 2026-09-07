@@ -15,10 +15,11 @@ import (
 //
 // # What a pass is, and what makes this different from the loop
 //
-// The reconcile loop runs a third-party app's own Reconcile every few minutes with NO
-// sink and NO webhook base, and those two absences are what make it safe to
-// run unattended: a base is permission to register a webhook, and a sink is
-// permission to mint a credential. Neither is something a timer may decide.
+// The reconcile loop runs a third-party app's own Reconcile every few minutes
+// with NO sink and NO webhook base, and those two absences are what make it
+// safe to run unattended: a base is permission to register a webhook, and a
+// sink is permission to mint a credential. Neither is something a timer may
+// decide.
 //
 // A pass is the same function with both supplied, and it runs because a
 // person pressed a button. That is the whole distinction, and it is why this
@@ -38,40 +39,41 @@ import (
 // dashboard and a tick that ran a minute later cannot disagree about what an
 // integration's state is: there is one classifier and one status row.
 
-// Pass runs one third-party app's provisioning, with permission to write.
+// Pass runs one integration's provisioning, with permission to write.
 //
-// Kind is here rather than inferred so the registry is keyed by the third-party app's
-// own answer, the same shape [integration.Reconciler] uses.
+// Kind is here rather than inferred so the registry is keyed by the
+// integration's own answer, the same shape [integration.Reconciler] uses.
 type Pass interface {
 	Kind() integration.Kind
 
-	// Run executes the third-party app's existing Reconcile with a sink and a base.
-	// It returns findings in the shared vocabulary, and an error only for
+	// Run executes the third-party app's existing Reconcile with a sink and a
+	// base. It returns findings in the shared vocabulary, and an error only for
 	// a fault: something the engine or the third-party app could not do at all,
 	// which is a different fact from anything the findings can express.
 	Run(ctx context.Context, in PassInput) ([]integration.Finding, error)
 
-	// Needs reports the transient third-party app credential this pass requires, or
-	// nil. A group Owner token or a Mattermost admin PAT is asked for on
-	// every run and never stored: it can create accounts, and a
-	// permanently held one turns a one-time grant into a standing power.
+	// Needs reports the transient third-party app credential this pass requires,
+	// or nil. A group Owner token or a Mattermost admin PAT is asked for on
+	// every run and never stored: it can create accounts, and a permanently held
+	// one turns a one-time grant into a standing power.
 	Needs() *Requirement
 }
 
 // Teardowner is a [Pass] that can also remove what it registered.
 //
-// OPTIONAL, and the third-party apps that do not satisfy it are not oversights: Slack,
-// Mattermost and Datadog register no webhook from this engine, so a teardown
-// for them would have nothing to withdraw. A type assertion is what asks,
-// which keeps a third-party app's answer in one place — the third-party app — rather than in a
-// list here that has to be kept in step with it.
+// OPTIONAL, and the third-party apps that do not satisfy it are not
+// oversights: Slack, Mattermost and Datadog register no webhook from this
+// engine, so a teardown for them would have nothing to withdraw. A type
+// assertion is what asks, which keeps a third-party app's answer in one place
+// (its own package) rather than in a list here that has to be kept in step
+// with it.
 type Teardowner interface {
 	Pass
 
-	// Teardown removes what this third-party app's passes created. It is the only
-	// operation in this package that DESTROYS at a third-party app, so it takes
-	// the operator's own answer about how far to go rather than
-	// inferring it.
+	// Teardown removes what this third-party app's passes created. It is the
+	// only operation in this package that DESTROYS at a third-party app, so it
+	// takes the operator's own answer about how far to go rather than inferring
+	// it.
 	//
 	// An error holds the surface in [integration.PhaseDisconnecting] and
 	// the loop tries again, so a partial teardown must be safe to repeat:
@@ -92,9 +94,9 @@ type TeardownInput struct {
 	// pressed Disconnect is not a decision a button gets to make.
 	RemoveSeats bool
 
-	// Operator is the transient third-party app credential, for a third-party app whose
-	// [Pass.Needs] asks for one. Removing an account usually needs the
-	// same authority creating it did.
+	// Operator is the transient third-party app credential, for an
+	// integration whose [Pass.Needs] asks for one. Removing an account
+	// usually needs the same authority creating it did.
 	Operator string
 }
 
@@ -125,14 +127,16 @@ type PassInput struct {
 	Operator string
 }
 
-// ErrPassInFlight reports that this third-party app's pass is already running.
+// ErrPassInFlight reports that this third-party app's pass is already
+// running.
 var ErrPassInFlight = errors.New("setup: a pass for this integration is already running")
 
-// ErrNoPass reports a third-party app this build cannot provision from the API.
+// ErrNoPass reports a third-party app this build cannot provision from the
+// API.
 var ErrNoPass = errors.New("setup: no provisioning pass for this integration")
 
-// ErrNoTeardown reports a third-party app that registers nothing to remove. Slack,
-// Mattermost and Datadog register no webhook from this engine, so a
+// ErrNoTeardown reports a third-party app that registers nothing to remove.
+// Slack, Mattermost and Datadog register no webhook from this engine, so a
 // disconnect has only the company document to change.
 var ErrNoTeardown = errors.New("setup: nothing to remove at this integration")
 
@@ -210,7 +214,8 @@ func NewRunner(passes []Pass, duty func(integration.Kind) Duty, now func() time.
 	}
 }
 
-// Serves reports whether this build can provision a third-party app from the API.
+// Serves reports whether this build can provision a third-party app from the
+// API.
 func (r *Runner) Serves(kind integration.Kind) bool {
 	if r == nil {
 		return false
@@ -219,7 +224,8 @@ func (r *Runner) Serves(kind integration.Kind) bool {
 	return ok
 }
 
-// Needs is the transient credential this third-party app's pass asks for, or nil.
+// Needs is the transient credential this third-party app's pass asks for, or
+// nil.
 func (r *Runner) Needs(kind integration.Kind) *Requirement {
 	if r == nil {
 		return nil
@@ -234,8 +240,8 @@ func (r *Runner) Needs(kind integration.Kind) *Requirement {
 // Start runs a pass, blocking until it finishes.
 //
 // BLOCKING, deliberately, and the caller decides what to do with that. A
-// GitHub pass is a handful of API calls; the third-party apps whose passes take
-// minutes are not on this surface yet, and giving every one of them an
+// GitHub pass is a handful of API calls; the third-party apps whose passes
+// take minutes are not on this surface yet, and giving every one of them an
 // asynchronous shape today would be building the machinery for a case that
 // does not exist while making the one that does harder to reason about.
 func (r *Runner) Start(ctx context.Context, kind integration.Kind, in PassInput, id string) (*Run, error) {
@@ -282,17 +288,17 @@ func (r *Runner) Start(ctx context.Context, kind integration.Kind, in PassInput,
 	return run, nil
 }
 
-// StartTeardown removes what a third-party app holds, under the same guard a pass runs
-// beneath.
+// StartTeardown removes what a third-party app holds, under the same guard a
+// pass runs beneath.
 //
 // THE SAME LEASE, deliberately. A teardown and a provisioning pass are the
-// two operations that write at the third-party app, and letting them overlap is how a
-// disconnect deletes a webhook the pass beside it is registering. Sharing the
-// claim means one of them waits, whichever arrives second.
+// two operations that write at the third-party app, and letting them overlap
+// is how a disconnect deletes a webhook the pass beside it is registering.
+// Sharing the claim means one of them waits, whichever arrives second.
 //
-// Returns [ErrNoTeardown] for a third-party app that registers nothing to remove,
-// which the caller reads as "there was nothing to do" rather than as a
-// failure: the disconnect still finishes.
+// Returns [ErrNoTeardown] for a third-party app that registers nothing to
+// remove, which the caller reads as "there was nothing to do" rather than as
+// a failure: the disconnect still finishes.
 func (r *Runner) StartTeardown(
 	ctx context.Context, kind integration.Kind, in TeardownInput, id string,
 ) (*Run, error) {

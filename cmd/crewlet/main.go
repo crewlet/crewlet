@@ -731,10 +731,10 @@ func runEngine(args []string, stderr io.Writer) error {
 	// a seat is not claimed until its per-role MCP children are up — one
 	// subprocess per server per seat, each a spawn and a handshake and a
 	// tools/list. On the Nimbus example that is 21 children, and the whole
-	// inbound edge — dashboard, REST, every third-party app's webhook — was dark for
-	// as long as they took. Measured at 37 seconds with four seats and every
-	// third-party app failing FAST; a company whose third-party apps actually answer takes
-	// minutes, and it scales with seats times servers.
+	// inbound edge (dashboard, REST, every third-party app's webhook) was
+	// dark for as long as they took. Measured at 37 seconds with four seats
+	// and every vendor failing FAST; a company whose vendors actually answer
+	// takes minutes, and it scales with seats times servers.
 	//
 	// Nothing here needs a started engine: the node exists, /health and
 	// /ready report honestly that it holds no seats yet, and a webhook that
@@ -910,7 +910,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// The surface a DISCONNECT removes a block through, installed now
 	// because it is built here and the engine's loop started before it.
 	// Until it is set the loop refuses a disconnect rather than running
-	// the third-party app teardown and leaving the block behind.
+	// the teardown at the third-party app and leaving the block behind.
 	e.UseConfigWriter(engineConfigWriter{surface: configSurface})
 	setupSurface := setupapi.New(setupapi.Options{
 		Company: func() *config.Company { return companyConfig(e) },
@@ -1023,9 +1023,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// The inbound edge. It republishes onto THIS node's queue and
 		// dedupes through the FLEET'S coordination store, which is what
 		// makes a delivery that lands on any node wake the seat's owner
-		// exactly once — a third-party app retrying reaches whichever node the
-		// load balancer picks, so a claim only this node could see would
-		// suppress nothing.
+		// exactly once. A third-party app retrying reaches whichever node
+		// the load balancer picks, so a claim only this node could see
+		// would suppress nothing.
 		// The WRITE half of the counter, for POST /budgets/reset. On the
 		// default topology the coordination store is this engine's own
 		// embedded broker, so a node that is running is the only thing

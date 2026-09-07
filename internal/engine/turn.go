@@ -883,7 +883,7 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			owed = turn.ReplyTool
 
 		case types.ExternalNotification{}.EventType():
-			// The third-party app's own reading of its routing — see
+			// The third-party app's own reading of its routing. See
 			// [notify.Prompt.Addressed]. Absent decodes as false, so an
 			// event written by a build that predates the field is
 			// unaddressed rather than an obligation nobody recorded.

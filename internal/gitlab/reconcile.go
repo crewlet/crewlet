@@ -784,7 +784,7 @@ const SigningSecretPrefix = whsec.Prefix
 // MintSigningSecret generates a Standard-Webhooks signing secret.
 //
 // The FORMAT lives in [whsec], with the three readers that must agree on it.
-// This is the third-party app-facing name for it, because a caller here is asking
+// This is the vendor-facing name for it, because a caller here is asking
 // GitLab a question and should not have to know which spec answers it.
 func MintSigningSecret() (string, error) { return whsec.Mint() }
 

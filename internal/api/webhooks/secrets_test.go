@@ -19,7 +19,7 @@ import (
 // that absence is asserted rather than assumed.
 //
 // A field wired to the wrong secret is invisible until a real delivery from a
-// real third-party app refuses to verify, with the third-party app's settings page showing a
+// real third-party app refuses to verify, with its settings page showing a
 // healthy hook. That is what the mapping is held to here.
 
 // gitLabFixtureSecret is whsec_ over standard base64 of a 32-byte key — the

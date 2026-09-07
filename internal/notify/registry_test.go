@@ -56,8 +56,8 @@ func TestASeatResolvesByEveryAddressItHas(t *testing.T) {
 	if !ok || byID.Handle != lead.Handle {
 		t.Fatalf("agent id resolved to %+v, want the lead", byID)
 	}
-	// The declared address, case-folded — a third-party app hands back whatever
-	// the sender typed.
+	// The declared address, case-folded, because a third-party app hands
+	// back whatever the sender typed.
 	byEmail, ok := r.ByEmail("lead@EXAMPLE.com")
 	if !ok || byEmail.Handle != lead.Handle {
 		t.Fatalf("email resolved to %+v, want the lead", byEmail)

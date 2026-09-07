@@ -88,7 +88,7 @@ func TestCustomWorksWhenFullyDeclared(t *testing.T) {
 
 // The rule the docs promise: maps merge key-wise, lists replace wholesale.
 // An element-wise list merge would produce an argv neither side wrote, and
-// the failure would look like a third-party app bug rather than a config one.
+// the failure would look like a vendor bug rather than a config one.
 func TestOverridesReplaceListsWholesale(t *testing.T) {
 	t.Parallel()
 	base, _ := Builtin("claude-code")

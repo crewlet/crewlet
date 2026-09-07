@@ -30,7 +30,7 @@ import (
 //
 // Every other test in this tree stops at a seam. This one starts a real engine
 // on a real broker, wakes a real seat with a real trigger, drives a real
-// Plan/Execute/Review loop against a scripted third-party app endpoint, and reads the
+// Plan/Execute/Review loop against a scripted vendor endpoint, and reads the
 // result off a WebSocket dialled the way the dashboard dials it — then feeds
 // those exact frames through the dashboard's OWN store.js and socket.js.
 //

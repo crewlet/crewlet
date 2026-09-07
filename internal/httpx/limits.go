@@ -2,10 +2,10 @@ package httpx
 
 // MaxResponseBody bounds a decoded third-party app response.
 //
-// Every third-party app client caps the ERROR body it reads (2 KiB) and the discarded
-// body it drains (1 MiB) and left the SUCCESS decode unbounded — an asymmetry
-// inside one function, where the unbounded arm is the one that runs on every
-// successful call.
+// Every third-party app client caps the ERROR body it reads (2 KiB) and the
+// discarded body it drains (1 MiB) and left the SUCCESS decode unbounded, an
+// asymmetry inside one function, where the unbounded arm is the one that runs
+// on every successful call.
 //
 // This is hardening, not a defect: these are outbound calls to
 // operator-configured, authenticated endpoints, and json.Decoder already

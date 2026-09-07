@@ -153,10 +153,10 @@ const (
 	// ActorProvider means the third-party app is applying what it already accepted.
 	ActorProvider Actor = "provider"
 
-	// ActorAdmin means a person must act AT THE VENDOR: install the app,
-	// approve the scopes, widen the grant, remove access somebody else
-	// added. Watched briskly, because somebody told to install an app is
-	// usually installing it as they read, and the point of the loop is
+	// ActorAdmin means a person must act AT THE THIRD-PARTY APP: install
+	// the app, approve the scopes, widen the grant, remove access somebody
+	// else added. Watched briskly, because somebody told to install an app
+	// is usually installing it as they read, and the point of the loop is
 	// that it resumes without them pressing anything.
 	ActorAdmin Actor = "admin"
 

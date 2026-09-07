@@ -186,7 +186,7 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 // THE BODY IS THE VALUE, raw bytes, not a JSON wrapper. A credential is
 // arbitrary text — a PEM key has newlines, a token can be anything — and
 // making the caller escape it into JSON puts an encoding step between the
-// operator and the byte sequence the third-party app will check.
+// operator and the byte sequence the vendor will check.
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	// BEFORE THE BODY, so a name the grammar cannot reference is refused

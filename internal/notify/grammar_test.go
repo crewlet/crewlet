@@ -7,8 +7,8 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// The two real grammars, declared the way a third-party app package will declare
-// them, so these tests exercise the shapes that actually ship.
+// The two real grammars, declared the way a third-party app's package will
+// declare them, so these tests exercise the shapes that actually ship.
 var (
 	markup = notify.MarkupGrammar{
 		Name:       "slack",

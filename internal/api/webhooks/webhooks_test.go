@@ -844,7 +844,7 @@ func TestCredentialHeadersAreRedactedBeforeADeliveryIsStored(t *testing.T) {
 	}
 }
 
-// --- delivery deduplication, for the third-party apps that send no delivery id ------ //
+// --- delivery deduplication, for integrations that send no delivery id ----- //
 
 // CONFLUENCE DATA CENTER SENDS THE SAME HEADER ITS JIRA TWIN DOES, and the
 // route ignored it: the claim short-circuits on an empty key, so every

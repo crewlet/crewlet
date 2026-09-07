@@ -19,7 +19,7 @@
 // weaker key than the operator believed they had configured.
 //
 // Config sits at the bottom of the engine's import graph and cannot reach
-// the third-party app package, so the rule lives here, where all three can.
+// the integration package, so the rule lives here, where all three can.
 //
 // # Getting the encoding wrong is silent
 //
@@ -50,7 +50,7 @@ const Prefix = "whsec_"
 const KeyBytes = 32
 
 // Key decodes a signing secret to its raw HMAC key, reporting whether the
-// secret is one the third-party app could have produced.
+// secret is one the vendor could have produced.
 //
 // Three-valued in effect rather than two: a caller distinguishes "no secret
 // configured" (the empty string, which is not this function's business) from

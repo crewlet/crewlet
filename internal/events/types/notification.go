@@ -157,7 +157,7 @@ func (e ExternalNotification) Actor() string { return e.Sender }
 // assembled, which is the message plus the triage guidance wrapped around it.
 //
 // Body rather than SalientBody, because the scaffolding is not noise here —
-// it is the third-party app prompt that tells the planner how to read this surface.
+// it is the integration prompt that tells the planner how to read this surface.
 // The salient half is what the LEARNING workers want (see
 // engine.salientBody), and the two readers wanting different halves is
 // exactly why both fields exist.

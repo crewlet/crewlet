@@ -29,9 +29,9 @@ import (
 //
 //	rate       one window's width x a small factor — a window nobody writes
 //	           to again must age out, and nothing may outlive its successor
-//	claims     the dedupe window, minutes: long enough to cover a third-party app's
-//	           retries and an operator's replay, short enough that a
-//	           deliberate re-send later is not swallowed
+//	claims     the dedupe window, minutes: long enough to cover a
+//	           third-party app's retries and an operator's replay, short
+//	           enough that a deliberate re-send later is not swallowed
 //	ledger     turn-completion retention, days: it has to outlast the
 //	           redelivery horizon and the scheduler's catchup floor
 //	cooldowns  the longest credential cooldown, an hour
@@ -1030,7 +1030,7 @@ func (f *FleetStore) Secret(ctx context.Context, name string) (coord.SecretRecor
 	case err != nil:
 		// RAISED. "No such credential" renders downstream as an unset
 		// ${VAR}, which is an empty string handed to a provider, which is
-		// an auth failure blamed on the third-party app. An unreadable store must
+		// an auth failure blamed on the vendor. An unreadable store must
 		// never be able to say it.
 		return coord.SecretRecord{}, false, unavailable("read the secret", err)
 	}

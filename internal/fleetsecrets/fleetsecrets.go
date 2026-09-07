@@ -6,7 +6,7 @@
 // It was, and that was the last piece of company-wide state living somewhere
 // only one node could see. `crewlet secrets set` reached exactly the
 // node whose Tier A file it was pointed at; every peer kept what it booted
-// with, and nothing failed until a seat landed on one of them and a third-party app
+// with, and nothing failed until a seat landed on one of them and a vendor
 // rejected a credential the operator believed they had rotated.
 //
 // The company CONFIG already travels this way — the activation plane writes a

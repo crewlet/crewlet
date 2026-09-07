@@ -34,7 +34,7 @@ var log = logging.Get("providers.llm")
 // endpoint.
 //
 // Go's default is 2 (http.DefaultMaxIdleConnsPerHost). Over HTTP/2 — what the
-// third-party app endpoints negotiate — that barely matters, because one connection
+// vendor endpoints negotiate — that barely matters, because one connection
 // multiplexes every concurrent request. It matters a great deal for the
 // endpoints this same code also serves: a self-hosted vLLM or a gateway
 // speaking HTTP/1.1 gives one request per connection, so a node running more
@@ -54,7 +54,7 @@ var log = logging.Get("providers.llm")
 // It delegates to [httpx.Client], which is what makes the pool shared: this
 // function is called once per configured provider, so a transport built here
 // gave each provider a pool of its own and two providers against one endpoint
-// — the ordinary case, a default and an auxiliary model on the same third-party app —
+// — the ordinary case, a default and an auxiliary model on the same vendor —
 // reused nothing between them.
 //
 // No client-level Timeout is set. The per-call deadline belongs to the SDK's
@@ -65,11 +65,11 @@ var log = logging.Get("providers.llm")
 // pool. http.Client.CloseIdleConnections forwards to its transport, which is
 // the process's ONE transport — so a provider "reclaiming its own idle
 // sockets" on a config swap drops the warm connections of every other
-// provider, all seven third-party app clients, every remote MCP server and the sandbox
+// provider, all seven vendor clients, every remote MCP server and the sandbox
 // control plane. All three providers had exactly that method; none had a
 // caller outside its own tests, and the shared transport's 90-second
 // IdleConnTimeout is what reaps a connection nobody wants. On a shared pool a
-// swap that replaces a provider pointing at the same third-party app WANTS the warm
+// swap that replaces a provider pointing at the same vendor WANTS the warm
 // connection anyway.
 func NewHTTPClient() *http.Client {
 	return httpx.Client(0)
@@ -133,10 +133,10 @@ func isNetworkError(err error) bool {
 	return errors.As(err, &netErr)
 }
 
-// resetHeaders are the third-party app-specific "your limit clears at" headers, in the
+// resetHeaders are the vendor-specific "your limit clears at" headers, in the
 // order they are consulted.
 //
-// Two shapes, because the third-party apps chose differently: OpenAI sends a duration
+// Two shapes, because the vendors chose differently: OpenAI sends a duration
 // ("6m0s", "1.5s", sometimes a bare number of seconds) and Anthropic sends an
 // RFC 3339 instant. Reading only the OpenAI names and only the bare-number
 // form leaves "6m0s" — the value OpenAI actually sends once a limit has
@@ -154,7 +154,7 @@ var resetHeaders = []string{
 //
 // Retry-After wins, in either RFC 9110 form, through [llm.ParseRetryAfter] —
 // there is exactly one parser for that grammar and this is not a second one.
-// Failing that, the third-party app reset headers are consulted in order.
+// Failing that, the vendor reset headers are consulted in order.
 //
 // A non-positive value is NOT a hint and the scan keeps going. That rule is
 // deliberate: a zero cooldown is not a cooldown, it is a key with no record
@@ -185,7 +185,7 @@ func RetryHint(h http.Header, now time.Time) (time.Duration, bool) {
 	return 0, false
 }
 
-// parseReset reads one reset header value in any of the three shapes third-party apps
+// parseReset reads one reset header value in any of the three shapes vendors
 // send: a Go-style duration ("6m0s", "1.5s"), a bare number of seconds ("20"),
 // or an RFC 3339 instant.
 func parseReset(raw string, now time.Time) (time.Duration, bool) {

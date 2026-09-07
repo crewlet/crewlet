@@ -239,10 +239,10 @@ type Reconciliation struct {
 //
 // # Human ids need no integration
 //
-// Unlike agent identities, which each transport resolves against the third-party app
-// at connect, a human's ids are declared in config. Registration is
-// therefore synchronous and runs at boot and on every org swap, with no
-// network and nothing to await.
+// Unlike agent identities, which each transport resolves against the
+// third-party app at connect, a human's ids are declared in config.
+// Registration is therefore synchronous and runs at boot and on every org
+// swap, with no network and nothing to await.
 //
 // lookup resolves ${VAR} references; nil reads the process environment. An
 // identity whose reference does not resolve is skipped and counted, never

@@ -240,9 +240,9 @@ providers:
                                         #   a bench is SHARED across the fleet, so a peer's 429 benches the
                                         #   key here too — see concepts/coordination.md
       base_url: "${LLM_BASE_URL}"       # optional — custom endpoint; supports ${ENV_VAR} references.
-                                        #   Required for openai-compatible (it has no third-party app default);
-                                        #   on `openai` / `anthropic` it points the third-party app's own wire
-                                        #   format at a gateway or proxy instead of the third-party app host
+                                        #   Required for openai-compatible (it has no vendor default);
+                                        #   on `openai` / `anthropic` it points the vendor's own wire
+                                        #   format at a gateway or proxy instead of the vendor host
       timeout_seconds: 120              # optional — per-call HTTP timeout (default: 120); raise for slow / large-output reasoning models
                                         #   (the cli-agent backend drives a subprocess and uses cli.timeout_seconds instead)
       reasoning: false                  # optional — enable reasoning/extended thinking (default: false)
@@ -291,7 +291,7 @@ providers:
                                         #   blob; empty falls back to
                                         #   CREWLET_LLM_CLI_<KEY>_CREDENTIALS
         overrides: {}                   # optional — replace any profile field when a
-                                        #   third-party app renames a flag (validated here, so a
+                                        #   vendor renames a flag (validated here, so a
                                         #   typo fails `crewlet validate`)
 
   embeddings:                           # optional — similarity search for the

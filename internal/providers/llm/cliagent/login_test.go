@@ -90,7 +90,7 @@ func TestAdoptingWithNoHostLoginSaysWhereItLooked(t *testing.T) {
 
 // A bundle carries a login onto another host, and must come back byte for
 // byte — a credential that round-trips almost correctly is a login that fails
-// at the third-party app with no explanation.
+// at the vendor with no explanation.
 func TestACredentialBundleRoundTrips(t *testing.T) {
 	source := loginProvider(t)
 	home := t.TempDir()
@@ -231,7 +231,7 @@ func TestExportingWithNoLoginRefuses(t *testing.T) {
 	}
 }
 
-// Logout removes the local credential even when the third-party app's own command
+// Logout removes the local credential even when the vendor's own command
 // fails: a login the operator believes they removed must not still work.
 func TestLogoutRemovesTheCredentialEvenIfTheVendorCommandFails(t *testing.T) {
 	p := loginProvider(t)
@@ -246,7 +246,7 @@ func TestLogoutRemovesTheCredentialEvenIfTheVendorCommandFails(t *testing.T) {
 
 	err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil {
-		t.Error("a failing third-party app logout was reported as success")
+		t.Error("a failing vendor logout was reported as success")
 	}
 	if p.Workspace().HasLogin() {
 		t.Error("the credential survived a logout the operator was told about")

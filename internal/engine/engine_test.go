@@ -52,7 +52,7 @@ func TestAnEpochBuildsWithoutReachingTheNetwork(t *testing.T) {
 	t.Parallel()
 	// Building an epoch must be something a `validate` command can do. A
 	// constructor that dialled a provider would make config validation
-	// depend on the third-party app being up.
+	// depend on the vendor being up.
 	c := company(t, companyDoc)
 	if c.Org == nil || c.Models == nil || c.Tools == nil {
 		t.Fatalf("epoch = %+v", c)
@@ -196,7 +196,7 @@ func TestTheExtensionJudgeIsOnUnlessTurnedOff(t *testing.T) {
 
 func TestACLIAgentProviderBuildsWithoutALogin(t *testing.T) {
 	// Like every other backend, it must BUILD without credentials: the
-	// call then fails with the third-party app's own "not authenticated", which
+	// call then fails with the vendor's own "not authenticated", which
 	// names the CLI, while a constructor that refused to exist would take
 	// the whole company down at boot over one provider's login.
 	t.Setenv(config.CLIHomeEnv, t.TempDir())

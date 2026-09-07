@@ -79,7 +79,7 @@ func TestDoctorNamesAnUnadoptedHostLogin(t *testing.T) {
 }
 
 // A budget built on estimates is a different promise from one built on the
-// third-party app's own counts, so the report must not let the difference pass
+// vendor's own counts, so the report must not let the difference pass
 // silently.
 func TestDoctorSaysWhenTokenCountsAreEstimated(t *testing.T) {
 	dir := t.TempDir()

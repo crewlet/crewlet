@@ -7,14 +7,14 @@
 // it, and it already went stale by three.
 //
 // The CLI holds the operator's OAuth login, so Crewlet never sees a password
-// and never re-implements a third-party app's auth. What makes this more than "shell
+// and never re-implements a vendor's auth. What makes this more than "shell
 // out to a CLI" is three problems it has to solve first, and each is a file
 // here:
 //
 //   - SHARED MEMORY. A CLI keeps sessions, history, todos and project notes
 //     under one home, so seven seats on one subscription would read each
 //     other's transcripts. Every call runs in its own seat home with HOME,
-//     the XDG variables and the third-party app's own relocation variable pointed
+//     the XDG variables and the vendor's own relocation variable pointed
 //     inside it, in an empty per-call working directory, with an ALLOWLISTED
 //     environment rather than the engine's — see workspace.go and env.go.
 //
@@ -31,7 +31,7 @@
 // contract: it does not retry, and it classifies a failure no further than a
 // coarse kind. The one classification that is genuinely its own is a SPENT
 // SUBSCRIPTION, which arrives as prose on a SUCCESSFUL exit and is recognised
-// by a third-party app's verbatim sentinel plus the reset instant it carries — never
+// by a vendor's verbatim sentinel plus the reset instant it carries — never
 // by keyword, which is how the same recognition was got wrong twice before.
 package cliagent
 
@@ -109,7 +109,7 @@ var _ llm.Provider = (*Provider)(nil)
 // New builds a cli-agent provider.
 //
 // Like every other backend, it builds even when no login is present: the call
-// then fails with the third-party app's own "not authenticated", which names the CLI
+// then fails with the vendor's own "not authenticated", which names the CLI
 // and is exactly what `crewlet llm doctor` explains. A constructor that
 // refused to exist would take the whole company down at boot over one
 // provider's credentials.
@@ -317,7 +317,7 @@ func (p *Provider) completion(prompt string, res *rawResult) (*llm.Completion, e
 
 	// A spent subscription is checked BEFORE the exit code, because it
 	// arrives on a successful one: the process exits 0 and the answer is
-	// the third-party app's own sentence about the plan.
+	// the vendor's own sentence about the plan.
 	if kind, retry, ok := p.classifyMarkers(out.text, res.stderr); ok {
 		return nil, p.fail(kind, retry, fmt.Errorf("%s", firstLine(out.text, res.stderr)))
 	}
@@ -376,8 +376,8 @@ func (p *Provider) completion(prompt string, res *rawResult) (*llm.Completion, e
 // classifyMarkers recognises a spent subscription or an expired login in a
 // CLI's own words.
 //
-// Structure, not keywords. A marker is a sentinel the third-party app emits VERBATIM,
-// and where the third-party app carries the reset instant alongside it, the
+// Structure, not keywords. A marker is a sentinel the vendor emits VERBATIM,
+// and where the vendor carries the reset instant alongside it, the
 // classification yields a real Retry-After rather than a guess. Matching
 // "usage limit" case-insensitively across a reply is what made this wrong
 // before: a model asked about rate limits writes the phrase itself, and every
@@ -405,7 +405,7 @@ func (p *Provider) classifyMarkers(text, stderr string) (llm.ErrorKind, time.Dur
 
 // resetAfter reads the reset instant a limit marker carries.
 //
-// Zero when the third-party app gave none, which the credential pool reads as "use the
+// Zero when the vendor gave none, which the credential pool reads as "use the
 // configured cooldown" — the honest answer, rather than inventing a window.
 func resetAfter(from string, marker LimitMarker) time.Duration {
 	if marker.ResetSeparator == "" {
@@ -449,7 +449,7 @@ func (p *Provider) fail(kind llm.ErrorKind, retryAfter time.Duration, err error)
 }
 
 // firstLine is the first non-empty line across the given texts, for a failure
-// message that names the third-party app's own sentence rather than its whole reply.
+// message that names the vendor's own sentence rather than its whole reply.
 func firstLine(texts ...string) string {
 	for _, text := range texts {
 		for line := range strings.SplitSeq(text, "\n") {

@@ -8,9 +8,9 @@ import (
 
 // Generic is the prompt for a source nobody has written one for.
 //
-// An extension's own events, or a third-party app added to config before its prompt
-// exists. Its answers are the CONSERVATIVE reading of each question, which is
-// not the same as the empty one:
+// An extension's own events, or a third-party app added to config before its
+// prompt exists. Its answers are the CONSERVATIVE reading of each question,
+// which is not the same as the empty one:
 //
 //   - It renders the body in full, because for a source the spine knows
 //     nothing about, the body is all the context there is.
@@ -18,8 +18,8 @@ import (
 //     the turn-start filters have something real to filter against.
 //   - It derives no conversation key, so its events are never merged. Merging
 //     two triggers the spine cannot tell apart loses one of them.
-//   - It supersedes nothing, because it has no idea which of this third-party app's
-//     bodies are state and which are messages.
+//   - It supersedes nothing, because it has no idea which of this
+//     third-party app's bodies are state and which are messages.
 type Generic struct{}
 
 var _ Prompt = Generic{}
@@ -55,10 +55,11 @@ func (Generic) DigestBody(_, body string) string { return body }
 // Build renders the notification and then tells the seat how to decide whether
 // it was asked for anything.
 //
-// THE EVALUATION BLOCK IS THE POINT, and it is here rather than in each third-party app
-// because it is a fact about being an agent in a company, not about the
-// third-party app: a seat that replies to everything it is mentioned in is noise, and a
-// seat that silently declines a direct ask looks like the message was lost.
+// THE EVALUATION BLOCK IS THE POINT, and it is here rather than in each
+// third-party app because it is a fact about being an agent in a company,
+// not about the third-party app: a seat that replies to everything it is
+// mentioned in is noise, and a seat that silently declines a direct ask
+// looks like the message was lost.
 // Both failures are the same root cause — reading "my name appeared" as "I was
 // asked" — and both are cheap to fix in the trigger.
 func (Generic) Build(n Inbound, _ Parties) string {
@@ -78,9 +79,9 @@ func (Generic) Build(n Inbound, _ Parties) string {
 
 // evaluationBlock is the shared "were you actually asked?" guidance.
 //
-// Exported through Build rather than duplicated per third-party app: every source's
-// prompt wants it, and a copy per third-party app is how five of them come to say
-// slightly different things about when silence is correct.
+// Exported through Build rather than duplicated per integration: every
+// source's prompt wants it, and a copy per integration is how five of them
+// come to say slightly different things about when silence is correct.
 const evaluationBlock = `
 ## Evaluate Before Acting
 1. **Were you actually asked to do something?** Read the verb, not just whether your name appears. Being mentioned in passing (e.g. "check with @you on this") or named as the subject of a message addressed to someone else is NOT a request directed at you.
@@ -88,8 +89,8 @@ const evaluationBlock = `
 3. **If you were asked but have decided not to act** (out of scope, already handled, wrong person, declining) → do NOT skip silently. Post a brief reply on the originating channel explaining why — leaving a direct ask unanswered looks like the message was lost.
 `
 
-// EvaluationBlock is that guidance, for a third-party app prompt that builds its own
-// body and wants the same ending.
+// EvaluationBlock is that guidance, for a third-party app's prompt that
+// builds its own body and wants the same ending.
 func EvaluationBlock() string { return evaluationBlock }
 
 // renderMetadata lists the metadata a seat can act on.

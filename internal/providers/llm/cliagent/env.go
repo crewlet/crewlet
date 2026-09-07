@@ -12,7 +12,7 @@ import (
 //
 // An allowlist rather than os.Environ() because the engine's environment
 // holds the org's chat token, its database DSN and every provider key: a
-// child that inherited it would hand each of those to a third-party app's CLI, and
+// child that inherited it would hand each of those to a vendor's CLI, and
 // would silently bill a metered ANTHROPIC_API_KEY that happened to be
 // exported while the operator believed they were on a flat-rate plan.
 //

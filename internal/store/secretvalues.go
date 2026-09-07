@@ -49,7 +49,7 @@ import (
 // safe answer and carries on. This one raises. An unreadable secret
 // resolving to "" does not fail here — it becomes an empty Bearer token
 // hours later and somewhere else entirely, on a request whose 401 names the
-// third-party app rather than this store.
+// vendor rather than this store.
 type SecretValues struct {
 	db     *DB
 	cipher secrets.Cipher
@@ -84,7 +84,7 @@ func (s *SecretValues) Set(ctx context.Context, name, value, by, source string, 
 	}
 	// THE SAME KEY SPACE the fleet's store enforces, checked here too
 	// because this is the path `crewlet secrets set` takes against a
-	// stopped node — and whatever lands here is migrated onto the fleet
+	// stopped node, and whatever lands here is migrated onto the fleet
 	// unchanged at the next start.
 	if err := secrets.CheckName(name); err != nil {
 		return err

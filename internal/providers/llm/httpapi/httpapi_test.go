@@ -265,7 +265,7 @@ func TestNewHTTPClientRaisesTheIdleConnectionCeiling(t *testing.T) {
 		t.Fatal("the transport carries no proxy function")
 	}
 	if !transport.ForceAttemptHTTP2 {
-		t.Fatal("HTTP/2 was lost, which is the multiplexing the third-party app endpoints rely on")
+		t.Fatal("HTTP/2 was lost, which is the multiplexing the vendor endpoints rely on")
 	}
 	// A client-level timeout would also cap a future streaming read, and it
 	// surfaces as a bare error rather than the context.DeadlineExceeded this

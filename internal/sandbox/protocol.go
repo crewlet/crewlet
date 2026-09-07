@@ -135,7 +135,7 @@ type Spec struct {
 // must configure its own provider rather than read credentials from the env.
 //
 // Some agents resolve a bare "<provider>/<model>" against a catalogue AND the
-// third-party app's default endpoint — so a custom gateway plus an unlisted model id
+// vendor's default endpoint — so a custom gateway plus an unlisted model id
 // either fails to resolve or silently hits the wrong host. A runner uses this
 // to declare a provider with an explicit base URL and the exact model,
 // bypassing both. An agent that reads its credentials from the environment
@@ -154,7 +154,7 @@ type AgentLLM struct {
 	// "sonnet" would be addressed as "openai/sonnet".
 	ProviderType string
 
-	// BaseURL is the endpoint. Empty means the third-party app default, and so no
+	// BaseURL is the endpoint. Empty means the vendor default, and so no
 	// custom provider declaration at all.
 	BaseURL string
 }

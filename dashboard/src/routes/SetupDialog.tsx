@@ -1,12 +1,11 @@
 /**
  * Connecting an integration, from the requirement list the engine answers.
  *
- * NOTHING ABOUT ANY VENDOR IS IN THIS FILE. Every label, every help line,
- * every link to a third-party app's own page arrives on the requirement, so adding a
- * third-party app is a Go change and no screen work at all. That is the one structural
- * difference from the console, where each third-party app's fields are inline in a
- * single very long component and the seventh third-party app cost as much as the
- * first.
+ * NOTHING ABOUT ANY THIRD-PARTY APP IS IN THIS FILE. Every label, every help
+ * line, every link to an app's own page arrives on the requirement, so adding
+ * an integration is a Go change and no screen work at all. That is the one
+ * structural difference from the console, where each app's fields are inline
+ * in a single very long component and the seventh cost as much as the first.
  *
  * # A secret is never rendered
  *
@@ -226,8 +225,9 @@ export interface SetupSection {
   name: string;
   tool: SetupToolState;
   /**
-   * The seat this section is for, on a third-party app whose credentials live on the
-   * seat. Its requirements replace the tool's, and the submission names it.
+   * The seat this section is for, on a third-party app whose credentials
+   * live on the seat. Its requirements replace the tool's, and the
+   * submission names it.
    */
   seat?: string;
 }
@@ -243,7 +243,7 @@ export function SetupDialog({
    * The surfaces this tool is made of. Usually one; Atlassian is three,
    * because a company thinks in Atlassian and the engine reaches it over
    * Jira, Confluence and the Forge relay. Each section submits to its own
-   * third-party app block, which is what keeps every write atomic on the thing it
+   * vendor block, which is what keeps every write atomic on the thing it
    * changes.
    */
   sections: SetupSection[];
@@ -256,7 +256,7 @@ export function SetupDialog({
 }) {
   const toast = useToast();
   // Keyed by SECTION rather than by vendor, because a per-seat vendor has
-  // one section per seat and they all carry the same third-party app key.
+  // one section per seat and they all carry the same vendor key.
   // CONNECTING is "no section here is configured yet". It no longer decides
   // which fields the form shows — that is one list either way — only what
   // the dialog is CALLED and what its button says, which have to agree: a
@@ -475,7 +475,7 @@ export function SetupDialog({
     setFieldErrors({});
 
     // ONE REQUEST PER SURFACE, and only for the surfaces that have
-    // something to send. Each is atomic on its own third-party app block, so a
+    // something to send. Each is atomic on its own vendor block, so a
     // refusal on the second leaves the first landed rather than half
     // applied to one document.
     const work = sections

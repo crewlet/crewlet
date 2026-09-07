@@ -52,7 +52,7 @@ const noLocalToolsReply = "NO-LOCAL-TOOLS"
 // webProbeURL answers with the server's clock on a line reading
 // `ts=<unix seconds>.<fraction>`. Chosen for being highly available and for
 // carrying a value that changes every request, so a fetch cannot be faked
-// from memory. It is a plain-text endpoint, which every third-party app's fetch tool
+// from memory. It is a plain-text endpoint, which every vendor's fetch tool
 // can read.
 const webProbeURL = "https://www.cloudflare.com/cdn-cgi/trace"
 
@@ -68,7 +68,7 @@ const noWebReply = "NO-WEB"
 // probeSkew is how far a reported clock may sit from the engine's before the
 // probe stops believing a tool ran.
 //
-// A shell answers in the same second. A fetch through a third-party app's tool can
+// A shell answers in the same second. A fetch through a vendor's tool can
 // take tens of seconds on a loaded host, and the endpoint's own clock is not
 // the engine's, so the window is generous — but it is still a window a
 // guessed epoch cannot land in: a model that does not know the current time
@@ -308,7 +308,7 @@ func (p *Provider) localToolsStance() string {
 	case LocalToolsDenied:
 		return "denied by profile"
 	case LocalToolsVendorDefault:
-		return "third-party app default (" + p.profile.LocalToolsNote + ")"
+		return "vendor default (" + p.profile.LocalToolsNote + ")"
 	default:
 		return "not declared by profile"
 	}
@@ -319,7 +319,7 @@ func (p *Provider) localToolsStance() string {
 //
 // The verdict is measured, never inferred from the profile: a profile that
 // says "denied" and a CLI that ran the command is precisely the finding an
-// operator needs, and a profile that says "third-party app default" and a CLI that
+// operator needs, and a profile that says "vendor default" and a CLI that
 // refused is good news worth printing. The second return is the problem line,
 // empty when there is none.
 func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
@@ -334,7 +334,7 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 	case ran && p.profile.LocalTools == LocalToolsDenied:
 		return "probe: SHELL RAN", fmt.Sprintf(
 			"the %q profile says local tools are denied, but the CLI ran a shell "+
-				"command on the engine host — the third-party app's denial flag is not taking "+
+				"command on the engine host — the vendor's denial flag is not taking "+
 				"effect on this build (%s); check cli.overrides against the installed "+
 				"version before running seats on it", p.agent, orNone(p.profile.WrittenFor))
 	case ran:
@@ -353,7 +353,7 @@ func (p *Provider) shellProbe(ctx context.Context) (verdict, problem string) {
 //
 // Web is the one local tool a profile keeps ON, so a CLI that cannot reach
 // it is a problem: the seat has less reach than the same CLI at a terminal,
-// and the cause is usually a third-party app sandbox flag that also cut the network,
+// and the cause is usually a vendor sandbox flag that also cut the network,
 // or an egress proxy the child environment was not told about.
 func (p *Provider) webProbe(ctx context.Context) string {
 	comp, err := p.Complete(ctx, llm.Request{
@@ -367,7 +367,7 @@ func (p *Provider) webProbe(ctx context.Context) string {
 	}
 	return fmt.Sprintf(
 		"failed — the %q CLI could not fetch %s with its own web tool (it said: %q). "+
-			"Web is meant to stay on for every subscription seat: check that no third-party app "+
+			"Web is meant to stay on for every subscription seat: check that no vendor "+
 			"sandbox flag cuts the network and that the egress proxy reaches the child "+
 			"environment (cli.env / passthrough_env)",
 		p.agent, webProbeURL, textcut.Ellipsis(strings.TrimSpace(comp.Content), 120))
@@ -434,7 +434,7 @@ func (p *Provider) probeVersion(ctx context.Context) string {
 // The command that matters, and the reason it is not merely a version probe:
 // a profile can look perfect — binary present, login present, flags accepted
 // — and still not produce a parseable tool call, because the envelope
-// contract is a request to a model rather than a schema the third-party app enforces.
+// contract is a request to a model rather than a schema the vendor enforces.
 // That failure only shows up on the first turn of a real seat otherwise.
 func (p *Provider) smokeTest(ctx context.Context) string {
 	comp, err := p.Complete(ctx, llm.Request{

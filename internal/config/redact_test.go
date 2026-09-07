@@ -13,7 +13,7 @@ import (
 // document must be able to come back — a config nobody can edit is a config
 // nobody maintains.
 //
-// The third-party app each block names is incidental to every assertion below; what
+// The vendor each block names is incidental to every assertion below; what
 // each one contributes is a SHAPE — a literal credential, a ${VAR}
 // reference, a per-seat credential, a credential inside a map. The fixture
 // has to PARSE, so the blocks are written as the validator wants them.

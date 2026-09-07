@@ -175,10 +175,10 @@ func TestCategoriesAreKnownValues(t *testing.T) {
 	}
 }
 
-// THE VENDOR A NOTIFICATION EVENT CONCERNS IS A TAG, because a listing
-// deliberately never selects the payload column — so the Integrations room
-// aggregating "how many of this third-party app's deliveries were dropped by the
-// routing gate" has no other way to read it.
+// THE THIRD-PARTY APP A NOTIFICATION EVENT CONCERNS IS A TAG, because a
+// listing deliberately never selects the payload column, so the Integrations
+// room aggregating "how many of this third-party app's deliveries were dropped
+// by the routing gate" has no other way to read it.
 func TestRecordForTagsTheNotificationSource(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []string{

@@ -1,18 +1,18 @@
 // Package provision is the integration-agnostic half of minting credentials,
 // and of asking a third-party app who they belong to.
 //
-// Every provisioning CLI does the same thing in a different third-party app's API:
-// walk the company config for `${VAR}` references that name a credential,
-// create or rotate that credential with the third-party app, and record the value
-// where the engine will resolve it from. Only the middle step is
-// third-party app-specific. This package is the other two.
+// Every provisioning CLI does the same thing in a different third-party
+// app's API: walk the company config for `${VAR}` references that name a
+// credential, create or rotate that credential with the third-party app,
+// and record the value where the engine will resolve it from. Only the
+// middle step is integration-specific. This package is the other two.
 //
-// [ResolveConcurrently] is the same argument one step later: every third-party app's
-// reconcile, and the engine's own credential resolvers, fan out one identity
-// lookup per seat, and the bound on that fan-out is a property of talking to a
-// third-party app rather than of any one of them. It lives here because this is the
-// leaf all of them already share — see identity.go for what the number is
-// anchored to.
+// [ResolveConcurrently] is the same argument one step later: every
+// third-party app's reconcile, and the engine's own credential resolvers,
+// fan out one identity lookup per seat, and the bound on that fan-out is a
+// property of talking to a third-party app rather than of any one of them.
+// It lives here because this is the leaf all of them already share. See
+// identity.go for what the number is anchored to.
 package provision
 
 import (
@@ -32,10 +32,9 @@ import (
 //
 // A sink may persist REMOTELY — the encrypted secret store is a database
 // write. Buffering in memory and flushing at the end opens a window where a
-// credential exists at the third-party app and nowhere else: if the process dies
-// there, the token is live, unrecorded, and nobody knows to revoke it.
-// Write-through closes that window, and a write-through sink needs a
-// context.
+// credential exists at the third-party app and nowhere else: if the process
+// dies there, the token is live, unrecorded, and nobody knows to revoke it.
+// Write-through closes that window, and a write-through sink needs a context.
 //
 // # Discard is the other half, and the one that is easy to leave out
 //
@@ -65,7 +64,7 @@ type TokenSink interface {
 	//
 	// # It is what makes a re-run safe to run
 	//
-	// A third-party app that serves a credential once — which is all of them —
+	// A third-party app that serves a credential once (which is all of them)
 	// gives a provisioner no way to check that the value it recorded last
 	// time still matches. Without this the only option is to mint fresh
 	// every run, and that is an outage: the engine is running with the
@@ -106,9 +105,9 @@ type TokenSink interface {
 // ErrNoSink reports a run with nowhere to put what it mints.
 //
 // Refused UP FRONT rather than discovered after the first token: a
-// provisioning run with no sink would mint live credentials at the third-party app
-// and print none of them, which is the worst outcome available — every one
-// of them has to be found and revoked by hand.
+// provisioning run with no sink would mint live credentials at the
+// third-party app and print none of them, which is the worst outcome
+// available — every one of them has to be found and revoked by hand.
 var ErrNoSink = errors.New("provision: name where minted credentials should go")
 
 // ReferencedVars is the set of ${VAR} names one config value points at.
@@ -143,8 +142,8 @@ func SoleVar(value string) (string, bool) {
 // Verdict is what probing a recorded credential concluded.
 //
 // FOUR OUTCOMES, not two, because the two that are easy to merge are the
-// two that must not be: "the third-party app refused this credential" and "I could
-// not reach the third-party app" lead to opposite actions.
+// two that must not be: "the third-party app refused this credential" and "I
+// could not reach the third-party app" lead to opposite actions.
 type Verdict int
 
 const (
@@ -158,8 +157,8 @@ const (
 	// Nothing to do.
 	VerdictSelf
 
-	// VerdictRejected means the third-party app refused it. Whatever is in the variable
-	// is not a credential, so minting is unambiguously right.
+	// VerdictRejected means the third-party app refused it. Whatever is in the
+	// variable is not a credential, so minting is unambiguously right.
 	VerdictRejected
 
 	// VerdictOther means it authenticates as a DIFFERENT account. This is a
@@ -171,9 +170,9 @@ const (
 
 // Seat is one agent seat a provisioner has work to do for.
 //
-// The third-party app-specific scan produces these; everything below is shared. Held
-// as a struct rather than passed as four arguments because a report groups
-// by it and a rollback iterates it.
+// The integration-specific scan produces these; everything below is shared.
+// Held as a struct rather than passed as four arguments because a report
+// groups by it and a rollback iterates it.
 type Seat struct {
 	// Handle is the seat, for the report.
 	Handle string
@@ -204,12 +203,12 @@ type Seat struct {
 //
 // # Why a plan exists at all
 //
-// Every one of these runs is partly destructive at the third-party app: it creates
-// accounts, rotates tokens that something is currently authenticating with,
-// and removes seats a config no longer has. An operator needs to see that
-// list before it happens, and a --dry-run that re-walks the config
-// separately would be a second implementation that can disagree with the
-// real one about what it was going to do.
+// Every one of these runs is partly destructive at the third-party app: it
+// creates accounts, rotates tokens that something is currently authenticating
+// with, and removes seats a config no longer has. An operator needs to see
+// that list before it happens, and a --dry-run that re-walks the config
+// separately would be a second implementation that can disagree with the real
+// one about what it was going to do.
 type Plan struct {
 	// Seats are the seats to provision, in a stable order.
 	Seats []Seat

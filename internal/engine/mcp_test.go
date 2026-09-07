@@ -187,7 +187,7 @@ func TestASeatsOwnSurfaceStillCarriesTheBuiltins(t *testing.T) {
 // A SERVER THAT WILL NOT START COSTS ITS OWN TOOLS AND NOTHING ELSE.
 //
 // The alternative — failing the apply — takes a working company offline
-// because one third-party app's binary is missing from an image. The operator sees the
+// because one vendor's binary is missing from an image. The operator sees the
 // group absent, which is the reading that sends them to the right subsystem;
 // builtins quietly shrinking is the reading that does not.
 func TestAServerThatCannotStartLeavesTheSeatItsBuiltins(t *testing.T) {
@@ -318,7 +318,7 @@ func TestAHeldSeatsPerRoleToolsSurviveAConfigApply(t *testing.T) {
 //
 // A per-role child belongs to the seat's LEASE rather than to the epoch, so
 // an apply must leave it alone: restarting one would re-handshake every
-// seat's third-party app credentials on every config edit, and the control-plane doc
+// seat's vendor credentials on every config edit, and the control-plane doc
 // states the rule. The registry is rebuilt; the process never learns an
 // apply happened.
 func TestAnApplyDoesNotRestartAHeldSeatsChild(t *testing.T) {
@@ -350,7 +350,7 @@ func TestAnApplyDoesNotRestartAHeldSeatsChild(t *testing.T) {
 //
 // The tempting fix is to restart every server on every apply, which would
 // make the case above pass while tearing down every working child — on a
-// company with several seats and real third-party apps, seconds of every seat's tools
+// company with several seats and real vendors, seconds of every seat's tools
 // being absent for a config edit that touched none of them.
 func TestAnUnchangedServerIsNotRestartedByAnApply(t *testing.T) {
 	t.Parallel()

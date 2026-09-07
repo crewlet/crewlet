@@ -48,7 +48,7 @@ type Integrations struct {
 	// things need it that are not a person running a command:
 	//
 	//   - The reconcile loop, to say anything at all about ingress. Every
-	//     third-party app Result reports the hook a RUN registered, which is empty
+	//     integration Result reports the hook a RUN registered, which is empty
 	//     for a read-only pass by construction, so without this the loop
 	//     cannot tell a company whose webhook is missing from one it was
 	//     never asked to register. It therefore says nothing, which is
@@ -607,7 +607,7 @@ func (m *Mattermost) validate(path string) error {
 
 // IsAtlassianCloud reports an address that is an Atlassian-hosted site.
 //
-// The SAME rule the third-party app clients apply (jira.DeploymentOf and
+// The SAME rule the vendor clients apply (jira.DeploymentOf and
 // confluence.DeploymentOf), restated here because config is a leaf they
 // depend on. It exists because the validators used to decide "Cloud" from
 // cloud_id alone, and a Cloud site given by URL, which is how most companies
@@ -806,8 +806,8 @@ var GitLabAccessLevels = []GitLabAccessLevel{GitLabDeveloper, GitLabMaintainer}
 // identical values would be two `Valid()` methods to keep in step and two
 // chances for `auto` to come to mean different things.
 //
-// The FIELD names stay each third-party app's own — `group_webhook` on GitLab,
-// `org_webhook` on GitHub — because those are the words their own
+// The FIELD names stay each third-party app's own (`group_webhook` on
+// GitLab, `org_webhook` on GitHub), because those are the words their own
 // documentation uses.
 type ContainerWebhookMode string
 
@@ -1164,8 +1164,8 @@ func (d *Datadog) HandleTagOrDefault() string {
 		return strings.ToLower(tag)
 	}
 	// Restated rather than imported from internal/datadog: config is a
-	// leaf that the third-party app packages depend on, and reaching the other way
-	// for one word would invert that. The third-party app package's own constant
+	// leaf that the vendor packages depend on, and reaching the other way
+	// for one word would invert that. The vendor package's own constant
 	// carries the reasoning, and a test asserts the two agree.
 	return "crewlet"
 }

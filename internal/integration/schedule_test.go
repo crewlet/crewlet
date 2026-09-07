@@ -112,8 +112,8 @@ func TestSettledOverrideAppliesOnlyWhenReady(t *testing.T) {
 		t.Fatalf("a surface with no override waited %s, want the shared %s", got, s.Settled)
 	}
 	// The override is a SETTLED interval. A surface that is waiting on the
-	// third-party app must not inherit it, or a rate-limited third-party app would also be
-	// the slowest one to finish provisioning.
+	// third-party app must not inherit it, or a rate-limited surface would
+	// also be the slowest one to finish provisioning.
 	working := Report{Phase: PhaseProvisioning, Actor: ActorEngine}
 	if got := s.Next(working, 1, slack); got != s.WaitingBase {
 		t.Fatalf("a provisioning surface waited %s, want the %s waiting base",

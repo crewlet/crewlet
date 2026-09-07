@@ -1,9 +1,9 @@
-// Package integration is the third-party app-neutral half of keeping an external
+// Package integration is the app-neutral half of keeping an external
 // surface in line with the company.
 //
 // # Why this exists before any third-party app sits on it
 //
-// Six third-party app packages already know how to bring their surface into line:
+// Six integration packages already know how to bring their surface into line:
 // slack, mattermost, jira, github, gitlab and (from this change) datadog.
 // What none of them had was a way to SAY WHERE THEY GOT TO. Each returned a
 // bag of its own nouns (Created, Rotated, Kept, Pending, Failed, Notes), each
@@ -13,10 +13,11 @@
 // NEVER INFERS HEALTH: there was nothing to infer it from.
 //
 // This package is that missing half, and it is built the way internal/notify
-// was built, before any third-party app sat on it. A spine grown after its first
-// third-party app has that third-party app welded into it, and the five bespoke classifiers
-// this replaces are what that looks like: written once per third-party app, they had
-// already drifted on the question that matters most (see [Classify]).
+// was built, before any third-party app sat on it. A spine grown after its
+// first integration has that integration welded into it, and the five bespoke
+// classifiers this replaces are what that looks like: written once per
+// integration, they had already drifted on the question that matters most
+// (see [Classify]).
 //
 // # The three things it owns
 //
@@ -41,7 +42,7 @@
 // talking to, NOT that fifteen service accounts and everything attributable
 // to them should be destroyed. So a removed block makes this package forget
 // its state and nothing else; decommissioning accounts stays an explicit
-// gesture on the third-party app's own subcommand, where the operator types the flag
+// gesture on the integration's own subcommand, where the operator types the flag
 // and reads what it is about to delete.
 package integration
 

@@ -22,10 +22,10 @@ import (
 // # Why the sink is a required choice
 //
 // A run with nowhere to put what it mints creates live credentials at the
-// third-party app and prints none of them — the worst outcome available, because
-// every one has to be found and revoked by hand. So there is no default: the
-// operator says where, up front, and a run with no answer is refused before
-// it touches anything.
+// third-party app and prints none of them, the worst outcome available,
+// because every one has to be found and revoked by hand. So there is no
+// default: the operator says where, up front, and a run with no answer is
+// refused before it touches anything.
 
 // sinkFlags is the shared --secret-store / --env-file / --print choice.
 type sinkFlags struct {
@@ -437,17 +437,17 @@ type vendorCommand struct {
 	run  func(args []string, stdout, stderr io.Writer) error
 }
 
-// vendorCommands is the whole third-party app CLI surface, and it is the ONLY list.
+// vendorCommands is the whole vendor CLI surface, and it is the ONLY list.
 //
 // Dispatch and usage both read this table because they were once two
-// hand-maintained lists, and third-party apps added since have drifted between them in
+// hand-maintained lists, and vendors added since have drifted between them in
 // both directions: one shipped with import and resync working and advertised
 // nowhere, and Confluence — which has an import and no provision — was
 // advertised with a `provision` subcommand that does not exist. Both are the
 // same defect, in opposite directions, and both are invisible to anyone not
 // reading the source. A table cannot drift from itself.
 //
-// Ordered per third-party app, because the printed usage is this slice.
+// Ordered per vendor, because the printed usage is this slice.
 var vendorCommands = map[string][]vendorCommand{
 	"gitlab": {
 		{"provision", "<company.yaml>", runGitLabProvision},
@@ -475,7 +475,7 @@ var vendorCommands = map[string][]vendorCommand{
 // errUnknownSub is `crewlet <vendor> <typo>`.
 //
 // A SENTINEL because the alternative for the caller is matching on the
-// message, and the one caller that has to tell "this third-party app does not have
+// message, and the one caller that has to tell "this vendor does not have
 // that command" from "that command ran and failed" is the test holding the
 // usage text and the dispatch table together.
 var errUnknownSub = errors.New("unknown command")

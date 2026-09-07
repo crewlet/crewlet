@@ -419,7 +419,7 @@ func TestAnOrdinaryErrorBodyIsReplayedWhole(t *testing.T) {
 //
 // It is the worst place in the tree for two idle connections per host: a
 // company runs one of these per remote server PER SEAT, so every seat sharing
-// one third-party app endpoint contends on the same two.
+// one vendor endpoint contends on the same two.
 func TestIdentityWrapsTheSharedTransport(t *testing.T) {
 	t.Parallel()
 	_, ident := newHTTPTransport(Spec{

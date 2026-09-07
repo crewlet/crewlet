@@ -21,11 +21,11 @@ type Schedule struct {
 	WaitingMax  time.Duration
 
 	// AdminBase and AdminMax bound the wait for something a person must do
-	// AT THE VENDOR. Short at first, because they are usually doing it as
-	// they read, and the point of the loop is that it resumes the moment
-	// they finish without them pressing anything. Stretching out is what
-	// stops a tab left open overnight costing a request every fifteen
-	// seconds until morning.
+	// AT THE THIRD-PARTY APP. Short at first, because they are usually
+	// doing it as they read, and the point of the loop is that it resumes
+	// the moment they finish without them pressing anything. Stretching out
+	// is what stops a tab left open overnight costing a request every
+	// fifteen seconds until morning.
 	AdminBase time.Duration
 	AdminMax  time.Duration
 
@@ -96,8 +96,8 @@ func (s Schedule) WithDefaults() Schedule {
 // Next returns how long to wait after a report, given how many consecutive
 // passes have not settled.
 //
-// settled overrides [Schedule.Settled] for one third-party app and is zero when that
-// third-party app has no reason to differ. It exists because the cost of a converged
+// settled overrides [Schedule.Settled] for one surface and is zero when that
+// surface has no reason to differ. It exists because the cost of a converged
 // pass is not comparable across surfaces: Slack's app-manifest methods are
 // rate limited to roughly one request a minute, so re-reading twenty seats
 // costs twenty minutes of waiting, while GitLab answers the same question in

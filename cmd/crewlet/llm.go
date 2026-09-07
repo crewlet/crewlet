@@ -25,9 +25,9 @@ import (
 //
 // Every other provider type is configured and done: an API key is a string in
 // the secret store. A `cli-agent` provider is a LOGIN — browser OAuth with
-// PKCE, often behind SSO and MFA — held by a third-party app's own command-line tool
+// PKCE, often behind SSO and MFA — held by a vendor's own command-line tool
 // in a directory on disk. There is no password grant to script, and driving a
-// headless browser through a third-party app's login page breaks on their next
+// headless browser through a vendor's login page breaks on their next
 // redesign. So Crewlet does not re-implement any of it. What it controls is
 // WHERE the credential lands: inside the provider's own isolated directory,
 // separate from the operator's personal login on the same machine.
@@ -47,7 +47,7 @@ import (
 // to run a command on the engine host and reports whether it did — a profile
 // that denies local tools and a CLI that ran one is a hole where the isolation
 // was assumed. The web probe asks it to fetch a URL, because web is the one
-// local tool every profile keeps ON and a third-party app's sandbox flag can cut it
+// local tool every profile keeps ON and a vendor's sandbox flag can cut it
 // without saying so.
 
 const llmUsage = `crewlet llm — subscription CLI backends: logins, health and tokens
@@ -96,7 +96,7 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 	fromHost := fs.Bool("from-host", false,
 		"adopt the login this machine already has (login only)")
 	captureToken := fs.Bool("capture-token", false,
-		"run the third-party app's token-minting command (login only)")
+		"run the vendor's token-minting command (login only)")
 	tokenStdin := fs.Bool("token-stdin", false,
 		"read a headless token from stdin (login only)")
 	username := fs.String("username", "",
@@ -337,11 +337,11 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 			strings.Join(taken, ", "), p.Workspace().CredentialsDir())
 		// Said every time, because it is the one cost of this route and
 		// it only bites later: both copies now descend from one refresh
-		// token, and a third-party app that rotates them logs out whichever side
+		// token, and a vendor that rotates them logs out whichever side
 		// refreshes second.
 		fmt.Fprintln(stdout,
 			"\nThis is a COPY: your own login is untouched, but both copies now share\n"+
-				"one refresh token, and a third-party app that rotates them can log out whichever\n"+
+				"one refresh token, and a vendor that rotates them can log out whichever\n"+
 				"side refreshes second.")
 		if tokenVar, err := cliagent.TokenVarName(p.Profile()); err == nil {
 			fmt.Fprintf(stdout,

@@ -491,7 +491,7 @@ func TestAnUnreachableModelWritesNothing(t *testing.T) {
 	t.Run("the call fails", func(t *testing.T) {
 		t.Parallel()
 		store := &fakeDiary{}
-		p := &auxProvider{err: errors.New("502 from the third-party app")}
+		p := &auxProvider{err: errors.New("502 from the vendor")}
 		dec, err := decider(t, p, store).Decide(context.Background(), pdTurn())
 		if err == nil {
 			t.Fatal("a failed aux call reported success")

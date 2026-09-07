@@ -41,7 +41,7 @@ func creditedCompany(t *testing.T, agent string) (*Company, *org.Role) {
 // whose rotation is fleet state — so a CLI that mints no headless token has
 // nothing inside a remote box to authenticate with. Left unchecked the run
 // provisions a box, installs the agent, applies every setup step and starts
-// the job, and the agent fails at its first model call with the third-party app's own
+// the job, and the agent fails at its first model call with the vendor's own
 // "not authenticated", minutes in, naming nothing an operator could act on.
 func TestARemoteRunWithNoTravellingCredentialIsRefused(t *testing.T) {
 	t.Parallel()

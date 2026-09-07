@@ -247,7 +247,7 @@ integrations:
 //
 // Secrets live in the config as ${VAR}s. The edge's material was assembled
 // from the config WITHOUT resolving, so every route verified against the
-// literal "${GITLAB_SIGNING_SECRET}" — every delivery from every third-party app
+// literal "${GITLAB_SIGNING_SECRET}", every delivery from every third-party app
 // refused, with the third-party app's settings page showing a healthy hook. Measured
 // against a real GitLab, where the only trace was one warning per delivery.
 //
@@ -295,7 +295,7 @@ func TestAnUnconfiguredNodeHasNoWebhookSecrets(t *testing.T) {
 // and no parser behind any of them, so a company naming one got a block that
 // validated, appeared on the dashboard's Integrations room beside the
 // working ones, and woke nobody. This is what catches a third-party app whose config
-// ships without its wiring — and, in the other direction, a third-party app whose
+// ships without its wiring and, in the other direction, a third-party app whose
 // wiring is dropped from startNotifications by a refactor.
 func TestAConfiguredTrackerActuallyRoutes(t *testing.T) {
 	t.Parallel()
@@ -484,7 +484,7 @@ integrations:
 	}
 
 	if slices.Contains(e.RoutedSources(), "jira") {
-		t.Errorf("a retired third-party app still routes: %v\n"+
+		t.Errorf("a retired vendor still routes: %v\n"+
 			"its parser is live and handling deliveries under the credential "+
 			"the revision revoked", e.RoutedSources())
 	}
@@ -524,11 +524,11 @@ integrations:
 		t.Fatalf("Apply: %v", err)
 	}
 	if got := e.WebhookSecrets().GitHub; got != "" {
-		t.Errorf("a disabled third-party app still verifies deliveries with %q: the route "+
+		t.Errorf("a disabled vendor still verifies deliveries with %q: the route "+
 			"ingests what the routing half will then drop", got)
 	}
 	if slices.Contains(e.RoutedSources(), "github") {
-		t.Errorf("a disabled third-party app still routes: %v", e.RoutedSources())
+		t.Errorf("a disabled vendor still routes: %v", e.RoutedSources())
 	}
 }
 
@@ -536,8 +536,8 @@ integrations:
 //
 // Confluence's converged in one direction: it returned early unless a parser
 // was ALREADY running, on the reasoning that boot owns the first build. Boot
-// owns the first one and nothing owned the second — the parser set is
-// assembled once, in New — so a revision that ADDED Confluence after boot
+// owns the first one and nothing owned the second (the parser set is
+// assembled once, in New), so a revision that ADDED Confluence after boot
 // registered nothing.
 //
 // Disconnecting and reconnecting is exactly that sequence, and it is the one

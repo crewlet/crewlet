@@ -111,7 +111,7 @@ func TestWithNoBudgetTheProviderIsNotWrapped(t *testing.T) {
 }
 
 // A FAILED CHARGE DOES NOT FAIL THE COMPLETION. The call already succeeded at
-// the third-party app and the caller's work is valid; turning a coordination blip into
+// the vendor and the caller's work is valid; turning a coordination blip into
 // a reflection outage would be the wrong trade, and the pre-flight gate is
 // what actually stops the spending.
 func TestAnUncountedSpendStillReturnsTheCompletion(t *testing.T) {

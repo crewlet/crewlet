@@ -150,7 +150,7 @@ func seedCredentials(l boxLayout, files map[string]string) {
 // collectCredentials writes a credential the run refreshed back to the shared
 // login.
 //
-// OAuth access tokens expire in hours and most third-party apps rotate the refresh
+// OAuth access tokens expire in hours and most vendors rotate the refresh
 // token alongside them, so a box that quietly discards the rewritten file logs
 // the whole fleet out at the next expiry. Only writes back over a file that
 // already exists in the shared store, so a torn-down box can never CREATE a

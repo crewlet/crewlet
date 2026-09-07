@@ -157,8 +157,8 @@ func (e *Engine) buildPromoter(c *Company) *learning.Promoter {
 	return promoter
 }
 
-// Compile-time proof that the third-party app writer satisfies the pass's seam. The
+// Compile-time proof that the integration writer satisfies the pass's seam. The
 // interface is declared by the consumer, so nothing else would notice a
 // signature drift until the wiring above failed to build — which is later
-// than a reader of the third-party app package would want to find out.
+// than a reader of the integration package would want to find out.
 var _ learning.PromotionWriter = (*confluence.PromotionWriter)(nil)

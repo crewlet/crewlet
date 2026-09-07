@@ -8,7 +8,7 @@ import (
 )
 
 // The values here are SHAPES, not credentials: each is a syntactically valid
-// example of a third-party app's format built from filler characters, which is what the
+// example of a vendor's format built from filler characters, which is what the
 // denylist matches on.
 func TestEveryKnownShapeIsReplaced(t *testing.T) {
 	cases := map[string]string{

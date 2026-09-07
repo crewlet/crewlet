@@ -462,7 +462,7 @@ func TestARepeatedRequestIsGrantedOnce(t *testing.T) {
 
 	if got := slices.Clone(g.Active); len(got) != 2 {
 		// read_file plus the skill loader, once each: two ToolDefs with one
-		// name is a request some third-party apps refuse outright.
+		// name is a request some vendors refuse outright.
 		t.Errorf("duplicates reached the offered list: %v", got)
 	}
 	if n := strings.Count(strings.Join(g.Rejected, ","), "slack_post"); n != 1 {

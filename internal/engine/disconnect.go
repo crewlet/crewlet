@@ -12,8 +12,8 @@ import (
 //
 // The consumer's own interface, one method wide, because that is all a
 // disconnect needs. The implementation is the same `PATCH /config` surface
-// every other write goes through — one merge, one validation, one
-// compare-and-set — rather than a second path onto the document.
+// every other write goes through (one merge, one validation, one
+// compare-and-set) rather than a second path onto the document.
 type ConfigWriter interface {
 	// Apply merges patch into the active revision and activates the
 	// result.
@@ -24,7 +24,7 @@ type ConfigWriter interface {
 //
 // Installed rather than constructed here because the config surface is built
 // where the API is, and the reconcile loop is armed when the engine itself is
-// CONSTRUCTED — several hundred milliseconds earlier, measured. A disconnect
+// CONSTRUCTED, several hundred milliseconds earlier, measured. A disconnect
 // ticking in that window reports [integration.ErrDisconnectUnavailable] and
 // the loop leaves the row untouched, rather than running the third-party app teardown
 // and finding it cannot remove the block: that would leave an integration

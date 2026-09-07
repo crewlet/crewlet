@@ -580,8 +580,8 @@ func (e *Engine) stopNotifications(ctx context.Context) {
 // errorText renders a third-party app reconcile failure for a log line, including the
 // "it built but produced nothing" case that carries no error of its own.
 //
-// SHARED by every third-party app reconciler, because each of them has the same two
-// ways to fail and a per-third-party app copy would drift the first time one of them
+// SHARED by every integration reconciler, because each of them has the same two
+// ways to fail and a per-integration copy would drift the first time one of them
 // learned a third.
 func errorText(err error) string {
 	if err == nil {

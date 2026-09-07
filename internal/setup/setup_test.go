@@ -64,7 +64,8 @@ func TestADerivedSecretNameIsAlwaysReferenceable(t *testing.T) {
 // EVERY VENDOR KIND DERIVES A NAME THE GRAMMAR ACCEPTS, which is what lets
 // the slug skip the leading-digit rule: a derived name always begins with the
 // kind, and a kind that did not start with a letter would break that
-// silently, on one third-party app, for the seats whose handles start with a digit.
+// silently, on one third-party app, for the seats whose handles start with a
+// digit.
 func TestEveryVendorKindDerivesAReferenceableName(t *testing.T) {
 	t.Parallel()
 	for _, kind := range integration.Kinds {
@@ -134,8 +135,8 @@ func TestAPointerIsMintedReusedOrRefused(t *testing.T) {
 // --- resolution ------------------------------------------------------------ //
 
 // PRESENT AND RESOLVED ARE TWO FACTS, and the gap between them is the silent
-// outage: the config shows a secret, the third-party app shows a healthy hook, and
-// every delivery is refused with nothing naming the variable.
+// outage: the config shows a secret, the third-party app shows a healthy
+// hook, and every delivery is refused with nothing naming the variable.
 func TestResolutionSeparatesWrittenDownFromUsable(t *testing.T) {
 	t.Parallel()
 	store := map[string]string{"HAVE": "value", "EMPTY": ""}
@@ -370,9 +371,9 @@ func TestRotatingAValueStillAdvancesTheEpoch(t *testing.T) {
 	}
 }
 
-// A field the third-party app does not declare is refused HAVING WRITTEN NOTHING.
-// Ignoring it while answering 201 is the worst of both: the caller believes
-// the value landed and nothing holds it.
+// A field the third-party app does not declare is refused HAVING WRITTEN
+// NOTHING. Ignoring it while answering 201 is the worst of both: the caller
+// believes the value landed and nothing holds it.
 func TestAnUnknownFieldIsRefusedBeforeAnythingIsWritten(t *testing.T) {
 	t.Parallel()
 	rec := &recorder{}

@@ -7,7 +7,7 @@
 // (llm.KindForStatus), everything about which credential to use next is the
 // pool's, and everything about which model to try next is the chain's.
 //
-// Two details here are the ones worth checking against the third-party app rather than
+// Two details here are the ones worth checking against the vendor rather than
 // against intuition:
 //
 //   - MAX RETRIES IS ZERO. The SDK retries twice by default, and its retry
@@ -18,7 +18,7 @@
 //     bench the key three round trips late or, on a connection error, learn
 //     nothing about it at all.
 //   - INPUT TOKENS ARE A SUM. Anthropic's usage.input_tokens counts only the
-//     UNCACHED remainder; the third-party app's own field doc says "Total input tokens
+//     UNCACHED remainder; the vendor's own field doc says "Total input tokens
 //     in a request is the summation of input_tokens, cache_creation_input_
 //     tokens and cache_read_input_tokens". The contract requires InputTokens
 //     to be the full prompt count, so all three are added. Getting this wrong
@@ -590,7 +590,7 @@ func toolChoice(choice llm.ToolChoice) (sdk.ToolChoiceUnionParam, bool) {
 
 // completion translates the response.
 func (p *Provider) completion(msg *sdk.Message) *llm.Completion {
-	// The CONFIGURED model id, not the one the response echoes. A third-party app
+	// The CONFIGURED model id, not the one the response echoes. A vendor
 	// alias resolving to a dated snapshot would otherwise re-key the
 	// per-model breakdown the day the alias moves, splitting one model's
 	// spend across two names that nothing in the config mentions.

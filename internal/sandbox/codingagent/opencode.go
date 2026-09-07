@@ -14,8 +14,8 @@ const OpenCodeName = "opencode"
 
 // OpenCodeProviderID is the provider a run's config declares.
 //
-// Its own id rather than one of the third-party app names, because it points at the
-// SEAT's endpoint and model, which may be neither third-party app's default.
+// Its own id rather than one of the vendor names, because it points at the
+// SEAT's endpoint and model, which may be neither vendor's default.
 const OpenCodeProviderID = "crewlet"
 
 // transcriptDetailLimit caps one transcript line's echoed command or path.
@@ -31,7 +31,7 @@ const transcriptDetailLimit = 160
 // reading the env: pointing it at a seat's model means declaring a custom
 // provider with an explicit base URL and the exact model id, because
 // OpenCode otherwise resolves a bare "<provider>/<model>" against a catalogue
-// AND the third-party app's default endpoint — so a custom gateway plus an unlisted
+// AND the vendor's default endpoint — so a custom gateway plus an unlisted
 // model either fails to resolve or silently hits the wrong host.
 type OpenCode struct{}
 
@@ -63,9 +63,9 @@ func (OpenCode) Command(req sandbox.RunRequest, _ Paths, _ string) string {
 // openCodeModelArg is the fully-formed --model value.
 //
 // A custom base URL means the run's own declared provider; otherwise the model
-// is addressed under its third-party app FAMILY. The family comes from the provider
+// is addressed under its vendor FAMILY. The family comes from the provider
 // type rather than being assumed, because a subscription entry's type is the
-// same for every third-party app — reading it would address a Claude subscription's
+// same for every vendor — reading it would address a Claude subscription's
 // model as an OpenAI one.
 func openCodeModelArg(llm *sandbox.AgentLLM) string {
 	if llm == nil || llm.Model == "" {

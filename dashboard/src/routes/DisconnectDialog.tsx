@@ -6,9 +6,9 @@
  * webhooks — is never in question: nothing else uses them, and one left
  * behind delivers a company's events to an engine with no block to route
  * them. Removing the ACCOUNTS it created is a different thing: each is a
- * colleague at that third-party app with commits, comments and history attached, and
- * deleting one because somebody pressed Disconnect is not a decision a button
- * gets to make. So the checkbox is off until it is ticked.
+ * colleague at that third-party app with commits, comments and history
+ * attached, and deleting one because somebody pressed Disconnect is not a
+ * decision a button gets to make. So the checkbox is off until it is ticked.
  *
  * The disconnect is ASKED FOR, not done here. The engine keeps the block
  * until the third-party app teardown succeeds, because that block carries the

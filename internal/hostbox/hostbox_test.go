@@ -211,7 +211,7 @@ func TestCopyFileAtomicReportsAMissingSourceRatherThanFailing(t *testing.T) {
 	dir := t.TempDir()
 	ran, err := CopyFileAtomic(filepath.Join(dir, "absent"), filepath.Join(dir, "dst"))
 	if err != nil {
-		t.Fatalf("a profile naming a file this third-party app does not use is not an error: %v", err)
+		t.Fatalf("a profile naming a file this vendor does not use is not an error: %v", err)
 	}
 	if ran {
 		t.Fatal("CopyFileAtomic reported a copy that could not have happened")

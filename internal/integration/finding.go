@@ -24,11 +24,11 @@ const (
 	// the access it was issued with.
 	//
 	// Distinct from [FindingCredentialMissing] because the fix is
-	// different — that one is a ${VAR} pointing at nothing, this one is a
-	// value the third-party app will not accept — and distinct from a transport
-	// fault because it NEVER clears on its own. Every pass will be refused
-	// identically until a person changes the credential, so reporting it
-	// as a wait leaves an operator watching a retry that cannot succeed.
+	// different (that one is a ${VAR} pointing at nothing, this one is a
+	// value the third-party app will not accept), and distinct from a
+	// transport fault because it NEVER clears on its own. Every pass will be
+	// refused identically until a person changes the credential, so reporting
+	// it as a wait leaves an operator watching a retry that cannot succeed.
 	FindingCredentialRejected FindingKind = "credential_rejected"
 
 	// FindingApprovalRequired is an app or scope a person must install or
@@ -81,11 +81,11 @@ const (
 // # The ordering IS the contract, and it is what the hand-written classifiers
 // it replaces disagreed about
 //
-// The control plane this was ported from wrote one classifier per third-party app,
-// five of them, each a switch over that third-party app's own result struct. They had
-// already drifted on the question that matters most: WHERE THE EXCESS-ACCESS
-// ADVISORY SITS. Because that advisory reports READY, anything ranked below
-// it disappears when both are present.
+// The control plane this was ported from wrote one classifier per
+// integration, five of them, each a switch over that integration's own
+// result struct. They had already drifted on the question that matters
+// most: WHERE THE EXCESS-ACCESS ADVISORY SITS. Because that advisory
+// reports READY, anything ranked below it disappears when both are present.
 //
 // Only one of the five got it right. Atlassian's ran the advisory in a second
 // pass, after every blocking condition. The other three that have one at all
@@ -107,7 +107,7 @@ const (
 // in all five, ranked below everything including the advisory.
 //
 // None of those is a hard bug to write. All of them are invisible from inside
-// one third-party app's function, which is why the ordering lives here, once, with a
+// one integration's function, which is why the ordering lives here, once, with a
 // test that pins it.
 //
 // The rule the order encodes: rank by HOW MUCH OF THE INTEGRATION IS NOT
@@ -261,8 +261,8 @@ type Finding struct {
 // Classify folds a pass's findings into the one report an operator reads.
 //
 // The worst finding wins, by [FindingKind.severity]. Ties keep the order the
-// third-party app emitted them in, so a third-party app that walks its seats in a stable order
-// reports a stable seat.
+// third-party app emitted them in, so one that walks its seats in a stable
+// order reports a stable seat.
 //
 // When several findings share the winning kind, the count is named. "an agent
 // needs maintainer on api-gateway" and "an agent needs maintainer on

@@ -40,7 +40,7 @@
 //
 // Most of what this package once shortened is no longer shortened at all, and
 // that is the better fix wherever it is available: content a turn reasons over
-// is passed whole, and a value with a third-party app limit is REFUSED with a message
+// is passed whole, and a value with a vendor limit is REFUSED with a message
 // naming the field rather than silently cut to fit. What is left here is the
 // cases where cutting is genuinely right — a diagnostic, a log field, a prompt
 // budget — where the alternative to a bounded string is an unbounded one.

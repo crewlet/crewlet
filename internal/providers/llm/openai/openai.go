@@ -5,7 +5,7 @@
 // not a protocol. That is also why the params it sends stay conservative: an
 // aggregator, a gateway or a local vLLM has to understand every field.
 //
-// Three details are worth checking against the third-party app rather than intuition:
+// Three details are worth checking against the vendor rather than intuition:
 //
 //   - MAX RETRIES IS ZERO, for the reason llm.go gives. The SDK's two default
 //     retries fire on 408, 409, 429, every 5xx and every connection error
@@ -16,7 +16,7 @@
 //     full prompt count and prompt_tokens_details.cached_tokens is a SUBSET
 //     of it. This looks like the opposite of the Anthropic backend and is the
 //     same invariant: the contract wants the full prompt count, and the two
-//     third-party apps report it differently. Adding the cache figures here would
+//     vendors report it differently. Adding the cache figures here would
 //     double-bill every cached round.
 //   - A REASONING TRACE HAS NO AGREED FIELD NAME. DeepSeek and several MiniMax
 //     hosts send reasoning_content, some send a bare reasoning, and OpenAI's
@@ -425,7 +425,7 @@ func formatMessages(messages []llm.Message) ([]sdk.ChatCompletionMessageParamUni
 			}
 			// ReasoningContent and ThinkingBlocks are deliberately NOT
 			// sent back. This endpoint has no field for either, and the
-			// third-party apps that emit reasoning_content reject it on input.
+			// vendors that emit reasoning_content reject it on input.
 			for _, tc := range m.ToolCalls {
 				args, err := httpapi.EncodeArgs(tc.Arguments, tc.Name)
 				if err != nil {

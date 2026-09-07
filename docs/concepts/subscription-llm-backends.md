@@ -5,9 +5,9 @@ Claude Code, Codex, Gemini CLI, Qwen Code, OpenCode, Cursor, Copilot or
 Grok — instead of a metered API key. [Supported CLIs](#supported-clis)
 below is the full list.
 
-The `cli-agent` provider type drives the third-party app's own command-line tool
+The `cli-agent` provider type drives the vendor's own command-line tool
 as a headless text model. The CLI holds the operator's OAuth login;
-Crewlet never sees a password and never re-implements a third-party app's auth.
+Crewlet never sees a password and never re-implements a vendor's auth.
 
 ```yaml
 providers:
@@ -29,7 +29,7 @@ crewlet llm doctor default                  # verify before the first turn
 
 > **The trade-off up front.** A subscription CLI is a *process*, not an
 > HTTP endpoint. It is slower to start, its tool calls ride a JSON
-> envelope rather than a native tool-call channel, and most third-party apps'
+> envelope rather than a native tool-call channel, and most vendors'
 > terms are written for interactive use. It is an excellent fit for
 > development, evaluation, and a small company you run yourself; a
 > metered key remains the better fit for a large, latency-sensitive
@@ -52,7 +52,7 @@ below.
 | **Shared memory** | A CLI keeps sessions, history, todos, and project notes under one home. Seven seats on one subscription would read each other's transcripts. | [Isolation](#isolation-the-part-that-actually-matters) |
 | **One model per entry** | A CLI takes `--model`, so per-phase models mean several entries — which must not mean several logins. | [Per-phase models](#per-phase-models) |
 | **No tool channel** | The tool loop needs `tool_calls` back. A CLI prints prose. | [Tool calls](#tool-calls) |
-| **Browser-only auth** | Third-party app logins are OAuth (PKCE) with MFA — no password grant to script. | [Authentication](#authentication) |
+| **Browser-only auth** | Vendor logins are OAuth (PKCE) with MFA — no password grant to script. | [Authentication](#authentication) |
 
 ---
 
@@ -67,7 +67,7 @@ its own place to run:
 └── seats/
     ├── sarah-chen/
     │   ├── cache/                # XDG_CACHE_HOME — warm, holds no conversation
-    │   ├── home/                 # HOME + XDG config/data/state + third-party app dirs
+    │   ├── home/                 # HOME + XDG config/data/state + vendor dirs
     │   └── work/<call-id>/       # cwd for one call, then deleted
     └── marcus-rivera/
         └── …
@@ -75,7 +75,7 @@ its own place to run:
 
 **Between seats.** Every seat gets its own `home`. `HOME`,
 `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `TMPDIR` and the
-third-party app's own relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …)
+vendor's own relocation variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …)
 all point inside it. Nothing in a CLI's state layout is reachable across
 that boundary.
 
@@ -143,7 +143,7 @@ seat.
 
 **Text mode is predictable**: the tool log is the engine's own, every
 call goes through the permission model and redaction, and it works with
-no reachable API. **Agent mode is the third-party app's own harness**: a real
+no reachable API. **Agent mode is the vendor's own harness**: a real
 shell, a real editor and a real checkout, which is what makes it worth
 having for code work.
 
@@ -270,21 +270,21 @@ permission model, secret redaction, and the event stream. Routing agent
 work through them would fork the engine's tool surface in two.
 
 So every profile **denies the CLI's shell and file tools** wherever the
-third-party app offers a way to, and each says how: a flag on the command line
+vendor offers a way to, and each says how: a flag on the command line
 (Claude Code's `--disallowedTools`, Copilot's `--deny-tool`, Codex's
 read-only sandbox) or a settings file the engine writes into the seat's
 own home or the per-call working directory before every call (Gemini's
 `settings.json`, OpenCode's `opencode.json`, Cursor's `.cursor/cli.json`).
 The shell is the one that matters: the seat's home and environment are
 isolated, but the filesystem is not, and a CLI with a shell on the engine
-host reads whatever the engine user can read. A third-party app with no such
-switch is declared as `local_tools: third-party-app-default` with a note saying
+host reads whatever the engine user can read. A vendor with no such
+switch is declared as `local_tools: vendor-default` with a note saying
 which switch is missing — and `crewlet llm doctor` **measures** the
 stance rather than trusting it (see [Operating it](#operating-it)).
 
 **Web is the one local tool that stays on.** A subscription seat must
 not have less reach than the same CLI at a terminal, and a fetch is a
-read — it never gates a delivery. Where a third-party app gates its web tools
+read — it never gates a delivery. Where a vendor gates its web tools
 behind an approval a headless run cannot answer, the profile allows them
 explicitly (`--allowedTools WebFetch WebSearch`, Copilot's
 `--allow-tool`); where its default web search answers from an offline
@@ -341,10 +341,10 @@ keep moving or a seat on this backend would run with no ceiling.
 
 ## Authentication
 
-Third-party app subscription logins are browser OAuth with PKCE, often with SSO,
+Vendor subscription logins are browser OAuth with PKCE, often with SSO,
 MFA, or a one-time code. **There is no username/password grant to
 script**, and driving a headless browser to type into one would break on
-the third-party app's next login-page change. Crewlet does not pretend otherwise.
+the vendor's next login-page change. Crewlet does not pretend otherwise.
 What it does instead covers every deployment shape:
 
 ### 0. Already logged in on this machine? Adopt it
@@ -363,7 +363,7 @@ home directory into Crewlet's, once, on request.
 It is a *copy*, not a redirect: agents never write into your personal
 credential file, so a fleet refreshing a token mid-session is not a
 surprise you get handed. The cost is that both copies then descend from
-one refresh token, and a third-party app that rotates refresh tokens can log out
+one refresh token, and a vendor that rotates refresh tokens can log out
 whichever side refreshes second. Where the CLI mints a headless token
 (option 2 below), that is the better answer and avoids the fork
 entirely — `crewlet llm login -from-host` says so after it runs.
@@ -386,7 +386,7 @@ problems:
     shared refresh token)
 ```
 
-### 1. Broker the third-party app's own login (any CLI)
+### 1. Broker the vendor's own login (any CLI)
 
 ```bash
 crewlet llm login default
@@ -404,7 +404,7 @@ personal CLI login on the same machine.
 crewlet llm login default -capture-token
 ```
 
-Runs the third-party app's token-minting command (`claude setup-token`) and puts
+Runs the vendor's token-minting command (`claude setup-token`) and puts
 the result in the [encrypted secret store](secret-store.md) under the
 profile's token variable — `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code.
 **Prefer this whenever the CLI offers it:** no credential files to sync,
@@ -433,10 +433,10 @@ The Claude, Codex, and Gemini profiles deliberately leave `stdin_login`
 unset, and the command says so rather than failing obscurely:
 
 ```
-Error: the 'claude-code' CLI authenticates through the third-party app's browser
+Error: the 'claude-code' CLI authenticates through the vendor's browser
 OAuth flow — there is no username/password login to drive. Run
 `crewlet llm login` (which brokers that flow), or
-`crewlet llm login -capture-token` where the third-party app mints a headless
+`crewlet llm login -capture-token` where the vendor mints a headless
 token. If your build of this CLI does accept a credential, declare it
 under providers.llm.<key>.cli.overrides.stdin_login.
 ```
@@ -491,11 +491,11 @@ llm logout <KEY>` first if you mean to replace it.
 ### Token refresh across seats
 
 OAuth access tokens expire in hours, and the CLI refreshes them
-mid-run. Most third-party apps rotate the *refresh* token at the same time, so
+mid-run. Most vendors rotate the *refresh* token at the same time, so
 Crewlet syncs a changed credential file back to the shared directory
 when a seat's generation closes — otherwise the whole fleet would be
 logged out at the next expiry. Two seats refreshing at the same instant
-can still race, exactly as two terminals running the third-party app's CLI would.
+can still race, exactly as two terminals running the vendor's CLI would.
 A headless token (option 2) has no refresh file and sidesteps this
 entirely.
 
@@ -517,7 +517,7 @@ entirely.
 
 ### CLI flags drift — and that's a config edit, not a release
 
-Every field of every profile is replaceable from YAML. When a third-party app
+Every field of every profile is replaceable from YAML. When a vendor
 renames a flag or changes its JSON shape, fix it in place:
 
 ```yaml
@@ -700,7 +700,7 @@ chain keeps the seat working while you re-run `crewlet llm login`.
 
 ## The other shape: an OAuth proxy in front of an HTTP entry
 
-Everything above drives the third-party app's CLI as a **process**. There is a
+Everything above drives the vendor's CLI as a **process**. There is a
 second way to spend a subscription, which Crewlet supports without
 knowing anything about it: run a **proxy** that holds the OAuth login
 itself and re-exposes it as an ordinary Anthropic- or OpenAI-shaped HTTP
@@ -729,13 +729,13 @@ providers:
 
 **`base_url` is not an `openai-compatible` field.** It is honoured on
 `anthropic` and `openai` entries too — it is only *required* for
-`openai-compatible`, which has no third-party app default to fall back to. The
+`openai-compatible`, which has no vendor default to fall back to. The
 same field is what points an entry at a corporate egress proxy or an
 Anthropic-API gateway, and the [code sandbox](code-sandbox.md) forwards
 an `anthropic` entry's value to Claude Code as `ANTHROPIC_BASE_URL`.
 
 **Which header your proxy will be handed** depends on the entry's type,
-because each backend sends its third-party app's native one:
+because each backend sends its vendor's native one:
 
 | Entry type | Credential arrives as |
 |---|---|
@@ -743,7 +743,7 @@ because each backend sends its third-party app's native one:
 | `openai`, `openai-compatible` | `Authorization: Bearer` |
 
 The `api_keys` value is the credential for **the proxy**, not for the
-third-party app: the third-party app login lives inside the proxy. Rotation, cooldowns and
+vendor: the vendor login lives inside the proxy. Rotation, cooldowns and
 the fleet-shared credential bench all apply to that inbound key as they
 would to any other.
 
@@ -778,16 +778,16 @@ you:
 ### Before you choose this
 
 A proxy that spends a *subscription* rather than an API key has to
-present itself to the third-party app as the third-party app's own client. In practice
+present itself to the vendor as the vendor's own client. In practice
 that means reproducing a specific client build's headers, its beta
 flags, sometimes its TLS fingerprint, and often injecting that client's
 system prompt ahead of yours — which quietly changes what your prompts
 say and where prompt-cache breakpoints land.
 
-Third-party app terms generally do not permit a third-party client to route
-requests through consumer subscription credentials, and third-party apps have
+Vendor terms generally do not permit a third-party client to route
+requests through consumer subscription credentials, and vendors have
 enforced that. Crewlet's `cli-agent` backend is on the other side of
-that line **by construction**: it runs the third-party app's own unmodified CLI,
+that line **by construction**: it runs the vendor's own unmodified CLI,
 logged in by you, as a child process — Crewlet never sees a password,
 never re-implements an auth flow, and never impersonates a client.
 Pointing `base_url` at a proxy is a supported configuration and a
@@ -861,10 +861,10 @@ A text-mode entry reports neither, rather than reporting that it would
 not work in a mode it is not in.
 
 A profile that says `denied` while the shell ran is a problem naming the
-installed version, because the third-party app's switch is not taking effect on
-it; a `third-party-app-default` profile whose shell ran is a problem stating the
+installed version, because the vendor's switch is not taking effect on
+it; a `vendor-default` profile whose shell ran is a problem stating the
 trust you are taking on; a web tool that could not fetch is a problem
-pointing at the third-party app's sandbox flags and the egress proxy the child
+pointing at the vendor's sandbox flags and the egress proxy the child
 environment was told about.
 
 One caveat worth stating plainly: `doctor` spends three real completions.
@@ -901,12 +901,12 @@ often — it skips all three and says so on each line.
   configuration and exposes no per-call setting; pick a reasoning model
   via `model` instead. Setting `reasoning: true` on a `cli-agent` entry
   is rejected at validation.
-- **Check the third-party app's terms.** Subscription plans are generally written
+- **Check the vendor's terms.** Subscription plans are generally written
   for interactive use by the subscriber. Running a fleet of agents on
   one may not be permitted by your plan — that is a decision for you,
   not something Crewlet can decide for you. It is the sharper question
   for [the proxy shape](#the-other-shape-an-oauth-proxy-in-front-of-an-http-entry),
-  where a third-party client is presenting itself as the third-party app's own.
+  where a third-party client is presenting itself as the vendor's own.
 
 ---
 

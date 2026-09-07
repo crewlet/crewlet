@@ -240,7 +240,7 @@ func TestAnUnreadableDeliveryIsAckedRatherThanRedelivered(t *testing.T) {
 // fails, a dead letter nobody is waiting on.
 func TestAFailingPassStillAcks(t *testing.T) {
 	t.Parallel()
-	w := &stubWorker{name: "w", err: errors.New("the third-party app is down")}
+	w := &stubWorker{name: "w", err: errors.New("the vendor is down")}
 	r := reflector(t, devOrg(), &recordingPub{err: errors.New("broker refused")}, w)
 	ev := events.New(settledTurn(), events.TraceContext{})
 	if res := r.Handle(context.Background(), ev); res.Outcome != queue.OutcomeAck {

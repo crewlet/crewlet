@@ -37,7 +37,7 @@ import (
 // So the engine keeps its own list, of the only parties it can route to
 // anyway. A seat is subscribed to a page when it TOUCHED it — edited it, or
 // was mentioned on it — which is the same rule Confluence applies to people
-// and needs no third-party app call to evaluate. It lives on the coordination store,
+// and needs no vendor call to evaluate. It lives on the coordination store,
 // because a seat subscribed by a mention one node handled has to be found by
 // whichever node handles the next event.
 //

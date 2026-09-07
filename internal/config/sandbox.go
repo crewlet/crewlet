@@ -218,7 +218,7 @@ type E2BSandbox struct {
 	// API is talked to and never whether it authenticates.
 	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"Remote sandbox API key; required. ${VAR} supported."`
 
-	// Domain points at a self-hosted cluster. Empty is the third-party app cloud.
+	// Domain points at a self-hosted cluster. Empty is the vendor cloud.
 	//
 	// ONE FIELD IS THE WHOLE CLOUD-TO-SELF-HOSTED SWITCH: the control-plane
 	// address and every box's own hostname are both derived from it, so

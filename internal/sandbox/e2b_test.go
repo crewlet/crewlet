@@ -23,7 +23,7 @@ import (
 // is THE WIRE: every request shape, every header, and the framing of the one
 // streaming call. A field spelled differently from what E2B expects fails
 // only against the real API, minutes into a coding run, with a message from
-// the third-party app rather than from us — so the assertions are written as "the
+// the vendor rather than from us — so the assertions are written as "the
 // request carries X", not as "the method returns Y".
 
 // e2bStub is a fake E2B: one server standing in for both planes, which is

@@ -10,7 +10,7 @@ import (
 
 // The fleet's credential cooldowns, joined to the pools that enforce them.
 //
-// A rate limit belongs to the KEY, at the third-party app, not to the process that
+// A rate limit belongs to the KEY, at the vendor, not to the process that
 // discovered it. Four nodes running one company share one bag of API keys, so
 // without this each of them pays its own 429 to learn what the first already
 // knew — and with a two-key pool that is four wasted calls and four turns

@@ -794,9 +794,10 @@ export interface ConfigDiff {
 /**
  * One input an integration cannot work without, as `/setup` answers it.
  *
- * The screen renders a form from these and knows nothing about any vendor:
- * every word a person reads is carried here, so adding a third-party app adds no
- * branch to a component. See internal/setup for what each field means.
+ * The screen renders a form from these and knows nothing about any
+ * third-party app: every word a person reads is carried here, so adding one
+ * adds no branch to a component. See internal/setup for what each field
+ * means.
  */
 export interface SetupRequirement {
   field: string;
@@ -908,8 +909,9 @@ export interface SetupToolState {
   /** The transient third-party app credential its pass asks for, never stored. */
   needs_operator?: SetupRequirement | null;
   /**
-   * Per-seat setup, for a third-party app whose credentials live on the seat rather
-   * than on the company. Slack is the one: each agent has its own app.
+   * Per-seat setup, for a third-party app whose credentials live on the
+   * seat rather than on the company. Slack is the one: each agent has its
+   * own app.
    */
   seats?: SetupSeatState[];
 }

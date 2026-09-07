@@ -489,9 +489,9 @@ func (f *fakeDisconnector) count() int {
 // Its block stays in the company document for the whole teardown, because
 // that block carries the credential the teardown authenticates with. A
 // reconcile over it would therefore find it configured, converge it, and
-// report it healthy while somebody was waiting for it to go — and on a third-party app
-// whose pass registers hooks, it would put back exactly what the teardown was
-// removing.
+// report it healthy while somebody was waiting for it to go, and on a
+// third-party app whose pass registers hooks, it would put back exactly what
+// the teardown was removing.
 func TestATearingDownSurfaceIsTornDownRatherThanReconciled(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	r := &fakeReconciler{kind: KindJira}

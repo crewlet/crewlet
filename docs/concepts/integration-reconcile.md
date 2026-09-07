@@ -34,7 +34,7 @@ Those findings fold into one **report**, which is what an operator reads:
 
 `grant_excess` is the one finding whose verdict is **ready**. The engine did not grant that access and cannot revoke it: it comes from the operator's own scheme, usually inherited from a parent group or a second role. Agents keep working, so the integration is ready with a note rather than blocked.
 
-That makes its rank load-bearing. Anything the advisory outranks disappears from the report entirely, so it is ranked below every real problem. The control plane this was ported from wrote one classifier per third-party app and three of them returned the advisory early, which hid a short grant, a failed agent, and a webhook that reached nobody. The ordering now lives in one place with a test that pins it.
+That makes its rank load-bearing. Anything the advisory outranks disappears from the report entirely, so it is ranked below every real problem. The control plane this was ported from wrote one classifier per integration and three of them returned the advisory early, which hid a short grant, a failed agent, and a webhook that reached nobody. The ordering now lives in one place with a test that pins it.
 
 ---
 
@@ -67,7 +67,7 @@ The status itself lives on the **coordination store**, not in the node's own dat
 flowchart LR
     subgraph workers["the node holding the worker duty"]
         L["reconcile loop<br/>every 15s, runs what is due"]
-        V["third-party app pass<br/>reads the surface"]
+        V["integration pass<br/>reads the surface"]
     end
     subgraph ingress["any node serving the API"]
         Q["/query/integrations"]
@@ -153,7 +153,7 @@ The **findings list travels as well as the report**, because the two answer diff
 
 Two of backlet's phases have no counterpart here, and neither is an omission:
 
-- `disconnected` is a tenant who has not connected an integration yet. Here that is a company document with no block, so there is no row and no phase — and the screen shows **no status badge at all**, only a Connect button. A tool nobody has configured has nothing to report.
+- `disconnected` is a tenant who has not connected an integration yet. Here that is a company document with no block, so there is no row and no phase. The screen shows **no status badge at all**, only a Connect button. A tool nobody has configured has nothing to report.
 - `disconnecting` is a teardown pass, and this engine has one: disconnect asks the third-party app to remove what the engine registered there before the block leaves the document, so a surface sits in `disconnecting` for as long as that takes and reports it if it fails.
 
 Two labels the dashboard adds for situations that are not phases: **Connecting**, for a block that is configured and that the loop has not reported on yet, which is the window of one reconcile interval after somebody connects, and **Paused**, for one whose surfaces are all disabled. Neither claims the integration works, which is the distinction the whole screen turns on.
@@ -183,4 +183,4 @@ type Reconciler interface {
 
 and is registered in `internal/engine/integrations.go`. Findings and errors are different answers and must not be collapsed: findings are statements about your world, and an error is a failure to read it.
 
-Every implementation is certified against **one suite**, `internal/integration/integrationtest`, in the same tradition as `queuetest` and `coordtest`. Its load-bearing case is that a pass over a converged world writes nothing, and the harness is required to be able to count third-party app writes, because that is the clause most likely to be wrong and the one whose failure is a credential rotated every ten minutes for ever.
+Every implementation is certified against **one suite**, `internal/integration/integrationtest`, in the same tradition as `queuetest` and `coordtest`. Its load-bearing case is that a pass over a converged world writes nothing, and the harness is required to be able to count writes to the third-party app, because that is the clause most likely to be wrong and the one whose failure is a credential rotated every ten minutes for ever.

@@ -123,7 +123,7 @@ const slugReadable = 48
 //
 // So: the readable form when it represents the handle EXACTLY, and otherwise
 // the readable prefix plus a digest of the whole handle. Distinct handles
-// cannot meet, whatever a third-party app's API or a founder's YAML supplies.
+// cannot meet, whatever a vendor's API or a founder's YAML supplies.
 func seatSlug(seat string) string {
 	seat = strings.TrimSpace(seat)
 	var b strings.Builder
@@ -157,7 +157,7 @@ func seatSlug(seat string) string {
 
 // Checkout is one call's place to run, and the seat share it borrows.
 type Checkout struct {
-	// Home is HOME for the child, and where every XDG and third-party app
+	// Home is HOME for the child, and where every XDG and vendor
 	// relocation variable points.
 	Home string
 	// Cache is XDG_CACHE_HOME — warm across calls, and holds no
@@ -214,7 +214,7 @@ func (w *Workspace) Acquire(seat, callID string) (*Checkout, error) {
 //
 // The LAST call out of a seat syncs a refreshed credential back to the shared
 // directory and prunes. Syncing back matters more than it looks: OAuth access
-// tokens expire in hours and most third-party apps rotate the refresh token with them,
+// tokens expire in hours and most vendors rotate the refresh token with them,
 // so discarding the file the CLI rewrote logs the whole fleet out at the next
 // expiry.
 func (c *Checkout) Release() error {
@@ -284,7 +284,7 @@ func (w *Workspace) seed(home string) error {
 		if os.IsNotExist(err) {
 			// No login yet is not an error here. The call then fails
 			// with the CLI's own "not authenticated", which names the
-			// third-party app and is what `crewlet llm doctor` explains — far
+			// vendor and is what `crewlet llm doctor` explains — far
 			// better than a provider that refused to start.
 			continue
 		}
@@ -308,7 +308,7 @@ func (w *Workspace) seed(home string) error {
 // seedFiles writes the profile's settings files for one scope into root.
 //
 // Written on EVERY seed rather than once: the CLI may rewrite its own
-// settings file during a call, and a third-party app's tool policy that quietly
+// settings file during a call, and a vendor's tool policy that quietly
 // changed under a seat is the hole these files exist to close. Verbatim at
 // 0600, parents created, rooted the same way prune's targets are.
 func (w *Workspace) seedFiles(root string, scope SeedScope) error {
@@ -334,9 +334,9 @@ func (w *Workspace) seedFiles(root string, scope SeedScope) error {
 //
 // Only when the content actually changed, so an idle seat does not rewrite
 // the shared file — and two seats that both refreshed can still race, exactly
-// as two terminals running the third-party app's CLI would. A headless token has no
+// as two terminals running the vendor's CLI would. A headless token has no
 // refresh file and sidesteps this entirely, which is why the docs recommend
-// one wherever the third-party app mints one.
+// one wherever the vendor mints one.
 func (w *Workspace) syncCredentialsOut(home string) error {
 	shared := w.CredentialsDir()
 	for _, rel := range w.profile.CredentialPaths {

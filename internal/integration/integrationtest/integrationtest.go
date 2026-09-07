@@ -1,7 +1,7 @@
 // Package integrationtest is the ONE suite every [integration.Reconciler]
 // passes, in the queuetest / coordtest / storetest tradition.
 //
-// # Why a shared suite rather than per-third-party app tests
+// # Why a shared suite rather than per-integration tests
 //
 // [integration.Reconciler]'s doc states a safety contract in four clauses,
 // and until this package existed nothing anywhere enforced any of them. That
@@ -73,7 +73,7 @@ func Cases() []Case {
 	}
 }
 
-// Reconciler is one third-party app's entry into the suite.
+// Reconciler is one integration's entry into the suite.
 type Reconciler struct {
 	// New builds a reconciler against a world that is ALREADY CONVERGED:
 	// every seat has the identity the company asks for, every credential

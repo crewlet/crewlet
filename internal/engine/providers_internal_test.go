@@ -139,7 +139,7 @@ func TestBuildProviderResolvesAnthropicBaseURLAndConventionalKey(t *testing.T) {
 
 // TestBuildProviderResolvesModel pins the third scalar a Tier B document may
 // write a reference into. An unresolved model is not a 401 an operator can
-// read: it is the third-party app rejecting a model literally named "${LLM_MODEL}".
+// read: it is the vendor rejecting a model literally named "${LLM_MODEL}".
 func TestBuildProviderResolvesModel(t *testing.T) {
 	r := tierB(map[string]string{"LLM_MODEL": "gpt-4o-mini"})
 
@@ -205,7 +205,7 @@ func TestOpenAICompatibleNamesItsEndpoint(t *testing.T) {
 		},
 		want: "vllm/llama-3",
 	}, {
-		name: "plain openai keeps the third-party app name",
+		name: "plain openai keeps the vendor name",
 		spec: config.LLMProvider{
 			Type: config.LLMOpenAI, Model: "gpt-4o",
 			APIKeys: []string{"sk-test"},

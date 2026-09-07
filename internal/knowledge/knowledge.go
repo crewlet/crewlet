@@ -52,10 +52,10 @@ const AutoDraftedParent = "Auto-Drafted Skills"
 
 // DraftPage is an auto-drafted page a promotion writer created or found.
 //
-// Declared here rather than in internal/learning because BOTH sides need it —
-// the pass that asks for a draft and the two third-party app writers that make one —
-// and internal/knowledge is the package neither of them would have to import
-// the other to reach.
+// Declared here rather than in internal/learning because BOTH sides need it
+// (the pass that asks for a draft and the two integration writers that make
+// one), and internal/knowledge is the package neither of them would have to
+// import the other to reach.
 type DraftPage struct {
 	ID    string
 	Title string

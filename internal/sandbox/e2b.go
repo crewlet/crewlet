@@ -82,7 +82,7 @@ type E2BOptions struct {
 	// to, never whether it authenticates.
 	APIKey string
 
-	// Domain is a self-hosted cluster, or empty for the third-party app cloud.
+	// Domain is a self-hosted cluster, or empty for the vendor cloud.
 	Domain string
 
 	// Template is the company-wide default box image, or empty to pick one

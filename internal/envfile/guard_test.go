@@ -52,7 +52,7 @@ func TestNobodyBuildsAnAssignmentByHand(t *testing.T) {
 			// The grammar's own package is where the one implementation
 			// lives, and vendored trees are not ours to police.
 			switch d.Name() {
-			case "envfile", ".git", "node_modules", "third-party app", "schema":
+			case "envfile", ".git", "node_modules", "vendor", "schema":
 				return fs.SkipDir
 			}
 			return nil

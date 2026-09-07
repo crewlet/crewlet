@@ -80,7 +80,8 @@ func TestASecondPassForOneVendorIsRefusedWhileTheFirstRuns(t *testing.T) {
 	}
 
 	// AND THE GUARD IS RELEASED. A claim that outlived its pass would lock
-	// the third-party app out of every later attempt until the process restarted.
+	// the third-party app out of every later attempt until the process
+	// restarted.
 	done := newGate(integration.KindGitHub)
 	close(done.release)
 	r2 := NewRunner([]Pass{done}, nil, pinnedNow)
@@ -133,8 +134,8 @@ func TestALeaseHeldElsewhereIsInFlight(t *testing.T) {
 	}
 }
 
-// A third-party app this build cannot provision is refused by name rather than
-// reported as a pass that did nothing.
+// A third-party app this build cannot provision is refused by name rather
+// than reported as a pass that did nothing.
 func TestAVendorWithNoPassIsRefused(t *testing.T) {
 	r := NewRunner(nil, nil, pinnedNow)
 	if _, err := r.Start(context.Background(), integration.KindSlack, PassInput{}, "run-1"); !errors.Is(err, ErrNoPass) {

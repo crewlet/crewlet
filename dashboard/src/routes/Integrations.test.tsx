@@ -446,12 +446,12 @@ test("a tool with no setup surface offers no action", () => {
   expect(actionFor(state, [])).toBeNull();
 });
 
-// --- a per-seat third-party app ------------------------------------------------------ //
+// --- a per-seat vendor ------------------------------------------------------ //
 
 // SLACK GETS A SECTION PER SEAT, because each agent has its own app and so its
 // own bot token. A seat with no app yet is exactly the seat somebody opened
 // this dialog to give one to, so it is listed too.
-test("a per-seat app becomes one section per agent", () => {
+test("a per-seat vendor becomes one section per agent", () => {
   const slackTool = toolState({
     key: "slack",
     configured: true,
@@ -519,7 +519,7 @@ test("a roster is listed once however many sections carry it", () => {
 
 // A company whose Slack block exists and whose seats hold no app is not
 // connected: nothing can post.
-test("a per-seat app with no seat set up is unfinished", () => {
+test("a per-seat vendor with no seat set up is unfinished", () => {
   const state = rollUp(slack, rowsOf({ key: "slack", configured: true }));
   const action = actionFor(state, [
     toolState({
@@ -796,8 +796,8 @@ test("a surface dropping nothing carries no note about it", () => {
 // --- disconnecting ---------------------------------------------------------- //
 
 // A TOOL NOBODY CONFIGURED HAS NOTHING TO DISCONNECT FROM, so it offers no
-// control for it. Otherwise a catalogue of six unconfigured third-party apps would
-// carry six buttons that undo nothing.
+// control for it. Otherwise a catalogue of six unconfigured third-party apps
+// would carry six buttons that undo nothing.
 test("an unconfigured tool offers no disconnect", () => {
   render(<EntryRow entry={slack} rows={rowsOf()} onDisconnect={() => {}} />);
   expect(screen.queryByRole("button", { name: "Disconnect" })).toBeNull();

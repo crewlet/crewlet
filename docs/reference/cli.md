@@ -32,7 +32,7 @@ subcommand below is served by it.
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key |
 | `crewlet llm list` | Every `cli-agent` provider the company declares, with its CLI, model and login state |
 | `crewlet llm doctor [KEY]` | Verify a subscription backend end to end — the CLI is installed, the login answers, a real completion returns, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before all three real calls) |
-| `crewlet llm login <KEY>` | Establish the third-party app's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
+| `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's credential files |
 | `crewlet llm export <KEY> [-secret-store]` | Pack the login into one portable blob — stdout, or the secret store under the name the engine restores from on a fresh host |
@@ -536,7 +536,7 @@ crewlet llm import <KEY>          # bundle on stdin
 ```
 
 The operator side of a [subscription LLM backend](../concepts/subscription-llm-backends.md):
-a `providers.llm` entry of `type: cli-agent` drives a third-party app's own CLI under
+a `providers.llm` entry of `type: cli-agent` drives a vendor's own CLI under
 the operator's Pro/Max plan instead of an API key, and the login that makes
 that work is established here rather than in the config document. `KEY` is the
 `providers.llm` key; commands that take one and are given none act on the only
@@ -554,11 +554,11 @@ reaches the network** (the one local tool every profile deliberately keeps
 on). Both are believed only on evidence a model cannot invent — the current
 clock, read by the tool.
 
-**`login`** has four shapes because the third-party apps do:
+**`login`** has four shapes because the vendors do:
 
 | Shape | When |
 |---|---|
-| *(no flag)* | Broker the third-party app's own interactive login and keep the result |
+| *(no flag)* | Broker the vendor's own interactive login and keep the result |
 | `-from-host` | Adopt a login this machine already has, e.g. from running the CLI by hand |
 | `-capture-token` | Mint a **headless token** into the secret store — the only shape a remote [code sandbox](../concepts/code-sandbox.md) can use, because a token is one scoped revocable variable and credential *files* never leave the engine host |
 | `-capture-token -print-token` | The same mint, written to **stdout** and stored nowhere — for an operator whose secrets live in somebody else's manager. It **refuses to run on a terminal**: this is a credential, and a token in a scrollback outlives the command, while a screen-share or a shell history outlives the scrollback. Pipe it or redirect it. The two-step alternative (`-capture-token`, then `secrets get -reveal`) writes the token into the store on the way past, which is precisely what this avoids. |

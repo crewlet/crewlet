@@ -132,7 +132,7 @@ func TestExpandFromEnviron(t *testing.T) {
 // AN UNSET REFERENCE RESOLVES TO EMPTY, never to its own literal text.
 //
 // This is the rule the two chat transports each wrote out by hand: a raw
-// "${SLACK_BOT_TOKEN_CEO}" matches nothing any third-party app accepts, so passing it
+// "${SLACK_BOT_TOKEN_CEO}" matches nothing any vendor accepts, so passing it
 // through turns a missing variable into a seat that authenticates as nobody
 // — diagnosed far from the config that named it.
 func TestResolveYieldsEmptyForAnUnsetReference(t *testing.T) {
@@ -164,7 +164,7 @@ func TestResolveLeavesALiteralAlone(t *testing.T) {
 
 // A WHOLE REFERENCE RESOLVES, and its value is trimmed too: an environment
 // variable set from a file routinely carries a trailing newline, and a token
-// with one is a token every third-party app rejects.
+// with one is a token every vendor rejects.
 func TestResolveSubstitutesAndTrims(t *testing.T) {
 	t.Parallel()
 	got := Resolve("${TOKEN}", func(name string) (string, bool) {

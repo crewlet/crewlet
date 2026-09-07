@@ -272,7 +272,7 @@ func TestTheSecretsSubcommandsAreChecked(t *testing.T) {
 
 // A PIPED SECRET LOSES ITS TRAILING NEWLINE and nothing else. `echo secret
 // | crewlet secrets set X` is how this is used, and a token carrying a
-// newline fails at the third-party app with a 401 that names neither the newline nor
+// newline fails at the vendor with a 401 that names neither the newline nor
 // this command. Stripping more would be wrong the other way: a secret may
 // legitimately end in whitespace, and altering it silently is a failure
 // nobody can see.

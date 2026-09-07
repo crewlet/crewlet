@@ -1010,7 +1010,7 @@ func TestResponseTranslation(t *testing.T) {
 	}
 }
 
-// The CONFIGURED id, not the one the response echoes: a third-party app alias resolving
+// The CONFIGURED id, not the one the response echoes: a vendor alias resolving
 // to a dated snapshot would re-key the breakdown the day the alias moves,
 // splitting one model's spend across two names the config never mentions.
 func TestTheCompletionNamesTheConfiguredModelNotTheEcho(t *testing.T) {
@@ -1030,7 +1030,7 @@ func TestTheCompletionNamesTheConfiguredModelNotTheEcho(t *testing.T) {
 	}
 }
 
-// input_tokens counts only the UNCACHED remainder. The third-party app's own field
+// input_tokens counts only the UNCACHED remainder. The vendor's own field
 // doc: "Total input tokens in a request is the summation of input_tokens,
 // cache_creation_input_tokens and cache_read_input_tokens." Getting this
 // wrong under-bills every cached round, which is most of them.

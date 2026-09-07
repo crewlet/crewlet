@@ -19,18 +19,18 @@ package notify
 //     Caught at parse time, by comparing usernames.
 //
 // Three implementations meant three chances to disagree, and they did: the
-// service read only `actor_account_id`, which one vendor stamps, so the
-// guard existed for that third-party app and silently did not exist for the rest.
-// Here there is ONE actor field every parser stamps, and one comparison —
-// applied by whichever layer holds the identifiers.
+// service read only `actor_account_id`, which one third-party app stamps,
+// so the guard existed for that third-party app and silently did not exist
+// for the rest. Here there is ONE actor field every parser stamps, and one
+// comparison, applied by whichever layer holds the identifiers.
 
 // ActorField is the metadata key carrying the external id of whoever caused
 // an event.
 //
-// ONE key across every third-party app, because the guard reads it and every parser
-// writes it. A per-third-party app key is not a naming preference — it is a guard
-// that protects the third-party apps somebody remembered and quietly protects none of
-// the others, which is exactly what it was.
+// ONE key across every third-party app, because the guard reads it and every
+// parser writes it. A per-integration key is not a naming preference. It is a
+// guard that protects the third-party apps somebody remembered and quietly
+// protects none of the others, which is exactly what it was.
 const ActorField = "actor_external_id"
 
 // SelfAction reports whether an event describes an action by the party it

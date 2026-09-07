@@ -25,8 +25,8 @@ var log = logging.Get("integration")
 // It is also what the control plane's own reconcile poll ticks at, and the
 // two cost about the same: a tick with nothing due is one duty claim and one
 // read of a coordination bucket holding at most seven keys, on a connection
-// the process already holds. Nothing is fetched from a third-party app unless a
-// third-party app is due.
+// the process already holds. Nothing is fetched from a third-party app unless
+// one is due.
 const Interval = 15 * time.Second
 
 // Reconciler is one surface's convergence step.
@@ -50,7 +50,7 @@ const Interval = 15 * time.Second
 //     that is an outage on a timer: the engine is authenticating with the old
 //     value, and rotating revokes what every running agent is using. Check
 //     what the sink recorded (provision.TokenSink.Value) and keep a working
-//     credential. Rotation is an operator gesture on the third-party app subcommand,
+//     credential. Rotation is an operator gesture on the integration subcommand,
 //     where somebody typed the flag.
 //   - MUST NOT delete anything a seat's departure implies. Decommissioning is
 //     the other flag on that subcommand, for the same reason.
@@ -92,16 +92,16 @@ type Reconciler interface {
 // its status, exactly as it forgets a kind nothing registered.
 var ErrNotConfigured = errors.New("integration: this surface is not configured")
 
-// ErrCredentialRejected reports a pass that failed because the VENDOR refused
-// the credential, rather than because the third-party app could not be reached.
+// ErrCredentialRejected reports a pass that failed because the third-party app
+// REFUSED the credential, rather than because it could not be reached.
 //
-// A third-party app wraps this around its own error when it can tell the difference —
-// an auth probe that came back 401 or 403 — and [Observe] then reports the
-// surface as the operator's to fix instead of folding it in with the
-// transport faults that clear on their own. Without it every refusal read as
-// "the engine is working on it", which is the one thing that is certainly not
-// happening: the credential will be refused identically on every pass until a
-// person changes it.
+// A third-party app wraps this around its own error when it can tell the
+// difference (an auth probe that came back 401 or 403), and [Observe] then
+// reports the surface as the operator's to fix instead of folding it in with
+// the transport faults that clear on their own. Without it every refusal read
+// as "the engine is working on it", which is the one thing that is certainly
+// not happening: the credential will be refused identically on every pass
+// until a person changes it.
 var ErrCredentialRejected = errors.New("integration: the third-party app refused this credential")
 
 // ErrDisconnectUnavailable reports a node that cannot complete a disconnect
@@ -122,8 +122,8 @@ var ErrDisconnectUnavailable = errors.New("integration: this node cannot complet
 // they are different problems: which statuses mean "your credential is no
 // good" is one rule for every third-party app, while digging the number out of a
 // refusal is a question about that third-party app's own error type. Written per
-// third-party app, the rule drifts — 401 alone in one place and 401-or-403 in the
-// next — and the surfaces that forgot 403 are exactly the ones that sit in
+// integration, the rule drifts (401 alone in one place and 401-or-403 in the
+// next), and the surfaces that forgot 403 are exactly the ones that sit in
 // "the engine is working on it" forever.
 //
 // 401 and 403 only. A 429 is rate limiting and clears, a 404 is usually the
@@ -394,7 +394,7 @@ func (w *Worker) Tick(ctx context.Context) {
 		if err != nil {
 			// UNKNOWN IS NOT LOST. A coordination store that could not
 			// answer must not be read as "the duty is mine": that is
-			// precisely the two-nodes-one-third-party app case this singleton
+			// precisely the two-nodes-one-integration case this singleton
 			// exists to rule out, and it would be entered by a store
 			// blip rather than by a decision.
 			log.WarnContext(ctx, "integration_duty_unknown", "error", err,

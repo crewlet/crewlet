@@ -113,7 +113,7 @@ appears.
 | Coordination | TTL leases with a fencing epoch | Seat ownership and the fleet's shared counters, in a KV riding the stream's own NATS connection — never the store file, and never a second connection that could fail on its own |
 | Config | YAML → typed structs → generated JSON Schema | One definition drives validation, the schema editors read, and the docs |
 | Tracing | OpenTelemetry | W3C Trace Context, automatic propagation, OTLP export to Jaeger/Tempo |
-| LLM clients | Official third-party app SDKs | Anthropic and OpenAI, plus any OpenAI-compatible endpoint |
+| LLM clients | Official vendor SDKs | Anthropic and OpenAI, plus any OpenAI-compatible endpoint |
 | Structured logging | `log/slog` | Standard library, machine-parsable, one component-bound logger per subsystem |
 | Testing | `testing` | Standard library, no assertion framework; one shared conformance suite per multi-backend contract |
 
@@ -164,7 +164,7 @@ Everything else is YAML config, in-memory state, or an external tool.
 ```
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
                           #   budgets, secrets, config, llm, and the six
-                          #   third-party app CLIs — gitlab/github/jira/slack
+                          #   integration CLIs — gitlab/github/jira/slack
                           #   `provision`, confluence `import|resync`,
                           #   mattermost `provision|doctor`
 internal/

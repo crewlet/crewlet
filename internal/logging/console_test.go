@@ -372,7 +372,7 @@ func TestEveryDeclaredFormatInstallsItsOwnHandler(t *testing.T) {
 // NOTHING A CALLER SUPPLIES REACHES THE TERMINAL RAW.
 //
 // Log content is not all first-party: an MCP server's stderr, a webhook
-// payload, an LLM error string and a third-party app API message all end up as values
+// payload, an LLM error string and a vendor API message all end up as values
 // on these lines. A control byte that survived would let that content repaint
 // an operator's terminal, and a newline would let it forge a whole log line —
 // a fake ERROR, or a fake "seat_released", written by whatever the engine was

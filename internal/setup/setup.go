@@ -6,31 +6,31 @@
 // Connecting an integration means putting values in two different places: a
 // credential into the fleet's sealed secret store, and everything else into
 // the company document. Which values, where each one goes, what a person has
-// to fetch from the third-party app first and what the engine can generate itself are
-// all facts only the third-party app package knows, and until now they were written
-// down in three places that could disagree: a CLI flag list, a config
-// validator's error strings, and a docs page.
+// to fetch from the third-party app first and what the engine can generate
+// itself are all facts only the integration package knows, and until now they
+// were written down in three places that could disagree: a CLI flag list, a
+// config validator's error strings, and a docs page.
 //
-// A [Requirement] is that fact, once. A third-party app package answers with a list of
-// them; the API serves the list; the dashboard renders a form from it and
-// knows nothing about any third-party app. Adding a third-party app adds no branch to the
-// screen.
+// A [Requirement] is that fact, once. An integration package answers with a
+// list of them; the API serves the list; the dashboard renders a form from it
+// and knows nothing about any third-party app. Adding a third-party app adds
+// no branch to the screen.
 //
 // # It is deliberately not a form description
 //
 // There is no widget name here, no ordering hint, no CSS. What a requirement
 // carries is what is TRUE about the input: where it lives in the config, what
-// it is called at the third-party app, whether it is a credential, whether the engine
-// can mint it, and which reconcile finding satisfying it clears. Everything
-// about presentation is the dashboard's, which is why a requirement can also
-// be read by a CLI, a test or a person reading JSON.
+// it is called at the third-party app, whether it is a credential, whether
+// the engine can mint it, and which reconcile finding satisfying it clears.
+// Everything about presentation is the dashboard's, which is why a
+// requirement can also be read by a CLI, a test or a person reading JSON.
 //
 // # The finding vocabulary is the join
 //
 // [Requirement.Blocks] names the [integration.FindingKind] that this input
 // being absent produces. That is what turns "what is wrong" into "what to
 // type": a row reporting `credential_missing` can offer exactly the fields
-// whose Blocks says they clear it, with no per-third-party app mapping anywhere.
+// whose Blocks says they clear it, with no per-integration mapping anywhere.
 package setup
 
 import (
@@ -118,8 +118,8 @@ type Choice struct {
 
 // Requirement is one input an integration cannot work without.
 type Requirement struct {
-	// Field is the requirement's identity within its third-party app, and the key
-	// a submission uses. The last segment of ConfigPath, normally.
+	// Field is the requirement's identity within its third-party app, and the
+	// key a submission uses. The last segment of ConfigPath, normally.
 	Field string `json:"field"`
 
 	// Label is what a person reads beside the input.
@@ -220,7 +220,8 @@ type Requirement struct {
 
 	// Mintable reports that the ENGINE can produce this value, so a
 	// person should not be asked for it. A shared webhook token and a
-	// signing secret are both mintable; a third-party app's own API token is not.
+	// signing secret are both mintable; a third-party app's own API token is
+	// not.
 	Mintable bool `json:"mintable,omitempty"`
 
 	// Help is one sentence on what the value is for.
@@ -275,10 +276,10 @@ type Requirement struct {
 	// and it exists only so the write path can tell a `${VAR}` it may
 	// write through from a literal it must refuse.
 	//
-	// It is set by the third-party app that declared the requirement, because that
-	// function has already read the block. The alternative was a second
-	// switch over every config path in the API layer, which is the same
-	// list written twice and eventually two lists that disagree.
+	// It is set by the third-party app that declared the requirement, because
+	// that function has already read the block. The alternative was a second
+	// switch over every config path in the API layer, which is the same list
+	// written twice and eventually two lists that disagree.
 	Stored string `json:"-"`
 
 	// Effective is what a `${VAR}` in Stored resolves to, for a field that
@@ -407,8 +408,8 @@ func ValidSecretName(name string) bool { return nameRule.MatchString(name) }
 
 // SecretNameFor is the name a requirement's value is stored under.
 //
-// The third-party app's own declaration wins. Failing that it is derived, so the
-// common path asks a person for nothing: VENDOR_FIELD, plus _HANDLE for a
+// The third-party app's own declaration wins. Failing that it is derived, so
+// the common path asks a person for nothing: VENDOR_FIELD, plus _HANDLE for a
 // per-seat requirement, upper-snaked. Every character the grammar refuses
 // becomes an underscore, which is what makes a handle like `nova-1` into
 // `NOVA_1` rather than an unreferenceable name.
@@ -431,9 +432,9 @@ func SecretNameFor(kind integration.Kind, r Requirement) string {
 // the separator would seal one seat's credential under the other's name.
 //
 // It does not guard the grammar's leading-digit rule, and does not need to:
-// a derived name always begins with the third-party app's own kind, every one of which
-// is letters. [TestEveryVendorKindDerivesAReferenceableName] is what holds
-// that true as kinds are added.
+// a derived name always begins with the third-party app's own kind, every one
+// of which is letters. [TestEveryVendorKindDerivesAReferenceableName] is what
+// holds that true as kinds are added.
 func slug(in string) string {
 	var b strings.Builder
 	for _, r := range strings.ToUpper(strings.TrimSpace(in)) {
@@ -506,9 +507,10 @@ func PointerFor(kind integration.Kind, r Requirement, current string) (name stri
 	return "", false, &ErrLiteralInConfig{Path: r.ConfigPath}
 }
 
-// Held, Plain and Toggle are the three answers a third-party app gives per field, and
-// together they are what a Requirement needs to know about the document: is
-// something written down, is it usable, and what exactly is written.
+// Held, Plain and Toggle are the three answers a third-party app gives per
+// field, and together they are what a Requirement needs to know about the
+// document: is something written down, is it usable, and what exactly is
+// written.
 //
 // Three functions rather than one with a flag, because the three cases are
 // genuinely different questions and picking the wrong one has a visible

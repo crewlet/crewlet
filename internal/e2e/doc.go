@@ -10,7 +10,7 @@
 // So the tests here run the real thing: a real engine on a real embedded
 // stream, the real API in front of it, a real turn driven by a scripted model,
 // and the dashboard's OWN modules consuming the frames that come out. Nothing
-// is stubbed except the third-party app endpoint, because a stub anywhere else is a
+// is stubbed except the vendor endpoint, because a stub anywhere else is a
 // stub of the thing under test.
 //
 // The package has no exported surface. It exists as a package rather than as

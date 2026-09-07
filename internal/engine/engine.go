@@ -56,7 +56,7 @@ type Company struct {
 //
 // It does NOT reach the network. Building an epoch must be something a
 // `validate` command can do, and a constructor that dialled a provider would
-// make config validation depend on the third-party app being up.
+// make config validation depend on the vendor being up.
 func NewCompany(c *config.Company) (*Company, error) {
 	// ENV-ONLY, which is what makes `crewlet validate` work on a laptop:
 	// the secret store lives in a database this path must not need.
