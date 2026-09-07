@@ -838,6 +838,24 @@ function useSetup(): {
   };
 }
 
+/**
+ * Why a disconnect this tool has already been asked for has not finished.
+ *
+ * Empty when it is not disconnecting, or when it is and nothing has failed
+ * yet — a teardown in flight is not a teardown stuck, and offering the way
+ * out of one that is simply running invites somebody to abandon it a second
+ * after asking.
+ */
+function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): string {
+  for (const surface of entry.surfaces) {
+    const reconcile = rows.get(surface.key)?.reconcile;
+    if (reconcile?.disconnecting && reconcile.last_error) {
+      return reconcile.last_error;
+    }
+  }
+  return "";
+}
+
 /** Which catalogue row a surface belongs to, so a running pass disables it. */
 function entryOwning(surfaceKey: string): string {
   return CATALOG.find((e) => e.surfaces.some((s) => s.key === surfaceKey))?.key ?? surfaceKey;
@@ -856,7 +874,11 @@ export function Integrations() {
   } | null>(null);
   const [running, setRunning] = useState("");
   const [passing, setPassing] = useState<{ tool: SetupToolState; title: string } | null>(null);
-  const [dropping, setDropping] = useState<{ name: string; kind: string } | null>(null);
+  const [dropping, setDropping] = useState<{
+    name: string;
+    kind: string;
+    stuck: string;
+  } | null>(null);
   const [lastRun, setLastRun] = useState<SetupRun | null>(null);
 
   /**
@@ -957,6 +979,7 @@ export function Integrations() {
         <DisconnectDialog
           name={dropping.name}
           kind={dropping.kind}
+          stuck={dropping.stuck || undefined}
           onClose={() => setDropping(null)}
           // The row does not vanish here: the engine keeps the block until
           // the third-party app teardown succeeds, so what a re-read shows is the
@@ -1058,7 +1081,13 @@ export function Integrations() {
                   }
                   setPassing({ tool, title: entry.name });
                 }}
-                onDisconnect={() => setDropping({ name: entry.name, kind: entry.surfaces[0]!.key })}
+                onDisconnect={() =>
+                  setDropping({
+                    name: entry.name,
+                    kind: entry.surfaces[0]!.key,
+                    stuck: stuckDisconnecting(entry, rows),
+                  })
+                }
                 running={running === entry.key}
               />
             ))}

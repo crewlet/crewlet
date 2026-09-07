@@ -25,6 +25,7 @@ import { rest, RestError } from "~/protocol/index.ts";
 export function DisconnectDialog({
   name,
   kind,
+  stuck,
   onClose,
   onDone,
 }: {
@@ -32,12 +33,22 @@ export function DisconnectDialog({
   name: string;
   /** The wire key of the surface being disconnected. */
   kind: string;
+  /**
+   * Why a disconnect already asked for has not finished, when one has not.
+   *
+   * THE REASON THIS IS A PROP. Forcing used to appear only after the REQUEST
+   * failed — but a teardown fails in the LOOP, minutes later, so the request
+   * had already answered 202 and the only way out of a permanently refusing
+   * app was a shell. The card knows the surface is stuck; the dialog needs
+   * telling so it can offer the way out.
+   */
+  stuck?: string;
   onClose: () => void;
   onDone: () => void;
 }) {
   const [removeSeats, setRemoveSeats] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(stuck ?? null);
 
   async function submit(force: boolean) {
     setBusy(true);
@@ -101,6 +112,11 @@ export function DisconnectDialog({
           <div className="banner critical">
             <Icon name="alert" size="sm" />
             <span className="col" style={{ gap: 4 }}>
+              {stuck && (
+                <span>
+                  This disconnect was already asked for and {name} has not let the engine finish it.
+                </span>
+              )}
               <span>{error}</span>
               {/* THE WAY OUT of a teardown that can never succeed: a
                   revoked credential, an instance that is gone. Offered

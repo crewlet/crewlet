@@ -76,3 +76,43 @@ test("forcing is offered only after a failure", async () => {
   await waitFor(() => expect(sent.length).toBe(2));
   expect(sent[1]!.body).toEqual({ remove_seats: false, force: true });
 });
+
+// A TEARDOWN FAILS IN THE LOOP, NOT IN THE REQUEST.
+//
+// Forcing used to appear only after the request itself failed — but the
+// request answers 202 and the teardown runs minutes later, so an app that
+// refuses permanently (a revoked token, an instance that is gone) left the
+// card reading Disconnecting for ever with no way out of it from the screen.
+// A stuck surface opens the dialog already showing why, with the way out.
+test("a disconnect stuck at the app offers the way out immediately", async () => {
+  const sent: Sent[] = [];
+  stubFetch(sent);
+  render(
+    <DisconnectDialog
+      name="Jira"
+      kind="jira"
+      stuck="jira: GET /rest/webhooks/1.0/webhook: 401: Client must be authenticated"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+
+  // The app's own words, and the sentence that says what happened.
+  expect(screen.getByText(/401: Client must be authenticated/)).toBeTruthy();
+  expect(screen.getByText(/has not let the engine finish it/)).toBeTruthy();
+
+  const force = screen.getByRole("button", { name: /anyway/i });
+  fireEvent.click(force);
+  await waitFor(() => expect(sent.length).toBe(1));
+  expect(sent[0]!.body).toEqual({ remove_seats: false, force: true });
+});
+
+// AND A DISCONNECT THAT IS MERELY RUNNING DOES NOT. Offering the way out of a
+// teardown that is working invites somebody to abandon it a second after
+// asking for it.
+test("a disconnect in flight does not offer forcing", () => {
+  const sent: Sent[] = [];
+  stubFetch(sent);
+  render(<DisconnectDialog name="Jira" kind="jira" onClose={() => {}} onDone={() => {}} />);
+  expect(screen.queryByRole("button", { name: /anyway/i })).toBeNull();
+});
