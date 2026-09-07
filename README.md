@@ -115,11 +115,19 @@ export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."     # or OpenAI, or any OpenAI-compatible endpoint
 export OPENAI_API_KEY="sk-..."            # embeddings
 
-./crewlet run -config config.yaml -company company.yaml
+./crewlet run          # reads ./crewlet.yaml (Tier A) and ./company.yaml (Tier B)
 ```
 
-The company file is a *seed*: it is imported the first time, and after that the
-store is the source of truth and `crewlet config` edits it live.
+Those two filenames are the defaults, so nothing needs naming when they sit in
+the working directory; `-config` and `-company` point elsewhere. The Tier A
+file is the short one — where this node's store, stream and API live — and the
+[quickstart](docs/getting-started/quickstart.md) writes it out in full.
+
+The company file is a *seed*: it is compared against the active revision on
+every boot, so an unchanged file imports nothing and an edited one is imported
+and activated. The store is the source of truth at runtime — `crewlet config`
+and `PUT /config` edit it live — but a node restarted with a stale seed file
+re-activates that file over them, so keep the two in step.
 
 A four-agent company is about 40 lines of YAML:
 
@@ -250,7 +258,7 @@ live-editable company document in the store that can be
 ## CLI
 
 ```bash
-crewlet run                                   # boot; seeds the store on first run
+crewlet run                                   # boot; seeds the store from company.yaml
 crewlet run -roles ingress                    # API + webhooks only (split deployments)
 crewlet validate                              # check both tiers before booting
 crewlet schema company                        # JSON Schema (editors, CI, agents)

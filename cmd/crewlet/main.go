@@ -178,8 +178,9 @@ Usage:
 Config:
   -config   Tier A, this NODE: where its broker, store and API are (default %q)
   -company  Tier B, the COMPANY: its org, providers and integrations (default %q).
-            A seed: it is imported into the store when the store does not
-            already hold it, and a running node serves the store.
+            A seed, compared against the active revision on every boot: an
+            unchanged file imports nothing, an EDITED one is imported and
+            activated. A running node then serves the store, not the file.
 `, version.String(), defaultBootstrapPath, defaultCompanyPath)
 }
 
@@ -192,10 +193,16 @@ Config:
 // come from them.
 //
 // Tier B is different: -company names a SEED. A running node serves the
-// revision the activation pointer names, and the file is imported into the
-// store when the store does not already hold it (see reconcile.go). That is
-// what makes a PUT /config on one node reach every other, and what makes an
-// operator's edit to the file still take effect.
+// revision the activation pointer names, and the file is reconciled into the
+// store on every boot — IDEMPOTENT BY CONTENT, not first-run-only, so an
+// unchanged file imports nothing and an edited one is imported and activated
+// (see reconcile.go). That is what makes a PUT /config on one node reach every
+// other, and what makes an operator's edit to the file still take effect.
+//
+// The cost of the second half is on the operator: a node restarted with a
+// STALE file re-activates it over newer live changes. Ignoring an edited file
+// instead would be worse — an operator edits a config, restarts, and nothing
+// happens, with nothing anywhere saying why.
 const (
 	defaultBootstrapPath = "crewlet.yaml"
 	defaultCompanyPath   = "company.yaml"
@@ -237,9 +244,10 @@ func (c configFlags) load() (*config.Bootstrap, *config.Company, error) {
 // nameTheNeighbour adds the one hint that answers the commonest first-run
 // failure.
 //
-// This repository's own quickstart, its example file and half its
-// documentation have called the Tier A document `config.yaml`, while the
-// binary's default is `crewlet.yaml`. An operator who followed the guide gets
+// `config.yaml` is the name this project's own guides used to give the Tier A
+// document, and the bundled example still carries it
+// (`examples/nimbus.config.yaml`), while the binary's default is
+// `crewlet.yaml`. An operator with a file written against that guidance gets
 // "no such file" about a name they never typed, with their file sitting right
 // there. Naming it costs one stat and saves the whole diagnosis.
 //
@@ -589,8 +597,14 @@ func runEngine(args []string, stderr io.Writer) error {
 	// nothing — without ever mentioning the file the operator named.
 	file, given := onePositional(fs, file)
 	if given > 1 {
+		// EVERY FLAG run REGISTERS, because this is the only synopsis an
+		// operator sees at the moment they got the arguments wrong. It
+		// listed five of the eight, so the three logging flags — the ones
+		// most often reached for while diagnosing exactly this — were
+		// invisible here and documented only in the reference.
 		fmt.Fprintln(stderr, "usage: crewlet run [<config.yaml>] "+
-			"[-company <company.yaml>] [-roles …] [-api-host …] [-api-port …]")
+			"[-company <company.yaml>] [-log-level …] [-log-format …] [-debug] "+
+			"[-roles …] [-api-host …] [-api-port …]")
 		return errors.New("name at most one config document")
 	}
 	if file != "" {
@@ -619,13 +633,16 @@ func runEngine(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// AND NOW THE FILE, which is what makes `debug: true` in Tier A mean
-	// anything. It was a declared field nothing ever read: the quickstart
-	// tells an operator to write it and the deployment guide says it
-	// "raises the log level to DEBUG", and for the life of the field it
-	// did nothing at all. Lines emitted BEFORE this point came out under
-	// the flags alone, which is the best a process can do about a file it
-	// has not opened yet.
+	// AND NOW THE FILE, which is what makes Tier A's `logging:` block mean
+	// anything. Its ancestor `debug: true` was a declared field nothing
+	// ever read: the quickstart told an operator to write it and the
+	// deployment guide said it "raises the log level to DEBUG", and for the
+	// life of the field it did nothing at all. It is retired now rather
+	// than wired up — a file still carrying it is REFUSED, and pointed at
+	// `logging.level` (see config.retiredBootstrapFields) — so this line is
+	// what keeps its replacement from repeating the bug. Lines emitted
+	// BEFORE this point came out under the flags alone, which is the best a
+	// process can do about a file it has not opened yet.
 	logging.SetVerbosity(logSettings(boot, fs, *logLevel, *logFormat, *debug))
 	// THE FLAGS OVERRIDE THE FILE, and are applied AFTER it loads so a
 	// validation failure names the file's own value rather than one the
@@ -1322,13 +1339,15 @@ func formatNames() []string {
 // A flag carries its default whether or not anyone typed it, so applying
 // `*logLevel` unconditionally would pin every node at info and make
 // `logging.level: warn` in the file dead on arrival — the same class of bug
-// as the `debug:` field this function exists to give a meaning. isFlagSet is
-// what separates "the operator asked for info" from "nobody said anything",
-// and it is the same idiom [overrideNode] uses for the three node overrides.
+// as the retired `debug:` field, which was declared in Tier A and read by
+// nothing for the whole of its life. isFlagSet is what separates "the
+// operator asked for info" from "nobody said anything", and it is the same
+// idiom [overrideNode] uses for the three node overrides.
 //
 // `-debug` only ever RAISES: it is the shorthand for asking for debug, not a
 // switch that turns the file's own setting off. An operator who wants a
-// `debug: true` file quieter for one run says so with `-log-level info`.
+// `logging.level: debug` file quieter for one run says so with
+// `-log-level info`.
 func logSettings(boot *config.Bootstrap, fs *flag.FlagSet,
 	logLevel, logFormat string, debug bool,
 ) (slog.Level, logging.Format) {

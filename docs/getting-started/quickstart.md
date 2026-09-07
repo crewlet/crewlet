@@ -287,10 +287,19 @@ engine in a single invocation:
 crewlet run crewlet.yaml -company company.yaml
 ```
 
-`-company` is a **seed**: it is imported when the store does not already
-hold a company, and ignored when it does — so re-running the same command
-boots straight from the store rather than overwriting what is live. A
-running node then serves the store, not the file.
+`-company` is a **seed**, and it is idempotent *by content* rather than
+first-run-only: on every boot the file is compared against the active
+revision, an unchanged file imports nothing, and an **edited file is imported
+and activated**. That is deliberate — silently ignoring an edited file would
+mean an operator changes a config, restarts, and nothing happens, with nothing
+anywhere saying why.
+
+The corollary matters on a fleet: a node restarted with a **stale**
+`company.yaml` re-activates that file over newer changes made through
+`PUT /config` or `crewlet config import`. Keep the file in step with the
+store, or leave `-company` pointing at nothing and let the node take its
+configuration from the store alone. A running node always serves the store,
+not the file.
 
 **Or two steps** — import once, then run:
 
@@ -302,9 +311,12 @@ crewlet run                             # boots from the store
 Both flags default to files in the working directory — `crewlet.yaml` and
 `company.yaml` — so a node whose files are named that way needs neither.
 
-**Stopping:** press `Ctrl+C` once for a graceful drain (running agent turns
-finish; the dashboard stays up so you can watch the in-flight count converge),
-twice to force-stop, three times to hard-exit. See
+**Stopping:** press `Ctrl+C` once for a graceful drain — running agent turns
+finish, and the HTTP surface (dashboard included) closes immediately so
+nothing new arrives while it converges, which means you watch the drain in the
+logs rather than on a screen. Press it a **second** time to exit at once; the
+first press hands signal handling back to the OS precisely so that works.
+There is no third tier. See
 [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown). Piping
 the output? Use `tee -i` (`crewlet run 2>&1 | tee -i run.log`) — a plain `tee`
 dies on the first Ctrl+C and the drain logs have nowhere to go.
