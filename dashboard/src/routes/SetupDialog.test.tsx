@@ -8,7 +8,7 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { HELD, SetupDialog, fieldsFor } from "./SetupDialog.tsx";
+import { HELD, SetupDialog, fieldsFor, vendorLink } from "./SetupDialog.tsx";
 import type { SetupRequirement, SetupToolState } from "~/protocol/index.ts";
 
 function req(over: Partial<SetupRequirement>): SetupRequirement {
@@ -332,6 +332,28 @@ test("a hidden field is submitted from its default and never rendered", async ()
     values: Record<string, string>;
   };
   expect(body.values.enabled).toBe("true");
+});
+
+// A LINK THAT NEEDS AN ANSWER IS NOT A LINK UNTIL IT HAS ONE.
+//
+// Atlassian's API keys live at a per-organization address, so until somebody
+// has typed the organization id there is no page to open — and a link to the
+// console's front door sends them somewhere they then have to navigate out
+// of, which is worse than no link at all.
+test("a templated vendor link waits for the field it needs", () => {
+  const url = "https://admin.atlassian.com/o/{org_id}/api-keys";
+  const same = (f: string) => f;
+  expect(vendorLink(url, {}, same)).toBe("");
+  expect(vendorLink(url, { org_id: "   " }, same)).toBe("");
+  expect(vendorLink(url, { org_id: "f124-abc" }, same)).toBe(
+    "https://admin.atlassian.com/o/f124-abc/api-keys",
+  );
+  // AND AN ANSWER IS ESCAPED, because it lands in a path.
+  expect(vendorLink(url, { org_id: "a/b" }, same)).toBe(
+    "https://admin.atlassian.com/o/a%2Fb/api-keys",
+  );
+  // A plain link is untouched.
+  expect(vendorLink("https://example.com/keys", {}, same)).toBe("https://example.com/keys");
 });
 
 // A FIX NARROWS TO THE FIELDS THAT CLEAR THE FINDING, which is what the

@@ -75,6 +75,31 @@ export function fieldsFor(reqs: SetupRequirement[], blocks?: string): SetupRequi
 }
 
 /**
+ * A vendor link with its `{field}` placeholders filled in, or empty when one
+ * of them has no answer yet.
+ *
+ * EMPTY MEANS NO LINK. Atlassian's API keys live at a per-organization
+ * address, so until somebody has typed the organization id there is no page
+ * to open — and a link to the console's front door sends them somewhere they
+ * then have to navigate out of, which is worse than no link at all.
+ */
+export function vendorLink(
+  url: string,
+  values: Record<string, string>,
+  key: (f: string) => string,
+): string {
+  if (!url) return "";
+  let resolved = url;
+  for (const match of url.matchAll(/\{([a-z_]+)\}/g)) {
+    const field = match[1] ?? "";
+    const value = (values[key(field)] ?? "").trim();
+    if (value === "") return "";
+    resolved = resolved.replace(`{${field}}`, encodeURIComponent(value));
+  }
+  return resolved;
+}
+
+/**
  * Whether a requirement is a row on the form at all.
  *
  * A HIDDEN field is written without being asked for, and a MINTABLE
@@ -565,6 +590,10 @@ export function SetupDialog({
   function renderField(section: SetupSection, r: SetupRequirement) {
     const appName = section.name;
     const key = valueKey(section, r);
+    // A LINK ONLY WHERE IT GOES SOMEWHERE. See [vendorLink].
+    const link = vendorLink(r.vendor_url ?? "", values, (field) =>
+      valueKey(section, { ...r, field, shared: false }),
+    );
     return (
       <div key={key} className="col gap-1">
         {editable(r) ? (
@@ -608,10 +637,10 @@ export function SetupDialog({
                     company has answered it. */}
                 {r.help}
                 {r.where && <> {r.where}</>}
-                {r.vendor_url && (
+                {link && (
                   <>
                     {" "}
-                    <a href={r.vendor_url} target="_blank" rel="noreferrer">
+                    <a href={link} target="_blank" rel="noreferrer">
                       {/* THE LINK IS PART OF THE SENTENCE when the app says
                           what to call it: "Create one on your API keys page"
                           sends somebody to the page it names, where a

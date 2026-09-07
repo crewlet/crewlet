@@ -454,6 +454,24 @@ export function Reconcile({
 }
 
 /**
+ * The order the catalogue is read in: what this company has, then what it
+ * could have, each half alphabetical.
+ *
+ * CONFIGURED COVERS ATTEMPTED as well as working — a card with a block
+ * behind it, whatever the loop says about it — because a broken integration
+ * is one this company HAS, and is the row most worth reaching first. Sorting
+ * on health instead would move a row out from under the cursor of somebody
+ * watching an app recover, which is exactly when they are looking at it.
+ */
+export function byConfiguredThenName(
+  rows: Map<string, IntegrationRow>,
+): (a: Entry, b: Entry) => number {
+  const rank = (entry: Entry) => (entry.surfaces.some((s) => rows.has(s.key)) ? 0 : 1);
+  return (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name);
+}
+
+/**
+ * The surfaces a card's Disconnect takes away, in the order it takes them./**
  * The surfaces a card's Disconnect takes away, in the order it takes them.
  *
  * THE PROVISIONING SURFACE LAST. On Atlassian the two products are reached
@@ -601,11 +619,12 @@ export function actionFor(
   ) {
     return { label: "Continue" };
   }
-  if (state.attention) {
-    // Narrowed to the fields that clear what the loop actually found, so a
-    // Fix opens the inputs that matter rather than the whole form.
-    return { label: "Fix", blocks: "credential_missing" };
-  }
+  // A FAULT IS NOT AN ACTION. A card that needs attention says so in its tag
+  // and its status line, and what to do about it is the settings the gear
+  // opens — the same settings, not a narrowed copy of them. A second button
+  // beside Disconnect, appearing and disappearing as an integration breaks
+  // and recovers, was a control whose whole content the line above it
+  // already carried.
   // NOTHING FOR A WORKING TOOL. It returned "Manage", which is the one label
   // here that named a place rather than a thing to do: every other value is
   // the engine saying a person is needed, and Manage was the engine saying
@@ -1035,50 +1054,46 @@ export function Integrations() {
 
       {loading && !data && <Skeleton rows={6} />}
       <QueryState error={error} loading={loading} empty={undefined}>
-        {/* ALPHABETICAL, in one flat list rather than grouped into panels.
-            A capability heading over a group of one is chrome around a
-            single row, and the list is short enough that a reader looking
-            for a particular app finds it by name.
+        {/* WHAT THIS COMPANY HAS, THEN WHAT IT COULD HAVE, each half
+            alphabetical. One flat list rather than panels: a capability
+            heading over a group of one is chrome around a single row.
 
-            It replaces a connected-first sort. That put what was already
-            working at the top, which reads well the first time and badly
-            afterwards: a list whose order changes as an app connects or
-            fails moves a row out from under the cursor of somebody who
-            came back to the same screen expecting to find it where it
-            was. A name does not move. */}
+            Connected covers ATTEMPTED as well as working — a card with a
+            block behind it, whatever the loop says about it — because a
+            broken integration is one this company has and is the row most
+            worth reaching first. Sorting on health instead would move a row
+            out from under the cursor every time an app recovered. */}
         <div className="int-list">
-          {[...CATALOG]
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .map((entry) => (
-              <EntryRow
-                key={entry.key}
-                entry={entry}
-                rows={rows}
-                sections={sectionsFor(entry, setup.byKey)}
-                onConnect={(blocks) =>
-                  setDialog({
-                    title: entry.name,
-                    sections: sectionsFor(entry, setup.byKey),
-                    blocks,
-                  })
-                }
-                onDisconnect={() =>
-                  setDropping({
-                    name: entry.name,
-                    // EVERY SURFACE THE CARD COVERS, not the first one.
-                    //
-                    // Atlassian is an organization and two products, and
-                    // disconnecting took only the surface that happened to
-                    // be listed first: the account was deleted, its block
-                    // removed, and the card still read Connected because
-                    // Jira and Confluence were untouched. A person pressing
-                    // Disconnect on a card means the card.
-                    kinds: disconnectOrder(entry, rows, sectionsFor(entry, setup.byKey)),
-                    stuck: stuckDisconnecting(entry, rows),
-                  })
-                }
-              />
-            ))}
+          {[...CATALOG].sort(byConfiguredThenName(rows)).map((entry) => (
+            <EntryRow
+              key={entry.key}
+              entry={entry}
+              rows={rows}
+              sections={sectionsFor(entry, setup.byKey)}
+              onConnect={(blocks) =>
+                setDialog({
+                  title: entry.name,
+                  sections: sectionsFor(entry, setup.byKey),
+                  blocks,
+                })
+              }
+              onDisconnect={() =>
+                setDropping({
+                  name: entry.name,
+                  // EVERY SURFACE THE CARD COVERS, not the first one.
+                  //
+                  // Atlassian is an organization and two products, and
+                  // disconnecting took only the surface that happened to
+                  // be listed first: the account was deleted, its block
+                  // removed, and the card still read Connected because
+                  // Jira and Confluence were untouched. A person pressing
+                  // Disconnect on a card means the card.
+                  kinds: disconnectOrder(entry, rows, sectionsFor(entry, setup.byKey)),
+                  stuck: stuckDisconnecting(entry, rows),
+                })
+              }
+            />
+          ))}
         </div>
         {data && configured.length === 0 && (
           <Empty

@@ -47,9 +47,13 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 			// invisible: a scoped key authenticates for everything here
 			// except the one call that creates an account, which answers
 			// 403 whatever scopes it holds.
-			Help:      "Create it without scopes: a scoped key cannot create accounts.",
-			LinkText:  "API keys",
-			VendorURL: "https://admin.atlassian.com",
+			Help:     "Create it without scopes: a scoped key cannot create accounts.",
+			LinkText: "API keys",
+			// FILLED FROM THE ORGANIZATION ID, and not a link until there is
+			// one: the keys live at a per-organization address, and the
+			// console's front door is somewhere a person then has to
+			// navigate out of.
+			VendorURL: "https://admin.atlassian.com/o/{org_id}/api-keys",
 			Blocks:    integration.FindingCredentialMissing,
 		},
 	}

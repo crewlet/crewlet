@@ -182,6 +182,15 @@ type Requirement struct {
 	// which is where a setting nobody is asked for belongs.
 	Hidden bool `json:"hidden,omitempty"`
 
+	// VendorURL may carry `{field}` placeholders, filled from what the form
+	// currently holds for those fields.
+	//
+	// Atlassian's API keys live at a per-organization address, so the link
+	// cannot be written down in advance: until somebody has typed the
+	// organization id there is no page to open, and a link to the console's
+	// front door sends them somewhere they then have to navigate out of.
+	// The form renders plain text until every placeholder resolves.
+
 	// Default is the value a form offers when this company has none.
 	//
 	// A SUGGESTION, never a stored value: nothing is written until

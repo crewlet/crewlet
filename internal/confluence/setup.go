@@ -183,8 +183,7 @@ func forDeployment(
 	return out
 }
 
-// Summary is the sentence the connect form opens with.
-func Summary() string {
-	return "Agents read the company's pages and answer comments on them. This " +
-		"engine registers a webhook per event so Confluence's changes reach it."
-}
+// Summary is empty, for the reason [jira.Summary] gives: Confluence is a
+// surface of the Atlassian card, and the card has already said what
+// connecting it does.
+func Summary() string { return "" }

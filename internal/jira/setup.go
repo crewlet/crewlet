@@ -171,9 +171,10 @@ func forDeployment(
 	return out
 }
 
-// Summary is the sentence the connect form opens with.
-func Summary() string {
-	return "Agents are assigned issues and mentioned by name. This engine " +
-		"registers a webhook so Jira's events reach it, and creates each " +
-		"agent's account through the Atlassian organization."
-}
+// Summary is empty on purpose.
+//
+// Jira is one surface of the Atlassian card, and the card already opens with
+// what connecting Atlassian does. A sentence per surface put three
+// paragraphs above the first field of one form, each explaining a product to
+// somebody who has just chosen it by name.
+func Summary() string { return "" }

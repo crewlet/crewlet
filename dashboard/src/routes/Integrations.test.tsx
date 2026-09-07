@@ -15,6 +15,7 @@ import {
   CATALOG,
   EntryRow,
   Reconcile,
+  byConfiguredThenName,
   disconnectOrder,
   phaseTone,
   rollUp,
@@ -383,8 +384,11 @@ test("the action follows the state", () => {
   // while saying only "nobody is needed".
   expect(actionFor(ready, [toolState({})])).toBeNull();
 
-  // A row a person owes something on offers Fix, narrowed to the fields
-  // that clear what the loop found.
+  // A FAULT IS NOT AN ACTION. A row a person owes something on says so in
+  // its tag and its status line; what to do about it is the settings the
+  // gear opens. A Fix button beside Disconnect, appearing and disappearing
+  // as an integration breaks and recovers, carried nothing the line above
+  // it did not already say.
   const owed = rollUp(
     atlassian,
     rowsOf({
@@ -393,9 +397,7 @@ test("the action follows the state", () => {
       reconcile: { phase: "degraded", actor: "admin", detail: "x" },
     }),
   );
-  const fix = actionFor(owed, [toolState({})]);
-  expect(fix?.label).toBe("Fix");
-  expect(fix?.blocks).toBe("credential_missing");
+  expect(actionFor(owed, [toolState({})])).toBeNull();
 });
 
 // A TOOL IS COMPLETE ONLY WHEN EVERY CONFIGURED SURFACE IS. Atlassian with
@@ -687,6 +689,26 @@ test("an agent is listed once however many surfaces report it", () => {
   // account rather than about one product's credential slot.
   expect(screen.getByText("mcp_env.atlassian.JIRA_API_TOKEN")).toBeTruthy();
   expect(screen.queryByText(/no Confluence credential/)).toBeNull();
+});
+
+// WHAT THIS COMPANY HAS COMES FIRST, then what it could have.
+//
+// Connected covers ATTEMPTED as well as working: a card with a block behind
+// it, whatever the loop says about it, because a broken integration is one
+// this company has and is the row most worth reaching first. Sorting on
+// health instead would move a row out from under the cursor of somebody
+// watching an app recover, which is exactly when they are looking at it.
+test("configured integrations lead the list, each half alphabetical", () => {
+  const rows = rowsOf(
+    // Datadog works; Jira is broken. Both are this company's.
+    { key: "datadog", configured: true, reconcile: { phase: "ready" } },
+    { key: "jira", configured: true, reconcile: { phase: "degraded", detail: "x" } },
+  );
+  const order = [...CATALOG].sort(byConfiguredThenName(rows)).map((e) => e.name);
+  expect(order).toEqual(["Atlassian", "Datadog", "GitHub", "GitLab", "Mattermost", "Slack"]);
+  // And with nothing configured it is plain alphabetical, unchanged.
+  const empty = [...CATALOG].sort(byConfiguredThenName(rowsOf())).map((e) => e.name);
+  expect(empty).toEqual([...empty].sort((a, b) => a.localeCompare(b)));
 });
 
 // DISCONNECT MEANS THE CARD, and the provisioner goes last.
