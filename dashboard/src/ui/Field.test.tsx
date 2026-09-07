@@ -120,3 +120,23 @@ test("free text keeps the spaces it is given", () => {
   });
   expect(onChange).toHaveBeenCalledWith("Datadog Read Only Role");
 });
+
+// THE BROWSER MUST NOT GET AN OPINION ABOUT A REFERENCE.
+//
+// Any field here may hold a `${VAR}` naming a sealed entry rather than a
+// value. With type="email" the browser refused the form for a value with no
+// "@" in it, so the dialog could not be saved at all over a reference the
+// engine resolves correctly. The shape is checked where the value is used.
+test("an email field never asserts a shape the browser enforces", () => {
+  render(
+    <Field
+      label="Account email"
+      kind="email"
+      value="${ATLASSIAN_USER_ACCOUNT_EMAIL}"
+      onChange={() => {}}
+    />,
+  );
+  const input = screen.getByLabelText("Account email") as HTMLInputElement;
+  expect(input.type).toBe("text");
+  expect(input.checkValidity()).toBe(true);
+});

@@ -156,8 +156,14 @@ export function Field({
           // A secret is a password field unless it holds a reference. See
           // the note above: the type is what keeps a CREDENTIAL out of
           // autofill and out of a screenshot, and a name is neither.
-          type={masked ? "password" : kind === "email" ? "email" : "text"}
-          inputMode={kind === "url" ? "url" : undefined}
+          // NEVER type="email", even on the email field. Any field here may
+          // hold a `${VAR}` naming a sealed entry instead of a value, and the
+          // browser's own validation refuses one for having no "@" in it:
+          // the form could not be saved at all, over a value the engine
+          // resolves correctly. inputMode still offers the right keyboard
+          // without asserting a shape.
+          type={masked ? "password" : "text"}
+          inputMode={kind === "email" ? "email" : kind === "url" ? "url" : undefined}
           value={value}
           placeholder={placeholder}
           disabled={disabled}
