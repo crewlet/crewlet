@@ -84,6 +84,37 @@ func (s *Service) documentOf(ctx context.Context) (*config.Company, store.Revisi
 	return company.Redact(), revision, nil
 }
 
+// References is every ${VAR} the active document names, paired with the path
+// of the field that names it.
+//
+// THE QUESTION IS "WHAT BREAKS IF I REMOVE THIS", and it is asked from the
+// Secrets screen rather than from here: deleting or renaming a credential the
+// document still points at leaves that pointer resolving to nothing, and the
+// surfaces holding it start refusing deliveries with no error naming the row
+// that went away. The answer has to carry PATHS — a name on its own says a
+// reference exists somewhere, which nobody can act on.
+//
+// It lives on the config surface because it is a fact about the config
+// document, not about the secret store: the store holds the values, and the
+// only thing that knows a value is spoken for is the document that names it.
+// /secrets could not answer this without a second reader of the company
+// revision.
+//
+// Derived from the SAME redacted document GET /config serves, which changes
+// nothing here: redaction masks a literal credential and deliberately leaves
+// a reference alone, because a reference names a credential rather than being
+// one.
+// The revision travels with the answer because the index is derived from it
+// and changes exactly when it does, which is what the route's entity-tag
+// needs and what a caller comparing two answers has to key on.
+func (s *Service) References(ctx context.Context) ([]config.Reference, store.Revision, error) {
+	company, revision, err := s.documentOf(ctx)
+	if err != nil {
+		return nil, store.Revision{}, err
+	}
+	return config.References(company), revision, nil
+}
+
 // ActiveRevision is the id of the revision the fleet is running.
 //
 // The token every conditional write is built against: a caller reads state,

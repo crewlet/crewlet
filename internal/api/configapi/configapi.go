@@ -140,6 +140,9 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	// there is no patch to make, and with no activation there is no apply
 	// and no refreshed secret snapshot. See [Service.Reload].
 	mux.HandleFunc("POST /config/reload", s.reload)
+	// WHICH FIELDS NAME A ${VAR}, which is what an operator needs before
+	// they remove a credential. See [Service.References].
+	mux.HandleFunc("GET /config/references", s.references)
 	mux.HandleFunc("GET /config/revisions", s.listRevisions)
 	mux.HandleFunc("GET /config/revisions/{id}", s.getRevision)
 	mux.HandleFunc("GET /config/revisions/{id}/diff", s.diff)
@@ -180,6 +183,30 @@ func (s *Service) getActive(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.writeDocument(w, r, company)
+	}
+}
+
+// references serves GET /config/references.
+//
+// 404 when nothing is active, matching GET /config: a deployment before its
+// first import has no document to reference anything, and reporting that as a
+// failure would make a working new install look broken.
+func (s *Service) references(w http.ResponseWriter, r *http.Request) {
+	refs, revision, err := s.References(r.Context())
+	switch {
+	case errors.Is(err, ErrNoActiveRevision):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_active_revision"})
+	case err != nil:
+		s.fail(w, "read the active revision", err)
+	default:
+		// THE SAME VALIDATOR the document itself carries: the index is
+		// derived from the revision and changes exactly when it does.
+		if serveConditional(w, r, revision) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"revision": revision.ID, "references": refs,
+		})
 	}
 }
 

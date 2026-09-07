@@ -1370,3 +1370,86 @@ func TestReloadRefusesWhenNothingIsActive(t *testing.T) {
 		t.Errorf("error = %v", got)
 	}
 }
+
+// GET /config/references answers which fields name a ${VAR}, which is what an
+// operator needs before they remove a credential. The fixture's `${ROTATED}`
+// sits in a list of api keys beside a literal, so the route has to report the
+// reference and only the reference.
+func TestReferencesReportsEveryPathThatNamesAVariable(t *testing.T) {
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc, nil)
+
+	res := s.do(t, http.MethodGet, "/config/references", "", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", res.Code, res.Body)
+	}
+	body := decode(t, res)
+	refs, _ := body["references"].([]any)
+	got := map[string]string{}
+	for _, entry := range refs {
+		row, _ := entry.(map[string]any)
+		got[fmt.Sprint(row["path"])] = fmt.Sprint(row["name"])
+	}
+	want := map[string]string{"providers.llm.zulu.api_keys[1]": "ROTATED"}
+	if len(got) != len(want) {
+		t.Fatalf("references = %v, want %v", got, want)
+	}
+	for path, name := range want {
+		if got[path] != name {
+			t.Errorf("references[%q] = %q, want %q", path, got[path], name)
+		}
+	}
+	// THE REVISION TRAVELS WITH IT. The index is derived from the
+	// document, so a caller holding one has to know which document it
+	// describes before acting on it.
+	if body["revision"] == nil || body["revision"] == "" {
+		t.Error("the answer named no revision")
+	}
+}
+
+// A LITERAL CREDENTIAL IS NOT A REFERENCE, and reporting one would make the
+// delete confirmation cry wolf: removing a stored secret cannot affect a
+// value the document carries inline.
+func TestReferencesNeverReportsALiteralCredential(t *testing.T) {
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc, nil)
+
+	res := s.do(t, http.MethodGet, "/config/references", "", nil)
+	if body := res.Body.String(); strings.Contains(body, "api_keys[0]") ||
+		strings.Contains(body, "sk-literal") ||
+		strings.Contains(body, signingSecret) {
+		t.Errorf("a literal credential reached the reference index: %s", body)
+	}
+}
+
+// A node before its first import has no document to reference anything, and
+// reporting that as a failure would make a working new install look broken.
+func TestReferencesAnswersNotFoundBeforeAnythingIsActive(t *testing.T) {
+	s := newSurface(t, nil)
+	res := s.do(t, http.MethodGet, "/config/references", "", nil)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", res.Code, res.Body)
+	}
+	if got := decode(t, res)["error"]; got != "no_active_revision" {
+		t.Errorf("error = %v, want no_active_revision", got)
+	}
+}
+
+// The index changes exactly when the document does, so it carries the
+// document's own validator and a caller that already has this revision is
+// told so rather than sent the list again.
+func TestReferencesCarriesTheDocumentsOwnValidator(t *testing.T) {
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc, nil)
+
+	first := s.do(t, http.MethodGet, "/config/references", "", nil)
+	tag := first.Header().Get("ETag")
+	if tag == "" {
+		t.Fatal("no ETag on the reference index")
+	}
+	again := s.do(t, http.MethodGet, "/config/references", "",
+		map[string]string{"If-None-Match": tag})
+	if again.Code != http.StatusNotModified {
+		t.Fatalf("status = %d, want 304: %s", again.Code, again.Body)
+	}
+}

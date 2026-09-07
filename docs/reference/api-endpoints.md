@@ -121,10 +121,27 @@ All `/config/*` routes require `Authorization: Bearer <token>` matching one of t
 | `GET` | `/config/revisions` | Paginated history (newest first), metadata only |
 | `GET` | `/config/revisions/{id}` | Single revision including its payload |
 | `GET` | `/config/revisions/{id}/diff?against=<uuid\|active>` | Structural diff |
+| `GET` | `/config/references` | Every `${VAR}` the active document names, each with the config path of the field that names it, plus the `revision` they were read from |
 
-The dashboard reads the same four facts over the query channel rather than
+The dashboard reads four of those facts over the query channel rather than
 these routes — `config`, `config_audit`, `config_diff` and `config_entities`,
-each operator-gated for the same reason the prefix is.
+each operator-gated for the same reason the prefix is. The reference index has
+no query of its own; the Secrets screen reads it over REST beside `/secrets`.
+
+**Why the reference index is a route and not a client-side scan.** It answers
+"what breaks if I remove this credential", which is the question in front of an
+operator about to delete or rename a secret: the config keeps `${VAR}`
+**pointers**, so a removed row leaves every pointer at it resolving to the
+empty string and the surfaces holding one start refusing deliveries with
+nothing naming the row that went away. Deriving it from `GET /config` in the
+client would mean a second copy of the `${VAR}` grammar, and the engine has
+already paid for that twice — a looser pattern once displayed a literal secret
+unmasked, and another once minted a live credential into a variable nothing
+reads. The path is the operator's own spelling
+(`roles[0].integrations.slack.bot_token`), the same one a validation failure
+reports, and a name with several readers appears once per reader. It carries
+the document's own `ETag`, because the index changes exactly when the revision
+does.
 
 **Full-document write:**
 
