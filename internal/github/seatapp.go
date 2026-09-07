@@ -144,8 +144,15 @@ func (r *SeatAppResult) reconcileSeat(
 		// anything wrong, there is a click outstanding. The action URL is
 		// empty because creating an app is a form POST from a page and
 		// not an address anybody can be sent to.
+		//
+		// APPROVAL_REQUIRED, NOT IDENTITY_MISSING, and the difference is
+		// who acts. identity_missing reads as the ENGINE provisioning an
+		// account, which is what happens on Slack and Mattermost; here
+		// the engine can do nothing at all until a person creates the app
+		// at GitHub, and a card reading "Setting up agents" over that
+		// waits for an act nobody is performing.
 		r.Findings = append(r.Findings, integration.Finding{
-			Kind:    integration.FindingIdentityMissing,
+			Kind:    integration.FindingApprovalRequired,
 			Subject: seat.Handle,
 			Detail: seat.Handle + " has no GitHub App of its own, so nothing it " +
 				"does on GitHub is its own: create one from the Integrations screen",
@@ -263,7 +270,8 @@ func (r *SeatAppResult) reconcileSeat(
 // state this seat is now in: it names an app that does not exist, so nothing
 // it does on GitHub is its own. The action URL is empty for the same reason
 // it is empty there — an app is created by a form POST from a page carrying
-// the operator's own session, not by following a link.
+// the operator's own session, not by following a link — and the actor is the
+// person at GitHub, because the engine cannot create an app for anybody.
 func (r *SeatAppResult) forget(ctx context.Context, opts SeatAppOptions, seat SeatApp) {
 	detail := seat.Handle + "'s GitHub App no longer exists at GitHub, so nothing " +
 		"it does there is its own: create one from the Integrations screen"
@@ -274,7 +282,7 @@ func (r *SeatAppResult) forget(ctx context.Context, opts SeatAppOptions, seat Se
 			// agree, and failing it leaves them naming a step that
 			// cannot be taken until the next pass.
 			r.Findings = append(r.Findings, integration.Finding{
-				Kind:    integration.FindingIdentityMissing,
+				Kind:    integration.FindingApprovalRequired,
 				Subject: seat.Handle,
 				Detail: detail + " (the stale record could not be cleared: " +
 					err.Error() + ")",
@@ -284,7 +292,7 @@ func (r *SeatAppResult) forget(ctx context.Context, opts SeatAppOptions, seat Se
 		r.Forgotten = append(r.Forgotten, seat.Handle)
 	}
 	r.Findings = append(r.Findings, integration.Finding{
-		Kind:    integration.FindingIdentityMissing,
+		Kind:    integration.FindingApprovalRequired,
 		Subject: seat.Handle,
 		Detail:  detail,
 	})

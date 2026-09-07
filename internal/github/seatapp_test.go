@@ -24,6 +24,12 @@ func kinds(findings []integration.Finding) []string {
 // Nobody has done anything wrong: there is a click left. The finding carries
 // no action URL, because an app is created by POSTing a manifest from a page
 // and there is no address to send anybody to.
+//
+// IT WAITS ON A PERSON, never on the engine. This was identity_missing for
+// one commit, which reads as the engine provisioning an account — true on
+// Slack, false here, because no engine can create a GitHub App for anybody.
+// The card said "Setting up agents" over a seat where nothing was happening
+// and nothing would until somebody clicked.
 func TestASeatWithNoAppReportsTheClickThatIsLeft(t *testing.T) {
 	t.Parallel()
 	res, err := github.ReconcileSeatApps(context.Background(), github.SeatAppOptions{
@@ -32,8 +38,12 @@ func TestASeatWithNoAppReportsTheClickThatIsLeft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := kinds(res.Findings); len(got) != 1 || got[0] != string(integration.FindingIdentityMissing) {
+	if got := kinds(res.Findings); len(got) != 1 || got[0] != string(integration.FindingApprovalRequired) {
 		t.Fatalf("findings = %v", got)
+	}
+	if phase, actor := res.Findings[0].Kind.Verdict(); actor != integration.ActorAdmin {
+		t.Errorf("a seat needing an app waits on %v in phase %v, and only a "+
+			"person at GitHub can create one", actor, phase)
 	}
 	if url := res.Findings[0].ActionURL; url != "" {
 		t.Errorf("creating an app was given an address to follow: %q", url)
@@ -176,7 +186,7 @@ func TestAnAppGitHubNoLongerHasIsReportedAsGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := kinds(res.Findings); len(got) != 1 || got[0] != string(integration.FindingIdentityMissing) {
+	if got := kinds(res.Findings); len(got) != 1 || got[0] != string(integration.FindingApprovalRequired) {
 		t.Fatalf("findings = %v, want the app to be reported missing", got)
 	}
 	// NO LINK, because there is nothing to follow: an app is created by a
@@ -214,7 +224,7 @@ func TestADryRunReportsAGoneAppWithoutClearingIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := kinds(res.Findings); len(got) != 1 || got[0] != string(integration.FindingIdentityMissing) {
+	if got := kinds(res.Findings); len(got) != 1 || got[0] != string(integration.FindingApprovalRequired) {
 		t.Fatalf("findings = %v", got)
 	}
 	if len(res.Forgotten) != 0 {
