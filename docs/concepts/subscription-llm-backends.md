@@ -488,11 +488,20 @@ problems:
 crewlet llm login default
 ```
 
-Runs the real `claude /login` / `codex login` / `opencode auth login`
+Runs the real `claude auth login` / `codex login` / `opencode auth login`
 attached to your terminal — follow its prompts exactly as you would by
 hand. The only thing Crewlet controls is *where* the credential lands:
 in the provider's isolated `credentials/` directory, separate from your
 personal CLI login on the same machine.
+
+Each profile names its vendor's own one-shot **auth subcommand**, which
+prints its OAuth URL and returns once you have signed in. A profile that
+named an in-session slash command instead would open an interactive
+session rather than run a login: the session asks you to sign in itself,
+then replays the slash command and asks a *second* time, and leaves you
+in a REPL you have to interrupt — after a login that had already
+succeeded. `crewlet llm login` returning you to your shell is the
+signal that it worked; `crewlet llm doctor <KEY>` confirms it.
 
 ### 2. Capture a headless token (best where it exists)
 
@@ -601,7 +610,7 @@ entirely.
 
 | `cli.agent` | Binary | Subscription | Notes |
 |---|---|---|---|
-| `claude-code` | `claude` | Claude Pro / Max | `claude setup-token` gives a headless `CLAUDE_CODE_OAUTH_TOKEN`. Reports full usage incl. cache tokens. |
+| `claude-code` | `claude` | Claude Pro / Max | `claude auth login` (and `auth status` / `auth logout`). `claude setup-token` gives a headless `CLAUDE_CODE_OAUTH_TOKEN`. Reports full usage incl. cache tokens. |
 | `codex` | `codex` | ChatGPT Plus / Pro | `codex login`. Streams JSONL events; runs `--sandbox read-only`. |
 | `gemini-cli` | `gemini` | Google AI Pro / free tier | First run starts the auth picker. `GOOGLE_CLOUD_PROJECT` passes through. |
 | `qwen-code` | `qwen` | Qwen OAuth | Gemini CLI fork; same shape. |

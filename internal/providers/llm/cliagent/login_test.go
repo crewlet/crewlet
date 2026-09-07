@@ -312,3 +312,65 @@ func bundleOf(t *testing.T, name, body string) string {
 	}
 	return base64.StdEncoding.EncodeToString(raw.Bytes())
 }
+
+// An auth command must be a SUBCOMMAND the CLI runs and exits from, never a
+// prompt typed at an interactive session.
+//
+// `claude` takes a bare argument as its prompt, so the `["/login"]` this
+// profile shipped never invoked a login command at all: it opened a session
+// carrying `/login` as the first message. Against the empty login-home
+// `runInCredentialHome` hands it, that session ran its own first-run sign-in
+// and THEN replayed the queued `/login`, so an operator who had just
+// authenticated was asked to authenticate again — and was then left in a REPL
+// that never exits, having to interrupt a login that had already succeeded.
+// A leading "/" is how that mistake is spelled for every CLI here.
+func TestNoProfileBrokersAnAuthCommandAsAPrompt(t *testing.T) {
+	t.Parallel()
+	for _, name := range BuiltinNames() {
+		if name == "custom" {
+			continue
+		}
+		p, err := Load(name, nil)
+		if err != nil {
+			t.Fatalf("Load(%q): %v", name, err)
+		}
+		for label, args := range map[string][]string{
+			"login_args":         p.LoginArgs,
+			"status_args":        p.StatusArgs,
+			"logout_args":        p.LogoutArgs,
+			"capture_token_args": p.CaptureTokenArgs,
+		} {
+			if len(args) > 0 && strings.HasPrefix(args[0], "/") {
+				t.Errorf("%s: %s = %q — a slash command is a PROMPT to an interactive "+
+					"session, not a subcommand that exits", name, label, args)
+			}
+		}
+	}
+}
+
+// The docs tell every operator to run `crewlet llm status` and
+// `crewlet llm logout`, and the flagship profile has to answer both.
+//
+// It answered neither: with no status_args the command failed with "this CLI
+// has no status command" for a CLI that has one, and with no logout_args
+// `logout` deleted the local files while leaving the session live at the
+// vendor — an operator who believed they had revoked a login had not.
+func TestTheClaudeProfileCanBrokerInspectAndRevokeItsLogin(t *testing.T) {
+	t.Parallel()
+	p, err := Load("claude-code", nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for label, want := range map[string][]string{
+		"login_args":  {"auth", "login", "--claudeai"},
+		"status_args": {"auth", "status", "--text"},
+		"logout_args": {"auth", "logout"},
+	} {
+		got := map[string][]string{
+			"login_args": p.LoginArgs, "status_args": p.StatusArgs, "logout_args": p.LogoutArgs,
+		}[label]
+		if strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("claude-code %s = %q, want %q", label, got, want)
+		}
+	}
+}

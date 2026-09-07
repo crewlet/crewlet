@@ -13,7 +13,7 @@
 claude-code:
   binary: claude
   vendor: anthropic
-  written_for: "Claude Code CLI 2.x (`claude --version`)"
+  written_for: "Claude Code CLI 2.1.x (`claude --version`)"
   version_args: ["--version"]
   # --no-session-persistence and --safe-mode are the isolation the rest of
   # this backend depends on: no transcript on disk to leak between turns, and
@@ -97,7 +97,26 @@ claude-code:
   host_credential_paths: [".claude/.credentials.json"]
   token_env: "CLAUDE_CODE_OAUTH_TOKEN"
   api_key_env: "ANTHROPIC_API_KEY"
-  login_args: ["/login"]
+  # `auth login`, NOT `/login`. `claude` takes a bare argument as the PROMPT
+  # ("Usage: claude [options] [command] [prompt]"), so `claude /login` never ran
+  # a login command at all: it opened an INTERACTIVE SESSION carrying `/login`
+  # as its first message. On the empty login-home this backend hands it, that
+  # session runs its OWN first-run sign-in, and the queued `/login` then asks a
+  # SECOND time — after which the operator is sitting in a REPL that never exits
+  # and has to Ctrl+C out of a login that had already succeeded. `claude auth
+  # login` is the one-shot subcommand: it prints the OAuth URL immediately and
+  # returns when the code is pasted.
+  #
+  # --claudeai is passed EXPLICITLY although it is today's default: `--console`
+  # is the same command billing an Anthropic API account instead, and a vendor
+  # that flipped the default would move every seat onto metered billing while
+  # the plan sat unused — the silent switch applyAuth deletes ANTHROPIC_API_KEY
+  # to prevent.
+  login_args: ["auth", "login", "--claudeai"]
+  # --text because a person ran `crewlet llm status` and is reading this; the
+  # CLI's own default is --json.
+  status_args: ["auth", "status", "--text"]
+  logout_args: ["auth", "logout"]
   capture_token_args: ["setup-token"]
   # A spent plan exits 0 with prose. The sentinel is emitted verbatim and
   # carries the reset instant after a pipe, so the classification yields a
