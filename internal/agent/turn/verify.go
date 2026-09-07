@@ -115,6 +115,39 @@ func Delivered(calls []ledger.Call, s Surface) bool {
 	return false
 }
 
+// Acted reports whether this round's record PROVES the turn already reached
+// outside the engine — that re-running it would repeat something it cannot
+// take back.
+//
+// A DIFFERENT QUESTION FROM [Delivered], and the two must not be merged.
+// Delivered asks whether an answer reached the person who is waiting, so it is
+// MCP-only on purpose: a first-party builtin "never counts however much it
+// writes". This asks whether anything irreversible happened at all, so a
+// builtin that wakes a colleague or starts a billed box counts exactly as much
+// as a Jira comment does.
+//
+// PROOF, NOT SUSPICION, and that asymmetry is the whole design. Its caller
+// spends a trigger on a true answer — a redelivery that would have re-run this
+// turn is given up instead — so a false positive discards work that never left
+// the process, while a false negative merely leaves today's behaviour in place.
+// Both halves are therefore positive: an MCP-backed call not proven read-only
+// (the rule [Deliverable] has survived two incidents on), or a tool whose own
+// annotations say open-world. A tool nobody classified proves nothing and is
+// not counted.
+//
+// SUCCESSFUL calls only, like Delivered: a post that failed did not post.
+func Acted(calls []ledger.Call, s Surface) bool {
+	for _, c := range calls {
+		if c.Failed {
+			continue
+		}
+		if Deliverable(c.Name, s) || slices.Contains(s.KnownOpenWorld, c.Name) {
+			return true
+		}
+	}
+	return false
+}
+
 // Verdict is what the engine concludes about a round before the reviewer sees
 // it.
 type Verdict struct {
