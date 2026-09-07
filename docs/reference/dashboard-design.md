@@ -623,6 +623,23 @@ row — what actually woke the turn — was pushed to second place. The subject
 comes first and the source follows it, with the flex sizing deciding who gives
 way on a narrow card: the message truncates, the source stays whole.
 
+### The document does not scroll
+
+`.screen` scrolls, and it is the only thing that may. The sidebar is a fixed
+rail beside a scrolling pane, so a page that can *also* scroll as a whole
+carries that rail off the top of the window and leaves the reader looking at
+background below the app — with two scrollbars, neither obviously the one they
+want.
+
+`body { min-height: 100dvh }` only asked the body to be at least a viewport
+tall. It still permitted it to grow, so the invariant held because nothing
+happened to exceed it rather than because anything enforced it. `height:
+100dvh` with `overflow: hidden` makes it unreachable instead of merely unused,
+and costs nothing: `.app` is already exactly that height. Verified by driving
+the built bundle in a browser — with 6000px of injected content and an
+explicit `window.scrollTo(0, 5000)`, `window.scrollY` stays 0 and the rail
+stays at the top, at every viewport from 600×900 to 1854×890.
+
 ### A panel has one left edge
 
 `.panel-body.tight` reduced the horizontal padding as well as the vertical

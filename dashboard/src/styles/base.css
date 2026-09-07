@@ -11,9 +11,19 @@ html {
   text-size-adjust: 100%;
 }
 
+/* THE DOCUMENT DOES NOT SCROLL. `.screen` does, and it is the only thing that
+   may: the sidebar is a fixed rail beside a scrolling pane, and a page that
+   can also scroll as a whole moves that rail off the top of the window and
+   leaves the reader looking at background below the app.
+   `min-height` only asked the body to be at least a viewport tall — it still
+   PERMITTED it to grow, so the shell's invariant held by nobody ever
+   exceeding it rather than by anything enforcing it. A fixed height plus
+   hidden overflow makes it unreachable instead of merely unused, and costs
+   nothing: `.app` is already exactly 100dvh. */
 body {
   margin: 0;
-  min-height: 100dvh;
+  height: 100dvh;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
