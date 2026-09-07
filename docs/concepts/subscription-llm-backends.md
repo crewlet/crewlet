@@ -488,11 +488,20 @@ problems:
 crewlet llm login default
 ```
 
-Runs the real `claude /login` / `codex login` / `opencode auth login`
+Runs the real `claude auth login` / `codex login` / `opencode auth login`
 attached to your terminal — follow its prompts exactly as you would by
 hand. The only thing Crewlet controls is *where* the credential lands:
 in the provider's isolated `credentials/` directory, separate from your
 personal CLI login on the same machine.
+
+Each profile names its vendor's own one-shot **auth subcommand**, which
+prints its OAuth URL and returns once you have signed in. A profile that
+named an in-session slash command instead would open an interactive
+session rather than run a login: the session asks you to sign in itself,
+then replays the slash command and asks a *second* time, and leaves you
+in a REPL you have to interrupt — after a login that had already
+succeeded. `crewlet llm login` returning you to your shell is the
+signal that it worked; `crewlet llm doctor <KEY>` confirms it.
 
 ### 2. Capture a headless token (best where it exists)
 
@@ -506,6 +515,12 @@ profile's token variable — `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code.
 **Prefer this whenever the CLI offers it:** no credential files to sync,
 no refresh-token rotation, and it survives an ephemeral container with
 no persistent volume.
+
+Minting is *interactive* — the CLI opens the same browser sign-in as
+option 1 — so its prompts and its sign-in URL are shown on your terminal
+while the token itself is captured. The token never touches stdout, which
+is what leaves `-print-token` free to pipe cleanly into your own secret
+manager.
 
 Already have a token from elsewhere?
 
@@ -601,7 +616,7 @@ entirely.
 
 | `cli.agent` | Binary | Subscription | Notes |
 |---|---|---|---|
-| `claude-code` | `claude` | Claude Pro / Max | `claude setup-token` gives a headless `CLAUDE_CODE_OAUTH_TOKEN`. Reports full usage incl. cache tokens. |
+| `claude-code` | `claude` | Claude Pro / Max | `claude auth login` (and `auth status` / `auth logout`). `claude setup-token` gives a headless `CLAUDE_CODE_OAUTH_TOKEN`. Reports full usage incl. cache tokens. |
 | `codex` | `codex` | ChatGPT Plus / Pro | `codex login`. Streams JSONL events; runs `--sandbox read-only`. |
 | `gemini-cli` | `gemini` | Google AI Pro / free tier | First run starts the auth picker. `GOOGLE_CLOUD_PROJECT` passes through. |
 | `qwen-code` | `qwen` | Qwen OAuth | Gemini CLI fork; same shape. |
@@ -636,6 +651,28 @@ still parses, and the answer field moved — names itself: the completion
 fails with the `text_paths` this profile looked in and the output the CLI
 actually produced. See
 [Finding the answer in the CLI's output](#finding-the-answer-in-the-clis-output).
+
+**`limit_markers` and `auth_markers` drift the most quietly.** Every other
+field fails visibly when it goes stale — a renamed flag is a non-zero exit
+`doctor` reports on the spot. A sentinel is matched *verbatim* against the
+CLI's own prose, so one the vendor has reworded simply never fires: a spent
+plan then classifies as a fatal error instead of `RATE_LIMIT`, the
+[fallback chain](#falling-back-to-a-metered-key) never carries the seat onto
+a metered key, and nothing says so until somebody hits their cap. If your
+CLI's wording differs from the built-in profile's, override it:
+
+```yaml
+cli:
+  agent: claude-code
+  overrides:
+    limit_markers:
+      - sentinel: "Usage limit reached"
+    auth_markers:
+      - sentinel: "Please run /login"
+```
+
+Take the sentinel from what your CLI actually prints, not from what it used
+to print.
 
 ---
 
@@ -775,7 +812,9 @@ to be.)
 ## Falling back to a metered key
 
 A spent subscription window arrives as prose on a *successful* exit
-("Usage limit reached. Resets at 4pm."). Crewlet matches that wording and
+("Usage limit reached · continuing automatically"). Crewlet matches that
+wording — and, where the CLI relays the API's own error instead, the
+`"type":"rate_limit_error"` in it — and
 reports it as `RATE_LIMIT`, which is retryable — so the ordinary
 [provider chain](turn-engine.md#per-phase-llm-models) carries the role
 onto a metered key for the rest of the window and back again afterwards,
@@ -800,6 +839,30 @@ roles:
 
 An expired login classifies as `AUTH`, which is also retryable — so the
 chain keeps the seat working while you re-run `crewlet llm login`.
+
+### What a sentinel may be
+
+Both recognitions are `limit_markers` / `auth_markers` on the profile: a
+literal substring the vendor emits, plus (where it carries one) the field
+holding the reset instant, so the retry-after is a datum rather than a
+guess. They are matched against whatever the CLI printed — which on a
+healthy call is **the model's own answer** — and a match benches the
+credential for a cooldown and hands the seat to the next entry in the
+chain.
+
+So a sentinel has to be the vendor's *wording*, and a profile is refused
+at `crewlet validate` if one contains no letters. The rule exists because
+a shipped profile carried `sentinel: "429"`, and three digits matched as
+a substring is not a rate limit — it is a model quoting an HTTP status, a
+stack trace's line number, a token count, or any ten-digit epoch. Every
+one of those took a working subscription out of service.
+
+The other way a sentinel stops working is quieter — the vendor reworded
+it, so it simply never fires. Both are fixed the same way, with
+`cli.overrides.limit_markers`; see
+[CLI flags drift](#cli-flags-drift--and-thats-a-config-edit-not-a-release)
+for the shape, and take the wording from the sentence your CLI actually
+printed, which a `FATAL` failure carries verbatim so that you can.
 
 ---
 

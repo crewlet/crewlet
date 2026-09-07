@@ -96,8 +96,11 @@ providers:
     # `-from-host` COPIES the login this machine already has into Crewlet's
     # own directory; your own ~/.claude is never read at runtime, because
     # each seat's child process gets its own HOME.  Plain
-    # `crewlet llm login default` instead brokers `claude /login` attached
-    # to your terminal, for a machine with no login yet.
+    # `crewlet llm login default` instead brokers `claude auth login`
+    # attached to your terminal, for a machine with no login yet.  It
+    # returns you to your shell once you have signed in — if a login
+    # command ever leaves you sitting in an interactive session, it did
+    # not run the vendor's auth subcommand.
     #
     # `-capture-token` is the better route where you can take it — it mints
     # a headless CLAUDE_CODE_OAUTH_TOKEN, so there is no credential file to

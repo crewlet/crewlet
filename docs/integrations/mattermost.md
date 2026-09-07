@@ -812,7 +812,7 @@ crewlet mattermost doctor examples/nimbus.company.yaml
 
 # 4. Authenticate the model — once, on this machine. `-from-host` copies
 #    the login `claude` already has here into Crewlet's own directory; plain
-#    `crewlet llm login default` brokers `claude /login` instead if this
+#    `crewlet llm login default` brokers `claude auth login` instead if this
 #    machine has none.
 crewlet llm login default -from-host \
     -company examples/nimbus.company.yaml -config examples/nimbus.config.yaml

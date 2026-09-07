@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 )
 
 // maxBundle bounds a credential bundle on the way IN, decompressed.
@@ -60,19 +62,83 @@ func (p *Provider) CaptureToken(ctx context.Context, in io.Reader, errOut io.Wri
 			"run `crewlet llm login` to broker its own login instead",
 			ErrNoLoginCommand, p.agent)
 	}
+	// MIRRORED WHILE IT IS CAPTURED, and this is the whole difficulty of the
+	// command. A minting command is INTERACTIVE — the CLI renders its UI
+	// whenever STDIN is a terminal, which it is here, since the operator has
+	// to complete a browser sign-in — and it writes every byte of that UI to
+	// STDOUT: the sign-in URL, the "paste code here" prompt, all of it.
+	// Measured against Claude Code 2.1.263 with a tty on stdin and a pipe on
+	// stdout: 1512 bytes to stdout, ZERO to stderr. So capturing stdout into a
+	// buffer alone handed the operator a blank terminal that then sat waiting
+	// for a code from a URL they were never shown.
+	//
+	// The mirror goes to errOut rather than stdout because `-print-token`
+	// writes the token itself to stdout, and a vendor's UI in that stream
+	// would corrupt what the operator is piping into their secret manager.
+	//
+	// GUARDED, because os/exec promises at most one Write at a time only when
+	// Stdout and Stderr are the SAME comparable value. A mirror makes them two
+	// different writers over one destination, which is two copier goroutines
+	// racing on it — and the loss is silent: measured, the mirrored bytes
+	// simply vanished and the operator's terminal went blank again, which is
+	// the very bug this is fixing. One mutex, shared by both, restores the
+	// guarantee without folding stderr into the buffer the token is read from.
 	var out bytes.Buffer
-	if err := p.runInCredentialHome(ctx, p.profile.CaptureTokenArgs, in, &out, errOut); err != nil {
+	mirror := lockedWriter{mu: new(sync.Mutex), w: errOut}
+	if err := p.runInCredentialHome(
+		ctx, p.profile.CaptureTokenArgs, in, io.MultiWriter(&out, mirror), mirror,
+	); err != nil {
 		return "", err
 	}
-	// The LAST non-empty line: these commands print instructions above the
-	// token, and taking the whole output would store the instructions.
-	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	token := lastPrintedLine(out.String())
+	if token == "" {
+		return "", fmt.Errorf("cliagent: %q printed no token", p.agent)
+	}
+	return token, nil
+}
+
+// lockedWriter serialises the two copier goroutines os/exec runs when neither
+// of a child's output streams is a plain file. Copies share the mutex by
+// holding the same pointer, so one value guards one destination.
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (l lockedWriter) Write(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(b)
+}
+
+// ansiEscape matches the control sequences a terminal UI writes between its
+// words: CSI (cursor, colour), OSC (window title, and the hyperlinks a modern
+// CLI wraps a sign-in URL in), and the bare two-character escapes.
+var ansiEscape = regexp.MustCompile(
+	"\x1b\\[[0-9;?]*[ -/]*[@-~]" + // CSI
+		"|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)" + // OSC, both terminators
+		"|\x1b[@-Z\\\\-_]") // the rest
+
+// lastPrintedLine reads the token out of what a minting command printed.
+//
+// The LAST non-empty line, because these commands print their instructions
+// above the token and storing the whole output would store the instructions.
+//
+// Escape sequences come off first, and \r splits a line like \n does: the same
+// interactivity that makes the mirror above necessary means this stream is a
+// rendered UI rather than a report, so it carries cursor moves, colour and
+// OSC-8 hyperlinks, and it redraws in place. A line that is only decoration
+// has to count as EMPTY rather than be stored as a credential — a token has no
+// escape sequence in it, and a frame of one is not a token.
+func lastPrintedLine(raw string) string {
+	cleaned := ansiEscape.ReplaceAllString(raw, "")
+	lines := strings.FieldsFunc(cleaned, func(r rune) bool { return r == '\n' || r == '\r' })
 	for i := len(lines) - 1; i >= 0; i-- {
-		if token := strings.TrimSpace(lines[i]); token != "" {
-			return token, nil
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			return line
 		}
 	}
-	return "", fmt.Errorf("cliagent: %q printed no token", p.agent)
+	return ""
 }
 
 // CredentialLogin drives a profile's declared username/password login.

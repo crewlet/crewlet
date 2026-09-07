@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -348,6 +349,25 @@ func TestDoctorWithoutSmokeSkipsTheProbesVisibly(t *testing.T) {
 	for _, want := range []string{"local tools", "web"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report has no %q line:\n%s", want, out.String())
+		}
+	}
+}
+
+// A prune is only as good as its blast radius.
+//
+// The claude profile drops `.claude/.claude.json` between seat generations
+// because its `projects` map carries per-directory conversation history — and
+// Claude Code keeps timestamped BYTE COPIES of that same file under
+// `.claude/backups`, which the prune did not touch. Removing the original and
+// leaving the copies carried the history into the next turn by the long way
+// round, and left a directory that grew one file per rotation for the life of
+// the seat.
+func TestTheClaudeProfilePrunesTheBackupsOfWhatItPrunes(t *testing.T) {
+	t.Parallel()
+	p, _ := Builtin("claude-code")
+	for _, want := range []string{".claude/.claude.json", ".claude/backups"} {
+		if !slices.Contains(p.VolatilePaths, want) {
+			t.Errorf("claude-code volatile_paths lacks %q: %q", want, p.VolatilePaths)
 		}
 	}
 }

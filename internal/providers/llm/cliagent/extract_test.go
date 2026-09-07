@@ -436,23 +436,54 @@ func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default"}
-	// Valid JSON with no `result` field: nothing for text_paths to find,
-	// and the vendor's sentinel sitting in a field this build never reads.
-	// The reset instant is computed rather than pinned — the profile reads
-	// it as a Unix epoch, so a literal would quietly become a reset in the
-	// past and turn this into a test that asserts nothing.
-	reset := time.Now().Add(90 * time.Minute).Unix()
-	_, err = prov.completion("prompt", &rawResult{stdout: fmt.Sprintf(
-		`{"note":"Claude AI usage limit reached|%d"}`, reset)})
+	// Valid JSON with no `result` field: nothing for text_paths to find, and
+	// the vendor's sentinel sitting in a field this build never reads.
+	_, err = prov.completion("prompt", &rawResult{
+		stdout: `{"note":"Usage limit reached \u00b7 continuing automatically"}`})
 	if err == nil {
 		t.Fatal("a spent plan produced a completion")
 	}
 	if got := llm.KindOf(err); got != llm.KindRateLimit {
 		t.Fatalf("kind = %v, want rate limit", got)
 	}
+}
+
+// Where a vendor DOES carry the reset instant beside its sentinel, the
+// classification yields a real Retry-After rather than falling back to the
+// pool's configured cooldown.
+//
+// Declared here rather than taken from a shipped profile: no built-in CLI
+// still emits a machine-readable reset — Claude Code's pipe-and-epoch wording
+// went with its 1.x prose — so pinning this to one would be pinning it to a
+// string no vendor prints, which is how the sentinel it replaced went stale
+// unnoticed. The mechanism is live and operator-reachable through
+// `cli.overrides`, so it is tested on its own terms.
+func TestAMarkerThatCarriesAResetInstantYieldsARealRetryAfter(t *testing.T) {
+	t.Parallel()
+	p, err := Load("claude-code", map[string]any{
+		"limit_markers": []any{map[string]any{
+			"sentinel": "quota spent", "reset_separator": "|", "reset_unit": "epoch",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default"}
+	// Computed rather than pinned: the profile reads it as a Unix epoch, so a
+	// literal would quietly become a reset in the past and turn this into a
+	// test that asserts nothing.
+	reset := time.Now().Add(90 * time.Minute).Unix()
+	_, err = prov.completion("prompt", &rawResult{stdout: fmt.Sprintf(
+		`{"note":"quota spent|%d"}`, reset)})
+	if err == nil {
+		t.Fatal("a spent plan produced a completion")
+	}
 	var failure *llm.Error
 	if !errors.As(err, &failure) {
 		t.Fatalf("not a classified failure: %v", err)
+	}
+	if failure.Kind != llm.KindRateLimit {
+		t.Errorf("kind = %v, want rate limit", failure.Kind)
 	}
 	if failure.RetryAfter <= 0 {
 		t.Error("the reset instant the sentinel carried was not read")

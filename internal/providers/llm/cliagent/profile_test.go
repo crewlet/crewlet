@@ -225,3 +225,89 @@ func TestReadsUsageAgreesWithWhatTheExtractorActuallyReads(t *testing.T) {
 		})
 	}
 }
+
+// A sentinel is matched as a plain substring against whatever the CLI printed,
+// which on a healthy call is the MODEL'S OWN ANSWER — so one that can occur in
+// ordinary text does not recognise a spent plan, it misclassifies replies as
+// one. Both kinds a marker produces bench the credential, so the cost is a
+// working subscription taken out of service.
+func TestASentinelWithNoLettersIsRefused(t *testing.T) {
+	t.Parallel()
+	base := Profile{
+		Binary:       "x",
+		CompleteArgs: []string{"-p"},
+		Output:       OutputText,
+	}
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*Profile)
+		wantErr string
+	}{
+		{"a bare HTTP status as a limit marker",
+			func(p *Profile) { p.LimitMarkers = []LimitMarker{{Sentinel: "429"}} },
+			"limit_markers[0].sentinel"},
+		{"punctuation only",
+			func(p *Profile) { p.LimitMarkers = []LimitMarker{{Sentinel: "!!!"}} },
+			"limit_markers[0].sentinel"},
+		// Auth markers were not checked AT ALL — not even for emptiness —
+		// and KindAuth exhausts the credential exactly as a spent plan does.
+		{"an auth marker with no letters",
+			func(p *Profile) { p.AuthMarkers = []AuthMarker{{Sentinel: "401"}} },
+			"auth_markers[0].sentinel"},
+		{"an empty auth marker",
+			func(p *Profile) { p.AuthMarkers = []AuthMarker{{Sentinel: ""}} },
+			"auth_markers[0].sentinel is empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := base
+			tc.mutate(&p)
+			err := p.validate("test")
+			if err == nil {
+				t.Fatal("a sentinel that matches ordinary text was accepted")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("message does not name the field: %v", err)
+			}
+		})
+	}
+
+	// The rule is "it has to contain a letter" and nothing more: a short
+	// vendor string is legitimate, and a length floor would be a constant
+	// nobody can defend.
+	for _, ok := range []string{"quota", "429 Too Many Requests", "Quota exceeded"} {
+		p := base
+		p.LimitMarkers = []LimitMarker{{Sentinel: ok}}
+		if err := p.validate("test"); err != nil {
+			t.Errorf("sentinel %q was refused: %v", ok, err)
+		}
+	}
+}
+
+// No shipped profile may carry one, which is the half a rule alone does not
+// give you: `429` sat in the opencode profile until this test existed.
+func TestNoShippedSentinelCanMatchOrdinaryText(t *testing.T) {
+	t.Parallel()
+	for _, name := range BuiltinNames() {
+		if name == "custom" {
+			// Ships nothing on purpose, so it does not load — see
+			// TestCustomShipsNothingAndSaysWhatIsMissing.
+			continue
+		}
+		p, err := Load(name, nil)
+		if err != nil {
+			t.Errorf("Load(%q): %v", name, err)
+			continue
+		}
+		for _, m := range p.LimitMarkers {
+			if problem := sentinelProblem(m.Sentinel); problem != "" {
+				t.Errorf("%s limit marker %s", name, problem)
+			}
+		}
+		for _, m := range p.AuthMarkers {
+			if problem := sentinelProblem(m.Sentinel); problem != "" {
+				t.Errorf("%s auth marker %s", name, problem)
+			}
+		}
+	}
+}

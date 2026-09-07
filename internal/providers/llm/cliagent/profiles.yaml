@@ -13,7 +13,7 @@
 claude-code:
   binary: claude
   vendor: anthropic
-  written_for: "Claude Code CLI 2.x (`claude --version`)"
+  written_for: "Claude Code CLI 2.1.x (`claude --version`)"
   version_args: ["--version"]
   # --no-session-persistence and --safe-mode are the isolation the rest of
   # this backend depends on: no transcript on disk to leak between turns, and
@@ -86,6 +86,16 @@ claude-code:
     # remaining keys (machineID, migration flags, cached feature data) are
     # re-created on the next start at the cost of a few milliseconds.
     - ".claude/.claude.json"
+    # And its BACKUPS, which are byte copies of that same file under
+    # timestamped names — pruning the original and leaving the copies would
+    # carry the projects map into the next turn by the long way round, and the
+    # directory accumulates one file per rotation for the life of the seat.
+    - ".claude/backups"
+    # The file's lock, for the same reason: pruning what it guards and leaving
+    # it behind is half a prune. It is a DIRECTORY, and one a killed CLI
+    # leaves held — this build reports "Could not refresh your login because
+    # another Claude Code process is refreshing it" off exactly that state.
+    - ".claude/.claude.json.lock"
     - ".claude/projects"
     - ".claude/sessions"
     - ".claude/todos"
@@ -97,18 +107,56 @@ claude-code:
   host_credential_paths: [".claude/.credentials.json"]
   token_env: "CLAUDE_CODE_OAUTH_TOKEN"
   api_key_env: "ANTHROPIC_API_KEY"
-  login_args: ["/login"]
+  # `auth login`, NOT `/login`. `claude` takes a bare argument as the PROMPT
+  # ("Usage: claude [options] [command] [prompt]"), so `claude /login` never ran
+  # a login command at all: it opened an INTERACTIVE SESSION carrying `/login`
+  # as its first message. On the empty login-home this backend hands it, that
+  # session runs its OWN first-run sign-in, and the queued `/login` then asks a
+  # SECOND time — after which the operator is sitting in a REPL that never exits
+  # and has to Ctrl+C out of a login that had already succeeded. `claude auth
+  # login` is the one-shot subcommand: it prints the OAuth URL immediately and
+  # returns when the code is pasted.
+  #
+  # --claudeai is passed EXPLICITLY although it is today's default: `--console`
+  # is the same command billing an Anthropic API account instead, and a vendor
+  # that flipped the default would move every seat onto metered billing while
+  # the plan sat unused — the silent switch applyAuth deletes ANTHROPIC_API_KEY
+  # to prevent.
+  login_args: ["auth", "login", "--claudeai"]
+  # --text because a person ran `crewlet llm status` and is reading this; the
+  # CLI's own default is --json.
+  status_args: ["auth", "status", "--text"]
+  logout_args: ["auth", "logout"]
   capture_token_args: ["setup-token"]
-  # A spent plan exits 0 with prose. The sentinel is emitted verbatim and
-  # carries the reset instant after a pipe, so the classification yields a
-  # real Retry-After rather than a guess.
+  # A spent plan exits 0 with prose, so it is recognised by the vendor's own
+  # words rather than by a status code.
+  #
+  # MEASURED AGAINST THE INSTALLED CLI, NOT REMEMBERED. The sentinel this
+  # profile shipped — "Claude AI usage limit reached", with the reset instant
+  # after a pipe — appears NOWHERE in 2.1.263: it was 1.x's wording, and the
+  # pipe-and-epoch field went with it. A sentinel that cannot match is worse
+  # than none, because a spent plan then classifies FATAL instead of
+  # RATE_LIMIT and the fallback chain never carries the seat onto a metered
+  # key — the exact failure this mechanism exists to prevent, silent for as
+  # long as nobody hits their cap.
+  #
+  # Two sentinels, because a spent window reaches the operator either way:
+  # the CLI's own line (every live variant begins with this exact prefix —
+  # "… · continuing automatically", "… · finishing up", "… · resets") and the
+  # API error it relays. Neither carries a reset instant any more, so there is
+  # no reset_separator: resetAfter then returns 0 and the credential pool uses
+  # its configured cooldown, which is the honest answer rather than an
+  # invented window.
   limit_markers:
-    - sentinel: "Claude AI usage limit reached"
-      reset_separator: "|"
-      reset_unit: epoch
+    - sentinel: "Usage limit reached"
+    - sentinel: '"type":"rate_limit_error"'
+  # "OAuth token has expired" was dead the same way. The live wording is
+  # "OAuth token has been revoked", and every other auth failure this CLI
+  # reports — "Not logged in", "Login expired", "OAuth token revoked" — ends
+  # in the same clause, so "Please run /login" covers all three at once.
   auth_markers:
     - sentinel: "Invalid API key"
-    - sentinel: "OAuth token has expired"
+    - sentinel: "OAuth token has been revoked"
     - sentinel: "Please run /login"
 
 codex:
@@ -268,9 +316,21 @@ opencode:
   stdin_login:
     args: ["auth", "login", "--username", "{username}"]
     stdin_template: "{password}\n"
+  # `429` was here as a third sentinel and is GONE rather than reworded.
+  # A sentinel is matched as a plain substring against whatever the CLI
+  # printed — on a healthy call, the model's own answer — so three digits
+  # match a quoted HTTP status, a stack trace's line number, a token count
+  # or any ten-digit epoch, and a match benches the subscription and hands
+  # the seat to the fallback chain. That is a working company degrading
+  # quietly, and it fires far more often than the spent plan it was for.
+  #
+  # Not replaced with a guess: nothing here can be verified without the CLI
+  # in front of it, and an unverified sentinel is the same mistake in a
+  # respectable font. `usage limit` remains, and an operator who sees a
+  # spent OpenCode plan classified FATAL has the CLI's own sentence in that
+  # error — which is what `cli.overrides.limit_markers` is for.
   limit_markers:
     - sentinel: "usage limit"
-    - sentinel: "429"
   auth_markers:
     - sentinel: "not authenticated"
     - sentinel: "no credentials"
