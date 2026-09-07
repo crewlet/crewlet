@@ -27,10 +27,10 @@ import (
 // screen renders a form from, so answering nothing would leave an operator a
 // Connect button that opens an empty dialog.
 func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []setup.Requirement {
-	var token, routeTo, handleTag string
+	var token, routeTo string
 	var enabled bool
 	if in != nil {
-		token, routeTo, handleTag = in.WebhookToken, in.RouteTo, in.HandleTag
+		token, routeTo = in.WebhookToken, in.RouteTo
 		enabled = in.Enabled
 	}
 
@@ -48,7 +48,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Label:      "Datadog region",
 			Kind:       setup.KindChoice,
 			ConfigPath: "integrations.datadog.provisioning.site",
-			Required:   false,
+			Required:   true,
 			Connect:    true,
 			Choices:    siteChoices(),
 			Default:    DefaultSite,
@@ -60,7 +60,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Kind:       setup.KindSecret,
 			ConfigPath: "integrations.datadog.provisioning.api_key",
 			SecretName: "DATADOG_API_KEY",
-			Required:   false,
+			Required:   true,
 			Connect:    true,
 			Help:       "Create one on your",
 			LinkText:   "API keys page",
@@ -72,7 +72,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Kind:       setup.KindSecret,
 			ConfigPath: "integrations.datadog.provisioning.app_key",
 			SecretName: "DATADOG_APP_KEY",
-			Required:   false,
+			Required:   true,
 			Connect:    true,
 			Help:       "Create one on your",
 			LinkText:   "application keys page",
@@ -93,7 +93,8 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Kind:       setup.KindToggle,
 			ConfigPath: "integrations.datadog.enabled",
 			Required:   true,
-			Help:       "Off keeps the configuration and closes the route.",
+			Hidden:     true,
+			Default:    "true",
 		},
 		{
 			Field:      "webhook_token",
@@ -123,15 +124,6 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Help:       "The seat an alert wakes when no monitor tag names an owner.",
 			Blocks:     integration.FindingCredentialMissing,
 		},
-		{
-			Field:      "handle_tag",
-			Label:      "Owner tag key",
-			Kind:       setup.KindText,
-			ConfigPath: "integrations.datadog.handle_tag",
-			Required:   false,
-			Help:       "The monitor tag key that names an alert's owner. Defaults to crewlet.",
-			Format:     "a Datadog tag key",
-		},
 	}
 
 	var site, apiKey, appKey string
@@ -154,7 +146,6 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 		"enabled":       {toggle: true},
 		"webhook_token": {raw: token, sealed: true},
 		"route_to":      {raw: routeTo},
-		"handle_tag":    {raw: handleTag},
 	}
 	for i := range reqs {
 		v, ok := values[reqs[i].Field]

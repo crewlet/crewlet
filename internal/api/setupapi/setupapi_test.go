@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -176,7 +177,7 @@ func TestAnUnconfiguredVendorSaysWhatItNeeds(t *testing.T) {
 			state["configured"], state["satisfied"])
 	}
 	reqs := requirements(t, state)
-	for _, field := range []string{"enabled", "webhook_token", "route_to", "handle_tag"} {
+	for _, field := range []string{"enabled", "webhook_token", "route_to"} {
 		if _, ok := reqs[field]; !ok {
 			t.Errorf("the list omits %q", field)
 		}
@@ -190,9 +191,16 @@ func TestAnUnconfiguredVendorSaysWhatItNeeds(t *testing.T) {
 	if reqs["webhook_token"]["blocks"] != "credential_missing" {
 		t.Errorf("blocks = %v", reqs["webhook_token"]["blocks"])
 	}
-	// The optional one is optional, and still listed.
-	if reqs["handle_tag"]["required"] != false {
-		t.Error("the owner tag key is reported as required")
+	// EVERY FIELD ON A CONNECT FORM IS REQUIRED, which is the control
+	// plane's own contract: its Datadog connect takes site, api_key and
+	// app_key and rejects a request missing any of them. The optional ones
+	// were optional to the INTEGRATION and read as optional to the person
+	// filling the form in, who then connected an app that could do half of
+	// what they asked for.
+	for _, field := range []string{"site", "api_key", "app_key"} {
+		if reqs[field]["required"] != true {
+			t.Errorf("%s is reported as optional", field)
+		}
 	}
 	// NO CREDENTIAL CARRIES A VALUE, ever. Requirement.Stored can hold a
 	// literal key on a company that wrote one instead of a ${VAR}, so the
@@ -268,7 +276,7 @@ func TestASubmissionSealsTheSecretAndPointsTheConfigAtIt(t *testing.T) {
 	s.seed(t)
 
 	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", `{
-		"values": {"route_to": "sre-lead", "enabled": "true"},
+		"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"},
 		"generate": ["webhook_token"]
 	}`, nil)
 	if res.Code != http.StatusCreated {
@@ -279,7 +287,10 @@ func TestASubmissionSealsTheSecretAndPointsTheConfigAtIt(t *testing.T) {
 	// The secret is sealed, under the name the third-party app declared, and the
 	// answer names it without carrying it.
 	names, _ := body["wrote_secrets"].([]any)
-	if len(names) != 1 || names[0] != "DATADOG_WEBHOOK_TOKEN" {
+	// Every credential the submission carried, named and not carried. The
+	// provisioning keys are part of connecting Datadog now, so a complete
+	// submission seals three.
+	if len(names) != 3 || !slices.Contains(names, any("DATADOG_WEBHOOK_TOKEN")) {
 		t.Fatalf("wrote_secrets = %v", names)
 	}
 	minted, ok := s.vault.get("DATADOG_WEBHOOK_TOKEN")
@@ -375,10 +386,10 @@ func TestASubmissionIsValidatedAsTheWholeCompany(t *testing.T) {
 	s.seed(t)
 
 	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", `{
-		"values": {"handle_tag": "owner", "enabled": "true"},
+		"values": {"site": "datadoghq.com", "enabled": "true"},
 		"generate": ["webhook_token"]
 	}`, nil)
-	// The block comes into existence with a token and a tag and no
+	// The block comes into existence with a token and a region and no
 	// route_to, which the config validator refuses.
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", res.Code, res.Body)
@@ -397,7 +408,7 @@ func TestAStaleRevisionIsRefused(t *testing.T) {
 
 	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", `{
 		"if_match": "01JSOMETHINGELSE",
-		"values": {"route_to": "sre-lead", "enabled": "true"},
+		"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"},
 		"generate": ["webhook_token"]
 	}`, nil)
 	if res.Code != http.StatusConflict {
@@ -461,7 +472,7 @@ func TestRotatingASecretPublishesAnyway(t *testing.T) {
 	s.seed(t)
 
 	first := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
-		`{"values": {"route_to": "sre-lead", "enabled": "true"}, "generate": ["webhook_token"]}`, nil)
+		`{"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}, "generate": ["webhook_token"]}`, nil)
 	if first.Code != http.StatusCreated {
 		t.Fatalf("connect = %d: %s", first.Code, first.Body)
 	}
@@ -499,7 +510,7 @@ func TestDisconnectRemovesTheBlockAndNamesTheOrphans(t *testing.T) {
 	s := newSurface(t)
 	s.seed(t)
 	connect := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
-		`{"values": {"route_to": "sre-lead", "enabled": "true"}, "generate": ["webhook_token"]}`, nil)
+		`{"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}, "generate": ["webhook_token"]}`, nil)
 	if connect.Code != http.StatusCreated {
 		t.Fatalf("connect = %d: %s", connect.Code, connect.Body)
 	}
@@ -513,8 +524,8 @@ func TestDisconnectRemovesTheBlockAndNamesTheOrphans(t *testing.T) {
 		t.Fatalf("removed = %v", body["removed"])
 	}
 	orphans, _ := body["orphaned_secrets"].([]any)
-	if len(orphans) != 1 || orphans[0] != "DATADOG_WEBHOOK_TOKEN" {
-		t.Errorf("orphaned_secrets = %v", orphans)
+	if !slices.Contains(orphans, any("DATADOG_WEBHOOK_TOKEN")) {
+		t.Errorf("orphaned_secrets = %v, want the sealed token named", orphans)
 	}
 	// The value is still sealed. Naming it is the point; deleting it is
 	// the operator's call.
@@ -803,7 +814,7 @@ func TestAProvisionPassNeedsAPublicBase(t *testing.T) {
 	pass := &recordingPass{}
 	s.withPass(t, pass)
 	res := s.do(t, http.MethodPatch, "/config",
-		`{"integrations":{"github":{"enabled":true,"webhook_secret":"${GH_SECRET}"}}}`,
+		`{"integrations":{"github":{"enabled":true,"webhook_secret":"${GH_SECRET}","provisioning":{"org":"acme"}}}}`,
 		map[string]string{
 			"Content-Type": "application/merge-patch+json", "X-Summary": "no base",
 		})
@@ -1178,8 +1189,10 @@ func TestDisconnectNamesOnlyTheSecretsThatExist(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	s.seed(t)
-	// Connect with the webhook token only, leaving Datadog's optional
-	// provisioning keys unset.
+	// Connect with the webhook token only, leaving the provisioning keys
+	// unset. The form asks for them, and a submission that omits one is
+	// still a submission: what this pins is that the disconnect names the
+	// secrets that EXIST rather than every name the app declares.
 	connect := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
 		`{"values": {"route_to": "sre-lead", "enabled": "true"}, "generate": ["webhook_token"]}`, nil)
 	if connect.Code != http.StatusCreated {
@@ -1211,7 +1224,7 @@ func TestASealWithNoKeyringSaysWhatToSet(t *testing.T) {
 	s.vault.fail = fmt.Errorf("setup: seal DATADOG_APP_KEY: %w", secrets.ErrNoKeyring)
 
 	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
-		`{"values": {"route_to": "sre-lead", "enabled": "true"}, "generate": ["webhook_token"]}`, nil)
+		`{"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}, "generate": ["webhook_token"]}`, nil)
 	if res.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503: %s", res.Code, res.Body)
 	}

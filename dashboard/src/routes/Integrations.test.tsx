@@ -43,6 +43,12 @@ test("an unknown phase is never positive", () => {
 test("the tone follows how much is not working", () => {
   expect(phaseTone("degraded")).toBe("caution");
   expect(phaseTone("unconfigured")).toBe("critical");
+  // EVERY IN-PROGRESS PHASE IS AMBER. Each one is an integration that does
+  // not work yet, and neutral is the tone this screen uses for a state
+  // nobody needs to come back to.
+  for (const phase of ["provisioning", "activating", "awaiting_admin", "disconnecting"]) {
+    expect(phaseTone(phase)).toBe("caution");
+  }
 });
 
 // The detail is the sentence that saves somebody reading logs, and the link
@@ -164,9 +170,9 @@ test("absent, paused and connecting are told apart", () => {
   // measured claim, and inventing one is the whole failure this screen is
   // built to avoid. It is the window between connecting and the loop's first
   // pass, and it says so.
-  expect(rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: true })).tag).toBe(
-    "Connecting",
-  );
+  const connecting = rollUp(slack, rowsOf({ key: "slack", configured: true, enabled: true }));
+  expect(connecting.tag).toBe("Connecting");
+  expect(connecting.tone).toBe("caution");
 });
 
 // A phase a newer node wrote outranks ready and is outranked by every phase

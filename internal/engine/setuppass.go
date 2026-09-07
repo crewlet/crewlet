@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
 
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
 )
@@ -68,8 +69,81 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&gitlabPass{engine: e},
 		&mattermostPass{engine: e},
 		&datadogPass{engine: e},
+		&atlassianPass{engine: e},
 	}
 }
+
+// atlassianPass creates one Atlassian service account per agent.
+//
+// THE ONE PASS WHOSE CREDENTIAL IS NOT THE INTEGRATION'S. Jira and Confluence
+// authenticate as an account against a site; this authenticates as the
+// ORGANIZATION those sites belong to, which is the only place an identity can
+// be created. So it is its own pass with its own block rather than a step
+// inside either product's.
+type atlassianPass struct{ engine *Engine }
+
+func (*atlassianPass) Kind() integration.Kind { return integration.KindAtlassian }
+
+// Needs is nil: the organization key is held in the company document like
+// every other credential.
+func (*atlassianPass) Needs() *setup.Requirement { return nil }
+
+func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.Atlassian
+	if cfg == nil {
+		return nil, integration.ErrNotConfigured
+	}
+	env := p.engine.resolver()
+	key := strings.TrimSpace(env.Value(cfg.APIKey))
+	if strings.TrimSpace(cfg.OrgID) == "" || key == "" {
+		return []integration.Finding{{
+			Kind: integration.FindingCredentialMissing,
+			Detail: "the Atlassian organization id and its API key did not both " +
+				"resolve, and the admin APIs need the organization as the " +
+				"subject and the key as the authority",
+		}}, nil
+	}
+	plan, err := atlassian.PlanFor(company.Org)
+	if err != nil {
+		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
+	}
+	res, err := atlassian.Reconcile(ctx, atlassian.Options{
+		Client: atlassian.NewClient(atlassian.ClientOptions{}),
+		OrgID:  strings.TrimSpace(cfg.OrgID), Key: key, Plan: plan, Sink: in.Sink,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
+	}
+	return res.Findings(), nil
+}
+
+// Teardown deletes the accounts this pass created, when asked.
+func (p *atlassianPass) Teardown(ctx context.Context, in setup.TeardownInput) error {
+	company := p.engine.Company()
+	cfg := company.Config.Integrations.Atlassian
+	if cfg == nil || !in.RemoveSeats {
+		// Atlassian holds no webhook this engine registered — Cloud events
+		// arrive through the Forge relay — so with the accounts staying
+		// there is nothing to do at all.
+		return nil
+	}
+	env := p.engine.resolver()
+	key := strings.TrimSpace(env.Value(cfg.APIKey))
+	if key == "" {
+		return nil
+	}
+	plan, err := atlassian.PlanFor(company.Org)
+	if err != nil {
+		return fmt.Errorf("engine: atlassian teardown: %w", err)
+	}
+	return atlassian.Teardown(ctx, atlassian.TeardownOptions{
+		Client: atlassian.NewClient(atlassian.ClientOptions{}),
+		OrgID:  strings.TrimSpace(cfg.OrgID), Key: key, Plan: plan,
+	})
+}
+
+var _ setup.Teardowner = (*atlassianPass)(nil)
 
 // SetupRunner is the pass runner this node serves, or nil when it has no
 // secret store to mint into.

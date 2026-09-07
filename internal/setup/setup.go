@@ -168,6 +168,20 @@ type Requirement struct {
 	// this is declared rather than inferred.
 	Shared bool `json:"shared,omitempty"`
 
+	// Hidden marks a value the form writes without asking for it.
+	//
+	// The `enabled` toggle on every inbound app is the case: connecting an
+	// integration and leaving it switched off is not a thing anybody means,
+	// so the question was a control whose only sensible answer was the one
+	// it already had. It is still WRITTEN — the block needs the field, and a
+	// company that has connected an app wants its route open — from Default,
+	// through the same submission as everything else.
+	//
+	// Pausing an integration without disconnecting it is still a thing an
+	// operator does on purpose. It is an edit to the company configuration,
+	// which is where a setting nobody is asked for belongs.
+	Hidden bool `json:"hidden,omitempty"`
+
 	// Default is the value a form offers when this company has none.
 	//
 	// A SUGGESTION, never a stored value: nothing is written until

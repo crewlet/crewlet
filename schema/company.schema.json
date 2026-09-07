@@ -1,5 +1,19 @@
 {
   "$defs": {
+    "Atlassian": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key": {
+          "description": "Unscoped organization API key. A scoped key is refused by the account-management API.",
+          "type": "string"
+        },
+        "org_id": {
+          "description": "Atlassian organization id, from admin.atlassian.com.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "CLIAgent": {
       "additionalProperties": false,
       "properties": {
@@ -575,6 +589,10 @@
     "Integrations": {
       "additionalProperties": false,
       "properties": {
+        "atlassian": {
+          "$ref": "#/$defs/Atlassian",
+          "description": "Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."
+        },
         "confluence": {
           "$ref": "#/$defs/Confluence",
           "description": "Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."

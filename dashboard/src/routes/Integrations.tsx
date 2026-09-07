@@ -113,6 +113,12 @@ export const CATALOG: Entry[] = [
     description: "Issue tracking and documentation",
     vendor: "atlassian",
     surfaces: [
+      // THE ORGANIZATION FIRST, because it is where an agent's account is
+      // created and the two products are what that account then works in.
+      // It is not a third product: Jira and Confluence are sites this
+      // engine reads and writes AS an account, and this is the only place
+      // an account can be made at all.
+      { key: "atlassian", name: "Organization" },
       { key: "jira", name: "Jira" },
       { key: "confluence", name: "Confluence" },
       { key: "forge", name: "Forge relay" },
@@ -160,12 +166,17 @@ export function phaseTone(phase: string): Tone {
       return "caution";
     case "unconfigured":
       return "critical";
+    // IN PROGRESS IS NOT NEUTRAL. Every one of these is an integration
+    // that does not work YET — setting up agents, waiting for the provider,
+    // waiting for a person, being taken away — and neutral is the tone this
+    // screen uses for a state nobody needs to come back to. Amber is the
+    // word for incomplete: it says look again, without saying broken, which
+    // is what critical and caution's red neighbour would say.
     case "awaiting_admin":
-      return "info";
     case "provisioning":
     case "activating":
     case "disconnecting":
-      return "neutral";
+      return "caution";
     default:
       // A phase a newer node wrote. Rendered as-is in a neutral tone
       // rather than guessed at: claiming a surface is fine on the
@@ -351,7 +362,9 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
   // to a Connect button that had already gone.
   return {
     tag: "Connecting",
-    tone: "neutral",
+    // Amber for the same reason every in-progress phase is: this is the
+    // window before the loop's first report, and it is not yet working.
+    tone: "caution",
     outline: true,
     status: ingress,
     attention: ingress !== undefined,

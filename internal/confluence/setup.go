@@ -58,8 +58,13 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 			Label:      "Account email",
 			Kind:       setup.KindText,
 			ConfigPath: "integrations.confluence.email",
-			Required:   false,
-			Help:       "Cloud authenticates as email and token together. Leave empty for Data Center.",
+			// REQUIRED ON CLOUD, which authenticates an API token as
+			// email and token together and refuses it as a bearer. It was
+			// optional for the Data Center case, which made it optional on
+			// every form including the one where it is the difference
+			// between a working credential and a 401.
+			Required: DeploymentOf(cmp.Or(url, siteURL)) == Cloud,
+			Help:     "Cloud authenticates as email and token together. Leave empty for Data Center.",
 		},
 		{
 			Field:      "token",

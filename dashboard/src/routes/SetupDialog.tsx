@@ -333,7 +333,11 @@ export function SetupDialog({
   // in. It is still generated on submit; payloadFor reads the requirement,
   // not the rendering.
   function editable(r: SetupRequirement): boolean {
-    return !(r.kind === "secret" && r.mintable);
+    // A HIDDEN FIELD IS WRITTEN, NOT ASKED, and a generated credential has
+    // nothing for a person to type. Neither is rendered; both are still
+    // submitted, because payloadFor reads the requirement rather than the
+    // rendering.
+    return !r.hidden && !(r.kind === "secret" && r.mintable);
   }
 
   /** What one section would send: only what was touched, plus its mints. */

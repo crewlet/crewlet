@@ -34,7 +34,8 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 			Kind:       setup.KindToggle,
 			ConfigPath: "integrations.mattermost.enabled",
 			Required:   true,
-			Help:       "Off keeps the configuration and closes every seat's socket.",
+			Hidden:     true,
+			Default:    "true",
 		},
 		{
 			Field:      "url",

@@ -288,6 +288,52 @@ test("a field name shared by two surfaces holds two values", () => {
   );
 });
 
+// A HIDDEN FIELD IS WRITTEN WITHOUT BEING ASKED FOR.
+//
+// Connecting an integration and leaving it switched off is not a thing
+// anybody means, so the toggle was a control whose only sensible answer was
+// the one it already had. Dropping it from the form must not drop it from
+// the submission: the block needs the field, and a company that has just
+// connected an app wants its route open.
+test("a hidden field is submitted from its default and never rendered", async () => {
+  const spy = stubFetch(
+    () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
+  );
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            requirements: [
+              req({ field: "site", label: "Datadog region", kind: "text", connect: true }),
+              req({
+                field: "enabled",
+                label: "Accept Datadog deliveries",
+                kind: "toggle",
+                hidden: true,
+                default: "true",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.queryByText("Accept Datadog deliveries")).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+  const body = JSON.parse(String(spy.mock.calls[0]?.[1]?.body)) as {
+    values: Record<string, string>;
+  };
+  expect(body.values.enabled).toBe("true");
+});
+
 // A FIX NARROWS TO THE FIELDS THAT CLEAR THE FINDING, which is what the
 // blocks field on a requirement is for.
 test("a finding narrows the form to what clears it", () => {

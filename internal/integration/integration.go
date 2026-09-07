@@ -70,6 +70,13 @@ const (
 	KindGitHub     Kind = "github"
 	KindGitLab     Kind = "gitlab"
 	KindDatadog    Kind = "datadog"
+
+	// KindAtlassian is the ORGANIZATION, not a third product. Jira and
+	// Confluence are sites this engine reads and writes as an account; this
+	// is where the account itself is created, which no site API can do. It
+	// reconciles identities and never ingests anything, so it has no
+	// inbound route of its own.
+	KindAtlassian Kind = "atlassian"
 )
 
 // Kinds is every surface this package knows, in the order an operator reads
@@ -78,7 +85,7 @@ const (
 // between two reads of the same fleet.
 var Kinds = []Kind{
 	KindSlack, KindMattermost, KindJira, KindConfluence,
-	KindGitHub, KindGitLab, KindDatadog,
+	KindGitHub, KindGitLab, KindDatadog, KindAtlassian,
 }
 
 // Valid reports whether k is a surface this build knows.

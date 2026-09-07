@@ -31,6 +31,7 @@ type Integrations struct {
 	GitHub     *GitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"GitHub.com or Enterprise Server, webhook secret and provisioning. Absent = disabled."`
 	GitLab     *GitLab     `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"GitLab instance, webhook signing and provisioning. Absent = disabled."`
 	Datadog    *Datadog    `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"Datadog monitor alerts delivered as inbound events. Absent = disabled."`
+	Atlassian  *Atlassian  `yaml:"atlassian,omitempty" json:"atlassian,omitempty" desc:"Atlassian organization and its unscoped API key, used to create one service account per agent. Absent = accounts are made by hand."`
 
 	// ForgeAppID verifies the Forge app's invocation tokens: the JWT's
 	// audience claim must match it. Required when the Forge app is used —
@@ -971,6 +972,33 @@ func (g *GitLab) validate(path string) error {
 // a bad username fails on the line that authored it rather than midway
 // through a provisioning run that has already created half the fleet.
 var mattermostUsername = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// Atlassian is the organization one service account per agent is created in.
+//
+// A DIFFERENT THING FROM THE TWO PRODUCT BLOCKS. Jira and Confluence are
+// sites this engine reads and writes AS an account. This is the organization
+// those sites belong to, and the only place an identity can be created at
+// all: Atlassian's site APIs have no route for it, and its organization APIs
+// take a credential no site accepts. The block is separate because the
+// credential is, not because the product is.
+//
+// OPTIONAL, and its absence is a working configuration rather than a missing
+// one: a company whose operator creates each agent's Atlassian account by
+// hand and pastes the token into the seat's mcp_env needs none of this. What
+// it buys is that nobody has to.
+type Atlassian struct {
+	// OrgID is the organization the admin APIs take as their subject. It is
+	// in the admin console's own URL.
+	OrgID string `yaml:"org_id,omitempty" json:"org_id,omitempty" desc:"Atlassian organization id, from admin.atlassian.com."`
+
+	// APIKey is an organization API key created WITHOUT scopes.
+	//
+	// Unscoped is not a convenience. The account-management service refuses
+	// a scoped key with 403 whatever scopes it holds, so a key created the
+	// way the reference suggests authenticates for everything here except
+	// the one call that creates an account.
+	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"Unscoped organization API key. A scoped key is refused by the account-management API."`
+}
 
 // Datadog turns monitor alerts into inbound events, so a firing monitor can
 // wake a seat the same way a comment on a merge request does.

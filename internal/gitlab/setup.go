@@ -19,14 +19,12 @@ import (
 
 // Requirements says what this company still needs for GitLab.
 func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setup.Requirement {
-	var url, signing, token, group, prefix string
+	var url, signing, group string
 	var enabled bool
-	var accessLevel config.GitLabAccessLevel
 	if in != nil {
-		enabled, url = in.Enabled, in.URL
-		signing, token = in.SigningSecret, in.Token
+		enabled, url, signing = in.Enabled, in.URL, in.SigningSecret
 		if p := in.Provisioning; p != nil {
-			group, prefix, accessLevel = p.Group, p.UsernamePrefix, p.AccessLevel
+			group = p.Group
 		}
 	}
 
@@ -37,7 +35,8 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindToggle,
 			ConfigPath: "integrations.gitlab.enabled",
 			Required:   true,
-			Help:       "Off keeps the configuration and closes the route.",
+			Hidden:     true,
+			Default:    "true",
 		},
 		{
 			Field:      "url",
@@ -46,6 +45,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.gitlab.url",
 			Required:   true,
+			Default:    "https://gitlab.com",
 			Help:       "Leave this as https://gitlab.com unless you run GitLab yourself.",
 			Format:     "https://gitlab.example.com",
 			Blocks:     integration.FindingCredentialMissing,
@@ -68,52 +68,21 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			Blocks:   integration.FindingCredentialMissing,
 		},
 		{
-			Field:      "token",
-			Label:      "Read token",
-			Kind:       setup.KindSecret,
-			ConfigPath: "integrations.gitlab.token",
-			SecretName: "GITLAB_TOKEN",
-			Required:   false,
-			Help:       "Optional and read-only: without it only the reviewer hears about a merge request.",
-			Where:      "A personal access token with read_api.",
-			VendorURL:  "https://gitlab.com/-/user_settings/personal_access_tokens",
-		},
-		{
 			Field:      "provisioning.group",
 			Connect:    true,
 			Label:      "Group",
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.gitlab.provisioning.group",
-			Required:   false,
+			Required:   true,
 			Help:       "The top-level group the service accounts join and work in.",
 			Blocks:     integration.FindingIngressBlocked,
-		},
-		{
-			Field:      "provisioning.access_level",
-			Label:      "Membership level",
-			Kind:       setup.KindChoice,
-			ConfigPath: "integrations.gitlab.provisioning.access_level",
-			Required:   false,
-			Choices:    accessChoices(),
-			Help:       "Developer pushes and opens merge requests; maintainer also merges.",
-		},
-		{
-			Field:      "provisioning.username_prefix",
-			Label:      "Username prefix",
-			Kind:       setup.KindText,
-			ConfigPath: "integrations.gitlab.provisioning.username_prefix",
-			Required:   false,
-			Help:       "Put in front of every service account's username.",
 		},
 	}
 
 	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Toggle(enabled)
 	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Plain(url)
 	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Held(signing, resolve)
-	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Held(token, resolve)
-	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Plain(group)
-	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Plain(string(accessLevel))
-	reqs[6].Present, reqs[6].Resolved, reqs[6].Stored = setup.Plain(prefix)
+	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Plain(group)
 	// The administrator credential, appended rather than declared inline
 	// with the rest because it is the one whose value this function has to
 	// resolve through the same seam every other secret uses.
@@ -154,24 +123,6 @@ func AdminCredential(stored string) setup.Requirement {
 		Where:      "Create a legacy personal access token with the full api scope.",
 		VendorURL:  "https://gitlab.com/-/user_settings/personal_access_tokens",
 	}
-}
-
-// accessChoices are the membership levels, from the config package's own list
-// so a value it accepts and a value this offers can never diverge.
-func accessChoices() []setup.Choice {
-	labels := map[config.GitLabAccessLevel]string{
-		config.GitLabDeveloper:  "Developer: push and open merge requests",
-		config.GitLabMaintainer: "Maintainer: also merge and administer projects",
-	}
-	out := make([]setup.Choice, 0, len(config.GitLabAccessLevels))
-	for _, level := range config.GitLabAccessLevels {
-		label := labels[level]
-		if label == "" {
-			label = string(level)
-		}
-		out = append(out, setup.Choice{Value: string(level), Label: label})
-	}
-	return out
 }
 
 // Summary is the sentence the connect form opens with.

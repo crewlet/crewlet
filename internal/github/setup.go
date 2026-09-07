@@ -44,7 +44,8 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindToggle,
 			ConfigPath: "integrations.github.enabled",
 			Required:   true,
-			Help:       "Off keeps the configuration and closes the route.",
+			Hidden:     true,
+			Default:    "true",
 		},
 		{
 			Field:      "webhook_secret",
@@ -80,8 +81,10 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Blocks:    integration.FindingCredentialMissing,
 		},
 		{
-			Field:      "url",
-			Connect:    true,
+			Field: "url",
+			// NOT A CONNECT FIELD. It is empty for github.com, which is
+			// almost every company, and a form that opens with a blank
+			// optional address asks an Enterprise question of everyone.
 			Label:      "GitHub instance",
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.github.url",
@@ -95,7 +98,7 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Label:      "Organization",
 			Kind:       setup.KindID,
 			ConfigPath: "integrations.github.provisioning.org",
-			Required:   false,
+			Required:   true,
 			Help:       "The organization whose repositories these agents work in.",
 			Blocks:     integration.FindingIngressBlocked,
 		},

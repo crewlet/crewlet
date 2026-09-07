@@ -834,6 +834,15 @@ export interface SetupRequirement {
    */
   default?: string;
   mintable?: boolean;
+  /**
+   * Written without being asked for.
+   *
+   * The `enabled` toggle on every inbound app: connecting an integration and
+   * leaving it switched off is not a thing anybody means, so the question
+   * was a control whose only sensible answer was the one it already had. It
+   * is still submitted, from its default.
+   */
+  hidden?: boolean;
   help?: string;
   where?: string;
   vendor_url?: string;

@@ -33,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
@@ -415,6 +416,13 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		reqs = confluence.Requirements(block, s.resolve)
 		seats = credentialSeats(company, s.resolve,
 			confluence.SeatEnvs, confluence.CredentialKeys, "Confluence", false)
+		configured, enabled = block != nil, block != nil
+	case integration.KindAtlassian:
+		block := company.Integrations.Atlassian
+		summary = atlassian.Summary()
+		reqs = atlassian.Requirements(block, s.resolve)
+		seats = credentialSeats(company, s.resolve,
+			atlassian.SeatEnvs, atlassian.CredentialKeys, "Atlassian", s.passes.Serves(kind))
 		configured, enabled = block != nil, block != nil
 	case integration.KindGitLab:
 		block := company.Integrations.GitLab
