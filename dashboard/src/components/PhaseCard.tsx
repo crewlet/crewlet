@@ -44,8 +44,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge, Button, PhaseTag, cx } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
-import { fmtCount, fmtDateTime, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
-import { decisionLabel, ledgerOf, type PhaseRecord, type Round } from "~/lib/phases.ts";
+import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
+import {
+  decisionLabel,
+  ledgerOf,
+  phaseDuration,
+  type PhaseRecord,
+  type Round,
+} from "~/lib/phases.ts";
 import { staleness } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href } from "~/app/router.tsx";
@@ -262,6 +268,7 @@ export function PhaseCard({
   const { ledger, legacy } = ledgerOf(record);
   const streaming = ledger.some((r) => r.streaming);
   const stale = record.live ? staleness(record.at, now) : "";
+  const took = phaseDuration(record);
   // The last round is the live one while the phase runs: rounds only append,
   // so "newest" and "last" are the same row and stay the same row.
   const tailRef = useTail(open && record.live);
@@ -322,7 +329,6 @@ export function PhaseCard({
             rescued
           </Badge>
         )}
-        {record.worker && <Badge tone="neutral">worker: {record.worker}</Badge>}
         {record.backend === "sandbox" && (
           <Badge tone="info" icon="terminal">
             {record.codingAgent || "sandbox"}
@@ -344,6 +350,19 @@ export function PhaseCard({
         <span className="phase-meta t-num" title="total tokens">
           {record.totalTokens ? fmtCount(record.totalTokens) : "—"}
         </span>
+        {/* HOW LONG THIS PHASE TOOK. Only derivable since the phase's own
+            `agent_phase_started` is folded onto its record (see `withStarts`)
+            — `agent_phase_completed` carries the instant it landed and
+            nothing else, so a finished phase had no duration anywhere on this
+            dashboard. On a self-iterating turn that is the number that says
+            WHICH round was expensive, which is the question the token total
+            makes a reader ask and could not answer. Absent on a nested call,
+            which publishes no start. */}
+        {took != null && (
+          <span className="phase-meta t-num" title="how long this phase took">
+            {fmtDuration(took)}
+          </span>
+        )}
         {/* Running for HOW LONG, or landed WHEN. A live phase measured
             against `at` — which moves on every streamed frame — flickered
             between "just now" and "in 1s" as the two clocks crossed. */}

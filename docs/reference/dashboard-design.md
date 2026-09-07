@@ -471,6 +471,97 @@ tool-loop round lands is a list nobody can read while it is running, and
 
 ---
 
+## A turn is a story, not a log of itself
+
+The Turn screen answers "what happened in this turn". It used to answer it by
+saying the same things up to five times, and by putting the things nobody else
+said into a flat list called *Everything else this turn published*. On a turn
+that self-iterated three times, six of that list's twelve rows read
+`started execute (iter 2)` — one per phase card 200px above, which already
+says EXECUTE, iter 2, its model, its rounds, its tokens and what it decided. A
+seventh was the turn's own completion event, which the same screen also
+rendered as the stat strip and as a raw JSON dump.
+
+Four rules replace it, and each one names what it fixes.
+
+1. **A duplicate is a fact with a missing half.** `agent_phase_started` and
+   `agent_phase_completed` are the same phase — same `turn_id|phase|iteration`,
+   which *is* the phase key. Read apart, the start says nothing new. Read
+   together they are the one thing the finished record cannot say alone: the
+   completed event carries only the instant the phase **landed**, so no
+   completed phase had a duration anywhere on this dashboard. The start is
+   folded onto its own card now (`withStarts`), and every phase reports how
+   long it took — which is what answers "why did this turn cost 290k tokens"
+   on exactly the self-iterating turns where the question gets asked. A nested
+   call publishes no start and reports no duration rather than a wrong one.
+
+2. **Weight is meaning.** `reflection_completed` is a sentinel whose own
+   payload doc says it deliberately carries no outcome; a guard breach is a
+   turn the engine stopped. As two identical feed rows an operator scanning
+   for the second reads past it. So the rows are grouped by the question they
+   answer — **What went wrong** (above the phases, absent on a healthy turn),
+   **What the turn was given**, **What else it did**, **What it left behind**
+   — and anything this build has no opinion about falls through to a residual
+   list rather than being dropped. The event registry is additive-only; a type
+   a newer node publishes has to still render.
+
+3. **A healthy turn must be able to say so.** A set defined by subtraction
+   (`type !== …`) has no meaningful empty state, so "nothing went wrong here"
+   was not a state this screen could reach — and a section that is always full
+   is a section nobody reads.
+
+4. **The feed's row is not this screen's row.** `EventRow` has four columns —
+   time, actor, summary, source and category. On a page about ONE turn the
+   actor is the same seat on every row (it was rendered twelve times) and the
+   category is an internal taxonomy. Half the row was noise, so these sections
+   use a narrower row that spends the space on the event's own type instead.
+
+### And the header has to read the record that has the field
+
+`duration_ms` and `review_outcome` were read off `agent_turn_completed`, which
+has **neither**. They are on `turn_completed` — the learning subsystem's
+record of the same turn, published in the same breath, sitting in the same
+query answer. So *Took* silently fell back to the span between the turn's
+first and last event on every turn that ever ran, and *Review outcome* showed
+an em dash under a caption asserting the value came from the turn's own
+record. Two events describe one turn for two consumers; the screen reads both
+and names each for what it is.
+
+Three more header rules follow from the same audit:
+
+- **A turn's outcome is a state, so it takes a tone.** `Stat` grows a `tone`
+  for the case where the value IS an outcome — `done` positive, `self_iterate`
+  caution, a guard breach critical. Deliberately not on the other tiles: a
+  token count and an elapsed time are not in a state, and tinting every tile
+  would spend the four status hues on decoration. The tile also names the
+  **executor's** own last word (`delivered` / `no_action` / `blocked` /
+  `incomplete`) beside the **reviewer's** decision, because a turn that
+  delivered nothing and a turn that delivered read identically when only the
+  reviewer's word is shown.
+- **The failure badge is derived from what failed, not from the phase
+  records.** `phases.some(p => p.failed)` misses every turn the engine killed
+  *between* phases — a refused charge, an exhausted chain, a guard that fired
+  — which are precisely the turns with no failed phase record to find.
+- **An unlabelled identifier is not information.** The conversation key sat
+  under the seat's name as a raw truncated string
+  (`mattermost:9zd7xj4…:cnjza…`) with nothing saying what it was, and it is a
+  property of the *turn* rather than of the seat. It is labelled and explained
+  beside the turn's record now. In its place the header gained the two facts
+  that were missing entirely: **what woke this turn** (the trigger rides on
+  every phase event and links to its own event) and **what it set out to do**
+  (`plan_summary` — the agent's own account, which nothing read).
+
+Finally, **a nested call hangs off the phase that made it.** `host_phase` and
+`host_iteration` have always been on the wire, `groupTurns` has always done
+the split and `PhaseCard` has always had the prop — this screen used none of
+it, so a delegate fan-out of eight rendered as eight siblings of the turn's
+own two phases, and both the "N phases" badge and the token total disagreed
+with the feed's card for the same turn. The token tile now counts the turn's
+own phases and reports worker spend beside it, which is what the engine's own
+`total_tokens` / `subagent_tokens` split means.
+
+---
+
 ## Honest empty states
 
 A screen that renders a blank where data would go is a screen that cannot be

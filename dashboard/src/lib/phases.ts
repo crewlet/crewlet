@@ -109,7 +109,20 @@ export interface PhaseRecord {
   hostIteration: number;
   backend: string;
   codingAgent: string;
-  trigger: { type?: string; summary?: string; actor?: string; integration?: string } | null;
+  /**
+   * What woke the turn this phase belongs to, as [types.Trigger.Map] writes
+   * it. `id` and `sender` have always been on the wire and were not declared
+   * here, so nothing could link a turn to the event that asked for it.
+   */
+  trigger: {
+    id?: string;
+    type?: string;
+    summary?: string;
+    actor?: string;
+    integration?: string;
+    sender?: string;
+    timestamp?: string;
+  } | null;
   /** When the phase finished, or when the live call last moved. */
   at: string;
   /** When a live call BEGAN. Never moves — `at` does, on every round. */
@@ -392,6 +405,68 @@ export function streamedPhases(
     if (record && keep(record)) out.push(record);
   }
   return out;
+}
+
+/**
+ * Fold each phase's START instant onto the record of its finish.
+ *
+ * `agent_phase_started` and `agent_phase_completed` are the same phase: they
+ * carry the same `turn_id|phase|iteration`, which IS the phase key. Read
+ * apart, the started event is a log line saying nothing the finished card does
+ * not — six of them on a three-round turn, which is what made the Turn
+ * screen's event list read as a duplicate of its phase list.
+ *
+ * Read together they are the one thing the finished record cannot say alone:
+ * `agent_phase_completed` carries only the instant it landed, so a completed
+ * phase had no duration anywhere on the dashboard. On a turn that
+ * self-iterated three times and cost 290k tokens, "which round took ninety
+ * seconds" was derivable from two events sitting in the same query answer and
+ * shown by neither.
+ *
+ * Only the turn's OWN phases publish a start — a sub-agent, a judge and a
+ * learning worker nest under a host phase that is already showing one — so a
+ * nested record keeps `startedAt === at` and reports no duration rather than a
+ * wrong one.
+ */
+export function withStarts(phases: PhaseRecord[], starts: Map<string, string>): PhaseRecord[] {
+  return phases.map((rec) => {
+    const at = starts.get(rec.key);
+    // A LIVE phase already knows when it began, from the overlay's own
+    // `started_at`, and that value is the one that keeps ticking correctly if
+    // the started event never reached this tab. Never overwrite it.
+    if (!at || rec.live) return rec;
+    // Guarded on ordering rather than trusted: a start stamped after the
+    // finish is a clock the page cannot reconcile, and a negative duration
+    // reads as a bug in the engine rather than in the two timestamps.
+    if (tsKey(at) > tsKey(rec.at)) return rec;
+    return { ...rec, startedAt: at };
+  });
+}
+
+/**
+ * The start instant of every phase named by an `agent_phase_started` event,
+ * keyed the same way the phase itself is.
+ */
+export function phaseStarts(events: readonly EventRecord[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const ev of events) {
+    if (ev.type !== "agent_phase_started") continue;
+    const p = ev.payload as Record<string, unknown> | undefined;
+    if (!p) continue;
+    const key = phaseKey(String(p.turn_id ?? ""), String(p.phase ?? ""), num(p.iteration));
+    // FIRST wins. A phase that was extended re-enters its tool loop, and a
+    // second start would move the phase's beginning forward past work it
+    // already did.
+    if (!out.has(key)) out.set(key, ev.timestamp);
+  }
+  return out;
+}
+
+/** How long a phase took, or null when only one of its two instants is known. */
+export function phaseDuration(rec: PhaseRecord): number | null {
+  if (rec.live) return null;
+  const ms = tsKey(rec.at) - tsKey(rec.startedAt);
+  return ms > 0 ? ms : null;
 }
 
 /**

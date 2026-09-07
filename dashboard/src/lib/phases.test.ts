@@ -17,10 +17,13 @@ import {
   phaseKey,
   ledgerOf,
   narrations,
+  phaseDuration,
+  phaseStarts,
   rounds,
   splitThinking,
   streamedPhases,
   toolCalls,
+  withStarts,
   type PhaseRecord,
 } from "./phases.ts";
 import type { EventRecord, LiveCall } from "~/protocol/index.ts";
@@ -533,5 +536,94 @@ describe("the phases that finish while a tab is watching", () => {
   test("a row with no payload is dropped rather than rendered blank", () => {
     const bare = { ...phaseEvent(), payload: undefined };
     expect(streamedPhases([bare], () => true)).toEqual([]);
+  });
+});
+
+describe("a phase's duration", () => {
+  // `agent_phase_started` and `agent_phase_completed` are the same phase —
+  // same turn, same phase, same iteration, which IS the key. Read apart, the
+  // start is a log line that says nothing the finished card does not, and six
+  // of them on a three-round turn are what made the Turn screen's event list
+  // read as a duplicate of its phase list. Read together they are the one
+  // thing the finished record cannot say alone: how long the phase took.
+
+  function startEvent(over: Record<string, unknown> = {}, ts = "2026-01-01T00:00:00Z") {
+    return {
+      ...phaseEvent(over, ts),
+      id: `start-${ts}`,
+      type: "agent_phase_started",
+    } as EventRecord;
+  }
+
+  test("a phase that published a start gets a real duration", () => {
+    // Before this, `fromPhaseEvent` set startedAt to the COMPLETION instant —
+    // "a finished phase has one instant that matters" — so every completed
+    // phase on this dashboard reported no duration at all, while the event
+    // that carried its start sat in the same query answer.
+    const done = fromPhaseEvent(phaseEvent({}, "2026-01-01T00:01:40Z"))!;
+    const [withStart] = withStarts([done], phaseStarts([startEvent()]));
+    expect(withStart!.startedAt).toBe("2026-01-01T00:00:00Z");
+    expect(phaseDuration(withStart!)).toBe(100_000);
+  });
+
+  test("a phase with no start reports no duration rather than zero", () => {
+    // A sub-agent, a judge and a learning worker publish no start — they nest
+    // under a host phase that is already showing one. Synthesising a duration
+    // for them would put a confident 0s on a call that took ten seconds.
+    const nested = fromPhaseEvent(
+      phaseEvent({ phase: "subagent", host_phase: "execute", host_iteration: 1 }),
+    )!;
+    expect(withStarts([nested], phaseStarts([]))[0]!.startedAt).toBe(nested.at);
+    expect(phaseDuration(nested)).toBeNull();
+  });
+
+  test("a live phase keeps the start its own overlay gave it", () => {
+    // The overlay's `started_at` is the value that keeps the elapsed counter
+    // correct in a tab the started event never reached. Overwriting it with a
+    // stored start would make a running phase jump.
+    const live = fromLiveCall(liveCall({ started_at: "2026-01-01T00:00:30Z" }), "PM");
+    const [kept] = withStarts([live], phaseStarts([startEvent()]));
+    expect(kept!.startedAt).toBe("2026-01-01T00:00:30Z");
+    // And a running phase has no duration: it has an elapsed time, which is a
+    // different thing and is measured against the clock, not against `at`.
+    expect(phaseDuration(kept!)).toBeNull();
+  });
+
+  test("a start stamped after its own finish is refused", () => {
+    // Two clocks the page cannot reconcile. A negative duration reads as a
+    // bug in the engine rather than in the pair of timestamps, so the phase
+    // reports nothing instead.
+    const done = fromPhaseEvent(phaseEvent({}, "2026-01-01T00:00:05Z"))!;
+    const [kept] = withStarts([done], phaseStarts([startEvent({}, "2026-01-01T00:00:09Z")]));
+    expect(kept!.startedAt).toBe(done.at);
+    expect(phaseDuration(kept!)).toBeNull();
+  });
+
+  test("an extended phase keeps its FIRST start", () => {
+    // A phase granted more rounds re-enters its tool loop and opens again. The
+    // later start would move the phase's beginning forward past work it had
+    // already done — on exactly the long, hard phases that get extended.
+    const starts = phaseStarts([
+      startEvent({}, "2026-01-01T00:00:00Z"),
+      startEvent({}, "2026-01-01T00:00:50Z"),
+    ]);
+    expect(starts.get(phaseKey("t1", "execute", 1))).toBe("2026-01-01T00:00:00Z");
+  });
+
+  test("starts are keyed per iteration, so a self-iterate turn keeps them apart", () => {
+    const starts = phaseStarts([
+      startEvent({ iteration: 1 }, "2026-01-01T00:00:00Z"),
+      startEvent({ iteration: 2 }, "2026-01-01T00:02:00Z"),
+    ]);
+    expect(starts.get(phaseKey("t1", "execute", 1))).toBe("2026-01-01T00:00:00Z");
+    expect(starts.get(phaseKey("t1", "execute", 2))).toBe("2026-01-01T00:02:00Z");
+  });
+
+  test("a completed event is not mistaken for a start", () => {
+    // The two travel on the same screen and differ only by type. Reading the
+    // wrong one would set every phase's start to its own finish, which is
+    // exactly the state this replaces — silently, and with no duration to
+    // show for it.
+    expect(phaseStarts([phaseEvent()]).size).toBe(0);
   });
 });

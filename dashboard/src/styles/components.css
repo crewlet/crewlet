@@ -911,6 +911,22 @@ a.brand:hover {
   gap: var(--space-2);
   min-width: 0;
 }
+/* A stat's value takes a status ink when the number IS an outcome — a turn's
+   decision, a probe's verdict. Ink only, never a fill: the fill/ink split is
+   what the palette test measures, and a tinted block behind a --fs-2xl number
+   would read as a button. Most stats carry no tone at all; see Stat's prop. */
+.stat-value.tone-positive {
+  color: var(--positive-ink);
+}
+.stat-value.tone-caution {
+  color: var(--caution-ink);
+}
+.stat-value.tone-critical {
+  color: var(--critical-ink);
+}
+.stat-value.tone-info {
+  color: var(--info-ink);
+}
 .stat-value .unit {
   font-size: var(--fs-sm);
   font-weight: var(--fw-normal);

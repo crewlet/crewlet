@@ -440,12 +440,25 @@ export function Stat({
   unit,
   sub,
   icon,
+  tone,
 }: {
   label: ReactNode;
   value: ReactNode;
   unit?: ReactNode;
   sub?: ReactNode;
   icon?: IconName;
+  /**
+   * The STATE this number is in, when it has one — the ink of the value moves
+   * to that tone's step.
+   *
+   * Deliberately absent from most stats. Colour carries state and never
+   * identity, and a token count or an elapsed time is not in a state: tinting
+   * every tile would spend the four status hues on decoration and leave the
+   * one tile that means something indistinguishable from its neighbours. Use
+   * it where the value IS an outcome — a turn's decision, a probe's verdict —
+   * and nowhere else.
+   */
+  tone?: Exclude<Tone, "neutral" | "accent">;
 }) {
   return (
     <div className="stat">
@@ -453,7 +466,7 @@ export function Stat({
         {icon && <Icon name={icon} size="xs" />}
         {label}
       </div>
-      <div className="stat-value truncate">
+      <div className={cx("stat-value truncate", tone && `tone-${tone}`)}>
         {value}
         {unit && <span className="unit">{unit}</span>}
       </div>
