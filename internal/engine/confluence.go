@@ -26,29 +26,6 @@ import (
 // So the org credential is optional for routing (a page's mentions are in
 // the payload) and REQUIRED for search, and the two are reported separately.
 
-// confluenceSeatEnvs are the mcp_env servers a seat's own Confluence
-// credential can live under, in the order they are tried.
-//
-// The same two the tracker reads, because it is the same Atlassian identity
-// and the community MCP server covers both products under one entry.
-var confluenceSeatEnvs = []string{"atlassian", "confluence"}
-
-// confluenceCredentialKeys and confluenceEmailKeys are the spellings a
-// seat's credential arrives under.
-//
-// A seat WITH one searches as itself and Confluence enforces its own page
-// ACLs; a seat without one falls back to the org account, and an unscoped
-// search is then refused — see [knowledge.Permitted].
-var (
-	confluenceCredentialKeys = []string{
-		"CONFLUENCE_API_TOKEN", "CONFLUENCE_PERSONAL_TOKEN",
-		"CONFLUENCE_TOKEN", "ATLASSIAN_API_TOKEN",
-	}
-	confluenceEmailKeys = []string{
-		"CONFLUENCE_USERNAME", "CONFLUENCE_EMAIL", "ATLASSIAN_EMAIL",
-	}
-)
-
 // confluenceParts is what the knowledge base contributes to a company.
 type confluenceParts struct {
 	parser   *confluence.Parser
@@ -209,9 +186,9 @@ func seatConfluenceClient(env *config.Resolver, base string) confluence.SeatClie
 			return nil, false
 		}
 		var token, email string
-		for _, name := range confluenceSeatEnvs {
+		for _, name := range confluence.SeatEnvs {
 			block := seat.MCPEnv[name]
-			for _, key := range confluenceCredentialKeys {
+			for _, key := range confluence.CredentialKeys {
 				if value := strings.TrimSpace(env.Value(block[key])); value != "" {
 					token = value
 					break
@@ -220,7 +197,7 @@ func seatConfluenceClient(env *config.Resolver, base string) confluence.SeatClie
 			if token == "" {
 				continue
 			}
-			for _, key := range confluenceEmailKeys {
+			for _, key := range confluence.EmailKeys {
 				if value := strings.TrimSpace(env.Value(block[key])); value != "" {
 					email = value
 					break

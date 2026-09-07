@@ -107,7 +107,7 @@ test("a mintable secret offers no input", () => {
       onDone={() => {}}
     />,
   );
-  expect(screen.getByText(/Crewlet will generate this/)).toBeDefined();
+  expect(screen.getByText(/Crewlet generates this/)).toBeDefined();
   // And no password box anywhere: the one secret on this form is minted.
   expect(container.querySelectorAll('input[type="password"]').length).toBe(0);
 });
@@ -471,6 +471,18 @@ test("the toggle opens on what the app is set to", () => {
   // Configured and paused: paused.
   expect(open(true, "false")).toBe("false");
   expect(open(true, "true")).toBe("true");
+});
+
+// NOTHING TO JUDGE IS NOT "UNCONFIGURED".
+//
+// every() is true of an empty list, so a tool whose setup read was refused
+// arrived with no sections and called itself unconnected: the dialog opened
+// titled "Connect X", with a Connect button, over an integration the card
+// beside it was reporting Connected.
+test("a dialog with no sections does not claim to be connecting", () => {
+  render(<SetupDialog sections={[]} title="Datadog" onClose={() => {}} onDone={() => {}} />);
+  expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
 });
 
 // AND A CONFIGURED APP SHOWS EVERY FIELD, which it now shares with an

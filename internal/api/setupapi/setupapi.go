@@ -253,6 +253,18 @@ type ToolState struct {
 	// on a press that there is nothing behind it.
 	CanProvision bool `json:"can_provision"`
 
+	// SeatsRequired is whether a seat without its own credential makes this
+	// app unfinished.
+	//
+	// TRUE FOR SLACK ALONE, because an agent with no Slack app cannot post
+	// at all: the roster IS the integration there. Everywhere else a seat
+	// credential is an upgrade on a working app — Datadog routes alerts with
+	// no agent accounts, a Confluence seat without one searches as the org
+	// account — so a roster with nothing in it is a company's choice rather
+	// than an unfinished setup, and reporting it as work left to do put a
+	// Continue button on every connected card.
+	SeatsRequired bool `json:"seats_required,omitempty"`
+
 	// NeedsOperator is the transient third-party app administrator credential the
 	// pass asks for on every run, or null. Never stored.
 	NeedsOperator *setup.Requirement `json:"needs_operator,omitempty"`
@@ -276,6 +288,25 @@ type SeatState struct {
 	// address third-party apps reach this deployment at.
 	InboundPath string `json:"inbound_path,omitempty"`
 	PublicURL   string `json:"public_url,omitempty"`
+
+	// Present is whether this seat has STARTED: something is written down
+	// for it, whether or not it works.
+	//
+	// An explicit field because the roll-up asked `Requirements[0].Present`,
+	// which is an index into a list only Slack fills and panicked the moment
+	// a second app grew a roster. What it wanted to know was never about the
+	// first requirement; it was this.
+	Present bool `json:"present"`
+
+	// Detail is the one line the roster shows under a seat's name: where its
+	// credential is kept, or what is missing.
+	//
+	// Only an app with an inbound route per seat has a path to show, and
+	// Slack is the only one. Every other app's roster said "no inbound path
+	// yet" against every agent, which is true and says nothing about the
+	// thing the row exists to report: whether this agent can act as itself
+	// on this app.
+	Detail string `json:"detail,omitempty"`
 }
 
 // list serves GET /setup/integrations.
@@ -347,12 +378,16 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		block := company.Integrations.Datadog
 		summary = datadog.Summary()
 		reqs = datadog.Requirements(block, s.resolve)
+		seats = credentialSeats(company, s.resolve,
+			[]string{datadog.SeatEnv}, datadog.CredentialKeys, "Datadog account")
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindGitHub:
 		block := company.Integrations.GitHub
 		summary = github.Summary()
 		reqs = github.Requirements(block, s.resolve)
+		seats = credentialSeats(company, s.resolve,
+			[]string{github.SeatEnv}, github.CredentialKeys, "GitHub token")
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindJira:
@@ -367,6 +402,8 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		// that is a delivery path rather than a tool. Jira is where an
 		// operator opens Atlassian first, so it is asked there.
 		reqs = append(reqs, s.forgeRequirement(company))
+		seats = credentialSeats(company, s.resolve,
+			jira.SeatEnvs, jira.CredentialKeys, "Jira account")
 		// THE ATLASSIAN BLOCKS HAVE NO `enabled` FIELD. Their presence IS
 		// the switch, which is why a disconnect removes the block rather
 		// than flipping a flag, and why enabled tracks configured here
@@ -376,11 +413,15 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		block := company.Integrations.Confluence
 		summary = confluence.Summary()
 		reqs = confluence.Requirements(block, s.resolve)
+		seats = credentialSeats(company, s.resolve,
+			confluence.SeatEnvs, confluence.CredentialKeys, "Confluence account")
 		configured, enabled = block != nil, block != nil
 	case integration.KindGitLab:
 		block := company.Integrations.GitLab
 		summary = gitlab.Summary()
 		reqs = gitlab.Requirements(block, s.resolve)
+		seats = credentialSeats(company, s.resolve,
+			[]string{gitlab.SeatEnv}, gitlab.CredentialKeys, "service account")
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindMattermost:
@@ -419,13 +460,21 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	seatChoices(company, reqs)
 
 	satisfied := len(setup.Outstanding(reqs)) == 0
-	for _, seat := range seats {
-		// A TOOL IS SATISFIED WHEN EVERY SEAT THAT HAS STARTED IS. A seat
-		// nobody has set up does not make the tool unfinished, because a
-		// company running Slack for three of its ten agents chose that.
-		if seat.Requirements[0].Present && !seat.Satisfied {
-			satisfied = false
-			break
+	// A TOOL IS SATISFIED WHEN EVERY SEAT THAT HAS STARTED IS. A seat nobody
+	// has set up does not make the tool unfinished, because a company
+	// running Slack for three of its ten agents chose that.
+	//
+	// And only where the seats are load-bearing at all: see SeatsRequired.
+	// An informational roster must not be able to report an app unfinished,
+	// or listing a company's agents would turn every connected card into one
+	// with work outstanding.
+	seatsRequired := kind == integration.KindSlack
+	if seatsRequired {
+		for _, seat := range seats {
+			if seat.Present && !seat.Satisfied {
+				satisfied = false
+				break
+			}
 		}
 	}
 	state := ToolState{
@@ -435,6 +484,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		Satisfied:     satisfied,
 		InboundPath:   inboundPath(kind),
 		CanProvision:  s.passes.Serves(kind),
+		SeatsRequired: seatsRequired,
 		NeedsOperator: s.passes.Needs(kind),
 	}
 	if base := company.Integrations.WebhookBase(); base != "" && state.InboundPath != "" {
@@ -479,6 +529,73 @@ func (s *Service) forgeRequirement(company *config.Company) setup.Requirement {
 // would leave an operator no way to give one to them. Human seats are
 // excluded, because a person's Slack account is not something this engine
 // provisions or holds a token for.
+// credentialSeats is the roster of agents for an app whose seats each hold
+// their own credential.
+//
+// ONE BUILDER over every app, fed by the app's OWN list of where it keeps a
+// seat credential, because those spellings already exist in the package that
+// authenticates with them: writing them again here would be a second list
+// that stops matching the first, silently, since a seat whose credential was
+// not found looks exactly like a seat that has none.
+//
+// The roster exists because a company's agents are the point of these
+// integrations. A card that says Connected over no agents is telling an
+// operator the half that cannot be acted on: the question is which of their
+// people can work in this app, and only a per-seat answer has it.
+func credentialSeats(company *config.Company, resolve func(string) (string, bool),
+	envs, keys []string, noun string,
+) []SeatState {
+	out := []SeatState{}
+	for role := range company.EachRole() {
+		// THROUGH THE SEAT, the same derivation slackSeats uses: a handle
+		// defaults from the name, and "is this a person" is the org model's
+		// question rather than the config's.
+		seat := role.Seat()
+		if !seat.IsAgent() {
+			continue
+		}
+		state := SeatState{Handle: seat.Handle(), Name: role.Name, Requirements: []setup.Requirement{}}
+		stored, where := seatCredential(role.MCPEnv, envs, keys)
+		state.Present = stored != ""
+		switch {
+		case stored == "":
+			state.Detail = "no " + noun + " yet"
+		default:
+			// RESOLVED, not merely written down. A ${VAR} naming a secret
+			// the store does not hold is the state that reads as configured
+			// everywhere else while the agent authenticates with nothing.
+			if _, ok := setup.Resolution(stored, resolve); ok != nil && !*ok {
+				state.Detail = where + " did not resolve, so this agent authenticates with nothing"
+				break
+			}
+			state.Satisfied = true
+			state.Detail = where
+		}
+		out = append(out, state)
+	}
+	return out
+}
+
+// seatCredential finds a seat's credential for one app, and says where it is.
+//
+// The location is what the roster shows, and it is the mcp_env address rather
+// than the value: a credential's value has no business on this wire, and the
+// address is what an operator edits.
+func seatCredential(env map[string]map[string]string, envs, keys []string) (stored, where string) {
+	for _, name := range envs {
+		block := env[name]
+		if len(block) == 0 {
+			continue
+		}
+		for _, key := range keys {
+			if value := strings.TrimSpace(block[key]); value != "" {
+				return value, "mcp_env." + name + "." + key
+			}
+		}
+	}
+	return "", ""
+}
+
 // seatChoices fills every handle requirement with the company's agent seats.
 //
 // In place, on the app's own list, because a requirement is what the form
@@ -531,6 +648,7 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool)) []
 		state := SeatState{
 			Handle: handle, Name: role.Name,
 			Requirements: reqs,
+			Present:      len(reqs) > 0 && reqs[0].Present,
 			Satisfied:    len(setup.Outstanding(reqs)) == 0,
 			InboundPath:  "/webhooks/slack/" + handle,
 		}

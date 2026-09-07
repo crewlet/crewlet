@@ -434,6 +434,11 @@ export function Reconcile({
   );
 }
 
+/** A surface's display name inside its tool, for labelling that tool's roster. */
+function surfaceName(entry: Entry, key: string): string {
+  return entry.surfaces.find((s) => s.key === key)?.name ?? key;
+}
+
 /**
  * One surface inside a tool's details: its own phase, what arrived and what
  * became of it, where it listens, and what the loop found.
@@ -537,7 +542,16 @@ export function actionFor(
   // A per-seat third-party app with no seat set up yet is not connected, whatever its
   // company block says: a Slack company with no agent holding an app is a
   // company where nothing can post.
-  if (configured.some((t) => t.seats && t.seats.length > 0 && !t.seats.some((s) => s.satisfied))) {
+  //
+  // ONLY WHERE THE SEATS ARE LOAD-BEARING, which the engine says with
+  // seats_required. Every card carries a roster now, and most of those seat
+  // credentials are an upgrade on an app that already works — so reading any
+  // roster this way put Continue on every connected card, next to Connected.
+  if (
+    configured.some(
+      (t) => t.seats_required && t.seats && t.seats.length > 0 && !t.seats.some((s) => s.satisfied),
+    )
+  ) {
     return { label: "Continue" };
   }
   if (state.attention) {
@@ -570,7 +584,15 @@ export function sectionsFor(
   for (const surface of entry.surfaces) {
     const tool = byKey.get(surface.key);
     if (!tool) continue;
-    if (tool.seats && tool.seats.length > 0) {
+    // A SECTION PER SEAT IS SLACK'S SHAPE, and seats_required is what says
+    // so: each agent has its own Slack app with its own credentials, so each
+    // one is a form. Everywhere else a seat holds a credential written in
+    // its mcp_env, which this dialog does not edit, and the roster on the
+    // card is where it is reported.
+    //
+    // Without the flag every app with a roster split its dialog into one
+    // section per agent, each repeating the company's own fields.
+    if (tool.seats_required && tool.seats && tool.seats.length > 0) {
       // The company-wide block first, when it has anything to set, then a
       // section per seat.
       if (tool.requirements.length > 0) out.push({ name: surface.name, tool });
@@ -619,9 +641,23 @@ export function EntryRow({
   const state = rollUp(entry, rows);
   const present = presentSurfaces(entry, rows);
   const absent = present.length === 0;
-  const tools = (sections ?? []).map((s) => s.tool);
+  // BY KEY, because a per-seat app contributes one section per agent and
+  // they all carry the same tool. Counting it once per section made a
+  // roster of one agent render four rows on the Atlassian card.
+  const tools = [...new Map((sections ?? []).map((s) => [s.tool.key, s.tool])).values()];
   const action = actionFor(state, tools);
-  const seats = tools.flatMap((t) => t.seats ?? []);
+  // NAMED BY SURFACE where the card has more than one that has agents.
+  // Atlassian is one card over Jira and Confluence, so an agent appears once
+  // per surface: two rows reading "SRE Lead" with nothing saying which is
+  // which. The status line above already prefixes a surface's name for the
+  // same reason, so the roster uses the same convention.
+  const rosters = tools.filter((t) => (t.seats ?? []).length > 0);
+  const seats = rosters.flatMap((t) =>
+    (t.seats ?? []).map((seat) => ({
+      seat,
+      surface: rosters.length > 1 ? surfaceName(entry, t.key) : "",
+    })),
+  );
   const bodyID = `int-body-${entry.key}`;
 
   // A FRAGMENT, not a wrapper: the header already has one actions row, and
@@ -725,15 +761,26 @@ export function EntryRow({
             {present.map((p) => (
               <SurfaceRow key={p.surface.key} surface={p.surface} row={p.row} />
             ))}
-            {seats.map((seat) => (
-              <li key={seat.handle} className="int-row">
+            {seats.map(({ seat, surface }) => (
+              <li key={`${surface}:${seat.handle}`} className="int-row">
                 <div className="int-row-identity">
-                  <span className="int-row-name">{seat.name || seat.handle}</span>
+                  <span className="int-row-name">
+                    {surface ? `${surface}: ` : ""}
+                    {seat.name || seat.handle}
+                  </span>
+                  {/* WHERE THIS AGENT'S OWN CREDENTIAL IS, or what is
+                      missing. It read "no inbound path yet" against every
+                      agent of every app but Slack, because Slack is the only
+                      one with a route per seat: true, and silent about the
+                      thing the row exists to answer, which is whether this
+                      agent can act as itself here. */}
                   <span className="int-row-detail">
                     {seat.inbound_path ? (
                       <code className="inline">{seat.inbound_path}</code>
+                    ) : seat.detail ? (
+                      seat.detail
                     ) : (
-                      "no inbound path yet"
+                      "nothing set up for this agent"
                     )}
                   </span>
                 </div>

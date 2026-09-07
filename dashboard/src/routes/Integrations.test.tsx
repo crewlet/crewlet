@@ -399,6 +399,9 @@ test("a per-seat app becomes one section per agent", () => {
     key: "slack",
     configured: true,
     requirements: [],
+    // WHAT MAKES IT PER-SEAT. Every app carries a roster now; this flag is
+    // the difference between a list of agents to read and a form per agent.
+    seats_required: true,
     seats: [
       { handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true },
       { handle: "cto", name: "CTO", requirements: [], satisfied: false },
@@ -407,6 +410,54 @@ test("a per-seat app becomes one section per agent", () => {
   const sections = sectionsFor(slack, new Map([["slack", slackTool]]));
   expect(sections.map((s) => s.seat)).toEqual(["sre-lead", "cto"]);
   expect(sections.map((s) => s.name)).toEqual(["SRE Lead", "CTO"]);
+});
+
+// AND AN INFORMATIONAL ROSTER DOES NOT. A Datadog seat holds a credential
+// written in its mcp_env, which this dialog does not edit: splitting the form
+// into one section per agent gave every one of them a copy of the company's
+// own fields to fill in.
+test("an informational roster stays one section", () => {
+  const datadog = CATALOG.find((e) => e.key === "datadog")!;
+  const tool = toolState({
+    key: "datadog",
+    configured: true,
+    seats: [
+      { handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true },
+      { handle: "cto", name: "CTO", requirements: [], satisfied: false },
+    ],
+  });
+  const sections = sectionsFor(datadog, new Map([["datadog", tool]]));
+  expect(sections.map((s) => s.name)).toEqual(["Datadog"]);
+  expect(sections.map((s) => s.seat)).toEqual([undefined]);
+});
+
+// AND THE ROSTER IS COUNTED ONCE. A per-seat app contributes one section per
+// agent, all carrying the same tool, so reading the seats off every section
+// rendered each agent as many times as there were sections.
+test("a roster is listed once however many sections carry it", () => {
+  render(
+    <EntryRow
+      entry={slack}
+      rows={rowsOf({ key: "slack", configured: true })}
+      sections={sectionsFor(
+        slack,
+        new Map([
+          [
+            "slack",
+            toolState({
+              key: "slack",
+              configured: true,
+              requirements: [],
+              seats_required: true,
+              seats: [{ handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true }],
+            }),
+          ],
+        ]),
+      )}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Show Slack details/ }));
+  expect(screen.getAllByText("SRE Lead").length).toBe(1);
 });
 
 // A company whose Slack block exists and whose seats hold no app is not
@@ -418,10 +469,26 @@ test("a per-seat app with no seat set up is unfinished", () => {
       key: "slack",
       configured: true,
       satisfied: true,
+      // LOAD-BEARING, which is Slack's whole shape and nobody else's.
+      seats_required: true,
       seats: [{ handle: "cto", requirements: [], satisfied: false }],
     }),
   ]);
   expect(action?.label).toBe("Continue");
+
+  // AND AN INFORMATIONAL ROSTER IS NOT WORK OUTSTANDING. Every app lists its
+  // agents now, and most of those credentials are an upgrade on an app that
+  // already works: reading any roster as unfinished put a Continue button on
+  // every connected card.
+  const informational = actionFor(state, [
+    toolState({
+      key: "datadog",
+      configured: true,
+      satisfied: true,
+      seats: [{ handle: "cto", requirements: [], satisfied: false }],
+    }),
+  ]);
+  expect(informational).toBeNull();
 });
 
 // --- what a card offers, and what it no longer does ------------------------ //
@@ -475,6 +542,103 @@ test("settings open from the body, not the header", () => {
   fireEvent.click(screen.getByRole("button", { name: /Show Datadog details/ }));
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
   expect(opened).toBe(1);
+});
+
+// THE AGENTS ARE THE POINT, so the card lists them.
+//
+// Only Slack had a roster, because it was the only app with a route per seat
+// and the roster was built from that. Every other card opened on a surface
+// row and nothing else: Connected, over no answer at all to which of this
+// company's agents can actually work in the app.
+test("the card lists each agent and what it holds", () => {
+  render(
+    <EntryRow
+      entry={CATALOG.find((e) => e.key === "datadog")!}
+      rows={rowsOf({ key: "datadog", configured: true })}
+      sections={[
+        {
+          name: "Datadog",
+          tool: toolState({
+            key: "datadog",
+            seats: [
+              {
+                handle: "sre-lead",
+                name: "SRE Lead",
+                requirements: [],
+                present: true,
+                satisfied: true,
+                detail: "mcp_env.datadog.DD_APP_KEY",
+              },
+              {
+                handle: "cto",
+                name: "CTO",
+                requirements: [],
+                present: false,
+                satisfied: false,
+                detail: "no Datadog account yet",
+              },
+            ],
+          }),
+        },
+      ]}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Show Datadog details/ }));
+  expect(screen.getByText("SRE Lead")).toBeTruthy();
+  expect(screen.getByText("CTO")).toBeTruthy();
+  // AND WHAT EACH ONE HOLDS. A roster of names with no state is a list of
+  // agents, not an answer about the integration.
+  expect(screen.getByText("mcp_env.datadog.DD_APP_KEY")).toBeTruthy();
+  expect(screen.getByText("no Datadog account yet")).toBeTruthy();
+});
+
+// AND A MULTI-SURFACE CARD SAYS WHICH SURFACE EACH ROW IS FOR.
+//
+// Atlassian is one card over Jira and Confluence, so an agent appears once
+// per surface: without the prefix that is two rows reading "SRE Lead" with
+// nothing distinguishing them, one ready and one not.
+test("a roster on a two-surface card names the surface", () => {
+  render(
+    <EntryRow
+      entry={atlassian}
+      rows={rowsOf({ key: "jira", configured: true }, { key: "confluence", configured: true })}
+      sections={[
+        {
+          name: "Jira",
+          tool: toolState({
+            key: "jira",
+            seats: [
+              {
+                handle: "sre-lead",
+                name: "SRE Lead",
+                requirements: [],
+                satisfied: true,
+                detail: "mcp_env.atlassian.JIRA_API_TOKEN",
+              },
+            ],
+          }),
+        },
+        {
+          name: "Confluence",
+          tool: toolState({
+            key: "confluence",
+            seats: [
+              {
+                handle: "sre-lead",
+                name: "SRE Lead",
+                requirements: [],
+                satisfied: false,
+                detail: "no Confluence account yet",
+              },
+            ],
+          }),
+        },
+      ]}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
+  expect(screen.getByText(/Jira: SRE Lead/)).toBeTruthy();
+  expect(screen.getByText(/Confluence: SRE Lead/)).toBeTruthy();
 });
 
 // A DROP IS A PROBLEM, so it survives the counters being removed.

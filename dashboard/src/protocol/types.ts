@@ -868,6 +868,14 @@ export interface SetupToolState {
   public_url?: string;
   /** This build runs a provisioning pass for this vendor. */
   can_provision?: boolean;
+  /**
+   * Whether a seat without its own credential makes this app unfinished.
+   *
+   * Slack alone: an agent with no Slack app cannot post, so the roster IS
+   * the integration there. Everywhere else the roster is informational, and
+   * reading it as work outstanding puts a Continue button on a working card.
+   */
+  seats_required?: boolean;
   /** The transient third-party app credential its pass asks for, never stored. */
   needs_operator?: SetupRequirement | null;
   /**
@@ -881,9 +889,17 @@ export interface SetupSeatState {
   handle: string;
   name?: string;
   requirements: SetupRequirement[];
+  /** Whether anything is written down for this seat, working or not. */
+  present?: boolean;
   satisfied: boolean;
   inbound_path?: string;
   public_url?: string;
+  /**
+   * The one line under this agent's name: where its own credential for this
+   * app is kept, or what is missing. Only Slack has a route per seat, so
+   * every other app's roster has this and no path.
+   */
+  detail?: string;
 }
 
 /** One provisioning pass, live or finished. */

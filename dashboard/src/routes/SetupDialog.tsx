@@ -135,7 +135,13 @@ export function SetupDialog({
   // the dialog is CALLED and what its button says, which have to agree: a
   // title reading Connect over a Save button is the wrong promise, and was
   // what this dialog did.
-  const connecting = sections.every((section) => !section.tool.configured);
+  //
+  // `sections.length > 0` because EVERY() IS TRUE OF NOTHING: a tool whose
+  // setup read was refused, or that this build has no requirements for,
+  // arrives with no sections at all, and an empty list called itself
+  // unconfigured. The dialog then said "Connect X" with a Connect button
+  // over a connected integration.
+  const connecting = sections.length > 0 && sections.every((section) => !section.tool.configured);
 
   const shownBy = useMemo(() => {
     const out = new Map<string, SetupRequirement[]>();
@@ -389,10 +395,14 @@ export function SetupDialog({
         {r.kind === "secret" && r.mintable ? (
           <div className="field">
             <label>{r.label}</label>
+            {/* THE SAME SENTENCE EITHER WAY, with the stored state after
+                it, for the reason the ordinary credential field carries:
+                what this field IS does not depend on whether this company
+                has one yet, and swapping the whole description for a
+                pointer made one form read as two. */}
             <span className="hint">
-              {r.present && !replacing[r.field]
-                ? note
-                : "Crewlet will generate this and seal it in the secret store."}
+              Crewlet generates this and seals it in the secret store.
+              {r.present && !replacing[r.field] ? ` ${note}.` : ""}
             </span>
             {/* A REFUSAL BELONGS BESIDE ITS FIELD EVEN WHEN THE FIELD HAS
                     NO INPUT. A mintable secret is exactly the case where the
@@ -449,11 +459,9 @@ export function SetupDialog({
             }
             help={
               <>
-                {/* WHAT IS ALREADY HELD, said in the field rather than in
-                    place of it. The stored state is a fact about this
-                    field, not a different control: putting it here is what
-                    lets one form serve connecting and configuring. */}
-                {note && <>{note}. Leave this blank to keep it. </>}
+                {/* THE APP'S OWN SENTENCE FIRST, always, so a field's
+                    description opens the same way whether or not this
+                    company has answered it. */}
                 {r.help}
                 {r.where && <> {r.where}</>}
                 {r.vendor_url && (
@@ -470,6 +478,12 @@ export function SetupDialog({
                     {r.link_text ? "." : null}
                   </>
                 )}
+                {/* AND THE STORED STATE LAST. It is a fact about the field
+                    rather than a different control, and leading with it made
+                    the settings form read as a different screen from the
+                    connect form, which is the one thing these two are meant
+                    not to be. */}
+                {note && <> {note}, so leave it blank to keep the one you have.</>}
               </>
             }
           />
