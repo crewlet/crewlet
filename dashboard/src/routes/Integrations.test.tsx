@@ -193,33 +193,57 @@ test("an unknown phase is never the tool's ready state", () => {
   expect(broken.tag).toBe("degraded");
 });
 
-// THE CARD LEADS WITH THE TOOL, and the plumbing is behind a disclosure that
-// starts closed: an operator scanning six integrations wants six names and
-// six states, not six paragraphs. Opening it shows the counts, the paths and
-// what the loop found, per surface.
-test("a configured tool discloses its surfaces", () => {
+// A CARD'S BODY IS ITS AGENTS, not a restatement of its header.
+//
+// It opened with a row per surface — "Jira, /webhooks/jira, Connected" —
+// under a header already saying Connected, so the first thing a reader saw
+// on opening a card was the engine repeating the tag above it and naming a
+// route nobody has to paste any more, now that the loop registers the hook.
+test("a working surface adds nothing to the card", () => {
   render(
     <EntryRow
       entry={atlassian}
       rows={rowsOf(
-        { key: "jira", configured: true, inbound: 4, inbound_path: "/webhooks/jira" },
-        { key: "confluence", configured: true, inbound: 1 },
+        {
+          key: "jira",
+          configured: true,
+          inbound: 4,
+          inbound_path: "/webhooks/jira",
+          reconcile: { phase: "ready" },
+        },
+        { key: "confluence", configured: true, inbound: 1, reconcile: { phase: "ready" } },
       )}
     />,
   );
-  expect(screen.getByText("Atlassian")).toBeTruthy();
-  // Closed to begin with: nothing from the body is on screen.
-  expect(screen.queryByText("/webhooks/jira")).toBeNull();
-
   fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
-  expect(screen.getByText("Jira")).toBeTruthy();
+  expect(screen.queryByText("/webhooks/jira")).toBeNull();
+  expect(screen.queryByText("Jira")).toBeNull();
+  expect(screen.queryByText("Confluence")).toBeNull();
+});
+
+// AND A BROKEN ONE STILL SAYS SO, AND SAYS WHICH. The header rolls up to the
+// least ready surface, so a tool with two of them has two answers and only
+// one fits in the tag.
+test("a faulted surface says what is wrong and which surface it is", () => {
+  render(
+    <EntryRow
+      entry={atlassian}
+      rows={rowsOf(
+        { key: "jira", configured: true, reconcile: { phase: "ready" } },
+        {
+          key: "confluence",
+          configured: true,
+          secret_usable: false,
+          reconcile: { phase: "degraded", detail: "the webhook secret did not resolve" },
+        },
+      )}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
   expect(screen.getByText("Confluence")).toBeTruthy();
-  // The inbound PATH, which is the address to paste at the vendor. The raw
-  // in / dropped / merged counters that used to sit here are gone: all three
-  // read zero on a healthy surface, so the line cost a row of jargon to say
-  // nothing.
-  expect(screen.getByText("/webhooks/jira")).toBeTruthy();
-  expect(screen.queryByText(/in: 4/)).toBeNull();
+  expect(screen.getByText("secret unresolved")).toBeTruthy();
+  // And the surface that works is not listed beside it.
+  expect(screen.queryByText("Jira")).toBeNull();
 });
 
 // A TOOL NOBODY SET UP HAS NOTHING TO DISCLOSE, so it gets no disclosure: a

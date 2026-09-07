@@ -446,32 +446,44 @@ function surfaceName(entry: Entry, key: string): string {
 }
 
 /**
- * One surface inside a tool's details: its own phase, what arrived and what
- * became of it, where it listens, and what the loop found.
+ * What one surface has to report, or nothing.
+ *
+ * A CARD'S BODY IS ITS AGENTS. It used to open with a row per surface —
+ * "Jira, /webhooks/jira, Connected" — under a header already saying
+ * Connected, so the first thing a reader saw on opening a card was the
+ * engine restating the tag above it and naming a route nobody has to paste
+ * any more, now that the loop registers the hook itself.
+ *
+ * A surface with a PROBLEM still has to say so, and say which surface it is,
+ * because the header rolls up to the least ready one and a tool with two
+ * surfaces has two answers. So this renders when there is a fault and stays
+ * out of the way when there is not.
  */
-function SurfaceRow({ surface, row }: { surface: Surface; row: IntegrationRow }) {
+function SurfaceRow({
+  surface,
+  row,
+  named,
+}: {
+  surface: Surface;
+  row: IntegrationRow;
+  /** Whether to say which surface this is: only where the tool has more than one. */
+  named: boolean;
+}) {
+  const dropped = typeof row.skipped === "number" && row.skipped > 0;
+  const faulted =
+    row.secret_usable === false ||
+    row.routes === false ||
+    row.enabled === false ||
+    dropped ||
+    Boolean(row.reconcile?.detail) ||
+    Boolean(row.reconcile?.last_error) ||
+    (row.reconcile?.findings ?? []).length > 1;
+  if (!faulted) return null;
+
   return (
     <li className="int-row">
       <div className="int-row-identity">
-        <span className="int-row-name">{surface.name}</span>
-        <span className="int-row-detail int-row-facts">
-          {/* WHERE DELIVERIES ARRIVE, which is what a reader can act on: it
-              is the address to paste at the third-party app when a hook has to be
-              registered by hand.
-
-              The three raw counters that were here — in / dropped / merged —
-              are engine plumbing in the engine's own words, and on a healthy
-              surface all three read zero, so the line cost a row of jargon to
-              say nothing. What they were protecting is real and is kept
-              below: a surface that DROPS deliveries is a problem, and a
-              problem belongs in the note band with the other findings rather
-              than in a counter a reader has to interpret. */}
-          {typeof row.inbound_path === "string" && row.inbound_path ? (
-            <code className="inline">{String(row.inbound_path)}</code>
-          ) : (
-            "no inbound path"
-          )}
-        </span>
+        {named && <span className="int-row-name">{surface.name}</span>}
       </div>
 
       <div className="int-row-badges">
@@ -493,16 +505,10 @@ function SurfaceRow({ surface, row }: { surface: Surface; row: IntegrationRow })
             routes nowhere
           </Badge>
         )}
-        {row.reconcile ? (
-          <Badge tone={phaseTone(row.reconcile.phase)}>
-            {row.reconcile.phase_label || row.reconcile.phase.replace(/_/g, " ")}
-          </Badge>
-        ) : row.enabled === false ? (
-          <Badge outline>paused</Badge>
-        ) : null}
+        {row.enabled === false && <Badge outline>paused</Badge>}
       </div>
 
-      {typeof row.skipped === "number" && row.skipped > 0 && (
+      {dropped && (
         <div className="int-row-note">
           <span className="int-row-note-text">
             {/* ONE STRING, not a number beside its own noun. Split across
@@ -511,7 +517,7 @@ function SurfaceRow({ surface, row }: { surface: Surface; row: IntegrationRow })
             <span>
               {row.skipped === 1
                 ? "1 delivery was verified and dropped"
-                : `${row.skipped.toLocaleString()} deliveries were verified and dropped`}
+                : `${(row.skipped ?? 0).toLocaleString()} deliveries were verified and dropped`}
             </span>
             <span className="int-row-note-when">
               A drop is a delivery this surface accepted and no parser turned into work, so whatever
@@ -759,13 +765,19 @@ export function EntryRow({
 
       {open && (
         <div className="int-card-body" id={bodyID}>
-          {/* ONE LIST, surfaces and seats together. They are two kinds of the
-              same thing to a reader (a part of this tool, and whether it
-              works), and two lists put an arbitrary seam down the middle of a
-              Slack card whose every row is a seat. */}
+          {/* ONE LIST, the agents and anything wrong with a surface. They are
+              two kinds of the same thing to a reader (this tool, and whether
+              it works), and two lists put an arbitrary seam down the middle
+              of a card whose every row is an agent. A working surface adds
+              nothing, so on a healthy tool this list IS the roster. */}
           <ul className="int-rows">
             {present.map((p) => (
-              <SurfaceRow key={p.surface.key} surface={p.surface} row={p.row} />
+              <SurfaceRow
+                key={p.surface.key}
+                surface={p.surface}
+                row={p.row}
+                named={present.length > 1}
+              />
             ))}
             {seats.map(({ seat, surface }) => (
               <li key={`${surface}:${seat.handle}`} className="int-row int-seat-row">
