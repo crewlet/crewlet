@@ -86,6 +86,16 @@ claude-code:
     # remaining keys (machineID, migration flags, cached feature data) are
     # re-created on the next start at the cost of a few milliseconds.
     - ".claude/.claude.json"
+    # And its BACKUPS, which are byte copies of that same file under
+    # timestamped names — pruning the original and leaving the copies would
+    # carry the projects map into the next turn by the long way round, and the
+    # directory accumulates one file per rotation for the life of the seat.
+    - ".claude/backups"
+    # The file's lock, for the same reason: pruning what it guards and leaving
+    # it behind is half a prune. It is a DIRECTORY, and one a killed CLI
+    # leaves held — this build reports "Could not refresh your login because
+    # another Claude Code process is refreshing it" off exactly that state.
+    - ".claude/.claude.json.lock"
     - ".claude/projects"
     - ".claude/sessions"
     - ".claude/todos"
