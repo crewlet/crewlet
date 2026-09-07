@@ -174,7 +174,7 @@ meets their company first and the engine last.
 | | Integrations | `#/integrations` | `integrations`, plus `/setup/integrations` over REST *(operator-gated)* |
 | | Tools | `#/tools?q=&origin=` | the pushed tool catalogue |
 | | Configuration | `#/config?lens=&revision=` | `config` / `config_audit` / `config_diff` *(operator-gated)* |
-| | Secrets | `#/secrets` | the names and provenance the fleet holds — **never a value** *(operator-gated)* |
+| | Secrets | `#/secrets` | `/secrets` and `/config/references` over REST: the names the fleet holds, what reads each, and the writes that store, rotate and remove one — **never a value** *(operator-gated)* |
 | — | Trace | `#/traces/{id}` | `trace` — reached from a row or from search |
 | — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published |
 | — | Event | `#/events/{id}` | `event` |

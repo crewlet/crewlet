@@ -70,10 +70,16 @@ function offline(err: unknown): RestError {
   });
 }
 
+/**
+ * The one request path. `body` is already encoded, and `type` is what it is
+ * encoded as — the split exists because not every write on this API takes
+ * JSON. See `putText` below.
+ */
 async function send(
   method: string,
   path: string,
-  body?: unknown,
+  body?: string,
+  type?: string,
   headers: Record<string, string> = {},
 ): Promise<unknown> {
   const token = apiToken();
@@ -81,10 +87,10 @@ async function send(
     method,
     headers: {
       ...(token ? { Authorization: "Bearer " + token } : {}),
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      ...(type ? { "Content-Type": type } : {}),
       ...headers,
     },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    ...(body === undefined ? {} : { body }),
   };
 
   let response: Response;
@@ -119,14 +125,34 @@ async function send(
   return parsed;
 }
 
+/** JSON in, for every route that takes a document. */
+function json(
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<unknown> {
+  return send(method, path, JSON.stringify(body ?? {}), "application/json", headers);
+}
+
 export const rest = {
   get: (path: string) => send("GET", path),
   post: (path: string, body?: unknown, headers?: Record<string, string>) =>
-    send("POST", path, body ?? {}, headers),
+    json("POST", path, body, headers),
   put: (path: string, body?: unknown, headers?: Record<string, string>) =>
-    send("PUT", path, body ?? {}, headers),
+    json("PUT", path, body, headers),
   patch: (path: string, body?: unknown, headers?: Record<string, string>) =>
-    send("PATCH", path, body ?? {}, headers),
+    json("PATCH", path, body, headers),
+  /**
+   * THE BODY IS THE VALUE, not a document carrying one.
+   *
+   * `PUT /secrets/{name}` takes the credential as raw bytes, deliberately: a
+   * credential is arbitrary text — a PEM key has newlines, a token can hold
+   * anything — and an encoding step between the operator and the byte
+   * sequence the vendor compares is a 401 nobody can explain. Sending it
+   * through `put` would seal the JSON quotes into the credential.
+   */
+  putText: (path: string, value: string) => send("PUT", path, value, "text/plain; charset=utf-8"),
   // DELETE CARRIES A BODY HERE, which is unusual and deliberate: a
   // disconnect is not one act but a family of them, and which one it is —
   // whether the accounts go too, whether to stop waiting for a third-party app that
@@ -134,5 +160,7 @@ export const rest = {
   // routes. Passing them as query parameters would put a destructive choice
   // in a proxy log.
   del: (path: string, body?: unknown, headers?: Record<string, string>) =>
-    send("DELETE", path, body, headers),
+    body === undefined
+      ? send("DELETE", path, undefined, undefined, headers)
+      : json("DELETE", path, body, headers),
 };

@@ -950,6 +950,19 @@ export interface SecretRow {
   source: string;
 }
 
+/**
+ * One `${VAR}` the active company document names, and the field that names it.
+ *
+ * `GET /config/references` answers a list of these. `path` is the operator's
+ * own spelling of the field — `roles[0].integrations.slack.bot_token` — so it
+ * is something they can find, and a credential with several readers appears
+ * once per reader.
+ */
+export interface ConfigReference {
+  path: string;
+  name: string;
+}
+
 // ---------------------------------------------------------------------------
 // Frames
 // ---------------------------------------------------------------------------

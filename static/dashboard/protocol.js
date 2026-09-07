@@ -742,16 +742,21 @@ function offline(err) {
 		detail: err instanceof Error ? err.message : "the engine could not be reached"
 	});
 }
-async function send(method, path, body, headers = {}) {
+/**
+* The one request path. `body` is already encoded, and `type` is what it is
+* encoded as — the split exists because not every write on this API takes
+* JSON. See `putText` below.
+*/
+async function send(method, path, body, type, headers = {}) {
 	const token = apiToken();
 	const init = {
 		method,
 		headers: {
 			...token ? { Authorization: "Bearer " + token } : {},
-			...body === void 0 ? {} : { "Content-Type": "application/json" },
+			...type ? { "Content-Type": type } : {},
 			...headers
 		},
-		...body === void 0 ? {} : { body: JSON.stringify(body) }
+		...body === void 0 ? {} : { body }
 	};
 	let response;
 	try {
@@ -775,12 +780,26 @@ async function send(method, path, body, headers = {}) {
 	}
 	return parsed;
 }
+/** JSON in, for every route that takes a document. */
+function json(method, path, body, headers) {
+	return send(method, path, JSON.stringify(body ?? {}), "application/json", headers);
+}
 var rest = {
 	get: (path) => send("GET", path),
-	post: (path, body, headers) => send("POST", path, body ?? {}, headers),
-	put: (path, body, headers) => send("PUT", path, body ?? {}, headers),
-	patch: (path, body, headers) => send("PATCH", path, body ?? {}, headers),
-	del: (path, body, headers) => send("DELETE", path, body, headers)
+	post: (path, body, headers) => json("POST", path, body, headers),
+	put: (path, body, headers) => json("PUT", path, body, headers),
+	patch: (path, body, headers) => json("PATCH", path, body, headers),
+	/**
+	* THE BODY IS THE VALUE, not a document carrying one.
+	*
+	* `PUT /secrets/{name}` takes the credential as raw bytes, deliberately: a
+	* credential is arbitrary text — a PEM key has newlines, a token can hold
+	* anything — and an encoding step between the operator and the byte
+	* sequence the vendor compares is a 401 nobody can explain. Sending it
+	* through `put` would seal the JSON quotes into the credential.
+	*/
+	putText: (path, value) => send("PUT", path, value, "text/plain; charset=utf-8"),
+	del: (path, body, headers) => body === void 0 ? send("DELETE", path, void 0, void 0, headers) : json("DELETE", path, body, headers)
 };
 //#endregion
 export { LiveSocket, MAX_EVENTS, RestError, Store, api, apiToken, clearToken, onTokenChanged, onTokenRequested, requestToken, rest, storeToken };
