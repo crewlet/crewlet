@@ -8,7 +8,7 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { SetupDialog, fieldsFor } from "./SetupDialog.tsx";
+import { HELD, SetupDialog, fieldsFor } from "./SetupDialog.tsx";
 import type { SetupRequirement, SetupToolState } from "~/protocol/index.ts";
 
 function req(over: Partial<SetupRequirement>): SetupRequirement {
@@ -98,7 +98,7 @@ test("the form is rendered from the requirement list", () => {
 
 // A MINTABLE SECRET HAS NO INPUT. Asking a person to invent a shared token is
 // asking them to invent a password.
-test("a mintable secret offers no input", () => {
+test("a mintable secret is not on the form at all", () => {
   const { container } = render(
     <SetupDialog
       sections={[{ name: "Datadog", tool }]}
@@ -107,38 +107,99 @@ test("a mintable secret offers no input", () => {
       onDone={() => {}}
     />,
   );
-  expect(screen.getByText(/Crewlet generates this/)).toBeDefined();
-  // And no password box anywhere: the one secret on this form is minted.
+  // NO ROW, not a row without an input. It was a label over a sentence
+  // saying the engine would handle it, which is the engine narrating its own
+  // plumbing in the middle of a form somebody is filling in.
+  expect(screen.queryByText("Shared token")).toBeNull();
+  expect(screen.queryByText(/generates this/)).toBeNull();
   expect(container.querySelectorAll('input[type="password"]').length).toBe(0);
 });
 
-// NO VALUE IS EVER RENDERED. A stored secret shows the ${VAR} it points at,
-// which is safe, and nothing else.
-test("a stored secret is never rendered as a value", () => {
-  const stored: SetupToolState = {
-    ...tool,
-    configured: true,
-    requirements: tool.requirements.map((r) =>
-      r.field === "webhook_token" ? { ...r, present: true, resolved: true } : r,
-    ),
-  };
-  const { container } = render(
+// A HELD CREDENTIAL SHOWS THAT IT IS HELD, and never what it is.
+//
+// The engine does not send a credential back, so an empty box under a
+// required label read as an unanswered question on a form that is already
+// complete. The dots say "there is one", which is the only thing this
+// process actually knows.
+test("a stored credential is prefilled with dots, never a value", () => {
+  render(
     <SetupDialog
-      sections={[{ name: "Datadog", tool: stored }]}
-      title="Datadog"
+      sections={[
+        {
+          name: "GitLab",
+          tool: {
+            ...tool,
+            configured: true,
+            requirements: [
+              req({
+                field: "admin_token",
+                label: "Group Owner token",
+                kind: "secret",
+                secret_name: "GITLAB_ADMIN_TOKEN",
+                required: true,
+                present: true,
+              }),
+            ],
+          },
+        },
+      ]}
+      title="GitLab"
       onClose={() => {}}
       onDone={() => {}}
     />,
   );
-  // A mintable credential has no input in either form: there is nothing for
-  // a person to type, and the value has a shape they would get wrong.
-  expect(container.querySelectorAll('input[type="password"]').length).toBe(0);
-  // AND THE FORM SAYS NOTHING ABOUT WHAT IS STORED. It used to name the
-  // ${VAR} here, which is a fact about this company rather than about the
-  // field, and it is what made the settings form a different screen from the
-  // connect form. Where a credential is kept is the Secrets screen's answer.
+  const input = screen.getByLabelText("Group Owner token") as HTMLInputElement;
+  expect(input.value).toBe(HELD);
+  expect(input.type).toBe("password");
+  // Still required, because the app says so and that does not change once a
+  // company has answered it.
+  expect(screen.queryByText("(optional)")).toBeNull();
+  // And the form says nothing about where it is kept.
   expect(screen.queryByText(/Stored as/)).toBeNull();
-  expect(screen.queryByText(/DATADOG_WEBHOOK_TOKEN/)).toBeNull();
+  expect(screen.queryByText(/GITLAB_ADMIN_TOKEN/)).toBeNull();
+});
+
+// AND LEAVING THE DOTS ALONE WRITES NOTHING. Submitting the placeholder
+// would rewrite a working key with sixteen bullet characters.
+test("untouched dots are not submitted", async () => {
+  const spy = stubFetch(
+    () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
+  );
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "GitLab",
+          tool: {
+            ...tool,
+            configured: true,
+            requirements: [
+              req({ field: "admin_token", label: "Owner token", kind: "secret", present: true }),
+              req({
+                field: "url",
+                label: "Instance",
+                kind: "url",
+                present: true,
+                value: "https://g",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="GitLab"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText("Instance"), { target: { value: "https://gitlab.com" } });
+  fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
+  await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+
+  const body = JSON.parse(String(spy.mock.calls[0]?.[1]?.body)) as {
+    values: Record<string, string>;
+  };
+  expect(body.values.url).toBe("https://gitlab.com");
+  expect("admin_token" in body.values).toBe(false);
 });
 
 // A SHARED VALUE IS ASKED ONCE AND WRITTEN TO EVERY SURFACE.
@@ -291,8 +352,12 @@ test("a literal_in_config refusal is shown against its field", async () => {
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
-  expect(await screen.findByRole("alert")).toBeDefined();
-  expect(screen.getByText(/holds a value here rather than a/)).toBeDefined();
+  // IN THE BANNER, because this is the one field with no row to sit under:
+  // a generated credential is exactly what the engine refuses this way, and
+  // the operator never sees the slot it will not overwrite. Beside a field
+  // that is not rendered, the refusal was invisible.
+  expect(await screen.findByText(/holds a value at/)).toBeDefined();
+  expect(screen.getByText(/integrations.datadog.webhook_token/)).toBeDefined();
 });
 
 // THE FORM SAYS WHAT CONNECTING DOES BEFORE IT ASKS FOR ANYTHING.
@@ -457,9 +522,12 @@ test("connecting and managing render one identical form", () => {
       />,
     );
     const form = view.baseElement.querySelector(".int-form");
-    // React mints an id per rendered field, so a second render of the same
-    // form has different ones. They are the only thing allowed to differ.
-    const html = (form?.innerHTML ?? "").replace(/\b(id|for|aria-describedby)="[^"]*"/g, "");
+    // Two things are allowed to differ, and only two. React mints an id per
+    // rendered field, so a second render of the same form has different
+    // ones. And a credential this company already holds is prefilled with
+    // dots — the field, its label, its help and its required mark are all
+    // the same, and what it CONTAINS is the state the form is showing.
+    const html = (form?.innerHTML ?? "").replace(/\b(id|for|aria-describedby|value)="[^"]*"/g, "");
     view.unmount();
     return html;
   };

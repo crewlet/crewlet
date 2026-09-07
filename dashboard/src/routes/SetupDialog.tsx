@@ -98,6 +98,19 @@ export function splitFields(reqs: SetupRequirement[]): {
 }
 
 /**
+ * What a stored credential shows in its input.
+ *
+ * The engine never sends a credential back, so there is nothing true to put
+ * here — but an empty box under a required label reads as an unanswered
+ * question on a form that is already complete. The dots say "there is one",
+ * which is the only thing this process actually knows.
+ *
+ * Left alone it is never submitted (see payloadFor): typing over it is what
+ * replaces the credential.
+ */
+export const HELD = "••••••••••••••••";
+
+/**
  * How a field's value is addressed in this form.
  *
  * SCOPED TO ITS SECTION, because a field NAME is not unique across a tool:
@@ -209,6 +222,42 @@ export function SetupDialog({
   }, [sections, ownBy]);
   const shown = useMemo(() => [...shownBy.values()].flat(), [shownBy]);
 
+  // WHAT THE ONE FORM RENDERS.
+  //
+  // A per-seat app keeps a heading per section, because each is a different
+  // agent's own credentials and the name is what says whose. Every other
+  // tool is one thing to the person filling the form in, whatever the config
+  // calls its blocks, so its surfaces run together with no headings and one
+  // fold at the end.
+  const perSeat = sections.some((section) => section.seat !== undefined);
+  const grouped = useMemo(
+    () =>
+      sections
+        .map((section) => {
+          const { connect, more } = splitFields(shownBy.get(sectionKey(section)) ?? []);
+          return { section, heading: perSeat ? section.name : "", connect, more };
+        })
+        .filter((g) => g.connect.length > 0 || g.more.length > 0),
+    [sections, shownBy, perSeat],
+  );
+  const folded = useMemo(
+    () => grouped.flatMap(({ section, more }) => more.map((r) => ({ section, r }))),
+    [grouped],
+  );
+  // ONE INTRO PER DISTINCT SENTENCE. Two surfaces of one tool each carry
+  // their own summary, and a per-seat app repeats one summary per agent.
+  const intros = useMemo(() => {
+    const seen = new Set<string>();
+    return sections
+      .map((section) => section.tool.summary ?? "")
+      .filter((text) => text !== "" && !seen.has(text) && seen.add(text));
+  }, [sections]);
+  // The surfaces whose hooks a person has to register by hand.
+  const manual = useMemo(
+    () => sections.filter((section) => section.tool.public_url && !section.tool.can_provision),
+    [sections],
+  );
+
   const [values, setValues] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
     for (const section of sections) {
@@ -244,6 +293,13 @@ export function SetupDialog({
       // Never a credential: the engine does not put one on this wire, so
       // `value` is absent on every secret and those open empty, which is
       // what "leave it blank to keep it" means below.
+      // A CREDENTIAL SHOWS THAT IT IS HELD, not what it is. `value` is
+      // absent on every secret by construction, so this is the only signal
+      // there is that the field is already answered.
+      if (r.kind === "secret" && r.present) {
+        initial[key] = HELD;
+        return;
+      }
       if (r.value) {
         initial[key] = r.value;
         return;
@@ -268,14 +324,14 @@ export function SetupDialog({
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  // A MINTABLE SECRET IS THE ONLY FIELD WITHOUT AN INPUT, because there is
-  // nothing for a person to type: the engine generates the value and it has
-  // a shape a person would get wrong.
+  // A MINTABLE SECRET IS NOT ON THE FORM AT ALL.
   //
-  // A stored ordinary credential used to be hidden behind a Replace button
-  // too, which is what made the settings dialog a different form from the
-  // connect one: three inputs became three lines of text. It renders as its
-  // own input either way now, empty, and an empty one is left alone.
+  // There is nothing for a person to type — the engine generates the value,
+  // and it has a shape a person would get wrong — so the row was a label
+  // over a sentence saying the engine would handle it. That is the engine
+  // narrating its own plumbing in the middle of a form somebody is filling
+  // in. It is still generated on submit; payloadFor reads the requirement,
+  // not the rendering.
   function editable(r: SetupRequirement): boolean {
     return !(r.kind === "secret" && r.mintable);
   }
@@ -302,13 +358,11 @@ export function SetupDialog({
       }
       const value = values[valueKey(section, r)];
       if (value === undefined) continue;
-      // AN EMPTY CREDENTIAL FIELD MEANS KEEP THE ONE YOU HAVE. The input
-      // opens empty because the engine never sends a credential back, so
-      // submitting an empty one would rewrite a working key with nothing.
-      // That is also what lets the connect form and the settings form be
-      // the same form: no Replace step, and no way to blank a secret by
-      // not retyping it.
-      if (r.kind === "secret" && value.trim() === "") continue;
+      // AN UNTOUCHED CREDENTIAL IS LEFT ALONE. Empty, or still showing the
+      // dots that say one is held: either way there is nothing new to write,
+      // and submitting it would rewrite a working key with placeholder text.
+      // Typing over it is what replaces the credential.
+      if (r.kind === "secret" && (value.trim() === "" || value === HELD)) continue;
       send[r.field] = value;
     }
     return { values: send, generate };
@@ -365,12 +419,20 @@ export function SetupDialog({
           .find(({ r }) => r.config_path === path);
         const target = found?.r;
         if (found && target) {
-          setFieldErrors({
-            [valueKey(found.section, target)]:
-              "The company configuration holds a value here rather than a ${VAR} " +
-              "reference, so there is no variable to store the credential in. " +
-              "Clear it in Configuration, then try again.",
-          });
+          const said =
+            "The company configuration holds a value at " +
+            path +
+            " rather than a ${VAR} reference, so there is no variable to store the " +
+            "credential in. Clear it in Configuration, then try again.";
+          // A GENERATED CREDENTIAL HAS NO FIELD TO SIT UNDER, and it is
+          // exactly the one the engine refuses this way, because the
+          // operator never sees the slot it will not overwrite. Beside a
+          // field that is not rendered, the refusal was invisible.
+          if (!editable(target)) {
+            setError(said);
+            return;
+          }
+          setFieldErrors({ [valueKey(found.section, target)]: said });
           // An error inside the disclosure is an error nobody can see.
           if (!target.connect) setMoreOpen(true);
           return;
@@ -409,64 +471,69 @@ export function SetupDialog({
         </>
       }
     >
-      {sections.map((section) => {
-        const reqs = shownBy.get(sectionKey(section)) ?? [];
-        if (reqs.length === 0) return null;
-        const { connect, more } = splitFields(reqs);
-        return (
-          <div key={sectionKey(section)} className="int-form">
-            {/* A HEADING ONLY WHERE THERE IS MORE THAN ONE. On Slack the
-                dialog is already titled Slack, and a "Slack" heading under
-                it is a word that says nothing. */}
-            {sections.length > 1 && <strong className="int-section">{section.name}</strong>}
-            {/* WHAT CONNECTING DOES, before what it needs. A form that opens
-                with a credential field asks for a secret before saying what
-                it is for, and the engine is the one that knows: the sentence
-                comes from the app's own package, not from here. */}
-            {section.tool.summary && <p className="int-form-intro">{section.tool.summary}</p>}
-            {section.tool.public_url && !section.tool.can_provision && (
-              <div className="banner neutral">
-                <Icon name="link" size="sm" />
-                <span className="col" style={{ gap: 4 }}>
-                  <span>
-                    Deliveries arrive at <code className="inline">{section.tool.public_url}</code>
-                  </span>
-                  <span className="t-caption">
-                    This engine registers no webhook for {section.name}, so paste that address into{" "}
-                    {section.name}&apos;s own settings yourself.
-                  </span>
-                </span>
-              </div>
-            )}
-            {connect.map((r) => (
-              <Fragment key={`${sectionKey(section)}:${r.field}`}>
-                {renderField(section, r)}
-              </Fragment>
-            ))}
-            {/* CLOSED, and closed in both directions: a disclosure that
-                sprang open when a field inside it was unset would be the
-                settings form differing from the connect form again, which
-                is the one thing this dialog may not do. It opens when a
-                submission is refused for something inside it, so an error
-                is never hidden behind it. */}
-            {more.length > 0 && (
-              <details className="int-form-more" open={moreOpen} onToggle={onMoreToggle}>
-                <summary className="int-summary">
-                  More settings
-                  <span className="faint"> ({more.length})</span>
-                </summary>
-                <div className="int-form-more-fields">
-                  {more.map((r) => (
-                    <Fragment key={`${sectionKey(section)}:${r.field}`}>
-                      {renderField(section, r)}
-                    </Fragment>
-                  ))}
-                </div>
-              </details>
-            )}
+      {/* ONE FORM OVER THE WHOLE TOOL.
+          Atlassian is Jira and Confluence, and it rendered as two blocks
+          under two headings, each with its own intro and its own "More
+          settings" fold — which is the config's shape, not the product's. A
+          person connecting Atlassian is connecting one thing, and this is
+          one form: the surfaces are what the ENGINE talks to, and a reader
+          filling in a site address does not need to know which of the two
+          config blocks it lands in.
+
+          A PER-SEAT app is the exception and keeps its headings, because
+          there each section is a different agent's own credentials and the
+          name is what says whose. */}
+      <div className="int-form">
+        {intros.map((intro, i) => (
+          <p key={i} className="int-form-intro">
+            {intro}
+          </p>
+        ))}
+        {manual.map((section) => (
+          <div key={sectionKey(section)} className="banner neutral">
+            <Icon name="link" size="sm" />
+            <span className="col" style={{ gap: 4 }}>
+              <span>
+                Deliveries arrive at <code className="inline">{section.tool.public_url}</code>
+              </span>
+              <span className="t-caption">
+                This engine registers no webhook for {section.name}, so paste that address into{" "}
+                {section.name}&apos;s own settings yourself.
+              </span>
+            </span>
           </div>
-        );
-      })}
+        ))}
+
+        {grouped.map(({ section, heading, connect, more }) => (
+          <Fragment key={sectionKey(section) + ":group"}>
+            {heading && <strong className="int-section">{heading}</strong>}
+            {connect.map((r) => (
+              <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
+            ))}
+          </Fragment>
+        ))}
+
+        {/* ONE FOLD FOR THE WHOLE TOOL, for the same reason: two "More
+            settings" rows in one dialog is the config's shape showing
+            through. CLOSED in both directions — a disclosure that sprang
+            open because a field inside it was unset would be the settings
+            form differing from the connect form. It opens when a submission
+            is refused for something inside it, so an error is never hidden
+            behind it. */}
+        {folded.length > 0 && (
+          <details className="int-form-more" open={moreOpen} onToggle={onMoreToggle}>
+            <summary className="int-summary">
+              More settings
+              <span className="faint"> ({folded.length})</span>
+            </summary>
+            <div className="int-form-more-fields">
+              {folded.map(({ section, r }) => (
+                <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>
+              ))}
+            </div>
+          </details>
+        )}
+      </div>
 
       {error && (
         <div className="banner critical">
@@ -474,12 +541,6 @@ export function SetupDialog({
           <span>{error}</span>
         </div>
       )}
-
-      {/* WHERE THE CREDENTIAL GOES, said before it is handed over. An
-          operator typing a key into a self-hosted process is owed that much,
-          and no more: how the configuration REFERS to a sealed value is the
-          engine's business, not something to explain on the way past. */}
-      <span className="t-caption faint">Credentials are sealed in the secret store.</span>
     </Dialog>
   );
 
@@ -491,21 +552,7 @@ export function SetupDialog({
     const key = valueKey(section, r);
     return (
       <div key={key} className="col gap-1">
-        {r.kind === "secret" && r.mintable ? (
-          <div className="field">
-            <label>{r.label}</label>
-            <span className="hint">Crewlet generates this and seals it in the secret store.</span>
-            {/* A REFUSAL BELONGS BESIDE ITS FIELD EVEN WHEN THE FIELD HAS
-                    NO INPUT. A mintable secret is exactly the case where the
-                    engine can answer literal_in_config, because the operator
-                    never sees the slot it refuses to overwrite. */}
-            {fieldErrors[key] && (
-              <span className="hint field-error" role="alert">
-                {fieldErrors[key]}
-              </span>
-            )}
-          </div>
-        ) : editable(r) ? (
+        {editable(r) ? (
           <Field
             label={r.label}
             kind={r.kind === "toggle" ? "choice" : (r.kind as FieldKind)}
