@@ -24,7 +24,12 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 
 	reqs := []setup.Requirement{
 		{
-			Field:      "org_id",
+			Field: "org_id",
+			// SHARED, so Jira's and Confluence's own fields can cite it.
+			// The organization is one answer for the whole of Atlassian,
+			// and the site addresses under it are read from a page whose
+			// address contains it.
+			Shared:     true,
 			Connect:    true,
 			Label:      "Organization id",
 			Kind:       setup.KindID,

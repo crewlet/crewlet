@@ -990,3 +990,87 @@ test("fillTemplate leaves a placeholder nothing answers alone", () => {
 test("fillTemplate passes text with no placeholder through unchanged", () => {
   expect(fillTemplate("plain words", () => "x")).toBe("plain words");
 });
+
+// A `{field}` reference follows the FIELD IT NAMES, across surfaces. Jira's
+// site address cites `{org_id}`, which Atlassian asks once for the whole tool
+// and keeps under the bare name. Resolved against the referring section, the
+// lookup was `jira:org_id`, which nothing answers, so the link was dropped
+// however much had been typed.
+test("a link cites a shared field from another section", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Organization",
+          tool: {
+            ...tool,
+            key: "atlassian",
+            requirements: [
+              req({
+                field: "org_id",
+                label: "Organization id",
+                kind: "id",
+                shared: true,
+                present: true,
+                value: "org-42",
+              }),
+            ],
+          },
+        },
+        {
+          name: "Jira",
+          tool: {
+            ...tool,
+            key: "jira",
+            requirements: [
+              req({
+                field: "url",
+                label: "Jira site",
+                kind: "url",
+                link_text: "App URLs",
+                vendor_url: "https://admin.atlassian.com/o/{org_id}/product-urls",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Atlassian"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const link = screen.getByText("App URLs") as HTMLAnchorElement;
+  expect(link.href).toBe("https://admin.atlassian.com/o/org-42/product-urls");
+});
+
+// AND STAYS UNLINKED UNTIL THERE IS ONE, which is the rule the organization
+// id already set: a per-organization address with a hole in it opens the
+// console's front door, somewhere a person then has to navigate out of.
+test("a link citing an unanswered field is not drawn", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Jira",
+          tool: {
+            ...tool,
+            key: "jira",
+            requirements: [
+              req({
+                field: "url",
+                label: "Jira site",
+                kind: "url",
+                link_text: "App URLs",
+                vendor_url: "https://admin.atlassian.com/o/{org_id}/product-urls",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Atlassian"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.queryByText("App URLs")).toBeNull();
+});

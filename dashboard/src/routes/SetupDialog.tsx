@@ -609,6 +609,42 @@ export function SetupDialog({
     </Dialog>
   );
 
+  /**
+   * The value key a `{field}` reference in one requirement's text resolves
+   * through.
+   *
+   * IT FOLLOWS THE REFERENCED FIELD, not the referring one. This used to
+   * build the key from the section plus the name with `shared` forced off,
+   * which is right only while a template names a field in its own section:
+   * Jira's site address cites `{org_id}`, and that value is asked once for
+   * the whole of Atlassian and lives under the bare name, so the forced key
+   * looked up `jira:org_id`, found nothing, and dropped the link every time.
+   *
+   * The section is still tried FIRST, because a field name is not unique
+   * across a tool: Jira and Confluence both declare `url` and they are
+   * different addresses.
+   */
+  function refKey(section: SetupSection, field: string): string {
+    const here = (ownBy.get(sectionKey(section)) ?? []).find((r) => r.field === field);
+    if (here) return valueKey(section, here);
+    for (const [, reqs] of ownBy) {
+      const shared = reqs.find((r) => r.field === field && r.shared);
+      if (shared) return shared.field;
+    }
+    return `${sectionKey(section)}:${field}`;
+  }
+
+  /** What the engine reads for a field this company has left blank. */
+  function defaultOf(section: SetupSection, field: string): string {
+    for (const [key, reqs] of ownBy) {
+      const found = reqs.find(
+        (r) => r.field === field && (key === sectionKey(section) || r.shared),
+      );
+      if (found) return found.default ?? "";
+    }
+    return "";
+  }
+
   // The app's NAME is passed in rather than read from a closure: this is
   // one function over every section's fields, and the link it draws has to
   // say which app it opens.
@@ -616,19 +652,12 @@ export function SetupDialog({
     const appName = section.name;
     const key = valueKey(section, r);
     // A LINK ONLY WHERE IT GOES SOMEWHERE. See [vendorLink].
-    const link = vendorLink(r.vendor_url ?? "", values, (field) =>
-      valueKey(section, { ...r, field, shared: false }),
-    );
+    const link = vendorLink(r.vendor_url ?? "", values, (field) => refKey(section, field));
     // WHAT THIS FORM CURRENTLY HOLDS, falling back to the field's own
     // default, which is what the engine reads when it is left blank. See
     // [fillTemplate].
-    const siblings = ownBy.get(sectionKey(section)) ?? [];
     const fill = (text: string) =>
-      fillTemplate(text, (field) => {
-        const sibling = siblings.find((s) => s.field === field);
-        if (!sibling) return "";
-        return values[valueKey(section, sibling)] || sibling.default || "";
-      });
+      fillTemplate(text, (field) => values[refKey(section, field)] || defaultOf(section, field));
     return (
       <div key={key} className="col gap-1">
         {editable(r) ? (

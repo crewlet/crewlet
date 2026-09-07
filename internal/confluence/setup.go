@@ -40,8 +40,17 @@ func Requirements(in *config.Confluence, resolve func(string) (string, bool)) []
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.confluence.url",
 			Required:   cloudID == "",
-			Help:       "Your Cloud site or Data Center instance. Give this or a cloud id.",
-			Blocks:     integration.FindingCredentialMissing,
+			Help: "Where people open Confluence, for example " +
+				"https://your-company.atlassian.net. Connecting Atlassian discovers " +
+				"it from your organization; give it here for Data Center, or " +
+				"before Atlassian is connected.",
+			Where: "Yours is listed under",
+			// FILLED FROM THE ORGANIZATION ID, and not a link until there
+			// is one: the page is per-organization, and the console's front
+			// door is somewhere a person then has to navigate out of.
+			LinkText:  "App URLs",
+			VendorURL: "https://admin.atlassian.com/o/{org_id}/product-urls",
+			Blocks:    integration.FindingCredentialMissing,
 		},
 		{
 			Field:  "cloud_id",
