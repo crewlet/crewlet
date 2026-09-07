@@ -3,6 +3,9 @@ package atlassian_test
 import (
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/atlassian"
+	"github.com/crewlet/crewlet/internal/config"
+
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -51,5 +54,50 @@ func TestBothAtlassianProductsDescribeAsharedFieldTheSameWay(t *testing.T) {
 					theirs.Field, disagreement.what, disagreement.a, disagreement.b)
 			}
 		}
+	}
+}
+
+// THE ORGANIZATION ID IS A VALUE IN THE SAME DOCUMENT AS THE KEY, so it is
+// read the same way.
+//
+// A company keeping it in the sealed store had the literal text
+// "${ATLASSIAN_ORG_ID}" reported as present and resolved, and sent to
+// Atlassian as the subject of every admin call. The field is not a credential
+// and does not need to be: what makes a value referenceable is that the
+// engine reads it through the resolver, and the form has to report the two
+// facts separately or a reference naming nothing shows green.
+func TestTheOrganizationIdReportsWhetherItsReferenceResolves(t *testing.T) {
+	store := map[string]string{"HAVE": "org-42"}
+	resolve := func(name string) (string, bool) { v, ok := store[name]; return v, ok }
+
+	for name, tc := range map[string]struct {
+		stored       string
+		wantPresent  bool
+		wantResolved bool
+	}{
+		"a literal":               {stored: "org-42", wantPresent: true, wantResolved: true},
+		"a reference that is":     {stored: "${HAVE}", wantPresent: true, wantResolved: true},
+		"a reference that is not": {stored: "${GONE}", wantPresent: true, wantResolved: false},
+		"nothing":                 {stored: "", wantPresent: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reqs := atlassian.Requirements(&config.Atlassian{OrgID: tc.stored}, resolve)
+			for _, r := range reqs {
+				if r.Field != "org_id" {
+					continue
+				}
+				if r.Present != tc.wantPresent {
+					t.Fatalf("present = %v, want %v", r.Present, tc.wantPresent)
+				}
+				if !tc.wantPresent {
+					return
+				}
+				if r.Resolved == nil || *r.Resolved != tc.wantResolved {
+					t.Errorf("resolved = %v, want %v", r.Resolved, tc.wantResolved)
+				}
+				return
+			}
+			t.Fatal("no org_id requirement")
+		})
 	}
 }

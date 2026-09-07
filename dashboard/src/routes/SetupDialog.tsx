@@ -636,15 +636,21 @@ export function SetupDialog({
             doing is there for whoever wants it. */}
         {shown.some((r) => r.kind === "secret") && (
           <p className="int-form-note">
-            Tip: keep credentials in <a href={href(["secrets"])}>Secrets</a> and reference them here
-            as {"${NAME}"}.
-            {/* A SPAN CARRIES THE TOOLTIP, not the icon: the svg is
+            {/* THE MARK BEFORE THE SENTENCE, so the line reads as an aside
+                from its first character rather than ending in an icon
+                somebody has to go back for.
+
+                A SPAN CARRIES THE TOOLTIP, not the icon: the svg is
                 aria-hidden, and a `title` ATTRIBUTE on an svg is not the
                 `<title>` CHILD that draws one, so the hover would be silently
                 absent. The same words reach a screen reader as text. */}
             <span className="int-form-why" title={WHY_SECRETS}>
               <Icon name="info" size="sm" />
               <span className="sr-only">{WHY_SECRETS}</span>
+            </span>
+            <span>
+              Tip: keep credentials in <a href={href(["secrets"])}>Secrets</a> and reference them
+              here as {"${NAME}"}.
             </span>
           </p>
         )}

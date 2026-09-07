@@ -97,7 +97,13 @@ func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 	}
 	env := p.engine.resolver()
 	key := strings.TrimSpace(env.Value(cfg.APIKey))
-	if strings.TrimSpace(cfg.OrgID) == "" || key == "" {
+	// THROUGH THE RESOLVER, like the key beside it. The organization id is
+	// not a credential, but it is a value in the same document, and a
+	// company keeping it in the sealed store had the literal text
+	// "${ATLASSIAN_ORG_ID}" sent to Atlassian as the subject of every
+	// admin call, which is refused with nothing naming the cause.
+	org := strings.TrimSpace(env.Value(cfg.OrgID))
+	if org == "" || key == "" {
 		return []integration.Finding{{
 			Kind: integration.FindingCredentialMissing,
 			Detail: "the Atlassian organization id and its API key did not both " +
@@ -111,7 +117,7 @@ func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 	}
 	res, err := atlassian.Reconcile(ctx, atlassian.Options{
 		Client: atlassian.NewClient(atlassian.ClientOptions{}),
-		OrgID:  strings.TrimSpace(cfg.OrgID), Key: key, Plan: plan, Sink: in.Sink,
+		OrgID:  org, Key: key, Plan: plan, Sink: in.Sink,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
@@ -193,7 +199,7 @@ func (p *atlassianPass) Teardown(ctx context.Context, in setup.TeardownInput) er
 	}
 	return atlassian.Teardown(ctx, atlassian.TeardownOptions{
 		Client: atlassian.NewClient(atlassian.ClientOptions{}),
-		OrgID:  strings.TrimSpace(cfg.OrgID), Key: key, Plan: plan,
+		OrgID:  strings.TrimSpace(env.Value(cfg.OrgID)), Key: key, Plan: plan,
 	})
 }
 

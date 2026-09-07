@@ -474,6 +474,13 @@ curl -X POST https://engine.example.com/setup/integrations/datadog/inputs \
 under one key would eventually send a weak token by accident, and a field can
 be one or the other, never both.
 
+**Any field the engine reads through the resolver may hold a `${VAR}`**, not
+only the credentials: the Atlassian organization id, a site address, a cloud
+id and an account email are all read that way, so a company can keep them in
+the sealed store and name them here. `present` and `resolved` then say the two
+things separately, and a reference naming an entry that is not there reports
+`resolved: false` rather than passing for a working setting.
+
 **A `secret` field's value may be a `${VAR}` instead of a credential.** Sent
 one, the route writes that reference into the config path and seals nothing,
 so a credential already in the store can serve several fields and rotating it

@@ -38,7 +38,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
-	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -623,19 +622,17 @@ func (s *Service) discoverSite(
 	// document holds `${ATLASSIAN_ORG_API_KEY}` and the store is keyed on
 	// what is inside the braces — so passing the whole reference resolves
 	// nothing, silently, and this read as a company with no key at all.
-	key := ""
-	if name, isRef := envref.Whole(strings.TrimSpace(org.APIKey)); s.resolve != nil {
-		if !isRef {
-			key = strings.TrimSpace(org.APIKey)
-		} else {
-			key, _ = s.resolve(name)
-		}
-	}
-	if strings.TrimSpace(org.OrgID) == "" || strings.TrimSpace(key) == "" {
+	// BOTH THROUGH THE RESOLVER. The key was already read this way; the
+	// organization id was not, so a company keeping it in the sealed store
+	// asked Atlassian about an organization literally named
+	// "${ATLASSIAN_ORG_ID}".
+	key := setup.Deref(org.APIKey, s.resolve)
+	orgID := setup.Deref(org.OrgID, s.resolve)
+	if orgID == "" || key == "" {
 		return ""
 	}
 	site, err := atlassian.NewClient(atlassian.ClientOptions{}).
-		DiscoverSite(ctx, key, strings.TrimSpace(org.OrgID))
+		DiscoverSite(ctx, key, orgID)
 	if err != nil {
 		return "the Atlassian organization could not be read, so the site this " +
 			"integration works in is not known and none was given: " + err.Error()

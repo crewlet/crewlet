@@ -30,7 +30,12 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 		token, email, secret, siteURL = in.Token, in.Email, in.WebhookSecret, in.SiteURL
 	}
 
-	addressed := cmp.Or(url, siteURL) != ""
+	// THE ADDRESS, NOT THE REFERENCE NAMING IT. Every derivation below asks
+	// what the site looks like, and `${JIRA_URL}` looks like neither a Cloud
+	// site nor a Data Center instance: a company keeping its address in the
+	// store was offered the other deployment's fields.
+	address := setup.Deref(cmp.Or(url, siteURL), resolve)
+	addressed := address != ""
 
 	reqs := []setup.Requirement{
 		{
@@ -94,7 +99,7 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 			// case this got wrong: with no site typed yet DeploymentOf
 			// answers DataCenter for the empty string, so the one field a
 			// fresh Cloud connect cannot do without was marked optional.
-			Required: !addressed || DeploymentOf(cmp.Or(url, siteURL)) == Cloud,
+			Required: !addressed || DeploymentOf(address) == Cloud,
 			// WHERE TO READ IT. The address belongs to the account whose
 			// API token is in the field below, so it is the one on that
 			// account's own profile rather than anything in the
@@ -154,13 +159,19 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 		},
 	}
 
-	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Plain(url)
-	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Plain(cloudID)
-	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Plain(email)
+	// HELD, NOT PLAIN, for every field the engine reads through the
+	// resolver. Plain claims present AND resolved on the strength of
+	// something being written down, which is true of a literal and false of
+	// a `${VAR}` naming an entry that is not there: the form went green
+	// over a field every call then failed on, which is the exact silent
+	// outage this pair of facts exists to separate.
+	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Held(url, resolve)
+	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Held(cloudID, resolve)
+	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Held(email, resolve)
 	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Held(token, resolve)
 	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Held(secret, resolve)
-	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Plain(siteURL)
-	return forDeployment(reqs, DeploymentOf(cmp.Or(url, siteURL)), cloudID, addressed)
+	reqs[5].Present, reqs[5].Resolved, reqs[5].Stored = setup.Held(siteURL, resolve)
+	return forDeployment(reqs, DeploymentOf(address), cloudID, addressed)
 }
 
 // forDeployment drops the fields the other Atlassian deployment uses.

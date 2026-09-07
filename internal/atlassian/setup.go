@@ -63,7 +63,13 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 		},
 	}
 
-	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Plain(orgID)
+	// HELD, NOT PLAIN, for every field the engine reads through the
+	// resolver. Plain claims present AND resolved on the strength of
+	// something being written down, which is true of a literal and false of
+	// a `${VAR}` naming an entry that is not there: the form went green
+	// over a field every call then failed on, which is the exact silent
+	// outage this pair of facts exists to separate.
+	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Held(orgID, resolve)
 	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Held(key, resolve)
 	return reqs
 }

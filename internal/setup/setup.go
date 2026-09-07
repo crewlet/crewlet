@@ -480,6 +480,26 @@ func PointerFor(kind integration.Kind, r Requirement, current string) (name stri
 // is present when it is ON, because reporting `false` as written down would
 // make a paused integration look complete.
 
+// Deref is the value a field actually carries: a whole `${VAR}` read through
+// the store, anything else as written.
+//
+// For the DERIVATIONS a form makes from a value rather than for the value
+// itself. Jira's and Confluence's forms decide which deployment they are
+// looking at from the site address, and a reference is not an address: read
+// literally, `${JIRA_URL}` has no `.atlassian.net` in it, so a Cloud site
+// configured through the store was offered a Data Center's fields.
+func Deref(value string, resolve func(string) (string, bool)) string {
+	value = strings.TrimSpace(value)
+	name, isRef := envref.Whole(value)
+	if !isRef || resolve == nil {
+		return value
+	}
+	if got, ok := resolve(name); ok {
+		return strings.TrimSpace(got)
+	}
+	return ""
+}
+
 // Held is a value that may be a `${VAR}`, resolved through this process.
 func Held(value string, resolve func(string) (string, bool)) (bool, *bool, string) {
 	present, resolved := Resolution(value, resolve)
