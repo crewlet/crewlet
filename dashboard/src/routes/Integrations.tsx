@@ -29,7 +29,6 @@ import { Avatar, Badge, Button, Empty, Skeleton } from "~/ui/primitives.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtDateTime } from "~/lib/format.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
@@ -392,6 +391,18 @@ export function Reconcile({
   // fixes the first should not wait a full pass to learn there was a second.
   const rest = (status.findings ?? []).slice(1);
 
+  // A WORKING SURFACE SAYS NOTHING.
+  //
+  // The band used to carry the loop's own clock — when it last settled and
+  // when it next runs — under every surface, which is the engine narrating
+  // its schedule to somebody who asked what state their integration is in.
+  // On a healthy surface that timestamp was the ONLY thing in the band, so
+  // the card grew a grey stripe per surface saying nothing had happened.
+  // The tag says the state; the band is for what a person has to act on.
+  if (!status.detail && !status.action_url && !status.last_error && rest.length === 0) {
+    return null;
+  }
+
   return (
     <div className="int-row-note">
       <span className="int-row-note-text">
@@ -424,11 +435,6 @@ export function Reconcile({
             </ul>
           </details>
         )}
-
-        <span className="int-row-note-when">
-          {status.settled_at ? `settled ${fmtDateTime(status.settled_at)}` : "not settled yet"}
-          {status.next_attempt_at ? ` · next check ${fmtDateTime(status.next_attempt_at)}` : ""}
-        </span>
       </span>
     </div>
   );

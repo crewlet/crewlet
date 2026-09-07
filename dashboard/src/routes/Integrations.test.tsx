@@ -641,6 +641,52 @@ test("a roster on a two-surface card names the surface", () => {
   expect(screen.getByText(/Confluence: SRE Lead/)).toBeTruthy();
 });
 
+// A WORKING SURFACE SAYS NOTHING UNDER ITS NAME.
+//
+// The note band carried the loop's own clock — last settled, next check —
+// under every surface, and on a healthy one that was the only thing in it: a
+// grey stripe per surface reporting that nothing had happened. The tag says
+// the state; the band is for what a person has to act on.
+test("a ready surface carries no note", () => {
+  render(
+    <EntryRow
+      entry={CATALOG.find((e) => e.key === "datadog")!}
+      rows={rowsOf({
+        key: "datadog",
+        configured: true,
+        reconcile: { phase: "ready", settled_at: "2026-09-06T23:06:47Z" },
+      })}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Show Datadog details/ }));
+  expect(screen.queryByText(/settled/)).toBeNull();
+  expect(screen.queryByText(/next check/)).toBeNull();
+});
+
+// AND A SURFACE WITH SOMETHING TO SAY STILL SAYS IT. Dropping the band
+// wholesale would take the findings with it, which are the half a person
+// acts on.
+test("a degraded surface still carries its finding", () => {
+  render(
+    <EntryRow
+      entry={CATALOG.find((e) => e.key === "datadog")!}
+      rows={rowsOf({
+        key: "datadog",
+        configured: true,
+        reconcile: {
+          phase: "degraded",
+          detail: "sre-lead has no Datadog account",
+          settled_at: "2026-09-06T23:06:47Z",
+        },
+      })}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Show Datadog details/ }));
+  // Twice on purpose: the card's own status line, and the surface's note.
+  expect(screen.getAllByText("sre-lead has no Datadog account").length).toBe(2);
+  expect(screen.queryByText(/next check/)).toBeNull();
+});
+
 // A DROP IS A PROBLEM, so it survives the counters being removed.
 //
 // The three counters were dropped from the surface line because all three
