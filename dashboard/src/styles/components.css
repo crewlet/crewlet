@@ -1074,6 +1074,37 @@ code.inline {
   padding: 1px 4px;
   color: var(--text-secondary);
 }
+/* A REFUSAL'S PROBLEMS, one per line.
+ *
+ * A validation refusal is several of them joined with newlines, and HTML
+ * collapses those: the banner showed one run-on paragraph in which the second
+ * problem's config path landed inside the first one's sentence. A reader
+ * could not tell how many things were wrong, let alone which.
+ */
+.problems {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+/* INHERITED, not restated. These sit inside a banner or a field error that
+   has already set the colour for what it is saying, and a code face that
+   brought its own would read as a quotation from somewhere else. */
+.banner code.inline,
+.field-error code.inline {
+  color: inherit;
+  background: var(--surface-inset);
+}
+/* A `${VAR}` wears the face it wears in a field and on the Secrets screen:
+   these are names of sealed entries, and one drawn as ordinary code reads as
+   a path in the document rather than an entry in the store. */
+.banner code.inline.is-reference,
+.field-error code.inline.is-reference {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+}
+
 kbd {
   font-family: var(--font-mono);
   font-size: var(--fs-3xs);

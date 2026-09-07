@@ -28,6 +28,7 @@ import { Badge, Button } from "~/ui/primitives.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
 import { Icon } from "~/ui/Icon.tsx";
+import { Problems } from "~/ui/Problems.tsx";
 import { useToast } from "~/ui/Toast.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { SetupRequirement, SetupToolState } from "~/protocol/index.ts";
@@ -692,7 +693,11 @@ export function SetupDialog({
       {error && (
         <div className="banner critical">
           <Icon name="alert" size="sm" />
-          <span>{error}</span>
+          {/* THE PROBLEMS, not the paragraph. A validation refusal is several
+              of them joined with newlines, which HTML collapses into one run
+              where the second problem's config path lands inside the first
+              one's sentence. See [Problems]. */}
+          <Problems detail={error} />
         </div>
       )}
     </Dialog>

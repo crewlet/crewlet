@@ -117,12 +117,12 @@ func (w Worker) validate(path string, providers map[string]struct{}, ceiling int
 	var p problems
 	if strings.TrimSpace(w.Description) == "" {
 		p.add(at(path, "description"), ErrMissing,
-			"a worker needs a description — it is the only thing an executor "+
+			"a worker needs a description: it is the only thing an executor "+
 				"reads when choosing between workers")
 	}
 	if strings.TrimSpace(w.SystemPrompt) == "" {
 		p.add(at(path, "system_prompt"), ErrMissing,
-			"a worker needs a system_prompt — it is the persona the template exists to hold")
+			"a worker needs a system_prompt: it is the persona the template exists to hold")
 	}
 	if w.MaxTurns < 0 {
 		p.add(at(path, "max_turns"), ErrOutOfRange, "must not be negative, got %d", w.MaxTurns)
@@ -143,7 +143,7 @@ func (w Worker) validate(path string, providers map[string]struct{}, ceiling int
 	if w.Model != "" && providers != nil {
 		if _, ok := providers[w.Model]; !ok {
 			p.add(at(path, "model"), ErrUnknownValue,
-				"names provider %q, which providers.llm does not configure — "+
+				"names provider %q, which providers.llm does not configure: "+
 					"configured: %s", w.Model, keyList(providers))
 		}
 	}
@@ -191,25 +191,25 @@ func validateOutputSchema(path string, schema map[string]any) error {
 	props, ok := schema["properties"].(map[string]any)
 	if !ok || len(props) == 0 {
 		p.add(at(path, "properties"), ErrMissing,
-			"an output schema needs at least one property — an empty one asks "+
+			"an output schema needs at least one property: an empty one asks "+
 				"the worker to submit nothing, which is what leaving `output` out already does")
 	}
 	if len(props) > maxOutputProperties {
 		p.add(at(path, "properties"), ErrOutOfRange,
-			"has %d fields; at most %d — the schema is sent on every round of the "+
+			"has %d fields; at most %d: the schema is sent on every round of the "+
 				"worker's loop, and a model asked for more fields than this fills them badly",
 			len(props), maxOutputProperties)
 	}
 	for _, name := range requiredNames(schema) {
 		if _, ok := props[name]; !ok {
 			p.add(at(path, "required"), ErrUnknownValue,
-				"requires %q, which is not one of its properties — a provider "+
+				"requires %q, which is not one of its properties: a provider "+
 					"validating the submission would refuse every call", name)
 		}
 	}
 	if d := schemaDepth(schema, 0); d > maxOutputDepth {
 		p.add(path, ErrOutOfRange,
-			"nests %d levels deep; at most %d — deeper than that is a document, "+
+			"nests %d levels deep; at most %d: deeper than that is a document, "+
 				"and a document is what prose is for", d, maxOutputDepth)
 	}
 	return p.err()
@@ -288,7 +288,7 @@ func (c *Company) validateWorkers() error {
 		path := at("workers", name)
 		if !workerKey.MatchString(name) {
 			p.add(path, ErrUnknownValue,
-				"worker names are lowercase slugs matching %s — an executor types "+
+				"worker names are lowercase slugs matching %s: an executor types "+
 					"this name into a delegate call, so it has to be reproducible "+
 					"from having read it once", workerKey.String())
 		}
@@ -316,7 +316,7 @@ func validateWorkerRefs(path string, refs []string, defined map[string]Worker) e
 		if _, ok := defined[name]; !ok {
 			p.add(idx(at(path, "workers"), i), ErrUnknownValue,
 				"names worker %q, which the top-level workers: block does not "+
-					"define — defined: %s", name, workerList(defined))
+					"define: defined: %s", name, workerList(defined))
 		}
 	}
 	return p.err()
@@ -337,7 +337,7 @@ func (u *Unit) validateWorkerRefs(path string, defined map[string]Worker) error 
 // workerList renders the defined template names for an error message.
 func workerList(defined map[string]Worker) string {
 	if len(defined) == 0 {
-		return "(none — the workers: block is empty or absent)"
+		return "(none: the workers: block is empty or absent)"
 	}
 	return strings.Join(sortedKeys(defined), ", ")
 }
@@ -456,7 +456,7 @@ func cloneValue(v any) any {
 // would let the prompt and the delegate tool's own refusal message describe
 // the same worker differently.
 func DescribeWorker(name string, w Worker) string {
-	line := "- `" + name + "` — " + firstLine(w.Description)
+	line := "- `" + name + "`: " + firstLine(w.Description)
 	var notes []string
 	if len(w.Tools) > 0 {
 		notes = append(notes, "tools: "+strings.Join(w.Tools, ", "))
@@ -580,7 +580,7 @@ func (d Delegation) validate(path string) error {
 	for _, f := range positive {
 		if f.value < 1 {
 			p.add(at(path, f.name), ErrOutOfRange,
-				"must be at least 1, got %d — a cap of zero refuses every "+
+				"must be at least 1, got %d: a cap of zero refuses every "+
 					"delegate call", f.value)
 		}
 	}
@@ -598,13 +598,13 @@ func (d Delegation) validate(path string) error {
 	for _, f := range timeouts {
 		if f.value <= 0 {
 			p.add(at(path, f.name), ErrOutOfRange,
-				"must be positive, got %v — a non-positive timeout expires "+
+				"must be positive, got %v: a non-positive timeout expires "+
 					"before the work starts", f.value)
 		}
 	}
 	if f := d.BudgetFraction; f <= 0 || f > 1 {
 		p.add(at(path, "budget_fraction"), ErrOutOfRange,
-			"must be a fraction in (0, 1], got %v — it is a SHARE of the "+
+			"must be a fraction in (0, 1], got %v: it is a SHARE of the "+
 				"parent's remaining budget, not a token count", f)
 	}
 	// A ceiling below the cap it bounds is a contradiction rather than a
@@ -613,13 +613,13 @@ func (d Delegation) validate(path string) error {
 	// without going below the default.
 	if d.MaxTurnsCeiling > 0 && d.MaxTurns > 0 && d.MaxTurnsCeiling < d.MaxTurns {
 		p.add(at(path, "max_turns_ceiling"), ErrConflict,
-			"is %d, below max_turns (%d) — a template asking for the ordinary "+
+			"is %d, below max_turns (%d): a template asking for the ordinary "+
 				"round cap would then be refused at load",
 			d.MaxTurnsCeiling, d.MaxTurns)
 	}
 	if d.CallTimeoutSeconds > 0 && d.TaskTimeoutSeconds > d.CallTimeoutSeconds {
 		p.add(at(path, "task_timeout_seconds"), ErrConflict,
-			"is %v, above call_timeout_seconds (%v) — one worker could then "+
+			"is %v, above call_timeout_seconds (%v): one worker could then "+
 				"outlive the call that is waiting for it",
 			d.TaskTimeoutSeconds, d.CallTimeoutSeconds)
 	}

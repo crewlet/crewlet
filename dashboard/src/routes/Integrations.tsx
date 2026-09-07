@@ -266,6 +266,16 @@ export interface EntryState {
   tone: Tone;
   /** Drawn outlined when the tool is absent or paused, filled when it is live. */
   outline: boolean;
+  /**
+   * Whether the engine or the third-party app is mid-flight on this card.
+   *
+   * A CARD IN MOTION OFFERS NOTHING, which is what this exists to say. It is
+   * the window between a connect and the loop's first report, and the one
+   * between asking for a disconnect and its finishing: a person has nothing
+   * to do in either, and a button beside "Connecting" invites them to act on
+   * a card whose state is about to change under them.
+   */
+  busy?: boolean;
 }
 
 type Present = { surface: Surface; row: IntegrationRow };
@@ -320,6 +330,7 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
       tag: going.row.reconcile?.phase_label || "Disconnecting",
       tone: "neutral",
       outline: false,
+      busy: true,
     };
   }
 
@@ -360,6 +371,7 @@ export function rollUp(entry: Entry, rows: Map<string, IntegrationRow>): EntrySt
     // window before the loop's first report, and it is not yet working.
     tone: "caution",
     outline: true,
+    busy: true,
   };
 }
 
@@ -602,6 +614,12 @@ export function actionFor(
   present = false,
 ): { label: string; blocks?: string } | null {
   if (tools.length === 0) return null;
+  // A CARD IN MOTION OFFERS NOTHING. Between a connect and the loop's first
+  // report, and between asking for a disconnect and its finishing, there is
+  // nothing a person does that moves it: the engine is working, and a button
+  // beside "Connecting" invites somebody to act on a card whose state is
+  // about to change under them. See [EntryState.busy].
+  if (state.busy) return null;
   // THE TWO HALVES OF THIS SCREEN ARRIVE SEPARATELY, and the socket's rows
   // are the quicker one. Straight after a connect the rows already say the
   // block exists while this listing is still the pre-connect one, and a

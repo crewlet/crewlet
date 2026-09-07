@@ -194,7 +194,7 @@ func (p *Providers) validate(path string) error {
 	for key, provider := range p.LLM {
 		if strings.TrimSpace(key) == "" {
 			probs.add(llmPath, ErrMissing,
-				"a provider key must not be empty — it is the name seats "+
+				"a provider key must not be empty: it is the name seats "+
 					"select this provider by")
 			continue
 		}
@@ -248,7 +248,7 @@ func (p *Providers) validateSharedStateDirs(path string) error {
 			probs.add(at(at(path, key), "cli.state_dir"), ErrConflict,
 				"shares %q with providers.llm.%s but drives a different CLI "+
 					"(%q vs %q). One state directory is one login and one set "+
-					"of per-seat homes, which only works for the same CLI — "+
+					"of per-seat homes, which only works for the same CLI: "+
 					"give them separate state_dirs",
 				cfg.CLI.StateDir, prev.key, cfg.CLI.Agent, prev.agent)
 			continue
@@ -505,7 +505,7 @@ func (c CredentialCooldowns) validate(path string) error {
 		}
 		if f.value < minCooldownSeconds || f.value > maxCooldownSeconds {
 			p.add(at(path, f.name), ErrOutOfRange,
-				"must be %d..%d seconds, got %d — below a minute a cooling key "+
+				"must be %d..%d seconds, got %d: below a minute a cooling key "+
 					"is retried before the limit clears, and above a day it is "+
 					"effectively retired",
 				minCooldownSeconds, maxCooldownSeconds, f.value)
@@ -759,7 +759,7 @@ func (c *CLIAgent) ResolvedStateDir(key string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf(
 			"providers.llm.%s.cli.state_dir: no directory given and no home directory to "+
-				"derive one under (%w) — set cli.state_dir, or %s", key, err, CLIHomeEnv)
+				"derive one under (%w): set cli.state_dir, or %s", key, err, CLIHomeEnv)
 	}
 	return filepath.Join(home, defaultCLIHome, key), nil
 }

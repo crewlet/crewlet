@@ -290,7 +290,7 @@ func (n *Node) validate(path string) error {
 	if n.MaxConcurrent < 0 {
 		p.add(at(path, "max_concurrent"), ErrOutOfRange,
 			"must be 0 (the engine default) or a positive number of turns, "+
-				"got %d — there is no \"unbounded\"; write a large number for "+
+				"got %d: there is no \"unbounded\"; write a large number for "+
 				"effectively no limit", n.MaxConcurrent)
 	}
 
@@ -300,7 +300,7 @@ func (n *Node) validate(path string) error {
 		// catches a config built in code.
 		p.add(at(path, "id"), ErrUnknownValue,
 			"%q must start alphanumeric and contain only letters, digits, "+
-				"'.', '_' or '-' (max 64 chars) — it lands in log fields and "+
+				"'.', '_' or '-' (max 64 chars): it lands in log fields and "+
 				"broker consumer names", n.ID)
 	}
 
@@ -311,7 +311,7 @@ func (n *Node) validate(path string) error {
 	// they meant something they then failed to name.
 	if n.Roles != nil && len(n.Roles) == 0 {
 		p.add(at(path, "roles"), ErrMissing,
-			"name at least one of %s — a node with no roles does nothing at "+
+			"name at least one of %s: a node with no roles does nothing at "+
 				"all. Omit the key to run every role, which is the "+
 				"single-process default", strings.Join(nodeRoleNames, ", "))
 	}
@@ -767,7 +767,7 @@ func (a *APIAuth) validate(path string) error {
 		tp := idx(at(path, "tokens"), i)
 		if strings.TrimSpace(t.ID) == "" {
 			p.add(at(tp, "id"), ErrMissing,
-				"every token needs a label — it is what a revision's audit row records")
+				"every token needs a label: it is what a revision's audit row records")
 		}
 		if strings.TrimSpace(t.Token) == "" {
 			p.add(at(tp, "token"), ErrMissing, "token must not be empty")
@@ -866,7 +866,7 @@ func (s *Secrets) validate(path string) error {
 			p.add(at(kp, "id"), ErrMissing, "every key needs an id")
 		} else if !secretKeyIDPattern.MatchString(k.ID) {
 			p.add(at(kp, "id"), ErrUnknownValue,
-				"%q must contain only letters, digits, '.', '_' or '-' — it is "+
+				"%q must contain only letters, digits, '.', '_' or '-': it is "+
 					"stamped into every envelope this key seals", k.ID)
 		}
 		if strings.TrimSpace(k.Material) == "" {
@@ -880,7 +880,7 @@ func (s *Secrets) validate(path string) error {
 	}
 	if len(s.Keys) > 0 && s.ActiveKeyID == "" {
 		p.add(at(path, "active_key_id"), ErrMissing,
-			"required once keys is set — one key has to seal new writes")
+			"required once keys is set: one key has to seal new writes")
 	}
 	if s.ActiveKeyID != "" {
 		if _, ok := ids[s.ActiveKeyID]; !ok {

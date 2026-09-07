@@ -46,7 +46,7 @@ type Role struct {
 	// EFFECTIVELY PERMANENT: the seat's durable id is derived from the
 	// company name and this handle, so changing either orphans that seat's
 	// diary, onboarding markers and counterparty profiles.
-	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug. Effectively permanent — it derives the seat's durable id."`
+	Handle string `yaml:"handle,omitempty" json:"handle,omitempty" js:"pattern=^[a-z0-9][a-z0-9-]*$" desc:"Canonical slug. Effectively permanent: it derives the seat's durable id."`
 
 	Email string `yaml:"email,omitempty" json:"email,omitempty" desc:"Seat email; plus-addressing derives from the handle."`
 
@@ -452,13 +452,13 @@ func (s *RoleSlack) validate(path string) error {
 	var p problems
 	if strings.TrimSpace(s.BotToken) == "" {
 		p.add(at(path, "bot_token"), ErrMissing,
-			"required — without it this seat receives messages it cannot "+
+			"required: without it this seat receives messages it cannot "+
 				"answer. `crewlet slack provision` mints one into the ${VAR} "+
 				"this field points at")
 	}
 	if strings.TrimSpace(s.SigningSecret) == "" {
 		p.add(at(path, "signing_secret"), ErrMissing,
-			"required — this seat's /webhooks/slack/<handle> route has nothing "+
+			"required: this seat's /webhooks/slack/<handle> route has nothing "+
 				"to verify a delivery with otherwise and answers 503 to every "+
 				"one, while the app's own settings page reports a healthy "+
 				"request URL")
@@ -494,7 +494,7 @@ func (m *RoleMattermost) validate(path string) error {
 	}
 	if !mattermostUsername.MatchString(m.Username) {
 		return fault(at(path, "username"), ErrUnknownValue,
-			"%q — Mattermost usernames are lowercase and contain only letters, "+
+			"%q: Mattermost usernames are lowercase and contain only letters, "+
 				"digits, '.', '-' and '_', starting with a letter or digit", m.Username)
 	}
 	return nil

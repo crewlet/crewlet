@@ -159,7 +159,7 @@ func (m *MCPServer) validate(path string) error {
 	var p problems
 	if strings.TrimSpace(m.Name) == "" {
 		p.add(at(path, "name"), ErrMissing,
-			"a server needs a name — it is the key seats declare credentials "+
+			"a server needs a name: it is the key seats declare credentials "+
 				"under and how its tools are labelled in every prompt")
 	}
 	if m.Transport != "" && !slices.Contains(MCPTransports, m.Transport) {

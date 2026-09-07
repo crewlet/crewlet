@@ -172,7 +172,7 @@ type SandboxProvider struct {
 	// waiter refreshes a running box's TTL every tick so the clock never
 	// kills it. Effectively the orphan-reclaim grace — how long a box
 	// outlives an engine that stopped heart-beating.
-	DefaultTimeoutSeconds float64 `yaml:"default_timeout_seconds,omitempty" json:"default_timeout_seconds,omitempty" js:"min=0" desc:"Box TTL/keepalive. Not a run cap — the orphan-reclaim grace."`
+	DefaultTimeoutSeconds float64 `yaml:"default_timeout_seconds,omitempty" json:"default_timeout_seconds,omitempty" js:"min=0" desc:"Box TTL/keepalive. Not a run cap: the orphan-reclaim grace."`
 
 	// DefaultPauseTTLSeconds is how long a sandbox blocked on a human's
 	// answer stays paused before it is reaped and the work re-seeds from
@@ -233,7 +233,7 @@ type E2BSandbox struct {
 	// template with the resources you want and name it here — there is
 	// deliberately no engine-side limits knob, because the engine could
 	// not honour one.
-	Template string `yaml:"template,omitempty" json:"template,omitempty" desc:"Box template. This is where vCPU/RAM/disk are set — at template build time."`
+	Template string `yaml:"template,omitempty" json:"template,omitempty" desc:"Box template. This is where vCPU/RAM/disk are set: at template build time."`
 }
 
 func (e *E2BSandbox) validate(path string) error {
@@ -245,7 +245,7 @@ func (e *E2BSandbox) validate(path string) error {
 		// one 401s at its first create — minutes into a turn that has
 		// already spent its own rounds.
 		p.add(at(path, "api_key"), ErrMissing,
-			"required — the API authenticates every call, including against "+
+			"required: the API authenticates every call, including against "+
 				"a self-hosted cluster, where `domain` changes which API is "+
 				"talked to and not whether it authenticates")
 	}
@@ -592,7 +592,7 @@ func (s *SandboxSetupStep) validate(path string) error {
 	var p problems
 	if strings.TrimSpace(s.Name) == "" {
 		p.add(at(path, "name"), ErrMissing,
-			"a setup step needs a name — it is what a failure message points at")
+			"a setup step needs a name: it is what a failure message points at")
 	}
 	if len(s.Files) == 0 && len(s.Commands) == 0 && len(s.Env) == 0 && s.Brief == "" {
 		// A step that provisions nothing and tells the agent nothing is

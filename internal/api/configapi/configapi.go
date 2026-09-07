@@ -326,7 +326,7 @@ func (s *Service) checkPatchMediaType(w http.ResponseWriter, r *http.Request) bo
 	writeJSON(w, http.StatusUnsupportedMediaType, map[string]any{
 		"error": "unsupported_patch_media_type", "accept_patch": acceptPatch,
 		"you_sent": media,
-		"hint": "PATCH /config takes a JSON Merge Patch (RFC 7396) — an object " +
+		"hint": "PATCH /config takes a JSON Merge Patch (RFC 7396): an object " +
 			"shaped like the document. A JSON Patch (RFC 6902) list of " +
 			"operations is a different format this surface does not serve; " +
 			"editing one seat is PUT /config/roles/{handle}",
@@ -427,7 +427,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	summary, body, ok := requireSummary(w, r, body,
-		"PUT /config needs an audit summary — the X-Summary header, "+
+		"PUT /config needs an audit summary: the X-Summary header, "+
 			"or a top-level _summary key in the body. The revision history "+
 			"is the record of who changed what and why")
 	if !ok {
@@ -505,7 +505,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	summary, body, ok := requireSummary(w, r, body,
-		"PATCH /config needs an audit summary — the X-Summary "+
+		"PATCH /config needs an audit summary: the X-Summary "+
 			"header, or a top-level _summary key in the body. A patch is "+
 			"the change least visible in a diff, so the sentence saying "+
 			"what it was for matters most here")

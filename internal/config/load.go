@@ -291,11 +291,11 @@ func retiredKey(goType, field string) string {
 // Entries are permanent. A file written against any past release stays
 // diagnosable, and the cost is one map entry.
 var retiredBootstrapFields = map[string]string{
-	"Bootstrap.debug": "`debug` is no longer a setting — it was a second way to say " +
+	"Bootstrap.debug": "`debug` is no longer a setting: it was a second way to say " +
 		"the log level and it is gone. Write `logging:` with `level: debug` " +
 		"under it (and `level: info` is the default, so a `debug: false` " +
 		"can simply be deleted)",
-	"Store.driver": "`store.driver` is no longer a setting — it chose between " +
+	"Store.driver": "`store.driver` is no longer a setting: it chose between " +
 		"two store implementations and there is one. Turso is the database; " +
 		"the mainline-SQLite fallback and the CREWLET_STORE_DRIVER variable " +
 		"that selected it are both gone. Delete the line; the file it names " +
@@ -332,7 +332,7 @@ func decodeError(err error, retired map[string]string) error {
 				continue
 			}
 			out.add("line "+m[1], ErrUnknownField,
-				"%q is not a setting — check the spelling, or the block it belongs under", m[2])
+				"%q is not a setting: check the spelling, or the block it belongs under", m[2])
 			continue
 		}
 		out.add("", ErrShape, "%s", strings.TrimSpace(line))

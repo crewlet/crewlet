@@ -408,7 +408,10 @@ function toolState(over: Partial<SetupToolState>): SetupToolState {
 // inputs the state tag beside it is derived from. Two derivations would
 // eventually tell an operator two different things in one row.
 test("the action follows the state", () => {
-  const ready = rollUp(atlassian, rowsOf({ key: "jira", configured: true }));
+  const ready = rollUp(
+    atlassian,
+    rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready" } }),
+  );
   expect(actionFor(ready, [toolState({ configured: false })])?.label).toBe("Connect");
   expect(actionFor(ready, [toolState({ satisfied: false })])?.label).toBe("Continue");
   // A WORKING TOOL OFFERS NOTHING. Nothing a person does moves it, and the
@@ -432,12 +435,45 @@ test("the action follows the state", () => {
   expect(actionFor(owed, [toolState({})])).toBeNull();
 });
 
+// A CARD IN MOTION OFFERS NOTHING.
+//
+// Between a connect and the loop's first report, and between asking for a
+// disconnect and its finishing, there is nothing a person does that moves the
+// card: the engine is working. A Continue button beside "Connecting" invited
+// somebody to act on a card whose state was about to change under them, and
+// on a multi-surface tool it appeared the instant the first surface was
+// saved, which is the moment the loop had least to say.
+test("a card the engine is mid-flight on offers no action", () => {
+  // CONNECTED AND UNREPORTED: the window after a save.
+  const connecting = rollUp(atlassian, rowsOf({ key: "atlassian", configured: true }));
+  expect(connecting.tag).toBe("Connecting");
+  // Atlassian is three surfaces, so the other two are unconfigured and this
+  // is exactly the card that drew Continue beside Connecting.
+  expect(
+    actionFor(connecting, [toolState({ key: "atlassian" }), toolState({ configured: false })]),
+  ).toBeNull();
+
+  // AND BEING TAKEN AWAY, which is the other direction of the same rule.
+  const going = rollUp(
+    atlassian,
+    rowsOf({
+      key: "jira",
+      configured: true,
+      reconcile: { phase: "ready", disconnecting: true },
+    }),
+  );
+  expect(actionFor(going, [toolState({ configured: false })])).toBeNull();
+});
+
 // A TOOL IS COMPLETE ONLY WHEN EVERY CONFIGURED SURFACE IS. Atlassian with
 // Jira set up and Confluence half done is neither Connect nor finished: it is
 // a tool with something left to do, and reading only the first surface would
 // have called it done.
 test("one unfinished surface makes the whole tool unfinished", () => {
-  const ready = rollUp(atlassian, rowsOf({ key: "jira", configured: true }));
+  const ready = rollUp(
+    atlassian,
+    rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready" } }),
+  );
   const mixed = actionFor(ready, [
     toolState({ key: "jira", configured: true, satisfied: true }),
     toolState({ key: "confluence", configured: true, satisfied: false }),
@@ -558,7 +594,13 @@ test("a roster is listed once however many sections carry it", () => {
 // nowhere on the one card with real work outstanding. The card still SAYS so,
 // through the tag its reconcile phase drives.
 test("a per-seat app leaves the work to the agent's own row", () => {
-  const state = rollUp(slack, rowsOf({ key: "slack", configured: true }));
+  // SETTLED, because this is about what the action IS. A card between a
+  // connect and the loop's first report offers nothing at all, which is a
+  // different rule with its own test.
+  const state = rollUp(
+    slack,
+    rowsOf({ key: "slack", configured: true, reconcile: { phase: "ready" } }),
+  );
   // GITHUB'S SHAPE: unfinished, and with nothing left to type. Both acts that
   // produce an agent's app happen at GitHub, from that agent's own row, so a
   // GitHub seat carries no requirements and the dialog has no box a Continue
@@ -992,7 +1034,10 @@ test("disconnect skips a surface this company never configured", () => {
 // "Connect" beside a tag reading Connected: two controls describing the same
 // tool, disagreeing, with the button the wrong one.
 test("a stale setup listing offers nothing rather than contradicting the tag", () => {
-  const connected = rollUp(atlassian, rowsOf({ key: "jira", configured: true }));
+  const connected = rollUp(
+    atlassian,
+    rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready" } }),
+  );
   const behind = [
     toolState({ key: "atlassian", configured: false }),
     toolState({ key: "jira", configured: false }),

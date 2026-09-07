@@ -124,7 +124,7 @@ func (t *TurnEngine) validate(path string) error {
 	for _, f := range positive {
 		if f.value < 1 {
 			p.add(at(path, f.name), ErrOutOfRange,
-				"must be at least 1, got %d — a cap of zero fails every turn "+
+				"must be at least 1, got %d: a cap of zero fails every turn "+
 					"on its first guard check", f.value)
 		}
 	}
@@ -159,7 +159,7 @@ func (t *TurnEngine) validate(path string) error {
 	for _, c := range ceilings {
 		if c.value < c.base {
 			p.add(at(path, c.name), ErrOutOfRange,
-				"must be at least %s (%d), got %d — set them equal to disable "+
+				"must be at least %s (%d), got %d: set them equal to disable "+
 					"extensions for this phase", c.baseName, c.base, c.value)
 		}
 	}

@@ -88,7 +88,7 @@ func (i *Integrations) validate(path string) error {
 	// nowhere, which is the failure mode this whole field exists to close.
 	if base := strings.TrimSpace(i.PublicBaseURL); base != "" && !hasHTTPScheme(base) {
 		p.add(at(path, "public_base_url"), ErrUnknownValue,
-			"%q must start with http:// or https:// — it is the base every "+
+			"%q must start with http:// or https://: it is the base every "+
 				"webhook URL is built on, so a value without a scheme yields "+
 				"an address the third-party app accepts and never reaches", i.PublicBaseURL)
 	}
@@ -218,7 +218,7 @@ func (j *Jira) validate(path string) error {
 	case url == "" && cloud == "":
 		probs.add(path, ErrMissing,
 			"give url (a Data Center instance or a Cloud site) or cloud_id "+
-				"(an Atlassian Cloud id) — without one there is nowhere to read "+
+				"(an Atlassian Cloud id): without one there is nowhere to read "+
 				"an issue's watchers from")
 	case url != "" && cloud != "":
 		probs.add(path, ErrConflict,
@@ -235,7 +235,7 @@ func (j *Jira) validate(path string) error {
 	}
 	if strings.TrimSpace(j.Token) == "" {
 		probs.add(at(path, "token"), ErrMissing,
-			"required — the org account is what reads an issue's watchers, "+
+			"required: the org account is what reads an issue's watchers, "+
 				"which is the one routing input a Jira webhook never carries")
 	}
 	if strings.TrimSpace(j.WebhookSecret) == "" && cloud == "" && !IsAtlassianCloud(url) {
@@ -251,7 +251,7 @@ func (j *Jira) validate(path string) error {
 		// is told at the moment it tries to register one, by the command
 		// that was going to do it.
 		probs.add(at(path, "webhook_secret"), ErrMissing,
-			"required for a Data Center instance — the /webhooks/jira route "+
+			"required for a Data Center instance: the /webhooks/jira route "+
 				"has nothing to verify a delivery with otherwise, and answers "+
 				"503 to every one")
 	}
@@ -378,7 +378,7 @@ func (c *Confluence) validate(path string) error {
 	case url == "" && cloud == "":
 		probs.add(path, ErrMissing,
 			"give url (a Data Center instance or a Cloud site) or cloud_id "+
-				"(an Atlassian Cloud id) — without one there is nowhere to "+
+				"(an Atlassian Cloud id): without one there is nowhere to "+
 				"search")
 	case url != "" && cloud != "":
 		probs.add(path, ErrConflict,
@@ -395,7 +395,7 @@ func (c *Confluence) validate(path string) error {
 	}
 	if strings.TrimSpace(c.Token) == "" {
 		probs.add(at(path, "token"), ErrMissing,
-			"required — it is the account a seat with no Confluence "+
+			"required: it is the account a seat with no Confluence "+
 				"credential of its own searches under, and the one the "+
 				"tool-skill walk reads with")
 	}
@@ -407,7 +407,7 @@ func (c *Confluence) validate(path string) error {
 		// refusal lives where it can be honest instead: the provisioner
 		// will not register a Cloud hook without a token to put in it.
 		probs.add(at(path, "webhook_secret"), ErrMissing,
-			"required for a Data Center instance — the /webhooks/confluence "+
+			"required for a Data Center instance: the /webhooks/confluence "+
 				"route has nothing to verify a delivery with otherwise, and "+
 				"answers 503 to every one")
 	}
@@ -595,12 +595,12 @@ func (m *Mattermost) validate(path string) error {
 		// reference resolves later, and rejecting it here would forbid
 		// configuring the URL from the environment.
 		p.add(at(path, "url"), ErrUnknownValue,
-			"%q must start with http:// or https:// — it is the instance URL "+
+			"%q must start with http:// or https://: it is the instance URL "+
 				"browsers use", m.URL)
 	}
 	if strings.TrimSpace(m.Team) == "" {
 		p.add(at(path, "team"), ErrMissing,
-			"required when mattermost is enabled — channels are team-scoped")
+			"required when mattermost is enabled: channels are team-scoped")
 	}
 	return p.err()
 }
@@ -912,13 +912,13 @@ func (g *GitHub) validate(path string) error {
 		// rather than as "your instance address is missing https://".
 		if url := strings.TrimSpace(g.URL); url != "" && !hasHTTPScheme(url) {
 			p.add(at(path, "url"), ErrUnknownValue,
-				"%q must start with http:// or https:// — leave it unset for "+
+				"%q must start with http:// or https://: leave it unset for "+
 					"github.com, which is a different API host rather than a "+
 					"path on the web UI", g.URL)
 		}
 		if strings.TrimSpace(g.WebhookSecret) == "" {
 			p.add(at(path, "webhook_secret"), ErrMissing,
-				"required when github is enabled — every delivery is verified "+
+				"required when github is enabled: every delivery is verified "+
 					"against it, and a route with nothing to verify with "+
 					"answers 503 rather than accepting one")
 		}
@@ -949,7 +949,7 @@ func (g *GitHub) validate(path string) error {
 		if !ok || strings.TrimSpace(owner) == "" || strings.TrimSpace(name) == "" ||
 			strings.Contains(name, "/") {
 			p.add(idx(at(pp, "repos"), i), ErrShape,
-				"%q is not owner/repo — GitHub has no repository-only "+
+				"%q is not owner/repo: GitHub has no repository-only "+
 					"addressing, so there is nothing for a run to look up", repo)
 		}
 	}
@@ -970,7 +970,7 @@ func (g *GitLab) validate(path string) error {
 		switch {
 		case secret == "":
 			p.add(at(path, "signing_secret"), ErrMissing,
-				"required when gitlab is enabled — it is the only supported "+
+				"required when gitlab is enabled: it is the only supported "+
 					"webhook verification mode")
 		case isRef:
 			// A ${VAR} is checked where it is RESOLVED, not here. Tier B
@@ -1178,13 +1178,13 @@ func (d *Datadog) validate(path string) error {
 	}
 	if strings.TrimSpace(d.WebhookToken) == "" {
 		p.add(at(path, "webhook_token"), ErrMissing,
-			"required when datadog is enabled — every delivery is checked "+
+			"required when datadog is enabled: every delivery is checked "+
 				"against it, and a route with nothing to check against "+
 				"answers 503 rather than accepting one")
 	}
 	if strings.TrimSpace(d.RouteTo) == "" {
 		p.add(at(path, "route_to"), ErrMissing,
-			"required when datadog is enabled — name the handle of the seat "+
+			"required when datadog is enabled: name the handle of the seat "+
 				"an alert should wake when no monitor tag names an owner, "+
 				"or %q to dismiss those alerts on purpose. Without an answer "+
 				"they are verified, counted and then delivered to nobody, "+

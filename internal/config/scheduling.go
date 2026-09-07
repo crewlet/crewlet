@@ -85,7 +85,7 @@ func (s *Scheduling) validate(path string) error {
 	var p problems
 	if s.TickSeconds < 1 || s.TickSeconds > maxTickSeconds {
 		p.add(at(path, "tick_seconds"), ErrOutOfRange,
-			"must be 1..%d, got %d — cron fires at minute granularity, so a "+
+			"must be 1..%d, got %d: cron fires at minute granularity, so a "+
 				"tick at or above a minute misses fires rather than delaying them",
 			maxTickSeconds, s.TickSeconds)
 	}

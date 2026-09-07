@@ -37,6 +37,7 @@
 
 import { useId, useRef, useState, type ReactNode } from "react";
 
+import { Problems } from "./Problems.tsx";
 import { complete, rank, referenceAt, type Typing } from "./secretref.ts";
 
 export type FieldKind = "text" | "secret" | "url" | "id" | "choice" | "handle" | "email";
@@ -333,7 +334,10 @@ export function Field({
       )}
       {error && (
         <span className="hint field-error" id={errorID} role="alert">
-          {error}
+          {/* THE SAME FACES the banner gives a refusal: a field's own error
+              is one problem out of the same set, and a config path or a
+              `${VAR}` in it is the same kind of thing here. */}
+          <Problems detail={error} />
         </span>
       )}
     </div>
