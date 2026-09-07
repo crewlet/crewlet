@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
@@ -171,6 +172,22 @@ func (w Writer) Write(ctx context.Context, reqs []Requirement, in Submission) (R
 			}
 			continue
 		}
+		// A SUBMITTED `${VAR}` IS A POINTER, NOT A CREDENTIAL. An
+		// operator who keeps a credential in the sealed store and names
+		// it here is doing the thing this whole package exists to make
+		// possible, and sealing the reference AS a value would store the
+		// literal text "${NAME}" under the field's own name and point the
+		// config at that: a credential whose value is the spelling of
+		// another credential, refused by the vendor with no clue why.
+		//
+		// It needs no secret store in this process, which is why it is
+		// decided before that check: naming an entry is not writing one.
+		if ref, isRef := envref.Whole(strings.TrimSpace(value)); isRef {
+			if err := setPath(patch, r.ConfigPath, "${"+ref+"}"); err != nil {
+				return Result{}, err
+			}
+			continue
+		}
 		if w.Secrets == nil {
 			return Result{}, fmt.Errorf(
 				"setup: %s is a credential and this process has no secret store to seal it in",
@@ -270,6 +287,24 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 		if r.Kind != KindSecret {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := setPath(seat, r.ConfigPath, typed(r.Kind, value)); err != nil {
+				return Result{}, err
+			}
+			changed = true
+			continue
+		}
+		// A SUBMITTED `${VAR}` IS A POINTER, NOT A CREDENTIAL. An
+		// operator who keeps a credential in the sealed store and names
+		// it here is doing the thing this whole package exists to make
+		// possible, and sealing the reference AS a value would store the
+		// literal text "${NAME}" under the field's own name and point the
+		// config at that: a credential whose value is the spelling of
+		// another credential, refused by the vendor with no clue why.
+		//
+		// It needs no secret store in this process, which is why it is
+		// decided before that check: naming an entry is not writing one.
+		if ref, isRef := envref.Whole(strings.TrimSpace(value)); isRef {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			if err := setPath(seat, r.ConfigPath, "${"+ref+"}"); err != nil {
 				return Result{}, err
 			}
 			changed = true

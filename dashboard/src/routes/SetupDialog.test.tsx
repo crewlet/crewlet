@@ -1132,3 +1132,109 @@ test("a value shared across surfaces renders after them", () => {
     "API token",
   ]);
 });
+
+// A CREDENTIAL'S REFERENCE IS NOT THE CREDENTIAL. The engine sends `${NAME}`
+// back for a field pointing at the sealed store, and showing it is how an
+// operator tells "this reads SHARED_TOKEN" from "type here to replace what is
+// behind this field".
+test("a secret pointing at the store opens naming the entry it reads", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            configured: true,
+            requirements: [
+              req({
+                field: "webhook_token",
+                label: "Shared token",
+                kind: "secret",
+                present: true,
+                value: "${SHARED_TOKEN}",
+              }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const input = screen.getByLabelText("Shared token") as HTMLInputElement;
+  expect(input.value).toBe("${SHARED_TOKEN}");
+  expect(input.value).not.toBe(HELD);
+});
+
+// AND THE DOTS SURVIVE FOR THE ONE CASE THAT HAS NO REFERENCE: a company that
+// hand-wrote a literal into its config document. The engine sends no value
+// there, correctly, and an empty box under a required label reads as an
+// unanswered question on a form that is already complete.
+test("a literal credential still shows only that it is held", () => {
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            configured: true,
+            requirements: [
+              req({ field: "webhook_token", label: "Shared token", kind: "secret", present: true }),
+            ],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect((screen.getByLabelText("Shared token") as HTMLInputElement).value).toBe(HELD);
+});
+
+// The recommendation is an alternative to what the form asked for, so it is
+// shown only where there is a credential to keep somewhere.
+test("the secrets recommendation appears only on a form with a credential", () => {
+  const { unmount } = render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            requirements: [req({ field: "route_to", label: "Fallback seat", kind: "handle" })],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.queryByText(/Recommendation:/)).toBeNull();
+  unmount();
+
+  render(
+    <SetupDialog
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...tool,
+            requirements: [req({ field: "webhook_token", label: "Shared token", kind: "secret" })],
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.getByText(/Recommendation:/)).toBeTruthy();
+  expect((screen.getByText("Secrets") as HTMLAnchorElement).getAttribute("href")).toContain(
+    "secrets",
+  );
+});

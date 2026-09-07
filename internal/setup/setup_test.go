@@ -2,6 +2,7 @@ package setup_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -536,5 +537,103 @@ func TestAListPositionIsRefused(t *testing.T) {
 	}
 	if len(rec.events) != 0 {
 		t.Fatalf("a refused submission wrote %v", rec.events)
+	}
+}
+
+// A SUBMITTED `${VAR}` NAMES A CREDENTIAL RATHER THAN BEING ONE.
+//
+// An operator who keeps a token in the sealed store and points the field at
+// it is doing what this whole package exists to make possible. Sealing the
+// reference as a value would store the literal text "${SHARED_TOKEN}" under
+// the field's own name and point the config at THAT: a credential whose
+// value is the spelling of another credential, refused by the vendor with
+// nothing on any surface saying why.
+func TestASubmittedReferenceIsStoredAsAPointer(t *testing.T) {
+	t.Parallel()
+	rec := &recorder{}
+	result, err := writer(rec).Write(context.Background(), datadogReqs, setup.Submission{
+		Kind:    integration.KindDatadog,
+		Values:  map[string]string{"webhook_token": "${SHARED_TOKEN}", "route_to": "sre-lead"},
+		Summary: "point datadog at a stored secret", Operator: "founder",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// NOTHING WAS SEALED. Naming an entry is not writing one.
+	if len(result.Secrets) != 0 {
+		t.Errorf("wrote_secrets = %v, want nothing sealed", result.Secrets)
+	}
+	if len(rec.secrets) != 0 {
+		t.Errorf("the store was written: %v", rec.secrets)
+	}
+	if len(rec.events) != 1 || !strings.HasPrefix(rec.events[0], "patch:") {
+		t.Fatalf("events = %v, want the config write alone", rec.events)
+	}
+	if !strings.Contains(rec.events[0], `"webhook_token":"${SHARED_TOKEN}"`) {
+		t.Fatalf("the patch does not carry the operator's pointer: %s", rec.events[0])
+	}
+	// NOT THE FIELD'S OWN DERIVED NAME, which is what a pass that sealed
+	// first and pointed afterwards would have written.
+	if strings.Contains(rec.events[0], "DATADOG_WEBHOOK_TOKEN") {
+		t.Errorf("the patch points at the derived name: %s", rec.events[0])
+	}
+}
+
+// AND A COMPOSITE IS NOT A POINTER. `https://${HOST}/hook` names a variable
+// and carries an address beside it, so writing it through as a reference
+// would leave the field holding a fragment of a URL where a credential
+// belongs. It is a value, and it is sealed like one.
+func TestACompositeIsSealedRatherThanPointedAt(t *testing.T) {
+	t.Parallel()
+	rec := &recorder{}
+	if _, err := writer(rec).Write(context.Background(), datadogReqs, setup.Submission{
+		Kind:    integration.KindDatadog,
+		Values:  map[string]string{"webhook_token": "https://${HOST}/hook"},
+		Summary: "connect datadog", Operator: "founder",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rec.secrets["DATADOG_WEBHOOK_TOKEN"] != "https://${HOST}/hook" {
+		t.Errorf("the composite was not sealed: %v", rec.secrets)
+	}
+}
+
+// A CREDENTIAL'S REFERENCE REACHES THE FORM; THE CREDENTIAL NEVER DOES.
+//
+// The form has to open showing which entry of the sealed store a field
+// reads, or an operator cannot tell whether they are editing a pointer or
+// about to replace it. A literal in the same position IS the credential, and
+// a company that wrote one by hand must not have it read back to a screen.
+func TestOnlyAReferenceLeavesOnTheWire(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ stored, want string }{
+		"a reference": {stored: "${JIRA_TOKEN}", want: "${JIRA_TOKEN}"},
+		"padded":      {stored: "  ${JIRA_TOKEN}  ", want: "${JIRA_TOKEN}"},
+		"a literal":   {stored: "ATATT-real-credential", want: ""},
+		"a composite": {stored: "https://${HOST}/x", want: ""},
+		"nothing yet": {stored: "", want: ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			body, err := json.Marshal(setup.Requirement{
+				Field: "token", Kind: setup.KindSecret,
+				ConfigPath: "integrations.jira.token", Stored: tc.stored,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out struct {
+				Value string `json:"value"`
+			}
+			if err := json.Unmarshal(body, &out); err != nil {
+				t.Fatal(err)
+			}
+			if out.Value != tc.want {
+				t.Errorf("value = %q, want %q", out.Value, tc.want)
+			}
+			if tc.want == "" && strings.Contains(string(body), tc.stored) && tc.stored != "" {
+				t.Errorf("the payload carries the stored value: %s", body)
+			}
+		})
 	}
 }

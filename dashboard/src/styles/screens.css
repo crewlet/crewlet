@@ -1064,6 +1064,18 @@
  * that app's deliveries and routes them, so it has fields the console has no
  * equivalent for, and seven inputs in one column made connecting an app read
  * as filling in a configuration file. */
+/* An alternative to what the form asked for, so it closes the form rather
+   than sitting among the fields. It carries no rule of its own: where the
+   fold is present that rule already ends the form, and a second one would
+   box the note in. */
+.int-form-note {
+  margin: 0;
+  line-height: var(--lh-normal);
+}
+.int-form-note code {
+  font-family: var(--font-mono);
+}
+
 .int-form-more {
   /* IT CLOSES THE FORM, so it takes the rule and the space above it rather
      than sitting in the field flow with a hairline through the middle. The

@@ -250,9 +250,18 @@ by a process that can reach the [coordination store](../concepts/coordination.md
 | `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` and `source`. **Never a value** |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator |
-| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB. `?source=` records provenance (default `api`) |
+| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB. `?source=` records provenance (default `api`). `400 invalid_name` when the name is not an environment-variable name |
 | `DELETE` | `/secrets/{name}` | Remove one value. `200` either way, with `{"removed": true\|false}` |
 | `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id`, answering the names it moved. `?key_id=` is refused with `409` when it names a different key |
+
+**The name is an environment-variable name, and a write that is not one is
+refused.** The store is keyed by the name a `${VAR}` resolves through, so
+`gitlab-token` or `my token` would be sealed, listed and read by nothing at
+all — a success the operator only discovers when a provider fails to
+authenticate hours later. Letters, digits and underscores, starting with a
+letter or an underscore. The refusal comes before the body is read, so the
+name is what the answer points at. Reading and removing take the name as
+given, so a row written before the check can still be inspected and deleted.
 
 **The body is the value, not a JSON wrapper.** A credential is arbitrary bytes
 — a PEM key has newlines, a token can hold anything — and an encoding step
@@ -408,8 +417,19 @@ not the company has configured it:
 `kind` is one of `secret`, `url`, `id`, `choice`, `text`, `handle`, `toggle`.
 Each third-party app's own package declares its list, so the surface serves a third-party app it
 has no screen for and the dashboard renders a third-party app it has no code for.
-A `secret` is sealed and never echoed; a `toggle` is a JSON boolean in the
-document; a `handle` must name a seat this company has.
+A `toggle` is a JSON boolean in the document; a `handle` must name a seat this
+company has.
+
+A `secret`'s **credential** is never echoed. Its `value` carries the field's
+`${VAR}` reference when the document holds one, because that is a *name*
+rather than a credential: it says which entry of the sealed store the field
+reads, it is already visible through `GET /config` to anybody this surface
+answers, and a client that could not see it would have no way to tell
+"this reads `SHARED_TOKEN`" from "type here to replace what is behind this
+field". A document holding a **literal** in that position sends no `value` at
+all, and a composite such as `https://${HOST}/hook` is a literal for this
+purpose: it names a variable and carries an address beside it, so it is not a
+reference to anything.
 
 `present` and `resolved` are the same two facts `secret_present` and
 `secret_usable` are, asked per field: written down, and actually usable in
@@ -419,7 +439,7 @@ that this input being absent produces, which is what lets a row reporting
 `credential_missing` offer exactly the fields that clear it.
 
 `mintable` means the engine can generate the value, so nobody should be asked
-to invent it. **No route here ever returns a value.**
+to invent it. **No route here ever returns a credential.**
 
 ### Supplying them
 
@@ -436,6 +456,13 @@ curl -X POST https://engine.example.com/setup/integrations/datadog/inputs \
 `generate` is separate from `values` on purpose: a client that could send both
 under one key would eventually send a weak token by accident, and a field can
 be one or the other, never both.
+
+**A `secret` field's value may be a `${VAR}` instead of a credential.** Sent
+one, the route writes that reference into the config path and seals nothing,
+so a credential already in the store can serve several fields and rotating it
+is one write in one place. It needs no secret store in the answering process,
+because naming an entry is not writing one. Anything else in that position is
+a credential and is sealed under the field's own name, a composite included.
 
 What the route does, in this order:
 

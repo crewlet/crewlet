@@ -287,9 +287,15 @@ type Requirement struct {
 // plain settings — a region, a URL, a handle, a group — every one of which is
 // already readable through GET /config by anybody this route answers.
 //
+// A CREDENTIAL'S REFERENCE IS NOT THE CREDENTIAL, and it is the one thing a
+// secret field may carry back. `${JIRA_TOKEN}` is a NAME: it says which entry
+// of the sealed store this field reads, which is already visible through GET
+// /config to everybody this route answers, and it is what an operator has to
+// see to know they are editing the right pointer rather than replacing it.
+// A LITERAL in the same position is the credential itself and never leaves.
+//
 // A METHOD ON THE TYPE rather than a step in the API layer, so nothing can
-// forget it and no future caller can serialise a Requirement any other way. A
-// credential's value has no path onto the wire at all.
+// forget it and no future caller can serialise a Requirement any other way.
 func (r Requirement) MarshalJSON() ([]byte, error) {
 	// An alias, because marshalling the named type here would call this
 	// method again, forever.
@@ -298,10 +304,25 @@ func (r Requirement) MarshalJSON() ([]byte, error) {
 		wire
 		Value string `json:"value,omitempty"`
 	}{wire: wire(r)}
-	if r.Kind != KindSecret {
+	switch {
+	case r.Kind != KindSecret:
 		out.Value = r.Stored
+	case IsReference(r.Stored):
+		out.Value = strings.TrimSpace(r.Stored)
 	}
 	return json.Marshal(out)
+}
+
+// IsReference reports a value that is WHOLLY a `${VAR}`, and is therefore a
+// name rather than a credential.
+//
+// Whole, never merely containing one: `https://${HOST}/api` names a variable
+// and carries a hostname beside it, so treating it as a pointer would put a
+// fragment of a URL on a wire that refuses credentials, and writing through
+// it would replace the address with a token.
+func IsReference(value string) bool {
+	_, whole := envref.Whole(strings.TrimSpace(value))
+	return whole
 }
 
 // Satisfied reports whether this requirement needs nothing further.

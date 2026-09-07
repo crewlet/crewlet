@@ -32,6 +32,7 @@ import { Icon } from "~/ui/Icon.tsx";
 import { useToast } from "~/ui/Toast.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { SetupRequirement, SetupToolState } from "~/protocol/index.ts";
+import { href } from "~/app/router.tsx";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -163,12 +164,18 @@ export function splitFields(reqs: SetupRequirement[]): {
 }
 
 /**
- * What a stored credential shows in its input.
+ * What a stored credential shows in its input when there is nothing true to
+ * put there.
  *
- * The engine never sends a credential back, so there is nothing true to put
- * here — but an empty box under a required label reads as an unanswered
- * question on a form that is already complete. The dots say "there is one",
- * which is the only thing this process actually knows.
+ * A credential that lives in the sealed store is REFERENCED from the config
+ * as `${NAME}`, and the engine sends that reference back: it is a name, not a
+ * secret, and showing it is how an operator can tell they are editing a
+ * pointer rather than about to replace the credential behind it. Everything
+ * this dashboard writes takes that shape, so this placeholder is for the one
+ * case that does not: a company that hand-wrote a LITERAL into its config
+ * document. There the engine sends nothing, correctly, and an empty box under
+ * a required label would read as an unanswered question on a form that is
+ * already complete.
  *
  * Left alone it is never submitted (see payloadFor): typing over it is what
  * replaces the credential.
@@ -366,13 +373,14 @@ export function SetupDialog({
       // dialog offered "Choose one" over a region and a fallback seat the
       // document held, and saving it blanked both.
       //
-      // Never a credential: the engine does not put one on this wire, so
-      // `value` is absent on every secret and those open empty, which is
-      // what "leave it blank to keep it" means below.
-      // A CREDENTIAL SHOWS THAT IT IS HELD, not what it is. `value` is
-      // absent on every secret by construction, so this is the only signal
-      // there is that the field is already answered.
-      if (r.kind === "secret" && r.present) {
+      // A CREDENTIAL SHOWS ITS REFERENCE, or that it is held.
+      //
+      // `value` on a secret is a `${NAME}` and never the credential: the
+      // engine puts a whole reference on the wire and nothing else, so a
+      // field pointing at the sealed store opens naming the entry it reads.
+      // Only a hand-written LITERAL arrives with no value, and that is what
+      // the dots are for. See [HELD].
+      if (r.kind === "secret" && !r.value && r.present) {
         initial[key] = HELD;
         return;
       }
@@ -608,6 +616,19 @@ export function SetupDialog({
               ))}
             </div>
           </details>
+        )}
+
+        {/* LAST, because it is an alternative to what the form just asked
+            for rather than an instruction for filling it in. It is shown
+            only where there is a credential to keep somewhere: a form with
+            no secret on it has nothing this offers. */}
+        {shown.some((r) => r.kind === "secret") && (
+          <p className="hint int-form-note">
+            Recommendation: keep a credential in <a href={href(["secrets"])}>Secrets</a> and put its
+            reference here, written {"${NAME}"}. The config then names the entry instead of carrying
+            the value, so one credential can serve several fields and rotating it is one edit in one
+            place.
+          </p>
         )}
       </div>
 
