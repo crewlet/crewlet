@@ -373,12 +373,20 @@ func TestAFailedTurnIsStillRecordedAsWorked(t *testing.T) {
 	}
 }
 
-func TestABrokenPhaseNAKsAndRecordsNothing(t *testing.T) {
+// THE TRANSIENT CASE KEEPS ITS RETRY, and this is the test a wrong fix breaks.
+//
+// A broken phase that proved nothing reached outside the engine is the case
+// the dispatcher's old comment described for EVERY failure: nothing was
+// recorded, so a redelivery genuinely does run it cleanly. A provider that
+// never answered, a runner that could not be built, a refused budget and a
+// seat handed to another node mid-call all land here — none of them proves a
+// write, and every one of them is worth trying again.
+func TestABrokenPhaseThatProvedNothingStillNAKsAndRecordsNothing(t *testing.T) {
 	t.Parallel()
-	// A broken phase is not a failed turn. Nothing was recorded, so the
-	// redelivery runs cleanly.
 	completions := ledgerstore.NewMemoryCompletions()
 	a := ev("notification")
+	// Acted is false: the zero Result is a turn that proved nothing, which
+	// is the safe answer and the one every pre-effect failure produces.
 	r := &recorder{err: errors.New("provider unreachable")}
 	d := dispatcher(t, r)
 	d.Completions = completions
@@ -390,6 +398,84 @@ func TestABrokenPhaseNAKsAndRecordsNothing(t *testing.T) {
 	}
 	if len(completions.Worked(ctx, "ceo", []string{workkey.Derive([]string{a.ID.String()})})) != 0 {
 		t.Error("a broken phase recorded the trigger as worked")
+	}
+}
+
+// A TURN THAT ALREADY WROTE OUTSIDE THE ENGINE IS NOT REDELIVERED.
+//
+// The NAK above used to be unconditional, on a premise that held only for the
+// two writes internal/workkey guards: every MCP write, chat post, colleague
+// ask and coding run is keyed on nothing, so a deterministic mid-turn failure
+// replayed round one's external effects across the broker's whole delivery
+// budget — 25 attempts a second apart.
+func TestATurnThatBrokeAfterActingIsRecordedRatherThanRedelivered(t *testing.T) {
+	t.Parallel()
+	completions := ledgerstore.NewMemoryCompletions()
+	a := ev("notification")
+	r := &recorder{
+		result: turn.Result{Acted: true},
+		err:    errors.New("the reviewer's provider went away"),
+	}
+	d := dispatcher(t, r)
+	d.Completions = completions
+	var seen []*events.Event
+	d.Observe = func(_ context.Context, e *events.Event) { seen = append(seen, e) }
+	ctx := context.Background()
+
+	got := d.Dispatch(ctx, "ceo", []*events.Event{a})
+	if got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v, want an ACK — a retry would repeat this turn's writes", got.Outcome)
+	}
+	key := workkey.Derive([]string{a.ID.String()})
+	if !completions.Worked(ctx, "ceo", []string{key})[key] {
+		t.Error("the trigger was not recorded, so a park requeue or a peer's " +
+			"redelivery would run it again")
+	}
+	// AND IT SAYS SO. Giving up on a trigger silently is the one thing
+	// worse than the storm.
+	if len(seen) != 1 {
+		t.Fatalf("observed %d events, want the abandoned trigger on the record", len(seen))
+	}
+	skipped, ok := seen[0].Data.(*types.TurnTriggerSkipped)
+	if !ok {
+		t.Fatalf("observed %T, want a TurnTriggerSkipped", seen[0].Data)
+	}
+	if skipped.TriggerID != a.ID.String() {
+		t.Errorf("trigger id = %q, want the abandoned trigger's", skipped.TriggerID)
+	}
+	if !strings.Contains(skipped.Reason, "outside the engine") {
+		t.Errorf("reason = %q, want it to say why the trigger will not come back", skipped.Reason)
+	}
+}
+
+// ABANDONING A TURN FILES NO REPLY TO THE THREAD.
+//
+// A broken turn has no answer: its artifact is whichever round closed last, so
+// writing it back as this turn's reply tells the next turn on that thread the
+// work was done. RecordSession's own doc commemorates exactly that bug for the
+// suspended case — which is why the abandon path writes the completion rows
+// itself instead of reusing recordWorked.
+func TestAnAbandonedTurnWritesNoConversationEntry(t *testing.T) {
+	t.Parallel()
+	conversations := ledgerstore.NewMemoryConversations()
+	ctx := context.Background()
+	r := &recorder{
+		result: turn.Result{Acted: true, Decision: phase.Failed, Artifact: "a half-written draft"},
+		err:    errors.New("the reviewer's provider went away"),
+	}
+	d := dispatcher(t, r)
+	d.Conversations = conversations
+	d.Completions = ledgerstore.NewMemoryCompletions()
+
+	if got := d.Dispatch(ctx, "ceo", []*events.Event{inThread("notification", "slack:C1")}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+	after, err := conversations.History(ctx, "ceo", "slack:C1", 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(after) != 0 {
+		t.Errorf("history = %+v, want nothing — a broken turn said nothing to file", after)
 	}
 }
 
