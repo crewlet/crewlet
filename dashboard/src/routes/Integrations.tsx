@@ -119,8 +119,11 @@ export const CATALOG: Entry[] = [
       // engine reads and writes AS an account, and this is the only place
       // an account can be made at all.
       { key: "atlassian", name: "Organization" },
-      { key: "jira", name: "Jira" },
+      // THEN ALPHABETICALLY. The two products are peers, so any other order
+      // is a claim about which matters more, and this order is the one the
+      // rest of the screen already sorts by.
       { key: "confluence", name: "Confluence" },
+      { key: "jira", name: "Jira" },
       { key: "forge", name: "Forge relay" },
     ],
   },

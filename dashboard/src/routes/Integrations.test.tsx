@@ -741,7 +741,10 @@ test("disconnect takes every configured surface, provisioner last", () => {
     { name: "Jira", tool: toolState({ key: "jira", can_provision: false }) },
     { name: "Confluence", tool: toolState({ key: "confluence", can_provision: false }) },
   ];
-  expect(disconnectOrder(atlassian, rows, sections)).toEqual(["jira", "confluence", "atlassian"]);
+  // The products in the catalogue's own order, and the organization after
+  // both of them. What this asserts is the LAST position; the two products
+  // are peers and either order between them takes the same things away.
+  expect(disconnectOrder(atlassian, rows, sections)).toEqual(["confluence", "jira", "atlassian"]);
 });
 
 // AND A SURFACE NOBODY CONFIGURED IS NOT DELETED. A card lists what a tool
