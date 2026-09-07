@@ -708,3 +708,69 @@ func TestAnExternalStreamsTLSMaterialReachesTheDial(t *testing.T) {
 			"dial and been refused by name", err)
 	}
 }
+
+// THE WIDTH FOLLOWS THE CONFIG APPLY, not just the boot.
+//
+// The width comes from the company's embeddings provider, and Tier B is
+// versioned and edited live — so a handle that learned it once at open is
+// wrong from the first apply that changes the provider. It is wrong in the
+// silent direction too: EncodeVector refuses every write against the stale
+// width, and recall degrades to nothing with no error an operator sees.
+//
+// The reverse direction matters as much: a company that DROPS its embeddings
+// provider must come back to 0, or the node keeps demanding vectors of a width
+// nothing produces any more.
+func TestTheEmbeddingWidthFollowsAConfigApply(t *testing.T) {
+	// Not parallel: t.Setenv resolves the ${K} both documents reference.
+	const noVectors = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+`
+	const wide = `
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+  embeddings:
+    type: openai
+    model: text-embedding-3-large
+    api_key: ${K}
+    dimensions: 3072
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+`
+	t.Setenv("K", "test-key")
+	e := newEngine(t, engine.Options{Company: parsedCompany(t, noVectors)})
+	if got := e.Backends().Store.EmbeddingDim(); got != 0 {
+		t.Fatalf("booted at width %d, want 0 for a company with no embeddings", got)
+	}
+
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, wide)); err != nil {
+		t.Fatalf("apply the embedding provider: %v", err)
+	}
+	if got := e.Backends().Store.EmbeddingDim(); got != 3072 {
+		t.Errorf("after the apply the width is %d, want the configured 3072 "+
+			"— every vector write is refused until the process restarts", got)
+	}
+
+	if _, _, err := e.Apply(t.Context(), parsedCompany(t, noVectors)); err != nil {
+		t.Fatalf("apply the removal: %v", err)
+	}
+	if got := e.Backends().Store.EmbeddingDim(); got != 0 {
+		t.Errorf("after dropping the provider the width is %d, want 0", got)
+	}
+}

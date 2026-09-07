@@ -55,6 +55,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
@@ -123,6 +124,12 @@ type Options struct {
 	// config, learn the width, then migrate the rest. Vector columns here
 	// are plain BLOBs and this is the only thing that knows how wide they
 	// are. 0 means no embedding model is configured.
+	//
+	// It is the width to OPEN with, not a width fixed for the life of the
+	// handle: the company config is versioned and edited live, so the
+	// engine re-states it with [DB.SetEmbeddingDim] on every epoch it
+	// applies. A node that boots with no active revision opens at 0 and is
+	// told the real width by its first apply.
 	EmbeddingDim int
 }
 
@@ -151,7 +158,12 @@ type DB struct {
 	sql  *sql.DB
 	path string
 	caps Capabilities
-	dim  int
+
+	// dim is [Options.EmbeddingDim], re-stated by every config apply. ATOMIC
+	// because the applying goroutine writes it while turns are reading it to
+	// validate their vectors — a plain int here is a data race the detector
+	// finds on any company that writes memory during a reconcile.
+	dim atomic.Int64
 
 	// lock is this process's exclusive claim on path, held for the life of
 	// the handle and released by Close — or by the kernel, if this process
@@ -192,7 +204,8 @@ func Open(ctx context.Context, path string, opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	db := &DB{sql: pool, path: path, dim: opts.EmbeddingDim, lock: lock}
+	db := &DB{sql: pool, path: path, lock: lock}
+	db.SetEmbeddingDim(opts.EmbeddingDim)
 	applied, err := db.migrate(ctx)
 	if err != nil {
 		_ = pool.Close()
@@ -305,7 +318,22 @@ func (d *DB) Path() string { return d.path }
 // EmbeddingDim reports the configured vector width, or 0 when no embedding
 // model is configured. See Options.EmbeddingDim for why this is not in the
 // schema.
-func (d *DB) EmbeddingDim() int { return d.dim }
+func (d *DB) EmbeddingDim() int { return int(d.dim.Load()) }
+
+// SetEmbeddingDim re-states the width after a config apply changed it.
+//
+// The width came from the company config, which is versioned and edited live
+// — so a handle that learned it once at open is wrong from the first apply
+// that swaps the embeddings provider, and wrong in the silent direction: every
+// vector write is refused by [DB.EncodeVector] for the life of the process,
+// and recall degrades to nothing with no error an operator sees. A node that
+// booted with no active revision at all opens at 0 and learns the real width
+// here.
+//
+// A width of 0 is a real setting, not "unknown": it is what a company with no
+// embeddings provider configures, and it means vector writes are refused
+// deliberately.
+func (d *DB) SetEmbeddingDim(width int) { d.dim.Store(int64(width)) }
 
 // SQL exposes the pooled handle for store implementations built on this
 // database. Application code goes through a typed store instead — a caller

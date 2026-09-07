@@ -41,6 +41,35 @@ type epoch struct {
 // exists to remove, and it is removable only at the call site.
 func (e *Engine) Company() *Company { return e.epoch.current.Load() }
 
+// installEpoch publishes an epoch and re-states what is derived from it but
+// does not live on it.
+//
+// ONE FUNCTION for the two places an epoch becomes current — boot and apply —
+// because state set in one and forgotten in the other fails silently and only
+// on the path nobody exercised. The store's vector width is exactly that: it
+// is a property of the company's embeddings provider, so a boot that set it
+// while an apply did not would pin every node to the width it started on and
+// refuse every vector write after a provider change, with recall degrading to
+// nothing and no error anyone sees.
+func (e *Engine) installEpoch(c *Company) {
+	e.epoch.current.Store(c)
+	// Backends are always present on a running engine; a `crewlet validate`
+	// engine applies to nothing and has no store to tell.
+	if e.backends != nil && e.backends.Store != nil {
+		e.backends.Store.SetEmbeddingDim(embeddingWidth(c))
+	}
+}
+
+// embeddingWidth is the vector width an epoch's embeddings provider produces,
+// or 0 for a company that configures none — a real setting meaning vector
+// writes are refused, not an unknown.
+func embeddingWidth(c *Company) int {
+	if c == nil || c.Config == nil || c.Config.Providers.Embeddings == nil {
+		return 0
+	}
+	return c.Config.Providers.Embeddings.Width()
+}
+
 // Apply publishes a new epoch, reporting what happened to this node.
 //
 // The build comes first and touches nothing: [NewCompany] validates, resolves
@@ -153,7 +182,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	applied = append(applied, "integrations")
 
 	previous := e.Company()
-	e.epoch.current.Store(next)
+	e.installEpoch(next)
 	applied = append(applied, "epoch")
 
 	// AFTER the epoch is published, because a seat registry is a clone of

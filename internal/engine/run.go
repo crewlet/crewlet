@@ -430,7 +430,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err := e.equip(ctx, company); err != nil {
 		return fail(err)
 	}
-	e.epoch.current.Store(company)
+	e.installEpoch(company)
 
 	nodeID, err := config.ResolveNodeID(opts.Bootstrap, nil)
 	if err != nil {
