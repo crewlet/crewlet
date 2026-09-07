@@ -40,10 +40,13 @@ func Requirements(in *config.Jira, resolve func(string) (string, bool)) []setup.
 			Kind:       setup.KindURL,
 			ConfigPath: "integrations.jira.url",
 			Required:   cloudID == "",
-			Help: "Where people open Jira, for example " +
-				"https://your-company.atlassian.net. Connecting Atlassian discovers " +
-				"it from your organization; give it here for Data Center, or " +
-				"before Atlassian is connected.",
+			// ONE LINE. It said what the address is, that connecting
+			// Atlassian discovers it, and which deployment needs it typed
+			// anyway — three sentences under a field whose own label
+			// already says what it holds. The shape of the value is the
+			// part nobody can guess; discovery shows itself by filling the
+			// box in.
+			Help:  "Where people open Jira, for example https://your-company.atlassian.net.",
 			Where: "Yours is listed under",
 			// FILLED FROM THE ORGANIZATION ID, and not a link until there
 			// is one: the page is per-organization, and the console's front
