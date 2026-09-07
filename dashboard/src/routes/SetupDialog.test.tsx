@@ -214,7 +214,7 @@ test("the form opens with the engine's own summary", () => {
       sections={[{ name: "Datadog", tool: { ...tool, summary: "Datadog sends firing monitors." } }]}
       title="Datadog"
       onClose={() => {}}
-      onSaved={() => {}}
+      onDone={() => {}}
     />,
   );
   expect(screen.getByText("Datadog sends firing monitors.")).toBeTruthy();
@@ -243,7 +243,7 @@ test("an external link names the app it opens", () => {
       ]}
       title="Datadog"
       onClose={() => {}}
-      onSaved={() => {}}
+      onDone={() => {}}
     />,
   );
   expect(screen.getByRole("link", { name: "Open Datadog" })).toBeTruthy();
